@@ -22,7 +22,7 @@ notifications:
   jira_options: link label worklog
 github:
   description: "Official Rust implementation of Apache Arrow"
-    homepage: https://arrow.apache.org/
+  homepage: https://arrow.apache.org/
   enabled_merge_buttons:
     squash: true
     merge: false
