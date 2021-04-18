@@ -32,8 +32,8 @@ repos:
       - id: rustfmt
         name: Rust Format
         language: system
-        entry: bash -c "cd rust && cargo +stable fmt --all -- --check"
-        files: ^rust/.*\.rs$
+        entry: bash -c "cargo +stable fmt --all -- --check"
+        files: ^.*\.rs$
         types:
           - file
           - rust
