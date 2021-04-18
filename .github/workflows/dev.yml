@@ -40,4 +40,4 @@ jobs:
       - name: Setup Archery
         run: pip install -e dev/archery[docker]
       - name: Lint
-        run: archery lint --rat --rust
+        run: archery lint --rat

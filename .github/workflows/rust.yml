@@ -269,6 +269,20 @@ jobs:
           # Ignore MIRI errors until we can get a clean run
           cargo miri test || true
 
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup toolchain
+        run: |
+          rustup toolchain install stable
+          rustup default stable
+          rustup component add rustfmt
+      - name: Run
+        run: cargo fmt --all -- --check
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
