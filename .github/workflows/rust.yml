@@ -116,12 +116,6 @@ jobs:
           export CARGO_TARGET_DIR="/github/home/target"
           # run tests on all workspace members with default feature list
           cargo test
-          # test datafusion examples
-          cd datafusion-examples
-          cargo test --no-default-features
-          cargo run --example csv_sql
-          cargo run --example parquet_sql
-          cd ..
           cd arrow
           # re-run tests on arrow workspace with additional features
           cargo test --features=prettyprint
