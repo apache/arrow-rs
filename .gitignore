@@ -3,3 +3,6 @@ target
 rusty-tags.vi
 .history
 .flatbuffers/
+
+.vscode
+venv/*

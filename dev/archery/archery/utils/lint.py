@@ -265,10 +265,6 @@ def rat_linter(src, root):
     """Run apache-rat license linter."""
     logger.info("Running apache-rat linter")
 
-    if src.git_dirty:
-        logger.warn("Due to the usage of git-archive, uncommitted files will"
-                    " not be checked for rat violations. ")
-
     exclusion = exclusion_from_globs(
         os.path.join(src.dev, "release", "rat_exclude_files.txt"))
 
