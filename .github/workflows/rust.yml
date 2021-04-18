@@ -70,16 +70,7 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd rust
           cargo build
-      # Ballista is currently not part of the main workspace so requires a separate build step
-      - name: Build Ballista
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd rust/ballista/rust
-          # snmalloc requires cmake so build without default features
-          cargo build --no-default-features
 
   # test the crate
   linux-test:
@@ -123,7 +114,6 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd rust
           # run tests on all workspace members with default feature list
           cargo test
           # test datafusion examples
@@ -139,14 +129,6 @@ jobs:
           cargo run --example dynamic_types
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
-      # Ballista is currently not part of the main workspace so requires a separate test step
-      - name: Run Ballista tests
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd rust/ballista/rust
-          # snmalloc requires cmake so build without default features
-          cargo test --no-default-features
 
   # test the --features "simd" of the arrow crate. This requires nightly.
   linux-test-simd:
@@ -188,7 +170,7 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd rust/arrow
+          cd arrow
           cargo test --features "simd"
 
   windows-and-macos:
@@ -216,7 +198,6 @@ jobs:
           export PARQUET_TEST_DATA=$(pwd)/cpp/submodules/parquet-testing/data
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
-          cd rust
           cargo test
 
   clippy:
@@ -258,7 +239,6 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd rust
           cargo clippy --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
 
   miri-checks:
@@ -290,7 +270,6 @@ jobs:
           RUST_LOG: 'trace'
         run: |
           export MIRIFLAGS="-Zmiri-disable-isolation"
-          cd rust
           cargo miri setup
           cargo clean
           # Ignore MIRI errors until we can get a clean run
@@ -330,7 +309,6 @@ jobs:
           # 2020-11-15: There is a cargo-tarpaulin regression in 0.17.0
           # see https://github.com/xd009642/tarpaulin/issues/618
           cargo install --version 0.16.0 cargo-tarpaulin
-          cd rust
           cargo tarpaulin --out Xml
       - name: Report coverage
         continue-on-error: true
@@ -373,7 +351,7 @@ jobs:
           export CARGO_HOME="/home/runner/.cargo"
           export CARGO_TARGET_DIR="/home/runner/target"
 
-          cd rust/arrow-pyarrow-integration-testing
+          cd arrow-pyarrow-integration-testing
 
           python -m venv venv
           source venv/bin/activate
@@ -423,7 +401,7 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd rust/arrow
+          cd arrow
           cargo build --target wasm32-unknown-unknown
 
   # test the projects can build without default features
@@ -466,5 +444,5 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd rust/arrow
+          cd arrow
           cargo check --all-targets --no-default-features
