@@ -29,7 +29,7 @@ source_dir=${1}/rust
 export RUSTFLAGS="-C debuginfo=1"
 
 export ARROW_TEST_DATA=${arrow_dir}/testing/data
-export PARQUET_TEST_DATA=${arrow_dir}/cpp/submodules/parquet-testing/data
+export PARQUET_TEST_DATA=${arrow_dir}/parquet-testing/data
 
 # show activated toolchain
 rustup show

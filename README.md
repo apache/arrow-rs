@@ -104,7 +104,7 @@ git submodule update --init
 
 This populates data in two git submodules:
 
-- `../cpp/submodules/parquet_testing/data` (sourced from https://github.com/apache/parquet-testing.git)
+- `../parquet_testing/data` (sourced from https://github.com/apache/parquet-testing.git)
 - `../testing` (sourced from https://github.com/apache/arrow-testing)
 
 By default, `cargo test` will look for these directories at their
@@ -112,7 +112,7 @@ standard location. The following environment variables can be used to override t
 
 ```bash
 # Optionaly specify a different location for test data
-export PARQUET_TEST_DATA=$(cd ../cpp/submodules/parquet-testing/data; pwd)
+export PARQUET_TEST_DATA=$(cd ../parquet-testing/data; pwd)
 export ARROW_TEST_DATA=$(cd ../testing/data; pwd)
 ```
 
