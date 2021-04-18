@@ -23,7 +23,7 @@ arrow_dir=${1}
 
 export ARROW_SOURCE_DIR=${arrow_dir}
 export ARROW_TEST_DATA=${arrow_dir}/testing/data
-export PARQUET_TEST_DATA=${arrow_dir}/cpp/submodules/parquet-testing/data
+export PARQUET_TEST_DATA=${arrow_dir}/parquet-testing/data
 
 export PYARROW_CMAKE_GENERATOR=${CMAKE_GENERATOR:-Ninja}
 export PYARROW_BUILD_TYPE=${CMAKE_BUILD_TYPE:-debug}

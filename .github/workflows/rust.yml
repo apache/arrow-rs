@@ -298,7 +298,7 @@ jobs:
           export CARGO_TARGET_DIR="/home/runner/target"
 
           export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/cpp/submodules/parquet-testing/data
+          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
 
           # 2020-11-15: There is a cargo-tarpaulin regression in 0.17.0
           # see https://github.com/xd009642/tarpaulin/issues/618
@@ -369,7 +369,7 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-        PARQUET_TEST_DATA: /__w/arrow/arrow/cpp/submodules/parquet-testing/data
+        PARQUET_TEST_DATA: /__w/arrow/arrow/parquet-testing/data
     steps:
       - uses: actions/checkout@v2
         with:
@@ -413,7 +413,7 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-        PARQUET_TEST_DATA: /__w/arrow/arrow/cpp/submodules/parquet-testing/data
+        PARQUET_TEST_DATA: /__w/arrow/arrow/parquet-testing/data
     steps:
       - uses: actions/checkout@v2
         with:
