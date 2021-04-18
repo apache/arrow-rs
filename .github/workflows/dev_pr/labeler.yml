@@ -48,12 +48,6 @@ lang-ruby:
 lang-rust:
   - rust/**/*
 
-datafusion:
-  - rust/datafusion/**/*
-
-ballista:
-  - rust/ballista/**/*
-
 flight:
   - cpp/src/arrow/flight/**/*
   - r/R/flight.*
