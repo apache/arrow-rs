@@ -144,7 +144,7 @@ jobs:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow/arrow/testing/data
+        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
     steps:
       - uses: actions/checkout@v2
         with:
@@ -195,7 +195,7 @@ jobs:
         shell: bash
         run: |
           export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/cpp/submodules/parquet-testing/data
+          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
           cargo test
@@ -374,7 +374,7 @@ jobs:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow/arrow/testing/data
+        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
         PARQUET_TEST_DATA: /__w/arrow/arrow/cpp/submodules/parquet-testing/data
     steps:
       - uses: actions/checkout@v2
@@ -418,7 +418,7 @@ jobs:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow/arrow/testing/data
+        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
         PARQUET_TEST_DATA: /__w/arrow/arrow/cpp/submodules/parquet-testing/data
     steps:
       - uses: actions/checkout@v2
