@@ -19,8 +19,8 @@
 name = "arrow"
 version = "4.0.0-SNAPSHOT"
 description = "Rust implementation of Apache Arrow"
-homepage = "https://github.com/apache/arrow"
-repository = "https://github.com/apache/arrow"
+homepage = "https://github.com/apache/arrow-rs"
+repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
 keywords = [ "arrow" ]
