@@ -18,15 +18,7 @@
 name: Dev PR
 
 on:
-  # TODO: Enable this when eps1lon/actions-label-merge-conflict is available.
-  # push:
-  #   branches:
-  #     - master
-  pull_request_target:
-    types:
-      - opened
-      - edited
-      - synchronize
+  pull_request:
 
 jobs:
   process:
@@ -46,14 +38,8 @@ jobs:
           configuration-path: .github/workflows/dev_pr/labeler.yml
           sync-labels: true
 
-      # TODO: Enable this when eps1lon/actions-label-merge-conflict is available.
-      # - name: Checks if PR needs rebase
-      #   if: |
-      #     github.event_name == 'push' ||
-      #     (github.event_name == 'pull_request_target' &&
-      #        (github.event.action == 'opened' ||
-      #         github.event.action == 'synchronize'))
-      #   uses: eps1lon/actions-label-merge-conflict@releases/2.x
-      #   with:
-      #     dirtyLabel: "needs-rebase"
-      #     repoToken: "${{ secrets.GITHUB_TOKEN }}"
+      - name: Checks if PR needs rebase
+        uses: eps1lon/actions-label-merge-conflict@releases/2.x
+        with:
+          dirtyLabel: "needs-rebase"
+          repoToken: "${{ secrets.GITHUB_TOKEN }}"
