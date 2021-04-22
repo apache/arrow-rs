@@ -480,6 +480,12 @@ fn set_column_for_json_rows(
                     }
                 });
         }
+        DataType::Dictionary(_, value_type) => {
+            let slice = array.slice(0, row_count);
+            let hydrated = crate::compute::kernels::cast::cast(&slice, &value_type)
+                .expect("cannot cast dictionary to underlying values");
+            set_column_for_json_rows(rows, row_count, &hydrated, col_name)
+        }
         _ => {
             panic!("Unsupported datatype: {:#?}", array.data_type());
         }
@@ -681,8 +687,8 @@ mod tests {
     #[test]
     fn write_simple_rows() {
         let schema = Schema::new(vec![
-            Field::new("c1", DataType::Int32, false),
-            Field::new("c2", DataType::Utf8, false),
+            Field::new("c1", DataType::Int32, true),
+            Field::new("c2", DataType::Utf8, true),
         ]);
 
         let a = Int32Array::from(vec![Some(1), Some(2), Some(3), None, Some(5)]);
@@ -705,6 +711,56 @@ mod tests {
 {"c1":3,"c2":"c"}
 {"c2":"d"}
 {"c1":5}
+"#
+        );
+    }
+
+    #[test]
+    fn write_dictionary() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "c1",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            ),
+            Field::new(
+                "c2",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+                true,
+            ),
+        ]);
+
+        let a: DictionaryArray<Int32Type> = vec![
+            Some("cupcakes"),
+            Some("foo"),
+            Some("foo"),
+            None,
+            Some("cupcakes"),
+        ]
+        .into_iter()
+        .collect();
+        let b: DictionaryArray<Int8Type> =
+            vec![Some("sdsd"), Some("sdsd"), None, Some("sd"), Some("sdsd")]
+                .into_iter()
+                .collect();
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
+                .unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[batch]).unwrap();
+        }
+
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            r#"{"c1":"cupcakes","c2":"sdsd"}
+{"c1":"foo","c2":"sdsd"}
+{"c1":"foo"}
+{"c2":"sd"}
+{"c1":"cupcakes","c2":"sdsd"}
 "#
         );
     }
