@@ -384,4 +384,72 @@ mod tests {
 
         Ok(())
     }
+
+    fn collect_string_dictionary(
+        dictionary: &DictionaryArray<Int32Type>,
+    ) -> Vec<Option<String>> {
+        let values = dictionary.values();
+        let values = values.as_any().downcast_ref::<StringArray>().unwrap();
+
+        dictionary
+            .keys()
+            .iter()
+            .map(|key| key.map(|key| values.value(key as _).to_string()))
+            .collect()
+    }
+
+    fn concat_dictionary(
+        input_1: DictionaryArray<Int32Type>,
+        input_2: DictionaryArray<Int32Type>,
+    ) -> Vec<Option<String>> {
+        let concat = concat(&[&input_1 as _, &input_2 as _]).unwrap();
+        let concat = concat
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+
+        collect_string_dictionary(concat)
+    }
+
+    #[test]
+    fn test_string_dictionary_array() {
+        let input_1: DictionaryArray<Int32Type> =
+            vec!["hello", "A", "B", "hello", "hello", "C"]
+                .into_iter()
+                .collect();
+        let input_2: DictionaryArray<Int32Type> =
+            vec!["hello", "E", "E", "hello", "F", "E"]
+                .into_iter()
+                .collect();
+
+        let expected: Vec<_> = vec![
+            "hello", "A", "B", "hello", "hello", "C", "hello", "E", "E", "hello", "F",
+            "E",
+        ]
+        .into_iter()
+        .map(|x| Some(x.to_string()))
+        .collect();
+
+        let concat = concat_dictionary(input_1, input_2);
+        assert_eq!(concat, expected);
+    }
+
+    #[test]
+    fn test_string_dictionary_array_nulls() {
+        let input_1: DictionaryArray<Int32Type> =
+            vec![Some("foo"), Some("bar"), None, Some("fiz")]
+                .into_iter()
+                .collect();
+        let input_2: DictionaryArray<Int32Type> = vec![None].into_iter().collect();
+        let expected = vec![
+            Some("foo".to_string()),
+            Some("bar".to_string()),
+            None,
+            Some("fiz".to_string()),
+            None,
+        ];
+
+        let concat = concat_dictionary(input_1, input_2);
+        assert_eq!(concat, expected);
+    }
 }

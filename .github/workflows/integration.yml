@@ -15,31 +15,38 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Dev PR
+name: Integration
 
 on:
+  push:
   pull_request:
+    types: [ready_for_review]
 
 jobs:
-  process:
-    name: Process
+
+  docker:
+    name: Integration Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-
-      - name: Assign GitHub labels
-        if: |
-          github.event_name == 'pull_request_target' &&
-            (github.event.action == 'opened' ||
-             github.event.action == 'synchronize')
-        uses: actions/labeler@2.2.0
+      - name: Checkout Arrow
+        uses: actions/checkout@v2
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          configuration-path: .github/workflows/dev_pr/labeler.yml
-          sync-labels: true
-
-      - name: Checks if PR needs rebase
-        uses: eps1lon/actions-label-merge-conflict@releases/2.x
+          repository: apache/arrow
+          submodules: true
+          fetch-depth: 0
+      # this is temporary: once rust is removed from `apache/arrow`, we are good to go.
+      - name: Remove Rust from arrow
+        run: rm -rf rust/
+      - name: Checkout Arrow Rust
+        uses: actions/checkout@v2
         with:
-          dirtyLabel: "needs-rebase"
-          repoToken: "${{ secrets.GITHUB_TOKEN }}"
+          path: rust
+          fetch-depth: 0
+      - name: Setup Python
+        uses: actions/setup-python@v1
+        with:
+          python-version: 3.8
+      - name: Setup Archery
+        run: pip install -e dev/archery[docker]
+      - name: Execute Docker Build
+        run: archery docker run conda-integration
