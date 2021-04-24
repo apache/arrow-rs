@@ -257,7 +257,8 @@ pub fn sort_to_indices(
                 values, v, n, cmp, &options, limit,
             )
         }
-        DataType::Utf8 => sort_string(values, v, n, &options, limit),
+        DataType::Utf8 => sort_string::<i32>(values, v, n, &options, limit),
+        DataType::LargeUtf8 => sort_string::<i64>(values, v, n, &options, limit),
         DataType::List(field) => match field.data_type() {
             DataType::Int8 => sort_list::<i32, Int8Type>(values, v, n, &options, limit),
             DataType::Int16 => sort_list::<i32, Int16Type>(values, v, n, &options, limit),
@@ -545,14 +546,17 @@ fn insert_valid_values<T>(result_slice: &mut [u32], offset: usize, valids: &[(u3
 }
 
 /// Sort strings
-fn sort_string(
+fn sort_string<Offset: StringOffsetSizeTrait>(
     values: &ArrayRef,
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
     options: &SortOptions,
     limit: Option<usize>,
 ) -> Result<UInt32Array> {
-    let values = as_string_array(values);
+    let values = values
+        .as_any()
+        .downcast_ref::<GenericStringArray<Offset>>()
+        .unwrap();
 
     sort_string_helper(
         values,
@@ -958,14 +962,25 @@ mod tests {
         assert_eq!(output, expected)
     }
 
+    /// Tests both Utf8 and LargeUtf8
     fn test_sort_string_arrays(
         data: Vec<Option<&str>>,
         options: Option<SortOptions>,
         limit: Option<usize>,
         expected_data: Vec<Option<&str>>,
     ) {
-        let output = StringArray::from(data);
-        let expected = Arc::new(StringArray::from(expected_data)) as ArrayRef;
+        let output = StringArray::from(data.clone());
+        let expected = Arc::new(StringArray::from(expected_data.clone())) as ArrayRef;
+        let output = match limit {
+            Some(_) => {
+                sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
+            }
+            _ => sort(&(Arc::new(output) as ArrayRef), options).unwrap(),
+        };
+        assert_eq!(&output, &expected);
+
+        let output = LargeStringArray::from(data);
+        let expected = Arc::new(LargeStringArray::from(expected_data)) as ArrayRef;
         let output = match limit {
             Some(_) => {
                 sort_limit(&(Arc::new(output) as ArrayRef), options, limit).unwrap()
