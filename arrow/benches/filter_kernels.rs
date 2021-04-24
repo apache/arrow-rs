@@ -23,7 +23,7 @@ use arrow::array::*;
 use arrow::compute::{build_filter, filter};
 use arrow::datatypes::{Float32Type, UInt8Type};
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 
 fn bench_filter(data_array: &dyn Array, filter_array: &BooleanArray) {
     criterion::black_box(filter(data_array, filter_array).unwrap());
@@ -44,7 +44,7 @@ fn add_benchmark(c: &mut Criterion) {
     let sparse_filter = build_filter(&sparse_filter_array).unwrap();
 
     let data_array = create_primitive_array::<UInt8Type>(size, 0.0);
-
+    c.benchmark_group("filter u8").throughput( Throughput::Elements(data_array.len() as u64));
     c.bench_function("filter u8", |b| {
         b.iter(|| bench_filter(&data_array, &filter_array))
     });
