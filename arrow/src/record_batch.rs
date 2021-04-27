@@ -268,7 +268,7 @@ impl RecordBatch {
     ///   ("a", a),
     ///   ("b", b),
     /// ]);
-    ///
+    /// ```
     pub fn try_from_iter<I, F>(value: I) -> Result<Self>
     where
         I: IntoIterator<Item = (F, ArrayRef)>,
@@ -307,6 +307,7 @@ impl RecordBatch {
     ///   ("a", a, false),
     ///   ("b", b, true),
     /// ]);
+    /// ```
     pub fn try_from_iter_with_nullable<I, F>(value: I) -> Result<Self>
     where
         I: IntoIterator<Item = (F, ArrayRef, bool)>,
