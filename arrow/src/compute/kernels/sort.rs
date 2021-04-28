@@ -495,12 +495,11 @@ where
     }
 
     // collect results directly into a buffer instead of a vec to avoid another aligned allocation
-    let mut result = MutableBuffer::new(values.len() * std::mem::size_of::<u32>());
+    let result_capacity = len * std::mem::size_of::<u32>();
+    let mut result = MutableBuffer::new(result_capacity);
     // sets len to capacity so we can access the whole buffer as a typed slice
-    result.resize(values.len() * std::mem::size_of::<u32>(), 0);
+    result.resize(result_capacity, 0);
     let result_slice: &mut [u32] = result.typed_data_mut();
-
-    debug_assert_eq!(result_slice.len(), nulls_len + valids_len);
 
     if options.nulls_first {
         let size = nulls_len.min(len);
@@ -1555,6 +1554,17 @@ mod tests {
             }),
             Some(3),
             vec![Some(1.0), Some(2.0), Some(3.0)],
+        );
+
+        // limit that includes some extra nulls
+        test_sort_primitive_arrays::<Float64Type>(
+            vec![Some(2.0), None, None, Some(1.0)],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            Some(3),
+            vec![Some(1.0), Some(2.0), None],
         );
     }
 
