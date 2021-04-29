@@ -324,11 +324,35 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
 }
 
 /// Creates a new empty array
+///
+/// ```
+/// use std::sync::Arc;
+/// use arrow::datatypes::DataType;
+/// use arrow::array::{ArrayRef, Int32Array, new_empty_array};
+///
+/// let empty_array = new_empty_array(&DataType::Int32);
+/// let array: ArrayRef = Arc::new(Int32Array::from(vec![] as Vec<i32>));
+///
+/// assert_eq!(&array, &empty_array);
+/// ```
 pub fn new_empty_array(data_type: &DataType) -> ArrayRef {
     let data = ArrayData::new_empty(data_type);
     make_array(data)
 }
-/// Creates a new array of `data_type` of length `length` filled entirely of `NULL` values
+
+/// Creates a new array of `data_type` of length `length` filled
+/// entirely of `NULL` values
+///
+/// ```
+/// use std::sync::Arc;
+/// use arrow::datatypes::DataType;
+/// use arrow::array::{ArrayRef, Int32Array, new_null_array};
+///
+/// let null_array = new_null_array(&DataType::Int32, 3);
+/// let array: ArrayRef = Arc::new(Int32Array::from(vec![None, None, None]));
+///
+/// assert_eq!(&array, &null_array);
+/// ```
 pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
     // context: https://github.com/apache/arrow/pull/9469#discussion_r574761687
     match data_type {
