@@ -487,9 +487,13 @@ where
         len = limit.min(len);
     }
     if !descending {
-        sort_by(&mut valids, len - nulls_len, |a, b| cmp(a.1, b.1));
+        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+            cmp(a.1, b.1)
+        });
     } else {
-        sort_by(&mut valids, len - nulls_len, |a, b| cmp(a.1, b.1).reverse());
+        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+            cmp(a.1, b.1).reverse()
+        });
         // reverse to keep a stable ordering
         nulls.reverse();
     }
@@ -503,7 +507,7 @@ where
 
     if options.nulls_first {
         let size = nulls_len.min(len);
-        result_slice[0..nulls_len.min(len)].copy_from_slice(&nulls);
+        result_slice[0..size].copy_from_slice(&nulls[0..size]);
         if nulls_len < len {
             insert_valid_values(result_slice, nulls_len, &valids[0..len - size]);
         }
@@ -1565,6 +1569,17 @@ mod tests {
             }),
             Some(3),
             vec![Some(1.0), Some(2.0), None],
+        );
+
+        // too many nulls
+        test_sort_primitive_arrays::<Float64Type>(
+            vec![Some(2.0), None, None, None],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            Some(2),
+            vec![None, None],
         );
     }
 
