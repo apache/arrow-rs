@@ -1303,6 +1303,15 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
                 item_type
             ))),
             _ => {
+                // a list is a group type with a single child. The list child's
+                // name comes from the child's field name.
+                let mut list_child = list_type.get_fields().first().ok_or(ArrowError(
+                    "List GroupType should have a field".to_string(),
+                ))?;
+                // if the child's name is "list" and it has a child, then use this child
+                if list_child.name() == "list" && !list_child.get_fields().is_empty() {
+                    list_child = list_child.get_fields().first().unwrap();
+                }
                 let arrow_type = self
                     .arrow_schema
                     .field_with_name(list_type.name())
@@ -1310,9 +1319,9 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
                     .map(|f| f.data_type().to_owned())
                     .unwrap_or_else(|| {
                         ArrowType::List(Box::new(Field::new(
-                            list_type.name(),
+                            list_child.name(),
                             item_reader_type.clone(),
-                            list_type.is_optional(),
+                            list_child.is_optional(),
                         )))
                     });
 

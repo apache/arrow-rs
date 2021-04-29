@@ -92,6 +92,8 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
         let mut row_group_writer = self.writer.next_row_group()?;
         for (array, field) in batch.columns().iter().zip(batch.schema().fields()) {
             let mut levels = batch_level.calculate_array_levels(array, field);
+            // Reverse levels as we pop() them when writing arrays
+            levels.reverse();
             write_leaves(&mut row_group_writer, array, &mut levels)?;
         }
 
@@ -741,7 +743,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "See ARROW-11294, data is correct but list field name is incorrect"]
     fn arrow_writer_complex() {
         // define schema
         let struct_field_d = Field::new("d", DataType::Float64, true);
@@ -934,7 +935,6 @@ mod tests {
             let actual_data = actual_batch.column(i).data();
 
             assert_eq!(expected_data, actual_data);
-            // assert_eq!(expected_data, actual_data, "L: {:#?}\nR: {:#?}", expected_data, actual_data);
         }
     }
 
