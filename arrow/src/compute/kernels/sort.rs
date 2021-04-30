@@ -1560,7 +1560,7 @@ mod tests {
             vec![Some(1.0), Some(2.0), Some(3.0)],
         );
 
-        // limit that includes some extra nulls
+        // valid values less than limit with extra nulls
         test_sort_primitive_arrays::<Float64Type>(
             vec![Some(2.0), None, None, Some(1.0)],
             Some(SortOptions {
@@ -1571,7 +1571,17 @@ mod tests {
             vec![Some(1.0), Some(2.0), None],
         );
 
-        // too many nulls
+        test_sort_primitive_arrays::<Float64Type>(
+            vec![Some(2.0), None, None, Some(1.0)],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            Some(3),
+            vec![None, None, Some(1.0)],
+        );
+
+        // more nulls than limit
         test_sort_primitive_arrays::<Float64Type>(
             vec![Some(2.0), None, None, None],
             Some(SortOptions {
@@ -1580,6 +1590,16 @@ mod tests {
             }),
             Some(2),
             vec![None, None],
+        );
+
+        test_sort_primitive_arrays::<Float64Type>(
+            vec![Some(2.0), None, None, None],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            Some(2),
+            vec![Some(2.0), None],
         );
     }
 
