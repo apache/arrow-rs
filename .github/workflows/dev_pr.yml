@@ -38,8 +38,8 @@ jobs:
           configuration-path: .github/workflows/dev_pr/labeler.yml
           sync-labels: true
 
-      - name: Checks if PR needs rebase
-        uses: eps1lon/actions-label-merge-conflict@releases/2.x
-        with:
-          dirtyLabel: "needs-rebase"
-          repoToken: "${{ secrets.GITHUB_TOKEN }}"
+      #- name: Checks if PR needs rebase
+      #  uses: eps1lon/actions-label-merge-conflict@releases/2.x
+      #  with:
+      #    dirtyLabel: "needs-rebase"
+      #    repoToken: "${{ secrets.GITHUB_TOKEN }}"
