@@ -20,7 +20,6 @@ name: Integration
 on:
   push:
   pull_request:
-    types: [ready_for_review]
 
 jobs:
 
