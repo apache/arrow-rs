@@ -1510,7 +1510,7 @@ mod tests {
         );
 
         // The 2 levels should not be the same
-        if &struct_non_null_level == &struct_null_level {
+        if struct_non_null_level == struct_null_level {
             panic!("Levels should not be equal, to reflect the difference in struct nullness");
         }
     }
