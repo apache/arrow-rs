@@ -99,7 +99,7 @@ impl LevelInfo {
     /// Returns a list of `LevelInfo`, where each level is for nested primitive arrays.
     ///
     /// The parent struct's nullness is tracked, as it determines whether the child
-    /// max_deginition should be incremented.
+    /// max_definition should be incremented.
     /// The 'is_parent_struct' variable asks "is this field's parent a struct?".
     /// * If we are starting at a [RecordBatch], this is `false`.
     /// * If we are calculating a list's child, this is `false`.
