@@ -16,23 +16,6 @@
 // under the License.
 
 //! Contains the `NullArray` type.
-//!
-//! A `NullArray` is a simplified array where all values are null.
-//!
-//! # Example: Create an array
-//!
-//! ```
-//! use arrow::array::{Array, NullArray};
-//!
-//! # fn main() -> arrow::error::Result<()> {
-//! let array = NullArray::new(10);
-//!
-//! assert_eq!(array.len(), 10);
-//! assert_eq!(array.null_count(), 10);
-//!
-//! # Ok(())
-//! # }
-//! ```
 
 use std::any::Any;
 use std::fmt;
@@ -42,12 +25,33 @@ use crate::array::{Array, ArrayData};
 use crate::datatypes::*;
 
 /// An Array where all elements are nulls
+///
+/// A `NullArray` is a simplified array where all values are null.
+///
+/// # Example: Create an array
+///
+/// ```
+/// use arrow::array::{Array, NullArray};
+///
+/// # fn main() -> arrow::error::Result<()> {
+/// let array = NullArray::new(10);
+///
+/// assert_eq!(array.len(), 10);
+/// assert_eq!(array.null_count(), 10);
+///
+/// # Ok(())
+/// # }
+/// ```
 pub struct NullArray {
     data: ArrayData,
 }
 
 impl NullArray {
-    /// Create a new null array of the specified length
+    /// Create a new [`NullArray`] of the specified length
+    ///
+    /// *Note*: Use [`crate::array::new_null_array`] if you need an array of some
+    /// other [`DataType`].
+    ///
     pub fn new(length: usize) -> Self {
         let array_data = ArrayData::builder(DataType::Null).len(length).build();
         NullArray::from(array_data)
