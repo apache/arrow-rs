@@ -48,4 +48,4 @@ jobs:
       - name: Setup Archery
         run: pip install -e dev/archery[docker]
       - name: Execute Docker Build
-        run: archery docker run conda-integration
+        run: archery docker run -e ARCHERY_INTEGRATION_WITH_RUST=1 conda-integration
