@@ -498,8 +498,8 @@ fn get_fsb_array_slice(
 mod tests {
     use super::*;
 
-    use std::io::Seek;
     use std::sync::Arc;
+    use std::{fs::File, io::Seek};
 
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Field, Schema, UInt32Type, UInt8Type};
@@ -956,7 +956,7 @@ mod tests {
 
     const SMALL_SIZE: usize = 4;
 
-    fn roundtrip(filename: &str, expected_batch: RecordBatch) {
+    fn roundtrip(filename: &str, expected_batch: RecordBatch) -> File {
         let file = get_temp_file(filename, &[]);
 
         let mut writer = ArrowWriter::try_new(
@@ -968,7 +968,7 @@ mod tests {
         writer.write(&expected_batch).unwrap();
         writer.close().unwrap();
 
-        let reader = SerializedFileReader::new(file).unwrap();
+        let reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
         let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
 
@@ -986,9 +986,11 @@ mod tests {
 
             assert_eq!(expected_data, actual_data);
         }
+
+        file
     }
 
-    fn one_column_roundtrip(filename: &str, values: ArrayRef, nullable: bool) {
+    fn one_column_roundtrip(filename: &str, values: ArrayRef, nullable: bool) -> File {
         let schema = Schema::new(vec![Field::new(
             "col",
             values.data_type().clone(),
@@ -997,7 +999,7 @@ mod tests {
         let expected_batch =
             RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
 
-        roundtrip(filename, expected_batch);
+        roundtrip(filename, expected_batch)
     }
 
     fn values_required<A, I>(iter: I, filename: &str)
