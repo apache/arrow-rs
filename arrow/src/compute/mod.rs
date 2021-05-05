@@ -23,6 +23,7 @@ mod util;
 
 pub use self::kernels::aggregate::*;
 pub use self::kernels::arithmetic::*;
+pub use self::kernels::arity::*;
 pub use self::kernels::boolean::*;
 pub use self::kernels::cast::*;
 pub use self::kernels::comparison::*;
