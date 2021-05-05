@@ -248,6 +248,19 @@ fn write_leaf(
                         .expect("Unable to get i64 array");
                     get_numeric_array_slice::<Int64Type, _>(&array, &indices)
                 }
+                ArrowDataType::UInt64 => {
+                    // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
+                    // `(i64::MAX as u64)..u64::MAX` to `i64::MIN..0`
+                    let array = column
+                        .as_any()
+                        .downcast_ref::<arrow_array::UInt64Array>()
+                        .expect("Unable to get u64 array");
+                    let array = arrow::compute::unary::<_, _, arrow::datatypes::Int64Type>(
+                        array,
+                        |x| x as i64,
+                    );
+                    get_numeric_array_slice::<Int64Type, _>(&array, &indices)
+                }
                 _ => {
                     let array = arrow::compute::cast(column, &ArrowDataType::Int64)?;
                     let array = array
@@ -507,7 +520,11 @@ mod tests {
     use arrow::{array::*, buffer::Buffer};
 
     use crate::arrow::{ArrowReader, ParquetFileArrowReader};
-    use crate::file::{reader::SerializedFileReader, writer::InMemoryWriteableCursor};
+    use crate::file::{
+        reader::{FileReader, SerializedFileReader},
+        statistics::Statistics,
+        writer::InMemoryWriteableCursor,
+    };
     use crate::util::test_common::get_temp_file;
 
     #[test]
@@ -1450,5 +1467,36 @@ mod tests {
             "test_arrow_writer_string_dictionary_unsigned_index.parquet",
             expected_batch,
         );
+    }
+
+    #[test]
+    fn u64_min_max() {
+        // check values roundtrip through parquet
+        let values = Arc::new(UInt64Array::from_iter_values(vec![
+            u64::MIN,
+            u64::MIN + 1,
+            (i64::MAX as u64) - 1,
+            i64::MAX as u64,
+            (i64::MAX as u64) + 1,
+            u64::MAX - 1,
+            u64::MAX,
+        ]));
+        let file = one_column_roundtrip("u64_min_max_single_column", values, false);
+
+        // check statistics are valid
+        let reader = SerializedFileReader::new(file).unwrap();
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+        let row_group = metadata.row_group(0);
+        assert_eq!(row_group.num_columns(), 1);
+        let column = row_group.column(0);
+        let stats = column.statistics().unwrap();
+        assert!(stats.has_min_max_set());
+        if let Statistics::Int64(stats) = stats {
+            assert_eq!(*stats.min() as u64, u64::MIN);
+            assert_eq!(*stats.max() as u64, u64::MAX);
+        } else {
+            panic!("Statistics::Int64 missing")
+        }
     }
 }

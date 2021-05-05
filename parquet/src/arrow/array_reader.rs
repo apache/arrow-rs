@@ -380,6 +380,18 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
                 }
                 Arc::new(builder.finish()) as ArrayRef
             }
+            ArrowType::UInt64 => match array.data_type() {
+                ArrowType::Int64 => {
+                    // follow C++ implementation and use overflow/reinterpret cast from  i64 to u64 which will map
+                    // `i64::MIN..0` to `(i64::MAX as u64)..u64::MAX`
+                    let values = array.as_any().downcast_ref::<Int64Array>().unwrap();
+                    Arc::new(arrow::compute::unary::<_, _, ArrowUInt64Type>(
+                        values,
+                        |x| x as u64,
+                    ))
+                }
+                _ => arrow::compute::cast(&array, target_type)?,
+            },
             _ => arrow::compute::cast(&array, target_type)?,
         };
 
