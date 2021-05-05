@@ -344,7 +344,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_empty_metadata() {
+    fn test_ser_de_metadata() {
         // ser/de with empty metadata
         let mut schema = Schema::new(vec![
             Field::new("name", DataType::Utf8, false),
