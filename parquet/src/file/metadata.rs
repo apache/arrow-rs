@@ -35,11 +35,10 @@
 
 use std::sync::Arc;
 
-use parquet_format::{ColumnChunk, ColumnMetaData, RowGroup};
-
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 use crate::errors::{ParquetError, Result};
 use crate::file::statistics::{self, Statistics};
+use crate::format::{ColumnChunk, ColumnMetaData, RowGroup};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
@@ -84,7 +83,7 @@ impl ParquetMetaData {
     }
 }
 
-pub type KeyValue = parquet_format::KeyValue;
+pub type KeyValue = crate::format::KeyValue;
 
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;

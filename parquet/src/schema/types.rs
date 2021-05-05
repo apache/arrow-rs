@@ -19,12 +19,11 @@
 
 use std::{collections::HashMap, convert::From, fmt, sync::Arc};
 
-use parquet_format::SchemaElement;
-
 use crate::basic::{
     ConvertedType, LogicalType, Repetition, TimeType, TimeUnit, Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
+use crate::format::SchemaElement;
 
 // ----------------------------------------------------------------------
 // Parquet Type definitions

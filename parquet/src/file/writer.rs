@@ -24,7 +24,6 @@ use std::{
 };
 
 use byteorder::{ByteOrder, LittleEndian};
-use parquet_format as parquet;
 use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
 
 use crate::basic::PageType;
@@ -37,6 +36,7 @@ use crate::file::{
     metadata::*, properties::WriterPropertiesPtr,
     statistics::to_thrift as statistics_to_thrift, FOOTER_SIZE, PARQUET_MAGIC,
 };
+use crate::format as parquet;
 use crate::schema::types::{self, SchemaDescPtr, SchemaDescriptor, TypePtr};
 use crate::util::io::{FileSink, Position};
 

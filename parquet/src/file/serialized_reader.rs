@@ -20,7 +20,6 @@
 
 use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
 
-use parquet_format::{PageHeader, PageType};
 use thrift::protocol::TCompactInputProtocol;
 
 use crate::basic::{Compression, Encoding, Type};
@@ -28,6 +27,7 @@ use crate::column::page::{Page, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::{footer, metadata::*, reader::*, statistics};
+use crate::format::{PageHeader, PageType};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;

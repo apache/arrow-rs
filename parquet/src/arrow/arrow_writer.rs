@@ -101,7 +101,7 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
     }
 
     /// Close and finalize the underlying Parquet writer
-    pub fn close(&mut self) -> Result<parquet_format::FileMetaData> {
+    pub fn close(&mut self) -> Result<crate::format::FileMetaData> {
         self.writer.close()
     }
 }

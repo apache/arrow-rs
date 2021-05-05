@@ -45,6 +45,11 @@ pub mod data_type;
 pub use self::encodings::{decoding, encoding};
 pub use self::util::memory;
 
+/// Re-export parquet_format as `parquet::format`.
+///
+/// Users are encouraged to use this, to avoid format mismatches.
+pub use parquet_format as format;
+
 #[macro_use]
 mod util;
 #[cfg(any(feature = "arrow", test))]

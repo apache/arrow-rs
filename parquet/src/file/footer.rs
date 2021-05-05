@@ -22,17 +22,15 @@ use std::{
 };
 
 use byteorder::{ByteOrder, LittleEndian};
-use parquet_format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
 use thrift::protocol::TCompactInputProtocol;
 
 use crate::basic::ColumnOrder;
-
 use crate::errors::{ParquetError, Result};
 use crate::file::{
     metadata::*, reader::ChunkReader, DEFAULT_FOOTER_READ_SIZE, FOOTER_SIZE,
     PARQUET_MAGIC,
 };
-
+use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
 use crate::schema::types::{self, SchemaDescriptor};
 
 /// Layout of Parquet file
@@ -159,9 +157,9 @@ mod tests {
 
     use crate::basic::SortOrder;
     use crate::basic::Type;
+    use crate::format::TypeDefinedOrder;
     use crate::schema::types::Type as SchemaType;
     use crate::util::test_common::get_temp_file;
-    use parquet_format::TypeDefinedOrder;
 
     #[test]
     fn test_parse_metadata_size_smaller_than_footer() {

@@ -40,10 +40,10 @@
 use std::{cmp, fmt};
 
 use byteorder::{ByteOrder, LittleEndian};
-use parquet_format::Statistics as TStatistics;
 
 use crate::basic::Type;
 use crate::data_type::*;
+use crate::format::Statistics as TStatistics;
 use crate::util::bit_util::from_ne_slice;
 
 // Macro to generate methods create Statistics.

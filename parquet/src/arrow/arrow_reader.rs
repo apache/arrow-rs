@@ -578,7 +578,7 @@ mod tests {
         values: &[Vec<T::T>],
         path: &Path,
         schema: TypePtr,
-    ) -> Result<parquet_format::FileMetaData> {
+    ) -> Result<crate::format::FileMetaData> {
         let file = File::create(path)?;
         let writer_props = Arc::new(WriterProperties::builder().build());
 

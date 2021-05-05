@@ -20,12 +20,12 @@
 
 use std::{convert, fmt, result, str};
 
-use parquet_format as parquet;
+use crate::format as parquet;
 
 use crate::errors::ParquetError;
 
-// Re-export parquet_format types used in this module
-pub use parquet_format::{
+// Re-export parquet::format types used in this module, for convenience
+pub use crate::format::{
     BsonType, DateType, DecimalType, EnumType, IntType, JsonType, ListType, MapType,
     NullType, StringType, TimeType, TimeUnit, TimestampType, UUIDType,
 };
