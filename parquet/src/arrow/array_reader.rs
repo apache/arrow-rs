@@ -268,10 +268,20 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
             }
         }
 
+        let target_type = self.get_data_type().clone();
         let arrow_data_type = match T::get_physical_type() {
             PhysicalType::BOOLEAN => ArrowBooleanType::DATA_TYPE,
             PhysicalType::INT32 => ArrowInt32Type::DATA_TYPE,
-            PhysicalType::INT64 => ArrowInt64Type::DATA_TYPE,
+            PhysicalType::INT64 => {
+                match target_type {
+                    ArrowType::UInt64 => {
+                        // follow C++ implementation and use overflow/reinterpret cast from  i64 to u64 which will map
+                        // `i64::MIN..0` to `(i64::MAX as u64)..u64::MAX`
+                        ArrowUInt64Type::DATA_TYPE
+                    }
+                    _ => ArrowInt64Type::DATA_TYPE,
+                }
+            }
             PhysicalType::FLOAT => ArrowFloat32Type::DATA_TYPE,
             PhysicalType::DOUBLE => ArrowFloat64Type::DATA_TYPE,
             PhysicalType::INT96
@@ -343,15 +353,14 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
         // are datatypes which we must convert explicitly.
         // These are:
         // - date64: we should cast int32 to date32, then date32 to date64.
-        let target_type = self.get_data_type();
         let array = match target_type {
             ArrowType::Date64 => {
                 // this is cheap as it internally reinterprets the data
                 let a = arrow::compute::cast(&array, &ArrowType::Date32)?;
-                arrow::compute::cast(&a, target_type)?
+                arrow::compute::cast(&a, &target_type)?
             }
             ArrowType::Decimal(p, s) => {
-                let mut builder = DecimalBuilder::new(array.len(), *p, *s);
+                let mut builder = DecimalBuilder::new(array.len(), p, s);
                 match array.data_type() {
                     ArrowType::Int32 => {
                         let values = array.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -380,19 +389,7 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
                 }
                 Arc::new(builder.finish()) as ArrayRef
             }
-            ArrowType::UInt64 => match array.data_type() {
-                ArrowType::Int64 => {
-                    // follow C++ implementation and use overflow/reinterpret cast from  i64 to u64 which will map
-                    // `i64::MIN..0` to `(i64::MAX as u64)..u64::MAX`
-                    let values = array.as_any().downcast_ref::<Int64Array>().unwrap();
-                    Arc::new(arrow::compute::unary::<_, _, ArrowUInt64Type>(
-                        values,
-                        |x| x as u64,
-                    ))
-                }
-                _ => arrow::compute::cast(&array, target_type)?,
-            },
-            _ => arrow::compute::cast(&array, target_type)?,
+            _ => arrow::compute::cast(&array, &target_type)?,
         };
 
         // save definition and repetition buffers
