@@ -172,7 +172,7 @@ where
             FieldType::Arrow(f) => Ok(Some(f)),
         })
         .collect::<Result<Vec<Option<Field>>>>()
-        .map(|result| result.into_iter().filter_map(|f| f).collect::<Vec<Field>>())
+        .map(|result| result.into_iter().flatten().collect::<Vec<Field>>())
         .map(|fields| Schema::new_with_metadata(fields, metadata))
 }
 
@@ -827,9 +827,7 @@ impl ParquetTypeConverter<'_> {
                 .iter()
                 .map(|field_ptr| self.clone_with_schema(field_ptr).to_field())
                 .collect::<Result<Vec<Option<Field>>>>()
-                .map(|result| {
-                    result.into_iter().filter_map(|f| f).collect::<Vec<Field>>()
-                })
+                .map(|result| result.into_iter().flatten().collect::<Vec<Field>>())
                 .map(|fields| {
                     if fields.is_empty() {
                         None
