@@ -25,6 +25,7 @@ use std::{
     sync::atomic::AtomicIsize,
 };
 
+pub mod aligned_vec;
 mod alignment;
 mod types;
 
