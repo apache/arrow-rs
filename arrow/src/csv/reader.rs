@@ -353,7 +353,7 @@ impl<R: Read> Reader<R> {
         }
 
         // Initialize batch_records with StringRecords so they
-        // can be reused accross batches
+        // can be reused across batches
         let mut batch_records = Vec::with_capacity(batch_size);
         batch_records.resize_with(batch_size, Default::default);
 
