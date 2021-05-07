@@ -654,7 +654,7 @@ impl Decoder {
             projection
                 .iter()
                 .map(|name| self.schema.column_with_name(name))
-                .filter_map(|c| c)
+                .flatten()
                 .map(|(_, field)| field.clone())
                 .collect()
         };

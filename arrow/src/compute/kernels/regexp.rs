@@ -82,10 +82,8 @@ pub fn regexp_match<OffsetSize: StringOffsetSizeTrait>(
                     };
                     match re.captures(value) {
                         Some(caps) => {
-                            for m in caps.iter().skip(1) {
-                                if let Some(v) = m {
-                                    list_builder.values().append_value(v.as_str())?;
-                                }
+                            for m in caps.iter().skip(1).flatten() {
+                                list_builder.values().append_value(m.as_str())?;
                             }
                             list_builder.append(true)?
                         }

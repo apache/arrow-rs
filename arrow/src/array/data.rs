@@ -500,6 +500,7 @@ impl ArrayDataBuilder {
     }
 
     #[inline]
+    #[allow(clippy::len_without_is_empty)]
     pub const fn len(mut self, n: usize) -> Self {
         self.len = n;
         self

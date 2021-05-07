@@ -372,15 +372,15 @@ impl<'a> Parser<'a> {
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
                                 logical = Some(LogicalType::DECIMAL(DecimalType {
-                                    precision,
                                     scale,
+                                    precision,
                                 }));
                                 converted = ConvertedType::from(logical.clone());
                             } else {
                                 scale = 0;
                                 logical = Some(LogicalType::DECIMAL(DecimalType {
-                                    precision,
                                     scale,
+                                    precision,
                                 }));
                                 converted = ConvertedType::from(logical.clone());
                             }
@@ -401,8 +401,8 @@ impl<'a> Parser<'a> {
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
                                 logical = Some(LogicalType::TIME(TimeType {
-                                    unit,
                                     is_adjusted_to_u_t_c,
+                                    unit,
                                 }));
                                 converted = ConvertedType::from(logical.clone());
                             } else {
@@ -426,8 +426,8 @@ impl<'a> Parser<'a> {
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
                                 logical = Some(LogicalType::TIMESTAMP(TimestampType {
-                                    unit,
                                     is_adjusted_to_u_t_c,
+                                    unit,
                                 }));
                                 converted = ConvertedType::from(logical.clone());
                             } else {
