@@ -17,7 +17,8 @@
 
 //! Defines kernel to extract a substring of a \[Large\]StringArray
 
-use crate::{array::*, buffer::Buffer};
+use crate::alloc::aligned_vec::AlignedVec;
+use crate::array::*;
 use crate::{
     datatypes::DataType,
     error::{ArrowError, Result},
@@ -40,8 +41,9 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     let values = &array.data_ref().buffers()[1];
     let data = values.as_slice();
 
-    let mut new_values = Vec::new(); // we have no way to estimate how much this will be.
-    let mut new_offsets: Vec<OffsetSize> = Vec::with_capacity(array.len() + 1);
+    let mut new_values = AlignedVec::new(); // we have no way to estimate how much this will be.
+    let mut new_offsets: AlignedVec<OffsetSize> =
+        AlignedVec::with_capacity(array.len() + 1);
 
     let mut length_so_far = OffsetSize::zero();
     new_offsets.push(length_so_far);
@@ -80,10 +82,7 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
         None,
         null_bit_buffer,
         0,
-        vec![
-            Buffer::from_slice_ref(&new_offsets),
-            Buffer::from_slice_ref(&new_values),
-        ],
+        vec![new_offsets.into_buffer(), new_values.into_buffer()],
         vec![],
     );
     Ok(make_array(data))
