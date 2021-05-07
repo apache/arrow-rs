@@ -271,7 +271,16 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
         let target_type = self.get_data_type().clone();
         let arrow_data_type = match T::get_physical_type() {
             PhysicalType::BOOLEAN => ArrowBooleanType::DATA_TYPE,
-            PhysicalType::INT32 => ArrowInt32Type::DATA_TYPE,
+            PhysicalType::INT32 => {
+                match target_type {
+                    ArrowType::UInt32 => {
+                        // follow C++ implementation and use overflow/reinterpret cast from  i32 to u32 which will map
+                        // `i32::MIN..0` to `(i32::MAX as u32)..u32::MAX`
+                        ArrowUInt32Type::DATA_TYPE
+                    }
+                    _ => ArrowInt32Type::DATA_TYPE,
+                }
+            }
             PhysicalType::INT64 => {
                 match target_type {
                     ArrowType::UInt64 => {
