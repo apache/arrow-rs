@@ -91,7 +91,7 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
         let batch_level = LevelInfo::new_from_batch(batch);
         let mut row_group_writer = self.writer.next_row_group()?;
         for (array, field) in batch.columns().iter().zip(batch.schema().fields()) {
-            let mut levels = batch_level.calculate_array_levels(array, field, false);
+            let mut levels = batch_level.calculate_array_levels(array, field);
             // Reverse levels as we pop() them when writing arrays
             levels.reverse();
             write_leaves(&mut row_group_writer, array, &mut levels)?;
@@ -793,25 +793,29 @@ mod tests {
         let struct_field_g = Field::new(
             "g",
             DataType::List(Box::new(Field::new("item", DataType::Int16, true))),
+            false,
+        );
+        let struct_field_h = Field::new(
+            "h",
+            DataType::List(Box::new(Field::new("item", DataType::Int16, false))),
             true,
         );
         let struct_field_e = Field::new(
             "e",
-            DataType::Struct(vec![struct_field_f.clone(), struct_field_g.clone()]),
-            true,
+            DataType::Struct(vec![
+                struct_field_f.clone(),
+                struct_field_g.clone(),
+                struct_field_h.clone(),
+            ]),
+            false,
         );
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, true),
-            // Note: when the below struct is set to non-nullable, this test fails,
-            // but the output data written is correct.
-            // Interestingly, pyarrow will read it correctly, but pyspark fails to.
-            // This might be a compatibility quirk between arrow and parquet.
-            // We have opened https://github.com/apache/arrow-rs/issues/245 to investigate
             Field::new(
                 "c",
                 DataType::Struct(vec![struct_field_d.clone(), struct_field_e.clone()]),
-                true,
+                false,
             ),
         ]);
 
@@ -831,15 +835,23 @@ mod tests {
         // Construct a list array from the above two
         let g_list_data = ArrayData::builder(struct_field_g.data_type().clone())
             .len(5)
-            .add_buffer(g_value_offsets)
+            .add_buffer(g_value_offsets.clone())
             .add_child_data(g_value.data().clone())
-            // .null_bit_buffer(Buffer::from(vec![0b00011011])) // TODO: add to test after resolving other issues
             .build();
         let g = ListArray::from(g_list_data);
+        // The difference between g and h is that h has a null bitmap
+        let h_list_data = ArrayData::builder(struct_field_h.data_type().clone())
+            .len(5)
+            .add_buffer(g_value_offsets)
+            .add_child_data(g_value.data().clone())
+            .null_bit_buffer(Buffer::from(vec![0b00011011]))
+            .build();
+        let h = ListArray::from(h_list_data);
 
         let e = StructArray::from(vec![
             (struct_field_f, Arc::new(f) as ArrayRef),
             (struct_field_g, Arc::new(g) as ArrayRef),
+            (struct_field_h, Arc::new(h) as ArrayRef),
         ]);
 
         let c = StructArray::from(vec![
@@ -860,14 +872,10 @@ mod tests {
     #[test]
     fn arrow_writer_complex_mixed() {
         // This test was added while investigating https://github.com/apache/arrow-rs/issues/244.
-        // Only writing the "offest_field" column works when "some_nested_object" is non-null.
-        // This indicates that a non-null struct should not have a null child (with null values).
-        // One observation is that spark doesn't consider the parent struct's nullness,
-        // and so, we should investigate the impact of always treating structs as null.
-        // See https://github.com/apache/arrow-rs/issues/245.
+        // It was subsequently fixed while investigating https://github.com/apache/arrow-rs/issues/245.
 
         // define schema
-        let offset_field = Field::new("offset", DataType::Int32, true);
+        let offset_field = Field::new("offset", DataType::Int32, false);
         let partition_field = Field::new("partition", DataType::Int64, true);
         let topic_field = Field::new("topic", DataType::Utf8, true);
         let schema = Schema::new(vec![Field::new(
@@ -877,7 +885,7 @@ mod tests {
                 partition_field.clone(),
                 topic_field.clone(),
             ]),
-            true,
+            false,
         )]);
 
         // create some data
@@ -970,14 +978,10 @@ mod tests {
         let schema = Schema::new(vec![field_a.clone()]);
 
         // create data
-        // When the null buffer of the struct is created, this test fails.
-        // It appears that the nullness of the struct is ignored when the
-        // struct is read back.
-        // See https://github.com/apache/arrow-rs/issues/245
         let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
-            // .null_bit_buffer(Buffer::from(vec![0b00100111]))
+            .null_bit_buffer(Buffer::from(vec![0b00100111]))
             .add_child_data(c.data().clone())
             .build();
         let b = StructArray::from(b_data);
@@ -989,7 +993,7 @@ mod tests {
         let a = StructArray::from(a_data);
 
         assert_eq!(a.null_count(), 0);
-        assert_eq!(a.column(0).null_count(), 0);
+        assert_eq!(a.column(0).null_count(), 2);
 
         // build a racord batch
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
