@@ -10,7 +10,7 @@ use std::mem::ManuallyDrop;
 /// Can be useful in creating Arrow Buffers with Vec semantics
 #[derive(Debug)]
 pub struct AlignedVec<T> {
-    pub inner: Vec<T>,
+    inner: Vec<T>,
     // if into_inner is called, this will be true and we can use the default Vec's destructor
     taken: bool,
 }
@@ -169,11 +169,11 @@ impl<T> AlignedVec<T> {
         mem::take(&mut self.inner)
     }
 
-    /// Push at the end of the Vec. This is unsafe because a push when the capacity of the
-    /// inner Vec is reached will reallocate the Vec without the alignment, leaving this destructor's
-    /// alignment incorrect
+    /// Push at the end of the Vec.
     #[inline]
     pub fn push(&mut self, value: T) {
+        // Make sure that we always reallocate, and not let the inner vec reallocate!
+        // otherwise the wrong deallocator will run.
         if self.inner.len() == self.capacity() {
             // exponential allocation
             self.reserve(std::cmp::max(self.capacity(), 5));
