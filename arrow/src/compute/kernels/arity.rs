@@ -72,3 +72,40 @@ where
     let data = into_primitive_array_data::<_, O>(array, buffer);
     PrimitiveArray::<O>::from(data)
 }
+
+/// Applies a nullary and infalible function to generate a primitive array.
+/// You should use this instead of the vectorized version when each generated value is different.
+pub fn nullary<F, O>(size: usize, op: F) -> PrimitiveArray<O>
+where
+    O: ArrowPrimitiveType,
+    F: Fn() -> O::Native,
+{
+    let values = (0..size).map(|_| op());
+    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+    let data = ArrayData::new(O::DATA_TYPE, size, None, None, 0, vec![buffer], vec![]);
+    PrimitiveArray::<O>::from(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::array::Int32Array;
+
+    #[test]
+    fn test_unary() {
+        let original = Int32Array::from(vec![1, 2, 3]);
+        let mapped: Int32Array = unary(&original, |i| i * 2);
+        assert_eq!(mapped.len(), original.len());
+        assert_eq!(mapped.value(1), 4);
+    }
+
+    #[test]
+    fn test_nullary() {
+        let generated: Int32Array = nullary(1, || 1i32);
+        assert_eq!(generated.len(), 1);
+        assert_eq!(generated.value(0), 1);
+
+        let generated: Int32Array = nullary(0, || 1i32);
+        assert_eq!(generated.len(), 0);
+    }
+}
