@@ -17,7 +17,7 @@
 
 //! Defines take kernel for [Array]
 
-use std::{ops::AddAssign, sync::Arc};
+use std::{ops::AddAssign, sync::Arc, usize};
 
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::compute::util::{
@@ -261,6 +261,20 @@ fn maybe_usize<I: ArrowPrimitiveType>(index: I::Native) -> Result<usize> {
         .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))
 }
 
+fn take_no_nulls_u32<T, I>(
+    values: &[T::Native],
+    indices: &[u32],
+) -> Result<(Buffer, Option<Buffer>)>
+where
+    T: ArrowPrimitiveType,
+    I: ArrowNumericType,
+{
+    let values = indices.iter().map(|index| values[*index as usize]);
+    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+
+    Ok((buffer, None))
+}
+
 // take implementation when neither values nor indices contain nulls
 fn take_no_nulls<T, I>(
     values: &[T::Native],
@@ -418,7 +432,11 @@ where
         (false, false) => {
             // * no nulls
             // * all `indices.values()` are valid
-            take_no_nulls::<T, I>(values.values(), indices.values())?
+            if I::DATA_TYPE == DataType::UInt32 {
+                take_no_nulls::<T, I>(values.values(), indices.values().into())?
+            } else {
+                take_no_nulls::<T, I>(values.values(), indices.values())?
+            }
         }
         (true, false) => {
             // * nulls come from `values` alone
