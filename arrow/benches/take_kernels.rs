@@ -23,7 +23,7 @@ use rand::Rng;
 
 extern crate arrow;
 
-use arrow::compute::take;
+use arrow::compute::{TakeOptions, take};
 use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
@@ -46,6 +46,10 @@ fn bench_take(values: &dyn Array, indices: &UInt32Array) {
     criterion::black_box(take(values, &indices, None).unwrap());
 }
 
+fn bench_take_bounds_check(values: &dyn Array, indices: &UInt32Array) {
+    criterion::black_box(take(values, &indices, Some(TakeOptions{check_bounds: true})).unwrap());
+}
+
 fn add_benchmark(c: &mut Criterion) {
     let values = create_primitive_array::<Int32Type>(512, 0.0);
     let indices = create_random_index(512, 0.0);
@@ -55,6 +59,16 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("take i32 1024", |b| {
         b.iter(|| bench_take(&values, &indices))
     });
+
+    let values = create_primitive_array::<Int32Type>(512, 0.0);
+    let indices = create_random_index(512, 0.0);
+    c.bench_function("take check bounds i32 512", |b| b.iter(|| bench_take_bounds_check(&values, &indices)));
+    let values = create_primitive_array::<Int32Type>(1024, 0.0);
+    let indices = create_random_index(1024, 0.0);
+    c.bench_function("take check bounds i32 1024", |b| {
+        b.iter(|| bench_take_bounds_check(&values, &indices))
+    });
+
 
     let indices = create_random_index(512, 0.5);
     c.bench_function("take i32 nulls 512", |b| {

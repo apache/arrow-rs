@@ -100,17 +100,32 @@ where
     let options = options.unwrap_or_default();
     if options.check_bounds {
         let len = values.len();
-        for i in 0..indices.len() {
-            if indices.is_valid(i) {
-                let ix = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
+        if indices.null_count() > 0 {
+            indices.iter().flatten().try_for_each(|index| {
+                let ix =
+                ToPrimitive::to_usize(&index).ok_or_else(|| {
                     ArrowError::ComputeError("Cast to usize failed".to_string())
                 })?;
                 if ix >= len {
                     return Err(ArrowError::ComputeError(
-                    format!("Array index out of bounds, cannot get item at index {} from {} entries", ix, len))
+                format!("Array index out of bounds, cannot get item at index {} from {} entries", ix, len))
                 );
                 }
-            }
+                Ok(())
+            })?;
+        } else {
+            indices.values().iter().try_for_each(|index| {
+                let ix =
+                ToPrimitive::to_usize(index).ok_or_else(|| {
+                    ArrowError::ComputeError("Cast to usize failed".to_string())
+                })?;
+                if ix >= len {
+                    return Err(ArrowError::ComputeError(
+                format!("Array index out of bounds, cannot get item at index {} from {} entries", ix, len))
+                );
+                }
+                Ok(())
+            })?
         }
     }
     match values.data_type() {
