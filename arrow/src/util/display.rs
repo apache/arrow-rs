@@ -300,14 +300,12 @@ fn dict_array_value_to_string<K: ArrowPrimitiveType>(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::{
-        array::{
-            Int32Array, DecimalArray, ArrayData
-        },
         array::ArrayRef,
+        array::{ArrayData, DecimalArray, Int32Array},
     };
     use crate::{buffer::Buffer, datatypes::DataType};
-    use super::*;
     use std::sync::Arc;
 
     #[test]
