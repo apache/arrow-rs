@@ -102,27 +102,25 @@ where
         let len = values.len();
         if indices.null_count() > 0 {
             indices.iter().flatten().try_for_each(|index| {
-                let ix =
-                ToPrimitive::to_usize(&index).ok_or_else(|| {
+                let ix = ToPrimitive::to_usize(&index).ok_or_else(|| {
                     ArrowError::ComputeError("Cast to usize failed".to_string())
                 })?;
                 if ix >= len {
                     return Err(ArrowError::ComputeError(
-                format!("Array index out of bounds, cannot get item at index {} from {} entries", ix, len))
-                );
+                        format!("Array index out of bounds, cannot get item at index {} from {} entries", ix, len))
+                    );
                 }
                 Ok(())
             })?;
         } else {
             indices.values().iter().try_for_each(|index| {
-                let ix =
-                ToPrimitive::to_usize(index).ok_or_else(|| {
+                let ix = ToPrimitive::to_usize(index).ok_or_else(|| {
                     ArrowError::ComputeError("Cast to usize failed".to_string())
                 })?;
                 if ix >= len {
                     return Err(ArrowError::ComputeError(
-                format!("Array index out of bounds, cannot get item at index {} from {} entries", ix, len))
-                );
+                        format!("Array index out of bounds, cannot get item at index {} from {} entries", ix, len))
+                    );
                 }
                 Ok(())
             })?
