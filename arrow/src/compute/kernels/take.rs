@@ -261,13 +261,12 @@ fn maybe_usize<I: ArrowPrimitiveType>(index: I::Native) -> Result<usize> {
         .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))
 }
 
-fn take_no_nulls_u32<T, I>(
+fn take_no_nulls_u32<T>(
     values: &[T::Native],
     indices: &[u32],
 ) -> Result<(Buffer, Option<Buffer>)>
 where
     T: ArrowPrimitiveType,
-    I: ArrowNumericType,
 {
     let values = indices.iter().map(|index| values[*index as usize]);
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
@@ -433,7 +432,11 @@ where
             // * no nulls
             // * all `indices.values()` are valid
             if I::DATA_TYPE == DataType::UInt32 {
-                take_no_nulls::<T, I>(values.values(), indices.values().into())?
+                let indices_u32 = indices
+                    .as_any()
+                    .downcast_ref::<PrimitiveArray<UInt32Type>>()
+                    .expect("");
+                take_no_nulls_u32::<T>(values.values(), indices_u32.values())?
             } else {
                 take_no_nulls::<T, I>(values.values(), indices.values())?
             }
