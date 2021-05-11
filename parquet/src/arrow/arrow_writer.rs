@@ -1366,7 +1366,7 @@ mod tests {
         let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
             "item",
             DataType::Int32,
-            true, // TODO: why does this fail when false? Is it related to logical nulls?
+            false,
         ))))
         .len(5)
         .add_buffer(a_value_offsets)

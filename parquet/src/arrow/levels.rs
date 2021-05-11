@@ -331,7 +331,6 @@ impl LevelInfo {
                 unreachable!("Cannot have a root as a child")
             }
             (LevelType::List(_), _) => {
-                // Always add 1  (TDDO: document why)
                 self.max_definition + 1 + level_type.level_increment()
             }
             (LevelType::Struct(_), _) => {
