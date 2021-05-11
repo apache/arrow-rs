@@ -497,16 +497,9 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![dm])?;
 
         let table = pretty_format_batches(&[batch])?;
-
         let expected = vec![
-            "+------+",
-            "| f    |",
-            "+------+",
-            "| 101  |",
-            "|      |",
-            "| 200  |",
-            "| 3040 |",
-            "+------+",
+            "+------+", "| f    |", "+------+", "| 101  |", "|      |", "| 200  |",
+            "| 3040 |", "+------+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
