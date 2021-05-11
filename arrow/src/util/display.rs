@@ -192,6 +192,20 @@ macro_rules! make_string_from_list {
     }};
 }
 
+macro_rules! make_string_from_decimal {
+    ($array_type: ty, $column: ident, $row: ident, $scale: ident) => {{
+        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
+        let decimal_string = array.value($row).to_string();
+        let formatted_decimal = if *$scale == 0 {
+            decimal_string
+        } else {
+            let splits = decimal_string.split_at(decimal_string.len() - *$scale);
+            format!("{}.{}", splits.0, splits.1)
+        };
+        Ok(formatted_decimal)
+    }};
+}
+
 /// Get the value at the given row in an array as a String.
 ///
 /// Note this function is quite inefficient and is unlikely to be
@@ -217,7 +231,9 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
         DataType::Float16 => make_string!(array::Float32Array, column, row),
         DataType::Float32 => make_string!(array::Float32Array, column, row),
         DataType::Float64 => make_string!(array::Float64Array, column, row),
-        DataType::Decimal(_, _) => make_string!(array::DecimalArray, column, row),
+        DataType::Decimal(_, scale) => {
+            make_string_from_decimal!(array::DecimalArray, column, row, scale)
+        }
         DataType::Timestamp(unit, _) if *unit == TimeUnit::Second => {
             make_string_datetime!(array::TimestampSecondArray, column, row)
         }
@@ -296,49 +312,4 @@ fn dict_array_value_to_string<K: ArrowPrimitiveType>(
     })?;
 
     array_value_to_string(&dict_array.values(), dict_index)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        array::ArrayRef,
-        array::{ArrayData, DecimalArray, Int32Array},
-    };
-    use crate::{buffer::Buffer, datatypes::DataType};
-    use std::sync::Arc;
-
-    #[test]
-    fn test_int_display() -> Result<()> {
-        let array = Arc::new(Int32Array::from(vec![6, 3])) as ArrayRef;
-        let actual_one = array_value_to_string(&array, 0).unwrap();
-        let expected_one = String::from("6");
-
-        let actual_two = array_value_to_string(&array, 1).unwrap();
-        let expected_two = String::from("3");
-        assert_eq!(actual_one, expected_one);
-        assert_eq!(actual_two, expected_two);
-        Ok(())
-    }
-
-    #[test]
-    fn test_decimal_display() -> Result<()> {
-        let values: [u8; 32] = [
-            192, 219, 180, 17, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 36, 75, 238, 253,
-            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        ];
-        let array_data = ArrayData::builder(DataType::Decimal(23, 6))
-            .len(2)
-            .add_buffer(Buffer::from(&values[..]))
-            .build();
-        let decimal_array = DecimalArray::from(array_data);
-        let dm = Arc::new(decimal_array) as ArrayRef;
-        let actual = array_value_to_string(&dm, 0).unwrap();
-        let expected = String::from("8887000000");
-        assert_eq!(actual, expected);
-        let actual_two = array_value_to_string(&dm, 1).unwrap();
-        let expected_two = String::from("-8887000000");
-        assert_eq!(actual_two, expected_two);
-        Ok(())
-    }
 }
