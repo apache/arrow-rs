@@ -81,10 +81,7 @@ where
     O: ArrowPrimitiveType,
     F: Fn() -> O::Native,
 {
-    let values = iter::repeat_with(op).take(size);
-    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-    let data = ArrayData::new(O::DATA_TYPE, size, None, None, 0, vec![buffer], vec![]);
-    PrimitiveArray::<O>::from(data)
+    PrimitiveArray::<O>::from_iter_values(iter::repeat_with(op).take(size))
 }
 
 #[cfg(test)]
