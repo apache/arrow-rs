@@ -385,7 +385,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FFI_ArrowArray {
     pub(crate) length: i64,
     pub(crate) null_count: i64,
