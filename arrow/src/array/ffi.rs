@@ -97,7 +97,23 @@ mod tests {
 
     #[test]
     fn test_struct() -> Result<()> {
+        let inner = StructArray::from(vec![
+            (
+                Field::new("a1", DataType::Boolean, false),
+                Arc::new(BooleanArray::from(vec![true, true, false, false]))
+                    as Arc<dyn Array>,
+            ),
+            (
+                Field::new("a2", DataType::UInt32, false),
+                Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
+            ),
+        ]);
+
         let array = StructArray::from(vec![
+            (
+                Field::new("a", inner.data_type().clone(), false),
+                Arc::new(inner) as Arc<dyn Array>,
+            ),
             (
                 Field::new("b", DataType::Boolean, false),
                 Arc::new(BooleanArray::from(vec![false, false, true, true]))
