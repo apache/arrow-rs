@@ -259,8 +259,9 @@ jobs:
           export MIRIFLAGS="-Zmiri-disable-isolation"
           cargo miri setup
           cargo clean
-          # Ignore MIRI errors until we can get a clean run
-          cargo miri test || true
+          # Currently only the arrow crate is tested with miri 
+          # IO related tests and some unsupported tests are skipped
+          cargo miri test -p arrow -- --skip csv --skip ipc --skip json
 
   lint:
     name: Lint

@@ -154,6 +154,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // running forever
     fn length_test_string() -> Result<()> {
         length_cases()
             .into_iter()
@@ -170,6 +171,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // running forever
     fn length_test_large_string() -> Result<()> {
         length_cases()
             .into_iter()

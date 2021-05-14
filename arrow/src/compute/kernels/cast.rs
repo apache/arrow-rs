@@ -3521,6 +3521,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // running forever
     fn test_can_cast_types() {
         // this function attempts to ensure that can_cast_types stays
         // in sync with cast.  It simply tries all combinations of

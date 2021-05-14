@@ -153,27 +153,30 @@ impl FFI_ArrowSchema {
             _ => vec![],
         };
         // note: this cannot be done along with the above because the above is fallible and this op leaks.
-        let mut children_ptr = children_vec
+        let children_ptr = children_vec
             .into_iter()
             .map(Box::into_raw)
             .collect::<Box<_>>();
         let n_children = children_ptr.len() as i64;
-        let children = children_ptr.as_mut_ptr();
+
+        let flags = field.is_nullable() as i64 * 2;
+
+        let mut private = Box::new(SchemaPrivateData {
+            field,
+            children_ptr,
+        });
 
         // <https://arrow.apache.org/docs/format/CDataInterface.html#c.ArrowSchema>
         Ok(FFI_ArrowSchema {
             format: CString::new(format).unwrap().into_raw(),
             name: CString::new(name).unwrap().into_raw(),
             metadata: std::ptr::null_mut(),
-            flags: field.is_nullable() as i64 * 2,
+            flags,
             n_children,
-            children,
+            children: private.children_ptr.as_mut_ptr(),
             dictionary: std::ptr::null_mut(),
             release: Some(release_schema),
-            private_data: Box::into_raw(Box::new(SchemaPrivateData {
-                field,
-                children_ptr,
-            })) as *mut ::std::os::raw::c_void,
+            private_data: Box::into_raw(private) as *mut ::std::os::raw::c_void,
         })
     }
 
@@ -448,7 +451,7 @@ impl FFI_ArrowArray {
             .collect::<Vec<_>>();
         let n_buffers = buffers.len() as i64;
 
-        let mut buffers_ptr = buffers
+        let buffers_ptr = buffers
             .iter()
             .map(|maybe_buffer| match maybe_buffer {
                 // note that `raw_data` takes into account the buffer's offset
@@ -456,19 +459,17 @@ impl FFI_ArrowArray {
                 None => std::ptr::null(),
             })
             .collect::<Box<[_]>>();
-        let pointer = buffers_ptr.as_mut_ptr();
 
-        let mut children = data
+        let children = data
             .child_data()
             .iter()
             .map(|child| Box::into_raw(Box::new(FFI_ArrowArray::new(child))))
             .collect::<Box<_>>();
-        let children_ptr = children.as_mut_ptr();
         let n_children = children.len() as i64;
 
         // create the private data owning everything.
         // any other data must be added here, e.g. via a struct, to track lifetime.
-        let private_data = Box::new(PrivateData {
+        let mut private_data = Box::new(PrivateData {
             buffers,
             buffers_ptr,
             children,
@@ -480,8 +481,8 @@ impl FFI_ArrowArray {
             offset: data.offset() as i64,
             n_buffers,
             n_children,
-            buffers: pointer,
-            children: children_ptr,
+            buffers: private_data.buffers_ptr.as_mut_ptr(),
+            children: private_data.children.as_mut_ptr(),
             dictionary: std::ptr::null_mut(),
             release: Some(release_array),
             private_data: Box::into_raw(private_data) as *mut ::std::os::raw::c_void,

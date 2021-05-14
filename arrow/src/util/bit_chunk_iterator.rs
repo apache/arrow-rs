@@ -184,6 +184,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // error: Undefined Behavior: using uninitialized data, but this operation requires initialized memory
     fn test_iter_unaligned() {
         let input: &[u8] = &[
             0b00000000, 0b00000001, 0b00000010, 0b00000100, 0b00001000, 0b00010000,
@@ -205,6 +206,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // error: Undefined Behavior: using uninitialized data, but this operation requires initialized memory
     fn test_iter_unaligned_remainder_1_byte() {
         let input: &[u8] = &[
             0b00000000, 0b00000001, 0b00000010, 0b00000100, 0b00001000, 0b00010000,
@@ -226,6 +228,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // error: Undefined Behavior: using uninitialized data, but this operation requires initialized memory
     fn test_iter_unaligned_remainder_bits_across_bytes() {
         let input: &[u8] = &[0b00111111, 0b11111100];
         let buffer: Buffer = Buffer::from(input);
@@ -239,6 +242,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // error: Undefined Behavior: using uninitialized data, but this operation requires initialized memory
     fn test_iter_unaligned_remainder_bits_large() {
         let input: &[u8] = &[
             0b11111111, 0b00000000, 0b11111111, 0b00000000, 0b11111111, 0b00000000,
