@@ -192,6 +192,20 @@ macro_rules! make_string_from_list {
     }};
 }
 
+macro_rules! make_string_from_decimal {
+    ($array_type: ty, $column: ident, $row: ident, $scale: ident) => {{
+        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
+        let decimal_string = array.value($row).to_string();
+        let formatted_decimal = if *$scale == 0 {
+            decimal_string
+        } else {
+            let splits = decimal_string.split_at(decimal_string.len() - *$scale);
+            format!("{}.{}", splits.0, splits.1)
+        };
+        Ok(formatted_decimal)
+    }};
+}
+
 /// Get the value at the given row in an array as a String.
 ///
 /// Note this function is quite inefficient and is unlikely to be
@@ -217,6 +231,9 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
         DataType::Float16 => make_string!(array::Float32Array, column, row),
         DataType::Float32 => make_string!(array::Float32Array, column, row),
         DataType::Float64 => make_string!(array::Float64Array, column, row),
+        DataType::Decimal(_, scale) => {
+            make_string_from_decimal!(array::DecimalArray, column, row, scale)
+        }
         DataType::Timestamp(unit, _) if *unit == TimeUnit::Second => {
             make_string_datetime!(array::TimestampSecondArray, column, row)
         }

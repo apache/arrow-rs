@@ -115,6 +115,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::array::{DecimalBuilder, Int32Array};
     use std::sync::Arc;
 
     #[test]
@@ -417,5 +418,93 @@ mod tests {
             "+--------------------+",
         ];
         check_datetime!(Time64NanosecondArray, 11111111, expected);
+    }
+
+    #[test]
+    fn test_int_display() -> Result<()> {
+        let array = Arc::new(Int32Array::from(vec![6, 3])) as ArrayRef;
+        let actual_one = array_value_to_string(&array, 0).unwrap();
+        let expected_one = "6";
+
+        let actual_two = array_value_to_string(&array, 1).unwrap();
+        let expected_two = "3";
+        assert_eq!(actual_one, expected_one);
+        assert_eq!(actual_two, expected_two);
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal_display() -> Result<()> {
+        let capacity = 10;
+        let precision = 10;
+        let scale = 2;
+
+        let mut builder = DecimalBuilder::new(capacity, precision, scale);
+        builder.append_value(101).unwrap();
+        builder.append_null().unwrap();
+        builder.append_value(200).unwrap();
+        builder.append_value(3040).unwrap();
+
+        let dm = Arc::new(builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f",
+            dm.data_type().clone(),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![dm])?;
+
+        let table = pretty_format_batches(&[batch])?;
+
+        let expected = vec![
+            "+-------+",
+            "| f     |",
+            "+-------+",
+            "| 1.01  |",
+            "|       |",
+            "| 2.00  |",
+            "| 30.40 |",
+            "+-------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal_display_zero_scale() -> Result<()> {
+        let capacity = 10;
+        let precision = 5;
+        let scale = 0;
+
+        let mut builder = DecimalBuilder::new(capacity, precision, scale);
+        builder.append_value(101).unwrap();
+        builder.append_null().unwrap();
+        builder.append_value(200).unwrap();
+        builder.append_value(3040).unwrap();
+
+        let dm = Arc::new(builder.finish()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f",
+            dm.data_type().clone(),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![dm])?;
+
+        let table = pretty_format_batches(&[batch])?;
+        let expected = vec![
+            "+------+", "| f    |", "+------+", "| 101  |", "|      |", "| 200  |",
+            "| 3040 |", "+------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
     }
 }
