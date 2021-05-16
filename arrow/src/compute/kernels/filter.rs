@@ -17,12 +17,12 @@
 
 //! Defines miscellaneous array kernels.
 
+use crate::buffer::buffer_bin_and;
 use crate::datatypes::DataType;
 use crate::error::Result;
 use crate::record_batch::RecordBatch;
 use crate::{array::*, util::bit_chunk_iterator::BitChunkIterator};
 use std::iter::Enumerate;
-use std::ops::BitAnd;
 
 /// Function that can filter arbitrary arrays
 pub type Filter<'a> = Box<Fn(&ArrayData) -> ArrayData + 'a>;
@@ -229,14 +229,16 @@ pub fn filter(array: &Array, filter: &BooleanArray) -> Result<ArrayRef> {
         let array_data = filter.data_ref();
         let null_bitmap = array_data.null_buffer().unwrap();
         let mask = filter.values();
-        let new_mask = mask.bitand(&null_bitmap)?;
+        let offset = filter.offset();
+
+        let new_mask = buffer_bin_and(mask, offset, null_bitmap, offset, filter.len());
 
         let array_data = ArrayData::builder(DataType::Boolean)
             .len(filter.len())
             .add_buffer(new_mask)
             .build();
         let filter = BooleanArray::from(array_data);
-        // fully syntax, because we have an argument with the same name
+        // fully qualified syntax, because we have an argument with the same name
         return crate::compute::kernels::filter::filter(array, &filter);
     }
 
