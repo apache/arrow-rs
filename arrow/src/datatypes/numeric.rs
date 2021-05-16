@@ -25,7 +25,7 @@ use super::*;
 /// A subtype of primitive type that represents numeric values.
 ///
 /// SIMD operations are defined in this trait if available on the target system.
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 pub trait ArrowNumericType: ArrowPrimitiveType
 where
     Self::Simd: Add<Output = Self::Simd>
@@ -109,12 +109,12 @@ where
     fn unary_op<F: Fn(Self::Simd) -> Self::Simd>(a: Self::Simd, op: F) -> Self::Simd;
 }
 
-#[cfg(not(simd))]
+#[cfg(not(feature = "simd"))]
 pub trait ArrowNumericType: ArrowPrimitiveType {}
 
 macro_rules! make_numeric_type {
     ($impl_ty:ty, $native_ty:ty, $simd_ty:ident, $simd_mask_ty:ident) => {
-        #[cfg(simd)]
+        #[cfg(feature = "simd")]
         impl ArrowNumericType for $impl_ty {
             type Simd = $simd_ty;
 
@@ -318,7 +318,7 @@ macro_rules! make_numeric_type {
             }
         }
 
-        #[cfg(not(simd))]
+        #[cfg(not(feature = "simd"))]
         impl ArrowNumericType for $impl_ty {}
     };
 }
@@ -354,7 +354,7 @@ make_numeric_type!(DurationNanosecondType, i64, i64x8, m64x8);
 /// A subtype of primitive type that represents signed numeric values.
 ///
 /// SIMD operations are defined in this trait if available on the target system.
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 pub trait ArrowSignedNumericType: ArrowNumericType
 where
     Self::SignedSimd: Neg<Output = Self::SignedSimd>,
@@ -375,7 +375,7 @@ where
     fn write_signed(simd_result: Self::SignedSimd, slice: &mut [Self::Native]);
 }
 
-#[cfg(not(simd))]
+#[cfg(not(feature = "simd"))]
 pub trait ArrowSignedNumericType: ArrowNumericType
 where
     Self::Native: std::ops::Neg<Output = Self::Native>,
@@ -384,7 +384,7 @@ where
 
 macro_rules! make_signed_numeric_type {
     ($impl_ty:ty, $simd_ty:ident) => {
-        #[cfg(simd)]
+        #[cfg(feature = "simd")]
         impl ArrowSignedNumericType for $impl_ty {
             type SignedSimd = $simd_ty;
 
@@ -407,7 +407,7 @@ macro_rules! make_signed_numeric_type {
             }
         }
 
-        #[cfg(not(simd))]
+        #[cfg(not(feature = "simd"))]
         impl ArrowSignedNumericType for $impl_ty {}
     };
 }
@@ -419,17 +419,17 @@ make_signed_numeric_type!(Int64Type, i64x8);
 make_signed_numeric_type!(Float32Type, f32x16);
 make_signed_numeric_type!(Float64Type, f64x8);
 
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 pub trait ArrowFloatNumericType: ArrowNumericType {
     fn pow(base: Self::Simd, raise: Self::Simd) -> Self::Simd;
 }
 
-#[cfg(not(simd))]
+#[cfg(not(feature = "simd"))]
 pub trait ArrowFloatNumericType: ArrowNumericType {}
 
 macro_rules! make_float_numeric_type {
     ($impl_ty:ty, $simd_ty:ident) => {
-        #[cfg(simd)]
+        #[cfg(feature = "simd")]
         impl ArrowFloatNumericType for $impl_ty {
             #[inline]
             fn pow(base: Self::Simd, raise: Self::Simd) -> Self::Simd {
@@ -437,7 +437,7 @@ macro_rules! make_float_numeric_type {
             }
         }
 
-        #[cfg(not(simd))]
+        #[cfg(not(feature = "simd"))]
         impl ArrowFloatNumericType for $impl_ty {}
     };
 }
