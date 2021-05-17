@@ -1007,7 +1007,7 @@ mod tests {
         expected_data: Vec<Option<&str>>,
     ) {
         let array = DictionaryArray::<T>::from_iter(data.into_iter());
-        let array_values = array.values();
+        let array_values = array.values().clone();
         let dict = array_values
             .as_any()
             .downcast_ref::<StringArray>()
