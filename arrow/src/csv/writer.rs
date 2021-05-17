@@ -65,7 +65,7 @@
 //! }
 //! ```
 
-use csv as csv_crate;
+use csv_crate;
 
 use std::io::Write;
 

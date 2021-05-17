@@ -49,7 +49,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use csv as csv_crate;
+use csv_crate;
 
 use crate::array::{
     ArrayRef, BooleanArray, DictionaryArray, PrimitiveArray, StringArray,

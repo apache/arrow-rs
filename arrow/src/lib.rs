@@ -149,6 +149,7 @@ pub mod bitmap;
 pub mod buffer;
 mod bytes;
 pub mod compute;
+#[cfg(feature = "csv")]
 pub mod csv;
 pub mod datatypes;
 pub mod error;
