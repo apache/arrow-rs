@@ -15,9 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "simd")]
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+    feature = "simd"
+))]
 use crate::util::bit_util;
-#[cfg(feature = "simd")]
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+    feature = "simd"
+))]
 use packed_simd::u8x64;
 
 #[cfg(feature = "avx512")]
@@ -33,7 +39,10 @@ use super::{Buffer, MutableBuffer};
 /// and the `scalar_op` gets applied to remaining bytes.
 /// Contrary to the non-simd version `bitwise_bin_op_helper`, the offset and length is specified in bytes
 /// and this version does not support operations starting at arbitrary bit offsets.
-#[cfg(feature = "simd")]
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+    feature = "simd"
+))]
 pub fn bitwise_bin_op_simd_helper<F_SIMD, F_SCALAR>(
     left: &Buffer,
     left_offset: usize,
@@ -82,7 +91,10 @@ where
 /// and the `scalar_op` gets applied to remaining bytes.
 /// Contrary to the non-simd version `bitwise_unary_op_helper`, the offset and length is specified in bytes
 /// and this version does not support operations starting at arbitrary bit offsets.
-#[cfg(feature = "simd")]
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+    feature = "simd"
+))]
 pub fn bitwise_unary_op_simd_helper<F_SIMD, F_SCALAR>(
     left: &Buffer,
     left_offset: usize,
@@ -411,7 +423,10 @@ pub fn buffer_unary_not(
     len_in_bits: usize,
 ) -> Buffer {
     // SIMD implementation if available and byte-aligned
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     if offset_in_bits % 8 == 0 && len_in_bits % 8 == 0 {
         return bitwise_unary_op_simd_helper(
             &left,

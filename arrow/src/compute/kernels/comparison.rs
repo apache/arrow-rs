@@ -543,7 +543,10 @@ pub fn gt_eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
 
 /// Helper function to perform boolean lambda function on values from two arrays using
 /// SIMD.
-#[cfg(feature = "simd")]
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+    feature = "simd"
+))]
 fn simd_compare_op<T, SIMD_OP, SCALAR_OP>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
@@ -633,7 +636,10 @@ where
 
 /// Helper function to perform boolean lambda function on values from an array and a scalar value using
 /// SIMD.
-#[cfg(feature = "simd")]
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+    feature = "simd"
+))]
 fn simd_compare_op_scalar<T, SIMD_OP, SCALAR_OP>(
     left: &PrimitiveArray<T>,
     right: T::Native,
@@ -719,7 +725,10 @@ pub fn eq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<Bool
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op(left, right, T::eq, |a, b| a == b);
     #[cfg(not(feature = "simd"))]
     return compare_op!(left, right, |a, b| a == b);
@@ -730,7 +739,10 @@ pub fn eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<Boolea
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op_scalar(left, right, T::eq, |a, b| a == b);
     #[cfg(not(feature = "simd"))]
     return compare_op_scalar!(left, right, |a, b| a == b);
@@ -741,7 +753,10 @@ pub fn neq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<Boo
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op(left, right, T::ne, |a, b| a != b);
     #[cfg(not(feature = "simd"))]
     return compare_op!(left, right, |a, b| a != b);
@@ -752,7 +767,10 @@ pub fn neq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<Boole
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op_scalar(left, right, T::ne, |a, b| a != b);
     #[cfg(not(feature = "simd"))]
     return compare_op_scalar!(left, right, |a, b| a != b);
@@ -764,7 +782,10 @@ pub fn lt<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<Bool
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op(left, right, T::lt, |a, b| a < b);
     #[cfg(not(feature = "simd"))]
     return compare_op!(left, right, |a, b| a < b);
@@ -776,7 +797,10 @@ pub fn lt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<Boolea
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op_scalar(left, right, T::lt, |a, b| a < b);
     #[cfg(not(feature = "simd"))]
     return compare_op_scalar!(left, right, |a, b| a < b);
@@ -791,7 +815,10 @@ pub fn lt_eq<T>(
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op(left, right, T::le, |a, b| a <= b);
     #[cfg(not(feature = "simd"))]
     return compare_op!(left, right, |a, b| a <= b);
@@ -803,7 +830,10 @@ pub fn lt_eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<Boo
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op_scalar(left, right, T::le, |a, b| a <= b);
     #[cfg(not(feature = "simd"))]
     return compare_op_scalar!(left, right, |a, b| a <= b);
@@ -815,7 +845,10 @@ pub fn gt<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<Bool
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op(left, right, T::gt, |a, b| a > b);
     #[cfg(not(feature = "simd"))]
     return compare_op!(left, right, |a, b| a > b);
@@ -827,7 +860,10 @@ pub fn gt_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<Boolea
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op_scalar(left, right, T::gt, |a, b| a > b);
     #[cfg(not(feature = "simd"))]
     return compare_op_scalar!(left, right, |a, b| a > b);
@@ -842,7 +878,10 @@ pub fn gt_eq<T>(
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op(left, right, T::ge, |a, b| a >= b);
     #[cfg(not(feature = "simd"))]
     return compare_op!(left, right, |a, b| a >= b);
@@ -854,7 +893,10 @@ pub fn gt_eq_scalar<T>(left: &PrimitiveArray<T>, right: T::Native) -> Result<Boo
 where
     T: ArrowNumericType,
 {
-    #[cfg(feature = "simd")]
+    #[cfg(all(
+        any(target_arch = "x86", target_arch = "x86_64", target_arch = "aarch64"),
+        feature = "simd"
+    ))]
     return simd_compare_op_scalar(left, right, T::ge, |a, b| a >= b);
     #[cfg(not(feature = "simd"))]
     return compare_op_scalar!(left, right, |a, b| a >= b);
