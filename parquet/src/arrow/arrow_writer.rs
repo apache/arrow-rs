@@ -1560,4 +1560,21 @@ mod tests {
             panic!("Statistics::Int64 missing")
         }
     }
+
+    #[test]
+    fn statistics_null_counts_only_nulls() {
+        // check that null-count statistics for "only NULL"-columns are correct
+        let values = Arc::new(UInt64Array::from(vec![None, None]));
+        let file = one_column_roundtrip("null_counts", values, true);
+
+        // check statistics are valid
+        let reader = SerializedFileReader::new(file).unwrap();
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+        let row_group = metadata.row_group(0);
+        assert_eq!(row_group.num_columns(), 1);
+        let column = row_group.column(0);
+        let stats = column.statistics().unwrap();
+        assert_eq!(stats.null_count(), 2);
+    }
 }
