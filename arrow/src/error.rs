@@ -19,8 +19,6 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::io::Write;
 
-#[cfg(feature = "csv")]
-use csv_crate;
 use std::error::Error;
 
 /// Many different operations in the `arrow` crate return this error type.

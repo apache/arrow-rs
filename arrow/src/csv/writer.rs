@@ -65,8 +65,6 @@
 //! }
 //! ```
 
-use csv_crate;
-
 use std::io::Write;
 
 use crate::datatypes::*;

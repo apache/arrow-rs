@@ -49,8 +49,6 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use csv_crate;
-
 use crate::array::{
     ArrayRef, BooleanArray, DictionaryArray, PrimitiveArray, StringArray,
 };
@@ -58,7 +56,7 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
 
-use self::csv_crate::{ByteRecord, StringRecord};
+use csv_crate::{ByteRecord, StringRecord};
 
 lazy_static! {
     static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d+\.\d+)$").unwrap();
