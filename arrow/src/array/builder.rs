@@ -383,7 +383,7 @@ impl From<BooleanBufferBuilder> for Buffer {
 }
 
 /// Trait for dealing with different array builders at runtime
-pub trait ArrayBuilder: Any {
+pub trait ArrayBuilder: Any + Send {
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize;
 
