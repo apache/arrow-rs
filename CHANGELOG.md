@@ -1,4 +1,6 @@
-For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md)\n# Changelog
+For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md)
+
+# Changelog
 
 ## [4.1.0](https://github.com/apache/arrow-rs/tree/4.1.0) (2021-05-17)
 
