@@ -235,7 +235,7 @@ impl MutableBuffer {
     }
 
     #[inline]
-    pub(super) fn into_buffer(self) -> Buffer {
+    pub fn into_buffer(self) -> Buffer {
         let bytes = unsafe {
             Bytes::new(self.data, self.len, Deallocation::Native(self.capacity))
         };
