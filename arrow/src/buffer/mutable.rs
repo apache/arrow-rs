@@ -191,9 +191,6 @@ impl MutableBuffer {
     /// buffer.shrink_to_fit();
     /// assert!(buffer.capacity() >= 64 && buffer.capacity() < 128);
     /// ```
-    // For performance reasons, this must be inlined so that the `if` is executed inside the caller, and not as an extra call that just
-    // exits.
-    #[inline(always)]
     pub fn shrink_to_fit(&mut self) {
         let new_capacity = bit_util::round_upto_multiple_of_64(self.len);
         if new_capacity < self.capacity {
@@ -779,5 +776,16 @@ mod tests {
 
         buf2.reserve(65);
         assert!(buf != buf2);
+    }
+
+    #[test]
+    fn test_mutable_shrink_to_fit() {
+        let mut buffer = MutableBuffer::new(128);
+        assert_eq!(buffer.capacity(), 128);
+        buffer.push(1);
+        buffer.push(2);
+
+        buffer.shrink_to_fit();
+        assert!(buffer.capacity() >= 64 && buffer.capacity() < 128);
     }
 }
