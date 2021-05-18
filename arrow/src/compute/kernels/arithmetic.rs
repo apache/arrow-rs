@@ -445,7 +445,7 @@ where
 }
 
 /// SIMD vectorized implementation of `left % right`.
-/// If any of the lanes marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero`
+/// If any of the lanes marked as valid in `valid_mask` are `0` then an `ArrowError::ModulusByZero`
 /// is returned. The contents of no-valid lanes are undefined.
 #[cfg(simd)]
 #[inline]
@@ -513,7 +513,7 @@ where
 }
 
 /// Scalar implementation of `left % right` for the remainder elements after complete chunks have been processed using SIMD.
-/// If any of the values marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero` is returned.
+/// If any of the values marked as valid in `valid_mask` are `0` then an `ArrowError::ModulusByZero` is returned.
 #[cfg(simd)]
 #[inline]
 fn simd_checked_modulus_remainder<T: ArrowNumericType>(
@@ -1065,7 +1065,7 @@ where
 
 /// Perform `left % right` operation on two arrays. If either left or right value is null
 /// then the result is also null. If any right hand value is zero then the result of this
-/// operation will be `Err(ArrowError::DivideByZero)`.
+/// operation will be `Err(ArrowError::ModulusByZero)`.
 pub fn modulus<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
