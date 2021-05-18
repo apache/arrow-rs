@@ -603,11 +603,7 @@ impl BitReader {
 
         // Advance byte_offset to next unread byte and read num_bytes
         self.byte_offset += bytes_read;
-        let v = read_num_bytes!(
-            T,
-            num_bytes,
-            self.buffer.start_from(self.byte_offset).as_ref()
-        );
+        let v = read_num_bytes!(T, num_bytes, self.buffer.data()[self.byte_offset..]);
         self.byte_offset += num_bytes;
 
         // Reset buffered_values
@@ -657,11 +653,8 @@ impl BitReader {
 
     fn reload_buffer_values(&mut self) {
         let bytes_to_read = cmp::min(self.total_bytes - self.byte_offset, 8);
-        self.buffered_values = read_num_bytes!(
-            u64,
-            bytes_to_read,
-            self.buffer.start_from(self.byte_offset).as_ref()
-        );
+        self.buffered_values =
+            read_num_bytes!(u64, bytes_to_read, self.buffer.data()[self.byte_offset..]);
     }
 }
 
