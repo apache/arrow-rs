@@ -176,6 +176,40 @@ impl MutableBuffer {
         self.len = new_len;
     }
 
+    /// Shrinks the capacity of the buffer as much as possible.
+    /// The new capacity will aligned to the nearest 64 bit alignment.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow::buffer::{Buffer, MutableBuffer};
+    /// // 2 cache lines
+    /// let mut buffer = MutableBuffer::new(128);
+    /// assert_eq!(buffer.capacity(), 128);
+    /// buffer.push(1);
+    /// buffer.push(2);
+    ///
+    /// buffer.shrink_to_fit();
+    /// assert!(buffer.capacity() >= 64 && buffer.capacity() < 128);
+    /// ```
+    // For performance reasons, this must be inlined so that the `if` is executed inside the caller, and not as an extra call that just
+    // exits.
+    #[inline(always)]
+    pub fn shrink_to_fit(&mut self) {
+        let new_capacity = bit_util::round_upto_multiple_of_64(self.len);
+        if new_capacity < self.capacity {
+            // JUSTIFICATION
+            //  Benefit
+            //      necessity
+            //  Soundness
+            //      `self.data` is valid for `self.capacity`.
+            let ptr =
+                unsafe { alloc::reallocate(self.data, self.capacity, new_capacity) };
+
+            self.data = ptr;
+            self.capacity = new_capacity;
+        }
+    }
+
     /// Returns whether this buffer is empty or not.
     #[inline]
     pub const fn is_empty(&self) -> bool {
