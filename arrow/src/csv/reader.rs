@@ -108,10 +108,37 @@ pub fn infer_file_schema<R: Read + Seek>(
     max_read_records: Option<usize>,
     has_header: bool,
 ) -> Result<(Schema, usize)> {
+    infer_file_schema_with_csv_options(
+        reader,
+        delimiter,
+        max_read_records,
+        has_header,
+        None,
+        None,
+        None,
+    )
+}
+
+fn infer_file_schema_with_csv_options<R: Read + Seek>(
+    reader: &mut R,
+    delimiter: u8,
+    max_read_records: Option<usize>,
+    has_header: bool,
+    escape: Option<u8>,
+    quote: Option<u8>,
+    terminator: Option<u8>,
+) -> Result<(Schema, usize)> {
     let saved_offset = reader.seek(SeekFrom::Current(0))?;
 
-    let (schema, records_count) =
-        infer_reader_schema(reader, delimiter, max_read_records, has_header)?;
+    let (schema, records_count) = infer_reader_schema_with_csv_options(
+        reader,
+        delimiter,
+        max_read_records,
+        has_header,
+        escape,
+        quote,
+        terminator,
+    )?;
 
     // return the reader seek back to the start
     reader.seek(SeekFrom::Start(saved_offset))?;
@@ -131,9 +158,34 @@ pub fn infer_reader_schema<R: Read>(
     max_read_records: Option<usize>,
     has_header: bool,
 ) -> Result<(Schema, usize)> {
-    let mut csv_reader = csv_crate::ReaderBuilder::new()
-        .delimiter(delimiter)
-        .from_reader(reader);
+    infer_reader_schema_with_csv_options(
+        reader,
+        delimiter,
+        max_read_records,
+        has_header,
+        None,
+        None,
+        None,
+    )
+}
+
+fn infer_reader_schema_with_csv_options<R: Read>(
+    reader: &mut R,
+    delimiter: u8,
+    max_read_records: Option<usize>,
+    has_header: bool,
+    escape: Option<u8>,
+    quote: Option<u8>,
+    terminator: Option<u8>,
+) -> Result<(Schema, usize)> {
+    let mut csv_reader = Reader::build_csv_reader(
+        reader,
+        has_header,
+        Some(delimiter),
+        escape,
+        quote,
+        terminator,
+    );
 
     // get or create header names
     // when has_header is false, creates default column names with column_ prefix
@@ -761,6 +813,12 @@ pub struct ReaderBuilder {
     has_header: bool,
     /// An optional column delimiter. Defaults to `b','`
     delimiter: Option<u8>,
+    /// An optional escape charactor. Defaults None
+    escape: Option<u8>,
+    /// An optional quote charactor. Defaults b'\"'
+    quote: Option<u8>,
+    /// An optional record terminator. Defaults CRLF
+    terminator: Option<u8>,
     /// Optional maximum number of records to read during schema inference
     ///
     /// If a number is not provided, all the records are read.
@@ -781,6 +839,9 @@ impl Default for ReaderBuilder {
             schema: None,
             has_header: false,
             delimiter: None,
+            escape: None,
+            quote: None,
+            terminator: None,
             max_records: None,
             batch_size: 1024,
             bounds: None,
@@ -835,6 +896,21 @@ impl ReaderBuilder {
         self
     }
 
+    pub fn with_escape(mut self, escape: u8) -> Self {
+        self.escape = Some(escape);
+        self
+    }
+
+    pub fn with_quote(mut self, quote: u8) -> Self {
+        self.quote = Some(quote);
+        self
+    }
+
+    pub fn with_terminator(mut self, terminator: u8) -> Self {
+        self.terminator = Some(terminator);
+        self
+    }
+
     /// Set the CSV reader to infer the schema of the file
     pub fn infer_schema(mut self, max_records: Option<usize>) -> Self {
         // remove any schema that is set
@@ -862,21 +938,31 @@ impl ReaderBuilder {
         let schema = match self.schema {
             Some(schema) => schema,
             None => {
-                let (inferred_schema, _) = infer_file_schema(
+                let (inferred_schema, _) = infer_file_schema_with_csv_options(
                     &mut reader,
                     delimiter,
                     self.max_records,
                     self.has_header,
+                    self.escape,
+                    self.quote,
+                    self.terminator,
                 )?;
 
                 Arc::new(inferred_schema)
             }
         };
-        Ok(Reader::from_reader(
+        let csv_reader = Reader::build_csv_reader(
             reader,
-            schema,
             self.has_header,
             self.delimiter,
+            self.escape,
+            self.quote,
+            self.terminator,
+        );
+        Ok(Reader::from_csv_reader(
+            csv_reader,
+            schema,
+            self.has_header,
             self.batch_size,
             None,
             self.projection.clone(),
