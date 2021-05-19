@@ -383,7 +383,7 @@ impl<R: Read> Reader<R> {
         )
     }
 
-    pub(crate) fn build_csv_reader(
+    fn build_csv_reader(
         reader: R,
         has_header: bool,
         delimiter: Option<u8>,
@@ -407,7 +407,7 @@ impl<R: Read> Reader<R> {
         reader_builder.from_reader(reader)
     }
 
-    pub(crate) fn from_csv_reader(
+    fn from_csv_reader(
         mut csv_reader: csv_crate::Reader<R>,
         schema: SchemaRef,
         has_header: bool,
