@@ -324,15 +324,45 @@ impl<R: Read> Reader<R> {
         bounds: Bounds,
         projection: Option<Vec<usize>>,
     ) -> Self {
+        let csv_reader =
+            Self::build_csv_reader(reader, has_header, delimiter, None, None, None);
+        Self::from_csv_reader(
+            csv_reader, schema, has_header, batch_size, bounds, projection,
+        )
+    }
+
+    pub(crate) fn build_csv_reader(
+        reader: R,
+        has_header: bool,
+        delimiter: Option<u8>,
+        escape: Option<u8>,
+        quote: Option<u8>,
+        terminator: Option<u8>,
+    ) -> csv_crate::Reader<R> {
         let mut reader_builder = csv_crate::ReaderBuilder::new();
         reader_builder.has_headers(has_header);
 
         if let Some(c) = delimiter {
             reader_builder.delimiter(c);
         }
+        reader_builder.escape(escape);
+        if let Some(c) = quote {
+            reader_builder.quote(c);
+        }
+        if let Some(t) = terminator {
+            reader_builder.terminator(csv_crate::Terminator::Any(t));
+        }
+        reader_builder.from_reader(reader)
+    }
 
-        let mut csv_reader = reader_builder.from_reader(reader);
-
+    pub(crate) fn from_csv_reader(
+        mut csv_reader: csv_crate::Reader<R>,
+        schema: SchemaRef,
+        has_header: bool,
+        batch_size: usize,
+        bounds: Bounds,
+        projection: Option<Vec<usize>>,
+    ) -> Self {
         let (start, end) = match bounds {
             None => (0, usize::MAX),
             Some((start, end)) => (start, end),
