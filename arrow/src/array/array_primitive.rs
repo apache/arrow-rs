@@ -93,6 +93,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// # Safety
     ///
     /// caller must ensure that the passed in offset is less than the array len()
+    #[inline]
     pub unsafe fn value_unchecked(&self, i: usize) -> T::Native {
         let offset = i + self.offset();
         *self.raw_values.as_ptr().add(offset)
@@ -103,6 +104,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Note this doesn't do any bound checking, for performance reason.
     /// # Safety
     /// caller must ensure that the passed in offset is less than the array len()
+    #[inline]
     pub fn value(&self, i: usize) -> T::Native {
         debug_assert!(i < self.len());
         unsafe { self.value_unchecked(i) }
