@@ -340,10 +340,26 @@ impl<OffsetSize: StringOffsetSizeTrait> From<Vec<&str>>
 
 /// An array where each element is a variable-sized sequence of bytes representing a string
 /// whose maximum length (in bytes) is represented by a i32.
+///
+/// Example
+///
+/// ```
+/// use arrow::array::StringArray;
+/// let array = StringArray::from(vec![Some("foo"), None, Some("bar")]);
+/// assert_eq!(array.value(0), "foo");
+/// ```
 pub type StringArray = GenericStringArray<i32>;
 
 /// An array where each element is a variable-sized sequence of bytes representing a string
 /// whose maximum length (in bytes) is represented by a i64.
+///
+/// Example
+///
+/// ```
+/// use arrow::array::LargeStringArray;
+/// let array = LargeStringArray::from(vec![Some("foo"), None, Some("bar")]);
+/// assert_eq!(array.value(2), "bar");
+/// ```
 pub type LargeStringArray = GenericStringArray<i64>;
 
 impl<T: StringOffsetSizeTrait> From<GenericListArray<T>> for GenericStringArray<T> {
