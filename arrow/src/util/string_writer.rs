@@ -23,6 +23,8 @@
 //! Example:
 //!
 //! ```
+//! #[cfg(feature = "csv")]
+//! {
 //! use arrow::array::*;
 //! use arrow::csv;
 //! use arrow::datatypes::*;
@@ -58,6 +60,7 @@
 //! let sw = StringWriter::new();
 //! let mut writer = csv::Writer::new(sw);
 //! writer.write(&batch).unwrap();
+//! }
 //! ```
 
 use std::io::{Error, ErrorKind, Result, Write};
