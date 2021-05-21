@@ -115,8 +115,7 @@ test_source_distribution() {
 
   # raises on any formatting errors
   rustup component add rustfmt --toolchain stable
-  cargo +stable fmt --all -- --check
-  rustup default stable
+  cargo fmt --all -- --check
 
   # Clone testing repositories if not cloned already
   git clone https://github.com/apache/arrow-testing.git arrow-testing-data
@@ -132,8 +131,7 @@ test_source_distribution() {
     -e 's/^parquet = "([^"]*)"/parquet = { version = "\1", path = "..\/parquet" }/g' \
     */Cargo.toml
 
-  # raises on any warnings
-  RUSTFLAGS="-D warnings" cargo build
+  cargo build
   cargo test
 }
 
