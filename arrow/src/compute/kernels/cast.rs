@@ -1371,10 +1371,10 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                 })?;
 
             let keys_array: ArrayRef = Arc::new(dict_array.keys_array());
-            let values_array: ArrayRef = dict_array.values();
+            let values_array = dict_array.values();
             let cast_keys = cast_with_options(&keys_array, to_index_type, &cast_options)?;
             let cast_values =
-                cast_with_options(&values_array, to_value_type, &cast_options)?;
+                cast_with_options(values_array, to_value_type, &cast_options)?;
 
             // Failure to cast keys (because they don't fit in the
             // target type) results in NULL values;
