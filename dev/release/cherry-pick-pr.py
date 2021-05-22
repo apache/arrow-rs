@@ -4,11 +4,12 @@
 #
 # To test locally:
 # pip3 install PyGithub
-# ARROW_GITHUB_API_TOKEN=<your token> CHECKOUT_ROOT=<path to arrow-rs> CHERRY_PICK_SHA=<sha to cherry pick> python3 cherry-pick-pr.py
+# ARROW_GITHUB_API_TOKEN=<..>
+#     CHECKOUT_ROOT=<path>
+#     CHERRY_PICK_SHA=<sha> python3 cherry-pick-pr.py
 #
 import os
 import sys
-import json
 import six
 import subprocess
 
@@ -22,19 +23,19 @@ p = Path(__file__)
 # Use github workspace if specified
 repo_root = os.environ.get("CHECKOUT_ROOT")
 if repo_root is None:
-    print("Checkout of arrow-rs must be specified by CHECKOUT_ROOT environment")
+    print("arrow-rs checkout must be supplied in CHECKOUT_ROOT environment")
     sys.exit(1)
 
 print("Using checkout in {}".format(repo_root))
 
 token = os.environ.get('ARROW_GITHUB_API_TOKEN', None)
 if token is None:
-    print("GITHUB token must be supplied via ARROW_GITHUB_API_TOKEN environmet")
+    print("GITHUB token must be supplied in ARROW_GITHUB_API_TOKEN environmet")
     sys.exit(1)
 
 new_sha = os.environ.get('CHERRY_PICK_SHA', None)
 if new_sha is None:
-    print("SHA to cherry pick must be supplied via CHERRY_PICK_SHA environmet")
+    print("SHA to cherry pick must be supplied in CHERRY_PICK_SHA environment")
     sys.exit(1)
 
 
@@ -75,7 +76,9 @@ def make_cherry_pick():
     # and cherry pick to there.
     #
 
-    print("Creating cherry pick from {} to {}".format(new_sha_short, new_branch))
+    print("Creating cherry pick from {} to {}".format(
+        new_sha_short, new_branch
+    ))
 
     # The following tortured dance is required due to how the github
     # actions/checkout works (it doesn't pull other branches and pulls
