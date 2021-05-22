@@ -101,9 +101,9 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
             .flatten()
     }
 
-    /// Returns an `ArrayRef` to the dictionary values.
-    pub fn values(&self) -> ArrayRef {
-        self.values.clone()
+    /// Returns a reference to the dictionary values array
+    pub fn values(&self) -> &ArrayRef {
+        &self.values
     }
 
     /// Returns a clone of the value type of this list.

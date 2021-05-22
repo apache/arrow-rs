@@ -19,7 +19,6 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::io::Write;
 
-use csv as csv_crate;
 use std::error::Error;
 
 /// Many different operations in the `arrow` crate return this error type.
@@ -59,6 +58,7 @@ impl From<::std::io::Error> for ArrowError {
     }
 }
 
+#[cfg(feature = "csv")]
 impl From<csv_crate::Error> for ArrowError {
     fn from(error: csv_crate::Error) -> Self {
         match error.kind() {
