@@ -27,6 +27,28 @@ use crate::buffer::{Buffer, MutableBuffer};
 use crate::util::bit_util;
 
 /// Array of bools
+///
+/// # Example
+///
+/// ```
+///     use arrow::array::{Array, BooleanArray};
+///     let arr = BooleanArray::from(vec![Some(false), Some(true), None, Some(true)]);
+///     assert_eq!(4, arr.len());
+///     assert_eq!(0, arr.offset());
+///     assert_eq!(1, arr.null_count());
+///     assert!(arr.is_valid(0));
+///     assert!(!arr.is_null(0));
+///     assert_eq!(false, arr.value(0));
+///     assert!(arr.is_valid(1));
+///     assert!(!arr.is_null(1));
+///     assert_eq!(true, arr.value(1));
+///     assert!(!arr.is_valid(2));
+///     assert!(arr.is_null(2));
+///     assert!(arr.is_valid(3));
+///     assert!(!arr.is_null(3));
+///     assert_eq!(true, arr.value(3));
+/// ```
+///
 pub struct BooleanArray {
     data: ArrayData,
     /// Pointer to the value array. The lifetime of this must be <= to the value buffer
