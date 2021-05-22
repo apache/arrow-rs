@@ -14,7 +14,7 @@ import subprocess
 
 from pathlib import Path
 
-TARGET_BRANCH='active_release'
+TARGET_BRANCH = 'active_release'
 TARGET_REPO = 'apache/arrow-rs'
 
 p = Path(__file__)
@@ -25,7 +25,7 @@ if repo_root is None:
     print("Checkout of arrow-rs must be specified by CHECKOUT_ROOT environment")
     sys.exit(1)
 
-print("Using checkout in {}".format(repo_root));
+print("Using checkout in {}".format(repo_root))
 
 token = os.environ.get('ARROW_GITHUB_API_TOKEN', None)
 if token is None:
@@ -36,7 +36,6 @@ new_sha = os.environ.get('CHERRY_PICK_SHA', None)
 if new_sha is None:
     print("SHA to cherry pick must be supplied via CHERRY_PICK_SHA environmet")
     sys.exit(1)
-
 
 
 # from merge_pr.py from arrow repo
@@ -58,6 +57,7 @@ def run_cmd(cmd):
         output = output.decode('utf-8')
 
     return output
+
 
 os.chdir(repo_root)
 new_sha_short = run_cmd("git rev-parse --short {}".format(new_sha)).strip()
@@ -83,8 +83,8 @@ def make_cherry_pick():
 
     # pull 10 commits back so we can get the proper cherry pick
     # (probably only need 2 but 10 must be better, right?)
-    run_cmd(['git', 'fetch', '--depth', '10', 'origin', 'master' ])
-    run_cmd(['git', 'fetch', 'origin', 'active_release' ])
+    run_cmd(['git', 'fetch', '--depth', '10', 'origin', 'master'])
+    run_cmd(['git', 'fetch', 'origin', 'active_release'])
     run_cmd(['git', 'checkout', '-b', new_branch])
     run_cmd(['git', 'reset', '--hard', 'origin/active_release'])
     run_cmd(['git', 'cherry-pick', new_sha])
@@ -98,12 +98,13 @@ def make_cherry_pick_pr():
 
     # Default titles
     new_title = 'Cherry pick {}'.format(new_sha)
-    new_commit_message = 'Automatic cherry-pick of {}\n'.format(new_sha);
+    new_commit_message = 'Automatic cherry-pick of {}\n'.format(new_sha)
 
     # try and get info from github api
     commit = repo.get_commit(new_sha)
     for orig_pull in commit.get_pulls():
-        new_commit_message += '* Originally appeared in {}: {}\n'.format(orig_pull.html_url, orig_pull.title)
+        new_commit_message += '* Originally appeared in {}: {}\n'.format(
+            orig_pull.html_url, orig_pull.title)
         new_title = 'Cherry pick {}'.format(orig_pull.title)
 
     pr = repo.create_pull(title=new_title,
@@ -114,6 +115,7 @@ def make_cherry_pick_pr():
                           )
 
     print('Created PR {}'.format(pr.html_url))
+
 
 make_cherry_pick()
 make_cherry_pick_pr()
