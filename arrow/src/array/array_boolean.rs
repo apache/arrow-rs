@@ -27,6 +27,86 @@ use crate::buffer::{Buffer, MutableBuffer};
 use crate::util::bit_util;
 
 /// Array of bools
+///
+/// # Example **using a builder**
+///
+/// ```
+///     use arrow::array::{Array, BooleanArray};
+///     let mut builder = BooleanArray::builder(3);
+///     builder.append_value(true).unwrap();
+///     builder.append_null().unwrap();
+///     builder.append_value(false).unwrap();
+///     let arr = builder.finish();
+///     assert_eq!(3, arr.len());
+///     assert_eq!(1, arr.null_count());
+/// ```
+///
+/// # Example **from a vector**
+///
+/// ```
+///     use arrow::array::{Array, BooleanArray};
+///     use arrow::buffer::Buffer;
+///     let buf = Buffer::from([10_u8]);
+///     let arr = BooleanArray::from(vec![false, true, false, true]);
+///     assert_eq!(&buf, arr.values());
+///     assert_eq!(4, arr.len());
+///     assert_eq!(0, arr.offset());
+///     assert_eq!(0, arr.null_count());
+///     for i in 0..4 {
+///        assert!(!arr.is_null(i));
+///        assert!(arr.is_valid(i));
+///        assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {}", i)
+///     }
+/// ```
+///
+/// # Example **from a vector of Option values**
+///
+/// ```
+///     use arrow::array::{Array, BooleanArray};
+///     use arrow::buffer::Buffer;
+///     let buf = Buffer::from([10_u8]);
+///     let arr = BooleanArray::from(vec![Some(false), Some(true), None, Some(true)]);
+///     assert_eq!(&buf, arr.values());
+///     assert_eq!(4, arr.len());
+///     assert_eq!(0, arr.offset());
+///     assert_eq!(1, arr.null_count());
+///     for i in 0..4 {
+///         if i == 2 {
+///             assert!(arr.is_null(i));
+///             assert!(!arr.is_valid(i));
+///         } else {
+///             assert!(!arr.is_null(i));
+///             assert!(arr.is_valid(i));
+///             assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {}", i)
+///         }
+///     }
+/// ```
+///
+/// # Example **using an array builder**
+///
+/// ```
+///     // Build a boolean array with ArrayData builder and offset
+///     // 000011011
+///     use arrow::array::{Array, ArrayData, BooleanArray};
+///     use arrow::buffer::Buffer;
+///     use arrow::datatypes::DataType;
+///     let buf = Buffer::from([27_u8]);
+///     let buf2 = buf.clone();
+///     let data = ArrayData::builder(DataType::Boolean)
+///         .len(5)
+///         .offset(2)
+///         .add_buffer(buf)
+///         .build();
+///     let arr = BooleanArray::from(data);
+///     assert_eq!(&buf2, arr.values());
+///     assert_eq!(5, arr.len());
+///     assert_eq!(2, arr.offset());
+///     assert_eq!(0, arr.null_count());
+///     for i in 0..3 {
+///         assert_eq!(i != 0, arr.value(i), "failed at {}", i);
+///     }
+/// ```
+///
 pub struct BooleanArray {
     data: ArrayData,
     /// Pointer to the value array. The lifetime of this must be <= to the value buffer
