@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 TARGET_BRANCH='active_release'
-TARGET_REPO = 'alamb/arrow-rs'
+TARGET_REPO = 'apache/arrow-rs'
 
 p = Path(__file__)
 
