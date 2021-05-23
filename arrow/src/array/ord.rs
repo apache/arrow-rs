@@ -94,7 +94,7 @@ where
     let right_keys = right.keys_array();
 
     let left_values = StringArray::from(left.values().data().clone());
-    let right_values = StringArray::from(left.values().data().clone());
+    let right_values = StringArray::from(right.values().data().clone());
 
     Box::new(move |i: usize, j: usize| {
         let key_left = left_keys.value(i).to_usize().unwrap();
@@ -222,7 +222,7 @@ pub fn build_compare<'a>(left: &'a Array, right: &'a Array) -> Result<DynCompara
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Dictionaries do not support keys of type {:?}",
                         lhs
-                    )))
+                    )));
                 }
             }
         }
@@ -230,7 +230,7 @@ pub fn build_compare<'a>(left: &'a Array, right: &'a Array) -> Result<DynCompara
             return Err(ArrowError::InvalidArgumentError(format!(
                 "The data type type {:?} has no natural order",
                 lhs
-            )))
+            )));
         }
     })
 }
@@ -305,6 +305,21 @@ pub mod tests {
         assert_eq!(Ordering::Less, (cmp)(0, 1));
         assert_eq!(Ordering::Equal, (cmp)(3, 4));
         assert_eq!(Ordering::Greater, (cmp)(2, 3));
+        Ok(())
+    }
+
+    #[test]
+    fn test_multiple_dict() -> Result<()> {
+        let d1 = vec!["a", "b", "c", "d"];
+        let a1 = DictionaryArray::<Int16Type>::from_iter(d1.into_iter());
+        let d2 = vec!["e", "f", "g", "a"];
+        let a2 = DictionaryArray::<Int16Type>::from_iter(d2.into_iter());
+
+        let cmp = build_compare(&a1, &a2)?;
+
+        assert_eq!(Ordering::Less, (cmp)(0, 0));
+        assert_eq!(Ordering::Equal, (cmp)(0, 3));
+        assert_eq!(Ordering::Greater, (cmp)(1, 3));
         Ok(())
     }
 }
