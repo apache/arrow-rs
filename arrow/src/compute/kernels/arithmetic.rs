@@ -27,9 +27,9 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 use num::{One, Zero};
 
 use crate::buffer::Buffer;
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 use crate::buffer::MutableBuffer;
-#[cfg(not(simd))]
+#[cfg(not(feature = "simd"))]
 use crate::compute::kernels::arity::unary;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes;
@@ -37,13 +37,13 @@ use crate::datatypes::ArrowNumericType;
 use crate::error::{ArrowError, Result};
 use crate::{array::*, util::bit_util};
 use num::traits::Pow;
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 use std::borrow::BorrowMut;
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 use std::slice::{ChunksExact, ChunksExactMut};
 
 /// SIMD vectorized version of `unary_math_op` above specialized for signed numerical values.
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 fn simd_signed_unary_math_op<T, SIMD_OP, SCALAR_OP>(
     array: &PrimitiveArray<T>,
     simd_op: SIMD_OP,
@@ -91,7 +91,7 @@ where
     Ok(PrimitiveArray::<T>::from(data))
 }
 
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 fn simd_float_unary_math_op<T, SIMD_OP, SCALAR_OP>(
     array: &PrimitiveArray<T>,
     simd_op: SIMD_OP,
@@ -286,7 +286,7 @@ where
 }
 
 /// SIMD vectorized version of `math_op` above.
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 fn simd_math_op<T, SIMD_OP, SCALAR_OP>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
@@ -351,7 +351,7 @@ where
 /// SIMD vectorized implementation of `left / right`.
 /// If any of the lanes marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero`
 /// is returned. The contents of no-valid lanes are undefined.
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 #[inline]
 fn simd_checked_divide<T: ArrowNumericType>(
     valid_mask: Option<u64>,
@@ -384,7 +384,7 @@ where
 
 /// Scalar implementation of `left / right` for the remainder elements after complete chunks have been processed using SIMD.
 /// If any of the values marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero` is returned.
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 #[inline]
 fn simd_checked_divide_remainder<T: ArrowNumericType>(
     valid_mask: Option<u64>,
@@ -417,7 +417,7 @@ where
 }
 
 /// Scalar-divisor version of `simd_checked_divide_remainder`.
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 #[inline]
 fn simd_checked_divide_scalar_remainder<T: ArrowNumericType>(
     array_chunks: ChunksExact<T::Native>,
@@ -448,7 +448,7 @@ where
 ///
 /// The divide kernels need their own implementation as there is a need to handle situations
 /// where a divide by `0` occurs.  This is complicated by `NULL` slots and padding.
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 fn simd_divide<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
@@ -565,7 +565,7 @@ where
 }
 
 /// SIMD vectorized version of `divide_scalar`.
-#[cfg(simd)]
+#[cfg(feature = "simd")]
 fn simd_divide_scalar<T>(
     array: &PrimitiveArray<T>,
     divisor: T::Native,
@@ -624,9 +624,9 @@ where
         + Div<Output = T::Native>
         + Zero,
 {
-    #[cfg(simd)]
+    #[cfg(feature = "simd")]
     return simd_math_op(&left, &right, |a, b| a + b, |a, b| a + b);
-    #[cfg(not(simd))]
+    #[cfg(not(feature = "simd"))]
     return math_op(left, right, |a, b| a + b);
 }
 
@@ -644,9 +644,9 @@ where
         + Div<Output = T::Native>
         + Zero,
 {
-    #[cfg(simd)]
+    #[cfg(feature = "simd")]
     return simd_math_op(&left, &right, |a, b| a - b, |a, b| a - b);
-    #[cfg(not(simd))]
+    #[cfg(not(feature = "simd"))]
     return math_op(left, right, |a, b| a - b);
 }
 
@@ -656,9 +656,9 @@ where
     T: datatypes::ArrowSignedNumericType,
     T::Native: Neg<Output = T::Native>,
 {
-    #[cfg(simd)]
+    #[cfg(feature = "simd")]
     return simd_signed_unary_math_op(array, |x| -x, |x| -x);
-    #[cfg(not(simd))]
+    #[cfg(not(feature = "simd"))]
     return Ok(unary(array, |x| -x));
 }
 
@@ -671,7 +671,7 @@ where
     T: datatypes::ArrowFloatNumericType,
     T::Native: Pow<T::Native, Output = T::Native>,
 {
-    #[cfg(simd)]
+    #[cfg(feature = "simd")]
     {
         let raise_vector = T::init(raise);
         return simd_float_unary_math_op(
@@ -680,7 +680,7 @@ where
             |x| x.pow(raise),
         );
     }
-    #[cfg(not(simd))]
+    #[cfg(not(feature = "simd"))]
     return Ok(unary(array, |x| x.pow(raise)));
 }
 
@@ -698,9 +698,9 @@ where
         + Div<Output = T::Native>
         + Zero,
 {
-    #[cfg(simd)]
+    #[cfg(feature = "simd")]
     return simd_math_op(&left, &right, |a, b| a * b, |a, b| a * b);
-    #[cfg(not(simd))]
+    #[cfg(not(feature = "simd"))]
     return math_op(left, right, |a, b| a * b);
 }
 
@@ -720,9 +720,9 @@ where
         + Zero
         + One,
 {
-    #[cfg(simd)]
+    #[cfg(feature = "simd")]
     return simd_divide(&left, &right);
-    #[cfg(not(simd))]
+    #[cfg(not(feature = "simd"))]
     return math_divide(&left, &right);
 }
 
@@ -742,9 +742,9 @@ where
         + Zero
         + One,
 {
-    #[cfg(simd)]
+    #[cfg(feature = "simd")]
     return simd_divide_scalar(&array, divisor);
-    #[cfg(not(simd))]
+    #[cfg(not(feature = "simd"))]
     return math_divide_scalar(&array, divisor);
 }
 
