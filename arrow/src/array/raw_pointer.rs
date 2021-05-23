@@ -57,6 +57,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "memory is not aligned")]
+    #[cfg_attr(miri, ignore)] // sometimes does not panic as expected
     fn test_primitive_array_alignment() {
         let bytes = vec![0u8, 1u8];
         unsafe { RawPtrBox::<u64>::new(bytes.as_ptr().offset(1)) };

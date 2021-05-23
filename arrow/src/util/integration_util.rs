@@ -722,6 +722,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // running forever
     fn test_arrow_data_equality() {
         let secs_tz = Some("Europe/Budapest".to_string());
         let millis_tz = Some("America/New_York".to_string());
