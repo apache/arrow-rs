@@ -18,9 +18,22 @@
 # under the License.
 #
 
+# invokes the changelog generator with the config located in
+# arrow-rs/.github_changelog_generator
+#
+# Usage:
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log.sh
+
+set -e
+
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
+
+pushd ${SOURCE_TOP_DIR}
 docker run -it --rm -e CHANGELOG_GITHUB_TOKEN=$CHANGELOG_GITHUB_TOKEN -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user apache \
     --project arrow-rs \
     --since-commit 2021-04-20 \
-    --future-release 4.0.1
+    --future-release 4.1.0
+
 sed -i "s/\\\n/\n\n/" CHANGELOG.md
