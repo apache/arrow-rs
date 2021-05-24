@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 ##############################################################################
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
@@ -23,6 +23,9 @@
 # Usage: python3 cherry_pick_pr.py
 #
 # To test locally:
+#
+# git clone git@github.com:apache/arrow-rs.git /tmp/arrow-rs
+#
 # pip3 install PyGithub
 # ARROW_GITHUB_API_TOKEN=<..>
 #     CHECKOUT_ROOT=<path>
@@ -120,7 +123,7 @@ def make_cherry_pick_pr():
     repo = g.get_repo(TARGET_REPO)
 
     # Default titles
-    new_title = 'Cherry pick {}'.format(new_sha)
+    new_title = 'Cherry pick {} to active_release'.format(new_sha)
     new_commit_message = 'Automatic cherry-pick of {}\n'.format(new_sha)
 
     # try and get info from github api
@@ -128,7 +131,7 @@ def make_cherry_pick_pr():
     for orig_pull in commit.get_pulls():
         new_commit_message += '* Originally appeared in {}: {}\n'.format(
             orig_pull.html_url, orig_pull.title)
-        new_title = 'Cherry pick {}'.format(orig_pull.title)
+        new_title = 'Cherry pick {} to active_release'.format(orig_pull.title)
 
     pr = repo.create_pull(title=new_title,
                           body=new_commit_message,
