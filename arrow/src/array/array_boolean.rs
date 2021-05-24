@@ -34,7 +34,6 @@ use crate::util::bit_util;
 ///     use arrow::array::{Array, BooleanArray};
 ///     let arr = BooleanArray::from(vec![Some(false), Some(true), None, Some(true)]);
 ///     assert_eq!(4, arr.len());
-///     assert_eq!(0, arr.offset());
 ///     assert_eq!(1, arr.null_count());
 ///     assert!(arr.is_valid(0));
 ///     assert!(!arr.is_null(0));
