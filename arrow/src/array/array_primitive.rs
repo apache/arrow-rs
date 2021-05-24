@@ -865,6 +865,9 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "invalid time")]
+    // don't run on MIRI as it was causing MIRI to fail (even when the panic was expected)
+    // https://github.com/apache/arrow-rs/issues/345
+    #[cfg_attr(miri, ignore)]
     fn test_time32second_invalid_neg() {
         // The panic should come from chrono, not from arrow
         let arr: PrimitiveArray<Time32SecondType> = vec![-7201, -60054].into();
