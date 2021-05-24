@@ -1499,4 +1499,97 @@ mod tests {
         assert_eq!(None, parse_item::<Float64Type>("dd"));
         assert_eq!(None, parse_item::<Float64Type>("12.34.56"));
     }
+
+    #[test]
+    fn test_non_std_quote() {
+        let schema = Schema::new(
+            vec![
+                Field::new("text1", DataType::Utf8, false),
+                Field::new("text2", DataType::Utf8, false)]);
+        let builder = ReaderBuilder::new()
+            .with_schema( Arc::new(schema) )
+            .has_header(false)
+            .with_quote(b'~'); // default is ", change to ~
+
+        let mut csv_text = Vec::new();
+        let mut csv_writer = std::io::Cursor::new(&mut csv_text);
+        for index in 0..10 {
+            let text1 = format!("id{:}",index);
+            let text2 = format!("value{:}",index);
+            csv_writer.write_fmt( format_args!("~{}~,~{}~\r\n", text1,text2) ).unwrap();
+        }
+        let mut csv_reader = std::io::Cursor::new(&csv_text);
+        let mut reader = builder.build(&mut csv_reader).unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        let col0 =batch.column(0);
+        assert_eq!(col0.len(), 10);
+        let col0_arr =col0.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!( col0_arr.value(0), "id0" );
+        let col1 =batch.column(1);
+        assert_eq!(col1.len(), 10);
+        let col1_arr =col1.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!( col1_arr.value(5), "value5" );
+    }
+
+    #[test]
+    fn test_non_std_escape() {
+        let schema = Schema::new(
+            vec![
+                Field::new("text1", DataType::Utf8, false),
+                Field::new("text2", DataType::Utf8, false)]);
+        let builder = ReaderBuilder::new()
+            .with_schema( Arc::new(schema) )
+            .has_header(false)
+            .with_escape(b'\\'); // default is None, change to \
+
+        let mut csv_text = Vec::new();
+        let mut csv_writer = std::io::Cursor::new(&mut csv_text);
+        for index in 0..10 {
+            let text1 = format!("id{:}",index);
+            let text2 = format!("value\\\"{:}",index);
+            csv_writer.write_fmt( format_args!("\"{}\",\"{}\"\r\n", text1,text2) ).unwrap();
+        }
+        let mut csv_reader = std::io::Cursor::new(&csv_text);
+        let mut reader = builder.build(&mut csv_reader).unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        let col0 =batch.column(0);
+        assert_eq!(col0.len(), 10);
+        let col0_arr =col0.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!( col0_arr.value(0), "id0" );
+        let col1 =batch.column(1);
+        assert_eq!(col1.len(), 10);
+        let col1_arr =col1.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!( col1_arr.value(5), "value\"5" );
+    }
+
+    #[test]
+    fn test_non_std_terminator() {
+        let schema = Schema::new(
+            vec![
+                Field::new("text1", DataType::Utf8, false),
+                Field::new("text2", DataType::Utf8, false)]);
+        let builder = ReaderBuilder::new()
+            .with_schema( Arc::new(schema) )
+            .has_header(false)
+            .with_terminator(b'\n'); // default is CRLF, change to LF
+
+        let mut csv_text = Vec::new();
+        let mut csv_writer = std::io::Cursor::new(&mut csv_text);
+        for index in 0..10 {
+            let text1 = format!("id{:}",index);
+            let text2 = format!("value{:}",index);
+            csv_writer.write_fmt( format_args!("\"{}\",\"{}\"\n", text1,text2) ).unwrap();
+        }
+        let mut csv_reader = std::io::Cursor::new(&csv_text);
+        let mut reader = builder.build(&mut csv_reader).unwrap();
+        let batch = reader.next().unwrap().unwrap();
+        let col0 =batch.column(0);
+        assert_eq!(col0.len(), 10);
+        let col0_arr =col0.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!( col0_arr.value(0), "id0" );
+        let col1 =batch.column(1);
+        assert_eq!(col1.len(), 10);
+        let col1_arr =col1.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!( col1_arr.value(5), "value5" );
+    }
 }
