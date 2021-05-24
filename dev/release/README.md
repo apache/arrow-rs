@@ -224,17 +224,13 @@ of the [arrow crate](https://crates.io/crates/arrow).
 
 Download and unpack the official release tarball
 
-If the Cargo.toml in this tag already contains `version = "0.11.0"` (as it
-should) then the crate can be published with the following command:
+Verify that the Cargo.toml in the tarball contains the correct version
+(e.g.  `version = "0.11.0"`) and then publish the crate with the
+following commands
 
 ```shell
-cargo publish
-```
-
-If the Cargo.toml does not have the correct version then it will be necessary
-to modify it manually. Since there is now a modified file locally that is not
-committed to GitHub it will be necessary to use the following command.
-
-```shell
-cargo publish --allow-dirty
+(cd arrow && cargo publish)
+(cd arrow_flight && cargo publish)
+(cd parquet && cargo publish)
+(cd parquet_derive && cargo publish)
 ```
