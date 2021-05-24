@@ -205,6 +205,21 @@ pub fn build_filter(filter: &BooleanArray) -> Result<Filter> {
     }))
 }
 
+fn prepare_filter(filter: &BooleanArray) -> BooleanArray {
+    let array_data = filter.data_ref();
+    let null_bitmap = array_data.null_buffer().unwrap();
+    let mask = filter.values();
+    let offset = filter.offset();
+
+    let new_mask = buffer_bin_and(mask, offset, null_bitmap, offset, filter.len());
+
+    let array_data = ArrayData::builder(DataType::Boolean)
+        .len(filter.len())
+        .add_buffer(new_mask)
+        .build();
+    BooleanArray::from(array_data)
+}
+
 /// Filters an [Array], returning elements matching the filter (i.e. where the values are true).
 ///
 /// # Example
@@ -225,18 +240,7 @@ pub fn filter(array: &Array, filter: &BooleanArray) -> Result<ArrayRef> {
     if filter.null_count() > 0 {
         // this greatly simplifies subsequent filtering code
         // now we only have a boolean mask to deal with
-        let array_data = filter.data_ref();
-        let null_bitmap = array_data.null_buffer().unwrap();
-        let mask = filter.values();
-        let offset = filter.offset();
-
-        let new_mask = buffer_bin_and(mask, offset, null_bitmap, offset, filter.len());
-
-        let array_data = ArrayData::builder(DataType::Boolean)
-            .len(filter.len())
-            .add_buffer(new_mask)
-            .build();
-        let filter = BooleanArray::from(array_data);
+        let filter = prepare_filter(filter);
         // fully qualified syntax, because we have an argument with the same name
         return crate::compute::kernels::filter::filter(array, &filter);
     }
@@ -251,12 +255,21 @@ pub fn filter(array: &Array, filter: &BooleanArray) -> Result<ArrayRef> {
 }
 
 /// Returns a new [RecordBatch] with arrays containing only values matching the filter.
-/// WARNING: the nulls of `filter` are ignored and the value on its slot is considered.
-/// Therefore, it is considered undefined behavior to pass `filter` with null values.
 pub fn filter_record_batch(
     record_batch: &RecordBatch,
     filter: &BooleanArray,
 ) -> Result<RecordBatch> {
+    if filter.null_count() > 0 {
+        // this greatly simplifies subsequent filtering code
+        // now we only have a boolean mask to deal with
+        let filter = prepare_filter(filter);
+        // fully qualified syntax, because we have an argument with the same name
+        return crate::compute::kernels::filter::filter_record_batch(
+            record_batch,
+            &filter,
+        );
+    }
+
     let filter = build_filter(filter)?;
     let filtered_arrays = record_batch
         .columns()
