@@ -21,6 +21,7 @@ use crate::{
     error::{ArrowError, Result},
     util::bit_util,
 };
+use std::mem;
 
 use super::{
     data::{into_buffers, new_buffers},
@@ -341,7 +342,59 @@ impl<'a> MutableArrayData<'a> {
             use_nulls = true;
         };
 
-        let [buffer1, buffer2] = new_buffers(data_type, capacity);
+        // We can prevent reallocation by precomputing the needed size.
+        // This is faster and more memory efficient.
+        let [buffer1, buffer2] = match data_type {
+            DataType::LargeUtf8 => {
+                // offsets
+                let mut buffer =
+                    MutableBuffer::new((1 + capacity) * mem::size_of::<i32>());
+                // safety: `unsafe` code assumes that this buffer is initialized with one element
+                buffer.push(0i64);
+                let str_values_size = arrays
+                    .iter()
+                    .map(|data| {
+                        // get the length of the value buffer
+                        let buf_len = data.buffers()[1].len();
+                        // find the offset of the buffer
+                        // this returns a slice of offsets, starting from the offset of the array
+                        // so we can take the first value
+                        let offset = data.buffer::<i64>(0)[0];
+                        buf_len - offset as usize
+                    })
+                    .sum::<usize>();
+
+                [
+                    buffer,
+                    MutableBuffer::new(str_values_size * mem::size_of::<u8>()),
+                ]
+            }
+            DataType::Utf8 => {
+                // offsets
+                let mut buffer =
+                    MutableBuffer::new((1 + capacity) * mem::size_of::<i32>());
+                // safety: `unsafe` code assumes that this buffer is initialized with one element
+                buffer.push(0i32);
+                let str_values_size = arrays
+                    .iter()
+                    .map(|data| {
+                        // get the length of the value buffer
+                        let buf_len = data.buffers()[1].len();
+                        // find the offset of the buffer
+                        // this returns a slice of offsets, starting from the offset of the array
+                        // so we can take the first value
+                        let offset = data.buffer::<i32>(0)[0];
+                        buf_len - offset as usize
+                    })
+                    .sum::<usize>();
+
+                [
+                    buffer,
+                    MutableBuffer::new(str_values_size * mem::size_of::<u8>()),
+                ]
+            }
+            _ => new_buffers(data_type, capacity),
+        };
 
         let child_data = match &data_type {
             DataType::Null
