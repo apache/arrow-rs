@@ -26,6 +26,3 @@ Apache Arrow Flight is a gRPC based protocol for exchanging Arrow data between p
 This crate simply provides the Rust implementation of the [Flight.proto](../../format/Flight.proto) gRPC protocol and provides an example that demonstrates how to build a Flight server implemented with Tonic.
 
 Note that building a Flight server also requires an implementation of Arrow IPC which is based on the Flatbuffers serialization framework. The Rust implementation of Arrow IPC is not yet complete although the generated Flatbuffers code is available as part of the core Arrow crate.
-
-
-
