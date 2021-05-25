@@ -6,7 +6,7 @@ We generally require a GitHub issue to be filed for all bug fixes and enhancemen
 
 Closes #.
 
- # Rationale for this change
+# Rationale for this change
  
  <!---
  Why are you proposing this change? If this is already explained clearly in the issue then this section is not needed.
