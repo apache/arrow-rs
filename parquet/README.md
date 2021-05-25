@@ -23,7 +23,7 @@
 Add this to your Cargo.toml:
 ```toml
 [dependencies]
-parquet = "5.0.0-SNAPSHOT"
+parquet = "4.1.0"
 ```
 
 and this to your crate root:
