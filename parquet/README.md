@@ -19,6 +19,8 @@
 
 # An Apache Parquet implementation in Rust
 
+[![Crates.io](https://img.shields.io/crates/v/parquet.svg)](https://crates.io/crates/parquet)
+
 ## Usage
 Add this to your Cargo.toml:
 ```toml

@@ -19,6 +19,8 @@
 
 # Native Rust implementation of Apache Arrow
 
+[![Crates.io](https://img.shields.io/crates/v/arrow.svg)](https://crates.io/crates/arrow)
+
 This crate contains a native Rust implementation of the [Arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html).
 
 ## Developer's guide
