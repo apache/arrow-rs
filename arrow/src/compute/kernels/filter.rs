@@ -197,15 +197,18 @@ pub fn build_filter(filter: &BooleanArray) -> Result<Filter> {
     let chunks = iter.collect::<Vec<_>>();
 
     Ok(Box::new(move |array: &ArrayData| {
-        if filter_count == array.len() {
-            return array.clone();
+        match filter_count {
+            // return all
+            len if len == array.len() => array.clone(),
+            0 => ArrayData::new_empty(array.data_type()),
+            _ => {
+                let mut mutable = MutableArrayData::new(vec![array], false, filter_count);
+                chunks
+                    .iter()
+                    .for_each(|(start, end)| mutable.extend(0, *start, *end));
+                mutable.freeze()
+            }
         }
-
-        let mut mutable = MutableArrayData::new(vec![array], false, filter_count);
-        chunks
-            .iter()
-            .for_each(|(start, end)| mutable.extend(0, *start, *end));
-        mutable.freeze()
     }))
 }
 
@@ -251,15 +254,25 @@ pub fn filter(array: &Array, filter: &BooleanArray) -> Result<ArrayRef> {
     }
 
     let iter = SlicesIterator::new(filter);
-    if iter.filter_count == array.len() {
-        let data = array.data().clone();
-        Ok(make_array(data))
-    } else {
-        let mut mutable =
-            MutableArrayData::new(vec![array.data_ref()], false, iter.filter_count);
-        iter.for_each(|(start, end)| mutable.extend(0, start, end));
-        let data = mutable.freeze();
-        Ok(make_array(data))
+    match iter.filter_count {
+        0 => {
+            // return empty
+            let data = ArrayData::new_empty(array.data_type());
+            Ok(make_array(data))
+        }
+        len if len == array.len() => {
+            // return all
+            let data = array.data().clone();
+            Ok(make_array(data))
+        }
+        _ => {
+            // actually filter
+            let mut mutable =
+                MutableArrayData::new(vec![array.data_ref()], false, iter.filter_count);
+            iter.for_each(|(start, end)| mutable.extend(0, start, end));
+            let data = mutable.freeze();
+            Ok(make_array(data))
+        }
     }
 }
 
@@ -652,6 +665,8 @@ mod tests {
     fn test_fast_path() -> Result<()> {
         let a: PrimitiveArray<Int64Type> =
             PrimitiveArray::from(vec![Some(1), Some(2), None]);
+
+        // all true
         let mask = BooleanArray::from(vec![true, true, true]);
         let out = filter(&a, &mask)?;
         let b = out
@@ -659,6 +674,12 @@ mod tests {
             .downcast_ref::<PrimitiveArray<Int64Type>>()
             .unwrap();
         assert_eq!(&a, b);
+
+        // all false
+        let mask = BooleanArray::from(vec![false, false, false]);
+        let out = filter(&a, &mask)?;
+        assert_eq!(out.len(), 0);
+        assert_eq!(out.data_type(), &DataType::Int64);
         Ok(())
     }
 }
