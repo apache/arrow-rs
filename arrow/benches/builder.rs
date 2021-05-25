@@ -89,8 +89,8 @@ fn bench_bool(c: &mut Criterion) {
 }
 
 fn bench_string(c: &mut Criterion) {
-    const SAMPLE_STRING: &str = "sample string";
-    let mut group = c.benchmark_group("bench_primitive");
+    const SAMPLE_STRING: &str = "🎈🎨👗🎱🎯🏆";
+    let mut group = c.benchmark_group("bench_string");
     group.throughput(Throughput::Bytes(
         ((BATCH_SIZE * NUM_BATCHES * SAMPLE_STRING.len()) as u32).into(),
     ));
@@ -106,11 +106,58 @@ fn bench_string(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_string_slice(c: &mut Criterion) {
+    // "🎈🎨👗🎱🎯🏆"
+    const SAMPLE_STRING: &'static [u8] = &[
+        240, 159, 142, 136, 240, 159, 142, 168, 240, 159, 145, 151, 240, 159, 142, 177,
+        240, 159, 142, 175, 240, 159, 143, 134,
+    ];
+    let mut group = c.benchmark_group("bench_string");
+    group.throughput(Throughput::Bytes(
+        ((BATCH_SIZE * NUM_BATCHES * SAMPLE_STRING.len()) as u32).into(),
+    ));
+    group.bench_function("bench_string_slice", |b| {
+        b.iter(|| {
+            let mut builder = StringBuilder::new(64);
+            for _ in 0..NUM_BATCHES * BATCH_SIZE {
+                let _ = black_box(builder.append_slice(SAMPLE_STRING));
+            }
+            black_box(builder.finish());
+        })
+    });
+    group.finish();
+}
+
+fn bench_string_slice_unchecked(c: &mut Criterion) {
+    // "🎈🎨👗🎱🎯🏆"
+    const SAMPLE_STRING: &'static [u8] = &[
+        240, 159, 142, 136, 240, 159, 142, 168, 240, 159, 145, 151, 240, 159, 142, 177,
+        240, 159, 142, 175, 240, 159, 143, 134,
+    ];
+    let mut group = c.benchmark_group("bench_string");
+    group.throughput(Throughput::Bytes(
+        ((BATCH_SIZE * NUM_BATCHES * SAMPLE_STRING.len()) as u32).into(),
+    ));
+    group.bench_function("bench_string_slice_unchecked", |b| {
+        b.iter(|| {
+            let mut builder = StringBuilder::new(64);
+            for _ in 0..NUM_BATCHES * BATCH_SIZE {
+                let _ =
+                    black_box(unsafe { builder.append_slice_unchecked(SAMPLE_STRING) });
+            }
+            black_box(builder.finish());
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_primitive,
     bench_primitive_nulls,
     bench_bool,
-    bench_string
+    bench_string,
+    bench_string_slice,
+    bench_string_slice_unchecked
 );
 criterion_main!(benches);

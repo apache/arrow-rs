@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem;
+use std::str::from_utf8;
 use std::sync::Arc;
 
 use crate::array::*;
@@ -1242,6 +1243,33 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringBuilder<OffsetSize> {
         self.builder
             .values()
             .append_slice(value.as_ref().as_bytes())?;
+        self.builder.append(true)?;
+        Ok(())
+    }
+
+    /// Appends a UTF-8 slice into the builder.
+    ///
+    /// Automatically calls the `append` method to delimit the slice appended in as a
+    /// distinct array element.
+    #[inline]
+    pub fn append_slice(&mut self, value: &[u8]) -> Result<()> {
+        // Do not append invalid UTF-8
+        from_utf8(value).or(Err(ArrowError::InvalidArgumentError(
+            "Only valid UTF-8 is accepted.".to_string(),
+        )))?;
+
+        self.builder.values().append_slice(value)?;
+        self.builder.append(true)?;
+        Ok(())
+    }
+
+    /// Appends a trusted UTF-8 slice into the builder.
+    ///
+    /// Automatically calls the `append` method to delimit the slice appended in as a
+    /// distinct array element.
+    #[inline]
+    pub unsafe fn append_slice_unchecked(&mut self, value: &[u8]) -> Result<()> {
+        self.builder.values().append_slice(value)?;
         self.builder.append(true)?;
         Ok(())
     }
@@ -2820,16 +2848,33 @@ mod tests {
         builder.append_value("hello").unwrap();
         builder.append(true).unwrap();
         builder.append_value("world").unwrap();
+        builder.append_slice(&[240, 159, 141, 142]).unwrap();
+        unsafe {
+            builder
+                .append_slice_unchecked(&[240, 159, 141, 142])
+                .unwrap();
+        }
 
         let string_array = builder.finish();
 
-        assert_eq!(3, string_array.len());
+        assert_eq!(5, string_array.len());
         assert_eq!(0, string_array.null_count());
         assert_eq!("hello", string_array.value(0));
         assert_eq!("", string_array.value(1));
         assert_eq!("world", string_array.value(2));
         assert_eq!(5, string_array.value_offsets()[2]);
         assert_eq!(5, string_array.value_length(2));
+        assert_eq!("🍎", string_array.value(3));
+        assert_eq!("🍎", string_array.value(4));
+
+        assert_eq!(
+            builder
+                .append_slice(&[240, 40, 140, 40]) // 4th octet invalid
+                .err()
+                .unwrap()
+                .to_string(),
+            "Invalid argument error: Only valid UTF-8 is accepted.".to_string()
+        );
     }
 
     #[test]
