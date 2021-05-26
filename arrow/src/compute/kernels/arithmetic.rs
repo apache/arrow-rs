@@ -219,7 +219,7 @@ where
                 let is_valid = unsafe { bit_util::get_bit_raw(b.as_ptr(), i) };
                 if is_valid {
                     if right.is_zero() {
-                        Err(ArrowError::ModulusByZero)
+                        Err(ArrowError::DivideByZero)
                     } else {
                         Ok(*left % *right)
                     }
@@ -237,7 +237,7 @@ where
             .zip(right.values())
             .map(|(left, right)| {
                 if right.is_zero() {
-                    Err(ArrowError::ModulusByZero)
+                    Err(ArrowError::DivideByZero)
                 } else {
                     Ok(*left % *right)
                 }
@@ -335,7 +335,7 @@ where
     T::Native: Rem<Output = T::Native> + Zero,
 {
     if modulo.is_zero() {
-        return Err(ArrowError::ModulusByZero);
+        return Err(ArrowError::DivideByZero);
     }
 
     let values = array.values().iter().map(|value| *value % modulo);
@@ -445,7 +445,7 @@ where
 }
 
 /// SIMD vectorized implementation of `left % right`.
-/// If any of the lanes marked as valid in `valid_mask` are `0` then an `ArrowError::ModulusByZero`
+/// If any of the lanes marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero`
 /// is returned. The contents of no-valid lanes are undefined.
 #[cfg(feature = "simd")]
 #[inline]
@@ -472,7 +472,7 @@ where
     let zero_mask = T::eq(right_no_invalid_zeros, zero);
 
     if T::mask_any(zero_mask) {
-        Err(ArrowError::ModulusByZero)
+        Err(ArrowError::DivideByZero)
     } else {
         Ok(T::bin_op(left, right_no_invalid_zeros, |a, b| a % b))
     }
@@ -513,7 +513,7 @@ where
 }
 
 /// Scalar implementation of `left % right` for the remainder elements after complete chunks have been processed using SIMD.
-/// If any of the values marked as valid in `valid_mask` are `0` then an `ArrowError::ModulusByZero` is returned.
+/// If any of the values marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero` is returned.
 #[cfg(feature = "simd")]
 #[inline]
 fn simd_checked_modulus_remainder<T: ArrowNumericType>(
@@ -536,7 +536,7 @@ where
         .try_for_each(|(i, (result_scalar, (left_scalar, right_scalar)))| {
             if valid_mask.map(|mask| mask & (1 << i) != 0).unwrap_or(true) {
                 if *right_scalar == T::Native::zero() {
-                    return Err(ArrowError::ModulusByZero);
+                    return Err(ArrowError::DivideByZero);
                 }
                 *result_scalar = *left_scalar % *right_scalar;
             }
@@ -592,7 +592,7 @@ where
     T::Native: Zero + Rem<Output = T::Native>,
 {
     if modulo.is_zero() {
-        return Err(ArrowError::ModulusByZero);
+        return Err(ArrowError::DivideByZero);
     }
 
     let result_remainder = result_chunks.into_remainder();
@@ -887,7 +887,7 @@ where
     T::Native: One + Zero + Rem<Output = T::Native>,
 {
     if modulo.is_zero() {
-        return Err(ArrowError::ModulusByZero);
+        return Err(ArrowError::DivideByZero);
     }
 
     let lanes = T::lanes();
@@ -1065,7 +1065,7 @@ where
 
 /// Perform `left % right` operation on two arrays. If either left or right value is null
 /// then the result is also null. If any right hand value is zero then the result of this
-/// operation will be `Err(ArrowError::ModulusByZero)`.
+/// operation will be `Err(ArrowError::DivideByZero)`.
 pub fn modulus<T>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
@@ -1111,7 +1111,7 @@ where
 
 /// Modulus every value in an array by a scalar. If any value in the array is null then the
 /// result is also null. If the scalar is zero then the result of this operation will be
-/// `Err(ArrowError::ModulusByZero)`.
+/// `Err(ArrowError::DivideByZero)`.
 pub fn modulus_scalar<T>(
     array: &PrimitiveArray<T>,
     modulo: T::Native,
@@ -1469,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "ModulusByZero")]
+    #[should_panic(expected = "DivideByZero")]
     fn test_primitive_array_modulus_by_zero() {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
