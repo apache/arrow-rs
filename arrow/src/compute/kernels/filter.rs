@@ -257,8 +257,7 @@ pub fn filter(array: &Array, filter: &BooleanArray) -> Result<ArrayRef> {
     match iter.filter_count {
         0 => {
             // return empty
-            let data = ArrayData::new_empty(array.data_type());
-            Ok(make_array(data))
+            Ok(new_empty_array(array.data_type()))
         }
         len if len == array.len() => {
             // return all
