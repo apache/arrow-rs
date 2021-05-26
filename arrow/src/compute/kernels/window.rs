@@ -17,18 +17,11 @@
 
 //! Defines windowing functions, like `shift`ing
 
-use crate::compute::concat;
+use crate::{array::new_null_array, compute::concat};
 use num::{abs, clamp};
 
-use crate::{
-    array::{make_array, ArrayData, PrimitiveArray},
-    datatypes::ArrowPrimitiveType,
-    error::Result,
-};
-use crate::{
-    array::{Array, ArrayRef},
-    buffer::MutableBuffer,
-};
+use crate::array::{Array, ArrayRef};
+use crate::{array::PrimitiveArray, datatypes::ArrowPrimitiveType, error::Result};
 
 /// Shifts array by defined number of items (to left or right)
 /// A positive value for `offset` shifts the array to the right
@@ -57,23 +50,9 @@ where
     // Generate array with remaining `null` items
     let nulls = abs(offset as i64) as usize;
 
-    let mut null_array = MutableBuffer::new(nulls);
-    let mut null_data = MutableBuffer::new(nulls * T::get_byte_width());
-    null_array.extend_zeros(nulls);
-    null_data.extend_zeros(nulls * T::get_byte_width());
-
-    let null_data = ArrayData::new(
-        T::DATA_TYPE,
-        nulls as usize,
-        Some(nulls),
-        Some(null_array.into()),
-        0,
-        vec![null_data.into()],
-        vec![],
-    );
+    let null_arr = new_null_array(&T::DATA_TYPE, nulls);
 
     // Concatenate both arrays, add nulls after if shift > 0 else before
-    let null_arr = make_array(null_data);
     if offset > 0 {
         concat(&[null_arr.as_ref(), slice.as_ref()])
     } else {
