@@ -244,16 +244,15 @@ fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// # Ok(())
 /// # }
 /// ```
-pub fn filter(array: &Array, filter: &BooleanArray) -> Result<ArrayRef> {
-    if filter.null_count() > 0 {
+pub fn filter(array: &Array, predicate: &BooleanArray) -> Result<ArrayRef> {
+    if predicate.null_count() > 0 {
         // this greatly simplifies subsequent filtering code
         // now we only have a boolean mask to deal with
-        let filter = prep_null_mask_filter(filter);
-        // fully qualified syntax, because we have an argument with the same name
-        return crate::compute::kernels::filter::filter(array, &filter);
+        let predicate = prep_null_mask_filter(predicate);
+        return filter(array, &predicate);
     }
 
-    let iter = SlicesIterator::new(filter);
+    let iter = SlicesIterator::new(predicate);
     match iter.filter_count {
         0 => {
             // return empty
@@ -278,20 +277,16 @@ pub fn filter(array: &Array, filter: &BooleanArray) -> Result<ArrayRef> {
 /// Returns a new [RecordBatch] with arrays containing only values matching the filter.
 pub fn filter_record_batch(
     record_batch: &RecordBatch,
-    filter: &BooleanArray,
+    predicate: &BooleanArray,
 ) -> Result<RecordBatch> {
-    if filter.null_count() > 0 {
+    if predicate.null_count() > 0 {
         // this greatly simplifies subsequent filtering code
         // now we only have a boolean mask to deal with
-        let filter = prep_null_mask_filter(filter);
-        // fully qualified syntax, because we have an argument with the same name
-        return crate::compute::kernels::filter::filter_record_batch(
-            record_batch,
-            &filter,
-        );
+        let predicate = prep_null_mask_filter(predicate);
+        return filter_record_batch(record_batch, &predicate);
     }
 
-    let filter = build_filter(filter)?;
+    let filter = build_filter(predicate)?;
     let filtered_arrays = record_batch
         .columns()
         .iter()
