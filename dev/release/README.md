@@ -234,3 +234,31 @@ following commands
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
 ```
+
+# Backporting
+
+As of now, the plan for backporting to `active_release` is to do so semi-manually.
+
+Step 1: Pick the commit to cherry-pick
+
+Step 2: Create cherry-pick PR to active_release
+
+Step 3a: If CI passes, merge cherry-pick PR
+
+Step 3b: If CI doesn't pass or some other changes are needed, the PR should be reviewed / approved as normal prior to merge
+
+
+
+For example, to backport `b2de5446cc1e45a0559fb39039d0545df1ac0d26` to active_release use the folliwing
+
+```shell
+git clone git@github.com:apache/arrow-rs.git /tmp/arrow-rs
+
+ARROW_GITHUB_API_TOKEN=$ARROW_GITHUB_API_TOKEN CHECKOUT_ROOT=/tmp/arrow-rs CHERRY_PICK_SHA=b2de5446cc1e45a0559fb39039d0545df1ac0d26 python3 dev/release/cherry-pick-pr.py
+```
+
+## Rationale for creating PRs:
+1. PRs are a natural place to run the CI tests to make sure there are no logical conflicts
+2. PRs offer a place for the original author / committers to comment and say it should/should not be backported.
+3. PRs offer a way to make cleanups / fixups and approve (if needed) for non cherry pick PRs
+4. There is an additional control / review when the candidate release is created
