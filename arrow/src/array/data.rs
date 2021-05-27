@@ -412,7 +412,7 @@ impl ArrayData {
     }
 
     /// Returns a new empty [ArrayData] valid for `data_type`.
-    pub(super) fn new_empty(data_type: &DataType) -> Self {
+    pub fn new_empty(data_type: &DataType) -> Self {
         let buffers = new_buffers(data_type, 0);
         let [buffer1, buffer2] = buffers;
         let buffers = into_buffers(data_type, buffer1, buffer2);
