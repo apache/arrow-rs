@@ -23,9 +23,6 @@ use std::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // avoid rerunning build if the file has not changed
-    println!("cargo:rerun-if-changed=../format/Flight.proto");
-
     // override the build location, in order to check in the changes to proto files
     env::set_var("OUT_DIR", "src");
 
@@ -33,6 +30,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // built or released so we build an absolute path to the proto file
     let path = Path::new("../format/Flight.proto");
     if path.exists() {
+        // avoid rerunning build if the file has not changed
+        println!("cargo:rerun-if-changed=../format/Flight.proto");
+
         tonic_build::compile_protos("../format/Flight.proto")?;
         // read file contents to string
         let mut file = OpenOptions::new()
