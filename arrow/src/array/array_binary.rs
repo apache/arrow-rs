@@ -1180,7 +1180,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_array_from_iter() {
-        let input_arg = vec![ vec![1, 2], vec![3, 4], vec![5, 6] ];
+        let input_arg = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
         let arr = FixedSizeBinaryArray::try_from_iter(input_arg.into_iter()).unwrap();
 
         assert_eq!(2, arr.value_length());
@@ -1189,8 +1189,15 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_array_from_sparse_iter() {
-        let input_arg = vec![ None, Some(vec![7, 8]), Some(vec![9, 10]), None, Some(vec![13, 14]) ];
-        let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+        let input_arg = vec![
+            None,
+            Some(vec![7, 8]),
+            Some(vec![9, 10]),
+            None,
+            Some(vec![13, 14]),
+        ];
+        let arr =
+            FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len())
     }
