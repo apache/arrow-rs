@@ -383,6 +383,57 @@ impl From<BooleanBufferBuilder> for Buffer {
 }
 
 /// Trait for dealing with different array builders at runtime
+///
+/// # Example
+///
+/// ```
+/// # use arrow::{
+/// #     array::{ArrayBuilder, ArrayRef, Float64Builder, Int64Builder, StringArray, StringBuilder},
+/// #     error::ArrowError,
+/// # };
+/// # fn main() -> std::result::Result<(), ArrowError> {
+/// // Create
+/// let mut data_builders: Vec<Box<dyn ArrayBuilder>> = vec![
+///     Box::new(Float64Builder::new(1024)),
+///     Box::new(Int64Builder::new(1024)),
+///     Box::new(StringBuilder::new(1024)),
+/// ];
+///
+/// // Fill
+/// data_builders[0]
+///     .as_any_mut()
+///     .downcast_mut::<Float64Builder>()
+///     .unwrap()
+///     .append_value(3.14)?;
+/// data_builders[1]
+///     .as_any_mut()
+///     .downcast_mut::<Int64Builder>()
+///     .unwrap()
+///     .append_value(-1)?;
+/// data_builders[2]
+///     .as_any_mut()
+///     .downcast_mut::<StringBuilder>()
+///     .unwrap()
+///     .append_value("🍎")?;
+///
+/// // Finish
+/// let array_refs: Vec<ArrayRef> = data_builders
+///     .iter_mut()
+///     .map(|builder| builder.finish())
+///     .collect();
+/// assert_eq!(array_refs[0].len(), 1);
+/// assert_eq!(array_refs[1].is_null(0), false);
+/// assert_eq!(
+///     array_refs[2]
+///         .as_any()
+///         .downcast_ref::<StringArray>()
+///         .unwrap()
+///         .value(0),
+///     "🍎"
+/// );
+/// # Ok(())
+/// # }
+/// ```
 pub trait ArrayBuilder: Any + Send {
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize;
