@@ -607,9 +607,11 @@ impl<T: DataType> ColumnWriterImpl<T> {
         let max_def_level = self.descr.max_def_level();
         let max_rep_level = self.descr.max_rep_level();
 
+        // always update column NULL count, no matter if page stats are used
+        self.num_column_nulls += self.num_page_nulls;
+
         let page_statistics = if calculate_page_stat {
             self.update_column_min_max();
-            self.num_column_nulls += self.num_page_nulls;
             Some(self.make_page_statistics())
         } else {
             None

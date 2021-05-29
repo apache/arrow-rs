@@ -19,6 +19,8 @@
 
 # Native Rust implementation of Apache Arrow
 
+[![Crates.io](https://img.shields.io/crates/v/arrow.svg)](https://crates.io/crates/arrow)
+
 This crate contains a native Rust implementation of the [Arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html).
 
 ## Developer's guide
@@ -174,33 +176,6 @@ specific JIRA issues and reference them in these code comments. For example:
 //      This is not sound because .... see https://issues.apache.org/jira/browse/ARROW-nnnnn
 ```
 
-# Publishing to crates.io
+# Releases and publishing to crates.io
 
-An Arrow committer can publish this crate after an official project release has
-been made to crates.io using the following instructions.
-
-Follow [these
-instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
-create an account and login to crates.io before asking to be added as an owner
-of the [arrow crate](https://crates.io/crates/arrow).
-
-Checkout the tag for the version to be released. For example:
-
-```bash
-git checkout apache-arrow-0.11.0
-```
-
-If the Cargo.toml in this tag already contains `version = "0.11.0"` (as it
-should) then the crate can be published with the following command:
-
-```bash
-cargo publish
-```
-
-If the Cargo.toml does not have the correct version then it will be necessary
-to modify it manually. Since there is now a modified file locally that is not
-committed to GitHub it will be necessary to use the following command.
-
-```bash
-cargo publish --allow-dirty
-```
+Please see the [release](../dev/release/README.md) for details on how to create arrow releases

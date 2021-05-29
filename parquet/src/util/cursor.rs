@@ -46,10 +46,11 @@ impl fmt::Debug for SliceableCursor {
 }
 
 impl SliceableCursor {
-    pub fn new(content: Vec<u8>) -> Self {
-        let size = content.len();
+    pub fn new(content: impl Into<Arc<Vec<u8>>>) -> Self {
+        let inner = content.into();
+        let size = inner.len();
         SliceableCursor {
-            inner: Arc::new(content),
+            inner,
             start: 0,
             pos: 0,
             length: size,
