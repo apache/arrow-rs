@@ -452,4 +452,23 @@ mod tests {
         let concat = concat_dictionary(input_1, input_2);
         assert_eq!(concat, expected);
     }
+
+    #[test]
+    fn test_concat_string_sizes() -> Result<()> {
+        let a: LargeStringArray = ((0..150).map(|_| Some("foo"))).collect();
+        let b: LargeStringArray = ((0..150).map(|_| Some("foo"))).collect();
+        let c = LargeStringArray::from(vec![Some("foo"), Some("bar"), None, Some("baz")]);
+        // 150 * 3 = 450
+        // 150 * 3 = 450
+        // 3 * 3   = 9
+        // ------------+
+        // 909
+        // closest 64 byte aligned cap = 960
+
+        let arr = concat(&[&a, &b, &c])?;
+        // this would have been 1280 if we did not precompute the value lengths.
+        assert_eq!(arr.data().buffers()[1].capacity(), 960);
+
+        Ok(())
+    }
 }

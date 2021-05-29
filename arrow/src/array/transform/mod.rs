@@ -21,11 +21,13 @@ use crate::{
     error::{ArrowError, Result},
     util::bit_util,
 };
+use std::mem;
 
 use super::{
     data::{into_buffers, new_buffers},
     ArrayData,
 };
+use crate::array::StringOffsetSizeTrait;
 
 mod boolean;
 mod fixed_binary;
@@ -324,6 +326,37 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
     })
 }
 
+fn preallocate_str_buffer<Offset: StringOffsetSizeTrait>(
+    capacity: usize,
+    arrays: &[&ArrayData],
+) -> [MutableBuffer; 2] {
+    // offsets
+    let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<Offset>());
+    // safety: `unsafe` code assumes that this buffer is initialized with one element
+    if Offset::is_large() {
+        buffer.push(0i64);
+    } else {
+        buffer.push(0i32)
+    }
+    let str_values_size = arrays
+        .iter()
+        .map(|data| {
+            // get the length of the value buffer
+            let buf_len = data.buffers()[1].len();
+            // find the offset of the buffer
+            // this returns a slice of offsets, starting from the offset of the array
+            // so we can take the first value
+            let offset = data.buffer::<Offset>(0)[0];
+            buf_len - offset.to_usize().unwrap()
+        })
+        .sum::<usize>();
+
+    [
+        buffer,
+        MutableBuffer::new(str_values_size * mem::size_of::<u8>()),
+    ]
+}
+
 impl<'a> MutableArrayData<'a> {
     /// returns a new [MutableArrayData] with capacity to `capacity` slots and specialized to create an
     /// [ArrayData] from multiple `arrays`.
@@ -341,7 +374,13 @@ impl<'a> MutableArrayData<'a> {
             use_nulls = true;
         };
 
-        let [buffer1, buffer2] = new_buffers(data_type, capacity);
+        // We can prevent reallocation by precomputing the needed size.
+        // This is faster and more memory efficient.
+        let [buffer1, buffer2] = match data_type {
+            DataType::LargeUtf8 => preallocate_str_buffer::<i64>(capacity, &arrays),
+            DataType::Utf8 => preallocate_str_buffer::<i32>(capacity, &arrays),
+            _ => new_buffers(data_type, capacity),
+        };
 
         let child_data = match &data_type {
             DataType::Null
