@@ -2,7 +2,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 # Changelog
 
-## [4.1.0](https://github.com/apache/arrow-rs/tree/4.1.0) (2021-05-17)
+## [4.1.0](https://github.com/apache/arrow-rs/tree/4.2.0) (2021-05-29)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/4.1.0...4.2.0)
 
