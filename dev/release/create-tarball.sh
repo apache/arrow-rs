@@ -73,7 +73,7 @@ echo ""
 echo "---------------------------------------------------------"
 cat <<MAIL
 To: dev@arrow.apache.org
-Subject: [VOTE][RUST] Release Apache Arrow Rust ${version}
+Subject: [VOTE][RUST] Release Apache Arrow Rust ${tag}
 
 Hi,
 
