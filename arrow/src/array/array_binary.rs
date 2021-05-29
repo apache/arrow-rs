@@ -316,6 +316,29 @@ impl<T: BinaryOffsetSizeTrait> From<GenericListArray<T>> for GenericBinaryArray<
 }
 
 /// A type of `FixedSizeListArray` whose elements are binaries.
+///
+/// # Examples
+///
+/// Create an array from an iterable argument of byte slices.
+///
+/// ```
+///    use arrow::array::{Array, FixedSizeBinaryArray};
+///    let input_arg = vec![ vec![1, 2], vec![3, 4], vec![5, 6] ];
+///    let arr = FixedSizeBinaryArray::try_from_iter(input_arg.into_iter()).unwrap();
+///
+///    assert_eq!(3, arr.len());
+///
+/// ```
+/// Create an array from an iterable argument of sparse byte slices.
+/// Sparsity means that the input argument can contain `None` items.
+/// ```
+///    use arrow::array::{Array, FixedSizeBinaryArray};
+///    let input_arg = vec![ None, Some(vec![7, 8]), Some(vec![9, 10]), None, Some(vec![13, 14]) ];
+///    let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+///    assert_eq!(5, arr.len())
+///
+/// ```
+///
 pub struct FixedSizeBinaryArray {
     data: ArrayData,
     value_data: RawPtrBox<u8>,
@@ -364,7 +387,7 @@ impl FixedSizeBinaryArray {
     /// Sparsity means that items returned by the iterator are optional, i.e input argument can
     /// contain `None` items.
     ///
-    /// # Examles
+    /// # Examples
     ///
     /// ```
     /// use arrow::array::FixedSizeBinaryArray;
@@ -449,7 +472,7 @@ impl FixedSizeBinaryArray {
 
     /// Create an array from an iterable argument of byte slices.
     ///
-    /// # Examles
+    /// # Examples
     ///
     /// ```
     /// use arrow::array::FixedSizeBinaryArray;
@@ -1153,5 +1176,22 @@ mod tests {
             "DecimalArray<23, 6>\n[\n  8887000000,\n  -8887000000,\n]",
             format!("{:?}", arr)
         );
+    }
+
+    #[test]
+    fn test_fixed_size_binary_array_from_iter() {
+        let input_arg = vec![ vec![1, 2], vec![3, 4], vec![5, 6] ];
+        let arr = FixedSizeBinaryArray::try_from_iter(input_arg.into_iter()).unwrap();
+
+        assert_eq!(2, arr.value_length());
+        assert_eq!(3, arr.len())
+    }
+
+    #[test]
+    fn test_fixed_size_binary_array_from_sparse_iter() {
+        let input_arg = vec![ None, Some(vec![7, 8]), Some(vec![9, 10]), None, Some(vec![13, 14]) ];
+        let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+        assert_eq!(2, arr.value_length());
+        assert_eq!(5, arr.len())
     }
 }
