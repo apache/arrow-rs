@@ -22,6 +22,4 @@ pub mod bit_util;
 mod bit_packing;
 pub mod cursor;
 pub mod hash_util;
-
-#[cfg(test)]
 pub mod test_common;

@@ -32,7 +32,6 @@ use rand::distributions::uniform::SampleUniform;
 use std::collections::VecDeque;
 use std::mem;
 use std::sync::Arc;
-use std::vec::IntoIter;
 
 pub trait DataPageBuilder {
     fn add_rep_levels(&mut self, max_level: i16, rep_levels: &[i16]);
@@ -78,6 +77,9 @@ impl DataPageBuilderImpl {
 
     // Adds levels to the buffer and return number of encoded bytes
     fn add_levels(&mut self, max_level: i16, levels: &[i16]) -> u32 {
+        if max_level <= 0 {
+            return 0;
+        }
         let size = max_buffer_size(Encoding::RLE, max_level, levels.len());
         let mut level_encoder = LevelEncoder::v1(Encoding::RLE, max_level, vec![0; size]);
         level_encoder.put(levels).expect("put() should be OK");
@@ -163,60 +165,65 @@ impl DataPageBuilder for DataPageBuilderImpl {
 }
 
 /// A utility page reader which stores pages in memory.
-pub struct InMemoryPageReader {
-    pages: Box<dyn Iterator<Item = Page>>,
+pub struct InMemoryPageReader<P: Iterator<Item = Page>> {
+    page_iter: P,
 }
 
-impl InMemoryPageReader {
-    pub fn new(pages: Vec<Page>) -> Self {
+impl<P: Iterator<Item = Page>> InMemoryPageReader<P> {
+    pub fn new(pages: impl IntoIterator<Item = Page, IntoIter = P>) -> Self {
         Self {
-            pages: Box::new(pages.into_iter()),
+            page_iter: pages.into_iter(),
         }
     }
 }
 
-impl PageReader for InMemoryPageReader {
+impl<P: Iterator<Item = Page>> PageReader for InMemoryPageReader<P> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
-        Ok(self.pages.next())
+        Ok(self.page_iter.next())
+    }
+}
+
+impl<P: Iterator<Item = Page>> Iterator for InMemoryPageReader<P> {
+    type Item = Result<Page>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.get_next_page().transpose()
     }
 }
 
 /// A utility page iterator which stores page readers in memory, used for tests.
-pub struct InMemoryPageIterator {
+#[derive(Clone)]
+pub struct InMemoryPageIterator<I: Iterator<Item = Vec<Page>>> {
     schema: SchemaDescPtr,
     column_desc: ColumnDescPtr,
-    page_readers: IntoIter<Box<dyn PageReader>>,
+    page_reader_iter: I,
 }
 
-impl InMemoryPageIterator {
+impl<I: Iterator<Item = Vec<Page>>> InMemoryPageIterator<I> {
     pub fn new(
         schema: SchemaDescPtr,
         column_desc: ColumnDescPtr,
-        pages: Vec<Vec<Page>>,
+        pages: impl IntoIterator<Item = Vec<Page>, IntoIter = I>,
     ) -> Self {
-        let page_readers = pages
-            .into_iter()
-            .map(|pages| Box::new(InMemoryPageReader::new(pages)) as Box<dyn PageReader>)
-            .collect::<Vec<Box<dyn PageReader>>>()
-            .into_iter();
-
         Self {
             schema,
             column_desc,
-            page_readers,
+            page_reader_iter: pages.into_iter(),
         }
     }
 }
 
-impl Iterator for InMemoryPageIterator {
+impl<I: Iterator<Item = Vec<Page>>> Iterator for InMemoryPageIterator<I> {
     type Item = Result<Box<dyn PageReader>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.page_readers.next().map(Ok)
+        self.page_reader_iter.next().map(
+            |x| Ok(Box::new(InMemoryPageReader::new(x)) as Box<dyn PageReader>)
+        )
     }
 }
 
-impl PageIterator for InMemoryPageIterator {
+impl<I: Iterator<Item = Vec<Page>>> PageIterator for InMemoryPageIterator<I> {
     fn schema(&mut self) -> Result<SchemaDescPtr> {
         Ok(self.schema.clone())
     }

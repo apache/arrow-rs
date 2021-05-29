@@ -22,7 +22,7 @@ use std::{cell, convert, io, result, str};
 #[cfg(any(feature = "arrow", test))]
 use arrow::error::ArrowError;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum ParquetError {
     /// General Parquet error.
     /// Returned when code violates normal workflow of working with Parquet files.

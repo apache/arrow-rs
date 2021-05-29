@@ -506,6 +506,11 @@ impl ArrayDataBuilder {
         self
     }
 
+    pub fn null_count(mut self, null_count: usize) -> Self {
+        self.null_count = Some(null_count);
+        self
+    }
+
     pub fn null_bit_buffer(mut self, buf: Buffer) -> Self {
         self.null_bit_buffer = Some(buf);
         self
