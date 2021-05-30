@@ -256,7 +256,7 @@ pub type DurationMillisecondBuilder = PrimitiveBuilder<DurationMillisecondType>;
 pub type DurationMicrosecondBuilder = PrimitiveBuilder<DurationMicrosecondType>;
 pub type DurationNanosecondBuilder = PrimitiveBuilder<DurationNanosecondType>;
 
-pub use self::transform::MutableArrayData;
+pub use self::transform::{Capacities, MutableArrayData};
 
 // --------------------- Array Iterator ---------------------
 

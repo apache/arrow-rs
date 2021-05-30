@@ -328,7 +328,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
 
 fn preallocate_str_buffer<Offset: StringOffsetSizeTrait>(
     capacity: usize,
-    arrays: &[&ArrayData],
+    str_values_size: usize,
 ) -> [MutableBuffer; 2] {
     // offsets
     let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<Offset>());
@@ -338,18 +338,6 @@ fn preallocate_str_buffer<Offset: StringOffsetSizeTrait>(
     } else {
         buffer.push(0i32)
     }
-    let str_values_size = arrays
-        .iter()
-        .map(|data| {
-            // get the length of the value buffer
-            let buf_len = data.buffers()[1].len();
-            // find the offset of the buffer
-            // this returns a slice of offsets, starting from the offset of the array
-            // so we can take the first value
-            let offset = data.buffer::<Offset>(0)[0];
-            buf_len - offset.to_usize().unwrap()
-        })
-        .sum::<usize>();
 
     [
         buffer,
@@ -357,6 +345,32 @@ fn preallocate_str_buffer<Offset: StringOffsetSizeTrait>(
     ]
 }
 
+/// Define capacities of child data or data buffers.
+#[derive(Debug)]
+pub enum Capacities {
+    /// Binary, Utf8 and LargeUtf8 data types
+    /// Define
+    /// * the capacity of the array offsets
+    /// * the capacity of the binary/ str buffer
+    Binary(usize, Option<usize>),
+    /// List and LargeList data types
+    /// Define
+    /// * the capacity of the array offsets
+    /// * the capacity of the child data
+    List(usize, Option<Box<Capacities>>),
+    /// Struct type
+    /// * the capacity of the array
+    /// * the capacities of the fields
+    Struct(usize, Option<Vec<Capacities>>),
+    /// Dictionary type
+    /// * the capacity of the array
+    /// * keys and values
+    ///     - the capacity of the keys (1st element of Vec)
+    ///     - the capacity of the values (2nd element of Vec)
+    Dictionary(usize, Option<Vec<Capacities>>),
+    /// Don't preallocate inner buffers and rely on array growth strategy
+    Array(usize),
+}
 impl<'a> MutableArrayData<'a> {
     /// returns a new [MutableArrayData] with capacity to `capacity` slots and specialized to create an
     /// [ArrayData] from multiple `arrays`.
@@ -364,7 +378,21 @@ impl<'a> MutableArrayData<'a> {
     /// `use_nulls` is a flag used to optimize insertions. It should be `false` if the only source of nulls
     /// are the arrays themselves and `true` if the user plans to call [MutableArrayData::extend_nulls].
     /// In other words, if `use_nulls` is `false`, calling [MutableArrayData::extend_nulls] should not be used.
-    pub fn new(arrays: Vec<&'a ArrayData>, mut use_nulls: bool, capacity: usize) -> Self {
+    pub fn new(arrays: Vec<&'a ArrayData>, use_nulls: bool, capacity: usize) -> Self {
+        Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
+    }
+
+    /// Similar to [MutableArray::new], but lets users define the preallocated capacities of the array.
+    /// See also [MutableArray::new] for more information on the arguments.
+    ///
+    /// # Panic
+    /// This function panics if the given `capacities` don't match the data type of `arrays`. Or when
+    /// a [Capacities] variant is not yet supported.
+    pub fn with_capacities(
+        arrays: Vec<&'a ArrayData>,
+        mut use_nulls: bool,
+        capacities: Capacities,
+    ) -> Self {
         let data_type = arrays[0].data_type();
         use crate::datatypes::*;
 
@@ -376,10 +404,27 @@ impl<'a> MutableArrayData<'a> {
 
         // We can prevent reallocation by precomputing the needed size.
         // This is faster and more memory efficient.
-        let [buffer1, buffer2] = match data_type {
-            DataType::LargeUtf8 => preallocate_str_buffer::<i64>(capacity, &arrays),
-            DataType::Utf8 => preallocate_str_buffer::<i32>(capacity, &arrays),
-            _ => new_buffers(data_type, capacity),
+        let ([buffer1, buffer2], capacity) = match (data_type, &capacities) {
+            (DataType::LargeUtf8, Capacities::Binary(cap, value_cap))
+                if value_cap.is_some() =>
+            {
+                (
+                    preallocate_str_buffer::<i64>(*cap, value_cap.unwrap()),
+                    *cap,
+                )
+            }
+            (DataType::Utf8, Capacities::Binary(cap, value_cap))
+                if value_cap.is_some() =>
+            {
+                (
+                    preallocate_str_buffer::<i32>(*cap, value_cap.unwrap()),
+                    *cap,
+                )
+            }
+            (_, Capacities::Array(capacity)) => {
+                (new_buffers(data_type, *capacity), *capacity)
+            }
+            _ => panic!("Capacities: {:?} not yet supported", capacities),
         };
 
         let child_data = match &data_type {
