@@ -95,16 +95,16 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
         // Track the number of rows being written in the batch.
         // We currently do not have a way of slicing nested arrays, thus we
         // track this manually.
-        let mut batches_written = 0;
-        let batch_rows = batch.num_rows();
-        while batches_written < batch_rows {
+        let num_rows = batch.num_rows();
+        let batches = (num_rows + self.max_row_group_size - 1) / self.max_row_group_size;
+        let min_batch = num_rows.min(self.max_row_group_size);
+        for batch_index in 0..batches {
             // Determine the offset and length of arrays
-            let offset = batches_written;
-            let batch_size = self.max_row_group_size.min(batch.num_rows() - offset);
-            batches_written += batch_size;
+            let offset = batch_index * min_batch;
+            let length = (num_rows - offset).min(self.max_row_group_size);
 
             // Compute the definition and repetition levels of the batch
-            let batch_level = LevelInfo::new(offset, batch_size);
+            let batch_level = LevelInfo::new(offset, length);
             let mut row_group_writer = self.writer.next_row_group()?;
             for (array, field) in batch.columns().iter().zip(batch.schema().fields()) {
                 let mut levels = batch_level.calculate_array_levels(array, field);
