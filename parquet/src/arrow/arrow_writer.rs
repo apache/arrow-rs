@@ -47,6 +47,8 @@ pub struct ArrowWriter<W: ParquetWriter> {
     ///
     /// The schema is used to verify that each record batch written has the correct schema
     arrow_schema: SchemaRef,
+    /// The length of arrays to write to each row group
+    max_row_group_size: usize,
 }
 
 impl<W: 'static + ParquetWriter> ArrowWriter<W> {
@@ -65,6 +67,8 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
         let mut props = props.unwrap_or_else(|| WriterProperties::builder().build());
         add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
 
+        let max_row_group_size = props.max_row_group_size();
+
         let file_writer = SerializedFileWriter::new(
             writer.try_clone()?,
             schema.root_schema_ptr(),
@@ -74,6 +78,7 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
         Ok(Self {
             writer: file_writer,
             arrow_schema,
+            max_row_group_size,
         })
     }
 
@@ -87,17 +92,31 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
                 "Record batch schema does not match writer schema".to_string(),
             ));
         }
-        // compute the definition and repetition levels of the batch
-        let batch_level = LevelInfo::new_from_batch(batch);
-        let mut row_group_writer = self.writer.next_row_group()?;
-        for (array, field) in batch.columns().iter().zip(batch.schema().fields()) {
-            let mut levels = batch_level.calculate_array_levels(array, field);
-            // Reverse levels as we pop() them when writing arrays
-            levels.reverse();
-            write_leaves(&mut row_group_writer, array, &mut levels)?;
+        // Track the number of rows being written in the batch.
+        // We currently do not have a way of slicing nested arrays, thus we
+        // track this manually.
+        let mut batches_written = 0;
+        let batch_rows = batch.num_rows();
+        while batches_written < batch_rows {
+            // Determine the offset and length of arrays
+            let offset = batches_written;
+            let batch_size = self.max_row_group_size.min(batch.num_rows() - offset);
+            batches_written += batch_size;
+
+            // Compute the definition and repetition levels of the batch
+            let batch_level = LevelInfo::new(offset, batch_size);
+            let mut row_group_writer = self.writer.next_row_group()?;
+            for (array, field) in batch.columns().iter().zip(batch.schema().fields()) {
+                let mut levels = batch_level.calculate_array_levels(array, field);
+                // Reverse levels as we pop() them when writing arrays
+                levels.reverse();
+                write_leaves(&mut row_group_writer, array, &mut levels)?;
+            }
+
+            self.writer.close_row_group(row_group_writer)?;
         }
 
-        self.writer.close_row_group(row_group_writer)
+        Ok(())
     }
 
     /// Close and finalize the underlying Parquet writer
@@ -209,16 +228,19 @@ fn write_leaf(
     levels: LevelInfo,
 ) -> Result<i64> {
     let indices = levels.filter_array_indices();
+    // Slice array according to computed offset and length
+    let column = column.slice(levels.offset, levels.length);
     let written = match writer {
         ColumnWriter::Int32ColumnWriter(ref mut typed) => {
             let values = match column.data_type() {
                 ArrowDataType::Date64 => {
                     // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
                     let array = if let ArrowDataType::Date64 = column.data_type() {
-                        let array = arrow::compute::cast(column, &ArrowDataType::Date32)?;
+                        let array =
+                            arrow::compute::cast(&column, &ArrowDataType::Date32)?;
                         arrow::compute::cast(&array, &ArrowDataType::Int32)?
                     } else {
-                        arrow::compute::cast(column, &ArrowDataType::Int32)?
+                        arrow::compute::cast(&column, &ArrowDataType::Int32)?
                     };
                     let array = array
                         .as_any()
@@ -240,7 +262,7 @@ fn write_leaf(
                     get_numeric_array_slice::<Int32Type, _>(&array, &indices)
                 }
                 _ => {
-                    let array = arrow::compute::cast(column, &ArrowDataType::Int32)?;
+                    let array = arrow::compute::cast(&column, &ArrowDataType::Int32)?;
                     let array = array
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
@@ -288,7 +310,7 @@ fn write_leaf(
                     get_numeric_array_slice::<Int64Type, _>(&array, &indices)
                 }
                 _ => {
-                    let array = arrow::compute::cast(column, &ArrowDataType::Int64)?;
+                    let array = arrow::compute::cast(&column, &ArrowDataType::Int64)?;
                     let array = array
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
@@ -866,7 +888,11 @@ mod tests {
         )
         .unwrap();
 
-        roundtrip("test_arrow_writer_complex.parquet", batch);
+        roundtrip(
+            "test_arrow_writer_complex.parquet",
+            batch,
+            Some(SMALL_SIZE / 2),
+        );
     }
 
     #[test]
@@ -904,7 +930,11 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(some_nested_object)])
                 .unwrap();
 
-        roundtrip("test_arrow_writer_complex_mixed.parquet", batch);
+        roundtrip(
+            "test_arrow_writer_complex_mixed.parquet",
+            batch,
+            Some(SMALL_SIZE / 2),
+        );
     }
 
     #[test]
@@ -936,7 +966,11 @@ mod tests {
         // build a racord batch
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
-        roundtrip("test_arrow_writer_2_level_struct.parquet", batch);
+        roundtrip(
+            "test_arrow_writer_2_level_struct.parquet",
+            batch,
+            Some(SMALL_SIZE / 2),
+        );
     }
 
     #[test]
@@ -966,7 +1000,11 @@ mod tests {
         // build a racord batch
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
-        roundtrip("test_arrow_writer_2_level_struct_non_null.parquet", batch);
+        roundtrip(
+            "test_arrow_writer_2_level_struct_non_null.parquet",
+            batch,
+            Some(SMALL_SIZE / 2),
+        );
     }
 
     #[test]
@@ -998,18 +1036,30 @@ mod tests {
         // build a racord batch
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
-        roundtrip("test_arrow_writer_2_level_struct_mixed_null.parquet", batch);
+        roundtrip(
+            "test_arrow_writer_2_level_struct_mixed_null.parquet",
+            batch,
+            Some(SMALL_SIZE / 2),
+        );
     }
 
     const SMALL_SIZE: usize = 4;
 
-    fn roundtrip(filename: &str, expected_batch: RecordBatch) -> File {
+    fn roundtrip(
+        filename: &str,
+        expected_batch: RecordBatch,
+        max_row_group_size: Option<usize>,
+    ) -> File {
         let file = get_temp_file(filename, &[]);
 
         let mut writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
             expected_batch.schema(),
-            None,
+            max_row_group_size.map(|size| {
+                WriterProperties::builder()
+                    .set_max_row_group_size(size)
+                    .build()
+            }),
         )
         .expect("Unable to write file");
         writer.write(&expected_batch).unwrap();
@@ -1037,7 +1087,12 @@ mod tests {
         file
     }
 
-    fn one_column_roundtrip(filename: &str, values: ArrayRef, nullable: bool) -> File {
+    fn one_column_roundtrip(
+        filename: &str,
+        values: ArrayRef,
+        nullable: bool,
+        max_row_group_size: Option<usize>,
+    ) -> File {
         let schema = Schema::new(vec![Field::new(
             "col",
             values.data_type().clone(),
@@ -1046,7 +1101,7 @@ mod tests {
         let expected_batch =
             RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
 
-        roundtrip(filename, expected_batch)
+        roundtrip(filename, expected_batch, max_row_group_size)
     }
 
     fn values_required<A, I>(iter: I, filename: &str)
@@ -1056,7 +1111,7 @@ mod tests {
     {
         let raw_values: Vec<_> = iter.into_iter().collect();
         let values = Arc::new(A::from(raw_values));
-        one_column_roundtrip(filename, values, false);
+        one_column_roundtrip(filename, values, false, Some(SMALL_SIZE / 2));
     }
 
     fn values_optional<A, I>(iter: I, filename: &str)
@@ -1070,7 +1125,7 @@ mod tests {
             .map(|(i, v)| if i % 2 == 0 { None } else { Some(v) })
             .collect();
         let optional_values = Arc::new(A::from(optional_raw_values));
-        one_column_roundtrip(filename, optional_values, true);
+        one_column_roundtrip(filename, optional_values, true, Some(SMALL_SIZE / 2));
     }
 
     fn required_and_optional<A, I>(iter: I, filename: &str)
@@ -1085,12 +1140,17 @@ mod tests {
     #[test]
     fn all_null_primitive_single_column() {
         let values = Arc::new(Int32Array::from(vec![None; SMALL_SIZE]));
-        one_column_roundtrip("all_null_primitive_single_column", values, true);
+        one_column_roundtrip(
+            "all_null_primitive_single_column",
+            values,
+            true,
+            Some(SMALL_SIZE / 2),
+        );
     }
     #[test]
     fn null_single_column() {
         let values = Arc::new(NullArray::new(SMALL_SIZE));
-        one_column_roundtrip("null_single_column", values, true);
+        one_column_roundtrip("null_single_column", values, true, Some(SMALL_SIZE / 2));
         // null arrays are always nullable, a test with non-nullable nulls fails
     }
 
@@ -1176,7 +1236,12 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampSecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip("timestamp_second_single_column", values, false);
+        one_column_roundtrip(
+            "timestamp_second_single_column",
+            values,
+            false,
+            Some(SMALL_SIZE / 2),
+        );
     }
 
     #[test]
@@ -1184,7 +1249,12 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMillisecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip("timestamp_millisecond_single_column", values, false);
+        one_column_roundtrip(
+            "timestamp_millisecond_single_column",
+            values,
+            false,
+            Some(SMALL_SIZE / 2),
+        );
     }
 
     #[test]
@@ -1192,7 +1262,12 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMicrosecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip("timestamp_microsecond_single_column", values, false);
+        one_column_roundtrip(
+            "timestamp_microsecond_single_column",
+            values,
+            false,
+            Some(SMALL_SIZE / 2),
+        );
     }
 
     #[test]
@@ -1200,7 +1275,12 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampNanosecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip("timestamp_nanosecond_single_column", values, false);
+        one_column_roundtrip(
+            "timestamp_nanosecond_single_column",
+            values,
+            false,
+            Some(SMALL_SIZE / 2),
+        );
     }
 
     #[test]
@@ -1336,7 +1416,12 @@ mod tests {
         builder.append_value(b"1112").unwrap();
         let array = Arc::new(builder.finish());
 
-        one_column_roundtrip("fixed_size_binary_single_column", array, true);
+        one_column_roundtrip(
+            "fixed_size_binary_single_column",
+            array,
+            true,
+            Some(SMALL_SIZE / 2),
+        );
     }
 
     #[test]
@@ -1379,7 +1464,7 @@ mod tests {
         let a = ListArray::from(a_list_data);
         let values = Arc::new(a);
 
-        one_column_roundtrip("list_single_column", values, true);
+        one_column_roundtrip("list_single_column", values, true, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1404,7 +1489,12 @@ mod tests {
         let a = LargeListArray::from(a_list_data);
         let values = Arc::new(a);
 
-        one_column_roundtrip("large_list_single_column", values, true);
+        one_column_roundtrip(
+            "large_list_single_column",
+            values,
+            true,
+            Some(SMALL_SIZE / 2),
+        );
     }
 
     #[test]
@@ -1414,7 +1504,7 @@ mod tests {
         let s = StructArray::from(vec![(struct_field_a, Arc::new(a_values) as ArrayRef)]);
 
         let values = Arc::new(s);
-        one_column_roundtrip("struct_single_column", values, false);
+        one_column_roundtrip("struct_single_column", values, false, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1440,6 +1530,7 @@ mod tests {
         roundtrip(
             "test_arrow_writer_string_dictionary.parquet",
             expected_batch,
+            Some(SMALL_SIZE / 2),
         );
     }
 
@@ -1470,6 +1561,7 @@ mod tests {
         roundtrip(
             "test_arrow_writer_primitive_dictionary.parquet",
             expected_batch,
+            Some(SMALL_SIZE / 2),
         );
     }
 
@@ -1496,6 +1588,7 @@ mod tests {
         roundtrip(
             "test_arrow_writer_string_dictionary_unsigned_index.parquet",
             expected_batch,
+            Some(SMALL_SIZE / 2),
         );
     }
 
@@ -1511,7 +1604,7 @@ mod tests {
             u32::MAX - 1,
             u32::MAX,
         ]));
-        let file = one_column_roundtrip("u32_min_max_single_column", values, false);
+        let file = one_column_roundtrip("u32_min_max_single_column", values, false, None);
 
         // check statistics are valid
         let reader = SerializedFileReader::new(file).unwrap();
@@ -1542,7 +1635,7 @@ mod tests {
             u64::MAX - 1,
             u64::MAX,
         ]));
-        let file = one_column_roundtrip("u64_min_max_single_column", values, false);
+        let file = one_column_roundtrip("u64_min_max_single_column", values, false, None);
 
         // check statistics are valid
         let reader = SerializedFileReader::new(file).unwrap();
@@ -1565,7 +1658,7 @@ mod tests {
     fn statistics_null_counts_only_nulls() {
         // check that null-count statistics for "only NULL"-columns are correct
         let values = Arc::new(UInt64Array::from(vec![None, None]));
-        let file = one_column_roundtrip("null_counts", values, true);
+        let file = one_column_roundtrip("null_counts", values, true, None);
 
         // check statistics are valid
         let reader = SerializedFileReader::new(file).unwrap();

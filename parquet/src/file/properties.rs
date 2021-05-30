@@ -290,6 +290,7 @@ impl WriterPropertiesBuilder {
 
     /// Sets max size for a row group.
     pub fn set_max_row_group_size(mut self, value: usize) -> Self {
+        assert!(value > 0, "Cannot have a 0 max row group size");
         self.max_row_group_size = value;
         self
     }
