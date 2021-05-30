@@ -303,6 +303,15 @@ impl BooleanBufferBuilder {
     }
 
     #[inline]
+    pub fn set_bit(&mut self, index: usize, bit: bool) {
+        if bit {
+            bit_util::set_bit(self.buffer.as_mut(), index);
+        } else {
+            bit_util::unset_bit(self.buffer.as_mut(), index);
+        }
+    }
+
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -2266,7 +2275,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_bytes() {
+    fn test_boolean_buffer_builder_write_bytes() {
         let mut b = BooleanBufferBuilder::new(4);
         b.append(false);
         b.append(true);
@@ -2283,6 +2292,67 @@ mod tests {
         assert_eq!(512, b.capacity());
         let buffer = b.finish();
         assert_eq!(1, buffer.len());
+    }
+
+    #[test]
+    fn test_boolean_buffer_builder_flip_first_bit() {
+        let mut buffer = BooleanBufferBuilder::new(4);
+        buffer.append(true);
+        buffer.append(true);
+        buffer.append(false);
+        buffer.append(true);
+        buffer.set_bit(0, false);
+        assert_eq!(buffer.len(), 4);
+        assert_eq!(buffer.finish().as_slice(), &[0b0101 as u8]);
+    }
+
+    #[test]
+    fn test_boolean_buffer_builder_flip_last_bit() {
+        let mut buffer = BooleanBufferBuilder::new(4);
+        buffer.append(true);
+        buffer.append(true);
+        buffer.append(false);
+        buffer.append(true);
+        buffer.set_bit(3, false);
+        assert_eq!(buffer.len(), 4);
+        assert_eq!(buffer.finish().as_slice(), &[0b1100 as u8]);
+    }
+
+    #[test]
+    fn test_boolean_buffer_builder_flip_an_inner_bit() {
+        let mut buffer = BooleanBufferBuilder::new(5);
+        buffer.append(true);
+        buffer.append(true);
+        buffer.append(false);
+        buffer.append(true);
+        buffer.set_bit(1, false);
+        assert_eq!(buffer.len(), 4);
+        assert_eq!(buffer.finish().as_slice(), &[0b1001 as u8]);
+    }
+
+    #[test]
+    fn test_boolean_buffer_builder_flip_several_bits() {
+        let mut buffer = BooleanBufferBuilder::new(5);
+        buffer.append(true);
+        buffer.append(true);
+        buffer.append(true);
+        buffer.append(false);
+        buffer.append(true);
+        buffer.set_bit(1, false);
+        buffer.set_bit(2, false);
+        assert_eq!(buffer.len(), 5);
+        assert_eq!(buffer.finish().as_slice(), &[0b10001 as u8]);
+    }
+
+    #[test]
+    fn test_boolean_buffer_builder_flip_several_bits_bigger_than_one_byte() {
+        let mut buffer = BooleanBufferBuilder::new(16);
+        buffer.append_n(10, true);
+        buffer.set_bit(0, false);
+        buffer.set_bit(3, false);
+        buffer.set_bit(9, false);
+        assert_eq!(buffer.len(), 10);
+        assert_eq!(buffer.finish().as_slice(), &[0b10111110, 0b01]);
     }
 
     #[test]
