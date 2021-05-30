@@ -964,7 +964,8 @@ impl ArrayConverter for StringArrayConverter {
                 "offset length value buffers can only contain bytes for a single value"
             );
             length_so_far += <i32 as ArrowNativeType>::from_usize(value_bytes.len()).unwrap();
-            offsets_buffer.push(length_so_far);
+            // this should be safe because a ValueDecoder should not read more than num_values
+            unsafe { offsets_buffer.push_unchecked(length_so_far); }
             values_buffer.extend_from_slice(value_bytes);
         })?;
         // calculate actual data_len, which may be different from the iterator's upper bound
