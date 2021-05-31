@@ -60,7 +60,7 @@ where
     let value_len = values.len() as i64;
     if offset == 0 {
         Ok(values.slice(0, values.len()))
-    } else if abs(offset) >= value_len || offset == i64::MIN {
+    } else if offset == i64::MIN || abs(offset) >= value_len {
         Ok(new_null_array(&T::DATA_TYPE, values.len()))
     } else {
         let slice_offset = clamp(-offset, 0, value_len) as usize;
