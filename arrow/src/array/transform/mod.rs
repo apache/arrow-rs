@@ -326,9 +326,9 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
     })
 }
 
-fn preallocate_str_buffer<Offset: StringOffsetSizeTrait>(
+fn preallocate_offset_and_binary_buffer<Offset: StringOffsetSizeTrait>(
     capacity: usize,
-    str_values_size: usize,
+    binary_size: usize,
 ) -> [MutableBuffer; 2] {
     // offsets
     let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<Offset>());
@@ -341,7 +341,7 @@ fn preallocate_str_buffer<Offset: StringOffsetSizeTrait>(
 
     [
         buffer,
-        MutableBuffer::new(str_values_size * mem::size_of::<u8>()),
+        MutableBuffer::new(binary_size * mem::size_of::<u8>()),
     ]
 }
 
@@ -405,12 +405,16 @@ impl<'a> MutableArrayData<'a> {
         // We can prevent reallocation by precomputing the needed size.
         // This is faster and more memory efficient.
         let ([buffer1, buffer2], capacity) = match (data_type, &capacities) {
-            (DataType::LargeUtf8, Capacities::Binary(cap, Some(value_cap))) => {
-                (preallocate_str_buffer::<i64>(*cap, *value_cap), *cap)
-            }
-            (DataType::Utf8, Capacities::Binary(cap, Some(value_cap))) => {
-                (preallocate_str_buffer::<i32>(*cap, *value_cap), *cap)
-            }
+            (DataType::LargeUtf8, Capacities::Binary(cap, Some(value_cap)))
+            | (DataType::LargeBinary, Capacities::Binary(cap, Some(value_cap))) => (
+                preallocate_offset_and_binary_buffer::<i64>(*cap, *value_cap),
+                *cap,
+            ),
+            (DataType::Utf8, Capacities::Binary(cap, Some(value_cap)))
+            | (DataType::Binary, Capacities::Binary(cap, Some(value_cap))) => (
+                preallocate_offset_and_binary_buffer::<i32>(*cap, *value_cap),
+                *cap,
+            ),
             (_, Capacities::Array(capacity)) => {
                 (new_buffers(data_type, *capacity), *capacity)
             }
