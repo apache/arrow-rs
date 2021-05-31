@@ -18,6 +18,7 @@
 //! Defines windowing functions, like `shift`ing
 
 use crate::array::{Array, ArrayRef};
+use crate::{array::new_null_array, compute::concat};
 use crate::{array::PrimitiveArray, datatypes::ArrowPrimitiveType, error::Result};
 use crate::{
     array::{make_array, new_null_array},
