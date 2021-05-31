@@ -83,7 +83,7 @@ pub fn shift(array: &Array, offset: i64) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::Int32Array;
+    use crate::array::{Float64Array, Int32Array, Int32DictionaryArray};
 
     #[test]
     fn test_shift_neg() {
@@ -98,6 +98,44 @@ mod tests {
         let a: Int32Array = vec![Some(1), None, Some(4)].into();
         let res = shift(&a, 1).unwrap();
         let expected: Int32Array = vec![None, Some(1), None].into();
+        assert_eq!(res.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_shift_neg_float64() {
+        let a: Float64Array = vec![Some(1.), None, Some(4.)].into();
+        let res = shift(&a, -1).unwrap();
+        let expected: Float64Array = vec![None, Some(4.), None].into();
+        assert_eq!(res.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_shift_pos_float64() {
+        let a: Float64Array = vec![Some(1.), None, Some(4.)].into();
+        let res = shift(&a, 1).unwrap();
+        let expected: Float64Array = vec![None, Some(1.), None].into();
+        assert_eq!(res.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_shift_neg_int32_dict() {
+        let a: Int32DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]
+            .iter()
+            .collect();
+        let res = shift(&a, -1).unwrap();
+        let expected: Int32DictionaryArray =
+            [None, Some("beta"), Some("alpha"), None].iter().collect();
+        assert_eq!(res.as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_shift_pos_int32_dict() {
+        let a: Int32DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]
+            .iter()
+            .collect();
+        let res = shift(&a, 1).unwrap();
+        let expected: Int32DictionaryArray =
+            [None, Some("alpha"), None, Some("beta")].iter().collect();
         assert_eq!(res.as_ref(), &expected);
     }
 
