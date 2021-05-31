@@ -470,15 +470,46 @@ impl<'a> MutableArrayData<'a> {
             // the dictionary type just appends keys and clones the values.
             DataType::Dictionary(_, _) => vec![],
             DataType::Float16 => unreachable!(),
-            DataType::Struct(fields) => (0..fields.len())
-                .map(|i| {
-                    let child_arrays = arrays
-                        .iter()
-                        .map(|array| &array.child_data()[i])
-                        .collect::<Vec<_>>();
-                    MutableArrayData::new(child_arrays, use_nulls, array_capacity)
-                })
-                .collect::<Vec<_>>(),
+            DataType::Struct(fields) => match capacities {
+                Capacities::Struct(capacity, Some(child_capacities)) => {
+                    array_capacity = capacity;
+                    (0..fields.len())
+                        .zip(child_capacities)
+                        .map(|(i, child_cap)| {
+                            let child_arrays = arrays
+                                .iter()
+                                .map(|array| &array.child_data()[i])
+                                .collect::<Vec<_>>();
+                            MutableArrayData::with_capacities(
+                                child_arrays,
+                                use_nulls,
+                                child_cap,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                }
+                Capacities::Struct(capacity, None) => {
+                    array_capacity = capacity;
+                    (0..fields.len())
+                        .map(|i| {
+                            let child_arrays = arrays
+                                .iter()
+                                .map(|array| &array.child_data()[i])
+                                .collect::<Vec<_>>();
+                            MutableArrayData::new(child_arrays, use_nulls, capacity)
+                        })
+                        .collect::<Vec<_>>()
+                }
+                _ => (0..fields.len())
+                    .map(|i| {
+                        let child_arrays = arrays
+                            .iter()
+                            .map(|array| &array.child_data()[i])
+                            .collect::<Vec<_>>();
+                        MutableArrayData::new(child_arrays, use_nulls, array_capacity)
+                    })
+                    .collect::<Vec<_>>(),
+            },
             _ => {
                 todo!("Take and filter operations still not supported for this datatype")
             }
