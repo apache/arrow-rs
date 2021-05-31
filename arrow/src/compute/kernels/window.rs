@@ -56,23 +56,20 @@ use num::{abs, clamp};
 /// let expected: Int32Array = vec![None, None, None].into();
 /// assert_eq!(res.as_ref(), &expected);
 /// ```
-pub fn shift<T>(values: &PrimitiveArray<T>, offset: i64) -> Result<ArrayRef>
-where
-    T: ArrowPrimitiveType,
-{
-    let value_len = values.len() as i64;
+pub fn shift(array: &Array, offset: i64) -> Result<ArrayRef> {
+    let value_len = array.len() as i64;
     if offset == 0 {
         Ok(make_array(values.data_ref().clone()))
     } else if offset == i64::MIN || abs(offset) >= value_len {
-        Ok(new_null_array(&T::DATA_TYPE, values.len()))
+        Ok(new_null_array(array.data_type(), array.len()))
     } else {
         let slice_offset = clamp(-offset, 0, value_len) as usize;
-        let length = values.len() - abs(offset) as usize;
-        let slice = values.slice(slice_offset, length);
+        let length = array.len() - abs(offset) as usize;
+        let slice = array.slice(slice_offset, length);
 
         // Generate array with remaining `null` items
         let nulls = abs(offset) as usize;
-        let null_arr = new_null_array(&T::DATA_TYPE, nulls);
+        let null_arr = new_null_array(array.data_type(), nulls);
 
         // Concatenate both arrays, add nulls after if shift > 0 else before
         if offset > 0 {
