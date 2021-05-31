@@ -405,21 +405,11 @@ impl<'a> MutableArrayData<'a> {
         // We can prevent reallocation by precomputing the needed size.
         // This is faster and more memory efficient.
         let ([buffer1, buffer2], capacity) = match (data_type, &capacities) {
-            (DataType::LargeUtf8, Capacities::Binary(cap, value_cap))
-                if value_cap.is_some() =>
-            {
-                (
-                    preallocate_str_buffer::<i64>(*cap, value_cap.unwrap()),
-                    *cap,
-                )
+            (DataType::LargeUtf8, Capacities::Binary(cap, Some(value_cap))) => {
+                (preallocate_str_buffer::<i64>(*cap, *value_cap), *cap)
             }
-            (DataType::Utf8, Capacities::Binary(cap, value_cap))
-                if value_cap.is_some() =>
-            {
-                (
-                    preallocate_str_buffer::<i32>(*cap, value_cap.unwrap()),
-                    *cap,
-                )
+            (DataType::Utf8, Capacities::Binary(cap, Some(value_cap))) => {
+                (preallocate_str_buffer::<i32>(*cap, *value_cap), *cap)
             }
             (_, Capacities::Array(capacity)) => {
                 (new_buffers(data_type, *capacity), *capacity)
