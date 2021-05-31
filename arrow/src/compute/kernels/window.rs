@@ -121,10 +121,13 @@ mod tests {
     fn test_shift_neg_int32_dict() {
         let a: Int32DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]
             .iter()
+            .copied()
             .collect();
         let res = shift(&a, -1).unwrap();
-        let expected: Int32DictionaryArray =
-            [None, Some("beta"), Some("alpha"), None].iter().collect();
+        let expected: Int32DictionaryArray = [None, Some("beta"), Some("alpha"), None]
+            .iter()
+            .copied()
+            .collect();
         assert_eq!(res.as_ref(), &expected);
     }
 
@@ -132,10 +135,13 @@ mod tests {
     fn test_shift_pos_int32_dict() {
         let a: Int32DictionaryArray = [Some("alpha"), None, Some("beta"), Some("alpha")]
             .iter()
+            .copied()
             .collect();
         let res = shift(&a, 1).unwrap();
-        let expected: Int32DictionaryArray =
-            [None, Some("alpha"), None, Some("beta")].iter().collect();
+        let expected: Int32DictionaryArray = [None, Some("alpha"), None, Some("beta")]
+            .iter()
+            .copied()
+            .collect();
         assert_eq!(res.as_ref(), &expected);
     }
 
