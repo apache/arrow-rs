@@ -346,7 +346,7 @@ fn preallocate_offset_and_binary_buffer<Offset: StringOffsetSizeTrait>(
 }
 
 /// Define capacities of child data or data buffers.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Capacities {
     /// Binary, Utf8 and LargeUtf8 data types
     /// Define
@@ -402,21 +402,22 @@ impl<'a> MutableArrayData<'a> {
             use_nulls = true;
         };
 
-        // We can prevent reallocation by precomputing the needed size.
-        // This is faster and more memory efficient.
-        let ([buffer1, buffer2], capacity) = match (data_type, &capacities) {
-            (DataType::LargeUtf8, Capacities::Binary(cap, Some(value_cap)))
-            | (DataType::LargeBinary, Capacities::Binary(cap, Some(value_cap))) => (
-                preallocate_offset_and_binary_buffer::<i64>(*cap, *value_cap),
-                *cap,
-            ),
-            (DataType::Utf8, Capacities::Binary(cap, Some(value_cap)))
-            | (DataType::Binary, Capacities::Binary(cap, Some(value_cap))) => (
-                preallocate_offset_and_binary_buffer::<i32>(*cap, *value_cap),
-                *cap,
-            ),
+        let mut array_capacity;
+
+        let [buffer1, buffer2] = match (data_type, &capacities) {
+            (DataType::LargeUtf8, Capacities::Binary(capacity, Some(value_cap)))
+            | (DataType::LargeBinary, Capacities::Binary(capacity, Some(value_cap))) => {
+                array_capacity = *capacity;
+                preallocate_offset_and_binary_buffer::<i64>(*capacity, *value_cap)
+            }
+            (DataType::Utf8, Capacities::Binary(capacity, Some(value_cap)))
+            | (DataType::Binary, Capacities::Binary(capacity, Some(value_cap))) => {
+                array_capacity = *capacity;
+                preallocate_offset_and_binary_buffer::<i32>(*capacity, *value_cap)
+            }
             (_, Capacities::Array(capacity)) => {
-                (new_buffers(data_type, *capacity), *capacity)
+                array_capacity = *capacity;
+                new_buffers(data_type, *capacity)
             }
             _ => panic!("Capacities: {:?} not yet supported", capacities),
         };
@@ -451,7 +452,20 @@ impl<'a> MutableArrayData<'a> {
                     .iter()
                     .map(|array| &array.child_data()[0])
                     .collect::<Vec<_>>();
-                vec![MutableArrayData::new(childs, use_nulls, capacity)]
+
+                let capacities =
+                    if let Capacities::List(capacity, child_capacities) = capacities {
+                        array_capacity = capacity;
+                        child_capacities
+                            .map(|c| *c)
+                            .unwrap_or(Capacities::Array(array_capacity))
+                    } else {
+                        Capacities::Array(array_capacity)
+                    };
+
+                vec![MutableArrayData::with_capacities(
+                    childs, use_nulls, capacities,
+                )]
             }
             // the dictionary type just appends keys and clones the values.
             DataType::Dictionary(_, _) => vec![],
@@ -462,7 +476,7 @@ impl<'a> MutableArrayData<'a> {
                         .iter()
                         .map(|array| &array.child_data()[i])
                         .collect::<Vec<_>>();
-                    MutableArrayData::new(child_arrays, use_nulls, capacity)
+                    MutableArrayData::new(child_arrays, use_nulls, array_capacity)
                 })
                 .collect::<Vec<_>>(),
             _ => {
@@ -504,7 +518,7 @@ impl<'a> MutableArrayData<'a> {
             .map(|array| build_extend_null_bits(array, use_nulls))
             .collect();
 
-        let null_bytes = bit_util::ceil(capacity, 8);
+        let null_bytes = bit_util::ceil(array_capacity, 8);
         let null_buffer = MutableBuffer::from_len_zeroed(null_bytes);
 
         let extend_values = match &data_type {
