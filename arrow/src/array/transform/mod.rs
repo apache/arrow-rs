@@ -520,6 +520,9 @@ impl<'a> MutableArrayData<'a> {
                 0 => unreachable!(),
                 1 => Some(arrays[0].child_data()[0].clone()),
                 _ => {
+                    if let Capacities::Dictionary(_, _) = capacities {
+                        panic!("dictionary capacity not yet supported")
+                    }
                     // Concat dictionaries together
                     let dictionaries: Vec<_> =
                         arrays.iter().map(|array| &array.child_data()[0]).collect();
