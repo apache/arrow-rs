@@ -84,12 +84,7 @@ impl From<ArrayData> for StructArray {
     fn from(data: ArrayData) -> Self {
         let mut boxed_fields = vec![];
         for cd in data.child_data() {
-            let child_data = if data.offset() != 0 || data.len() != cd.len() {
-                cd.slice(data.offset(), data.len())
-            } else {
-                cd.clone()
-            };
-            boxed_fields.push(make_array(child_data));
+            boxed_fields.push(make_array(cd.clone()));
         }
         Self { data, boxed_fields }
     }
