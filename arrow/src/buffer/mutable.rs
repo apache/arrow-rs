@@ -327,7 +327,7 @@ impl MutableBuffer {
     }
 
     /// Extends the buffer with a new item, without checking for sufficient capacity
-    /// Safety
+    /// # Safety
     /// Caller must ensure that the capacity()-len()>=size_of<T>()
     #[inline]
     pub unsafe fn push_unchecked<T: ToByteSlice>(&mut self, item: T) {

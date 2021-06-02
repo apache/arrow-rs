@@ -335,6 +335,7 @@ impl<T> BufferPtr<T> {
     }
 
     /// Returns whether this buffer is empty
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }

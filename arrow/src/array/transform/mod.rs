@@ -618,11 +618,19 @@ impl<'a> MutableArrayData<'a> {
         self.data.len += len;
     }
 
+    /// Returns the current length
     #[inline]
     pub fn len(&self) -> usize {
         self.data.len
     }
 
+    /// Returns true if len is 0
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.data.len == 0
+    }
+
+    /// Returns the current null count
     #[inline]
     pub fn null_count(&self) -> usize {
         self.data.null_count

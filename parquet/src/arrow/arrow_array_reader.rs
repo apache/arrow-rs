@@ -81,11 +81,11 @@ impl<V, L, It: Iterator<Item = (V, L, L)>> UnzipIterState<(V, L, L)> for PageBuf
     }
 }
 
-fn unzip_iter<V, L, It: Iterator<Item = (V, L, L)>>(it: It) -> (
-    UnzipIter<(V, L, L), V, PageBufferUnzipIterState<V, L, It>>, 
-    UnzipIter<(V, L, L), L, PageBufferUnzipIterState<V, L, It>>,
-    UnzipIter<(V, L, L), L, PageBufferUnzipIterState<V, L, It>>,
-) {
+type ValueUnzipIter<V, L, It> = UnzipIter<(V, L, L), V, PageBufferUnzipIterState<V, L, It>>;
+type LevelUnzipIter<V, L, It> = UnzipIter<(V, L, L), L, PageBufferUnzipIterState<V, L, It>>;
+type PageUnzipResult<V, L, It> = (ValueUnzipIter<V, L, It>, LevelUnzipIter<V, L, It>, LevelUnzipIter<V, L, It>);
+
+fn unzip_iter<V, L, It: Iterator<Item = (V, L, L)>>(it: It) -> PageUnzipResult<V, L, It> {
     let shared_data = Rc::new(RefCell::new(PageBufferUnzipIterState { 
         iter: it,
         value_iter_buffer: VecDeque::new(),
@@ -157,6 +157,8 @@ impl ColumnChunkContext {
     }
 }
 
+type PageDecoderTuple = (Box<dyn ValueDecoder>, Box<dyn ValueDecoder>, Box<dyn ValueDecoder>);
+
 impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
     pub fn try_new<P: PageIterator + 'a>(column_chunk_iterator: P, column_desc: ColumnDescPtr, array_converter: C, arrow_type: Option<ArrowType>) -> Result<Self> {
         let data_type = match arrow_type {
@@ -166,27 +168,27 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                 .clone(),
         };
         // println!("ArrowArrayReader::try_new, column: {}, data_type: {}", column_desc.path(), data_type);
+        type PageIteratorItem = Result<(Page, Rc<RefCell<ColumnChunkContext>>)>;
         let page_iter = column_chunk_iterator
             // build iterator of pages across column chunks
-            .flat_map(|x| -> Box<dyn Iterator<Item = Result<(Page, Rc<RefCell<ColumnChunkContext>>)>>> {
+            .flat_map(|x| -> Box<dyn Iterator<Item = PageIteratorItem>> {
                 // attach column chunk context
                 let context = Rc::new(RefCell::new(ColumnChunkContext::new()));
                 match x {
-                    Ok(page_reader) => Box::new(page_reader.map(move |pr| pr.and_then(|p| Ok((p, context.clone()))))),
+                    Ok(page_reader) => Box::new(page_reader.map(
+                        move |pr| pr.map(|p| (p, context.clone()))
+                    )),
                     // errors from reading column chunks / row groups are propagated to page level
                     Err(e) => Box::new(std::iter::once(Err(e)))
                 }
             });
         // capture a clone of column_desc in closure so that it can outlive current function
-        let map_page_fn = (|column_desc: ColumnDescPtr| {
-            // move |x: Result<Page>|  match x {
-            //     Ok(p) => Self::map_page(p, column_desc.as_ref()),
-            //     Err(e) => Err(e),
-            // }
+        let map_page_fn_factory = |column_desc: ColumnDescPtr| {
             move |x: Result<(Page, Rc<RefCell<ColumnChunkContext>>)>| x.and_then(
                 |(page, context)| Self::map_page(page, context, column_desc.as_ref())
             )
-        })(column_desc.clone());
+        };
+        let map_page_fn = map_page_fn_factory(column_desc.clone());
         // map page iterator into tuple of buffer iterators for (values, def levels, rep levels)
         // errors from lower levels are surfaced through the value decoder iterator
         let decoder_iter = page_iter
@@ -221,18 +223,18 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
         column_desc.max_rep_level() > 0
     }
 
-    fn map_page_error(err: ParquetError) -> (Box<dyn ValueDecoder>, Box<dyn ValueDecoder>, Box<dyn ValueDecoder>)
+    fn map_page_error(err: ParquetError) -> PageDecoderTuple
     {
         (
             Box::new(<dyn ValueDecoder>::once(Err(err.clone()))),
             Box::new(<dyn ValueDecoder>::once(Err(err.clone()))),
-            Box::new(<dyn ValueDecoder>::once(Err(err.clone()))),
+            Box::new(<dyn ValueDecoder>::once(Err(err))),
         )
     }
 
     // Split Result<Page> into Result<(Iterator<Values>, Iterator<DefLevels>, Iterator<RepLevels>)>
     // this method could fail, e.g. if the page encoding is not supported
-    fn map_page(page: Page, column_chunk_context: Rc<RefCell<ColumnChunkContext>>, column_desc: &ColumnDescriptor) -> Result<(Box<dyn ValueDecoder>, Box<dyn ValueDecoder>, Box<dyn ValueDecoder>)> 
+    fn map_page(page: Page, column_chunk_context: Rc<RefCell<ColumnChunkContext>>, column_desc: &ColumnDescriptor) -> Result<PageDecoderTuple> 
     {
         // println!(
         //     "ArrowArrayReader::map_page, column: {}, page: {:?}, encoding: {:?}, num values: {:?}", 
@@ -285,7 +287,7 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                     Box::new(LevelValueDecoder::new(rep_decoder))
                 }
                 else {
-                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General(format!("rep levels are not available")))))
+                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General("rep levels are not available".to_string()))))
                 };
                 // create def level decoder iterator
                 let def_level_iter: Box<dyn ValueDecoder> = if Self::def_levels_available(&column_desc) {
@@ -302,7 +304,7 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                     Box::new(LevelValueDecoder::new(def_decoder))
                 }
                 else {
-                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General(format!("def levels are not available")))))
+                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General("def levels are not available".to_string()))))
                 };
                 // create value decoder iterator
                 let value_iter = Self::get_value_decoder(
@@ -341,7 +343,7 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                     Box::new(LevelValueDecoder::new(rep_decoder))
                 }
                 else {
-                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General(format!("rep levels are not available")))))
+                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General("rep levels are not available".to_string()))))
                 };
                 // create def level decoder iterator
                 let def_level_iter: Box<dyn ValueDecoder> = if Self::def_levels_available(&column_desc) {
@@ -358,7 +360,7 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                     Box::new(LevelValueDecoder::new(def_decoder))
                 }
                 else {
-                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General(format!("def levels are not available")))))
+                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General("def levels are not available".to_string()))))
                 };
 
                 // create value decoder iterator
@@ -622,8 +624,8 @@ impl<I: Iterator<Item = Box<dyn ValueDecoder>>> CompositeValueDecoder<I> {
     fn new(mut decoder_iter: I) -> Self {
         let current_decoder = decoder_iter.next();
         Self {
-            decoder_iter,
             current_decoder,
+            decoder_iter,
         }
     }
 }
@@ -722,8 +724,8 @@ impl DictionaryValueDecoder for FixedLenPlainDecoder {
 
 impl ValueDecoder for FixedLenPlainDecoder {
     fn read_value_bytes(&mut self, num_values: usize, read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize> {
-        if self.data.len() > 0 {
-            let available_values = self.data.len() * 8 / self.value_bit_len;
+        let available_values = self.data.len() * 8 / self.value_bit_len;
+        if available_values > 0 {
             let values_to_read = std::cmp::min(available_values, num_values);
             let byte_len = values_to_read * self.value_bit_len / 8;
             read_bytes(&self.data.data()[..byte_len], values_to_read);
@@ -834,7 +836,7 @@ impl FixedLenDictionaryDecoder {
 
 impl ValueDecoder for FixedLenDictionaryDecoder {
     fn read_value_bytes(&mut self, num_values: usize, read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize> {
-        if self.num_values <= 0 {
+        if self.num_values == 0 {
             return Ok(0);
         }
         let context = self.context_ref.borrow();
@@ -892,7 +894,7 @@ impl VariableLenDictionaryDecoder {
 
 impl ValueDecoder for VariableLenDictionaryDecoder {
     fn read_value_bytes(&mut self, num_values: usize, read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize> {
-        if self.num_values <= 0 {
+        if self.num_values == 0 {
             return Ok(0);
         }
         let context = self.context_ref.borrow();

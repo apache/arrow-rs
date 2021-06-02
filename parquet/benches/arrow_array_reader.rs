@@ -479,7 +479,7 @@ fn add_benches(c: &mut Criterion) {
     println!("read {} values", count);
 
     // string, dictionary encoded, half NULLs
-    let dictionary_string_half_null_data = build_dictionary_encoded_string_page_iterator(schema.clone(), optional_string_column_desc.clone(), 0.5);
+    let dictionary_string_half_null_data = build_dictionary_encoded_string_page_iterator(schema, optional_string_column_desc.clone(), 0.5);
     group.bench_function("read StringArray, dictionary encoded, optional, half NULLs - old", |b| b.iter(|| {
         let array_reader = create_string_complex_array_reader(dictionary_string_half_null_data.clone(), optional_string_column_desc.clone());
         count = bench_array_reader(array_reader);
