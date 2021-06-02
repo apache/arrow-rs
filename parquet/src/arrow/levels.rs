@@ -680,10 +680,10 @@ impl LevelInfo {
             }
             DataType::LargeList(_) => {
                 let offsets = unsafe { array.data().buffers()[0].typed_data::<i64>() }
-                    .into_iter()
+                    .iter()
                     .skip(offset)
                     .take(len + 1)
-                    .map(|v| *v)
+                    .copied()
                     .collect();
                 let array_mask = match array.data().null_buffer() {
                     Some(buf) => get_bool_array_slice(buf, array.offset() + offset, len),
@@ -756,10 +756,9 @@ fn get_bool_array_slice(
     len: usize,
 ) -> Vec<bool> {
     let data = buffer.as_slice();
-    let result = (offset..(len + offset))
+    (offset..(len + offset))
         .map(|i| arrow::util::bit_util::get_bit(data, i))
-        .collect();
-    result
+        .collect()
 }
 
 #[cfg(test)]
@@ -1275,17 +1274,17 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
 
         let expected_batch_level = LevelInfo {
-            definition: vec![0; 5],
+            definition: vec![0; 2],
             repetition: None,
-            array_offsets: (0..=5).collect(),
-            array_mask: vec![true, true, true, true, true],
+            array_offsets: (0..=2).collect(),
+            array_mask: vec![true, true],
             max_definition: 0,
             level_type: LevelType::Root,
-            offset: 0,
-            length: 5,
+            offset: 2,
+            length: 2,
         };
 
-        let batch_level = LevelInfo::new(0, 5);
+        let batch_level = LevelInfo::new(2, 2);
         assert_eq!(&batch_level, &expected_batch_level);
 
         // calculate the list's level
@@ -1303,16 +1302,14 @@ mod tests {
         let list_level = levels.get(0).unwrap();
 
         let expected_level = LevelInfo {
-            definition: vec![3, 3, 3, 0, 3, 3, 3, 3, 3, 3, 3],
-            repetition: Some(vec![0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1]),
-            array_offsets: vec![0, 1, 3, 3, 6, 10],
-            array_mask: vec![
-                true, true, true, false, true, true, true, true, true, true, true,
-            ],
+            definition: vec![0, 3, 3, 3],
+            repetition: Some(vec![0, 0, 1, 1]),
+            array_offsets: vec![3, 3, 6],
+            array_mask: vec![false, true, true, true],
             max_definition: 3,
             level_type: LevelType::Primitive(true),
-            offset: 0,
-            length: 10,
+            offset: 3,
+            length: 3,
         };
         assert_eq!(&list_level.definition, &expected_level.definition);
         assert_eq!(&list_level.repetition, &expected_level.repetition);

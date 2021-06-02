@@ -84,7 +84,11 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
 
     /// Write a RecordBatch to writer
     ///
-    /// *NOTE:* The writer currently does not support all Arrow data types
+    /// The writer will slice the `batch` into `max_row_group_size`,
+    /// but if a batch has left-over rows less than the row group size,
+    /// the last row group will have fewer records.
+    /// This is currently a limitation  because we close the row group
+    /// instead of keeping it open for the next batch.
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
         // validate batch schema against writer's supplied schema
         if self.arrow_schema != batch.schema() {
@@ -890,8 +894,14 @@ mod tests {
 
         roundtrip(
             "test_arrow_writer_complex.parquet",
-            batch,
+            batch.clone(),
             Some(SMALL_SIZE / 2),
+        );
+
+        roundtrip(
+            "test_arrow_writer_complex_small_batch.parquet",
+            batch,
+            Some(SMALL_SIZE / 3),
         );
     }
 
@@ -1043,7 +1053,7 @@ mod tests {
         );
     }
 
-    const SMALL_SIZE: usize = 4;
+    const SMALL_SIZE: usize = 7;
 
     fn roundtrip(
         filename: &str,
@@ -1236,12 +1246,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampSecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip(
-            "timestamp_second_single_column",
-            values,
-            false,
-            Some(SMALL_SIZE / 2),
-        );
+        one_column_roundtrip("timestamp_second_single_column", values, false, Some(3));
     }
 
     #[test]
@@ -1253,7 +1258,7 @@ mod tests {
             "timestamp_millisecond_single_column",
             values,
             false,
-            Some(SMALL_SIZE / 2),
+            Some(SMALL_SIZE / 2 + 1),
         );
     }
 
@@ -1266,7 +1271,7 @@ mod tests {
             "timestamp_microsecond_single_column",
             values,
             false,
-            Some(SMALL_SIZE / 2),
+            Some(SMALL_SIZE / 2 + 2),
         );
     }
 
