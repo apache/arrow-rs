@@ -363,11 +363,9 @@ pub enum Capacities {
     /// * the capacities of the fields
     Struct(usize, Option<Vec<Capacities>>),
     /// Dictionary type
-    /// * the capacity of the array
-    /// * keys and values
-    ///     - the capacity of the keys (1st element of Vec)
-    ///     - the capacity of the values (2nd element of Vec)
-    Dictionary(usize, Option<Vec<Capacities>>),
+    /// * the capacity of the array/keys
+    /// * the capacity of the values
+    Dictionary(usize, Option<Box<Capacities>>),
     /// Don't preallocate inner buffers and rely on array growth strategy
     Array(usize),
 }
@@ -453,15 +451,17 @@ impl<'a> MutableArrayData<'a> {
                     .map(|array| &array.child_data()[0])
                     .collect::<Vec<_>>();
 
-                let capacities =
-                    if let Capacities::List(capacity, child_capacities) = capacities {
-                        array_capacity = capacity;
-                        child_capacities
-                            .map(|c| *c)
-                            .unwrap_or(Capacities::Array(array_capacity))
-                    } else {
-                        Capacities::Array(array_capacity)
-                    };
+                let capacities = if let Capacities::List(capacity, ref child_capacities) =
+                    capacities
+                {
+                    array_capacity = capacity;
+                    child_capacities
+                        .clone()
+                        .map(|c| *c)
+                        .unwrap_or(Capacities::Array(array_capacity))
+                } else {
+                    Capacities::Array(array_capacity)
+                };
 
                 vec![MutableArrayData::with_capacities(
                     childs, use_nulls, capacities,
@@ -471,7 +471,7 @@ impl<'a> MutableArrayData<'a> {
             DataType::Dictionary(_, _) => vec![],
             DataType::Float16 => unreachable!(),
             DataType::Struct(fields) => match capacities {
-                Capacities::Struct(capacity, Some(child_capacities)) => {
+                Capacities::Struct(capacity, Some(ref child_capacities)) => {
                     array_capacity = capacity;
                     (0..fields.len())
                         .zip(child_capacities)
@@ -483,7 +483,7 @@ impl<'a> MutableArrayData<'a> {
                             MutableArrayData::with_capacities(
                                 child_arrays,
                                 use_nulls,
-                                child_cap,
+                                child_cap.clone(),
                             )
                         })
                         .collect::<Vec<_>>()
