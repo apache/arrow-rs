@@ -18,7 +18,7 @@
 //! Defines windowing functions, like `shift`ing
 
 use crate::array::{Array, ArrayRef};
-use crate::{array::PrimitiveArray, datatypes::ArrowPrimitiveType, error::Result};
+use crate::error::Result;
 use crate::{
     array::{make_array, new_null_array},
     compute::concat,
@@ -59,7 +59,7 @@ use num::{abs, clamp};
 pub fn shift(array: &Array, offset: i64) -> Result<ArrayRef> {
     let value_len = array.len() as i64;
     if offset == 0 {
-        Ok(make_array(values.data_ref().clone()))
+        Ok(make_array(array.data_ref().clone()))
     } else if offset == i64::MIN || abs(offset) >= value_len {
         Ok(new_null_array(array.data_type(), array.len()))
     } else {
