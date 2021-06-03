@@ -21,8 +21,8 @@ use arrow::ipc::{
     convert, size_prefixed_root_as_message, writer, writer::EncodedData,
     writer::IpcWriteOptions,
 };
+
 use std::{
-    cmp::min,
     convert::{TryFrom, TryInto},
     fmt,
     ops::Deref,
@@ -75,6 +75,7 @@ pub struct SchemaAsIpc<'a> {
 
 /// IpcMessage represents a `Schema` in the format expected in
 /// `FlightInfo.schema`
+#[derive(Debug)]
 pub struct IpcMessage(pub Vec<u8>);
 
 // Useful conversion functions
@@ -115,37 +116,75 @@ impl<'a> Deref for SchemaAsIpc<'a> {
 
 // Display...
 
+/// Limits the output of value to limit...
+fn limited_fmt(f: &mut fmt::Formatter<'_>, value: &[u8], limit: usize) -> fmt::Result {
+    if value.len() > limit {
+        write!(f, "{:?}", &value[..limit])
+    } else {
+        write!(f, "{:?}", &value)
+    }
+}
+
 impl fmt::Display for FlightData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "descriptor: ")?;
+        write!(f, "FlightData {{")?;
+        write!(f, " descriptor: ")?;
         match &self.flight_descriptor {
-            Some(d) => write!(f, "{}, ", d)?,
-            None => write!(f, "None, ")?,
+            Some(d) => write!(f, "{}", d)?,
+            None => write!(f, "None")?,
         };
-        let limit = min(8, self.data_header.len());
-        write!(f, "header: {:?}, ", &self.data_header[..limit])?;
-        let limit = min(8, self.app_metadata.len());
-        write!(f, "metadata: {:?}, ", &self.app_metadata[..limit])?;
-        let limit = min(8, self.data_body.len());
-        write!(f, "body: {:?}", &self.data_body[..limit])
+        write!(f, ", header: ")?;
+        limited_fmt(f, &self.data_header, 8)?;
+        write!(f, ", metadata: ")?;
+        limited_fmt(f, &self.app_metadata, 8)?;
+        write!(f, ", body: ")?;
+        limited_fmt(f, &self.data_body, 8)?;
+        write!(f, " }}")
     }
 }
 
 impl fmt::Display for FlightDescriptor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "type: ")?;
+        write!(f, "FlightDescriptor {{")?;
+        write!(f, " type: ")?;
         match self.r#type() {
             DescriptorType::Cmd => {
-                let limit = min(8, self.cmd.len());
-                write!(f, "cmd, value: {:?}", &self.cmd[..limit])
+                write!(f, "cmd, value: ")?;
+                limited_fmt(f, &self.cmd, 8)?;
             }
             DescriptorType::Path => {
-                write!(f, "path, value: {:?}", self.path)
+                write!(f, "path: [")?;
+                let mut sep = "";
+                for element in &self.path {
+                    write!(f, "{}{}", sep, element)?;
+                    sep = ", ";
+                }
+                write!(f, "]")?;
             }
             DescriptorType::Unknown => {
-                write!(f, "unknown")
+                write!(f, "unknown")?;
             }
         }
+        write!(f, " }}")
+    }
+}
+
+impl fmt::Display for FlightEndpoint {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "FlightEndpoint {{")?;
+        write!(f, " ticket: ")?;
+        match &self.ticket {
+            Some(value) => write!(f, "{}", value),
+            None => write!(f, " none"),
+        }?;
+        write!(f, ", location: [")?;
+        let mut sep = "";
+        for location in &self.location {
+            write!(f, "{}{}", sep, location)?;
+            sep = ", ";
+        }
+        write!(f, "]")?;
+        write!(f, " }}")
     }
 }
 
@@ -153,15 +192,38 @@ impl fmt::Display for FlightInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let ipc_message = IpcMessage(self.schema.clone());
         let schema: Schema = ipc_message.try_into().map_err(|_err| fmt::Error)?;
-        write!(f, "schema: {}, ", schema)?;
-        write!(f, "descriptor: ")?;
+        write!(f, "FlightInfo {{")?;
+        write!(f, " schema: {}", schema)?;
+        write!(f, ", descriptor:")?;
         match &self.flight_descriptor {
-            Some(d) => write!(f, "{}", d),
-            None => write!(f, "None"),
+            Some(d) => write!(f, " {}", d),
+            None => write!(f, " None"),
         }?;
-        write!(f, "endpoint: {:?}, ", self.endpoint)?;
-        write!(f, "total_records: {}, ", self.total_records)?;
-        write!(f, "total_bytes: {}, ", self.total_bytes)
+        write!(f, ", endpoint: [")?;
+        let mut sep = "";
+        for endpoint in &self.endpoint {
+            write!(f, "{}{}", sep, endpoint)?;
+            sep = ", ";
+        }
+        write!(f, "], total_records: {}", self.total_records)?;
+        write!(f, ", total_bytes: {}", self.total_bytes)?;
+        write!(f, " }}")
+    }
+}
+
+impl fmt::Display for Location {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Location {{")?;
+        write!(f, " uri: ")?;
+        write!(f, "{}", self.uri)
+    }
+}
+
+impl fmt::Display for Ticket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Ticket {{")?;
+        write!(f, " ticket: ")?;
+        write!(f, "{}", base64::encode(&self.ticket))
     }
 }
 
@@ -347,12 +409,46 @@ impl<'a> SchemaAsIpc<'a> {
 mod tests {
     use super::*;
 
+    struct TestVector(Vec<u8>, usize);
+
+    impl fmt::Display for TestVector {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            limited_fmt(f, &self.0, self.1)
+        }
+    }
+
     #[test]
     fn it_creates_flight_descriptor_command() {
         let expected_cmd = "my_command".as_bytes();
         let fd = FlightDescriptor::new_cmd(expected_cmd.to_vec());
         assert_eq!(fd.r#type(), DescriptorType::Cmd);
         assert_eq!(fd.cmd, expected_cmd.to_vec());
-        println!("{}", fd);
+    }
+
+    #[test]
+    fn it_accepts_equal_output() {
+        let input = TestVector(vec![91; 10], 10);
+
+        let actual = format!("{}", input);
+        let expected = format!("{:?}", vec![91; 10]);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn it_accepts_short_output() {
+        let input = TestVector(vec![91; 6], 10);
+
+        let actual = format!("{}", input);
+        let expected = format!("{:?}", vec![91; 6]);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn it_accepts_long_output() {
+        let input = TestVector(vec![91; 10], 9);
+
+        let actual = format!("{}", input);
+        let expected = format!("{:?}", vec![91; 9]);
+        assert_eq!(actual, expected);
     }
 }

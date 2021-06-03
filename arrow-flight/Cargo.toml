@@ -27,6 +27,7 @@ license = "Apache-2.0"
 
 [dependencies]
 arrow = { path = "../arrow", version = "5.0.0-SNAPSHOT" }
+base64 = "0.13"
 tonic = "0.4"
 bytes = "1"
 prost = "0.7"
