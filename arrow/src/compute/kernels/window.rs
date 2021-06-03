@@ -18,8 +18,11 @@
 //! Defines windowing functions, like `shift`ing
 
 use crate::array::{Array, ArrayRef};
-use crate::{array::new_null_array, compute::concat};
 use crate::{array::PrimitiveArray, datatypes::ArrowPrimitiveType, error::Result};
+use crate::{
+    array::{make_array, new_null_array},
+    compute::concat,
+};
 use num::{abs, clamp};
 
 /// Shifts array by defined number of items (to left or right)
@@ -59,7 +62,7 @@ where
 {
     let value_len = values.len() as i64;
     if offset == 0 {
-        Ok(values.slice(0, values.len()))
+        Ok(make_array(values.data_ref().clone()))
     } else if offset == i64::MIN || abs(offset) >= value_len {
         Ok(new_null_array(&T::DATA_TYPE, values.len()))
     } else {
