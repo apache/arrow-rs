@@ -142,9 +142,10 @@ def make_cherry_pick_pr():
                           body=new_commit_message,
                           base='refs/heads/active_release',
                           head='refs/heads/{}'.format(new_branch),
-                          maintainer_can_modify=True
-                          labels=[release_cherry_pick_label]
+                          maintainer_can_modify=True,
                           )
+
+    pr.add_to_labels(release_cherry_pick_label)
 
     print('Created PR {}'.format(pr.html_url))
 
