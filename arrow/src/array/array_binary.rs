@@ -20,6 +20,8 @@ use std::fmt;
 use std::mem;
 use std::{any::Any, iter::FromIterator};
 
+use num::integer::div_rem;
+
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
@@ -728,8 +730,11 @@ impl From<ArrayData> for DecimalArray {
 impl fmt::Debug for DecimalArray {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "DecimalArray<{}, {}>\n[\n", self.precision, self.scale)?;
+        let point_index = 10_i128.pow(self.scale as u32);
         print_long_array(self, f, |array, index, f| {
-            fmt::Debug::fmt(&array.value(index), f)
+            let (prefix, suffix) = &div_rem(array.value(index), point_index);
+
+            write!(f, "{}.{}", prefix, suffix.abs())
         })?;
         write!(f, "]")
     }
@@ -758,7 +763,7 @@ impl Array for DecimalArray {
 #[cfg(test)]
 mod tests {
     use crate::{
-        array::{LargeListArray, ListArray},
+        array::{DecimalBuilder, LargeListArray, ListArray},
         datatypes::Field,
     };
 
@@ -1163,17 +1168,16 @@ mod tests {
 
     #[test]
     fn test_decimal_array_fmt_debug() {
-        let values: [u8; 32] = [
-            192, 219, 180, 17, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 36, 75, 238, 253,
-            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        ];
-        let array_data = ArrayData::builder(DataType::Decimal(23, 6))
-            .len(2)
-            .add_buffer(Buffer::from(&values[..]))
-            .build();
-        let arr = DecimalArray::from(array_data);
+        let values: Vec<i128> = vec![8887000000, -8887000000];
+        let mut decimal_builder = DecimalBuilder::new(3, 23, 6);
+
+        values.iter().for_each(|&value| {
+            decimal_builder.append_value(value).unwrap();
+        });
+        decimal_builder.append_null().unwrap();
+        let arr = decimal_builder.finish();
         assert_eq!(
-            "DecimalArray<23, 6>\n[\n  8887000000,\n  -8887000000,\n]",
+            "DecimalArray<23, 6>\n[\n  8887.0,\n  -8887.0,\n  null,\n]",
             format!("{:?}", arr)
         );
     }

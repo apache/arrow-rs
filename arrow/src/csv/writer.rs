@@ -65,7 +65,10 @@
 //! }
 //! ```
 
+use std::convert::TryInto;
 use std::io::Write;
+
+use num::integer::div_rem;
 
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
@@ -241,6 +244,14 @@ impl<W: Write> Writer<W> {
                             .unwrap(),
                     };
                     format!("{}", datetime.format(&self.timestamp_format))
+                }
+                DataType::Decimal(_precision, scale) => {
+                    let c = col.as_any().downcast_ref::<DecimalArray>().unwrap();
+                    let value = c.value(row_index);
+                    let (prefix, suffix) =
+                        div_rem(value, 10_i128.pow((*scale).try_into().unwrap()));
+
+                    format!("{}.{}", prefix, suffix.abs())
                 }
                 t => {
                     // List and Struct arrays not supported by the writer, any
@@ -566,6 +577,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
             Field::new("c4", DataType::Boolean, true),
             Field::new("c5", DataType::Timestamp(TimeUnit::Millisecond, None), true),
             Field::new("c6", DataType::Time32(TimeUnit::Second), false),
+            Field::new("c7", DataType::Decimal(6, 2), false),
         ]);
 
         let c1 = StringArray::from(vec![
@@ -585,6 +597,11 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
             None,
         );
         let c6 = Time32SecondArray::from(vec![1234, 24680, 85563]);
+        let mut c7_builder = DecimalBuilder::new(5, 6, 2);
+        c7_builder.append_value(12345_i128).unwrap();
+        c7_builder.append_value(-12345_i128).unwrap();
+        c7_builder.append_null().unwrap();
+        let c7 = c7_builder.finish();
 
         let batch = RecordBatch::try_new(
             Arc::new(schema),
@@ -595,6 +612,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
                 Arc::new(c4),
                 Arc::new(c5),
                 Arc::new(c6),
+                Arc::new(c7),
             ],
         )
         .unwrap();
@@ -606,13 +624,13 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
             writer.write(batch).unwrap();
         }
 
-        let left = "c1,c2,c3,c4,c5,c6
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03\n";
+        let left = "c1,c2,c3,c4,c5,c6,c7
+Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,123.45
+consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,-123.45
+sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,
+Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,123.45
+consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,-123.45
+sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,\n";
         let right = writer.writer.into_inner().map(|s| s.to_string());
         assert_eq!(Some(left.to_string()), right.ok());
     }
