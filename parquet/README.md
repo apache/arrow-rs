@@ -27,7 +27,7 @@ Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-parquet = "4.1.0"
+parquet = "^4"
 ```
 
 and this to your crate root:
