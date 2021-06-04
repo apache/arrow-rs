@@ -262,6 +262,7 @@ There are two tags that help keep track of backporting:
 1. [`cherry-picked`](https://github.com/apache/arrow-rs/labels/cherry-picked) for PRs that have been cherry-picked/backported to `active_release`
 2. [`release-cherry-pick`](https://github.com/apache/arrow-rs/labels/release-cherry-pick) for the PRs that are the cherry pick
 
+You can find candidates to cherry pick using this filter: https://github.com/apache/arrow-rs/pulls?page=2&q=is%3Apr+is%3Aclosed+-label%3Arelease-cherry-pick+-label%3Acherry-picked
 
 ## Rationale for creating PRs:
 1. PRs are a natural place to run the CI tests to make sure there are no logical conflicts
