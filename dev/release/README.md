@@ -250,6 +250,7 @@ ARROW_GITHUB_API_TOKEN=$ARROW_GITHUB_API_TOKEN CHECKOUT_ROOT=/tmp/arrow-rs CHERR
 ```
 
 ## Tags
+
 There are two tags that help keep track of backporting:
 
 1. [`cherry-picked`](https://github.com/apache/arrow-rs/labels/cherry-picked) for PRs that have been cherry-picked/backported to `active_release`
