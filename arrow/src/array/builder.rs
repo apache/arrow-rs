@@ -303,7 +303,7 @@ impl BooleanBufferBuilder {
     }
 
     #[inline]
-    pub fn set_bit(&mut self, index: usize, bit: bool) {
+    pub fn set_bit(&mut self, index: usize, v: bool) {
         if bit {
             bit_util::set_bit(self.buffer.as_mut(), index);
         } else {
