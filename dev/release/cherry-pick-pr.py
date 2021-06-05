@@ -117,10 +117,14 @@ def make_cherry_pick():
     run_cmd(['git', 'push', '-u', 'origin', new_branch])
 
 
+
 def make_cherry_pick_pr():
     from github import Github
     g = Github(token)
     repo = g.get_repo(TARGET_REPO)
+
+    release_cherry_pick_label = repo.get_label('release-cherry-pick')
+    cherry_picked_label = repo.get_label('cherry-picked')
 
     # Default titles
     new_title = 'Cherry pick {} to active_release'.format(new_sha)
@@ -132,13 +136,16 @@ def make_cherry_pick_pr():
         new_commit_message += '* Originally appeared in {}: {}\n'.format(
             orig_pull.html_url, orig_pull.title)
         new_title = 'Cherry pick {} to active_release'.format(orig_pull.title)
+        orig_pull.add_to_labels(cherry_picked_label)
 
     pr = repo.create_pull(title=new_title,
                           body=new_commit_message,
                           base='refs/heads/active_release',
                           head='refs/heads/{}'.format(new_branch),
-                          maintainer_can_modify=True
+                          maintainer_can_modify=True,
                           )
+
+    pr.add_to_labels(release_cherry_pick_label)
 
     print('Created PR {}'.format(pr.html_url))
 
