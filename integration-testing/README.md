@@ -23,8 +23,8 @@ See [Integration.rst](../../docs/source/format/Integration.rst) for an overview 
 
 This crate contains the following binaries, which are invoked by Archery during integration testing with other Arrow implementations.
 
-| Binary | Purpose |
-|--------|---------|
-| arrow-file-to-stream | Converts an Arrow file to an Arrow stream |
-| arrow-stream-to-file | Converts an Arrow stream to an Arrow file |
-| arrow-json-integration-test | Converts between Arrow and JSON formats |
+| Binary                      | Purpose                                   |
+| --------------------------- | ----------------------------------------- |
+| arrow-file-to-stream        | Converts an Arrow file to an Arrow stream |
+| arrow-stream-to-file        | Converts an Arrow stream to an Arrow file |
+| arrow-json-integration-test | Converts between Arrow and JSON formats   |
