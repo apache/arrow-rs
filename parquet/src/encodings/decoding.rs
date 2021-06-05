@@ -395,16 +395,15 @@ impl<T: DataType> DeltaBitPackDecoder<T> {
             .get_zigzag_vlq_int()
             .ok_or_else(|| eof_err!("Not enough data to decode 'min_delta'"))?;
 
-        let mut widths = vec![];
+        self.delta_bit_widths.clear();
         for _ in 0..self.num_mini_blocks {
             let w = self
                 .bit_reader
                 .get_aligned::<u8>(1)
                 .ok_or_else(|| eof_err!("Not enough data to decode 'width'"))?;
-            widths.push(w);
+            self.delta_bit_widths.push(w);
         }
 
-        self.delta_bit_widths.set_data(widths);
         self.mini_block_idx = 0;
         self.delta_bit_width = self.delta_bit_widths.data()[0];
         self.values_current_mini_block = self.values_per_mini_block;
@@ -417,7 +416,6 @@ impl<T: DataType> DeltaBitPackDecoder<T> {
     where
         T::T: FromBytes,
     {
-        self.deltas_in_mini_block.clear();
         if self.use_batch {
             self.deltas_in_mini_block
                 .resize(self.values_current_mini_block, T::T::default());
@@ -427,6 +425,7 @@ impl<T: DataType> DeltaBitPackDecoder<T> {
             );
             assert!(loaded == self.values_current_mini_block);
         } else {
+            self.deltas_in_mini_block.clear();
             for _ in 0..self.values_current_mini_block {
                 // TODO: load one batch at a time similar to int32
                 let delta = self
