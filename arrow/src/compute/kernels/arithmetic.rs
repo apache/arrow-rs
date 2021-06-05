@@ -22,7 +22,7 @@
 //! `RUSTFLAGS="-C target-feature=+avx2"` for example.  See the documentation
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, Div, Mul, Neg, Rem, Sub};
 
 use num::{One, Zero};
 
@@ -189,6 +189,74 @@ where
     Ok(PrimitiveArray::<T>::from(data))
 }
 
+/// Helper function to modulus two arrays.
+///
+/// # Errors
+///
+/// This function errors if:
+/// * the arrays have different lengths
+/// * a division by zero is found
+fn math_modulus<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: ArrowNumericType,
+    T::Native: Rem<Output = T::Native> + Zero,
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform math operation on arrays of different length".to_string(),
+        ));
+    }
+
+    let null_bit_buffer =
+        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
+
+    let buffer = if let Some(b) = &null_bit_buffer {
+        let values = left.values().iter().zip(right.values()).enumerate().map(
+            |(i, (left, right))| {
+                let is_valid = unsafe { bit_util::get_bit_raw(b.as_ptr(), i) };
+                if is_valid {
+                    if right.is_zero() {
+                        Err(ArrowError::DivideByZero)
+                    } else {
+                        Ok(*left % *right)
+                    }
+                } else {
+                    Ok(T::default_value())
+                }
+            },
+        );
+        unsafe { Buffer::try_from_trusted_len_iter(values) }
+    } else {
+        // no value is null
+        let values = left
+            .values()
+            .iter()
+            .zip(right.values())
+            .map(|(left, right)| {
+                if right.is_zero() {
+                    Err(ArrowError::DivideByZero)
+                } else {
+                    Ok(*left % *right)
+                }
+            });
+        unsafe { Buffer::try_from_trusted_len_iter(values) }
+    }?;
+
+    let data = ArrayData::new(
+        T::DATA_TYPE,
+        left.len(),
+        None,
+        null_bit_buffer,
+        0,
+        vec![buffer],
+        vec![],
+    );
+    Ok(PrimitiveArray::<T>::from(data))
+}
+
 /// Helper function to divide two arrays.
 ///
 /// # Errors
@@ -250,6 +318,34 @@ where
         left.len(),
         None,
         null_bit_buffer,
+        0,
+        vec![buffer],
+        vec![],
+    );
+    Ok(PrimitiveArray::<T>::from(data))
+}
+
+/// Scalar-modulo version of `math_modulus`.
+fn math_modulus_scalar<T>(
+    array: &PrimitiveArray<T>,
+    modulo: T::Native,
+) -> Result<PrimitiveArray<T>>
+where
+    T: ArrowNumericType,
+    T::Native: Rem<Output = T::Native> + Zero,
+{
+    if modulo.is_zero() {
+        return Err(ArrowError::DivideByZero);
+    }
+
+    let values = array.values().iter().map(|value| *value % modulo);
+    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+
+    let data = ArrayData::new(
+        T::DATA_TYPE,
+        array.len(),
+        None,
+        array.data_ref().null_buffer().cloned(),
         0,
         vec![buffer],
         vec![],
@@ -348,6 +444,40 @@ where
     Ok(PrimitiveArray::<T>::from(data))
 }
 
+/// SIMD vectorized implementation of `left % right`.
+/// If any of the lanes marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero`
+/// is returned. The contents of no-valid lanes are undefined.
+#[cfg(feature = "simd")]
+#[inline]
+fn simd_checked_modulus<T: ArrowNumericType>(
+    valid_mask: Option<u64>,
+    left: T::Simd,
+    right: T::Simd,
+) -> Result<T::Simd>
+where
+    T::Native: One + Zero,
+{
+    let zero = T::init(T::Native::zero());
+    let one = T::init(T::Native::one());
+
+    let right_no_invalid_zeros = match valid_mask {
+        Some(mask) => {
+            let simd_mask = T::mask_from_u64(mask);
+            // select `1` for invalid lanes, which will be a no-op during division later
+            T::mask_select(simd_mask, right, one)
+        }
+        None => right,
+    };
+
+    let zero_mask = T::eq(right_no_invalid_zeros, zero);
+
+    if T::mask_any(zero_mask) {
+        Err(ArrowError::DivideByZero)
+    } else {
+        Ok(T::bin_op(left, right_no_invalid_zeros, |a, b| a % b))
+    }
+}
+
 /// SIMD vectorized implementation of `left / right`.
 /// If any of the lanes marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero`
 /// is returned. The contents of no-valid lanes are undefined.
@@ -380,6 +510,40 @@ where
     } else {
         Ok(T::bin_op(left, right_no_invalid_zeros, |a, b| a / b))
     }
+}
+
+/// Scalar implementation of `left % right` for the remainder elements after complete chunks have been processed using SIMD.
+/// If any of the values marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero` is returned.
+#[cfg(feature = "simd")]
+#[inline]
+fn simd_checked_modulus_remainder<T: ArrowNumericType>(
+    valid_mask: Option<u64>,
+    left_chunks: ChunksExact<T::Native>,
+    right_chunks: ChunksExact<T::Native>,
+    result_chunks: ChunksExactMut<T::Native>,
+) -> Result<()>
+where
+    T::Native: Zero + Rem<Output = T::Native>,
+{
+    let result_remainder = result_chunks.into_remainder();
+    let left_remainder = left_chunks.remainder();
+    let right_remainder = right_chunks.remainder();
+
+    result_remainder
+        .iter_mut()
+        .zip(left_remainder.iter().zip(right_remainder.iter()))
+        .enumerate()
+        .try_for_each(|(i, (result_scalar, (left_scalar, right_scalar)))| {
+            if valid_mask.map(|mask| mask & (1 << i) != 0).unwrap_or(true) {
+                if *right_scalar == T::Native::zero() {
+                    return Err(ArrowError::DivideByZero);
+                }
+                *result_scalar = *left_scalar % *right_scalar;
+            }
+            Ok(())
+        })?;
+
+    Ok(())
 }
 
 /// Scalar implementation of `left / right` for the remainder elements after complete chunks have been processed using SIMD.
@@ -416,6 +580,34 @@ where
     Ok(())
 }
 
+/// Scalar-modulo version of `simd_checked_modulus_remainder`.
+#[cfg(feature = "simd")]
+#[inline]
+fn simd_checked_modulus_scalar_remainder<T: ArrowNumericType>(
+    array_chunks: ChunksExact<T::Native>,
+    modulo: T::Native,
+    result_chunks: ChunksExactMut<T::Native>,
+) -> Result<()>
+where
+    T::Native: Zero + Rem<Output = T::Native>,
+{
+    if modulo.is_zero() {
+        return Err(ArrowError::DivideByZero);
+    }
+
+    let result_remainder = result_chunks.into_remainder();
+    let array_remainder = array_chunks.remainder();
+
+    result_remainder
+        .iter_mut()
+        .zip(array_remainder.iter())
+        .for_each(|(result_scalar, array_scalar)| {
+            *result_scalar = *array_scalar % modulo;
+        });
+
+    Ok(())
+}
+
 /// Scalar-divisor version of `simd_checked_divide_remainder`.
 #[cfg(simd)]
 #[inline]
@@ -442,6 +634,126 @@ where
         });
 
     Ok(())
+}
+
+/// SIMD vectorized version of `modulus`.
+///
+/// The modulus kernels need their own implementation as there is a need to handle situations
+/// where a modulus by `0` occurs.  This is complicated by `NULL` slots and padding.
+#[cfg(feature = "simd")]
+fn simd_modulus<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: ArrowNumericType,
+    T::Native: One + Zero + Rem<Output = T::Native>,
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform math operation on arrays of different length".to_string(),
+        ));
+    }
+
+    // Create the combined `Bitmap`
+    let null_bit_buffer =
+        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
+
+    let lanes = T::lanes();
+    let buffer_size = left.len() * std::mem::size_of::<T::Native>();
+    let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
+
+    match &null_bit_buffer {
+        Some(b) => {
+            // combine_option_bitmap returns a slice or new buffer starting at 0
+            let valid_chunks = b.bit_chunks(0, left.len());
+
+            // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
+            let mut result_chunks = result.typed_data_mut().chunks_exact_mut(64);
+            let mut left_chunks = left.values().chunks_exact(64);
+            let mut right_chunks = right.values().chunks_exact(64);
+
+            valid_chunks
+                .iter()
+                .zip(
+                    result_chunks
+                        .borrow_mut()
+                        .zip(left_chunks.borrow_mut().zip(right_chunks.borrow_mut())),
+                )
+                .try_for_each(
+                    |(mut mask, (result_slice, (left_slice, right_slice)))| {
+                        // split chunks further into slices corresponding to the vector length
+                        // the compiler is able to unroll this inner loop and remove bounds checks
+                        // since the outer chunk size (64) is always a multiple of the number of lanes
+                        result_slice
+                            .chunks_exact_mut(lanes)
+                            .zip(left_slice.chunks_exact(lanes).zip(right_slice.chunks_exact(lanes)))
+                            .try_for_each(|(result_slice, (left_slice, right_slice))| -> Result<()> {
+                                let simd_left = T::load(left_slice);
+                                let simd_right = T::load(right_slice);
+
+                                let simd_result = simd_checked_modulus::<T>(Some(mask), simd_left, simd_right)?;
+
+                                T::write(simd_result, result_slice);
+
+                                // skip the shift and avoid overflow for u8 type, which uses 64 lanes.
+                                mask >>= T::lanes() % 64;
+
+                                Ok(())
+                            })
+                    },
+                )?;
+
+            let valid_remainder = valid_chunks.remainder_bits();
+
+            simd_checked_modulus_remainder::<T>(
+                Some(valid_remainder),
+                left_chunks,
+                right_chunks,
+                result_chunks,
+            )?;
+        }
+        None => {
+            let mut result_chunks = result.typed_data_mut().chunks_exact_mut(lanes);
+            let mut left_chunks = left.values().chunks_exact(lanes);
+            let mut right_chunks = right.values().chunks_exact(lanes);
+
+            result_chunks
+                .borrow_mut()
+                .zip(left_chunks.borrow_mut().zip(right_chunks.borrow_mut()))
+                .try_for_each(
+                    |(result_slice, (left_slice, right_slice))| -> Result<()> {
+                        let simd_left = T::load(left_slice);
+                        let simd_right = T::load(right_slice);
+
+                        let simd_result =
+                            simd_checked_modulus::<T>(None, simd_left, simd_right)?;
+
+                        T::write(simd_result, result_slice);
+
+                        Ok(())
+                    },
+                )?;
+
+            simd_checked_modulus_remainder::<T>(
+                None,
+                left_chunks,
+                right_chunks,
+                result_chunks,
+            )?;
+        }
+    }
+
+    let data = ArrayData::new(
+        T::DATA_TYPE,
+        left.len(),
+        None,
+        null_bit_buffer,
+        0,
+        vec![result.into()],
+        vec![],
+    );
+    Ok(PrimitiveArray::<T>::from(data))
 }
 
 /// SIMD vectorized version of `divide`.
@@ -557,6 +869,52 @@ where
         left.len(),
         None,
         null_bit_buffer,
+        0,
+        vec![result.into()],
+        vec![],
+    );
+    Ok(PrimitiveArray::<T>::from(data))
+}
+
+/// SIMD vectorized version of `modulus_scalar`.
+#[cfg(feature = "simd")]
+fn simd_modulus_scalar<T>(
+    array: &PrimitiveArray<T>,
+    modulo: T::Native,
+) -> Result<PrimitiveArray<T>>
+where
+    T: ArrowNumericType,
+    T::Native: One + Zero + Rem<Output = T::Native>,
+{
+    if modulo.is_zero() {
+        return Err(ArrowError::DivideByZero);
+    }
+
+    let lanes = T::lanes();
+    let buffer_size = array.len() * std::mem::size_of::<T::Native>();
+    let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
+
+    let mut result_chunks = result.typed_data_mut().chunks_exact_mut(lanes);
+    let mut array_chunks = array.values().chunks_exact(lanes);
+
+    result_chunks
+        .borrow_mut()
+        .zip(array_chunks.borrow_mut())
+        .for_each(|(result_slice, array_slice)| {
+            let simd_left = T::load(array_slice);
+            let simd_right = T::init(modulo);
+
+            let simd_result = T::bin_op(simd_left, simd_right, |a, b| a % b);
+            T::write(simd_result, result_slice);
+        });
+
+    simd_checked_modulus_scalar_remainder::<T>(array_chunks, modulo, result_chunks)?;
+
+    let data = ArrayData::new(
+        T::DATA_TYPE,
+        array.len(),
+        None,
+        array.data_ref().null_buffer().cloned(),
         0,
         vec![result.into()],
         vec![],
@@ -696,12 +1054,36 @@ where
         + Sub<Output = T::Native>
         + Mul<Output = T::Native>
         + Div<Output = T::Native>
+        + Rem<Output = T::Native>
         + Zero,
 {
     #[cfg(simd)]
     return simd_math_op(&left, &right, |a, b| a * b, |a, b| a * b);
     #[cfg(not(simd))]
     return math_op(left, right, |a, b| a * b);
+}
+
+/// Perform `left % right` operation on two arrays. If either left or right value is null
+/// then the result is also null. If any right hand value is zero then the result of this
+/// operation will be `Err(ArrowError::DivideByZero)`.
+pub fn modulus<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: Add<Output = T::Native>
+        + Sub<Output = T::Native>
+        + Mul<Output = T::Native>
+        + Div<Output = T::Native>
+        + Rem<Output = T::Native>
+        + Zero
+        + One,
+{
+    #[cfg(feature = "simd")]
+    return simd_modulus(&left, &right);
+    #[cfg(not(feature = "simd"))]
+    return math_modulus(&left, &right);
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -717,6 +1099,7 @@ where
         + Sub<Output = T::Native>
         + Mul<Output = T::Native>
         + Div<Output = T::Native>
+        + Rem<Output = T::Native>
         + Zero
         + One,
 {
@@ -724,6 +1107,29 @@ where
     return simd_divide(&left, &right);
     #[cfg(not(simd))]
     return math_divide(&left, &right);
+}
+
+/// Modulus every value in an array by a scalar. If any value in the array is null then the
+/// result is also null. If the scalar is zero then the result of this operation will be
+/// `Err(ArrowError::DivideByZero)`.
+pub fn modulus_scalar<T>(
+    array: &PrimitiveArray<T>,
+    modulo: T::Native,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: Add<Output = T::Native>
+        + Sub<Output = T::Native>
+        + Mul<Output = T::Native>
+        + Div<Output = T::Native>
+        + Rem<Output = T::Native>
+        + Zero
+        + One,
+{
+    #[cfg(feature = "simd")]
+    return simd_modulus_scalar(&array, modulo);
+    #[cfg(not(feature = "simd"))]
+    return math_modulus_scalar(&array, modulo);
 }
 
 /// Divide every value in an array by a scalar. If any value in the array is null then the
@@ -739,6 +1145,7 @@ where
         + Sub<Output = T::Native>
         + Mul<Output = T::Native>
         + Div<Output = T::Native>
+        + Rem<Output = T::Native>
         + Zero
         + One,
 {
@@ -836,11 +1243,32 @@ mod tests {
     }
 
     #[test]
+    fn test_primitive_array_modulus() {
+        let a = Int32Array::from(vec![15, 15, 8, 1, 9]);
+        let b = Int32Array::from(vec![5, 6, 8, 9, 1]);
+        let c = modulus(&a, &b).unwrap();
+        assert_eq!(0, c.value(0));
+        assert_eq!(3, c.value(1));
+        assert_eq!(0, c.value(2));
+        assert_eq!(1, c.value(3));
+        assert_eq!(0, c.value(4));
+    }
+
+    #[test]
     fn test_primitive_array_divide_scalar() {
         let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
         let b = 3;
         let c = divide_scalar(&a, b).unwrap();
         let expected = Int32Array::from(vec![5, 4, 3, 2, 0]);
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_primitive_array_modulus_scalar() {
+        let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
+        let b = 3;
+        let c = modulus_scalar(&a, b).unwrap();
+        let expected = Int32Array::from(vec![0, 2, 0, 2, 1]);
         assert_eq!(c, expected);
     }
 
@@ -863,6 +1291,24 @@ mod tests {
     }
 
     #[test]
+    fn test_primitive_array_modulus_sliced() {
+        let a = Int32Array::from(vec![0, 0, 0, 15, 15, 8, 1, 9, 0]);
+        let b = Int32Array::from(vec![0, 0, 0, 5, 6, 8, 9, 1, 0]);
+        let a = a.slice(3, 5);
+        let b = b.slice(3, 5);
+        let a = a.as_any().downcast_ref::<Int32Array>().unwrap();
+        let b = b.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        let c = modulus(&a, &b).unwrap();
+        assert_eq!(5, c.len());
+        assert_eq!(0, c.value(0));
+        assert_eq!(3, c.value(1));
+        assert_eq!(0, c.value(2));
+        assert_eq!(1, c.value(3));
+        assert_eq!(0, c.value(4));
+    }
+
+    #[test]
     fn test_primitive_array_divide_with_nulls() {
         let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9), None]);
         let b = Int32Array::from(vec![Some(5), Some(6), Some(8), Some(9), None, None]);
@@ -876,12 +1322,35 @@ mod tests {
     }
 
     #[test]
+    fn test_primitive_array_modulus_with_nulls() {
+        let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9), None]);
+        let b = Int32Array::from(vec![Some(5), Some(6), Some(8), Some(9), None, None]);
+        let c = modulus(&a, &b).unwrap();
+        assert_eq!(0, c.value(0));
+        assert_eq!(true, c.is_null(1));
+        assert_eq!(0, c.value(2));
+        assert_eq!(1, c.value(3));
+        assert_eq!(true, c.is_null(4));
+        assert_eq!(true, c.is_null(5));
+    }
+
+    #[test]
     fn test_primitive_array_divide_scalar_with_nulls() {
         let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9), None]);
         let b = 3;
         let c = divide_scalar(&a, b).unwrap();
         let expected =
             Int32Array::from(vec![Some(5), None, Some(2), Some(0), Some(3), None]);
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_primitive_array_modulus_scalar_with_nulls() {
+        let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9), None]);
+        let b = 3;
+        let c = modulus_scalar(&a, b).unwrap();
+        let expected =
+            Int32Array::from(vec![Some(0), None, Some(2), Some(1), Some(0), None]);
         assert_eq!(c, expected);
     }
 
@@ -939,11 +1408,72 @@ mod tests {
     }
 
     #[test]
+    fn test_primitive_array_modulus_with_nulls_sliced() {
+        let a = Int32Array::from(vec![
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(15),
+            None,
+            Some(8),
+            Some(1),
+            Some(9),
+            None,
+            None,
+        ]);
+        let b = Int32Array::from(vec![
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(5),
+            Some(6),
+            Some(8),
+            Some(9),
+            None,
+            None,
+            None,
+        ]);
+
+        let a = a.slice(8, 6);
+        let a = a.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        let b = b.slice(8, 6);
+        let b = b.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        let c = modulus(&a, &b).unwrap();
+        assert_eq!(6, c.len());
+        assert_eq!(0, c.value(0));
+        assert_eq!(true, c.is_null(1));
+        assert_eq!(0, c.value(2));
+        assert_eq!(1, c.value(3));
+        assert_eq!(true, c.is_null(4));
+        assert_eq!(true, c.is_null(5));
+    }
+
+    #[test]
     #[should_panic(expected = "DivideByZero")]
     fn test_primitive_array_divide_by_zero() {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
         divide(&a, &b).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "DivideByZero")]
+    fn test_primitive_array_modulus_by_zero() {
+        let a = Int32Array::from(vec![15]);
+        let b = Int32Array::from(vec![0]);
+        modulus(&a, &b).unwrap();
     }
 
     #[test]
