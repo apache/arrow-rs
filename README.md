@@ -25,13 +25,13 @@ Welcome to the implementation of Arrow, the popular in-memory columnar format, i
 
 This part of the Arrow project is divided in 4 main components:
 
-| Crate     | Description | Documentation |
-|-----------|-------------|---------------|
-|Arrow        | Core functionality (memory layout, arrays, low level computations) | [(README)](arrow/README.md) |
-|Parquet      | Parquet support | [(README)](parquet/README.md) |
-|Arrow-flight | Arrow data between processes | [(README)](arrow-flight/README.md) |
-|DataFusion   | In-memory query engine with SQL support | [(README)](https://github.com/apache/arrow-datafusion/blob/master/README.md) |
-|Ballista     | Distributed query execution | [(README)](https://github.com/apache/arrow-datafusion/blob/master/ballista/README.md) |
+| Crate        | Description                                                        | Documentation                                                                         |
+| ------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| Arrow        | Core functionality (memory layout, arrays, low level computations) | [(README)](arrow/README.md)                                                           |
+| Parquet      | Parquet support                                                    | [(README)](parquet/README.md)                                                         |
+| Arrow-flight | Arrow data between processes                                       | [(README)](arrow-flight/README.md)                                                    |
+| DataFusion   | In-memory query engine with SQL support                            | [(README)](https://github.com/apache/arrow-datafusion/blob/master/README.md)          |
+| Ballista     | Distributed query execution                                        | [(README)](https://github.com/apache/arrow-datafusion/blob/master/ballista/README.md) |
 
 Independently, they support a vast array of functionality for in-memory computations.
 
@@ -39,15 +39,15 @@ Together, they allow users to write an SQL query or a `DataFrame` (using the `da
 
 Generally speaking, the `arrow` crate offers functionality to develop code that uses Arrow arrays, and `datafusion` offers most operations typically found in SQL, with the notable exceptions of:
 
-* `join`
-* `window` functions
+- `join`
+- `window` functions
 
 There are too many features to enumerate here, but some notable mentions:
 
-* `Arrow` implements all formats in the specification except certain dictionaries
-* `Arrow` supports SIMD operations to some of its vertical operations
-* `DataFusion` supports `async` execution
-* `DataFusion` supports user-defined functions, aggregates, and whole execution nodes
+- `Arrow` implements all formats in the specification except certain dictionaries
+- `Arrow` supports SIMD operations to some of its vertical operations
+- `DataFusion` supports `async` execution
+- `DataFusion` supports user-defined functions, aggregates, and whole execution nodes
 
 You can find more details about each crate in their respective READMEs.
 
@@ -118,7 +118,6 @@ export ARROW_TEST_DATA=$(cd ../testing/data; pwd)
 
 From here on, this is a pure Rust project and `cargo` can be used to run tests, benchmarks, docs and examples as usual.
 
-
 ### Running the tests
 
 Run tests using the Rust standard `cargo test` command:
@@ -156,9 +155,10 @@ If you use Visual Studio Code with the `rust-analyzer` plugin, you can enable `c
 One of the concerns with `clippy` is that it often produces a lot of false positives, or that some recommendations may hurt readability. We do not have a policy of which lints are ignored, but if you disagree with a `clippy` lint, you may disable the lint and briefly justify it.
 
 Search for `allow(clippy::` in the codebase to identify lints that are ignored/allowed. We currently prefer ignoring lints on the lowest unit possible.
-* If you are introducing a line that returns a lint warning or error, you may disable the lint on that line.
-* If you have several lints on a function or module, you may disable the lint on the function or module.
-* If a lint is pervasive across multiple modules, you may disable it at the crate level.
+
+- If you are introducing a line that returns a lint warning or error, you may disable the lint on that line.
+- If you have several lints on a function or module, you may disable the lint on the function or module.
+- If a lint is pervasive across multiple modules, you may disable it at the crate level.
 
 ## Git Pre-Commit Hook
 
