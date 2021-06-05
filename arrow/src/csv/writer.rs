@@ -65,14 +65,12 @@
 //! }
 //! ```
 
-use std::convert::TryInto;
 use std::io::Write;
-
-use num::integer::div_rem;
 
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
+use crate::util::display::make_string_from_decimal;
 use crate::{array::*, util::serialization::lexical_to_string};
 const DEFAULT_DATE_FORMAT: &str = "%F";
 const DEFAULT_TIME_FORMAT: &str = "%T";
@@ -245,14 +243,7 @@ impl<W: Write> Writer<W> {
                     };
                     format!("{}", datetime.format(&self.timestamp_format))
                 }
-                DataType::Decimal(_precision, scale) => {
-                    let c = col.as_any().downcast_ref::<DecimalArray>().unwrap();
-                    let value = c.value(row_index);
-                    let (prefix, suffix) =
-                        div_rem(value, 10_i128.pow((*scale).try_into().unwrap()));
-
-                    format!("{}.{}", prefix, suffix.abs())
-                }
+                DataType::Decimal(..) => make_string_from_decimal(col, row_index)?,
                 t => {
                     // List and Struct arrays not supported by the writer, any
                     // other type needs to be implemented

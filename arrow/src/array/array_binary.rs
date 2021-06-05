@@ -20,8 +20,6 @@ use std::fmt;
 use std::mem;
 use std::{any::Any, iter::FromIterator};
 
-use num::integer::div_rem;
-
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
@@ -668,6 +666,17 @@ impl DecimalArray {
         self.length * i as i32
     }
 
+    #[inline]
+    pub fn value_as_string(&self, row: usize) -> String {
+        let decimal_string = self.value(row).to_string();
+        if self.scale == 0 {
+            decimal_string
+        } else {
+            let splits = decimal_string.split_at(decimal_string.len() - self.scale);
+            format!("{}.{}", splits.0, splits.1)
+        }
+    }
+
     pub fn from_fixed_size_list_array(
         v: FixedSizeListArray,
         precision: usize,
@@ -730,11 +739,10 @@ impl From<ArrayData> for DecimalArray {
 impl fmt::Debug for DecimalArray {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "DecimalArray<{}, {}>\n[\n", self.precision, self.scale)?;
-        let point_index = 10_i128.pow(self.scale as u32);
         print_long_array(self, f, |array, index, f| {
-            let (prefix, suffix) = &div_rem(array.value(index), point_index);
+            let formatted_decimal = array.value_as_string(index);
 
-            write!(f, "{}.{}", prefix, suffix.abs())
+            write!(f, "{}", formatted_decimal)
         })?;
         write!(f, "]")
     }
@@ -1177,7 +1185,7 @@ mod tests {
         decimal_builder.append_null().unwrap();
         let arr = decimal_builder.finish();
         assert_eq!(
-            "DecimalArray<23, 6>\n[\n  8887.0,\n  -8887.0,\n  null,\n]",
+            "DecimalArray<23, 6>\n[\n  8887.000000,\n  -8887.000000,\n  null,\n]",
             format!("{:?}", arr)
         );
     }
