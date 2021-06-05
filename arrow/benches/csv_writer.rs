@@ -28,14 +28,14 @@ use arrow::record_batch::RecordBatch;
 use std::fs::File;
 use std::sync::Arc;
 
-fn record_batches_to_csv() {
+fn criterion_benchmark(c: &mut Criterion) {
     #[cfg(feature = "csv")]
     {
         let schema = Schema::new(vec![
             Field::new("c1", DataType::Utf8, false),
             Field::new("c2", DataType::Float64, true),
             Field::new("c3", DataType::UInt32, false),
-            Field::new("c3", DataType::Boolean, true),
+            Field::new("c4", DataType::Boolean, true),
         ]);
 
         let c1 = StringArray::from(vec![
@@ -59,15 +59,16 @@ fn record_batches_to_csv() {
         let file = File::create("target/bench_write_csv.csv").unwrap();
         let mut writer = csv::Writer::new(file);
         let batches = vec![&b, &b, &b, &b, &b, &b, &b, &b, &b, &b, &b];
-        #[allow(clippy::unit_arg)]
-        criterion::black_box(for batch in batches {
-            writer.write(batch).unwrap()
+
+        c.bench_function("record_batches_to_csv", |b| {
+            b.iter(|| {
+                #[allow(clippy::unit_arg)]
+                criterion::black_box(for batch in &batches {
+                    writer.write(batch).unwrap()
+                });
+            });
         });
     }
-}
-
-fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("record_batches_to_csv", |b| b.iter(record_batches_to_csv));
 }
 
 criterion_group!(benches, criterion_benchmark);
