@@ -70,24 +70,9 @@ pub struct DictionaryArray<K: ArrowPrimitiveType> {
 }
 
 impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
-    /// Return an iterator to the keys of this dictionary.
+    /// Return an array view of the keys of this dictionary as a PrimitiveArray.
     pub fn keys(&self) -> &PrimitiveArray<K> {
         &self.keys
-    }
-
-    /// Returns an array view of the keys of this dictionary
-    pub fn keys_array(&self) -> PrimitiveArray<K> {
-        let data = self.data_ref();
-        let keys_data = ArrayData::new(
-            K::DATA_TYPE,
-            data.len(),
-            Some(data.null_count()),
-            data.null_buffer().cloned(),
-            data.offset(),
-            data.buffers().to_vec(),
-            vec![],
-        );
-        PrimitiveArray::<K>::from(keys_data)
     }
 
     /// Returns the lookup key by doing reverse dictionary lookup
@@ -379,7 +364,7 @@ mod tests {
         let test = vec!["a", "b", "c", "a"];
         let array: DictionaryArray<Int8Type> = test.into_iter().collect();
 
-        let keys = array.keys_array();
+        let keys = array.keys();
         assert_eq!(&DataType::Int8, keys.data_type());
         assert_eq!(0, keys.null_count());
         assert_eq!(&[0, 1, 2, 0], keys.values());
@@ -390,7 +375,7 @@ mod tests {
         let test = vec![Some("a"), None, Some("b"), None, None, Some("a")];
         let array: DictionaryArray<Int32Type> = test.into_iter().collect();
 
-        let keys = array.keys_array();
+        let keys = array.keys();
         assert_eq!(&DataType::Int32, keys.data_type());
         assert_eq!(3, keys.null_count());
 

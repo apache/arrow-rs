@@ -90,8 +90,8 @@ where
 {
     let left = left.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
     let right = right.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
-    let left_keys = left.keys_array();
-    let right_keys = right.keys_array();
+    let left_keys = left.keys();
+    let right_keys = right.keys();
 
     let left_values = StringArray::from(left.values().data().clone());
     let right_values = StringArray::from(right.values().data().clone());

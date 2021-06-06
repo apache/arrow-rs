@@ -297,7 +297,7 @@ fn dict_array_value_to_string<K: ArrowPrimitiveType>(
 ) -> Result<String> {
     let dict_array = colum.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
 
-    let keys_array = dict_array.keys_array();
+    let keys_array = dict_array.keys();
 
     if keys_array.is_null(row) {
         return Ok(String::from(""));

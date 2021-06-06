@@ -755,7 +755,7 @@ where
     I: ArrowNumericType,
     I::Native: ToPrimitive,
 {
-    let new_keys = take_primitive::<T, I>(&values.keys_array(), indices)?;
+    let new_keys = take_primitive::<T, I>(values.keys(), indices)?;
     let new_keys_data = new_keys.data_ref();
 
     let data = ArrayData::new(

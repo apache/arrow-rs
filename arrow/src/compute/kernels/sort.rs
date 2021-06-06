@@ -584,7 +584,7 @@ fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
 ) -> Result<UInt32Array> {
     let values: &DictionaryArray<T> = as_dictionary_array::<T>(values);
 
-    let keys: &PrimitiveArray<T> = &values.keys_array();
+    let keys: &PrimitiveArray<T> = values.keys();
 
     let dict = values.values();
     let dict: &StringArray = as_string_array(&dict);
@@ -1028,7 +1028,7 @@ mod tests {
             .as_any()
             .downcast_ref::<StringArray>()
             .expect("Unable to get dictionary values");
-        let sorted_keys = sorted.keys_array();
+        let sorted_keys = sorted.keys();
 
         assert_eq!(sorted_dict, dict);
 

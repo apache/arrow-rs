@@ -1370,7 +1370,8 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                     )
                 })?;
 
-            let keys_array: ArrayRef = Arc::new(dict_array.keys_array());
+            let keys_array: ArrayRef =
+                Arc::new(PrimitiveArray::<K>::from(dict_array.keys().data().clone()));
             let values_array = dict_array.values();
             let cast_keys = cast_with_options(&keys_array, to_index_type, &cast_options)?;
             let cast_values =
@@ -1450,7 +1451,8 @@ where
         cast_with_options(&dict_array.values(), to_type, cast_options)?;
 
     // Note take requires first casting the indices to u32
-    let keys_array: ArrayRef = Arc::new(dict_array.keys_array());
+    let keys_array: ArrayRef =
+        Arc::new(PrimitiveArray::<K>::from(dict_array.keys().data().clone()));
     let indicies = cast_with_options(&keys_array, &DataType::UInt32, cast_options)?;
     let u32_indicies =
         indicies
