@@ -2303,7 +2303,7 @@ mod tests {
         buffer.append(true);
         buffer.set_bit(0, false);
         assert_eq!(buffer.len(), 4);
-        assert_eq!(buffer.finish().as_slice(), &[0b1010 as u8]);
+        assert_eq!(buffer.finish().as_slice(), &[0b1010_u8]);
     }
 
     #[test]
@@ -2315,7 +2315,7 @@ mod tests {
         buffer.append(true);
         buffer.set_bit(3, false);
         assert_eq!(buffer.len(), 4);
-        assert_eq!(buffer.finish().as_slice(), &[0b0011 as u8]);
+        assert_eq!(buffer.finish().as_slice(), &[0b0011_u8]);
     }
 
     #[test]
@@ -2327,7 +2327,7 @@ mod tests {
         buffer.append(true);
         buffer.set_bit(1, false);
         assert_eq!(buffer.len(), 4);
-        assert_eq!(buffer.finish().as_slice(), &[0b1001 as u8]);
+        assert_eq!(buffer.finish().as_slice(), &[0b1001_u8]);
     }
 
     #[test]
@@ -2341,7 +2341,7 @@ mod tests {
         buffer.set_bit(1, false);
         buffer.set_bit(2, false);
         assert_eq!(buffer.len(), 5);
-        assert_eq!(buffer.finish().as_slice(), &[0b10001 as u8]);
+        assert_eq!(buffer.finish().as_slice(), &[0b10001_u8]);
     }
 
     #[test]
@@ -2352,7 +2352,7 @@ mod tests {
         buffer.set_bit(3, false);
         buffer.set_bit(9, false);
         assert_eq!(buffer.len(), 10);
-        assert_eq!(buffer.finish().as_slice(), &[0b11110110, 0b01]);
+        assert_eq!(buffer.finish().as_slice(), &[0b11110110_u8, 0b01_u8]);
     }
 
     #[test]
@@ -2368,7 +2368,7 @@ mod tests {
         buffer.set_bit(14, true);
         buffer.set_bit(13, false);
         assert_eq!(buffer.len(), 15);
-        assert_eq!(buffer.finish().as_slice(), &[0b01010110, 0b1011100]);
+        assert_eq!(buffer.finish().as_slice(), &[0b01010110_u8, 0b1011100_u8]);
     }
 
     #[test]
