@@ -167,7 +167,6 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                 .data_type()
                 .clone(),
         };
-        // println!("ArrowArrayReader::try_new, column: {}, data_type: {}", column_desc.path(), data_type);
         type PageIteratorItem = Result<(Page, Rc<RefCell<ColumnChunkContext>>)>;
         let page_iter = column_chunk_iterator
             // build iterator of pages across column chunks
@@ -236,10 +235,6 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
     // this method could fail, e.g. if the page encoding is not supported
     fn map_page(page: Page, column_chunk_context: Rc<RefCell<ColumnChunkContext>>, column_desc: &ColumnDescriptor) -> Result<PageDecoderTuple> 
     {
-        // println!(
-        //     "ArrowArrayReader::map_page, column: {}, page: {:?}, encoding: {:?}, num values: {:?}", 
-        //     column_desc.path(), page.page_type(), page.encoding(), page.num_values()
-        // );
         use crate::encodings::levels::LevelDecoder;
         match page {
             Page::DictionaryPage {
@@ -502,8 +497,6 @@ impl<C: ArrayConverter> ArrayReader for ArrowArrayReader<'static, C> {
         };
 
         // read a batch of values
-        // println!("ArrowArrayReader::next_batch, batch_size: {}, values_to_read: {}", batch_size, values_to_read);
-
         // converter only creates a no-null / all value array data
         let mut value_array_data = self.array_converter.convert_value_bytes(&mut self.value_decoder, values_to_read)?;
 
@@ -1272,6 +1265,8 @@ mod tests {
                 Some(&rep_levels[accu_len..(accu_len + array.len())]),
                 array_reader.get_rep_levels()
             );
+
+            assert_eq!(accu_len + array.len(), 200);
         }
     }
 

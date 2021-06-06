@@ -78,10 +78,9 @@ impl<'a> SlicesIterator<'a> {
         }
     }
 
+    /// Counts the number of set bits in the filter array.
     fn filter_count(&self) -> usize {
         let values = self.filter.values();
-        // this operation is performed before iteration
-        // because it is fast and allows reserving all the needed memory
         values.count_set_bits_offset(self.filter.offset(), self.filter.len())
     }
 
