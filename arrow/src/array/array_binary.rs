@@ -613,6 +613,32 @@ impl Array for FixedSizeBinaryArray {
 }
 
 /// A type of `DecimalArray` whose elements are binaries.
+///
+/// # Examples
+///
+/// ```
+///    use arrow::array::{ArrayData, Array, DecimalArray};
+///    use arrow::buffer::Buffer;
+///    use arrow::datatypes::DataType;
+///    // let val_8887: [u8; 16] = [192, 219, 180, 17, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+///    // let val_neg_8887: [u8; 16] = [64, 36, 75, 238, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255];
+///    let values: [u8; 32] = [
+///        192, 219, 180, 17, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 36, 75, 238, 253,
+///        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+///    ];
+///    let array_data = ArrayData::builder(DataType::Decimal(23, 6))
+///        .len(2)
+///        .add_buffer(Buffer::from(&values[..]))
+///        .build();
+///    let decimal_array = DecimalArray::from(array_data);
+///    assert_eq!(2, decimal_array.len());
+///    assert_eq!(8_887_000_000, decimal_array.value(0));
+///    assert_eq!(-8_887_000_000, decimal_array.value(1));
+///    assert_eq!(16, decimal_array.value_length());
+///    assert_eq!(23, decimal_array.precision());
+///    assert_eq!(6, decimal_array.scale());
+/// ```
+///
 pub struct DecimalArray {
     data: ArrayData,
     value_data: RawPtrBox<u8>,
