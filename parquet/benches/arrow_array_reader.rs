@@ -18,6 +18,7 @@
 use std::{collections::VecDeque, sync::Arc};
 use criterion::{criterion_group, criterion_main, Criterion};
 use parquet::{arrow::array_reader::ArrayReader, basic::Encoding, column::page::PageIterator, data_type::{Int32Type, ByteArrayType}, schema::types::{ColumnDescPtr, SchemaDescPtr}};
+use parquet::util::{InMemoryPageIterator, DataPageBuilderImpl, DataPageBuilder};
 
 fn build_test_schema() -> SchemaDescPtr {
     use parquet::schema::{types::SchemaDescriptor, parser::parse_message_type};
@@ -51,7 +52,6 @@ pub fn seedable_rng() -> StdRng {
 }
 
 fn build_plain_encoded_int32_page_iterator(schema: SchemaDescPtr, column_desc: ColumnDescPtr, null_density: f32) -> impl PageIterator + Clone {
-    use parquet::util::test_common::page_util::{InMemoryPageIterator, DataPageBuilderImpl, DataPageBuilder};
     let max_def_level = column_desc.max_def_level();
     let max_rep_level = column_desc.max_rep_level();
     let rep_levels = vec![0; VALUES_PER_PAGE];
@@ -89,7 +89,6 @@ fn build_plain_encoded_int32_page_iterator(schema: SchemaDescPtr, column_desc: C
 }
 
 fn build_dictionary_encoded_int32_page_iterator(schema: SchemaDescPtr, column_desc: ColumnDescPtr, null_density: f32) -> impl PageIterator + Clone {
-    use parquet::util::test_common::page_util::{InMemoryPageIterator, DataPageBuilderImpl, DataPageBuilder};
     use parquet::encoding::{Encoder, DictEncoder};
     let max_def_level = column_desc.max_def_level();
     let max_rep_level = column_desc.max_rep_level();
@@ -152,7 +151,6 @@ fn build_dictionary_encoded_int32_page_iterator(schema: SchemaDescPtr, column_de
 }
 
 fn build_plain_encoded_string_page_iterator(schema: SchemaDescPtr, column_desc: ColumnDescPtr, null_density: f32) -> impl PageIterator + Clone {
-    use parquet::util::test_common::page_util::{InMemoryPageIterator, DataPageBuilderImpl, DataPageBuilder};
     let max_def_level = column_desc.max_def_level();
     let max_rep_level = column_desc.max_rep_level();
     let rep_levels = vec![0; VALUES_PER_PAGE];
@@ -189,7 +187,6 @@ fn build_plain_encoded_string_page_iterator(schema: SchemaDescPtr, column_desc: 
 }
 
 fn build_dictionary_encoded_string_page_iterator(schema: SchemaDescPtr, column_desc: ColumnDescPtr, null_density: f32) -> impl PageIterator + Clone {
-    use parquet::util::test_common::page_util::{InMemoryPageIterator, DataPageBuilderImpl, DataPageBuilder};
     use parquet::encoding::{Encoder, DictEncoder};
     let max_def_level = column_desc.max_def_level();
     let max_rep_level = column_desc.max_rep_level();
