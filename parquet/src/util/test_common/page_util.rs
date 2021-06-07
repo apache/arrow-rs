@@ -217,9 +217,9 @@ impl<I: Iterator<Item = Vec<Page>>> Iterator for InMemoryPageIterator<I> {
     type Item = Result<Box<dyn PageReader>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.page_reader_iter.next().map(
-            |x| Ok(Box::new(InMemoryPageReader::new(x)) as Box<dyn PageReader>)
-        )
+        self.page_reader_iter
+            .next()
+            .map(|x| Ok(Box::new(InMemoryPageReader::new(x)) as Box<dyn PageReader>))
     }
 }
 

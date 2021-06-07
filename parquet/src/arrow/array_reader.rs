@@ -1499,7 +1499,9 @@ impl<'a> ArrayReaderBuilder {
                             arrow_type,
                         )?))
                     } else {
-                        use crate::arrow::arrow_array_reader::{StringArrayConverter, ArrowArrayReader};
+                        use crate::arrow::arrow_array_reader::{
+                            ArrowArrayReader, StringArrayConverter,
+                        };
                         let converter = StringArrayConverter::new();
                         Ok(Box::new(ArrowArrayReader::try_new(
                             *page_iterator,

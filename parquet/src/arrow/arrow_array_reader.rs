@@ -15,28 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, collections::VecDeque, marker::PhantomData};
-use std::{rc::Rc, cell::RefCell};
-use arrow::{array::{ArrayRef, Int16Array}, buffer::MutableBuffer, datatypes::{DataType as ArrowType, ToByteSlice}};
-use crate::{column::page::{Page, PageIterator}, memory::ByteBufferPtr, schema::types::{ColumnDescPtr, ColumnDescriptor}};
-use crate::arrow::schema::parquet_to_arrow_field;
-use crate::errors::{ParquetError, Result};
-use crate::basic::Encoding;
 use super::array_reader::ArrayReader;
+use crate::arrow::schema::parquet_to_arrow_field;
+use crate::basic::Encoding;
+use crate::errors::{ParquetError, Result};
+use crate::{
+    column::page::{Page, PageIterator},
+    memory::ByteBufferPtr,
+    schema::types::{ColumnDescPtr, ColumnDescriptor},
+};
+use arrow::{
+    array::{ArrayRef, Int16Array},
+    buffer::MutableBuffer,
+    datatypes::{DataType as ArrowType, ToByteSlice},
+};
+use std::{any::Any, collections::VecDeque, marker::PhantomData};
+use std::{cell::RefCell, rc::Rc};
 
-struct UnzipIter<Source, Target, State>
-{
+struct UnzipIter<Source, Target, State> {
     shared_state: Rc<RefCell<State>>,
     select_item_buffer: fn(&mut State) -> &mut VecDeque<Target>,
     consume_source_item: fn(source_item: Source, state: &mut State) -> Target,
 }
 
-impl<Source, Target, State> UnzipIter<Source, Target, State>
-{
+impl<Source, Target, State> UnzipIter<Source, Target, State> {
     fn new(
-        shared_state: Rc<RefCell<State>>, 
-        item_buffer_selector: fn(&mut State) -> &mut VecDeque<Target>, 
-        source_item_consumer: fn(source_item: Source, state: &mut State) -> Target
+        shared_state: Rc<RefCell<State>>,
+        item_buffer_selector: fn(&mut State) -> &mut VecDeque<Target>,
+        source_item_consumer: fn(source_item: Source, state: &mut State) -> Target,
     ) -> Self {
         Self {
             shared_state,
@@ -51,13 +57,17 @@ trait UnzipIterState<T> {
     fn source_iter(&mut self) -> &mut Self::SourceIter;
 }
 
-impl<Source, Target, State: UnzipIterState<Source>> Iterator for UnzipIter<Source, Target, State> {
+impl<Source, Target, State: UnzipIterState<Source>> Iterator
+    for UnzipIter<Source, Target, State>
+{
     type Item = Target;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut inner = self.shared_state.borrow_mut();
         // try to get one from the stored data
-        (self.select_item_buffer)(&mut *inner).pop_front().or_else(|| 
+        (self.select_item_buffer)(&mut *inner)
+            .pop_front()
+            .or_else(||
             // nothing stored, we need a new element.
             inner.source_iter().next().map(|s| {
                 (self.consume_source_item)(s, &mut inner)
@@ -72,7 +82,9 @@ struct PageBufferUnzipIterState<V, L, It> {
     rep_level_iter_buffer: VecDeque<L>,
 }
 
-impl<V, L, It: Iterator<Item = (V, L, L)>> UnzipIterState<(V, L, L)> for PageBufferUnzipIterState<V, L, It> {
+impl<V, L, It: Iterator<Item = (V, L, L)>> UnzipIterState<(V, L, L)>
+    for PageBufferUnzipIterState<V, L, It>
+{
     type SourceIter = It;
 
     #[inline]
@@ -81,12 +93,18 @@ impl<V, L, It: Iterator<Item = (V, L, L)>> UnzipIterState<(V, L, L)> for PageBuf
     }
 }
 
-type ValueUnzipIter<V, L, It> = UnzipIter<(V, L, L), V, PageBufferUnzipIterState<V, L, It>>;
-type LevelUnzipIter<V, L, It> = UnzipIter<(V, L, L), L, PageBufferUnzipIterState<V, L, It>>;
-type PageUnzipResult<V, L, It> = (ValueUnzipIter<V, L, It>, LevelUnzipIter<V, L, It>, LevelUnzipIter<V, L, It>);
+type ValueUnzipIter<V, L, It> =
+    UnzipIter<(V, L, L), V, PageBufferUnzipIterState<V, L, It>>;
+type LevelUnzipIter<V, L, It> =
+    UnzipIter<(V, L, L), L, PageBufferUnzipIterState<V, L, It>>;
+type PageUnzipResult<V, L, It> = (
+    ValueUnzipIter<V, L, It>,
+    LevelUnzipIter<V, L, It>,
+    LevelUnzipIter<V, L, It>,
+);
 
 fn unzip_iter<V, L, It: Iterator<Item = (V, L, L)>>(it: It) -> PageUnzipResult<V, L, It> {
-    let shared_data = Rc::new(RefCell::new(PageBufferUnzipIterState { 
+    let shared_data = Rc::new(RefCell::new(PageBufferUnzipIterState {
         iter: it,
         value_iter_buffer: VecDeque::new(),
         def_level_iter_buffer: VecDeque::new(),
@@ -96,11 +114,11 @@ fn unzip_iter<V, L, It: Iterator<Item = (V, L, L)>>(it: It) -> PageUnzipResult<V
     let value_iter = UnzipIter::new(
         shared_data.clone(),
         |state| &mut state.value_iter_buffer,
-        |(v, d, r), state| { 
-            state.def_level_iter_buffer.push_back(d); 
+        |(v, d, r), state| {
+            state.def_level_iter_buffer.push_back(d);
             state.rep_level_iter_buffer.push_back(r);
             v
-        }, 
+        },
     );
 
     let def_level_iter = UnzipIter::new(
@@ -110,7 +128,7 @@ fn unzip_iter<V, L, It: Iterator<Item = (V, L, L)>>(it: It) -> PageUnzipResult<V
             state.value_iter_buffer.push_back(v);
             state.rep_level_iter_buffer.push_back(r);
             d
-        }, 
+        },
     );
 
     let rep_level_iter = UnzipIter::new(
@@ -120,14 +138,18 @@ fn unzip_iter<V, L, It: Iterator<Item = (V, L, L)>>(it: It) -> PageUnzipResult<V
             state.value_iter_buffer.push_back(v);
             state.def_level_iter_buffer.push_back(d);
             r
-        }, 
+        },
     );
 
     (value_iter, def_level_iter, rep_level_iter)
 }
 
 pub trait ArrayConverter {
-    fn convert_value_bytes(&self, value_decoder: &mut impl ValueDecoder, num_values: usize) -> Result<arrow::array::ArrayData>;
+    fn convert_value_bytes(
+        &self,
+        value_decoder: &mut impl ValueDecoder,
+        num_values: usize,
+    ) -> Result<arrow::array::ArrayData>;
 }
 
 pub struct ArrowArrayReader<'a, C: ArrayConverter + 'a> {
@@ -157,10 +179,19 @@ impl ColumnChunkContext {
     }
 }
 
-type PageDecoderTuple = (Box<dyn ValueDecoder>, Box<dyn ValueDecoder>, Box<dyn ValueDecoder>);
+type PageDecoderTuple = (
+    Box<dyn ValueDecoder>,
+    Box<dyn ValueDecoder>,
+    Box<dyn ValueDecoder>,
+);
 
 impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
-    pub fn try_new<P: PageIterator + 'a>(column_chunk_iterator: P, column_desc: ColumnDescPtr, array_converter: C, arrow_type: Option<ArrowType>) -> Result<Self> {
+    pub fn try_new<P: PageIterator + 'a>(
+        column_chunk_iterator: P,
+        column_desc: ColumnDescPtr,
+        array_converter: C,
+        arrow_type: Option<ArrowType>,
+    ) -> Result<Self> {
         let data_type = match arrow_type {
             Some(t) => t,
             None => parquet_to_arrow_field(column_desc.as_ref())?
@@ -174,32 +205,32 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                 // attach column chunk context
                 let context = Rc::new(RefCell::new(ColumnChunkContext::new()));
                 match x {
-                    Ok(page_reader) => Box::new(page_reader.map(
-                        move |pr| pr.map(|p| (p, context.clone()))
-                    )),
+                    Ok(page_reader) => Box::new(
+                        page_reader.map(move |pr| pr.map(|p| (p, context.clone()))),
+                    ),
                     // errors from reading column chunks / row groups are propagated to page level
-                    Err(e) => Box::new(std::iter::once(Err(e)))
+                    Err(e) => Box::new(std::iter::once(Err(e))),
                 }
             });
         // capture a clone of column_desc in closure so that it can outlive current function
         let map_page_fn_factory = |column_desc: ColumnDescPtr| {
-            move |x: Result<(Page, Rc<RefCell<ColumnChunkContext>>)>| x.and_then(
-                |(page, context)| Self::map_page(page, context, column_desc.as_ref())
-            )
+            move |x: Result<(Page, Rc<RefCell<ColumnChunkContext>>)>| {
+                x.and_then(|(page, context)| {
+                    Self::map_page(page, context, column_desc.as_ref())
+                })
+            }
         };
         let map_page_fn = map_page_fn_factory(column_desc.clone());
         // map page iterator into tuple of buffer iterators for (values, def levels, rep levels)
         // errors from lower levels are surfaced through the value decoder iterator
-        let decoder_iter = page_iter
-            .map(map_page_fn)
-            .map(|x| match x {
-                Ok(iter_tuple) => iter_tuple,
-                // errors from reading pages are propagated to decoder iterator level
-                Err(e) => Self::map_page_error(e)
-            });
+        let decoder_iter = page_iter.map(map_page_fn).map(|x| match x {
+            Ok(iter_tuple) => iter_tuple,
+            // errors from reading pages are propagated to decoder iterator level
+            Err(e) => Self::map_page_error(e),
+        });
         // split tuple iterator into separate iterators for (values, def levels, rep levels)
         let (value_iter, def_level_iter, rep_level_iter) = unzip_iter(decoder_iter);
-        
+
         Ok(Self {
             column_desc,
             data_type,
@@ -222,8 +253,7 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
         column_desc.max_rep_level() > 0
     }
 
-    fn map_page_error(err: ParquetError) -> PageDecoderTuple
-    {
+    fn map_page_error(err: ParquetError) -> PageDecoderTuple {
         (
             Box::new(<dyn ValueDecoder>::once(Err(err.clone()))),
             Box::new(<dyn ValueDecoder>::once(Err(err.clone()))),
@@ -233,8 +263,11 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
 
     // Split Result<Page> into Result<(Iterator<Values>, Iterator<DefLevels>, Iterator<RepLevels>)>
     // this method could fail, e.g. if the page encoding is not supported
-    fn map_page(page: Page, column_chunk_context: Rc<RefCell<ColumnChunkContext>>, column_desc: &ColumnDescriptor) -> Result<PageDecoderTuple> 
-    {
+    fn map_page(
+        page: Page,
+        column_chunk_context: Rc<RefCell<ColumnChunkContext>>,
+        column_desc: &ColumnDescriptor,
+    ) -> Result<PageDecoderTuple> {
         use crate::encodings::levels::LevelDecoder;
         match page {
             Page::DictionaryPage {
@@ -245,10 +278,17 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
             } => {
                 let mut column_chunk_context = column_chunk_context.borrow_mut();
                 if column_chunk_context.dictionary_values.is_some() {
-                    return Err(general_err!("Column chunk cannot have more than one dictionary"));
+                    return Err(general_err!(
+                        "Column chunk cannot have more than one dictionary"
+                    ));
                 }
                 // create plain decoder for dictionary values
-                let mut dict_decoder = Self::get_dictionary_page_decoder(buf, num_values as usize, encoding, column_desc)?;
+                let mut dict_decoder = Self::get_dictionary_page_decoder(
+                    buf,
+                    num_values as usize,
+                    encoding,
+                    column_desc,
+                )?;
                 // decode and cache dictionary values
                 let dictionary_values = dict_decoder.read_dictionary_values()?;
                 column_chunk_context.set_dictionary(dictionary_values);
@@ -270,46 +310,48 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
             } => {
                 let mut buffer_ptr = buf;
                 // create rep level decoder iterator
-                let rep_level_iter: Box<dyn ValueDecoder> = if Self::rep_levels_available(&column_desc) {
-                    let mut rep_decoder =
-                        LevelDecoder::v1(rep_level_encoding, column_desc.max_rep_level());
-                    let rep_level_byte_len = rep_decoder.set_data(
-                        num_values as usize,
-                        buffer_ptr.all(),
-                    );
-                    // advance buffer pointer
-                    buffer_ptr = buffer_ptr.start_from(rep_level_byte_len);
-                    Box::new(LevelValueDecoder::new(rep_decoder))
-                }
-                else {
-                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General("rep levels are not available".to_string()))))
-                };
+                let rep_level_iter: Box<dyn ValueDecoder> =
+                    if Self::rep_levels_available(&column_desc) {
+                        let mut rep_decoder = LevelDecoder::v1(
+                            rep_level_encoding,
+                            column_desc.max_rep_level(),
+                        );
+                        let rep_level_byte_len =
+                            rep_decoder.set_data(num_values as usize, buffer_ptr.all());
+                        // advance buffer pointer
+                        buffer_ptr = buffer_ptr.start_from(rep_level_byte_len);
+                        Box::new(LevelValueDecoder::new(rep_decoder))
+                    } else {
+                        Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General(
+                            "rep levels are not available".to_string(),
+                        ))))
+                    };
                 // create def level decoder iterator
-                let def_level_iter: Box<dyn ValueDecoder> = if Self::def_levels_available(&column_desc) {
-                    let mut def_decoder = LevelDecoder::v1(
-                        def_level_encoding,
-                        column_desc.max_def_level(),
-                    );
-                    let def_levels_byte_len = def_decoder.set_data(
-                        num_values as usize,
-                        buffer_ptr.all(),
-                    );
-                    // advance buffer pointer
-                    buffer_ptr = buffer_ptr.start_from(def_levels_byte_len);
-                    Box::new(LevelValueDecoder::new(def_decoder))
-                }
-                else {
-                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General("def levels are not available".to_string()))))
-                };
+                let def_level_iter: Box<dyn ValueDecoder> =
+                    if Self::def_levels_available(&column_desc) {
+                        let mut def_decoder = LevelDecoder::v1(
+                            def_level_encoding,
+                            column_desc.max_def_level(),
+                        );
+                        let def_levels_byte_len =
+                            def_decoder.set_data(num_values as usize, buffer_ptr.all());
+                        // advance buffer pointer
+                        buffer_ptr = buffer_ptr.start_from(def_levels_byte_len);
+                        Box::new(LevelValueDecoder::new(def_decoder))
+                    } else {
+                        Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General(
+                            "def levels are not available".to_string(),
+                        ))))
+                    };
                 // create value decoder iterator
                 let value_iter = Self::get_value_decoder(
-                    buffer_ptr, num_values as usize, encoding, column_desc, column_chunk_context
+                    buffer_ptr,
+                    num_values as usize,
+                    encoding,
+                    column_desc,
+                    column_chunk_context,
                 )?;
-                Ok((
-                    value_iter,
-                    def_level_iter,
-                    rep_level_iter
-                ))
+                Ok((value_iter, def_level_iter, rep_level_iter))
             }
             Page::DataPageV2 {
                 buf,
@@ -324,61 +366,73 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
             } => {
                 let mut offset = 0;
                 // create rep level decoder iterator
-                let rep_level_iter: Box<dyn ValueDecoder> = if Self::rep_levels_available(&column_desc) {
-                    let rep_levels_byte_len = rep_levels_byte_len as usize;
-                    let mut rep_decoder =
-                        LevelDecoder::v2(column_desc.max_rep_level());
-                    rep_decoder.set_data_range(
-                        num_values as usize,
-                        &buf,
-                        offset,
-                        rep_levels_byte_len,
-                    );
-                    offset += rep_levels_byte_len;
-                    Box::new(LevelValueDecoder::new(rep_decoder))
-                }
-                else {
-                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General("rep levels are not available".to_string()))))
-                };
+                let rep_level_iter: Box<dyn ValueDecoder> =
+                    if Self::rep_levels_available(&column_desc) {
+                        let rep_levels_byte_len = rep_levels_byte_len as usize;
+                        let mut rep_decoder =
+                            LevelDecoder::v2(column_desc.max_rep_level());
+                        rep_decoder.set_data_range(
+                            num_values as usize,
+                            &buf,
+                            offset,
+                            rep_levels_byte_len,
+                        );
+                        offset += rep_levels_byte_len;
+                        Box::new(LevelValueDecoder::new(rep_decoder))
+                    } else {
+                        Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General(
+                            "rep levels are not available".to_string(),
+                        ))))
+                    };
                 // create def level decoder iterator
-                let def_level_iter: Box<dyn ValueDecoder> = if Self::def_levels_available(&column_desc) {
-                    let def_levels_byte_len = def_levels_byte_len as usize;
-                    let mut def_decoder =
-                        LevelDecoder::v2(column_desc.max_def_level());
-                    def_decoder.set_data_range(
-                        num_values as usize,
-                        &buf,
-                        offset,
-                        def_levels_byte_len,
-                    );
-                    offset += def_levels_byte_len;
-                    Box::new(LevelValueDecoder::new(def_decoder))
-                }
-                else {
-                    Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General("def levels are not available".to_string()))))
-                };
+                let def_level_iter: Box<dyn ValueDecoder> =
+                    if Self::def_levels_available(&column_desc) {
+                        let def_levels_byte_len = def_levels_byte_len as usize;
+                        let mut def_decoder =
+                            LevelDecoder::v2(column_desc.max_def_level());
+                        def_decoder.set_data_range(
+                            num_values as usize,
+                            &buf,
+                            offset,
+                            def_levels_byte_len,
+                        );
+                        offset += def_levels_byte_len;
+                        Box::new(LevelValueDecoder::new(def_decoder))
+                    } else {
+                        Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General(
+                            "def levels are not available".to_string(),
+                        ))))
+                    };
 
                 // create value decoder iterator
                 let values_buffer = buf.start_from(offset);
                 let value_iter = Self::get_value_decoder(
-                    values_buffer, num_values as usize, encoding, column_desc, column_chunk_context
+                    values_buffer,
+                    num_values as usize,
+                    encoding,
+                    column_desc,
+                    column_chunk_context,
                 )?;
-                Ok((
-                    value_iter,
-                    def_level_iter,
-                    rep_level_iter
-                ))
+                Ok((value_iter, def_level_iter, rep_level_iter))
             }
         }
     }
 
-    fn get_dictionary_page_decoder(values_buffer: ByteBufferPtr, num_values: usize, mut encoding: Encoding, column_desc: &ColumnDescriptor) -> Result<Box<dyn DictionaryValueDecoder>> {
+    fn get_dictionary_page_decoder(
+        values_buffer: ByteBufferPtr,
+        num_values: usize,
+        mut encoding: Encoding,
+        column_desc: &ColumnDescriptor,
+    ) -> Result<Box<dyn DictionaryValueDecoder>> {
         if encoding == Encoding::PLAIN || encoding == Encoding::PLAIN_DICTIONARY {
             encoding = Encoding::RLE_DICTIONARY
         }
 
         if encoding == Encoding::RLE_DICTIONARY {
-            Ok(Self::get_plain_value_decoder(values_buffer, num_values, column_desc).into_dictionary_decoder())
+            Ok(
+                Self::get_plain_value_decoder(values_buffer, num_values, column_desc)
+                    .into_dictionary_decoder(),
+            )
         } else {
             Err(nyi_err!(
                 "Invalid/Unsupported encoding type for dictionary: {}",
@@ -387,32 +441,45 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
         }
     }
 
-    fn get_value_decoder(values_buffer: ByteBufferPtr, num_values: usize, mut encoding: Encoding, column_desc: &ColumnDescriptor, column_chunk_context: Rc<RefCell<ColumnChunkContext>>) -> Result<Box<dyn ValueDecoder>> {
+    fn get_value_decoder(
+        values_buffer: ByteBufferPtr,
+        num_values: usize,
+        mut encoding: Encoding,
+        column_desc: &ColumnDescriptor,
+        column_chunk_context: Rc<RefCell<ColumnChunkContext>>,
+    ) -> Result<Box<dyn ValueDecoder>> {
         if encoding == Encoding::PLAIN_DICTIONARY {
             encoding = Encoding::RLE_DICTIONARY;
         }
 
         match encoding {
-            Encoding::PLAIN => Ok(Self::get_plain_value_decoder(values_buffer, num_values, column_desc).into_value_decoder()),
+            Encoding::PLAIN => {
+                Ok(
+                    Self::get_plain_value_decoder(values_buffer, num_values, column_desc)
+                        .into_value_decoder(),
+                )
+            }
             Encoding::RLE_DICTIONARY => {
                 if column_chunk_context.borrow().dictionary_values.is_some() {
                     let value_bit_len = Self::get_column_physical_bit_len(column_desc);
-                    let dictionary_decoder: Box<dyn ValueDecoder> = if value_bit_len == 0 {
+                    let dictionary_decoder: Box<dyn ValueDecoder> = if value_bit_len == 0
+                    {
                         Box::new(VariableLenDictionaryDecoder::new(
-                            column_chunk_context, values_buffer, num_values
+                            column_chunk_context,
+                            values_buffer,
+                            num_values,
                         ))
-                    }
-                    else {
+                    } else {
                         Box::new(FixedLenDictionaryDecoder::new(
-                            column_chunk_context, values_buffer, num_values, value_bit_len
+                            column_chunk_context,
+                            values_buffer,
+                            num_values,
+                            value_bit_len,
                         ))
                     };
                     Ok(dictionary_decoder)
-                }
-                else {
-                    Err(general_err!(
-                        "Dictionary values have not been initialized."
-                    ))
+                } else {
+                    Err(general_err!("Dictionary values have not been initialized."))
                 }
             }
             // Encoding::RLE => Box::new(RleValueDecoder::new()),
@@ -437,20 +504,31 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
         }
     }
 
-    fn get_plain_value_decoder(values_buffer: ByteBufferPtr, num_values: usize, column_desc: &ColumnDescriptor) -> Box<dyn PlainValueDecoder> {
+    fn get_plain_value_decoder(
+        values_buffer: ByteBufferPtr,
+        num_values: usize,
+        column_desc: &ColumnDescriptor,
+    ) -> Box<dyn PlainValueDecoder> {
         let value_bit_len = Self::get_column_physical_bit_len(column_desc);
         if value_bit_len == 0 {
             Box::new(VariableLenPlainDecoder::new(values_buffer, num_values))
-        }
-        else {
-            Box::new(FixedLenPlainDecoder::new(values_buffer, num_values, value_bit_len))
+        } else {
+            Box::new(FixedLenPlainDecoder::new(
+                values_buffer,
+                num_values,
+                value_bit_len,
+            ))
         }
     }
 
-    fn build_level_array(level_decoder: &mut impl ValueDecoder, batch_size: usize) -> Result<Int16Array> {
+    fn build_level_array(
+        level_decoder: &mut impl ValueDecoder,
+        batch_size: usize,
+    ) -> Result<Int16Array> {
         use arrow::datatypes::Int16Type;
         let level_converter = PrimitiveArrayConverter::<Int16Type>::new();
-        let array_data = level_converter.convert_value_bytes(level_decoder, batch_size)?;
+        let array_data =
+            level_converter.convert_value_bytes(level_decoder, batch_size)?;
         Ok(Int16Array::from(array_data))
     }
 }
@@ -467,38 +545,46 @@ impl<C: ArrayConverter> ArrayReader for ArrowArrayReader<'static, C> {
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
         if Self::rep_levels_available(&self.column_desc) {
             // read rep levels if available
-            let rep_level_array = Self::build_level_array(&mut self.rep_level_decoder, batch_size)?;
+            let rep_level_array =
+                Self::build_level_array(&mut self.rep_level_decoder, batch_size)?;
             self.last_rep_levels = Some(rep_level_array);
         }
-        
+
         // check if def levels are available
-        let (values_to_read, null_bitmap_array) = if !Self::def_levels_available(&self.column_desc) {
-            // if no def levels - just read (up to) batch_size values
-            (batch_size, None)
-        }
-        else {
-            // if def levels are available - they determine how many values will be read
-            // decode def levels, return first error if any
-            let def_level_array = Self::build_level_array(&mut self.def_level_decoder, batch_size)?;
-            let def_level_count = def_level_array.len();
-            // use eq_scalar to efficiently build null bitmap array from def levels
-            let null_bitmap_array = arrow::compute::eq_scalar(&def_level_array, self.column_desc.max_def_level())?;
-            self.last_def_levels = Some(def_level_array);
-            // efficiently calculate values to read
-            let values_to_read = null_bitmap_array.values().count_set_bits_offset(0, def_level_count);
-            let maybe_null_bitmap = if values_to_read != null_bitmap_array.len() {
-                Some(null_bitmap_array)
-            }
-            else {
-                // shortcut if no NULLs
-                None
+        let (values_to_read, null_bitmap_array) =
+            if !Self::def_levels_available(&self.column_desc) {
+                // if no def levels - just read (up to) batch_size values
+                (batch_size, None)
+            } else {
+                // if def levels are available - they determine how many values will be read
+                // decode def levels, return first error if any
+                let def_level_array =
+                    Self::build_level_array(&mut self.def_level_decoder, batch_size)?;
+                let def_level_count = def_level_array.len();
+                // use eq_scalar to efficiently build null bitmap array from def levels
+                let null_bitmap_array = arrow::compute::eq_scalar(
+                    &def_level_array,
+                    self.column_desc.max_def_level(),
+                )?;
+                self.last_def_levels = Some(def_level_array);
+                // efficiently calculate values to read
+                let values_to_read = null_bitmap_array
+                    .values()
+                    .count_set_bits_offset(0, def_level_count);
+                let maybe_null_bitmap = if values_to_read != null_bitmap_array.len() {
+                    Some(null_bitmap_array)
+                } else {
+                    // shortcut if no NULLs
+                    None
+                };
+                (values_to_read, maybe_null_bitmap)
             };
-            (values_to_read, maybe_null_bitmap)
-        };
 
         // read a batch of values
         // converter only creates a no-null / all value array data
-        let mut value_array_data = self.array_converter.convert_value_bytes(&mut self.value_decoder, values_to_read)?;
+        let mut value_array_data = self
+            .array_converter
+            .convert_value_bytes(&mut self.value_decoder, values_to_read)?;
 
         if let Some(null_bitmap_array) = null_bitmap_array {
             // Only if def levels are available - insert null values efficiently using MutableArrayData.
@@ -506,24 +592,30 @@ impl<C: ArrayConverter> ArrayReader for ArrowArrayReader<'static, C> {
             // With a small number of NULLs, this will only be a few copies of large byte sequences.
             let actual_batch_size = null_bitmap_array.len();
             // use_nulls is false, because null_bitmap_array is already calculated and re-used
-            let mut mutable = arrow::array::MutableArrayData::new(vec![&value_array_data], false, actual_batch_size);
+            let mut mutable = arrow::array::MutableArrayData::new(
+                vec![&value_array_data],
+                false,
+                actual_batch_size,
+            );
             // SlicesIterator slices only the true values, NULLs are inserted to fill any gaps
-            arrow::compute::SlicesIterator::new(&null_bitmap_array).for_each(|(start, end)| {
-                // the gap needs to be filled with NULLs
-                if start > mutable.len() {
-                    let nulls_to_add = start - mutable.len();
-                    mutable.extend_nulls(nulls_to_add);
-                }
-                // fill values, adjust start and end with NULL count so far
-                let nulls_added = mutable.null_count();
-                mutable.extend(0, start - nulls_added, end - nulls_added);
-            });
+            arrow::compute::SlicesIterator::new(&null_bitmap_array).for_each(
+                |(start, end)| {
+                    // the gap needs to be filled with NULLs
+                    if start > mutable.len() {
+                        let nulls_to_add = start - mutable.len();
+                        mutable.extend_nulls(nulls_to_add);
+                    }
+                    // fill values, adjust start and end with NULL count so far
+                    let nulls_added = mutable.null_count();
+                    mutable.extend(0, start - nulls_added, end - nulls_added);
+                },
+            );
             // any remaining part is NULLs
             if mutable.len() < actual_batch_size {
                 let nulls_to_add = actual_batch_size - mutable.len();
                 mutable.extend_nulls(nulls_to_add);
             }
-            
+
             value_array_data = mutable
                 .into_builder()
                 .null_bit_buffer(null_bitmap_array.values().clone())
@@ -549,7 +641,11 @@ impl<C: ArrayConverter> ArrayReader for ArrowArrayReader<'static, C> {
 use crate::encodings::rle::RleDecoder;
 
 pub trait ValueDecoder {
-    fn read_value_bytes(&mut self, num_values: usize, read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize>;
+    fn read_value_bytes(
+        &mut self,
+        num_values: usize,
+        read_bytes: &mut dyn FnMut(&[u8], usize),
+    ) -> Result<usize>;
 }
 
 trait DictionaryValueDecoder {
@@ -561,8 +657,9 @@ trait PlainValueDecoder: ValueDecoder + DictionaryValueDecoder {
     fn into_dictionary_decoder(self: Box<Self>) -> Box<dyn DictionaryValueDecoder>;
 }
 
-impl<T> PlainValueDecoder for T 
-where T: ValueDecoder + DictionaryValueDecoder + 'static
+impl<T> PlainValueDecoder for T
+where
+    T: ValueDecoder + DictionaryValueDecoder + 'static,
 {
     fn into_value_decoder(self: Box<T>) -> Box<dyn ValueDecoder> {
         self
@@ -585,7 +682,11 @@ impl dyn ValueDecoder {
 
 impl ValueDecoder for Box<dyn ValueDecoder> {
     #[inline]
-    fn read_value_bytes(&mut self, num_values: usize, read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize> {
+    fn read_value_bytes(
+        &mut self,
+        num_values: usize,
+        read_bytes: &mut dyn FnMut(&[u8], usize),
+    ) -> Result<usize> {
         self.as_mut().read_value_bytes(num_values, read_bytes)
     }
 }
@@ -596,14 +697,16 @@ struct SingleValueDecoder {
 
 impl SingleValueDecoder {
     fn new(value: Result<usize>) -> Self {
-        Self {
-            value,
-        }
+        Self { value }
     }
 }
 
 impl ValueDecoder for SingleValueDecoder {
-    fn read_value_bytes(&mut self, _num_values: usize, _read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize> {
+    fn read_value_bytes(
+        &mut self,
+        _num_values: usize,
+        _read_bytes: &mut dyn FnMut(&[u8], usize),
+    ) -> Result<usize> {
         self.value.clone()
     }
 }
@@ -623,8 +726,14 @@ impl<I: Iterator<Item = Box<dyn ValueDecoder>>> CompositeValueDecoder<I> {
     }
 }
 
-impl<I: Iterator<Item = Box<dyn ValueDecoder>>> ValueDecoder for CompositeValueDecoder<I> {
-    fn read_value_bytes(&mut self, num_values: usize, read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize> {
+impl<I: Iterator<Item = Box<dyn ValueDecoder>>> ValueDecoder
+    for CompositeValueDecoder<I>
+{
+    fn read_value_bytes(
+        &mut self,
+        num_values: usize,
+        read_bytes: &mut dyn FnMut(&[u8], usize),
+    ) -> Result<usize> {
         let mut values_to_read = num_values;
         while values_to_read > 0 {
             let value_decoder = match self.current_decoder.as_mut() {
@@ -633,11 +742,11 @@ impl<I: Iterator<Item = Box<dyn ValueDecoder>>> ValueDecoder for CompositeValueD
                 None => break,
             };
             while values_to_read > 0 {
-                let values_read = value_decoder.read_value_bytes(values_to_read, read_bytes)?;
+                let values_read =
+                    value_decoder.read_value_bytes(values_to_read, read_bytes)?;
                 if values_read > 0 {
                     values_to_read -= values_read;
-                }
-                else {
+                } else {
                     // no more values in current decoder
                     self.current_decoder = self.decoder_iter.next();
                     break;
@@ -664,21 +773,31 @@ impl LevelValueDecoder {
 }
 
 impl ValueDecoder for LevelValueDecoder {
-    fn read_value_bytes(&mut self, num_values: usize, read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize> {
+    fn read_value_bytes(
+        &mut self,
+        num_values: usize,
+        read_bytes: &mut dyn FnMut(&[u8], usize),
+    ) -> Result<usize> {
         let value_size = std::mem::size_of::<i16>();
         let mut total_values_read = 0;
         while total_values_read < num_values {
-            let values_to_read = std::cmp::min(num_values - total_values_read, self.level_value_buffer.len());
-            let values_read = match self.level_decoder.get(&mut self.level_value_buffer[..values_to_read]) {
+            let values_to_read = std::cmp::min(
+                num_values - total_values_read,
+                self.level_value_buffer.len(),
+            );
+            let values_read = match self
+                .level_decoder
+                .get(&mut self.level_value_buffer[..values_to_read])
+            {
                 Ok(values_read) => values_read,
                 Err(e) => return Err(e),
             };
             if values_read > 0 {
-                let level_value_bytes = &self.level_value_buffer.to_byte_slice()[..values_read * value_size];
+                let level_value_bytes =
+                    &self.level_value_buffer.to_byte_slice()[..values_read * value_size];
                 read_bytes(level_value_bytes, values_read);
                 total_values_read += values_read;
-            }
-            else {
+            } else {
                 break;
             }
         }
@@ -693,7 +812,11 @@ pub(crate) struct FixedLenPlainDecoder {
 }
 
 impl FixedLenPlainDecoder {
-    pub(crate) fn new(data: ByteBufferPtr, num_values: usize, value_bit_len: usize) -> Self {
+    pub(crate) fn new(
+        data: ByteBufferPtr,
+        num_values: usize,
+        value_bit_len: usize,
+    ) -> Self {
         Self {
             data,
             num_values,
@@ -716,19 +839,20 @@ impl DictionaryValueDecoder for FixedLenPlainDecoder {
 }
 
 impl ValueDecoder for FixedLenPlainDecoder {
-    fn read_value_bytes(&mut self, num_values: usize, read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize> {
+    fn read_value_bytes(
+        &mut self,
+        num_values: usize,
+        read_bytes: &mut dyn FnMut(&[u8], usize),
+    ) -> Result<usize> {
         let available_values = self.data.len() * 8 / self.value_bit_len;
         if available_values > 0 {
             let values_to_read = std::cmp::min(available_values, num_values);
             let byte_len = values_to_read * self.value_bit_len / 8;
             read_bytes(&self.data.data()[..byte_len], values_to_read);
-            self.data.set_range(
-                self.data.start() + byte_len,
-                self.data.len() - byte_len
-            );
+            self.data
+                .set_range(self.data.start() + byte_len, self.data.len() - byte_len);
             Ok(values_to_read)
-        }
-        else {
+        } else {
             Ok(0)
         }
     }
@@ -759,9 +883,8 @@ impl DictionaryValueDecoder for VariableLenPlainDecoder {
         let mut values = Vec::with_capacity(values_to_read);
         let mut values_read = 0;
         while self.position < data_len && values_read < values_to_read {
-            let len: usize = 
-                read_num_bytes!(u32, LEN_SIZE, data[self.position..])
-                as usize;
+            let len: usize =
+                read_num_bytes!(u32, LEN_SIZE, data[self.position..]) as usize;
             self.position += LEN_SIZE;
             if data_len < self.position + len {
                 return Err(eof_err!("Not enough bytes to decode"));
@@ -776,16 +899,19 @@ impl DictionaryValueDecoder for VariableLenPlainDecoder {
 }
 
 impl ValueDecoder for VariableLenPlainDecoder {
-    fn read_value_bytes(&mut self, num_values: usize, read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize> {
+    fn read_value_bytes(
+        &mut self,
+        num_values: usize,
+        read_bytes: &mut dyn FnMut(&[u8], usize),
+    ) -> Result<usize> {
         const LEN_SIZE: usize = std::mem::size_of::<u32>();
         let data = self.data.data();
         let data_len = data.len();
         let values_to_read = std::cmp::min(self.num_values, num_values);
         let mut values_read = 0;
         while self.position < data_len && values_read < values_to_read {
-            let len: usize = 
-                read_num_bytes!(u32, LEN_SIZE, data[self.position..])
-                as usize;
+            let len: usize =
+                read_num_bytes!(u32, LEN_SIZE, data[self.position..]) as usize;
             self.position += LEN_SIZE;
             if data_len < self.position + len {
                 return Err(eof_err!("Not enough bytes to decode"));
@@ -809,13 +935,21 @@ pub(crate) struct FixedLenDictionaryDecoder {
 }
 
 impl FixedLenDictionaryDecoder {
-    pub(crate) fn new(column_chunk_context: Rc<RefCell<ColumnChunkContext>>, key_data_bufer: ByteBufferPtr, num_values: usize, value_bit_len: usize) -> Self {
-        assert!(value_bit_len % 8 == 0, "value_bit_size must be a multiple of 8");
+    pub(crate) fn new(
+        column_chunk_context: Rc<RefCell<ColumnChunkContext>>,
+        key_data_bufer: ByteBufferPtr,
+        num_values: usize,
+        value_bit_len: usize,
+    ) -> Self {
+        assert!(
+            value_bit_len % 8 == 0,
+            "value_bit_size must be a multiple of 8"
+        );
         // First byte in `data` is bit width
         let bit_width = key_data_bufer.data()[0];
         let mut rle_decoder = RleDecoder::new(bit_width);
         rle_decoder.set_data(key_data_bufer.start_from(1));
-        
+
         Self {
             context_ref: column_chunk_context,
             key_data_bufer,
@@ -828,7 +962,11 @@ impl FixedLenDictionaryDecoder {
 }
 
 impl ValueDecoder for FixedLenDictionaryDecoder {
-    fn read_value_bytes(&mut self, num_values: usize, read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize> {
+    fn read_value_bytes(
+        &mut self,
+        num_values: usize,
+        read_bytes: &mut dyn FnMut(&[u8], usize),
+    ) -> Result<usize> {
         if self.num_values == 0 {
             return Ok(0);
         }
@@ -840,8 +978,12 @@ impl ValueDecoder for FixedLenDictionaryDecoder {
         let mut values_read = 0;
         while values_read < values_to_read {
             // read values in batches of up to self.keys_buffer.len()
-            let keys_to_read = std::cmp::min(values_to_read - values_read, self.keys_buffer.len());
-            let keys_read = match self.rle_decoder.get_batch(&mut self.keys_buffer[..keys_to_read]) {
+            let keys_to_read =
+                std::cmp::min(values_to_read - values_read, self.keys_buffer.len());
+            let keys_read = match self
+                .rle_decoder
+                .get_batch(&mut self.keys_buffer[..keys_to_read])
+            {
                 Ok(keys_read) => keys_read,
                 Err(e) => return Err(e),
             };
@@ -851,7 +993,11 @@ impl ValueDecoder for FixedLenDictionaryDecoder {
             }
             for i in 0..keys_read {
                 let key = self.keys_buffer[i] as usize;
-                read_bytes(&input_value_bytes[key * self.value_byte_len..][..self.value_byte_len], 1);
+                read_bytes(
+                    &input_value_bytes[key * self.value_byte_len..]
+                        [..self.value_byte_len],
+                    1,
+                );
             }
             values_read += keys_read;
         }
@@ -869,12 +1015,16 @@ pub(crate) struct VariableLenDictionaryDecoder {
 }
 
 impl VariableLenDictionaryDecoder {
-    pub(crate) fn new(column_chunk_context: Rc<RefCell<ColumnChunkContext>>, key_data_bufer: ByteBufferPtr, num_values: usize) -> Self {
+    pub(crate) fn new(
+        column_chunk_context: Rc<RefCell<ColumnChunkContext>>,
+        key_data_bufer: ByteBufferPtr,
+        num_values: usize,
+    ) -> Self {
         // First byte in `data` is bit width
         let bit_width = key_data_bufer.data()[0];
         let mut rle_decoder = RleDecoder::new(bit_width);
         rle_decoder.set_data(key_data_bufer.start_from(1));
-        
+
         Self {
             context_ref: column_chunk_context,
             key_data_bufer,
@@ -886,7 +1036,11 @@ impl VariableLenDictionaryDecoder {
 }
 
 impl ValueDecoder for VariableLenDictionaryDecoder {
-    fn read_value_bytes(&mut self, num_values: usize, read_bytes: &mut dyn FnMut(&[u8], usize)) -> Result<usize> {
+    fn read_value_bytes(
+        &mut self,
+        num_values: usize,
+        read_bytes: &mut dyn FnMut(&[u8], usize),
+    ) -> Result<usize> {
         if self.num_values == 0 {
             return Ok(0);
         }
@@ -896,8 +1050,12 @@ impl ValueDecoder for VariableLenDictionaryDecoder {
         let mut values_read = 0;
         while values_read < values_to_read {
             // read values in batches of up to self.keys_buffer.len()
-            let keys_to_read = std::cmp::min(values_to_read - values_read, self.keys_buffer.len());
-            let keys_read = match self.rle_decoder.get_batch(&mut self.keys_buffer[..keys_to_read]) {
+            let keys_to_read =
+                std::cmp::min(values_to_read - values_read, self.keys_buffer.len());
+            let keys_read = match self
+                .rle_decoder
+                .get_batch(&mut self.keys_buffer[..keys_to_read])
+            {
                 Ok(keys_read) => keys_read,
                 Err(e) => return Err(e),
             };
@@ -931,7 +1089,11 @@ impl<T: ArrowPrimitiveType> PrimitiveArrayConverter<T> {
 }
 
 impl<T: ArrowPrimitiveType> ArrayConverter for PrimitiveArrayConverter<T> {
-    fn convert_value_bytes(&self, value_decoder: &mut impl ValueDecoder, num_values: usize) -> Result<arrow::array::ArrayData> {
+    fn convert_value_bytes(
+        &self,
+        value_decoder: &mut impl ValueDecoder,
+        num_values: usize,
+    ) -> Result<arrow::array::ArrayData> {
         let value_size = T::get_byte_width();
         let values_byte_capacity = num_values * value_size;
         let mut values_buffer = MutableBuffer::new(values_byte_capacity);
@@ -959,7 +1121,11 @@ impl StringArrayConverter {
 }
 
 impl ArrayConverter for StringArrayConverter {
-    fn convert_value_bytes(&self, value_decoder: &mut impl ValueDecoder, num_values: usize) -> Result<arrow::array::ArrayData> {
+    fn convert_value_bytes(
+        &self,
+        value_decoder: &mut impl ValueDecoder,
+        num_values: usize,
+    ) -> Result<arrow::array::ArrayData> {
         use arrow::datatypes::ArrowNativeType;
         let offset_size = std::mem::size_of::<i32>();
         let mut offsets_buffer = MutableBuffer::new((num_values + 1) * offset_size);
@@ -970,14 +1136,17 @@ impl ArrayConverter for StringArrayConverter {
         let mut length_so_far = i32::default();
         offsets_buffer.push(length_so_far);
 
-        value_decoder.read_value_bytes(num_values,&mut |value_bytes, values_read| {
+        value_decoder.read_value_bytes(num_values, &mut |value_bytes, values_read| {
             debug_assert_eq!(
                 values_read, 1,
                 "offset length value buffers can only contain bytes for a single value"
             );
-            length_so_far += <i32 as ArrowNativeType>::from_usize(value_bytes.len()).unwrap();
+            length_so_far +=
+                <i32 as ArrowNativeType>::from_usize(value_bytes.len()).unwrap();
             // this should be safe because a ValueDecoder should not read more than num_values
-            unsafe { offsets_buffer.push_unchecked(length_so_far); }
+            unsafe {
+                offsets_buffer.push_unchecked(length_so_far);
+            }
             values_buffer.extend_from_slice(value_bytes);
         })?;
         // calculate actual data_len, which may be different from the iterator's upper bound
@@ -994,18 +1163,20 @@ impl ArrayConverter for StringArrayConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{basic::{Encoding}, column::page::PageReader, schema::types::SchemaDescPtr};
-    use crate::column::page::{Page};
-    use crate::data_type::{ByteArray};
-    use crate::data_type::{ByteArrayType};
+    use crate::column::page::Page;
+    use crate::data_type::ByteArray;
+    use crate::data_type::ByteArrayType;
     use crate::schema::parser::parse_message_type;
-    use crate::schema::types::{SchemaDescriptor};
+    use crate::schema::types::SchemaDescriptor;
     use crate::util::test_common::page_util::{
         DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator,
     };
+    use crate::{
+        basic::Encoding, column::page::PageReader, schema::types::SchemaDescPtr,
+    };
     use arrow::array::{PrimitiveArray, StringArray};
-    use arrow::datatypes::{Int32Type as ArrowInt32};
-    use rand::{Rng, distributions::uniform::SampleUniform, thread_rng};
+    use arrow::datatypes::Int32Type as ArrowInt32;
+    use rand::{distributions::uniform::SampleUniform, thread_rng, Rng};
     use std::sync::Arc;
 
     /// Iterator for testing reading empty columns
@@ -1054,9 +1225,9 @@ mod tests {
         let page_iterator = EmptyPageIterator::new(schema);
 
         let converter = PrimitiveArrayConverter::<arrow::datatypes::Int32Type>::new();
-        let mut array_reader = ArrowArrayReader::try_new(
-            page_iterator, column_desc, converter, None
-        ).unwrap();
+        let mut array_reader =
+            ArrowArrayReader::try_new(page_iterator, column_desc, converter, None)
+                .unwrap();
 
         // expect no values to be read
         let array = array_reader.next_batch(50).unwrap();
@@ -1141,9 +1312,9 @@ mod tests {
                 InMemoryPageIterator::new(schema, column_desc.clone(), page_lists);
 
             let converter = PrimitiveArrayConverter::<arrow::datatypes::Int32Type>::new();
-            let mut array_reader = ArrowArrayReader::try_new(
-                page_iterator, column_desc, converter, None
-            ).unwrap();
+            let mut array_reader =
+                ArrowArrayReader::try_new(page_iterator, column_desc, converter, None)
+                    .unwrap();
 
             // Read first 50 values, which are all from the first column chunk
             let array = array_reader.next_batch(50).unwrap();
@@ -1224,9 +1395,9 @@ mod tests {
                 InMemoryPageIterator::new(schema, column_desc.clone(), page_lists);
 
             let converter = PrimitiveArrayConverter::<arrow::datatypes::Int32Type>::new();
-            let mut array_reader = ArrowArrayReader::try_new(
-                page_iterator, column_desc, converter, None
-            ).unwrap();
+            let mut array_reader =
+                ArrowArrayReader::try_new(page_iterator, column_desc, converter, None)
+                    .unwrap();
 
             let mut accu_len: usize = 0;
 
@@ -1333,9 +1504,9 @@ mod tests {
 
         let page_iterator = InMemoryPageIterator::new(schema, column_desc.clone(), pages);
         let converter = StringArrayConverter::new();
-        let mut array_reader = ArrowArrayReader::try_new(
-            page_iterator, column_desc, converter, None
-        ).unwrap();
+        let mut array_reader =
+            ArrowArrayReader::try_new(page_iterator, column_desc, converter, None)
+                .unwrap();
 
         let mut accu_len: usize = 0;
 

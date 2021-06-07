@@ -23,4 +23,6 @@ mod bit_packing;
 pub mod cursor;
 pub mod hash_util;
 pub(crate) mod test_common;
-pub use self::test_common::page_util::{InMemoryPageIterator, DataPageBuilderImpl, DataPageBuilder};
+pub use self::test_common::page_util::{
+    DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator,
+};

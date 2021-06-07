@@ -25,7 +25,7 @@ use std::mem;
 
 use super::{
     data::{into_buffers, new_buffers},
-    ArrayData, ArrayDataBuilder
+    ArrayData, ArrayDataBuilder,
 };
 use crate::array::StringOffsetSizeTrait;
 
@@ -84,7 +84,8 @@ impl<'a> _MutableArrayData<'a> {
             .buffers(buffers)
             .child_data(child_data);
         if self.null_count > 0 {
-            array_data_builder = array_data_builder.null_bit_buffer(self.null_buffer.into());
+            array_data_builder =
+                array_data_builder.null_bit_buffer(self.null_buffer.into());
         }
 
         array_data_builder
@@ -554,8 +555,7 @@ impl<'a> MutableArrayData<'a> {
         let null_buffer = if use_nulls {
             let null_bytes = bit_util::ceil(array_capacity, 8);
             MutableBuffer::from_len_zeroed(null_bytes)
-        }
-        else {
+        } else {
             // create 0 capacity mutable buffer with the intention that it won't be used
             MutableBuffer::with_capacity(0)
         };
