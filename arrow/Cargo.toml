@@ -125,6 +125,10 @@ name = "sort_kernel"
 harness = false
 
 [[bench]]
+name = "partition_kernels"
+harness = false
+
+[[bench]]
 name = "csv_writer"
 harness = false
 

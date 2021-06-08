@@ -33,10 +33,10 @@ fn create_array(size: usize, with_nulls: bool) -> ArrayRef {
     Arc::new(array)
 }
 
-fn bench_sort(arr_a: &ArrayRef, array_b: &ArrayRef, limit: Option<usize>) {
+fn bench_sort(array_a: &ArrayRef, array_b: &ArrayRef, limit: Option<usize>) {
     let columns = vec![
         SortColumn {
-            values: arr_a.clone(),
+            values: array_a.clone(),
             options: None,
         },
         SortColumn {
