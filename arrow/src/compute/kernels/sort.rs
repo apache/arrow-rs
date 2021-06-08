@@ -805,7 +805,17 @@ pub fn lexsort(columns: &[SortColumn], limit: Option<usize>) -> Result<Vec<Array
     let indices = lexsort_to_indices(columns, limit)?;
     columns
         .iter()
-        .map(|c| take(c.values.as_ref(), &indices, None))
+        .map(|c| {
+            take(
+                c.values.as_ref(),
+                &indices,
+                // disable bound check overhead since indices are already generated from
+                // the same record batch
+                Some(TakeOptions {
+                    check_bounds: false,
+                }),
+            )
+        })
         .collect()
 }
 
