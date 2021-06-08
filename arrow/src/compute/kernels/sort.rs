@@ -274,6 +274,12 @@ pub fn sort_to_indices(
             DataType::UInt64 => {
                 sort_list::<i32, UInt64Type>(values, v, n, &options, limit)
             }
+            DataType::Float32 => {
+                sort_list::<i32, Float32Type>(values, v, n, &options, limit)
+            }
+            DataType::Float64 => {
+                sort_list::<i32, Float64Type>(values, v, n, &options, limit)
+            }
             t => Err(ArrowError::ComputeError(format!(
                 "Sort not supported for list type {:?}",
                 t
@@ -294,6 +300,12 @@ pub fn sort_to_indices(
             DataType::UInt64 => {
                 sort_list::<i64, UInt64Type>(values, v, n, &options, limit)
             }
+            DataType::Float32 => {
+                sort_list::<i64, Float32Type>(values, v, n, &options, limit)
+            }
+            DataType::Float64 => {
+                sort_list::<i64, Float64Type>(values, v, n, &options, limit)
+            }
             t => Err(ArrowError::ComputeError(format!(
                 "Sort not supported for list type {:?}",
                 t
@@ -313,6 +325,12 @@ pub fn sort_to_indices(
             }
             DataType::UInt64 => {
                 sort_list::<i32, UInt64Type>(values, v, n, &options, limit)
+            }
+            DataType::Float32 => {
+                sort_list::<i32, Float32Type>(values, v, n, &options, limit)
+            }
+            DataType::Float64 => {
+                sort_list::<i32, Float64Type>(values, v, n, &options, limit)
             }
             t => Err(ArrowError::ComputeError(format!(
                 "Sort not supported for list type {:?}",
@@ -2152,6 +2170,52 @@ mod tests {
                 Some(vec![Some(4)]),
             ],
             Some(1),
+        );
+
+        test_sort_list_arrays::<Float32Type>(
+            vec![
+                Some(vec![Some(1.0), Some(0.0)]),
+                Some(vec![Some(4.0), Some(3.0), Some(2.0), Some(1.0)]),
+                Some(vec![Some(2.0), Some(3.0), Some(4.0)]),
+                Some(vec![Some(3.0), Some(3.0), Some(3.0), Some(3.0)]),
+                Some(vec![Some(1.0), Some(1.0)]),
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            None,
+            vec![
+                Some(vec![Some(1.0), Some(0.0)]),
+                Some(vec![Some(1.0), Some(1.0)]),
+                Some(vec![Some(2.0), Some(3.0), Some(4.0)]),
+                Some(vec![Some(3.0), Some(3.0), Some(3.0), Some(3.0)]),
+                Some(vec![Some(4.0), Some(3.0), Some(2.0), Some(1.0)]),
+            ],
+            None,
+        );
+
+        test_sort_list_arrays::<Float64Type>(
+            vec![
+                Some(vec![Some(1.0), Some(0.0)]),
+                Some(vec![Some(4.0), Some(3.0), Some(2.0), Some(1.0)]),
+                Some(vec![Some(2.0), Some(3.0), Some(4.0)]),
+                Some(vec![Some(3.0), Some(3.0), Some(3.0), Some(3.0)]),
+                Some(vec![Some(1.0), Some(1.0)]),
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            None,
+            vec![
+                Some(vec![Some(1.0), Some(0.0)]),
+                Some(vec![Some(1.0), Some(1.0)]),
+                Some(vec![Some(2.0), Some(3.0), Some(4.0)]),
+                Some(vec![Some(3.0), Some(3.0), Some(3.0), Some(3.0)]),
+                Some(vec![Some(4.0), Some(3.0), Some(2.0), Some(1.0)]),
+            ],
+            None,
         );
 
         test_sort_list_arrays::<Int32Type>(
