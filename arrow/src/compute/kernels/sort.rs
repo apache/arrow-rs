@@ -20,6 +20,7 @@
 use crate::array::*;
 use crate::buffer::MutableBuffer;
 use crate::compute::take;
+use crate::compute::TakeOptions;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use std::cmp::Ordering;
