@@ -31,7 +31,25 @@
 //! ```
 
 use crate::array::*;
+use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
+
+fn compute_str_values_length<Offset: StringOffsetSizeTrait>(
+    arrays: &[&ArrayData],
+) -> usize {
+    arrays
+        .iter()
+        .map(|&data| {
+            // get the length of the value buffer
+            let buf_len = data.buffers()[1].len();
+            // find the offset of the buffer
+            // this returns a slice of offsets, starting from the offset of the array
+            // so we can take the first value
+            let offset = data.buffer::<Offset>(0)[0];
+            buf_len - offset.to_usize().unwrap()
+        })
+        .sum()
+}
 
 /// Concatenate multiple [Array] of the same type into a single [ArrayRef].
 pub fn concat(arrays: &[&Array]) -> Result<ArrayRef> {
@@ -56,7 +74,25 @@ pub fn concat(arrays: &[&Array]) -> Result<ArrayRef> {
 
     let arrays = arrays.iter().map(|a| a.data()).collect::<Vec<_>>();
 
-    let mut mutable = MutableArrayData::new(arrays, false, capacity);
+    let mut mutable = match arrays[0].data_type() {
+        DataType::Utf8 => {
+            let str_values_size = compute_str_values_length::<i32>(&arrays);
+            MutableArrayData::with_capacities(
+                arrays,
+                false,
+                Capacities::Binary(capacity, Some(str_values_size)),
+            )
+        }
+        DataType::LargeUtf8 => {
+            let str_values_size = compute_str_values_length::<i64>(&arrays);
+            MutableArrayData::with_capacities(
+                arrays,
+                false,
+                Capacities::Binary(capacity, Some(str_values_size)),
+            )
+        }
+        _ => MutableArrayData::new(arrays, false, capacity),
+    };
 
     for (i, len) in lengths.iter().enumerate() {
         mutable.extend(i, 0, *len)
