@@ -376,7 +376,7 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray> {
     let null_bit_buffer = data
         .null_bitmap()
         .as_ref()
-        .map(|b| b.bits.slice(left_offset));
+        .map(|b| b.bits.bit_slice(left_offset, len));
 
     let values = buffer_unary_not(&data.buffers()[0], left_offset, len);
 
@@ -809,6 +809,19 @@ mod tests {
         let c = not(&a).unwrap();
 
         let expected = BooleanArray::from(vec![true, false]);
+
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_bool_array_not_sliced() {
+        let a = BooleanArray::from(vec![None, Some(true), Some(false), None, Some(true)]);
+        let a = a.slice(1, 4);
+        let a = a.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let c = not(&a).unwrap();
+
+        let expected =
+            BooleanArray::from(vec![Some(false), Some(true), None, Some(false)]);
 
         assert_eq!(c, expected);
     }
