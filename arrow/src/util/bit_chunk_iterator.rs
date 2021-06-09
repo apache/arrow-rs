@@ -35,10 +35,10 @@ impl<'a> BitChunks<'a> {
         let byte_offset = offset / 8;
         let bit_offset = offset % 8;
 
-        let chunk_bits = 8 * std::mem::size_of::<u64>();
-
-        let chunk_len = len / chunk_bits;
-        let remainder_len = len & (chunk_bits - 1);
+        // number of complete u64 chunks
+        let chunk_len = len / 64;
+        // number of remaining bits
+        let remainder_len = len % 64;
 
         BitChunks::<'a> {
             buffer: &buffer[byte_offset..],
@@ -137,14 +137,18 @@ impl Iterator for BitChunkIterator<'_> {
         // so when reading as u64 on a big-endian machine, the bytes need to be swapped
         let current = unsafe { std::ptr::read_unaligned(raw_data.add(index)).to_le() };
 
-        let combined = if self.bit_offset == 0 {
+        let bit_offset = self.bit_offset;
+
+        let combined = if bit_offset == 0 {
             current
         } else {
-            let next =
-                unsafe { std::ptr::read_unaligned(raw_data.add(index + 1)).to_le() };
+            // the constructor ensures that bit_offset is in 0..8
+            // that means we need to read at most one additional byte to fill in the high bits
+            let next = unsafe {
+                std::ptr::read_unaligned(raw_data.add(index + 1) as *const u8) as u64
+            };
 
-            current >> self.bit_offset
-                | (next & ((1 << self.bit_offset) - 1)) << (64 - self.bit_offset)
+            (current >> bit_offset) | (next << (64 - bit_offset))
         };
 
         self.index = index + 1;
@@ -253,5 +257,19 @@ mod tests {
             0b100_0000_0011_1111_1100_0000_0011_1111_1100_0000_0011_1111_1100_0000_0011_1111,
             bitchunks.remainder_bits()
         );
+    }
+
+    #[test]
+    fn test_iter_remainder_out_of_bounds() {
+        // allocating a full page should trigger a fault when reading out of bounds
+        const ALLOC_SIZE: usize = 4 * 1024;
+        let input = vec![0xFF_u8; ALLOC_SIZE];
+
+        let buffer: Buffer = Buffer::from(input);
+
+        let bitchunks = buffer.bit_chunks(57, ALLOC_SIZE * 8 - 57);
+
+        assert_eq!(u64::MAX, bitchunks.iter().last().unwrap());
+        assert_eq!(0x7F, bitchunks.remainder_bits());
     }
 }
