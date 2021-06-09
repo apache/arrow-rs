@@ -281,6 +281,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // error: this test uses too much memory to run on CI
     fn bit_length_test_string() -> Result<()> {
         bit_length_cases()
             .into_iter()
@@ -297,6 +298,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // error: this test uses too much memory to run on CI
     fn bit_length_test_large_string() -> Result<()> {
         bit_length_cases()
             .into_iter()
