@@ -77,6 +77,7 @@ To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 */
 
 use std::{
+    convert::TryFrom,
     ffi::CStr,
     ffi::CString,
     iter,
@@ -217,6 +218,10 @@ impl FFI_ArrowSchema {
         unsafe { self.children.add(index).as_ref().unwrap().as_ref().unwrap() }
     }
 
+    pub fn children(&self) -> impl Iterator<Item = &Self> {
+        (0..self.n_children as usize).map(move |i| self.child(i))
+    }
+
     pub fn nullable(&self) -> bool {
         (self.flags / 2) & 1 == 1
     }
@@ -229,120 +234,6 @@ impl Drop for FFI_ArrowSchema {
             Some(release) => unsafe { release(self) },
         };
     }
-}
-
-/// See https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings
-fn to_field(schema: &FFI_ArrowSchema) -> Result<Field> {
-    let data_type = match schema.format() {
-        "n" => DataType::Null,
-        "b" => DataType::Boolean,
-        "c" => DataType::Int8,
-        "C" => DataType::UInt8,
-        "s" => DataType::Int16,
-        "S" => DataType::UInt16,
-        "i" => DataType::Int32,
-        "I" => DataType::UInt32,
-        "l" => DataType::Int64,
-        "L" => DataType::UInt64,
-        "e" => DataType::Float16,
-        "f" => DataType::Float32,
-        "g" => DataType::Float64,
-        "z" => DataType::Binary,
-        "Z" => DataType::LargeBinary,
-        "u" => DataType::Utf8,
-        "U" => DataType::LargeUtf8,
-        "tdD" => DataType::Date32,
-        "tdm" => DataType::Date64,
-        "tts" => DataType::Time32(TimeUnit::Second),
-        "ttm" => DataType::Time32(TimeUnit::Millisecond),
-        "ttu" => DataType::Time64(TimeUnit::Microsecond),
-        "ttn" => DataType::Time64(TimeUnit::Nanosecond),
-        "+l" => {
-            let child = schema.child(0);
-            DataType::List(Box::new(to_field(child)?))
-        }
-        "+L" => {
-            let child = schema.child(0);
-            DataType::LargeList(Box::new(to_field(child)?))
-        }
-        "+s" => {
-            let children = (0..schema.n_children as usize)
-                .map(|x| to_field(schema.child(x)))
-                .collect::<Result<Vec<_>>>()?;
-            DataType::Struct(children)
-        }
-        // Parametrized types, requiring string parse
-        other => {
-            match other.splitn(2, ':').collect::<Vec<&str>>().as_slice() {
-                // Decimal types in format "d:precision,scale" or "d:precision,scale,bitWidth"
-                ["d", extra] => {
-                    match extra.splitn(3, ',').collect::<Vec<&str>>().as_slice() {
-                        [precision, scale] => {
-                            let parsed_precision = precision.parse::<usize>().map_err(|_| {
-                                ArrowError::CDataInterface(
-                                    "The decimal type requires an integer precision".to_string(),
-                                )
-                            })?;
-                            let parsed_scale = scale.parse::<usize>().map_err(|_| {
-                                ArrowError::CDataInterface(
-                                    "The decimal type requires an integer scale".to_string(),
-                                )
-                            })?;
-                            DataType::Decimal(parsed_precision, parsed_scale)
-                        },
-                        [precision, scale, bits] => {
-                            if *bits != "128" {
-                                return Err(ArrowError::CDataInterface("Only 128 bit wide decimal is supported in the Rust implementation".to_string()));
-                            }
-                            let parsed_precision = precision.parse::<usize>().map_err(|_| {
-                                ArrowError::CDataInterface(
-                                    "The decimal type requires an integer precision".to_string(),
-                                )
-                            })?;
-                            let parsed_scale = scale.parse::<usize>().map_err(|_| {
-                                ArrowError::CDataInterface(
-                                    "The decimal type requires an integer scale".to_string(),
-                                )
-                            })?;
-                            DataType::Decimal(parsed_precision, parsed_scale)
-                        }
-                        _ => {
-                            return Err(ArrowError::CDataInterface(format!(
-                                "The decimal pattern \"d:{:?}\" is not supported in the Rust implementation",
-                                extra
-                            )))
-                        }
-                    }
-                }
-
-                // Timestamps in format "tts:" and "tts:America/New_York" for no timezones and timezones resp.
-                ["tss", ""] => DataType::Timestamp(TimeUnit::Second, None),
-                ["tsm", ""] => DataType::Timestamp(TimeUnit::Millisecond, None),
-                ["tsu", ""] => DataType::Timestamp(TimeUnit::Microsecond, None),
-                ["tsn", ""] => DataType::Timestamp(TimeUnit::Nanosecond, None),
-                ["tss", tz] => {
-                    DataType::Timestamp(TimeUnit::Second, Some(tz.to_string()))
-                }
-                ["tsm", tz] => {
-                    DataType::Timestamp(TimeUnit::Millisecond, Some(tz.to_string()))
-                }
-                ["tsu", tz] => {
-                    DataType::Timestamp(TimeUnit::Microsecond, Some(tz.to_string()))
-                }
-                ["tsn", tz] => {
-                    DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.to_string()))
-                }
-
-                _ => {
-                    return Err(ArrowError::CDataInterface(format!(
-                    "The datatype \"{:?}\" is still not supported in Rust implementation",
-                    other
-                )))
-                }
-            }
-        }
-    };
-    Ok(Field::new(schema.name(), data_type, schema.nullable()))
 }
 
 /// See https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings
@@ -814,7 +705,7 @@ pub struct ArrowArrayChild<'a> {
 impl ArrowArrayRef for ArrowArray {
     /// the data_type as declared in the schema
     fn data_type(&self) -> Result<DataType> {
-        to_field(&self.schema).map(|x| x.data_type().clone())
+        DataType::try_from(self.schema.as_ref())
     }
 
     fn array(&self) -> &FFI_ArrowArray {
@@ -833,7 +724,7 @@ impl ArrowArrayRef for ArrowArray {
 impl<'a> ArrowArrayRef for ArrowArrayChild<'a> {
     /// the data_type as declared in the schema
     fn data_type(&self) -> Result<DataType> {
-        to_field(self.schema).map(|x| x.data_type().clone())
+        DataType::try_from(self.schema)
     }
 
     fn array(&self) -> &FFI_ArrowArray {
