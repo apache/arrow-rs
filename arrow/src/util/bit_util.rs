@@ -62,7 +62,7 @@ pub unsafe fn get_bit_raw(data: *const u8, i: usize) -> bool {
     (*data.add(i >> 3) & BIT_MASK[i & 7]) != 0
 }
 
-/// Sets bit at position `i` for `data`
+/// Sets bit at position `i` for `data` to 1
 #[inline]
 pub fn set_bit(data: &mut [u8], i: usize) {
     data[i >> 3] |= BIT_MASK[i & 7];
