@@ -662,7 +662,11 @@ pub(crate) mod private {
             bit_writer: &mut BitWriter,
         ) -> Result<()> {
             for value in values {
-                bit_writer.put_value(*value as u64, 1);
+                if !bit_writer.put_value(*value as u64, 1) {
+                    return Err(ParquetError::EOF(
+                        "unable to put boolean value".to_string(),
+                    ));
+                }
             }
             Ok(())
         }
