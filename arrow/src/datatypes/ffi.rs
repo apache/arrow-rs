@@ -220,10 +220,16 @@ impl TryFrom<&Field> for CArrowSchema {
     type Error = ArrowError;
 
     fn try_from(field: &Field) -> Result<Self> {
+        let flags = if field.is_nullable() {
+            ffi::Flags::NULLABLE
+        } else {
+            ffi::Flags::empty()
+        };
         CArrowSchema::try_from(field.data_type())
             .unwrap()
             .with_name(field.name())
-        // with_flags
+            .unwrap()
+            .with_flags(flags)
     }
 }
 

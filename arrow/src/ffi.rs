@@ -87,11 +87,21 @@ use std::{
     sync::Arc,
 };
 
+use bitflags::bitflags;
+
 use crate::array::ArrayData;
 use crate::buffer::Buffer;
-use crate::datatypes::{DataType, Field, TimeUnit};
+use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
+
+bitflags! {
+    pub struct Flags: i64 {
+        const DICTIONARY_ORDERED = 0b00000001;
+        const NULLABLE = 0b00000010;
+        const MAP_KEYS_SORTED = 0b00000100;
+    }
+}
 
 /// ABI-compatible struct for `ArrowSchema` from C Data Interface
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
@@ -158,9 +168,6 @@ impl FFI_ArrowSchema {
             children: children_ptr,
         });
         this.private_data = Box::into_raw(private_data) as *mut c_void;
-        if this.n_children > 0 {
-            // perhaps move the set command here
-        }
 
         Ok(this)
     }
@@ -170,7 +177,11 @@ impl FFI_ArrowSchema {
         Ok(self)
     }
 
-    // pub fn with_flags() {}
+    pub fn with_flags(mut self, flags: Flags) -> Result<Self> {
+        self.flags = flags.bits();
+        Ok(self)
+    }
+
     // pub fn with_dictionary() {}
     // pub fn with_metadata() {}
 
@@ -205,6 +216,10 @@ impl FFI_ArrowSchema {
         unsafe { CStr::from_ptr(self.name) }
             .to_str()
             .expect("The external API has a non-utf8 as name")
+    }
+
+    pub fn flags(&self) -> Option<Flags> {
+        Flags::from_bits(self.flags)
     }
 
     pub fn child(&self, index: usize) -> &Self {
