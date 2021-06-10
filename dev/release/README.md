@@ -22,15 +22,17 @@
 ## Branching
 
 We would maintain two branches: `active_release` and `master`.
-* All new PRs are created and merged against `master`
-* All versions are created from the `active_release` branch
-* Once merged to master, changes are "cherry-picked"  (via a hopefully soon to be automated process), to the `active_release` branch based on the judgement of the original PR author and maintainers.
 
-* We do not merge breaking api changes, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md) to the `active_release`
+- All new PRs are created and merged against `master`
+- All versions are created from the `active_release` branch
+- Once merged to master, changes are "cherry-picked" (via a hopefully soon to be automated process), to the `active_release` branch based on the judgement of the original PR author and maintainers.
+
+- We do not merge breaking api changes, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md) to the `active_release`
 
 Please see the [original proposal](https://docs.google.com/document/d/1tMQ67iu8XyGGZuj--h9WQYB9inCk6c2sL_4xMTwENGc/edit?ts=60961758) document the rational of this change.
 
 ## Release Branching
+
 We aim to release every other week from the `active_release` branch.
 
 Every other Monday, a maintainer proposes a minor (e.g. `4.1.0` to `4.2.0`) or patch (e.g `4.1.0` to `4.1.1`) release, depending on changes to the `active_release` in the previous 2 weeks, following the process beloe.
@@ -44,6 +46,7 @@ Apache Arrow in general does synchronized major releases every three months. The
 This directory contains the scripts used to manage an Apache Arrow Release.
 
 # Process Overview
+
 As part of the Apache governance model, official releases consist of
 signed source tarballs approved by the PMC.
 
@@ -51,7 +54,6 @@ We then use the code in the approved source tarball to release to
 crates.io, the Rust ecosystem's package manager.
 
 ## Branching
-
 
 # Release Preparation
 
@@ -65,16 +67,13 @@ The CHANGELOG is created automatically using
 This script creates a changelog using github issues and the
 labels associated with them.
 
-
-
-
 # Mechanics of creating a release
 
 ## Prepare the release branch and tags
 
 First, ensure that `active_release` contains the content of the desired release. For minor and patch releases, no additional steps are needed.
 
-To prepare for *a major release*, change `active release` to point at the latest `master` with commands such as:
+To prepare for _a major release_, change `active release` to point at the latest `master` with commands such as:
 
 ```
 git checkout active_release
@@ -111,7 +110,6 @@ Note that when reviewing the change log, rather than editing the
 `CHANGELOG.md`, it is preferred to update the issues and their labels
 (e.g. add `invalid` label to exclude them from release notes)
 
-
 ## Prepare release candidate tarball
 
 (Note you need to be a committer to run these scripts as they upload to the apache svn distribution servers)
@@ -135,7 +133,7 @@ Pick numbers in sequential order, with `0` for `rc1`, `1` for `rc1`, etc.
 
 ### Create, sign, and upload tarball
 
-Run the  `create-tarball.sh` with the  `<version>` tag and `<rc>` and you found in previous steps:
+Run the `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps:
 
 ```shell
 ./dev/release/create-tarball.sh 4.1.0 2
@@ -144,12 +142,11 @@ Run the  `create-tarball.sh` with the  `<version>` tag and `<rc>` and you found 
 This script
 
 1. creates and uploads a release candidate tarball to the [arrow
-dev](https://dist.apache.org/repos/dist/dev/arrow) location on the
-apache distribution svn server
+   dev](https://dist.apache.org/repos/dist/dev/arrow) location on the
+   apache distribution svn server
 
 2. provide you an email template to
-send to dev@arrow.apache.org for release voting.
-
+   send to dev@arrow.apache.org for release voting.
 
 ### Vote on Release Candidate tarball
 
@@ -185,7 +182,6 @@ The vote will be open for at least 72 hours.
 
 For the release to become "official" it needs at least three PMC members to vote +1 on it.
 
-
 #### Verifying Release Candidates
 
 There is a script in this repository which can be used to help `dev/release/verify-release-candidate.sh` assist the verification process. Run it like:
@@ -194,11 +190,9 @@ There is a script in this repository which can be used to help `dev/release/veri
 ./dev/release/verify-release-candidate.sh 4.1.0 2
 ```
 
-
 #### If the release is not approved
 
 If the release is not approved, fix whatever the problem is and try again with the next RC number
-
 
 ### If the release is approved,
 
@@ -225,7 +219,7 @@ of the [arrow crate](https://crates.io/crates/arrow).
 Download and unpack the official release tarball
 
 Verify that the Cargo.toml in the tarball contains the correct version
-(e.g.  `version = "0.11.0"`) and then publish the crate with the
+(e.g. `version = "0.11.0"`) and then publish the crate with the
 following commands
 
 ```shell
@@ -234,3 +228,39 @@ following commands
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
 ```
+
+# Backporting
+
+As of now, the plan for backporting to `active_release` is to do so semi-manually.
+
+Step 1: Pick the commit to cherry-pick
+
+Step 2: Create cherry-pick PR to active_release
+
+Step 3a: If CI passes, merge cherry-pick PR
+
+Step 3b: If CI doesn't pass or some other changes are needed, the PR should be reviewed / approved as normal prior to merge
+
+For example, to backport `b2de5446cc1e45a0559fb39039d0545df1ac0d26` to active_release use the folliwing
+
+```shell
+git clone git@github.com:apache/arrow-rs.git /tmp/arrow-rs
+
+ARROW_GITHUB_API_TOKEN=$ARROW_GITHUB_API_TOKEN CHECKOUT_ROOT=/tmp/arrow-rs CHERRY_PICK_SHA=b2de5446cc1e45a0559fb39039d0545df1ac0d26 python3 dev/release/cherry-pick-pr.py
+```
+
+## Tags
+
+There are two tags that help keep track of backporting:
+
+1. [`cherry-picked`](https://github.com/apache/arrow-rs/labels/cherry-picked) for PRs that have been cherry-picked/backported to `active_release`
+2. [`release-cherry-pick`](https://github.com/apache/arrow-rs/labels/release-cherry-pick) for the PRs that are the cherry pick
+
+You can find candidates to cherry pick using [this filter](https://github.com/apache/arrow-rs/pulls?q=is%3Apr+is%3Aclosed+-label%3Arelease-cherry-pick+-label%3Acherry-picked)
+
+## Rationale for creating PRs:
+
+1. PRs are a natural place to run the CI tests to make sure there are no logical conflicts
+2. PRs offer a place for the original author / committers to comment and say it should/should not be backported.
+3. PRs offer a way to make cleanups / fixups and approve (if needed) for non cherry pick PRs
+4. There is an additional control / review when the candidate release is created

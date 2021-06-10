@@ -79,12 +79,12 @@ The above script will run the `flatc` compiler and perform some adjustments to t
 
 Arrow uses the following features:
 
-* `simd` - Arrow uses the [packed_simd](https://crates.io/crates/packed_simd) crate to optimize many of the
- implementations in the [compute](https://github.com/apache/arrow/tree/master/rust/arrow/src/compute)
- module using SIMD intrinsics. These optimizations are turned *off* by default.
- If the `simd` feature is enabled, an unstable version of Rust is required (we test with `nightly-2021-03-24`)
-* `flight` which contains useful functions to convert between the Flight wire format and Arrow data
-* `prettyprint` which is a utility for printing record batches
+- `simd` - Arrow uses the [packed_simd](https://crates.io/crates/packed_simd) crate to optimize many of the
+  implementations in the [compute](https://github.com/apache/arrow/tree/master/rust/arrow/src/compute)
+  module using SIMD intrinsics. These optimizations are turned _off_ by default.
+  If the `simd` feature is enabled, an unstable version of Rust is required (we test with `nightly-2021-03-24`)
+- `flight` which contains useful functions to convert between the Flight wire format and Arrow data
+- `prettyprint` which is a utility for printing record batches
 
 Other than `simd` all the other features are enabled by default. Disabling `prettyprint` might be necessary in order to
 compile Arrow to the `wasm32-unknown-unknown` WASM target.
@@ -99,12 +99,12 @@ This crate only accepts the usage of `unsafe` code upon careful consideration, a
 
 Generally, `unsafe` should only be used when a `safe` counterpart is not available and there is no `safe` way to achieve additional performance in that area. The following is a summary of the current components of the crate that require `unsafe`:
 
-* alloc, dealloc and realloc of buffers along cache lines
-* Interpreting bytes as certain rust types, for access, representation and compute
-* Foreign interfaces (C data interface)
-* Inter-process communication (IPC)
-* SIMD
-* Performance (e.g. omit bounds checks, use of pointers to avoid bound checks)
+- alloc, dealloc and realloc of buffers along cache lines
+- Interpreting bytes as certain rust types, for access, representation and compute
+- Foreign interfaces (C data interface)
+- Inter-process communication (IPC)
+- SIMD
+- Performance (e.g. omit bounds checks, use of pointers to avoid bound checks)
 
 #### cache-line aligned memory management
 
@@ -147,13 +147,13 @@ Usage of `unsafe` for performance reasons is justified only when all other alter
 
 ### Considerations when introducing `unsafe`
 
-Usage of `unsafe` in this crate *must*:
+Usage of `unsafe` in this crate _must_:
 
-* not expose a public API as `safe` when there are necessary invariants for that API to be defined behavior.
-* have code documentation for why `safe` is not used / possible
-* have code documentation about which invariant the user needs to enforce to ensure [soundness](https://rust-lang.github.io/unsafe-code-guidelines/glossary.html#soundness-of-code--of-a-library), or which
-* invariant is being preserved.
-* if applicable, use `debug_assert`s to relevant invariants (e.g. bound checks)
+- not expose a public API as `safe` when there are necessary invariants for that API to be defined behavior.
+- have code documentation for why `safe` is not used / possible
+- have code documentation about which invariant the user needs to enforce to ensure [soundness](https://rust-lang.github.io/unsafe-code-guidelines/glossary.html#soundness-of-code--of-a-library), or which
+- invariant is being preserved.
+- if applicable, use `debug_assert`s to relevant invariants (e.g. bound checks)
 
 Example of code documentation:
 
