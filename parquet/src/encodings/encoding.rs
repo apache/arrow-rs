@@ -155,11 +155,15 @@ impl<T: DataType> Encoder<T> for PlainEncoder<T> {
 
     #[inline]
     fn put(&mut self, values: &[T::T]) -> Result<()> {
-        if self.bw_bytes_written + values.len() >= self.bit_writer.capacity() {
+        if T::get_physical_type() == Type::BOOLEAN
+            && self.bw_bytes_written + values.len() >= self.bit_writer.capacity()
+        {
             self.bit_writer.extend(256);
         }
         T::T::encode(values, &mut self.buffer, &mut self.bit_writer)?;
-        self.bw_bytes_written += values.len();
+        if T::get_physical_type() == Type::BOOLEAN {
+            self.bw_bytes_written += values.len();
+        }
         Ok(())
     }
 }
