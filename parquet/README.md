@@ -27,7 +27,7 @@ Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-parquet = "4.2.0"
+parquet = "4.3.0"
 ```
 
 and this to your crate root:
@@ -51,7 +51,7 @@ while let Some(record) = iter.next() {
 }
 ```
 
-See [crate documentation](https://docs.rs/crate/parquet/4.2.0) on available API.
+See [crate documentation](https://docs.rs/crate/parquet/4.3.0) on available API.
 
 ## Upgrading from versions prior to 4.0
 
