@@ -49,10 +49,11 @@
 //!}
 //! ```
 
-pub(in crate::arrow) mod array_reader;
+pub mod array_reader;
+pub mod arrow_array_reader;
 pub mod arrow_reader;
 pub mod arrow_writer;
-pub(in crate::arrow) mod converter;
+pub mod converter;
 pub(in crate::arrow) mod levels;
 pub(in crate::arrow) mod record_reader;
 pub mod schema;

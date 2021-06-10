@@ -45,6 +45,7 @@ arrow = { path = "../arrow", version = "5.0.0-SNAPSHOT", optional = true }
 base64 = { version = "0.13", optional = true }
 clap = { version = "2.33.3", optional = true }
 serde_json = { version = "1.0", features = ["preserve_order"], optional = true }
+rand = "0.8"
 
 [dev-dependencies]
 criterion = "0.3"
@@ -75,4 +76,8 @@ required-features = ["cli"]
 
 [[bench]]
 name = "arrow_writer"
+harness = false
+
+[[bench]]
+name = "arrow_array_reader"
 harness = false
