@@ -142,16 +142,88 @@ impl TryFrom<&CArrowSchema> for DataType {
     }
 }
 
+impl TryFrom<&DataType> for CArrowSchema {
+    type Error = ArrowError;
+
+    /// See https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings
+    fn try_from(dtype: &DataType) -> Result<Self> {
+        let format = match dtype {
+            DataType::Null => "n".to_string(),
+            DataType::Boolean => "b".to_string(),
+            DataType::Int8 => "c".to_string(),
+            DataType::UInt8 => "C".to_string(),
+            DataType::Int16 => "s".to_string(),
+            DataType::UInt16 => "S".to_string(),
+            DataType::Int32 => "i".to_string(),
+            DataType::UInt32 => "I".to_string(),
+            DataType::Int64 => "l".to_string(),
+            DataType::UInt64 => "L".to_string(),
+            DataType::Float16 => "e".to_string(),
+            DataType::Float32 => "f".to_string(),
+            DataType::Float64 => "g".to_string(),
+            DataType::Binary => "z".to_string(),
+            DataType::LargeBinary => "Z".to_string(),
+            DataType::Utf8 => "u".to_string(),
+            DataType::LargeUtf8 => "U".to_string(),
+            DataType::Decimal(precision, scale) => format!("d:{},{}", precision, scale),
+            DataType::Date32 => "tdD".to_string(),
+            DataType::Date64 => "tdm".to_string(),
+            DataType::Time32(TimeUnit::Second) => "tts".to_string(),
+            DataType::Time32(TimeUnit::Millisecond) => "ttm".to_string(),
+            DataType::Time64(TimeUnit::Microsecond) => "ttu".to_string(),
+            DataType::Time64(TimeUnit::Nanosecond) => "ttn".to_string(),
+            DataType::Timestamp(TimeUnit::Second, None) => "tss:".to_string(),
+            DataType::Timestamp(TimeUnit::Millisecond, None) => "tsm:".to_string(),
+            DataType::Timestamp(TimeUnit::Microsecond, None) => "tsu:".to_string(),
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => "tsn:".to_string(),
+            DataType::Timestamp(TimeUnit::Second, Some(tz)) => format!("tss:{}", tz),
+            DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) => format!("tsm:{}", tz),
+            DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => format!("tsu:{}", tz),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => format!("tsn:{}", tz),
+            DataType::List(_) => "+l".to_string(),
+            DataType::LargeList(_) => "+L".to_string(),
+            DataType::Struct(_) => "+s".to_string(),
+            other => {
+                return Err(ArrowError::CDataInterface(format!(
+                    "The datatype \"{:?}\" is still not supported in Rust implementation",
+                    other
+                )))
+            }
+        };
+        // allocate and hold the children
+        let children = match dtype {
+            DataType::List(child) | DataType::LargeList(child) => {
+                vec![CArrowSchema::try_from(child.as_ref())?]
+            }
+            DataType::Struct(fields) => fields
+                .iter()
+                .map(CArrowSchema::try_from)
+                .collect::<Result<Vec<_>>>()?,
+            _ => vec![],
+        };
+        CArrowSchema::try_new(&format, children)
+    }
+}
+
 impl TryFrom<&CArrowSchema> for Field {
     type Error = ArrowError;
 
     fn try_from(c_schema: &CArrowSchema) -> Result<Self> {
-        let field = Field::new(
-            c_schema.name(),
-            DataType::try_from(c_schema)?,
-            c_schema.nullable(),
-        );
+        let dtype = DataType::try_from(c_schema)?;
+        // TODO: validate that it has a struct type
+        let field = Field::new(c_schema.name(), dtype, c_schema.nullable());
         Ok(field)
+    }
+}
+
+impl TryFrom<&Field> for CArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(field: &Field) -> Result<Self> {
+        CArrowSchema::try_from(field.data_type())
+            .unwrap()
+            .with_name(field.name())
+        // with_flags
     }
 }
 
