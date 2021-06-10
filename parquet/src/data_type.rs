@@ -661,6 +661,9 @@ pub(crate) mod private {
             _: &mut W,
             bit_writer: &mut BitWriter,
         ) -> Result<()> {
+            if bit_writer.bytes_written() + values.len() >= bit_writer.capacity() {
+                bit_writer.extend(256);
+            }
             for value in values {
                 if !bit_writer.put_value(*value as u64, 1) {
                     return Err(ParquetError::EOF(
