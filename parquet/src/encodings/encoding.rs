@@ -112,7 +112,6 @@ pub struct PlainEncoder<T: DataType> {
     buffer: ByteBuffer,
     bit_writer: BitWriter,
     desc: ColumnDescPtr,
-    bw_bytes_written: usize,
     _phantom: PhantomData<T>,
 }
 
@@ -125,7 +124,6 @@ impl<T: DataType> PlainEncoder<T> {
             buffer: byte_buffer,
             bit_writer: BitWriter::new(256),
             desc,
-            bw_bytes_written: 0,
             _phantom: PhantomData,
         }
     }
@@ -155,15 +153,7 @@ impl<T: DataType> Encoder<T> for PlainEncoder<T> {
 
     #[inline]
     fn put(&mut self, values: &[T::T]) -> Result<()> {
-        if T::get_physical_type() == Type::BOOLEAN
-            && self.bw_bytes_written + values.len() >= self.bit_writer.capacity()
-        {
-            self.bit_writer.extend(256);
-        }
         T::T::encode(values, &mut self.buffer, &mut self.bit_writer)?;
-        if T::get_physical_type() == Type::BOOLEAN {
-            self.bw_bytes_written += values.len();
-        }
         Ok(())
     }
 }
