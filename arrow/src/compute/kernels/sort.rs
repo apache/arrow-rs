@@ -405,7 +405,13 @@ impl Default for SortOptions {
     }
 }
 
-/// Sort primitive values
+/// Sort boolean values
+///
+/// when a limit is present, the sort is pair-comparison based as k-select might be more efficient,
+/// when the limit is absent, binary partition is used to speed up (which is linear).
+///
+/// TODO maybe partition_validity call can be eliminated in this case and tri-color sort can be used
+/// instead. https://en.wikipedia.org/wiki/Dutch_national_flag_problem
 fn sort_boolean(
     values: &ArrayRef,
     value_indices: Vec<u32>,
@@ -443,6 +449,7 @@ fn sort_boolean(
     } else {
         // when limit is not present, we have a better way than sorting: we can just partition
         // the vec into [false..., true...] or [true..., false...] when descending
+        // TODO when https://github.com/rust-lang/rust/issues/62543 is merged we can use partition_in_place
         let (mut a, b): (Vec<(u32, bool)>, Vec<(u32, bool)>) = value_indices
             .into_iter()
             .map(|index| (index, values.value(index as usize)))
