@@ -22,10 +22,8 @@ use std::convert::TryFrom;
 use crate::{
     datatypes::{DataType, Field, Schema, TimeUnit},
     error::{ArrowError, Result},
-    ffi,
+    ffi::{FFI_ArrowSchema as CArrowSchema, Flags},
 };
-
-type CArrowSchema = ffi::FFI_ArrowSchema;
 
 impl TryFrom<&CArrowSchema> for DataType {
     type Error = ArrowError;
@@ -210,7 +208,6 @@ impl TryFrom<&CArrowSchema> for Field {
 
     fn try_from(c_schema: &CArrowSchema) -> Result<Self> {
         let dtype = DataType::try_from(c_schema)?;
-        // TODO: validate that it has a struct type
         let field = Field::new(c_schema.name(), dtype, c_schema.nullable());
         Ok(field)
     }
@@ -221,9 +218,9 @@ impl TryFrom<&Field> for CArrowSchema {
 
     fn try_from(field: &Field) -> Result<Self> {
         let flags = if field.is_nullable() {
-            ffi::Flags::NULLABLE
+            Flags::NULLABLE
         } else {
-            ffi::Flags::empty()
+            Flags::empty()
         };
         CArrowSchema::try_from(field.data_type())
             .unwrap()
@@ -237,13 +234,108 @@ impl TryFrom<&CArrowSchema> for Schema {
     type Error = ArrowError;
 
     fn try_from(c_schema: &CArrowSchema) -> Result<Self> {
-        let fields = c_schema.children().map(Field::try_from);
-        let schema = Schema::new(fields.collect::<Result<Vec<_>>>()?);
-        Ok(schema)
+        // interpret it as a struct type then extract its fields
+        let dtype = DataType::try_from(c_schema)?;
+        if let DataType::Struct(fields) = dtype {
+            Ok(Schema::new(fields))
+        } else {
+            Err(ArrowError::CDataInterface(format!(
+                "Unable to interpret C data struct as a Schema"
+            )))
+        }
+    }
+}
+
+impl TryFrom<&Schema> for CArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(schema: &Schema) -> Result<Self> {
+        let dtype = DataType::Struct(schema.fields().clone());
+        let c_schema = CArrowSchema::try_from(&dtype)?;
+        Ok(c_schema)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::datatypes::{DataType, Field, TimeUnit};
+    use crate::error::Result;
+    use std::convert::TryFrom;
+
+    fn round_trip_type(dtype: DataType) -> Result<()> {
+        let c_schema = CArrowSchema::try_from(&dtype)?;
+        let restored = DataType::try_from(&c_schema)?;
+        assert_eq!(restored, dtype);
+        Ok(())
+    }
+
+    fn round_trip_field(field: Field) -> Result<()> {
+        let c_schema = CArrowSchema::try_from(&field)?;
+        let restored = Field::try_from(&c_schema)?;
+        assert_eq!(restored, field);
+        Ok(())
+    }
+
+    fn round_trip_schema(schema: Schema) -> Result<()> {
+        let c_schema = CArrowSchema::try_from(&schema)?;
+        let restored = Schema::try_from(&c_schema)?;
+        assert_eq!(restored, schema);
+        Ok(())
+    }
+
+    #[test]
+    fn test_type() -> Result<()> {
+        round_trip_type(DataType::Int64)?;
+        round_trip_type(DataType::UInt64)?;
+        round_trip_type(DataType::Float64)?;
+        round_trip_type(DataType::Date64)?;
+        round_trip_type(DataType::Time64(TimeUnit::Nanosecond))?;
+        round_trip_type(DataType::Utf8)?;
+        round_trip_type(DataType::List(Box::new(Field::new(
+            "a",
+            DataType::Int16,
+            false,
+        ))))?;
+        round_trip_type(DataType::Struct(vec![Field::new(
+            "a",
+            DataType::Utf8,
+            true,
+        )]))?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_field() -> Result<()> {
+        let dtype = DataType::Struct(vec![Field::new("a", DataType::Utf8, true)]);
+        round_trip_field(Field::new("test", dtype, true))?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ]);
+        round_trip_schema(schema)?;
+
+        // test that we can interpret struct types as schema
+        let dtype = DataType::Struct(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Int16, false),
+        ]);
+        let c_schema = CArrowSchema::try_from(&dtype)?;
+        let schema = Schema::try_from(&c_schema)?;
+        assert_eq!(schema.fields().len(), 2);
+
+        // test that we assert the input type
+        let c_schema = CArrowSchema::try_from(&DataType::Float64)?;
+        let result = Schema::try_from(&c_schema);
+        assert_eq!(result.is_err(), true);
+        Ok(())
+    }
+
     // TODO
 }
