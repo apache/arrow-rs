@@ -1573,11 +1573,7 @@ impl<R: Read> Iterator for Reader<R> {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.next() {
-            Ok(None) => None,
-            Ok(Some(some)) => Some(Ok(some)),
-            Err(e) => Some(Err(e)),
-        }
+        self.next().transpose()
     }
 }
 
