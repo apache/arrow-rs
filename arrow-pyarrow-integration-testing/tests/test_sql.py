@@ -17,6 +17,7 @@
 # under the License.
 
 import unittest
+from decimal import Decimal
 
 import pyarrow
 import arrow_pyarrow_integration_testing
@@ -69,13 +70,27 @@ class TestCase(unittest.TestCase):
         Python -> Rust -> Python
         """
         old_allocated = pyarrow.total_allocated_bytes()
-        a = pyarrow.array([None, 1, 2], pyarrow.time32('s'))
+        a = pyarrow.array([None, 1, 2], pyarrow.time32("s"))
         b = arrow_pyarrow_integration_testing.concatenate(a)
-        expected = pyarrow.array([None, 1, 2] + [None, 1, 2], pyarrow.time32('s'))
+        expected = pyarrow.array([None, 1, 2] + [None, 1, 2], pyarrow.time32("s"))
         self.assertEqual(b, expected)
         del a
         del b
         del expected
+        # No leak of C++ memory
+        self.assertEqual(old_allocated, pyarrow.total_allocated_bytes())
+
+    def test_decimal_python(self):
+        """
+        Python -> Rust -> Python
+        """
+        old_allocated = pyarrow.total_allocated_bytes()
+        py_array = [round(Decimal(123.45), 2), round(Decimal(-123.45), 2), None]
+        a = pyarrow.array(py_array, pyarrow.decimal128(6, 2))
+        b = arrow_pyarrow_integration_testing.round_trip(a)
+        self.assertEqual(a, b)
+        del a
+        del b
         # No leak of C++ memory
         self.assertEqual(old_allocated, pyarrow.total_allocated_bytes())
 
@@ -94,6 +109,3 @@ class TestCase(unittest.TestCase):
         del b
         # No leak of C++ memory
         self.assertEqual(old_allocated, pyarrow.total_allocated_bytes())
-
-
-

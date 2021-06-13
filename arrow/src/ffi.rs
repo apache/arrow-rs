@@ -271,12 +271,47 @@ fn to_field(schema: &FFI_ArrowSchema) -> Result<Field> {
                 .collect::<Result<Vec<_>>>()?;
             DataType::Struct(children)
         }
-        other => {
-            return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{:?}\" is still not supported in Rust implementation",
-                other
-            )))
-        }
+        other => match other
+            .split(|c| c == ':' || c == ',')
+            .collect::<Vec<&str>>()
+            .as_slice()
+        {
+            ["d", precision, scale] => {
+                let parsed_precision = precision.parse::<usize>().map_err(|_| {
+                    ArrowError::CDataInterface(
+                        "The decimal type requires an integer precision".to_string(),
+                    )
+                })?;
+                let parsed_scale = scale.parse::<usize>().map_err(|_| {
+                    ArrowError::CDataInterface(
+                        "The decimal type requires an integer scale".to_string(),
+                    )
+                })?;
+                DataType::Decimal(parsed_precision, parsed_scale)
+            }
+            ["d", precision, scale, bits] => {
+                if *bits != "128" {
+                    return Err(ArrowError::CDataInterface("Only 128 bit wide decimal is supported in the Rust implementation".to_string()));
+                }
+                let parsed_precision = precision.parse::<usize>().map_err(|_| {
+                    ArrowError::CDataInterface(
+                        "The decimal type requires an integer precision".to_string(),
+                    )
+                })?;
+                let parsed_scale = scale.parse::<usize>().map_err(|_| {
+                    ArrowError::CDataInterface(
+                        "The decimal type requires an integer scale".to_string(),
+                    )
+                })?;
+                DataType::Decimal(parsed_precision, parsed_scale)
+            }
+            _ => {
+                return Err(ArrowError::CDataInterface(format!(
+                    "The datatype \"{:?}\" is still not supported in Rust implementation",
+                    other
+                )))
+            }
+        },
     };
     Ok(Field::new(schema.name(), data_type, schema.nullable()))
 }
@@ -301,6 +336,9 @@ fn to_format(data_type: &DataType) -> Result<String> {
         DataType::LargeBinary => "Z",
         DataType::Utf8 => "u",
         DataType::LargeUtf8 => "U",
+        DataType::Decimal(precision, scale) => {
+            return Ok(format!("d:{},{}", precision, scale))
+        }
         DataType::Date32 => "tdD",
         DataType::Date64 => "tdm",
         DataType::Time32(TimeUnit::Second) => "tts",
@@ -338,6 +376,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Int64, 1) | (DataType::Date64, 1) | (DataType::Time64(_), 1) => size_of::<i64>() * 8,
         (DataType::Float32, 1) => size_of::<f32>() * 8,
         (DataType::Float64, 1) => size_of::<f64>() * 8,
+        (DataType::Decimal(..), 1) => size_of::<i128>() * 8,
         // primitive types have a single buffer
         (DataType::Boolean, _) |
         (DataType::UInt8, _) |
@@ -349,7 +388,8 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Int32, _) | (DataType::Date32, _) | (DataType::Time32(_), _) |
         (DataType::Int64, _) | (DataType::Date64, _) | (DataType::Time64(_), _) |
         (DataType::Float32, _) |
-        (DataType::Float64, _) => {
+        (DataType::Float64, _) |
+        (DataType::Decimal(..), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{:?}\" expects 2 buffers, but requested {}. Please verify that the C data interface is correctly implemented.",
                 data_type, i
@@ -829,9 +869,9 @@ impl<'a> ArrowArrayChild<'a> {
 mod tests {
     use super::*;
     use crate::array::{
-        make_array, Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray,
-        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array,
-        OffsetSizeTrait, StringOffsetSizeTrait, Time32MillisecondArray,
+        make_array, Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
+        DecimalBuilder, GenericBinaryArray, GenericListArray, GenericStringArray,
+        Int32Array, OffsetSizeTrait, StringOffsetSizeTrait, Time32MillisecondArray,
     };
     use crate::compute::kernels;
     use crate::datatypes::Field;
@@ -855,6 +895,32 @@ mod tests {
 
         // verify
         assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
+
+        // (drop/release)
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal_round_trip() -> Result<()> {
+        // create an array natively
+        let mut builder = DecimalBuilder::new(5, 6, 2);
+        builder.append_value(12345_i128).unwrap();
+        builder.append_value(-12345_i128).unwrap();
+        builder.append_null().unwrap();
+        let original_array = builder.finish();
+
+        // export it
+        let array = ArrowArray::try_from(original_array.data().clone())?;
+
+        // (simulate consumer) import it
+        let data = ArrayData::try_from(array)?;
+        let array = make_array(data);
+
+        // perform some operation
+        let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+
+        // verify
+        assert_eq!(array, &original_array);
 
         // (drop/release)
         Ok(())
