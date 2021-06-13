@@ -48,7 +48,11 @@ fn bench_partition(sorted_columns: &[ArrayRef]) {
         })
         .collect::<Vec<_>>();
 
-    criterion::black_box(lexicographical_partition_ranges(&columns).unwrap());
+    criterion::black_box(
+        lexicographical_partition_ranges(&columns)
+            .unwrap()
+            .collect::<Vec<_>>(),
+    );
 }
 
 fn create_sorted_low_cardinality_data(length: usize) -> Vec<ArrayRef> {
