@@ -129,7 +129,7 @@ git push apache <version>
 
 ### Pick an Release Candidate (RC) number
 
-Pick numbers in sequential order, with `0` for `rc1`, `1` for `rc1`, etc.
+Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
 ### Create, sign, and upload tarball
 
