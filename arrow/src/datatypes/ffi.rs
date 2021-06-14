@@ -22,14 +22,14 @@ use std::convert::TryFrom;
 use crate::{
     datatypes::{DataType, Field, Schema, TimeUnit},
     error::{ArrowError, Result},
-    ffi::{FFI_ArrowSchema as CArrowSchema, Flags},
+    ffi::{FFI_ArrowSchema, Flags},
 };
 
-impl TryFrom<&CArrowSchema> for DataType {
+impl TryFrom<&FFI_ArrowSchema> for DataType {
     type Error = ArrowError;
 
     /// See https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings
-    fn try_from(c_schema: &CArrowSchema) -> Result<Self> {
+    fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self> {
         let dtype = match c_schema.format() {
             "n" => DataType::Null,
             "b" => DataType::Boolean,
@@ -140,7 +140,33 @@ impl TryFrom<&CArrowSchema> for DataType {
     }
 }
 
-impl TryFrom<&DataType> for CArrowSchema {
+impl TryFrom<&FFI_ArrowSchema> for Field {
+    type Error = ArrowError;
+
+    fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self> {
+        let dtype = DataType::try_from(c_schema)?;
+        let field = Field::new(c_schema.name(), dtype, c_schema.nullable());
+        Ok(field)
+    }
+}
+
+impl TryFrom<&FFI_ArrowSchema> for Schema {
+    type Error = ArrowError;
+
+    fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self> {
+        // interpret it as a struct type then extract its fields
+        let dtype = DataType::try_from(c_schema)?;
+        if let DataType::Struct(fields) = dtype {
+            Ok(Schema::new(fields))
+        } else {
+            Err(ArrowError::CDataInterface(format!(
+                "Unable to interpret C data struct as a Schema"
+            )))
+        }
+    }
+}
+
+impl TryFrom<&DataType> for FFI_ArrowSchema {
     type Error = ArrowError;
 
     /// See https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings
@@ -191,29 +217,19 @@ impl TryFrom<&DataType> for CArrowSchema {
         // allocate and hold the children
         let children = match dtype {
             DataType::List(child) | DataType::LargeList(child) => {
-                vec![CArrowSchema::try_from(child.as_ref())?]
+                vec![FFI_ArrowSchema::try_from(child.as_ref())?]
             }
             DataType::Struct(fields) => fields
                 .iter()
-                .map(CArrowSchema::try_from)
+                .map(FFI_ArrowSchema::try_from)
                 .collect::<Result<Vec<_>>>()?,
             _ => vec![],
         };
-        CArrowSchema::try_new(&format, children)
+        FFI_ArrowSchema::try_new(&format, children)
     }
 }
 
-impl TryFrom<&CArrowSchema> for Field {
-    type Error = ArrowError;
-
-    fn try_from(c_schema: &CArrowSchema) -> Result<Self> {
-        let dtype = DataType::try_from(c_schema)?;
-        let field = Field::new(c_schema.name(), dtype, c_schema.nullable());
-        Ok(field)
-    }
-}
-
-impl TryFrom<&Field> for CArrowSchema {
+impl TryFrom<&Field> for FFI_ArrowSchema {
     type Error = ArrowError;
 
     fn try_from(field: &Field) -> Result<Self> {
@@ -222,37 +238,43 @@ impl TryFrom<&Field> for CArrowSchema {
         } else {
             Flags::empty()
         };
-        CArrowSchema::try_from(field.data_type())
-            .unwrap()
-            .with_name(field.name())
-            .unwrap()
+        FFI_ArrowSchema::try_from(field.data_type())?
+            .with_name(field.name())?
             .with_flags(flags)
     }
 }
 
-impl TryFrom<&CArrowSchema> for Schema {
-    type Error = ArrowError;
-
-    fn try_from(c_schema: &CArrowSchema) -> Result<Self> {
-        // interpret it as a struct type then extract its fields
-        let dtype = DataType::try_from(c_schema)?;
-        if let DataType::Struct(fields) = dtype {
-            Ok(Schema::new(fields))
-        } else {
-            Err(ArrowError::CDataInterface(format!(
-                "Unable to interpret C data struct as a Schema"
-            )))
-        }
-    }
-}
-
-impl TryFrom<&Schema> for CArrowSchema {
+impl TryFrom<&Schema> for FFI_ArrowSchema {
     type Error = ArrowError;
 
     fn try_from(schema: &Schema) -> Result<Self> {
         let dtype = DataType::Struct(schema.fields().clone());
-        let c_schema = CArrowSchema::try_from(&dtype)?;
+        let c_schema = FFI_ArrowSchema::try_from(&dtype)?;
         Ok(c_schema)
+    }
+}
+
+impl TryFrom<DataType> for FFI_ArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(dtype: DataType) -> Result<Self> {
+        FFI_ArrowSchema::try_from(&dtype)
+    }
+}
+
+impl TryFrom<Field> for FFI_ArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(field: Field) -> Result<Self> {
+        FFI_ArrowSchema::try_from(&field)
+    }
+}
+
+impl TryFrom<Schema> for FFI_ArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(schema: Schema) -> Result<Self> {
+        FFI_ArrowSchema::try_from(&schema)
     }
 }
 
@@ -264,25 +286,29 @@ mod tests {
     use std::convert::TryFrom;
 
     fn round_trip_type(dtype: DataType) -> Result<()> {
-        let c_schema = CArrowSchema::try_from(&dtype)?;
+        let c_schema = FFI_ArrowSchema::try_from(&dtype)?;
         let restored = DataType::try_from(&c_schema)?;
         assert_eq!(restored, dtype);
         Ok(())
     }
 
     fn round_trip_field(field: Field) -> Result<()> {
-        let c_schema = CArrowSchema::try_from(&field)?;
+        let c_schema = FFI_ArrowSchema::try_from(&field)?;
         let restored = Field::try_from(&c_schema)?;
         assert_eq!(restored, field);
         Ok(())
     }
 
     fn round_trip_schema(schema: Schema) -> Result<()> {
-        let c_schema = CArrowSchema::try_from(&schema)?;
+        let c_schema = FFI_ArrowSchema::try_from(&schema)?;
         let restored = Schema::try_from(&c_schema)?;
         assert_eq!(restored, schema);
         Ok(())
     }
+
+    // fn roundtrip<T: TryInto<FFI_ArrowSchema>>(expected: T) {
+    //     let c_schema: FFI_ArrowSchema = expected.try_into().unwrap();
+    // }
 
     #[test]
     fn test_type() -> Result<()> {
@@ -326,12 +352,12 @@ mod tests {
             Field::new("a", DataType::Utf8, true),
             Field::new("b", DataType::Int16, false),
         ]);
-        let c_schema = CArrowSchema::try_from(&dtype)?;
+        let c_schema = FFI_ArrowSchema::try_from(&dtype)?;
         let schema = Schema::try_from(&c_schema)?;
         assert_eq!(schema.fields().len(), 2);
 
         // test that we assert the input type
-        let c_schema = CArrowSchema::try_from(&DataType::Float64)?;
+        let c_schema = FFI_ArrowSchema::try_from(&DataType::Float64)?;
         let result = Schema::try_from(&c_schema);
         assert_eq!(result.is_err(), true);
         Ok(())

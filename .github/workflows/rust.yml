@@ -325,9 +325,9 @@ jobs:
           python -m venv venv
           source venv/bin/activate
 
-          pip install maturin==0.8.2 toml==0.10.1 pyarrow==1.0.0 pytz
+          pip install maturin==0.8.2 toml==0.10.1 pyarrow==1.0.0 pytz pytest
           maturin develop
-          python -m unittest discover tests
+          pytest -v .
 
   # test the arrow crate builds against wasm32 in stable rust
   wasm32-build:

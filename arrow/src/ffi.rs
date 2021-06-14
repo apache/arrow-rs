@@ -330,10 +330,10 @@ pub struct FFI_ArrowArray {
     dictionary: *mut FFI_ArrowArray,
     release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
     // When exported, this MUST contain everything that is owned by this array.
-    // for example, any buffer pointed to in `buffers` must be here, as well as the `buffers` pointer
-    // itself.
-    // In other words, everything in [FFI_ArrowArray] must be owned by `private_data` and can assume
-    // that they do not outlive `private_data`.
+    // for example, any buffer pointed to in `buffers` must be here, as well
+    // as the `buffers` pointer itself.
+    // In other words, everything in [FFI_ArrowArray] must be owned by
+    // `private_data` and can assume that they do not outlive `private_data`.
     private_data: *mut c_void,
 }
 
@@ -354,7 +354,7 @@ unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
     let array = &mut *array;
 
     // take ownership of `private_data`, therefore dropping it`
-    let private = Box::from_raw(array.private_data as *mut PrivateData);
+    let private = Box::from_raw(array.private_data as *mut ArrayPrivateData);
     for child in private.children.iter() {
         let _ = Box::from_raw(*child);
     }
@@ -362,7 +362,7 @@ unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
     array.release = None;
 }
 
-struct PrivateData {
+struct ArrayPrivateData {
     buffers: Vec<Option<Buffer>>,
     buffers_ptr: Box<[*const c_void]>,
     children: Box<[*mut FFI_ArrowArray]>,
@@ -399,7 +399,7 @@ impl FFI_ArrowArray {
 
         // create the private data owning everything.
         // any other data must be added here, e.g. via a struct, to track lifetime.
-        let mut private_data = Box::new(PrivateData {
+        let mut private_data = Box::new(ArrayPrivateData {
             buffers,
             buffers_ptr,
             children,
