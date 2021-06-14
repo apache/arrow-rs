@@ -613,6 +613,30 @@ impl Array for FixedSizeBinaryArray {
 }
 
 /// A type of `DecimalArray` whose elements are binaries.
+///
+/// # Examples
+///
+/// ```
+///    use arrow::array::{Array, DecimalArray, DecimalBuilder};
+///    use arrow::datatypes::DataType;
+///    let mut builder = DecimalBuilder::new(30, 23, 6);
+///
+///    builder.append_value(8_887_000_000).unwrap();
+///    builder.append_null().unwrap();
+///    builder.append_value(-8_887_000_000).unwrap();
+///    let decimal_array: DecimalArray = builder.finish();
+///
+///    assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
+///    assert_eq!(8_887_000_000, decimal_array.value(0));
+///    assert_eq!("8887.000000", decimal_array.value_as_string(0));
+///    assert_eq!(3, decimal_array.len());
+///    assert_eq!(1, decimal_array.null_count());
+///    assert_eq!(32, decimal_array.value_offset(2));
+///    assert_eq!(16, decimal_array.value_length());
+///    assert_eq!(23, decimal_array.precision());
+///    assert_eq!(6, decimal_array.scale());
+/// ```
+///
 pub struct DecimalArray {
     data: ArrayData,
     value_data: RawPtrBox<u8>,
