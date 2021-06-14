@@ -627,6 +627,8 @@ impl Array for FixedSizeBinaryArray {
 ///    let decimal_array: DecimalArray = builder.finish();
 ///
 ///    assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
+///    assert_eq!(8_887_000_000, decimal_array.value(0));
+///    assert_eq!("8887.000000", decimal_array.value_as_string(0));
 ///    assert_eq!(3, decimal_array.len());
 ///    assert_eq!(1, decimal_array.null_count());
 ///    assert_eq!(32, decimal_array.value_offset(2));
