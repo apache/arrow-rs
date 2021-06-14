@@ -40,7 +40,6 @@ fn create_bool_array(size: usize, with_nulls: bool) -> ArrayRef {
     Arc::new(array)
 }
 
-
 fn bench_sort(array_a: &ArrayRef, array_b: &ArrayRef, limit: Option<usize>) {
     let columns = vec![
         SortColumn {
