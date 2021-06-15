@@ -661,7 +661,7 @@ pub(crate) mod private {
             _: &mut W,
             bit_writer: &mut BitWriter,
         ) -> Result<()> {
-            if bit_writer.bytes_written() + values.len() >= bit_writer.capacity() {
+            if bit_writer.bytes_written() + values.len() / 8 >= bit_writer.capacity() {
                 bit_writer.extend(256);
             }
             for value in values {
