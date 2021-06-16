@@ -350,6 +350,10 @@ impl ArrowJsonBatch {
                         let arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
                         arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
                     }
+                    DataType::Map(_, _) => {
+                        let arr = arr.as_any().downcast_ref::<MapArray>().unwrap();
+                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
+                    }
                     DataType::Decimal(_, _) => {
                         let arr = arr.as_any().downcast_ref::<DecimalArray>().unwrap();
                         arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
@@ -492,6 +496,7 @@ fn json_from_col(col: &ArrowJsonColumn, data_type: &DataType) -> Vec<Value> {
             json_from_fixed_size_list_col(col, field.data_type(), *list_size as usize)
         }
         DataType::Struct(fields) => json_from_struct_col(col, fields),
+        DataType::Map(field, keys_sorted) => json_from_map_col(col, field, *keys_sorted),
         DataType::Int64
         | DataType::UInt64
         | DataType::Date64
@@ -649,6 +654,51 @@ fn json_from_fixed_size_list_col(
     values
 }
 
+fn json_from_map_col(
+    col: &ArrowJsonColumn,
+    field: &Field,
+    _keys_sorted: bool,
+) -> Vec<Value> {
+    let mut values = Vec::with_capacity(col.count);
+
+    // get the inner array
+    let child = &col.children.clone().expect("list type must have children")[0];
+    let offsets: Vec<usize> = col
+        .offset
+        .clone()
+        .unwrap()
+        .iter()
+        .map(|o| match o {
+            Value::String(s) => s.parse::<usize>().unwrap(),
+            Value::Number(n) => n.as_u64().unwrap() as usize,
+            _ => panic!(
+                "Offsets should be numbers or strings that are convertible to numbers"
+            ),
+        })
+        .collect();
+
+    let inner = match field.data_type() {
+        DataType::Struct(fields) => json_from_struct_col(child, fields),
+        _ => panic!("Map child must be Struct"),
+    };
+
+    for i in 0..col.count {
+        match &col.validity {
+            Some(validity) => match &validity[i] {
+                0 => values.push(Value::Null),
+                1 => {
+                    values.push(Value::Array(inner[offsets[i]..offsets[i + 1]].to_vec()))
+                }
+                _ => panic!("Validity data should be 0 or 1"),
+            },
+            None => {
+                // Null type does not have a validity vector
+            }
+        }
+    }
+
+    values
+}
 #[cfg(test)]
 mod tests {
     use super::*;

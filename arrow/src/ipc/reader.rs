@@ -89,7 +89,7 @@ fn create_array(
             buffer_index += 2;
             array
         }
-        List(ref list_field) | LargeList(ref list_field) => {
+        List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
             let list_node = &nodes[node_index];
             let list_buffers: Vec<Buffer> = buffers[buffer_index..buffer_index + 2]
                 .iter()
@@ -371,6 +371,17 @@ fn create_list_array(
         let mut builder = ArrayData::builder(data_type.clone())
             .len(field_node.length() as usize)
             .buffers(buffers[1..1].to_vec())
+            .offset(0)
+            .child_data(vec![child_array.data().clone()]);
+        if null_count > 0 {
+            builder = builder.null_bit_buffer(buffers[0].clone())
+        }
+        make_array(builder.build())
+    } else if let DataType::Map(_, _) = *data_type {
+        let null_count = field_node.null_count() as usize;
+        let mut builder = ArrayData::builder(data_type.clone())
+            .len(field_node.length() as usize)
+            .buffers(buffers[1..2].to_vec())
             .offset(0)
             .child_data(vec![child_array.data().clone()]);
         if null_count > 0 {
@@ -931,6 +942,7 @@ mod tests {
             "generated_interval",
             "generated_datetime",
             "generated_dictionary",
+            "generated_map",
             "generated_nested",
             "generated_primitive_no_batches",
             "generated_primitive_zerolength",
@@ -972,6 +984,7 @@ mod tests {
             "generated_interval",
             "generated_datetime",
             "generated_dictionary",
+            "generated_map",
             "generated_nested",
             "generated_null_trivial",
             "generated_null",
@@ -999,6 +1012,7 @@ mod tests {
             "generated_interval",
             "generated_datetime",
             "generated_dictionary",
+            "generated_map",
             "generated_nested",
             "generated_primitive_no_batches",
             "generated_primitive_zerolength",
@@ -1033,6 +1047,8 @@ mod tests {
             "generated_interval",
             "generated_datetime",
             "generated_dictionary",
+            "generated_map",
+            // "generated_map_non_canonical",
             "generated_nested",
             "generated_null_trivial",
             "generated_null",
@@ -1064,6 +1080,8 @@ mod tests {
             "generated_interval",
             "generated_datetime",
             "generated_dictionary",
+            "generated_map",
+            // "generated_map_non_canonical",
             "generated_nested",
             "generated_null_trivial",
             "generated_null",
