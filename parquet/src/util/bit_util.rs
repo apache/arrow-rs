@@ -223,6 +223,20 @@ impl BitWriter {
         }
     }
 
+    /// Extend buffer size
+    #[inline]
+    pub fn extend(&mut self, increment: usize) {
+        self.max_bytes += increment;
+        let extra = vec![0; increment];
+        self.buffer.extend(extra);
+    }
+
+    /// Report buffer size
+    #[inline]
+    pub fn capacity(&mut self) -> usize {
+        self.max_bytes
+    }
+
     /// Consumes and returns the current buffer.
     #[inline]
     pub fn consume(mut self) -> Vec<u8> {
