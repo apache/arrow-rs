@@ -129,6 +129,20 @@ pub enum DataType {
     Dictionary(Box<DataType>, Box<DataType>),
     /// Decimal value with precision and scale
     Decimal(usize, usize),
+    /// A Map is a logical nested type that is represented as
+    ///
+    /// `List<entries: Struct<key: K, value: V>>`
+    ///
+    /// The keys and values are each respectively contiguous.
+    /// The key and value types are not constrained, but keys should be
+    /// hashable and unique.
+    /// Whether the keys are sorted can be set in the `bool` after the `Field`.
+    ///
+    /// In a field with Map type, the field has a child Struct field, which then
+    /// has two children: key type and the second the value type. The names of the
+    /// child fields may be respectively "entries", "key", and "value", but this is
+    /// not enforced.
+    Map(Box<Field>, bool),
 }
 
 /// An absolute length of time in seconds, milliseconds, microseconds or nanoseconds.
@@ -335,6 +349,16 @@ impl DataType {
                     // return an empty `struct` type as its children aren't defined in the map
                     Ok(DataType::Struct(vec![]))
                 }
+                Some(s) if s == "map" => {
+                    if let Some(Value::Bool(keys_sorted)) = map.get("keysSorted") {
+                        // Return a map with an empty type as its children aren't defined in the map
+                        Ok(DataType::Map(Box::new(default_field), *keys_sorted))
+                    } else {
+                        Err(ArrowError::ParseError(
+                            "Expecting a keysSorted for map".to_string(),
+                        ))
+                    }
+                }
                 Some(other) => Err(ArrowError::ParseError(format!(
                     "invalid or unsupported type name: {} in {:?}",
                     other, json
@@ -429,6 +453,9 @@ impl DataType {
             DataType::Decimal(precision, scale) => {
                 json!({"name": "decimal", "precision": precision, "scale": scale})
             }
+            DataType::Map(_, keys_sorted) => {
+                json!({"name": "map", "keysSorted": keys_sorted})
+            }
         }
     }
 
@@ -471,6 +498,10 @@ impl DataType {
                             && a.data_type().equals_datatype(b.data_type())
                     })
             }
+            (
+                DataType::Map(a_field, a_is_sorted),
+                DataType::Map(b_field, b_is_sorted),
+            ) => a_field == b_field && a_is_sorted == b_is_sorted,
             _ => self == other,
         }
     }
