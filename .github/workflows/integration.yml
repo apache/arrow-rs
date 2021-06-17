@@ -33,16 +33,13 @@ jobs:
           repository: apache/arrow
           submodules: true
           fetch-depth: 0
-      # this is temporary: once rust is removed from `apache/arrow`, we are good to go.
-      - name: Remove Rust from arrow
-        run: rm -rf rust/
       - name: Checkout Arrow Rust
         uses: actions/checkout@v2
         with:
           path: rust
           fetch-depth: 0
       - name: Setup Python
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v2
         with:
           python-version: 3.8
       - name: Setup Archery

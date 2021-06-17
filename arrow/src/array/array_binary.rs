@@ -613,6 +613,30 @@ impl Array for FixedSizeBinaryArray {
 }
 
 /// A type of `DecimalArray` whose elements are binaries.
+///
+/// # Examples
+///
+/// ```
+///    use arrow::array::{Array, DecimalArray, DecimalBuilder};
+///    use arrow::datatypes::DataType;
+///    let mut builder = DecimalBuilder::new(30, 23, 6);
+///
+///    builder.append_value(8_887_000_000).unwrap();
+///    builder.append_null().unwrap();
+///    builder.append_value(-8_887_000_000).unwrap();
+///    let decimal_array: DecimalArray = builder.finish();
+///
+///    assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
+///    assert_eq!(8_887_000_000, decimal_array.value(0));
+///    assert_eq!("8887.000000", decimal_array.value_as_string(0));
+///    assert_eq!(3, decimal_array.len());
+///    assert_eq!(1, decimal_array.null_count());
+///    assert_eq!(32, decimal_array.value_offset(2));
+///    assert_eq!(16, decimal_array.value_length());
+///    assert_eq!(23, decimal_array.precision());
+///    assert_eq!(6, decimal_array.scale());
+/// ```
+///
 pub struct DecimalArray {
     data: ArrayData,
     value_data: RawPtrBox<u8>,
@@ -664,6 +688,17 @@ impl DecimalArray {
     #[inline]
     fn value_offset_at(&self, i: usize) -> i32 {
         self.length * i as i32
+    }
+
+    #[inline]
+    pub fn value_as_string(&self, row: usize) -> String {
+        let decimal_string = self.value(row).to_string();
+        if self.scale == 0 {
+            decimal_string
+        } else {
+            let splits = decimal_string.split_at(decimal_string.len() - self.scale);
+            format!("{}.{}", splits.0, splits.1)
+        }
     }
 
     pub fn from_fixed_size_list_array(
@@ -729,7 +764,9 @@ impl fmt::Debug for DecimalArray {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "DecimalArray<{}, {}>\n[\n", self.precision, self.scale)?;
         print_long_array(self, f, |array, index, f| {
-            fmt::Debug::fmt(&array.value(index), f)
+            let formatted_decimal = array.value_as_string(index);
+
+            write!(f, "{}", formatted_decimal)
         })?;
         write!(f, "]")
     }
@@ -758,7 +795,7 @@ impl Array for DecimalArray {
 #[cfg(test)]
 mod tests {
     use crate::{
-        array::{LargeListArray, ListArray},
+        array::{DecimalBuilder, LargeListArray, ListArray},
         datatypes::Field,
     };
 
@@ -1163,17 +1200,16 @@ mod tests {
 
     #[test]
     fn test_decimal_array_fmt_debug() {
-        let values: [u8; 32] = [
-            192, 219, 180, 17, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 36, 75, 238, 253,
-            255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
-        ];
-        let array_data = ArrayData::builder(DataType::Decimal(23, 6))
-            .len(2)
-            .add_buffer(Buffer::from(&values[..]))
-            .build();
-        let arr = DecimalArray::from(array_data);
+        let values: Vec<i128> = vec![8887000000, -8887000000];
+        let mut decimal_builder = DecimalBuilder::new(3, 23, 6);
+
+        values.iter().for_each(|&value| {
+            decimal_builder.append_value(value).unwrap();
+        });
+        decimal_builder.append_null().unwrap();
+        let arr = decimal_builder.finish();
         assert_eq!(
-            "DecimalArray<23, 6>\n[\n  8887000000,\n  -8887000000,\n]",
+            "DecimalArray<23, 6>\n[\n  8887.000000,\n  -8887.000000,\n  null,\n]",
             format!("{:?}", arr)
         );
     }

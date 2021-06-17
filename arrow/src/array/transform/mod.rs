@@ -25,7 +25,7 @@ use std::mem;
 
 use super::{
     data::{into_buffers, new_buffers},
-    ArrayData,
+    ArrayData, ArrayDataBuilder,
 };
 use crate::array::StringOffsetSizeTrait;
 
@@ -63,7 +63,7 @@ struct _MutableArrayData<'a> {
 }
 
 impl<'a> _MutableArrayData<'a> {
-    fn freeze(self, dictionary: Option<ArrayData>) -> ArrayData {
+    fn freeze(self, dictionary: Option<ArrayData>) -> ArrayDataBuilder {
         let buffers = into_buffers(&self.data_type, self.buffer1, self.buffer2);
 
         let child_data = match self.data_type {
@@ -76,19 +76,19 @@ impl<'a> _MutableArrayData<'a> {
                 child_data
             }
         };
-        ArrayData::new(
-            self.data_type,
-            self.len,
-            Some(self.null_count),
-            if self.null_count > 0 {
-                Some(self.null_buffer.into())
-            } else {
-                None
-            },
-            0,
-            buffers,
-            child_data,
-        )
+
+        let mut array_data_builder = ArrayDataBuilder::new(self.data_type)
+            .offset(0)
+            .len(self.len)
+            .null_count(self.null_count)
+            .buffers(buffers)
+            .child_data(child_data);
+        if self.null_count > 0 {
+            array_data_builder =
+                array_data_builder.null_bit_buffer(self.null_buffer.into());
+        }
+
+        array_data_builder
     }
 }
 
@@ -552,8 +552,13 @@ impl<'a> MutableArrayData<'a> {
             .map(|array| build_extend_null_bits(array, use_nulls))
             .collect();
 
-        let null_bytes = bit_util::ceil(array_capacity, 8);
-        let null_buffer = MutableBuffer::from_len_zeroed(null_bytes);
+        let null_buffer = if use_nulls {
+            let null_bytes = bit_util::ceil(array_capacity, 8);
+            MutableBuffer::from_len_zeroed(null_bytes)
+        } else {
+            // create 0 capacity mutable buffer with the intention that it won't be used
+            MutableBuffer::with_capacity(0)
+        };
 
         let extend_values = match &data_type {
             DataType::Dictionary(_, _) => {
@@ -605,13 +610,40 @@ impl<'a> MutableArrayData<'a> {
 
     /// Extends this [MutableArrayData] with null elements, disregarding the bound arrays
     pub fn extend_nulls(&mut self, len: usize) {
+        // TODO: null_buffer should probably be extended here as well
+        // otherwise is_valid() could later panic
+        // add test to confirm
         self.data.null_count += len;
         (self.extend_nulls)(&mut self.data, len);
         self.data.len += len;
     }
 
+    /// Returns the current length
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.data.len
+    }
+
+    /// Returns true if len is 0
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.data.len == 0
+    }
+
+    /// Returns the current null count
+    #[inline]
+    pub fn null_count(&self) -> usize {
+        self.data.null_count
+    }
+
     /// Creates a [ArrayData] from the pushed regions up to this point, consuming `self`.
     pub fn freeze(self) -> ArrayData {
+        self.data.freeze(self.dictionary).build()
+    }
+
+    /// Creates a [ArrayDataBuilder] from the pushed regions up to this point, consuming `self`.
+    /// This is useful for extending the default behavior of MutableArrayData.
+    pub fn into_builder(self) -> ArrayDataBuilder {
         self.data.freeze(self.dictionary)
     }
 }

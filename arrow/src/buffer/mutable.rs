@@ -327,10 +327,10 @@ impl MutableBuffer {
     }
 
     /// Extends the buffer with a new item, without checking for sufficient capacity
-    /// Safety
+    /// # Safety
     /// Caller must ensure that the capacity()-len()>=size_of<T>()
     #[inline]
-    unsafe fn push_unchecked<T: ToByteSlice>(&mut self, item: T) {
+    pub unsafe fn push_unchecked<T: ToByteSlice>(&mut self, item: T) {
         let additional = std::mem::size_of::<T>();
         let dst = self.data.as_ptr().add(self.len) as *mut T;
         std::ptr::write(dst, item);

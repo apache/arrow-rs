@@ -757,11 +757,13 @@ impl ColumnDescriptor {
     }
 
     /// Returns maximum definition level for this column.
+    #[inline]
     pub fn max_def_level(&self) -> i16 {
         self.max_def_level
     }
 
     /// Returns maximum repetition level for this column.
+    #[inline]
     pub fn max_rep_level(&self) -> i16 {
         self.max_rep_level
     }

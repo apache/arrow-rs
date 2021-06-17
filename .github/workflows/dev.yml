@@ -27,19 +27,31 @@ env:
   ARCHERY_DOCKER_PASSWORD: ${{ secrets.DOCKERHUB_TOKEN }}
 
 jobs:
-  lint:
-    name: Lint C++, Python, R, Rust, Docker, RAT
+
+  rat:
+    name: Release Audit Tool (RAT)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout Arrow
+        uses: actions/checkout@v2
+        with:
+          repository: apache/arrow
+          submodules: true
+          fetch-depth: 0
+      - name: Checkout Arrow Rust
+        uses: actions/checkout@v2
+        with:
+          path: rust
+          fetch-depth: 0
       - name: Setup Python
         uses: actions/setup-python@v1
         with:
           python-version: 3.8
       - name: Setup Archery
-        run: pip install -e dev/archery[docker]
+        run: pip install -e dev/archery[lint]
       - name: Lint
         run: archery lint --rat
+
   prettier:
     name: Use prettier to check formatting of documents
     runs-on: ubuntu-latest

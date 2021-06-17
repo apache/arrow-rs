@@ -46,7 +46,7 @@ pub use self::encodings::{decoding, encoding};
 pub use self::util::memory;
 
 #[macro_use]
-mod util;
+pub mod util;
 #[cfg(any(feature = "arrow", test))]
 pub mod arrow;
 pub mod column;

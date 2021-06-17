@@ -60,7 +60,7 @@ use crate::arrow::converter::{
     Int96ArrayConverter, Int96Converter, IntervalDayTimeArrayConverter,
     IntervalDayTimeConverter, IntervalYearMonthArrayConverter,
     IntervalYearMonthConverter, LargeBinaryArrayConverter, LargeBinaryConverter,
-    LargeUtf8ArrayConverter, LargeUtf8Converter, Utf8ArrayConverter, Utf8Converter,
+    LargeUtf8ArrayConverter, LargeUtf8Converter,
 };
 use crate::arrow::record_reader::RecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
@@ -570,7 +570,7 @@ where
     T: DataType,
     C: Converter<Vec<Option<T::T>>, ArrayRef> + 'static,
 {
-    fn new(
+    pub fn new(
         pages: Box<dyn PageIterator>,
         column_desc: ColumnDescPtr,
         converter: C,
@@ -1499,12 +1499,12 @@ impl<'a> ArrayReaderBuilder {
                             arrow_type,
                         )?))
                     } else {
-                        let converter = Utf8Converter::new(Utf8ArrayConverter {});
-                        Ok(Box::new(ComplexObjectArrayReader::<
-                            ByteArrayType,
-                            Utf8Converter,
-                        >::new(
-                            page_iterator,
+                        use crate::arrow::arrow_array_reader::{
+                            ArrowArrayReader, StringArrayConverter,
+                        };
+                        let converter = StringArrayConverter::new();
+                        Ok(Box::new(ArrowArrayReader::try_new(
+                            *page_iterator,
                             column_desc,
                             converter,
                             arrow_type,
@@ -1728,7 +1728,7 @@ impl<'a> ArrayReaderBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::converter::Utf8Converter;
+    use crate::arrow::converter::{Utf8ArrayConverter, Utf8Converter};
     use crate::arrow::schema::parquet_to_arrow_schema;
     use crate::basic::{Encoding, Type as PhysicalType};
     use crate::column::page::{Page, PageReader};

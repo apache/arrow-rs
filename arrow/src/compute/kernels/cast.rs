@@ -956,7 +956,6 @@ const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 /// Arrays should have the same primitive data type, otherwise this should fail.
 /// We do not perform this check on primitive data types as we only use this
 /// function internally, where it is guaranteed to be infallible.
-#[allow(clippy::unnecessary_wraps)]
 fn cast_array_data<TO>(array: &ArrayRef, to_type: DataType) -> Result<ArrayRef>
 where
     TO: ArrowNumericType,
@@ -974,7 +973,6 @@ where
 }
 
 /// Convert Array into a PrimitiveArray of type, and apply numeric cast
-#[allow(clippy::unnecessary_wraps)]
 fn cast_numeric_arrays<FROM, TO>(from: &ArrayRef) -> Result<ArrayRef>
 where
     FROM: ArrowNumericType,
@@ -1006,7 +1004,6 @@ where
 }
 
 /// Cast numeric types to Utf8
-#[allow(clippy::unnecessary_wraps)]
 fn cast_numeric_to_string<FROM, OffsetSize>(array: &ArrayRef) -> Result<ArrayRef>
 where
     FROM: ArrowNumericType,
@@ -1035,7 +1032,6 @@ where
 }
 
 /// Cast numeric types to Utf8
-#[allow(clippy::unnecessary_wraps)]
 fn cast_string_to_numeric<T, Offset: StringOffsetSizeTrait>(
     from: &ArrayRef,
     cast_options: &CastOptions,
@@ -1101,7 +1097,6 @@ where
 }
 
 /// Casts generic string arrays to Date32Array
-#[allow(clippy::unnecessary_wraps)]
 fn cast_string_to_date32<Offset: StringOffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
@@ -1164,7 +1159,6 @@ fn cast_string_to_date32<Offset: StringOffsetSizeTrait>(
 }
 
 /// Casts generic string arrays to Date64Array
-#[allow(clippy::unnecessary_wraps)]
 fn cast_string_to_date64<Offset: StringOffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
@@ -1226,7 +1220,6 @@ fn cast_string_to_date64<Offset: StringOffsetSizeTrait>(
 }
 
 /// Casts generic string arrays to TimeStampNanosecondArray
-#[allow(clippy::unnecessary_wraps)]
 fn cast_string_to_timestamp_ns<Offset: StringOffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
@@ -1308,7 +1301,6 @@ where
 /// Cast Boolean types to numeric
 ///
 /// `false` returns 0 while `true` returns 1
-#[allow(clippy::unnecessary_wraps)]
 fn cast_bool_to_numeric<TO>(
     from: &ArrayRef,
     cast_options: &CastOptions,
@@ -1370,7 +1362,8 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                     )
                 })?;
 
-            let keys_array: ArrayRef = Arc::new(dict_array.keys_array());
+            let keys_array: ArrayRef =
+                Arc::new(PrimitiveArray::<K>::from(dict_array.keys().data().clone()));
             let values_array = dict_array.values();
             let cast_keys = cast_with_options(&keys_array, to_index_type, &cast_options)?;
             let cast_values =
@@ -1450,7 +1443,8 @@ where
         cast_with_options(&dict_array.values(), to_type, cast_options)?;
 
     // Note take requires first casting the indices to u32
-    let keys_array: ArrayRef = Arc::new(dict_array.keys_array());
+    let keys_array: ArrayRef =
+        Arc::new(PrimitiveArray::<K>::from(dict_array.keys().data().clone()));
     let indicies = cast_with_options(&keys_array, &DataType::UInt32, cast_options)?;
     let u32_indicies =
         indicies

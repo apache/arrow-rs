@@ -18,4 +18,4 @@
 pub mod decoding;
 pub mod encoding;
 pub mod levels;
-mod rle;
+pub(crate) mod rle;
