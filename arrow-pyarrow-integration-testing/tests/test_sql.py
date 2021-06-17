@@ -17,11 +17,12 @@
 # under the License.
 
 import contextlib
+import string
 
 import pytest
 import pyarrow as pa
 
-from arrow_pyarrow_integration_testing import PyDataType, PyField
+from arrow_pyarrow_integration_testing import PyDataType, PyField, PySchema
 import arrow_pyarrow_integration_testing as rust
 
 from pytz import timezone
@@ -130,13 +131,24 @@ def test_dictionary_type_roundtrip():
     assert ty.to_pyarrow() == pa.int32()
 
 
-# Missing implementation in pyarrow
-# @pytest.mark.parametrize('pyarrow_type', _supported_pyarrow_types, ids=str)
-# def test_field_roundtrip(pyarrow_type):
-#     for nullable in [True, False]:
-#         pyarrow_field = pa.field("test", pyarrow_type, nullable=nullable)
-#         field = PyField.from_pyarrow(pyarrow_field)
-#         assert field.to_pyarrow() == pyarrow_field
+@pytest.mark.parametrize('pyarrow_type', _supported_pyarrow_types, ids=str)
+def test_field_roundtrip(pyarrow_type):
+    pyarrow_field = pa.field("test", pyarrow_type, nullable=True)
+    field = PyField.from_pyarrow(pyarrow_field)
+    assert field.to_pyarrow() == pyarrow_field
+
+    if pyarrow_type != pa.null():
+        # A null type field may not be non-nullable
+        pyarrow_field = pa.field("test", pyarrow_type, nullable=False)
+        field = PyField.from_pyarrow(pyarrow_field)
+        assert field.to_pyarrow() == pyarrow_field
+
+
+def test_schema_roundtrip():
+    pyarrow_fields = zip(string.ascii_lowercase, _supported_pyarrow_types)
+    pyarrow_schema = pa.schema(pyarrow_fields)
+    schema = PySchema.from_pyarrow(pyarrow_schema)
+    assert schema.to_pyarrow() == pyarrow_schema
 
 
 def test_primitive_python():

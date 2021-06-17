@@ -22,7 +22,7 @@ use std::convert::TryFrom;
 use crate::{
     error::{ArrowError, Result},
     ffi,
-    ffi::ArrowArrayRef
+    ffi::ArrowArrayRef,
 };
 
 use super::ArrayData;

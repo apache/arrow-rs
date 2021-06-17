@@ -159,9 +159,9 @@ impl TryFrom<&FFI_ArrowSchema> for Schema {
         if let DataType::Struct(fields) = dtype {
             Ok(Schema::new(fields))
         } else {
-            Err(ArrowError::CDataInterface(format!(
-                "Unable to interpret C data struct as a Schema"
-            )))
+            Err(ArrowError::CDataInterface(
+                "Unable to interpret C data struct as a Schema".to_string(),
+            ))
         }
     }
 }
@@ -306,10 +306,6 @@ mod tests {
         Ok(())
     }
 
-    // fn roundtrip<T: TryInto<FFI_ArrowSchema>>(expected: T) {
-    //     let c_schema: FFI_ArrowSchema = expected.try_into().unwrap();
-    // }
-
     #[test]
     fn test_type() -> Result<()> {
         round_trip_type(DataType::Int64)?;
@@ -362,6 +358,4 @@ mod tests {
         assert_eq!(result.is_err(), true);
         Ok(())
     }
-
-    // TODO
 }

@@ -29,7 +29,7 @@ use pyo3::{libc::uintptr_t, prelude::*};
 
 use arrow::array::{make_array_from_raw, ArrayRef, Int64Array};
 use arrow::compute::kernels;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
 use arrow::ffi;
 use arrow::ffi::FFI_ArrowSchema;
@@ -76,6 +76,16 @@ struct PyDataType {
     inner: DataType,
 }
 
+#[pyclass]
+struct PyField {
+    inner: Field,
+}
+
+#[pyclass]
+struct PySchema {
+    inner: Schema,
+}
+
 #[pymethods]
 impl PyDataType {
     #[staticmethod]
@@ -84,7 +94,7 @@ impl PyDataType {
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         value.call_method1("_export_to_c", (c_schema_ptr as uintptr_t,))?;
         let dtype = DataType::try_from(&c_schema).map_err(PyO3ArrowError::from)?;
-        Ok(PyDataType { inner: dtype })
+        Ok(Self { inner: dtype })
     }
 
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
@@ -98,11 +108,6 @@ impl PyDataType {
     }
 }
 
-#[pyclass]
-struct PyField {
-    inner: Field,
-}
-
 #[pymethods]
 impl PyField {
     #[staticmethod]
@@ -111,7 +116,7 @@ impl PyField {
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         value.call_method1("_export_to_c", (c_schema_ptr as uintptr_t,))?;
         let field = Field::try_from(&c_schema).map_err(PyO3ArrowError::from)?;
-        Ok(PyField { inner: field })
+        Ok(Self { inner: field })
     }
 
     fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
@@ -122,6 +127,29 @@ impl PyField {
         let class = module.getattr("Field")?;
         let dtype = class.call_method1("_import_from_c", (c_schema_ptr as uintptr_t,))?;
         Ok(dtype.into())
+    }
+}
+
+#[pymethods]
+impl PySchema {
+    #[staticmethod]
+    fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        let c_schema = FFI_ArrowSchema::empty();
+        let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
+        value.call_method1("_export_to_c", (c_schema_ptr as uintptr_t,))?;
+        let schema = Schema::try_from(&c_schema).map_err(PyO3ArrowError::from)?;
+        Ok(Self { inner: schema })
+    }
+
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+        let c_schema =
+            FFI_ArrowSchema::try_from(&self.inner).map_err(PyO3ArrowError::from)?;
+        let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
+        let module = py.import("pyarrow")?;
+        let class = module.getattr("Schema")?;
+        let schema =
+            class.call_method1("_import_from_c", (c_schema_ptr as uintptr_t,))?;
+        Ok(schema.into())
     }
 }
 
@@ -137,10 +165,11 @@ impl<'source> FromPyObject<'source> for PyField {
     }
 }
 
-// struct PyField(Field);
-// struct PySchema(Schema);
-
-// fn type_to_rust(ob: PyObject, py: Python) -> PyResult<ArrayRef> {
+impl<'source> FromPyObject<'source> for PySchema {
+    fn extract(value: &'source PyAny) -> PyResult<Self> {
+        PySchema::from_pyarrow(value)
+    }
+}
 
 fn array_to_rust(ob: PyObject, py: Python) -> PyResult<ArrayRef> {
     // prepare a pointer to receive the Array struct
@@ -156,13 +185,12 @@ fn array_to_rust(ob: PyObject, py: Python) -> PyResult<ArrayRef> {
     )?;
 
     let array = unsafe { make_array_from_raw(array_pointer, schema_pointer) }
-        .map_err(|e| PyO3ArrowError::from(e))?;
+        .map_err(PyO3ArrowError::from)?;
     Ok(array)
 }
 
 fn array_to_py(array: ArrayRef, py: Python) -> PyResult<PyObject> {
-    let (array_pointer, schema_pointer) =
-        array.to_raw().map_err(|e| PyO3ArrowError::from(e))?;
+    let (array_pointer, schema_pointer) = array.to_raw().map_err(PyO3ArrowError::from)?;
 
     let pa = py.import("pyarrow")?;
 
@@ -183,15 +211,10 @@ fn double(array: PyObject, py: Python) -> PyResult<PyObject> {
     let array = array_to_rust(array, py)?;
 
     // perform some operation
-    let array =
-        array
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or(PyO3ArrowError::ArrowError(ArrowError::ParseError(
-                "Expects an int64".to_string(),
-            )))?;
-    let array =
-        kernels::arithmetic::add(&array, &array).map_err(|e| PyO3ArrowError::from(e))?;
+    let array = array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
+        PyO3ArrowError::ArrowError(ArrowError::ParseError("Expects an int64".to_string()))
+    })?;
+    let array = kernels::arithmetic::add(&array, &array).map_err(PyO3ArrowError::from)?;
     let array = Arc::new(array);
 
     // export
@@ -222,7 +245,7 @@ fn substring(array: PyObject, start: i64, py: Python) -> PyResult<PyObject> {
 
     // substring
     let array = kernels::substring::substring(array.as_ref(), start, &None)
-        .map_err(|e| PyO3ArrowError::from(e))?;
+        .map_err(PyO3ArrowError::from)?;
 
     // export
     array_to_py(array, py)
@@ -236,7 +259,7 @@ fn concatenate(array: PyObject, py: Python) -> PyResult<PyObject> {
 
     // concat
     let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()])
-        .map_err(|e| PyO3ArrowError::from(e))?;
+        .map_err(PyO3ArrowError::from)?;
 
     // export
     array_to_py(array, py)
@@ -256,6 +279,7 @@ fn round_trip(pyarray: PyObject, py: Python) -> PyResult<PyObject> {
 fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyDataType>()?;
     m.add_class::<PyField>()?;
+    m.add_class::<PySchema>()?;
     m.add_wrapped(wrap_pyfunction!(double))?;
     m.add_wrapped(wrap_pyfunction!(double_py))?;
     m.add_wrapped(wrap_pyfunction!(substring))?;
