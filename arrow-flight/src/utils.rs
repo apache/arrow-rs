@@ -100,7 +100,7 @@ pub fn flight_data_from_arrow_schema(
 /// Convert a `Schema` to bytes in the format expected in `FlightInfo.schema`
 #[deprecated(
     since = "4.3.0",
-    note = "Use From trait, e.g.: (schema, options).into()"
+    note = "Use TryFrom trait, e.g.: (schema, options).try_into()"
 )]
 pub fn ipc_message_from_arrow_schema(
     schema: &Schema,
