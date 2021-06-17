@@ -31,9 +31,10 @@ use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_server::FlightService,
     flight_service_server::FlightServiceServer, Action, ActionType, Criteria, Empty,
     FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, PutResult, SchemaResult, Ticket,
+    HandshakeResponse, IpcMessage, PutResult, SchemaAsIpc, SchemaResult, Ticket,
 };
 use futures::{channel::mpsc, sink::SinkExt, Stream, StreamExt};
+use std::convert::TryInto;
 use tokio::sync::Mutex;
 use tonic::{transport::Server, Request, Response, Status, Streaming};
 
@@ -111,12 +112,8 @@ impl FlightService for FlightServiceImpl {
 
         let options = arrow::ipc::writer::IpcWriteOptions::default();
 
-        let schema = std::iter::once({
-            Ok(arrow_flight::utils::flight_data_from_arrow_schema(
-                &flight.schema,
-                &options,
-            ))
-        });
+        let schema =
+            std::iter::once(Ok(SchemaAsIpc::new(&flight.schema, &options).into()));
 
         let batches = flight
             .chunks
@@ -179,14 +176,13 @@ impl FlightService for FlightServiceImpl {
                     flight.chunks.iter().map(|chunk| chunk.num_rows()).sum();
 
                 let options = arrow::ipc::writer::IpcWriteOptions::default();
-                let schema = arrow_flight::utils::ipc_message_from_arrow_schema(
-                    &flight.schema,
-                    &options,
-                )
-                .expect(
-                    "Could not generate schema bytes from schema stored by a DoPut; \
+                let message = SchemaAsIpc::new(&flight.schema, &options)
+                    .try_into()
+                    .expect(
+                        "Could not generate schema bytes from schema stored by a DoPut; \
                          this should be impossible",
-                );
+                    );
+                let IpcMessage(schema) = message;
 
                 let info = FlightInfo {
                     schema,

@@ -25,7 +25,8 @@ use arrow::{
 };
 use arrow_flight::{
     flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,
-    utils::flight_data_to_arrow_batch, FlightData, FlightDescriptor, Location, Ticket,
+    utils::flight_data_to_arrow_batch, FlightData, FlightDescriptor, Location,
+    SchemaAsIpc, Ticket,
 };
 use futures::{channel::mpsc, sink::SinkExt, stream, StreamExt};
 use tonic::{Request, Streaming};
@@ -73,8 +74,8 @@ async fn upload_data(
     let (mut upload_tx, upload_rx) = mpsc::channel(10);
 
     let options = arrow::ipc::writer::IpcWriteOptions::default();
-    let mut schema_flight_data =
-        arrow_flight::utils::flight_data_from_arrow_schema(&schema, &options);
+    let mut schema_flight_data: FlightData = SchemaAsIpc::new(&schema, &options).into();
+    // arrow_flight::utils::flight_data_from_arrow_schema(&schema, &options);
     schema_flight_data.flight_descriptor = Some(descriptor.clone());
     upload_tx.send(schema_flight_data).await?;
 
