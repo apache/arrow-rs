@@ -50,6 +50,7 @@ pub mod flight_service_server {
 
 pub use gen::Action;
 pub use gen::ActionType;
+pub use gen::BasicAuth;
 pub use gen::Criteria;
 pub use gen::Empty;
 pub use gen::FlightData;
