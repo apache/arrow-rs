@@ -201,9 +201,6 @@ fn array_to_py(array: ArrayRef, py: Python) -> PyResult<PyObject> {
     Ok(array.to_object(py))
 }
 
-/// Casts `array` to the target type
-//#[pyfunction]
-
 /// Returns `array + array` of an int64 array.
 #[pyfunction]
 fn double(array: PyObject, py: Python) -> PyResult<PyObject> {

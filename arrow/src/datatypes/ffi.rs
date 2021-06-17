@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains functionality to load an ArrayData from the C Data Interface
-
 use std::convert::TryFrom;
 
 use crate::{
