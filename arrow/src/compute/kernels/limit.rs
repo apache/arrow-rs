@@ -67,7 +67,7 @@ mod tests {
         let b = limit(&a, 1);
         let c = b.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(1, c.len());
-        assert_eq!(true, c.is_null(0));
+        assert!(c.is_null(0));
     }
 
     #[test]
@@ -186,7 +186,7 @@ mod tests {
         assert!(sliced_c0.is_valid(0));
         assert!(sliced_c0.is_null(1));
         assert!(sliced_c0.is_null(2));
-        assert_eq!(false, sliced_c0.value(0));
+        assert!(!sliced_c0.value(0));
 
         let sliced_c1 = sliced_array.column(1);
         let sliced_c1 = sliced_c1.as_any().downcast_ref::<Int32Array>().unwrap();

@@ -340,9 +340,9 @@ mod tests {
         assert_eq!(None, tensor.shape());
         assert_eq!(None, tensor.names());
         assert_eq!(0, tensor.ndim());
-        assert_eq!(false, tensor.is_row_major().unwrap());
-        assert_eq!(false, tensor.is_column_major().unwrap());
-        assert_eq!(false, tensor.is_contiguous().unwrap());
+        assert!(!tensor.is_row_major().unwrap());
+        assert!(!tensor.is_column_major().unwrap());
+        assert!(!tensor.is_contiguous().unwrap());
 
         let buf = Buffer::from(&[1, 2, 2, 2]);
         let tensor = Int32Tensor::try_new(buf, None, None, None).unwrap();
@@ -350,9 +350,9 @@ mod tests {
         assert_eq!(None, tensor.shape());
         assert_eq!(None, tensor.names());
         assert_eq!(0, tensor.ndim());
-        assert_eq!(false, tensor.is_row_major().unwrap());
-        assert_eq!(false, tensor.is_column_major().unwrap());
-        assert_eq!(false, tensor.is_contiguous().unwrap());
+        assert!(!tensor.is_row_major().unwrap());
+        assert!(!tensor.is_column_major().unwrap());
+        assert!(!tensor.is_contiguous().unwrap());
     }
 
     #[test]
@@ -383,9 +383,9 @@ mod tests {
         assert_eq!(Some(vec![32_usize, 4]).as_ref(), tensor.strides());
         assert_eq!(None, tensor.names());
         assert_eq!(2, tensor.ndim());
-        assert_eq!(true, tensor.is_row_major().unwrap());
-        assert_eq!(false, tensor.is_column_major().unwrap());
-        assert_eq!(true, tensor.is_contiguous().unwrap());
+        assert!(tensor.is_row_major().unwrap());
+        assert!(!tensor.is_column_major().unwrap());
+        assert!(tensor.is_contiguous().unwrap());
     }
 
     #[test]
@@ -401,9 +401,9 @@ mod tests {
         assert_eq!(Some(vec![4_usize, 8]).as_ref(), tensor.strides());
         assert_eq!(None, tensor.names());
         assert_eq!(2, tensor.ndim());
-        assert_eq!(false, tensor.is_row_major().unwrap());
-        assert_eq!(true, tensor.is_column_major().unwrap());
-        assert_eq!(true, tensor.is_contiguous().unwrap());
+        assert!(!tensor.is_row_major().unwrap());
+        assert!(tensor.is_column_major().unwrap());
+        assert!(tensor.is_contiguous().unwrap());
     }
 
     #[test]
@@ -422,9 +422,9 @@ mod tests {
         assert_eq!("Dim 1", tensor.dim_name(0).unwrap());
         assert_eq!("Dim 2", tensor.dim_name(1).unwrap());
         assert_eq!(2, tensor.ndim());
-        assert_eq!(false, tensor.is_row_major().unwrap());
-        assert_eq!(true, tensor.is_column_major().unwrap());
-        assert_eq!(true, tensor.is_contiguous().unwrap());
+        assert!(!tensor.is_row_major().unwrap());
+        assert!(tensor.is_column_major().unwrap());
+        assert!(tensor.is_contiguous().unwrap());
     }
 
     #[test]

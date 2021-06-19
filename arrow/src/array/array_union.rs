@@ -390,7 +390,7 @@ mod tests {
 
         assert_eq!(expected_array_values.len(), union.len());
         for (i, expected_value) in expected_array_values.iter().enumerate() {
-            assert_eq!(false, union.is_null(i));
+            assert!(!union.is_null(i));
             let slot = union.value(i);
             let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
             assert_eq!(slot.len(), 1);
@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(5, union.len());
         for i in 0..union.len() {
             let slot = union.value(i);
-            assert_eq!(false, union.is_null(i));
+            assert!(!union.is_null(i));
             match i {
                 0 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -465,21 +465,21 @@ mod tests {
             match i {
                 0 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert_eq!(false, union.is_null(i));
+                    assert!(!union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(1_i32, value);
                 }
                 1 => {
                     let slot = slot.as_any().downcast_ref::<Int64Array>().unwrap();
-                    assert_eq!(false, union.is_null(i));
+                    assert!(!union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(3_i64, value);
                 }
                 2 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert_eq!(false, union.is_null(i));
+                    assert!(!union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(10_i32, value);
@@ -487,7 +487,7 @@ mod tests {
                 3 => assert!(union.is_null(i)),
                 4 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert_eq!(false, union.is_null(i));
+                    assert!(!union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(6_i32, value);
@@ -516,7 +516,7 @@ mod tests {
             match i {
                 0 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert_eq!(false, union.is_null(i));
+                    assert!(!union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(10_i32, value);
@@ -524,7 +524,7 @@ mod tests {
                 1 => assert!(new_union.is_null(i)),
                 2 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert_eq!(false, union.is_null(i));
+                    assert!(!union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(6_i32, value);
@@ -666,7 +666,7 @@ mod tests {
 
         assert_eq!(expected_array_values.len(), union.len());
         for (i, expected_value) in expected_array_values.iter().enumerate() {
-            assert_eq!(false, union.is_null(i));
+            assert!(!union.is_null(i));
             let slot = union.value(i);
             let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
             assert_eq!(slot.len(), 1);
@@ -701,7 +701,7 @@ mod tests {
 
         for i in 0..union.len() {
             let slot = union.value(i);
-            assert_eq!(false, union.is_null(i));
+            assert!(!union.is_null(i));
             match i {
                 0 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -766,7 +766,7 @@ mod tests {
             match i {
                 0 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert_eq!(false, union.is_null(i));
+                    assert!(!union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(1_i32, value);
@@ -774,14 +774,14 @@ mod tests {
                 1 => assert!(union.is_null(i)),
                 2 => {
                     let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
-                    assert_eq!(false, union.is_null(i));
+                    assert!(!union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert!(value - 3_f64 < f64::EPSILON);
                 }
                 3 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert_eq!(false, union.is_null(i));
+                    assert!(!union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(4_i32, value);
@@ -811,7 +811,7 @@ mod tests {
                 0 => assert!(new_union.is_null(i)),
                 1 => {
                     let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
-                    assert_eq!(false, new_union.is_null(i));
+                    assert!(!new_union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert!(value - 3_f64 < f64::EPSILON);
@@ -819,7 +819,7 @@ mod tests {
                 2 => assert!(new_union.is_null(i)),
                 3 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert_eq!(false, new_union.is_null(i));
+                    assert!(!new_union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(4_i32, value);
