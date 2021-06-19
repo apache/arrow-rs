@@ -926,8 +926,8 @@ mod tests {
                 .get_value::<bool>(1)
                 .expect("get_value() should return OK");
             match i {
-                0 | 1 | 4 | 5 => assert_eq!(val, false),
-                _ => assert_eq!(val, true),
+                0 | 1 | 4 | 5 => assert!(!val),
+                _ => assert!(val),
             }
         }
     }

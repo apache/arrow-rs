@@ -588,7 +588,7 @@ impl<R: Read + Seek> FileReader<R> {
             if message_size == CONTINUATION_MARKER {
                 reader.read_exact(&mut message_size)?;
             }
-            let footer_len =  i32::from_le_bytes(message_size);
+            let footer_len = i32::from_le_bytes(message_size);
 
             let mut block_data = vec![0; footer_len as usize];
 
