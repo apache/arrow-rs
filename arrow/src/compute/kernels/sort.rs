@@ -950,7 +950,6 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
     use std::convert::TryFrom;
-    use std::iter::FromIterator;
     use std::sync::Arc;
 
     fn test_sort_to_indices_boolean_arrays(

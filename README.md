@@ -111,7 +111,7 @@ By default, `cargo test` will look for these directories at their
 standard location. The following environment variables can be used to override the location:
 
 ```bash
-# Optionaly specify a different location for test data
+# Optionally specify a different location for test data
 export PARQUET_TEST_DATA=$(cd ../parquet-testing/data; pwd)
 export ARROW_TEST_DATA=$(cd ../testing/data; pwd)
 ```
@@ -147,7 +147,7 @@ We recommend using `clippy` for checking lints during development. While we do n
 
 Run the following to check for clippy lints.
 
-```
+```bash
 cargo clippy
 ```
 
@@ -175,7 +175,7 @@ ls -l .git/hooks/pre-commit
 If the file already exists, to avoid mistakenly **overriding**, you MAY have to check
 the link source or file content. Else if not exist, let's safely soft link [pre-commit.sh](pre-commit.sh) as file `.git/hooks/pre-commit`:
 
-```
+```bash
 ln -s  ../../rust/pre-commit.sh .git/hooks/pre-commit
 ```
 

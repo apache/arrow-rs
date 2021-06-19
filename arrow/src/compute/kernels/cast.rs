@@ -1799,12 +1799,12 @@ mod tests {
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::UInt8).unwrap();
         let c = b.as_any().downcast_ref::<UInt8Array>().unwrap();
-        assert_eq!(false, c.is_valid(0));
+        assert!(!c.is_valid(0));
         assert_eq!(6, c.value(1));
-        assert_eq!(false, c.is_valid(2));
+        assert!(!c.is_valid(2));
         assert_eq!(8, c.value(3));
         // overflows return None
-        assert_eq!(false, c.is_valid(4));
+        assert!(!c.is_valid(4));
     }
 
     #[test]
@@ -1818,10 +1818,10 @@ mod tests {
         assert_eq!(3, b.len());
         assert_eq!(0, b.offset());
         let c = b.as_any().downcast_ref::<UInt8Array>().unwrap();
-        assert_eq!(false, c.is_valid(0));
+        assert!(!c.is_valid(0));
         assert_eq!(8, c.value(1));
         // overflows return None
-        assert_eq!(false, c.is_valid(2));
+        assert!(!c.is_valid(2));
     }
 
     #[test]
@@ -1885,7 +1885,7 @@ mod tests {
         let c = values.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(1, c.null_count());
         assert_eq!(5, c.value(0));
-        assert_eq!(false, c.is_valid(1));
+        assert!(!c.is_valid(1));
         assert_eq!(7, c.value(2));
         assert_eq!(8, c.value(3));
         assert_eq!(9, c.value(4));
@@ -1914,7 +1914,7 @@ mod tests {
         assert_eq!(1, c.null_count());
         assert!(7.0 - c.value(0) < f64::EPSILON);
         assert!(8.0 - c.value(1) < f64::EPSILON);
-        assert_eq!(false, c.is_valid(2));
+        assert!(!c.is_valid(2));
         assert!(10.0 - c.value(3) < f64::EPSILON);
     }
 
@@ -1926,9 +1926,9 @@ mod tests {
         let c = b.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(5, c.value(0));
         assert_eq!(6, c.value(1));
-        assert_eq!(false, c.is_valid(2));
+        assert!(!c.is_valid(2));
         assert_eq!(8, c.value(3));
-        assert_eq!(false, c.is_valid(4));
+        assert!(!c.is_valid(4));
     }
 
     #[test]
@@ -1955,7 +1955,7 @@ mod tests {
         let c = b.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(1, c.value(0));
         assert_eq!(0, c.value(1));
-        assert_eq!(false, c.is_valid(2));
+        assert!(!c.is_valid(2));
     }
 
     #[test]
@@ -1966,7 +1966,7 @@ mod tests {
         let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
         assert!(1.0 - c.value(0) < f64::EPSILON);
         assert!(0.0 - c.value(1) < f64::EPSILON);
-        assert_eq!(false, c.is_valid(2));
+        assert!(!c.is_valid(2));
     }
 
     #[test]
@@ -2029,11 +2029,11 @@ mod tests {
         assert_eq!(0, u16arr.value(0));
         assert_eq!(0, u16arr.value(1));
         assert_eq!(0, u16arr.value(2));
-        assert_eq!(false, u16arr.is_valid(3));
-        assert_eq!(false, u16arr.is_valid(4));
-        assert_eq!(false, u16arr.is_valid(5));
+        assert!(!u16arr.is_valid(3));
+        assert!(!u16arr.is_valid(4));
+        assert!(!u16arr.is_valid(5));
         assert_eq!(2, u16arr.value(6));
-        assert_eq!(false, u16arr.is_valid(7));
+        assert!(!u16arr.is_valid(7));
     }
 
     #[test]
@@ -3485,18 +3485,18 @@ mod tests {
         // test valid inputs
         let date_value = since(NaiveDate::from_ymd(2000, 1, 1), from_ymd(1970, 1, 1))
             .num_days() as i32;
-        assert_eq!(true, c.is_valid(0)); // "2000-01-01"
+        assert!(c.is_valid(0)); // "2000-01-01"
         assert_eq!(date_value, c.value(0));
 
         let date_value = since(NaiveDate::from_ymd(2000, 2, 2), from_ymd(1970, 1, 1))
             .num_days() as i32;
-        assert_eq!(true, c.is_valid(1)); // "2000-2-2"
+        assert!(c.is_valid(1)); // "2000-2-2"
         assert_eq!(date_value, c.value(1));
 
         // test invalid inputs
-        assert_eq!(false, c.is_valid(2)); // "2000-00-00"
-        assert_eq!(false, c.is_valid(3)); // "2000-01-01T12:00:00"
-        assert_eq!(false, c.is_valid(4)); // "2000"
+        assert!(!c.is_valid(2)); // "2000-00-00"
+        assert!(!c.is_valid(3)); // "2000-01-01T12:00:00"
+        assert!(!c.is_valid(4)); // "2000"
     }
 
     #[test]
@@ -3514,17 +3514,17 @@ mod tests {
         let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
 
         // test valid inputs
-        assert_eq!(true, c.is_valid(0)); // "2000-01-01T12:00:00"
+        assert!(c.is_valid(0)); // "2000-01-01T12:00:00"
         assert_eq!(946728000000, c.value(0));
-        assert_eq!(true, c.is_valid(1)); // "2020-12-15T12:34:56"
+        assert!(c.is_valid(1)); // "2020-12-15T12:34:56"
         assert_eq!(1608035696000, c.value(1));
-        assert_eq!(true, c.is_valid(2)); // "2020-2-2T12:34:56"
+        assert!(c.is_valid(2)); // "2020-2-2T12:34:56"
         assert_eq!(1580646896000, c.value(2));
 
         // test invalid inputs
-        assert_eq!(false, c.is_valid(3)); // "2000-00-00T12:00:00"
-        assert_eq!(false, c.is_valid(4)); // "2000-01-01 12:00:00"
-        assert_eq!(false, c.is_valid(5)); // "2000-01-01"
+        assert!(!c.is_valid(3)); // "2000-00-00T12:00:00"
+        assert!(!c.is_valid(4)); // "2000-01-01 12:00:00"
+        assert!(!c.is_valid(5)); // "2000-01-01"
     }
 
     #[test]

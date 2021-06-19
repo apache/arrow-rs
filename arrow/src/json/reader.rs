@@ -43,7 +43,6 @@
 //! ```
 
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
-use std::iter::FromIterator;
 use std::sync::Arc;
 
 use indexmap::map::IndexMap as HashMap;
@@ -1018,16 +1017,16 @@ impl Decoder {
                     "Temporal types are not yet supported, see ARROW-4803".to_string(),
                 ))
             }
-            DataType::Utf8 => {
-                StringArray::from_iter(flatten_json_string_values(rows).into_iter())
-                    .data()
-                    .clone()
-            }
-            DataType::LargeUtf8 => {
-                LargeStringArray::from_iter(flatten_json_string_values(rows).into_iter())
-                    .data()
-                    .clone()
-            }
+            DataType::Utf8 => flatten_json_string_values(rows)
+                .into_iter()
+                .collect::<StringArray>()
+                .data()
+                .clone(),
+            DataType::LargeUtf8 => flatten_json_string_values(rows)
+                .into_iter()
+                .collect::<LargeStringArray>()
+                .data()
+                .clone(),
             DataType::List(field) => {
                 let child = self
                     .build_nested_list_array::<i32>(&flatten_json_values(rows), field)?;
@@ -1347,7 +1346,7 @@ impl Decoder {
                 }
             })
             .collect::<Vec<Option<T::Native>>>();
-        let array = PrimitiveArray::<T>::from_iter(values.iter());
+        let array = values.iter().collect::<PrimitiveArray<T>>();
         array.data().clone()
     }
 }
@@ -1628,8 +1627,8 @@ mod tests {
             .as_any()
             .downcast_ref::<BooleanArray>()
             .unwrap();
-        assert_eq!(false, cc.value(0));
-        assert_eq!(true, cc.value(10));
+        assert!(!cc.value(0));
+        assert!(cc.value(10));
         let dd = batch
             .column(d.0)
             .as_any()
@@ -1668,34 +1667,34 @@ mod tests {
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
-        assert_eq!(true, aa.is_valid(0));
-        assert_eq!(false, aa.is_valid(1));
-        assert_eq!(false, aa.is_valid(11));
+        assert!(aa.is_valid(0));
+        assert!(!aa.is_valid(1));
+        assert!(!aa.is_valid(11));
         let bb = batch
             .column(b.0)
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert_eq!(true, bb.is_valid(0));
-        assert_eq!(false, bb.is_valid(2));
-        assert_eq!(false, bb.is_valid(11));
+        assert!(bb.is_valid(0));
+        assert!(!bb.is_valid(2));
+        assert!(!bb.is_valid(11));
         let cc = batch
             .column(c.0)
             .as_any()
             .downcast_ref::<BooleanArray>()
             .unwrap();
-        assert_eq!(true, cc.is_valid(0));
-        assert_eq!(false, cc.is_valid(4));
-        assert_eq!(false, cc.is_valid(11));
+        assert!(cc.is_valid(0));
+        assert!(!cc.is_valid(4));
+        assert!(!cc.is_valid(11));
         let dd = batch
             .column(d.0)
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
-        assert_eq!(false, dd.is_valid(0));
-        assert_eq!(true, dd.is_valid(1));
-        assert_eq!(false, dd.is_valid(4));
-        assert_eq!(false, dd.is_valid(11));
+        assert!(!dd.is_valid(0));
+        assert!(dd.is_valid(1));
+        assert!(!dd.is_valid(4));
+        assert!(!dd.is_valid(11));
     }
 
     #[test]
@@ -1738,7 +1737,7 @@ mod tests {
             .unwrap();
         assert_eq!(1, aa.value(0));
         // test that a 64bit value is returned as null due to overflowing
-        assert_eq!(false, aa.is_valid(11));
+        assert!(!aa.is_valid(11));
         let bb = batch
             .column(b.0)
             .as_any()
@@ -1834,7 +1833,7 @@ mod tests {
         assert_eq!(9, bb.len());
         assert!(2.0 - bb.value(0) < f64::EPSILON);
         assert!(-6.1 - bb.value(5) < f64::EPSILON);
-        assert_eq!(false, bb.is_valid(7));
+        assert!(!bb.is_valid(7));
 
         let cc = batch
             .column(c.0)
@@ -1844,9 +1843,9 @@ mod tests {
         let cc = cc.values();
         let cc = cc.as_any().downcast_ref::<BooleanArray>().unwrap();
         assert_eq!(6, cc.len());
-        assert_eq!(false, cc.value(0));
-        assert_eq!(false, cc.value(4));
-        assert_eq!(false, cc.is_valid(5));
+        assert!(!cc.value(0));
+        assert!(!cc.value(4));
+        assert!(!cc.is_valid(5));
     }
 
     #[test]
@@ -2203,10 +2202,10 @@ mod tests {
             .as_any()
             .downcast_ref::<DictionaryArray<Int16Type>>()
             .unwrap();
-        assert_eq!(false, dd.is_valid(0));
-        assert_eq!(true, dd.is_valid(1));
-        assert_eq!(true, dd.is_valid(2));
-        assert_eq!(false, dd.is_valid(11));
+        assert!(!dd.is_valid(0));
+        assert!(dd.is_valid(1));
+        assert!(dd.is_valid(2));
+        assert!(!dd.is_valid(11));
 
         assert_eq!(
             dd.keys(),
@@ -2394,7 +2393,7 @@ mod tests {
             .downcast_ref::<DictionaryArray<UInt64Type>>()
             .unwrap();
         assert_eq!(6, evs_list.len());
-        assert_eq!(true, evs_list.is_valid(1));
+        assert!(evs_list.is_valid(1));
         assert_eq!(DataType::Utf8, evs_list.value_type());
 
         // dict from the events list
@@ -2455,7 +2454,7 @@ mod tests {
             .downcast_ref::<DictionaryArray<UInt64Type>>()
             .unwrap();
         assert_eq!(8, evs_list.len());
-        assert_eq!(true, evs_list.is_valid(1));
+        assert!(evs_list.is_valid(1));
         assert_eq!(DataType::Utf8, evs_list.value_type());
 
         // dict from the events list
@@ -2750,9 +2749,9 @@ mod tests {
             .as_any()
             .downcast_ref::<TimestampSecondArray>()
             .unwrap();
-        assert_eq!(true, aa.is_valid(0));
-        assert_eq!(false, aa.is_valid(1));
-        assert_eq!(false, aa.is_valid(2));
+        assert!(aa.is_valid(0));
+        assert!(!aa.is_valid(1));
+        assert!(!aa.is_valid(2));
         assert_eq!(1, aa.value(0));
         assert_eq!(1, aa.value(3));
         assert_eq!(5, aa.value(7));
@@ -2792,9 +2791,9 @@ mod tests {
             .as_any()
             .downcast_ref::<TimestampMillisecondArray>()
             .unwrap();
-        assert_eq!(true, aa.is_valid(0));
-        assert_eq!(false, aa.is_valid(1));
-        assert_eq!(false, aa.is_valid(2));
+        assert!(aa.is_valid(0));
+        assert!(!aa.is_valid(1));
+        assert!(!aa.is_valid(2));
         assert_eq!(1, aa.value(0));
         assert_eq!(1, aa.value(3));
         assert_eq!(5, aa.value(7));
@@ -2827,9 +2826,9 @@ mod tests {
             .as_any()
             .downcast_ref::<Date64Array>()
             .unwrap();
-        assert_eq!(true, aa.is_valid(0));
-        assert_eq!(false, aa.is_valid(1));
-        assert_eq!(false, aa.is_valid(2));
+        assert!(aa.is_valid(0));
+        assert!(!aa.is_valid(1));
+        assert!(!aa.is_valid(2));
         assert_eq!(1, aa.value(0));
         assert_eq!(1, aa.value(3));
         assert_eq!(5, aa.value(7));
@@ -2866,9 +2865,9 @@ mod tests {
             .as_any()
             .downcast_ref::<Time64NanosecondArray>()
             .unwrap();
-        assert_eq!(true, aa.is_valid(0));
-        assert_eq!(false, aa.is_valid(1));
-        assert_eq!(false, aa.is_valid(2));
+        assert!(aa.is_valid(0));
+        assert!(!aa.is_valid(1));
+        assert!(!aa.is_valid(2));
         assert_eq!(1, aa.value(0));
         assert_eq!(1, aa.value(3));
         assert_eq!(5, aa.value(7));

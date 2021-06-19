@@ -361,18 +361,18 @@ mod tests {
         let b =
             BooleanArray::from(vec![true, false, false, false, true, false, true, true]);
         let b = b.data();
-        assert_eq!(equal(a, b), false);
-        assert_eq!(equal(b, a), false);
+        assert!(!equal(a, b));
+        assert!(!equal(b, a));
 
         let a_slice = a.slice(2, 3);
         let b_slice = b.slice(3, 3);
-        assert_eq!(equal(&a_slice, &b_slice), true);
-        assert_eq!(equal(&b_slice, &a_slice), true);
+        assert!(equal(&a_slice, &b_slice));
+        assert!(equal(&b_slice, &a_slice));
 
         let a_slice = a.slice(3, 4);
         let b_slice = b.slice(4, 4);
-        assert_eq!(equal(&a_slice, &b_slice), false);
-        assert_eq!(equal(&b_slice, &a_slice), false);
+        assert!(!equal(&a_slice, &b_slice));
+        assert!(!equal(&b_slice, &a_slice));
 
         // Test the optimization cases where null_count == 0 and starts at 0 and len >= size_of(u8)
 
@@ -486,8 +486,8 @@ mod tests {
 
     fn test_equal(lhs: &ArrayData, rhs: &ArrayData, expected: bool) {
         // equality is symmetric
-        assert_eq!(equal(lhs, lhs), true, "\n{:?}\n{:?}", lhs, lhs);
-        assert_eq!(equal(rhs, rhs), true, "\n{:?}\n{:?}", rhs, rhs);
+        assert!(equal(lhs, lhs), "\n{:?}\n{:?}", lhs, lhs);
+        assert!(equal(rhs, rhs), "\n{:?}\n{:?}", rhs, rhs);
 
         assert_eq!(equal(lhs, rhs), expected, "\n{:?}\n{:?}", lhs, rhs);
         assert_eq!(equal(rhs, lhs), expected, "\n{:?}\n{:?}", rhs, lhs);

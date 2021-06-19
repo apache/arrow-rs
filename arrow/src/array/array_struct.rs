@@ -465,12 +465,12 @@ mod tests {
         assert_eq!(5, c0.len());
         assert_eq!(3, c0.null_count());
         assert!(c0.is_valid(0));
-        assert_eq!(false, c0.value(0));
+        assert!(!c0.value(0));
         assert!(c0.is_null(1));
         assert!(c0.is_null(2));
         assert!(c0.is_null(3));
         assert!(c0.is_valid(4));
-        assert_eq!(true, c0.value(4));
+        assert!(c0.value(4));
 
         let c1 = struct_array.column(1);
         let c1 = c1.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -500,7 +500,7 @@ mod tests {
         assert!(sliced_c0.is_null(0));
         assert!(sliced_c0.is_null(1));
         assert!(sliced_c0.is_valid(2));
-        assert_eq!(true, sliced_c0.value(2));
+        assert!(sliced_c0.value(2));
 
         let sliced_c1 = sliced_array.column(1);
         let sliced_c1 = sliced_c1.as_any().downcast_ref::<Int32Array>().unwrap();

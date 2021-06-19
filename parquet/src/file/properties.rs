@@ -639,8 +639,8 @@ mod tests {
             Some(Encoding::DELTA_BINARY_PACKED)
         );
         assert_eq!(props.compression(&ColumnPath::from("a")), Compression::GZIP);
-        assert_eq!(props.dictionary_enabled(&ColumnPath::from("a")), false);
-        assert_eq!(props.statistics_enabled(&ColumnPath::from("a")), false);
+        assert!(!props.dictionary_enabled(&ColumnPath::from("a")));
+        assert!(!props.statistics_enabled(&ColumnPath::from("a")));
         assert_eq!(props.max_statistics_size(&ColumnPath::from("a")), 50);
 
         assert_eq!(
@@ -651,8 +651,8 @@ mod tests {
             props.compression(&ColumnPath::from("col")),
             Compression::SNAPPY
         );
-        assert_eq!(props.dictionary_enabled(&ColumnPath::from("col")), true);
-        assert_eq!(props.statistics_enabled(&ColumnPath::from("col")), true);
+        assert!(props.dictionary_enabled(&ColumnPath::from("col")));
+        assert!(props.statistics_enabled(&ColumnPath::from("col")));
         assert_eq!(props.max_statistics_size(&ColumnPath::from("col")), 123);
     }
 

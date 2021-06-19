@@ -585,13 +585,10 @@ impl<R: Read + Seek> FileReader<R> {
             let mut message_size: [u8; 4] = [0; 4];
             reader.seek(SeekFrom::Start(block.offset() as u64))?;
             reader.read_exact(&mut message_size)?;
-            let footer_len = if message_size == CONTINUATION_MARKER {
+            if message_size == CONTINUATION_MARKER {
                 reader.read_exact(&mut message_size)?;
-                i32::from_le_bytes(message_size)
-            } else {
-                i32::from_le_bytes(message_size)
-            };
-
+            }
+            let footer_len = i32::from_le_bytes(message_size);
             let mut block_data = vec![0; footer_len as usize];
 
             reader.read_exact(&mut block_data)?;
