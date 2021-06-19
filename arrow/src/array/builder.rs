@@ -3050,28 +3050,8 @@ mod tests {
             .add_buffer(Buffer::from_slice_ref(&[1, 2, 0, 4]))
             .build();
 
-        assert_eq!(&expected_string_data, arr.column(0).data());
-
-        // TODO: implement equality for ArrayData
-        assert_eq!(expected_int_data.len(), arr.column(1).data().len());
-        assert_eq!(
-            expected_int_data.null_count(),
-            arr.column(1).data().null_count()
-        );
-        assert_eq!(
-            expected_int_data.null_bitmap(),
-            arr.column(1).data().null_bitmap()
-        );
-        let expected_value_buf = expected_int_data.buffers()[0].clone();
-        let actual_value_buf = arr.column(1).data().buffers()[0].clone();
-        for i in 0..expected_int_data.len() {
-            if !expected_int_data.is_null(i) {
-                assert_eq!(
-                    expected_value_buf.as_slice()[i * 4..(i + 1) * 4],
-                    actual_value_buf.as_slice()[i * 4..(i + 1) * 4]
-                );
-            }
-        }
+        assert_eq!(expected_string_data, *arr.column(0).data());
+        assert_eq!(expected_int_data, *arr.column(1).data());
     }
 
     #[test]
