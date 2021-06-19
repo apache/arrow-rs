@@ -395,8 +395,13 @@ impl Default for SortOptions {
     }
 }
 
-/// Sort primitive values
-#[allow(clippy::unnecessary_wraps)]
+/// Sort boolean values
+///
+/// when a limit is present, the sort is pair-comparison based as k-select might be more efficient,
+/// when the limit is absent, binary partition is used to speed up (which is linear).
+///
+/// TODO maybe partition_validity call can be eliminated in this case and tri-color sort can be used
+/// instead. https://en.wikipedia.org/wiki/Dutch_national_flag_problem
 fn sort_boolean(
     values: &ArrayRef,
     value_indices: Vec<u32>,
@@ -410,30 +415,41 @@ fn sort_boolean(
         .expect("Unable to downcast to boolean array");
     let descending = options.descending;
 
-    // create tuples that are used for sorting
-    let mut valids = value_indices
-        .into_iter()
-        .map(|index| (index, values.value(index as usize)))
-        .collect::<Vec<(u32, bool)>>();
-
-    let mut nulls = null_indices;
-
-    let valids_len = valids.len();
-    let nulls_len = nulls.len();
+    let valids_len = value_indices.len();
+    let nulls_len = null_indices.len();
 
     let mut len = values.len();
-    if let Some(limit) = limit {
+    let valids = if let Some(limit) = limit {
         len = limit.min(len);
-    }
-    if !descending {
-        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-            cmp(a.1, b.1)
-        });
+        // create tuples that are used for sorting
+        let mut valids = value_indices
+            .into_iter()
+            .map(|index| (index, values.value(index as usize)))
+            .collect::<Vec<(u32, bool)>>();
+        if !descending {
+            sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+                cmp(a.1, b.1)
+            });
+        } else {
+            sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+                cmp(a.1, b.1).reverse()
+            });
+        }
+        valids
     } else {
-        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-            cmp(a.1, b.1).reverse()
-        });
-        // reverse to keep a stable ordering
+        // when limit is not present, we have a better way than sorting: we can just partition
+        // the vec into [false..., true...] or [true..., false...] when descending
+        // TODO when https://github.com/rust-lang/rust/issues/62543 is merged we can use partition_in_place
+        let (mut a, b): (Vec<(u32, bool)>, Vec<(u32, bool)>) = value_indices
+            .into_iter()
+            .map(|index| (index, values.value(index as usize)))
+            .partition(|(_, value)| *value == descending);
+        a.extend(b);
+        a
+    };
+
+    let mut nulls = null_indices;
+    if descending {
         nulls.reverse();
     }
 
