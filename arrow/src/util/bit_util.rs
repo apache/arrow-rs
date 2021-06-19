@@ -146,28 +146,28 @@ mod tests {
     #[test]
     fn test_get_bit() {
         // 00001101
-        assert_eq!(true, get_bit(&[0b00001101], 0));
-        assert_eq!(false, get_bit(&[0b00001101], 1));
-        assert_eq!(true, get_bit(&[0b00001101], 2));
-        assert_eq!(true, get_bit(&[0b00001101], 3));
+        assert!(get_bit(&[0b00001101], 0));
+        assert!(!get_bit(&[0b00001101], 1));
+        assert!(get_bit(&[0b00001101], 2));
+        assert!(get_bit(&[0b00001101], 3));
 
         // 01001001 01010010
-        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 0));
-        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 1));
-        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 2));
-        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 3));
-        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 4));
-        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 5));
-        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 6));
-        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 7));
-        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 8));
-        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 9));
-        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 10));
-        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 11));
-        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 12));
-        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 13));
-        assert_eq!(true, get_bit(&[0b01001001, 0b01010010], 14));
-        assert_eq!(false, get_bit(&[0b01001001, 0b01010010], 15));
+        assert!(get_bit(&[0b01001001, 0b01010010], 0));
+        assert!(!get_bit(&[0b01001001, 0b01010010], 1));
+        assert!(!get_bit(&[0b01001001, 0b01010010], 2));
+        assert!(get_bit(&[0b01001001, 0b01010010], 3));
+        assert!(!get_bit(&[0b01001001, 0b01010010], 4));
+        assert!(!get_bit(&[0b01001001, 0b01010010], 5));
+        assert!(get_bit(&[0b01001001, 0b01010010], 6));
+        assert!(!get_bit(&[0b01001001, 0b01010010], 7));
+        assert!(!get_bit(&[0b01001001, 0b01010010], 8));
+        assert!(get_bit(&[0b01001001, 0b01010010], 9));
+        assert!(!get_bit(&[0b01001001, 0b01010010], 10));
+        assert!(!get_bit(&[0b01001001, 0b01010010], 11));
+        assert!(get_bit(&[0b01001001, 0b01010010], 12));
+        assert!(!get_bit(&[0b01001001, 0b01010010], 13));
+        assert!(get_bit(&[0b01001001, 0b01010010], 14));
+        assert!(!get_bit(&[0b01001001, 0b01010010], 15));
     }
 
     #[test]

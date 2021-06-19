@@ -1554,17 +1554,17 @@ impl<'a> ArrayReaderBuilder {
                 )?))
             }
             PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+                let byte_width = match *cur_type {
+                    Type::PrimitiveType {
+                        ref type_length, ..
+                    } => *type_length,
+                    _ => {
+                        return Err(ArrowError(
+                            "Expected a physical type, not a group type".to_string(),
+                        ))
+                    }
+                };
                 if cur_type.get_basic_info().converted_type() == ConvertedType::INTERVAL {
-                    let byte_width = match *cur_type {
-                        Type::PrimitiveType {
-                            ref type_length, ..
-                        } => *type_length,
-                        _ => {
-                            return Err(ArrowError(
-                                "Expected a physical type, not a group type".to_string(),
-                            ))
-                        }
-                    };
                     if byte_width != 12 {
                         return Err(ArrowError(format!(
                             "Parquet interval type should have length of 12, found {}",
@@ -1617,16 +1617,6 @@ impl<'a> ArrayReaderBuilder {
                         }
                     }
                 } else {
-                    let byte_width = match *cur_type {
-                        Type::PrimitiveType {
-                            ref type_length, ..
-                        } => *type_length,
-                        _ => {
-                            return Err(ArrowError(
-                                "Expected a physical type, not a group type".to_string(),
-                            ))
-                        }
-                    };
                     let converter = FixedLenBinaryConverter::new(
                         FixedSizeArrayConverter::new(byte_width),
                     );

@@ -132,7 +132,7 @@ mod tests {
 
         assert_eq!(null_arr.len(), 32);
         assert_eq!(null_arr.null_count(), 32);
-        assert_eq!(null_arr.is_valid(0), false);
+        assert!(!null_arr.is_valid(0));
 
         assert_eq!(0, null_arr.get_buffer_memory_size());
         assert_eq!(
