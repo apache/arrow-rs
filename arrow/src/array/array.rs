@@ -296,6 +296,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::List(_) => Arc::new(ListArray::from(data)) as ArrayRef,
         DataType::LargeList(_) => Arc::new(LargeListArray::from(data)) as ArrayRef,
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,
+        DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
         DataType::Union(_) => Arc::new(UnionArray::from(data)) as ArrayRef,
         DataType::FixedSizeList(_, _) => {
             Arc::new(FixedSizeListArray::from(data)) as ArrayRef
@@ -452,6 +453,7 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                 .map(|field| ArrayData::new_empty(field.data_type()))
                 .collect(),
         )),
+        DataType::Map(_field, _keys_sorted) => todo!(),
         DataType::Union(_) => {
             unimplemented!("Creating null Union array not yet supported")
         }

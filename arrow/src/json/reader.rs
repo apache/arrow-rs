@@ -47,6 +47,7 @@ use std::sync::Arc;
 
 use indexmap::map::IndexMap as HashMap;
 use indexmap::set::IndexSet as HashSet;
+use serde_json::json;
 use serde_json::{map::Map as JsonMap, Value};
 
 use crate::buffer::MutableBuffer;
@@ -1282,6 +1283,12 @@ impl Decoder {
                             .build();
                         Ok(make_array(data))
                     }
+                    DataType::Map(map_field, _) => self.build_map_array(
+                        rows,
+                        field.name(),
+                        field.data_type(),
+                        map_field,
+                    ),
                     _ => Err(ArrowError::JsonError(format!(
                         "{:?} type is not supported",
                         field.data_type()
@@ -1290,6 +1297,101 @@ impl Decoder {
             })
             .collect();
         arrays
+    }
+
+    fn build_map_array(
+        &self,
+        rows: &[Value],
+        field_name: &str,
+        map_type: &DataType,
+        struct_field: &Field,
+    ) -> Result<ArrayRef> {
+        // A map has the format {"key": "value"} where key is most commonly a string,
+        // but could be a string, number or boolean (🤷🏾‍♂️) (e.g. {1: "value"}).
+        // A map is also represented as a flattened contiguous array, with the number
+        // of key-value pairs being separated by a list offset.
+        // If row 1 has 2 key-value pairs, and row 2 has 3, the offsets would be
+        // [0, 2, 5].
+        //
+        // Thus we try to read a map by iterating through the keys and values
+
+        let (key_field, value_field) =
+            if let DataType::Struct(fields) = struct_field.data_type() {
+                if fields.len() != 2 {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "DataType::Map expects a struct with 2 fields, found {} fields",
+                        fields.len()
+                    )));
+                }
+                (&fields[0], &fields[1])
+            } else {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "JSON map array builder expects a DataType::Map, found {:?}",
+                    struct_field.data_type()
+                )));
+            };
+        let value_map_iter = rows.iter().map(|value| {
+            value
+                .get(field_name)
+                .map(|v| v.as_object().map(|map| (map, map.len() as i32)))
+                .flatten()
+        });
+        let rows_len = rows.len();
+        let mut list_offsets = Vec::with_capacity(rows_len + 1);
+        list_offsets.push(0i32);
+        let mut last_offset = 0;
+        let num_bytes = bit_util::ceil(rows_len, 8);
+        let mut list_bitmap = MutableBuffer::from_len_zeroed(num_bytes);
+        let null_data = list_bitmap.as_slice_mut();
+
+        let struct_rows = value_map_iter
+            .enumerate()
+            .filter_map(|(i, v)| match v {
+                Some((map, len)) => {
+                    list_offsets.push(last_offset + len);
+                    last_offset += len;
+                    bit_util::set_bit(null_data, i);
+                    Some(map.iter().map(|(k, v)| {
+                        json!({
+                            key_field.name(): k,
+                            value_field.name(): v
+                        })
+                    }))
+                }
+                None => {
+                    list_offsets.push(last_offset);
+                    None
+                }
+            })
+            .flatten()
+            .collect::<Vec<Value>>();
+
+        let struct_children = self.build_struct_array(
+            struct_rows.as_slice(),
+            &[key_field.clone(), value_field.clone()],
+            &[],
+        )?;
+
+        Ok(make_array(ArrayData::new(
+            map_type.clone(),
+            rows_len,
+            None,
+            Some(list_bitmap.into()),
+            0,
+            vec![Buffer::from_slice_ref(&list_offsets)],
+            vec![ArrayData::new(
+                struct_field.data_type().clone(),
+                struct_children[0].len(),
+                None,
+                None,
+                0,
+                vec![],
+                struct_children
+                    .into_iter()
+                    .map(|array| array.data().clone())
+                    .collect(),
+            )],
+        )))
     }
 
     #[inline(always)]
@@ -2175,6 +2277,84 @@ mod tests {
         assert_eq!(d.data_ref(), read_d.data_ref());
 
         assert_eq!(read.data_ref(), expected.data_ref());
+    }
+
+    #[test]
+    fn test_map_json_arrays() {
+        let account_field = Field::new("account", DataType::UInt16, false);
+        let value_list_type =
+            DataType::List(Box::new(Field::new("item", DataType::Utf8, false)));
+        let entries_struct_type = DataType::Struct(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", value_list_type.clone(), true),
+        ]);
+        let stocks_field = Field::new(
+            "stocks",
+            DataType::Map(
+                Box::new(Field::new("entries", entries_struct_type.clone(), false)),
+                false,
+            ),
+            true,
+        );
+        let schema = Arc::new(Schema::new(vec![
+            account_field.clone(),
+            stocks_field.clone(),
+        ]));
+        let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
+        // Note: account 456 has 'long' twice, to show that the JSON reader will overwrite
+        // existing keys. This thus guarantees unique keys for the map
+        let json_content = r#"
+        {"account": 123, "stocks":{"long": ["$AAA", "$BBB"], "short": ["$CCC", "$D"]}}
+        {"account": 456, "stocks":{"long": null, "long": ["$AAA", "$CCC", "$D"], "short": null}}
+        {"account": 789, "stocks":{"hedged": ["$YYY"], "long": null, "short": ["$D"]}}
+        "#;
+        let mut reader = builder.build(Cursor::new(json_content)).unwrap();
+
+        // build expected output
+        let expected_accounts = UInt16Array::from(vec![123, 456, 789]);
+
+        let expected_keys = StringArray::from(vec![
+            "long", "short", "long", "short", "hedged", "long", "short",
+        ])
+        .data()
+        .clone();
+        let expected_value_array_data = StringArray::from(vec![
+            "$AAA", "$BBB", "$CCC", "$D", "$AAA", "$CCC", "$D", "$YYY", "$D",
+        ])
+        .data()
+        .clone();
+        // Create the list that holds ["$_", "$_"]
+        let expected_values = ArrayDataBuilder::new(value_list_type)
+            .len(7)
+            .add_buffer(Buffer::from(
+                vec![0i32, 2, 4, 7, 7, 8, 8, 9].to_byte_slice(),
+            ))
+            .add_child_data(expected_value_array_data.clone())
+            .null_bit_buffer(Buffer::from(vec![0b01010111]))
+            .build();
+        let expected_stocks_entries_data = ArrayDataBuilder::new(entries_struct_type)
+            .len(7)
+            .add_child_data(expected_keys.clone())
+            .add_child_data(expected_values)
+            .build();
+        let expected_stocks_data =
+            ArrayDataBuilder::new(stocks_field.data_type().clone())
+                .len(3)
+                .add_buffer(Buffer::from(vec![0i32, 2, 4, 7].to_byte_slice()))
+                .add_child_data(expected_stocks_entries_data)
+                .build();
+
+        let expected_stocks = make_array(expected_stocks_data);
+
+        // compare with result from json reader
+        let batch = reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(batch.num_columns(), 2);
+        let col1 = batch.column(0);
+        assert_eq!(col1.data(), expected_accounts.data());
+        // Compare the map
+        let col2 = batch.column(1);
+        assert_eq!(col2.data(), expected_stocks.data());
     }
 
     #[test]
