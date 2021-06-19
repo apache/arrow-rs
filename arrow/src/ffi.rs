@@ -836,7 +836,6 @@ mod tests {
     use crate::compute::kernels;
     use crate::datatypes::Field;
     use std::convert::TryFrom;
-    use std::iter::FromIterator;
 
     #[test]
     fn test_round_trip() -> Result<()> {
@@ -915,11 +914,10 @@ mod tests {
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        let value_offsets = Buffer::from_iter(
-            [0usize, 3, 6, 8]
-                .iter()
-                .map(|i| Offset::from_usize(*i).unwrap()),
-        );
+        let value_offsets = [0_usize, 3, 6, 8]
+            .iter()
+            .map(|i| Offset::from_usize(*i).unwrap())
+            .collect::<Buffer>();
 
         // Construct a list array from the above two
         let list_data_type = match std::mem::size_of::<Offset>() {

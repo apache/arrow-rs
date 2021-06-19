@@ -1009,11 +1009,11 @@ mod tests {
         assert_eq!(array.value(1), b"two");
         assert_eq!(array.value(3), b"");
         assert_eq!(array.value(4), b"three");
-        assert_eq!(array.is_null(0), false);
-        assert_eq!(array.is_null(1), false);
-        assert_eq!(array.is_null(2), true);
-        assert_eq!(array.is_null(3), false);
-        assert_eq!(array.is_null(4), false);
+        assert!(!array.is_null(0));
+        assert!(!array.is_null(1));
+        assert!(array.is_null(2));
+        assert!(!array.is_null(3));
+        assert!(!array.is_null(4));
     }
 
     #[test]

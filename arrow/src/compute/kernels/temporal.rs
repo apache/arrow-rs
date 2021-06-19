@@ -111,7 +111,7 @@ mod tests {
 
         let b = hour(&a).unwrap();
         assert_eq!(0, b.value(0));
-        assert_eq!(false, b.is_valid(1));
+        assert!(!b.is_valid(1));
         assert_eq!(4, b.value(2));
     }
 
@@ -121,7 +121,7 @@ mod tests {
 
         let b = hour(&a).unwrap();
         assert_eq!(0, b.value(0));
-        assert_eq!(false, b.is_valid(1));
+        assert!(!b.is_valid(1));
         assert_eq!(0, b.value(2));
     }
 
@@ -160,7 +160,7 @@ mod tests {
 
         let b = year(&a).unwrap();
         assert_eq!(2018, b.value(0));
-        assert_eq!(false, b.is_valid(1));
+        assert!(!b.is_valid(1));
         assert_eq!(2019, b.value(2));
     }
 
@@ -170,7 +170,7 @@ mod tests {
 
         let b = year(&a).unwrap();
         assert_eq!(2011, b.value(0));
-        assert_eq!(false, b.is_valid(1));
+        assert!(!b.is_valid(1));
         assert_eq!(2012, b.value(2));
     }
 
@@ -181,7 +181,7 @@ mod tests {
 
         let b = year(&a).unwrap();
         assert_eq!(2021, b.value(0));
-        assert_eq!(false, b.is_valid(1));
+        assert!(!b.is_valid(1));
         assert_eq!(2024, b.value(2));
     }
 }

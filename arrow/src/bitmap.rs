@@ -145,13 +145,13 @@ mod tests {
     #[test]
     fn test_bitmap_is_set() {
         let bitmap = Bitmap::from(Buffer::from([0b01001010]));
-        assert_eq!(false, bitmap.is_set(0));
-        assert_eq!(true, bitmap.is_set(1));
-        assert_eq!(false, bitmap.is_set(2));
-        assert_eq!(true, bitmap.is_set(3));
-        assert_eq!(false, bitmap.is_set(4));
-        assert_eq!(false, bitmap.is_set(5));
-        assert_eq!(true, bitmap.is_set(6));
-        assert_eq!(false, bitmap.is_set(7));
+        assert!(!bitmap.is_set(0));
+        assert!(bitmap.is_set(1));
+        assert!(!bitmap.is_set(2));
+        assert!(bitmap.is_set(3));
+        assert!(!bitmap.is_set(4));
+        assert!(!bitmap.is_set(5));
+        assert!(bitmap.is_set(6));
+        assert!(!bitmap.is_set(7));
     }
 }

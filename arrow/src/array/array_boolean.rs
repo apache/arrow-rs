@@ -147,7 +147,7 @@ impl From<Vec<bool>> for BooleanArray {
 
 impl From<Vec<Option<bool>>> for BooleanArray {
     fn from(data: Vec<Option<bool>>) -> Self {
-        BooleanArray::from_iter(data.iter())
+        data.iter().collect()
     }
 }
 

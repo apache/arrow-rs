@@ -444,9 +444,9 @@ mod tests {
         assert_eq!(67, d.len());
         assert_eq!(3, d.null_count());
         assert_eq!(1, d.value(0));
-        assert_eq!(true, d.is_null(1));
+        assert!(d.is_null(1));
         assert_eq!(64, d.value(63));
-        assert_eq!(true, d.is_null(64));
+        assert!(d.is_null(64));
         assert_eq!(67, d.value(65));
     }
 
@@ -468,7 +468,7 @@ mod tests {
         let c = filter(&a, &b).unwrap();
         let d = c.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(1, d.len());
-        assert_eq!(true, d.is_null(0));
+        assert!(d.is_null(0));
     }
 
     #[test]
@@ -479,8 +479,8 @@ mod tests {
         let d = c.as_ref().as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(2, d.len());
         assert_eq!("hello", d.value(0));
-        assert_eq!(false, d.is_null(0));
-        assert_eq!(true, d.is_null(1));
+        assert!(!d.is_null(0));
+        assert!(d.is_null(1));
     }
 
     #[test]
@@ -492,8 +492,8 @@ mod tests {
         let d = c.as_ref().as_any().downcast_ref::<BinaryArray>().unwrap();
         assert_eq!(2, d.len());
         assert_eq!(b"hello", d.value(0));
-        assert_eq!(false, d.is_null(0));
-        assert_eq!(true, d.is_null(1));
+        assert!(!d.is_null(0));
+        assert!(d.is_null(1));
     }
 
     #[test]
@@ -508,8 +508,8 @@ mod tests {
         let c = filter(a, &b).unwrap();
         let d = c.as_ref().as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(2, d.len());
-        assert_eq!(true, d.is_null(0));
-        assert_eq!(false, d.is_null(1));
+        assert!(d.is_null(0));
+        assert!(!d.is_null(1));
         assert_eq!(9, d.value(1));
     }
 
@@ -530,7 +530,7 @@ mod tests {
         assert_eq!(3, values.len());
         // but keys are filtered
         assert_eq!(2, d.len());
-        assert_eq!(true, d.is_null(0));
+        assert!(d.is_null(0));
         assert_eq!("world", values.value(d.keys().value(1) as usize));
     }
 

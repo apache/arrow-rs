@@ -1226,37 +1226,28 @@ mod tests {
         assert!(Field::Decimal(Decimal::from_i32(4, 8, 2)).is_primitive());
 
         // complex types
-        assert_eq!(
-            false,
-            Field::Group(make_row(vec![
-                ("x".to_string(), Field::Null),
-                ("Y".to_string(), Field::Int(2)),
-                ("z".to_string(), Field::Float(3.1)),
-                ("a".to_string(), Field::Str("abc".to_string()))
-            ]))
-            .is_primitive()
-        );
+        assert!(!Field::Group(make_row(vec![
+            ("x".to_string(), Field::Null),
+            ("Y".to_string(), Field::Int(2)),
+            ("z".to_string(), Field::Float(3.1)),
+            ("a".to_string(), Field::Str("abc".to_string()))
+        ]))
+        .is_primitive());
 
-        assert_eq!(
-            false,
-            Field::ListInternal(make_list(vec![
-                Field::Int(2),
-                Field::Int(1),
-                Field::Null,
-                Field::Int(12)
-            ]))
-            .is_primitive()
-        );
+        assert!(!Field::ListInternal(make_list(vec![
+            Field::Int(2),
+            Field::Int(1),
+            Field::Null,
+            Field::Int(12)
+        ]))
+        .is_primitive());
 
-        assert_eq!(
-            false,
-            Field::MapInternal(make_map(vec![
-                (Field::Int(1), Field::Float(1.2)),
-                (Field::Int(2), Field::Float(4.5)),
-                (Field::Int(3), Field::Float(2.3))
-            ]))
-            .is_primitive()
-        );
+        assert!(!Field::MapInternal(make_map(vec![
+            (Field::Int(1), Field::Float(1.2)),
+            (Field::Int(2), Field::Float(4.5)),
+            (Field::Int(3), Field::Float(2.3))
+        ]))
+        .is_primitive());
     }
 
     #[test]
@@ -1371,7 +1362,7 @@ mod tests {
             ("o".to_string(), Field::Decimal(Decimal::from_i32(4, 7, 2))),
         ]);
 
-        assert_eq!(false, row.get_bool(1).unwrap());
+        assert!(!row.get_bool(1).unwrap());
         assert_eq!(3, row.get_byte(2).unwrap());
         assert_eq!(4, row.get_short(3).unwrap());
         assert_eq!(5, row.get_int(4).unwrap());
@@ -1497,7 +1488,7 @@ mod tests {
     fn test_list_primitive_accessors() {
         // primitives
         let list = make_list(vec![Field::Bool(false)]);
-        assert_eq!(false, list.get_bool(0).unwrap());
+        assert!(!list.get_bool(0).unwrap());
 
         let list = make_list(vec![Field::Byte(3), Field::Byte(4)]);
         assert_eq!(4, list.get_byte(1).unwrap());
