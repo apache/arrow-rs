@@ -1404,6 +1404,7 @@ impl<'a> ArrayReaderBuilder {
     }
 
     /// Creates primitive array reader for each primitive type.
+    #[allow(clippy::branches_sharing_code)]
     fn build_for_primitive_type_inner(
         &self,
         cur_type: TypePtr,
