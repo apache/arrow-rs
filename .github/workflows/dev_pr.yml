@@ -18,11 +18,7 @@
 name: Dev PR
 
 on:
-  pull_request_target:
-    types:
-      - opened
-      - edited
-      - synchronize
+  pull_request:
 
 jobs:
   process:
@@ -35,7 +31,7 @@ jobs:
         if: |
           github.event_name == 'pull_request_target' &&
             (github.event.action == 'opened' ||
-             github.event.action == 'synchronize')
+             github.event.action == 'edited')
         uses: actions/labeler@2.2.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
