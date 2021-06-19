@@ -246,6 +246,9 @@ fn equal_values(
             _ => unreachable!(),
         },
         DataType::Float16 => unreachable!(),
+        DataType::Map(_, _) => {
+            list_equal::<i32>(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
+        }
     }
 }
 
