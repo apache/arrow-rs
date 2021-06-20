@@ -1245,11 +1245,11 @@ mod tests {
         let mut csv = Reader::new(file, Arc::new(schema), true, None, 1024, None, None);
         let batch = csv.next().unwrap().unwrap();
 
-        assert_eq!(false, batch.column(1).is_null(0));
-        assert_eq!(false, batch.column(1).is_null(1));
-        assert_eq!(true, batch.column(1).is_null(2));
-        assert_eq!(false, batch.column(1).is_null(3));
-        assert_eq!(false, batch.column(1).is_null(4));
+        assert!(!batch.column(1).is_null(0));
+        assert!(!batch.column(1).is_null(1));
+        assert!(batch.column(1).is_null(2));
+        assert!(!batch.column(1).is_null(3));
+        assert!(!batch.column(1).is_null(4));
     }
 
     #[test]
@@ -1292,18 +1292,18 @@ mod tests {
             ]
         );
 
-        assert_eq!(false, schema.field(0).is_nullable());
-        assert_eq!(true, schema.field(1).is_nullable());
-        assert_eq!(true, schema.field(2).is_nullable());
-        assert_eq!(false, schema.field(3).is_nullable());
-        assert_eq!(true, schema.field(4).is_nullable());
-        assert_eq!(true, schema.field(5).is_nullable());
+        assert!(!schema.field(0).is_nullable());
+        assert!(schema.field(1).is_nullable());
+        assert!(schema.field(2).is_nullable());
+        assert!(!schema.field(3).is_nullable());
+        assert!(schema.field(4).is_nullable());
+        assert!(schema.field(5).is_nullable());
 
-        assert_eq!(false, batch.column(1).is_null(0));
-        assert_eq!(false, batch.column(1).is_null(1));
-        assert_eq!(true, batch.column(1).is_null(2));
-        assert_eq!(false, batch.column(1).is_null(3));
-        assert_eq!(false, batch.column(1).is_null(4));
+        assert!(!batch.column(1).is_null(0));
+        assert!(!batch.column(1).is_null(1));
+        assert!(batch.column(1).is_null(2));
+        assert!(!batch.column(1).is_null(3));
+        assert!(!batch.column(1).is_null(4));
     }
 
     #[test]
@@ -1402,10 +1402,10 @@ mod tests {
         )?;
 
         assert_eq!(schema.fields().len(), 4);
-        assert_eq!(false, schema.field(0).is_nullable());
-        assert_eq!(true, schema.field(1).is_nullable());
-        assert_eq!(false, schema.field(2).is_nullable());
-        assert_eq!(false, schema.field(3).is_nullable());
+        assert!(!schema.field(0).is_nullable());
+        assert!(schema.field(1).is_nullable());
+        assert!(!schema.field(2).is_nullable());
+        assert!(!schema.field(3).is_nullable());
 
         assert_eq!(&DataType::Int64, schema.field(0).data_type());
         assert_eq!(&DataType::Utf8, schema.field(1).data_type());

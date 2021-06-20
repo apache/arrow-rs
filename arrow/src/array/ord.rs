@@ -241,7 +241,6 @@ pub mod tests {
     use crate::array::{Float64Array, Int32Array};
     use crate::error::Result;
     use std::cmp::Ordering;
-    use std::iter::FromIterator;
 
     #[test]
     fn test_i32() -> Result<()> {
@@ -298,7 +297,7 @@ pub mod tests {
     #[test]
     fn test_dict() -> Result<()> {
         let data = vec!["a", "b", "c", "a", "a", "c", "c"];
-        let array = DictionaryArray::<Int16Type>::from_iter(data.into_iter());
+        let array = data.into_iter().collect::<DictionaryArray<Int16Type>>();
 
         let cmp = build_compare(&array, &array)?;
 
@@ -311,9 +310,9 @@ pub mod tests {
     #[test]
     fn test_multiple_dict() -> Result<()> {
         let d1 = vec!["a", "b", "c", "d"];
-        let a1 = DictionaryArray::<Int16Type>::from_iter(d1.into_iter());
+        let a1 = d1.into_iter().collect::<DictionaryArray<Int16Type>>();
         let d2 = vec!["e", "f", "g", "a"];
-        let a2 = DictionaryArray::<Int16Type>::from_iter(d2.into_iter());
+        let a2 = d2.into_iter().collect::<DictionaryArray<Int16Type>>();
 
         let cmp = build_compare(&a1, &a2)?;
 

@@ -1314,11 +1314,11 @@ mod tests {
         let b = Int32Array::from(vec![Some(5), Some(6), Some(8), Some(9), None, None]);
         let c = divide(&a, &b).unwrap();
         assert_eq!(3, c.value(0));
-        assert_eq!(true, c.is_null(1));
+        assert!(c.is_null(1));
         assert_eq!(1, c.value(2));
         assert_eq!(0, c.value(3));
-        assert_eq!(true, c.is_null(4));
-        assert_eq!(true, c.is_null(5));
+        assert!(c.is_null(4));
+        assert!(c.is_null(5));
     }
 
     #[test]
@@ -1327,11 +1327,11 @@ mod tests {
         let b = Int32Array::from(vec![Some(5), Some(6), Some(8), Some(9), None, None]);
         let c = modulus(&a, &b).unwrap();
         assert_eq!(0, c.value(0));
-        assert_eq!(true, c.is_null(1));
+        assert!(c.is_null(1));
         assert_eq!(0, c.value(2));
         assert_eq!(1, c.value(3));
-        assert_eq!(true, c.is_null(4));
-        assert_eq!(true, c.is_null(5));
+        assert!(c.is_null(4));
+        assert!(c.is_null(5));
     }
 
     #[test]
@@ -1400,11 +1400,11 @@ mod tests {
         let c = divide(&a, &b).unwrap();
         assert_eq!(6, c.len());
         assert_eq!(3, c.value(0));
-        assert_eq!(true, c.is_null(1));
+        assert!(c.is_null(1));
         assert_eq!(1, c.value(2));
         assert_eq!(0, c.value(3));
-        assert_eq!(true, c.is_null(4));
-        assert_eq!(true, c.is_null(5));
+        assert!(c.is_null(4));
+        assert!(c.is_null(5));
     }
 
     #[test]
@@ -1453,11 +1453,11 @@ mod tests {
         let c = modulus(&a, &b).unwrap();
         assert_eq!(6, c.len());
         assert_eq!(0, c.value(0));
-        assert_eq!(true, c.is_null(1));
+        assert!(c.is_null(1));
         assert_eq!(0, c.value(2));
         assert_eq!(1, c.value(3));
-        assert_eq!(true, c.is_null(4));
-        assert_eq!(true, c.is_null(5));
+        assert!(c.is_null(4));
+        assert!(c.is_null(5));
     }
 
     #[test]
@@ -1491,10 +1491,10 @@ mod tests {
         let a = Int32Array::from(vec![Some(5), None, Some(7), None]);
         let b = Int32Array::from(vec![None, None, Some(6), Some(7)]);
         let c = add(&a, &b).unwrap();
-        assert_eq!(true, c.is_null(0));
-        assert_eq!(true, c.is_null(1));
-        assert_eq!(false, c.is_null(2));
-        assert_eq!(true, c.is_null(3));
+        assert!(c.is_null(0));
+        assert!(c.is_null(1));
+        assert!(!c.is_null(2));
+        assert!(c.is_null(3));
         assert_eq!(13, c.value(2));
     }
 

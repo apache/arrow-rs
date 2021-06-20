@@ -1323,6 +1323,7 @@ mod tests {
     macro_rules! to_byte_array_impl {
         ($ty: ty) => {
             impl ToByteArray<$ty> for $ty {
+                #[allow(clippy::wrong_self_convention)]
                 fn to_byte_array(data: &[<$ty as DataType>::T]) -> Vec<u8> {
                     <$ty as DataType>::T::slice_as_bytes(data).to_vec()
                 }
@@ -1336,6 +1337,7 @@ mod tests {
     to_byte_array_impl!(DoubleType);
 
     impl ToByteArray<BoolType> for BoolType {
+        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[bool]) -> Vec<u8> {
             let mut v = vec![];
             for i in 0..data.len() {
@@ -1351,6 +1353,7 @@ mod tests {
     }
 
     impl ToByteArray<Int96Type> for Int96Type {
+        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[Int96]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {
@@ -1361,6 +1364,7 @@ mod tests {
     }
 
     impl ToByteArray<ByteArrayType> for ByteArrayType {
+        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[ByteArray]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {
@@ -1374,6 +1378,7 @@ mod tests {
     }
 
     impl ToByteArray<FixedLenByteArrayType> for FixedLenByteArrayType {
+        #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[FixedLenByteArray]) -> Vec<u8> {
             let mut v = vec![];
             for d in data {

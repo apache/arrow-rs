@@ -173,7 +173,7 @@ impl<T: Clone> Buffer<T> {
     /// Buffer data is reset.
     #[inline]
     pub fn consume(&mut self) -> BufferPtr<T> {
-        let old_data = mem::replace(&mut self.data, vec![]);
+        let old_data = mem::take(&mut self.data);
         let mut result = BufferPtr::new(old_data);
         if let Some(ref mc) = self.mem_tracker {
             result = result.with_mem_tracker(mc.clone());

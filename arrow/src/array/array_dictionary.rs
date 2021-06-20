@@ -394,12 +394,12 @@ mod tests {
         assert_eq!(&DataType::Int32, keys.data_type());
         assert_eq!(3, keys.null_count());
 
-        assert_eq!(true, keys.is_valid(0));
-        assert_eq!(false, keys.is_valid(1));
-        assert_eq!(true, keys.is_valid(2));
-        assert_eq!(false, keys.is_valid(3));
-        assert_eq!(false, keys.is_valid(4));
-        assert_eq!(true, keys.is_valid(5));
+        assert!(keys.is_valid(0));
+        assert!(!keys.is_valid(1));
+        assert!(keys.is_valid(2));
+        assert!(!keys.is_valid(3));
+        assert!(!keys.is_valid(4));
+        assert!(keys.is_valid(5));
 
         assert_eq!(0, keys.value(0));
         assert_eq!(1, keys.value(2));

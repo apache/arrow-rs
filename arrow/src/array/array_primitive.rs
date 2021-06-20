@@ -777,19 +777,19 @@ mod tests {
 
         let bool_arr = arr2.as_any().downcast_ref::<BooleanArray>().unwrap();
 
-        assert_eq!(false, bool_arr.is_valid(0));
+        assert!(!bool_arr.is_valid(0));
 
-        assert_eq!(true, bool_arr.is_valid(1));
-        assert_eq!(true, bool_arr.value(1));
+        assert!(bool_arr.is_valid(1));
+        assert!(bool_arr.value(1));
 
-        assert_eq!(true, bool_arr.is_valid(2));
-        assert_eq!(false, bool_arr.value(2));
+        assert!(bool_arr.is_valid(2));
+        assert!(!bool_arr.value(2));
 
-        assert_eq!(true, bool_arr.is_valid(3));
-        assert_eq!(true, bool_arr.value(3));
+        assert!(bool_arr.is_valid(3));
+        assert!(bool_arr.value(3));
 
-        assert_eq!(true, bool_arr.is_valid(4));
-        assert_eq!(false, bool_arr.value(4));
+        assert!(bool_arr.is_valid(4));
+        assert!(!bool_arr.value(4));
     }
 
     #[test]

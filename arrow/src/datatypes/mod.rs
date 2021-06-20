@@ -863,7 +863,7 @@ mod tests {
         let first_name = &schema.fields()[0];
         assert_eq!(first_name.name(), "first_name");
         assert_eq!(first_name.data_type(), &DataType::Utf8);
-        assert_eq!(first_name.is_nullable(), false);
+        assert!(!first_name.is_nullable());
         assert_eq!(first_name.dict_id(), None);
         assert_eq!(first_name.dict_is_ordered(), None);
 
