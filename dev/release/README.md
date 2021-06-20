@@ -233,7 +233,9 @@ following commands
 
 As of now, the plan for backporting to `active_release` is to do so semi-manually.
 
-Step 1: Pick the commit to cherry-pick
+_Note_: Since minor releases will be automatically picked up by other CI systems, it is CRITICAL to only cherry pick commits that are API compatible -- that is that do not require any code changes in crates that rely on arrow. API changes are released with the next major version.
+
+Step 1: Pick the commit to cherry-pick.
 
 Step 2: Create cherry-pick PR to active_release
 
@@ -249,9 +251,9 @@ git clone git@github.com:apache/arrow-rs.git /tmp/arrow-rs
 ARROW_GITHUB_API_TOKEN=$ARROW_GITHUB_API_TOKEN CHECKOUT_ROOT=/tmp/arrow-rs CHERRY_PICK_SHA=b2de5446cc1e45a0559fb39039d0545df1ac0d26 python3 dev/release/cherry-pick-pr.py
 ```
 
-## Tags
+## Labels
 
-There are two tags that help keep track of backporting:
+There are two labels that help keep track of backporting:
 
 1. [`cherry-picked`](https://github.com/apache/arrow-rs/labels/cherry-picked) for PRs that have been cherry-picked/backported to `active_release`
 2. [`release-cherry-pick`](https://github.com/apache/arrow-rs/labels/release-cherry-pick) for the PRs that are the cherry pick
