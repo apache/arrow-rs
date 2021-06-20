@@ -82,7 +82,7 @@ version is available. Then simply update version of `parquet-format` crate in Ca
   - [x] Primitive column value readers
   - [x] Row record reader
   - [x] Arrow record reader
-- [ ] Statistics support
+- [x] Statistics support
 - [x] Write support
   - [x] Primitive column value writers
   - [ ] Row record writer
