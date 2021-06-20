@@ -1093,7 +1093,8 @@ mod tests {
             Some(vec![Some(3), None, Some(5), Some(19)]),
             Some(vec![Some(6), Some(7)]),
         ];
-        let list_array = GenericListArray::<i32>::from_iter_primitive::<Int32Type, _, _>(data);
+        let list_array =
+            GenericListArray::<i32>::from_iter_primitive::<Int32Type, _, _>(data);
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(4, list_array.len());
         assert_eq!(1, list_array.null_count());
@@ -1105,11 +1106,11 @@ mod tests {
         assert_eq!(
             10,
             list_array
-            .value(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap()
-            .value(0)
+                .value(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0)
         );
     }
 }
