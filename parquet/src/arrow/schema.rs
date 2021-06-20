@@ -507,6 +507,35 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_repetition(repetition)
                 .build()
         }
+        DataType::Map(field, _) => {
+            if let DataType::Struct(struct_fields) = field.data_type() {
+                Type::group_type_builder(name)
+                    .with_fields(&mut vec![Arc::new(
+                        Type::group_type_builder(field.name())
+                            .with_fields(&mut vec![
+                                Arc::new(arrow_to_parquet_type(&Field::new(
+                                    struct_fields[0].name(),
+                                    struct_fields[0].data_type().clone(),
+                                    false,
+                                ))?),
+                                Arc::new(arrow_to_parquet_type(&Field::new(
+                                    struct_fields[1].name(),
+                                    struct_fields[1].data_type().clone(),
+                                    struct_fields[1].is_nullable(),
+                                ))?),
+                            ])
+                            .with_repetition(Repetition::REPEATED)
+                            .build()?,
+                    )])
+                    .with_logical_type(Some(LogicalType::MAP(Default::default())))
+                    .with_repetition(repetition)
+                    .build()
+            } else {
+                Err(ArrowError(
+                    "DataType::Map should contain a struct field child".to_string(),
+                ))
+            }
+        }
         DataType::Union(_) => unimplemented!("See ARROW-8817."),
         DataType::Dictionary(_, ref value) => {
             // Dictionary encoding not handled at the schema level
@@ -791,24 +820,28 @@ impl ParquetTypeConverter<'_> {
     ///
     /// This function takes care of logical type and repetition.
     fn to_group_type(&self) -> Result<Option<DataType>> {
-        if self.is_repeated() {
-            self.to_struct().map(|opt| {
-                opt.map(|dt| {
-                    DataType::List(Box::new(Field::new(
-                        self.schema.name(),
-                        dt,
-                        self.is_nullable(),
-                    )))
-                })
-            })
-        } else {
-            match (
-                self.schema.get_basic_info().logical_type(),
-                self.schema.get_basic_info().converted_type(),
-            ) {
-                (Some(LogicalType::LIST(_)), _) => self.to_list(),
-                (None, ConvertedType::LIST) => self.to_list(),
-                _ => self.to_struct(),
+        match (
+            self.schema.get_basic_info().logical_type(),
+            self.schema.get_basic_info().converted_type(),
+        ) {
+            (Some(LogicalType::LIST(_)), _) | (_, ConvertedType::LIST) => self.to_list(),
+            (Some(LogicalType::MAP(_)), _)
+            | (_, ConvertedType::MAP)
+            | (_, ConvertedType::MAP_KEY_VALUE) => self.to_map(),
+            (_, _) => {
+                if self.is_repeated() {
+                    self.to_struct().map(|opt| {
+                        opt.map(|dt| {
+                            DataType::List(Box::new(Field::new(
+                                self.schema.name(),
+                                dt,
+                                self.is_nullable(),
+                            )))
+                        })
+                    })
+                } else {
+                    self.to_struct()
+                }
             }
         }
     }
@@ -913,6 +946,87 @@ impl ParquetTypeConverter<'_> {
             }
             _ => Err(ArrowError(
                 "Group element type of list can only contain one field.".to_string(),
+            )),
+        }
+    }
+
+    /// Converts a parquet map to arrow map.
+    ///
+    /// To fully understand this algorithm, please refer to
+    /// [parquet doc](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md).
+    fn to_map(&self) -> Result<Option<DataType>> {
+        match self.schema {
+            Type::PrimitiveType { .. } => Err(ParquetError::General(format!(
+                "{:?} is a map type and can't be processed as primitive.",
+                self.schema
+            ))),
+            Type::GroupType {
+                basic_info: _,
+                fields,
+            } if fields.len() == 1 => {
+                let key_item = fields.first().unwrap();
+
+                let (key_type, value_type) = match key_item.as_ref() {
+                    Type::PrimitiveType { .. } => {
+                        return Err(ArrowError(
+                            "A map can only have a group child type (key_values)."
+                                .to_string(),
+                        ))
+                    }
+                    Type::GroupType {
+                        basic_info: _,
+                        fields,
+                    } => {
+                        if fields.len() != 2 {
+                            return Err(ArrowError(format!("Map type should have 2 fields, a key and value. Found {} fields", fields.len())));
+                        } else {
+                            let nested_key = fields.first().unwrap();
+                            let nested_key_converter = self.clone_with_schema(nested_key);
+
+                            let nested_value = fields.last().unwrap();
+                            let nested_value_converter =
+                                self.clone_with_schema(nested_value);
+
+                            (
+                                nested_key_converter.to_data_type()?.map(|d| {
+                                    Field::new(
+                                        nested_key.name(),
+                                        d,
+                                        nested_key.is_optional(),
+                                    )
+                                }),
+                                nested_value_converter.to_data_type()?.map(|d| {
+                                    Field::new(
+                                        nested_value.name(),
+                                        d,
+                                        nested_value.is_optional(),
+                                    )
+                                }),
+                            )
+                        }
+                    }
+                };
+
+                match (key_type, value_type) {
+                    (Some(key), Some(value)) => Ok(Some(DataType::Map(
+                        Box::new(Field::new(
+                            key_item.name(),
+                            DataType::Struct(vec![key, value]),
+                            false,
+                        )),
+                        false, // There is no information to tell if keys are sorted
+                    ))),
+                    (None, None) => Ok(None),
+                    (None, Some(_)) => Err(ArrowError(
+                        "Could not convert the map key to a valid datatype".to_string(),
+                    )),
+                    (Some(_), None) => Err(ArrowError(
+                        "Could not convert the map value to a valid datatype".to_string(),
+                    )),
+                }
+            }
+            _ => Err(ArrowError(
+                "Group element type of map can only contain one field.".to_string(),
             )),
         }
     }
@@ -1295,6 +1409,122 @@ mod tests {
                 "my_list3",
                 DataType::List(Box::new(Field::new("element", DataType::Utf8, false))),
                 false,
+            ));
+        }
+
+        let parquet_group_type = parse_message_type(message_type).unwrap();
+
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+        let converted_arrow_schema =
+            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+        let converted_fields = converted_arrow_schema.fields();
+
+        assert_eq!(arrow_fields.len(), converted_fields.len());
+        for i in 0..arrow_fields.len() {
+            assert_eq!(arrow_fields[i], converted_fields[i]);
+        }
+    }
+
+    #[test]
+    fn test_parquet_maps() {
+        let mut arrow_fields = Vec::new();
+
+        // LIST encoding example taken from parquet-format/LogicalTypes.md
+        let message_type = "
+        message test_schema {
+          REQUIRED group my_map1 (MAP) {
+            REPEATED group key_value {
+              REQUIRED binary key (UTF8);
+              OPTIONAL int32 value;
+            }
+          }
+          OPTIONAL group my_map2 (MAP) {
+            REPEATED group map {
+              REQUIRED binary str (UTF8);
+              REQUIRED int32 num;
+            }
+          }
+          OPTIONAL group my_map3 (MAP_KEY_VALUE) {
+            REPEATED group map {
+              REQUIRED binary key (UTF8);
+              OPTIONAL int32 value;
+            }
+          }
+        }
+        ";
+
+        // // Map<String, Integer>
+        // required group my_map (MAP) {
+        //   repeated group key_value {
+        //     required binary key (UTF8);
+        //     optional int32 value;
+        //   }
+        // }
+        {
+            arrow_fields.push(Field::new(
+                "my_map1",
+                DataType::Map(
+                    Box::new(Field::new(
+                        "key_value",
+                        DataType::Struct(vec![
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new("value", DataType::Int32, true),
+                        ]),
+                        false,
+                    )),
+                    false,
+                ),
+                false,
+            ));
+        }
+
+        // // Map<String, Integer> (nullable map, non-null values)
+        // optional group my_map (MAP) {
+        //   repeated group map {
+        //     required binary str (UTF8);
+        //     required int32 num;
+        //   }
+        // }
+        {
+            arrow_fields.push(Field::new(
+                "my_map2",
+                DataType::Map(
+                    Box::new(Field::new(
+                        "map",
+                        DataType::Struct(vec![
+                            Field::new("str", DataType::Utf8, false),
+                            Field::new("num", DataType::Int32, false),
+                        ]),
+                        false,
+                    )),
+                    false,
+                ),
+                true,
+            ));
+        }
+
+        // // Map<String, Integer> (nullable map, nullable values)
+        // optional group my_map (MAP_KEY_VALUE) {
+        //   repeated group map {
+        //     required binary key (UTF8);
+        //     optional int32 value;
+        //   }
+        // }
+        {
+            arrow_fields.push(Field::new(
+                "my_map3",
+                DataType::Map(
+                    Box::new(Field::new(
+                        "map",
+                        DataType::Struct(vec![
+                            Field::new("key", DataType::Utf8, false),
+                            Field::new("value", DataType::Int32, true),
+                        ]),
+                        false,
+                    )),
+                    false,
+                ),
+                true,
             ));
         }
 
@@ -1843,6 +2073,52 @@ mod tests {
                 Field::new("c36", DataType::Decimal(2, 1), false),
                 Field::new("c37", DataType::Decimal(50, 20), false),
                 Field::new("c38", DataType::Decimal(18, 12), true),
+                Field::new(
+                    "c39",
+                    DataType::Map(
+                        Box::new(Field::new(
+                            "key_value",
+                            DataType::Struct(vec![
+                                Field::new("key", DataType::Utf8, false),
+                                Field::new(
+                                    "value",
+                                    DataType::List(Box::new(Field::new(
+                                        "element",
+                                        DataType::Utf8,
+                                        true,
+                                    ))),
+                                    true,
+                                ),
+                            ]),
+                            false,
+                        )),
+                        false, // fails to roundtrip keys_sorted
+                    ),
+                    true,
+                ),
+                Field::new(
+                    "c40",
+                    DataType::Map(
+                        Box::new(Field::new(
+                            "my_entries",
+                            DataType::Struct(vec![
+                                Field::new("my_key", DataType::Utf8, false),
+                                Field::new(
+                                    "my_value",
+                                    DataType::List(Box::new(Field::new(
+                                        "item",
+                                        DataType::Utf8,
+                                        true,
+                                    ))),
+                                    true,
+                                ),
+                            ]),
+                            false,
+                        )),
+                        false, // fails to roundtrip keys_sorted
+                    ),
+                    true,
+                ),
             ],
             metadata,
         );
