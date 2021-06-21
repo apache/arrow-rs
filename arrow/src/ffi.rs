@@ -181,10 +181,6 @@ impl FFI_ArrowSchema {
         Ok(self)
     }
 
-    // pub fn with_dictionary() {}
-    // pub fn with_metadata() {}
-
-    /// create an empty [FFI_ArrowSchema]
     pub fn empty() -> Self {
         Self {
             format: std::ptr::null_mut(),
@@ -223,7 +219,6 @@ impl FFI_ArrowSchema {
 
     pub fn child(&self, index: usize) -> &Self {
         assert!(index < self.n_children as usize);
-        // assert!(!self.name.is_null());
         unsafe { self.children.add(index).as_ref().unwrap().as_ref().unwrap() }
     }
 
