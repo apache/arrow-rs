@@ -152,7 +152,6 @@ impl FFI_ArrowSchema {
     pub fn try_new(format: &str, children: Vec<FFI_ArrowSchema>) -> Result<Self> {
         let mut this = Self::empty();
 
-        // note: this op leaks.
         let mut children_ptr = children
             .into_iter()
             .map(Box::new)
