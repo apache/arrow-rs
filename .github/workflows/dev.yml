@@ -32,25 +32,13 @@ jobs:
     name: Release Audit Tool (RAT)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Arrow
-        uses: actions/checkout@v2
-        with:
-          repository: apache/arrow
-          submodules: true
-          fetch-depth: 0
-      - name: Checkout Arrow Rust
-        uses: actions/checkout@v2
-        with:
-          path: rust
-          fetch-depth: 0
+      - uses: actions/checkout@v2
       - name: Setup Python
         uses: actions/setup-python@v1
         with:
           python-version: 3.8
-      - name: Setup Archery
-        run: pip install -e dev/archery[lint]
-      - name: Lint
-        run: archery lint --rat
+      - name: Audit licenses
+        run: ./dev/release/run-rat.sh .
 
   prettier:
     name: Use prettier to check formatting of documents
