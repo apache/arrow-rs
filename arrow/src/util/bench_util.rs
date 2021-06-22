@@ -102,7 +102,8 @@ pub fn create_string_array<Offset: StringOffsetSizeTrait>(
             if rng.gen::<f32>() < null_density {
                 None
             } else {
-                let value = rng.sample_iter(&Alphanumeric).take(4).collect::<String>();
+                let value = rng.sample_iter(&Alphanumeric).take(4).collect();
+                let value = String::from_utf8(value).unwrap();
                 Some(value)
             }
         })
@@ -124,7 +125,7 @@ pub fn create_binary_array<Offset: BinaryOffsetSizeTrait>(
             } else {
                 let value = rng
                     .sample_iter::<u8, _>(Standard)
-                    .take(range_rng.gen_range(0, 8))
+                    .take(range_rng.gen_range(0..8))
                     .collect::<Vec<u8>>();
                 Some(value)
             }

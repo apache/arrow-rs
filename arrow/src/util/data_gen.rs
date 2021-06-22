@@ -218,7 +218,7 @@ fn create_random_offsets<T: OffsetSizeTrait + SampleUniform>(
     offsets.push(current_offset);
 
     (0..size).for_each(|_| {
-        current_offset += rng.gen_range(min, max);
+        current_offset += rng.gen_range(min..max);
         offsets.push(current_offset);
     });
 
