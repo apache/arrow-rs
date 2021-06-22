@@ -37,10 +37,7 @@ Independently, they support a vast array of functionality for in-memory computat
 
 Together, they allow users to write an SQL query or a `DataFrame` (using the `datafusion` crate), run it against a parquet file (using the `parquet` crate), evaluate it in-memory using Arrow's columnar format (using the `arrow` crate), and send to another process (using the `arrow-flight` crate).
 
-Generally speaking, the `arrow` crate offers functionality to develop code that uses Arrow arrays, and `datafusion` offers most operations typically found in SQL, with the notable exceptions of:
-
-- `join`
-- `window` functions
+Generally speaking, the `arrow` crate offers functionality to develop code that uses Arrow arrays, and `datafusion` offers most operations typically found in SQL, including `join`s and window functions.
 
 There are too many features to enumerate here, but some notable mentions:
 
