@@ -52,7 +52,7 @@ impl OffsetSizeTrait for i64 {
 
 /// Generic struct for a primitive Array
 ///
-/// Instead of using `GenericListArray` directly, consider using [`ListArray`] or [`LargeListArray`]
+/// For non generic lists, you may wish to consider using [`ListArray`] or [`LargeListArray`]`
 pub struct GenericListArray<OffsetSize> {
     data: ArrayData,
     values: ArrayRef,
