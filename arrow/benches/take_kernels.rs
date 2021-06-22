@@ -35,7 +35,7 @@ fn create_random_index(size: usize, null_density: f32) -> UInt32Array {
         if rng.gen::<f32>() < null_density {
             builder.append_null().unwrap()
         } else {
-            let value = rng.gen_range::<u32, _, _>(0u32, size as u32);
+            let value = rng.gen_range::<u32, _>(0u32..size as u32);
             builder.append_value(value).unwrap();
         }
     }
