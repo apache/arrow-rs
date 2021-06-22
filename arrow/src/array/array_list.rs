@@ -1113,5 +1113,4 @@ mod tests {
             .build();
         ListArray::from(list_data);
     }
-
 }
