@@ -247,14 +247,16 @@ impl RecordBatch {
     /// Return a new RecordBatch where each column is sliced
     /// according to `offset` and `length`
     pub fn slice(&self, offset: usize, length: usize) -> Result<RecordBatch> {
-        let schema = self.schema();
-        let new_columns = self
+        let columns = self
             .columns()
             .iter()
             .map(|column| column.slice(offset, length))
             .collect();
 
-        RecordBatch::try_new(schema, new_columns)
+        Ok(Self {
+            schema: self.schema.clone(),
+            columns,
+        })
     }
 
     /// Create a `RecordBatch` from an iterable list of pairs of the
