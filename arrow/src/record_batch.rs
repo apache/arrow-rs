@@ -244,6 +244,18 @@ impl RecordBatch {
         &self.columns[..]
     }
 
+    /// Return a new RecordBatch where each column is sliced
+    /// according to `offset` and `length`
+    pub fn slice(&self, offset: usize, length: usize) -> Result<RecordBatch> {
+        let schema = self.schema();
+        let num_columns = self.num_columns();
+        let new_columns = (0..num_columns)
+            .map(|column_index| self.column(column_index).slice(offset, length))
+            .collect();
+
+        RecordBatch::try_new(schema, new_columns)
+    }
+
     /// Create a `RecordBatch` from an iterable list of pairs of the
     /// form `(field_name, array)`, with the same requirements on
     /// fields and arrays as [`RecordBatch::try_new`]. This method is
@@ -424,6 +436,29 @@ mod tests {
         assert_eq!(&DataType::Utf8, record_batch.schema().field(1).data_type());
         assert_eq!(5, record_batch.column(0).data().len());
         assert_eq!(5, record_batch.column(1).data().len());
+    }
+
+    #[test]
+    fn create_record_batch_slice() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let expected_schema = schema.clone();
+
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        let b = StringArray::from(vec!["a", "b", "c", "d", "e", "f", "h", "i"]);
+
+        let record_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
+                .unwrap();
+
+        let offset = 2;
+        let length = 5;
+        let record_batch_slice = record_batch.slice(offset, length).unwrap();
+
+        assert_eq!(record_batch_slice.schema().as_ref(), &expected_schema);
+        check_batch(record_batch_slice)
     }
 
     #[test]
