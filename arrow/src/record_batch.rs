@@ -248,9 +248,10 @@ impl RecordBatch {
     /// according to `offset` and `length`
     pub fn slice(&self, offset: usize, length: usize) -> Result<RecordBatch> {
         let schema = self.schema();
-        let num_columns = self.num_columns();
-        let new_columns = (0..num_columns)
-            .map(|column_index| self.column(column_index).slice(offset, length))
+        let new_columns = self
+            .columns()
+            .iter()
+            .map(|column| column.slice(offset, length))
             .collect();
 
         RecordBatch::try_new(schema, new_columns)
