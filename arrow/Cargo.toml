@@ -40,7 +40,10 @@ serde = { version = "1.0", features = ["rc"] }
 serde_derive = "1.0"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 indexmap = "1.6"
-rand = "0.8"
+rand = { version = "0.8", default-features = false }
+# getrandom is a dependency of rand, not (directly) of arrow
+# need to specify `js` feature to build on wasm
+getrandom = { version = "0.2", features = ["js"] }
 num = "0.4"
 csv_crate = { version = "1.1", optional = true, package="csv" }
 regex = "1.3"
