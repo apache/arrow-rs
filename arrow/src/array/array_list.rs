@@ -307,13 +307,13 @@ impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericListArray<OffsetSize> {
 ///     assert_eq!(0, list_array.value_length(1));
 ///     assert_eq!(4, list_array.value_length(2));
 ///     assert_eq!(
-///         0,
+///         19,
 ///         list_array
-///         .value(0)
+///         .value(2)
 ///         .as_any()
 ///         .downcast_ref::<Int32Array>()
 ///         .unwrap()
-///         .value(0)
+///         .value(3)
 ///     )
 /// ```
 pub type ListArray = GenericListArray<i32>;
