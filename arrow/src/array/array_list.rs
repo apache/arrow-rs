@@ -50,6 +50,9 @@ impl OffsetSizeTrait for i64 {
     }
 }
 
+/// Generic struct for a primitive Array
+///
+/// For non generic lists, you may wish to consider using [`ListArray`] or [`LargeListArray`]`
 pub struct GenericListArray<OffsetSize> {
     data: ArrayData,
     values: ArrayRef,
@@ -284,10 +287,67 @@ impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericListArray<OffsetSize> {
 
 /// A list array where each element is a variable-sized sequence of values with the same
 /// type whose memory offsets between elements are represented by a i32.
+///
+/// # Example
+///
+/// ```
+///     # use arrow::array::{Array, ListArray, Int32Array};
+///     # use arrow::datatypes::{DataType, Int32Type};
+///     let data = vec![
+///        Some(vec![Some(0), Some(1), Some(2)]),
+///        None,
+///        Some(vec![Some(3), None, Some(5), Some(19)]),
+///        Some(vec![Some(6), Some(7)]),
+///     ];
+///     let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+///     assert_eq!(DataType::Int32, list_array.value_type());
+///     assert_eq!(4, list_array.len());
+///     assert_eq!(1, list_array.null_count());
+///     assert_eq!(3, list_array.value_length(0));
+///     assert_eq!(0, list_array.value_length(1));
+///     assert_eq!(4, list_array.value_length(2));
+///     assert_eq!(
+///         19,
+///         list_array
+///         .value(2)
+///         .as_any()
+///         .downcast_ref::<Int32Array>()
+///         .unwrap()
+///         .value(3)
+///     )
+/// ```
 pub type ListArray = GenericListArray<i32>;
 
 /// A list array where each element is a variable-sized sequence of values with the same
 /// type whose memory offsets between elements are represented by a i64.
+/// # Example
+///
+/// ```
+///     # use arrow::array::{Array, LargeListArray, Int64Array};
+///     # use arrow::datatypes::{DataType, Int64Type};
+///     let data = vec![
+///        Some(vec![Some(0), Some(1), Some(2)]),
+///        None,
+///        Some(vec![Some(3), None, Some(5), Some(19)]),
+///        Some(vec![Some(6), Some(7)]),
+///     ];
+///     let list_array = LargeListArray::from_iter_primitive::<Int64Type, _, _>(data);
+///     assert_eq!(DataType::Int64, list_array.value_type());
+///     assert_eq!(4, list_array.len());
+///     assert_eq!(1, list_array.null_count());
+///     assert_eq!(3, list_array.value_length(0));
+///     assert_eq!(0, list_array.value_length(1));
+///     assert_eq!(4, list_array.value_length(2));
+///     assert_eq!(
+///         19,
+///         list_array
+///         .value(2)
+///         .as_any()
+///         .downcast_ref::<Int64Array>()
+///         .unwrap()
+///         .value(3)
+///     )
+/// ```
 pub type LargeListArray = GenericListArray<i64>;
 
 /// A list array where each element is a fixed-size sequence of values with the same
