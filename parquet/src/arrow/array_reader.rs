@@ -27,7 +27,7 @@ use arrow::array::{
     new_empty_array, Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryArray,
     BinaryBuilder, BooleanArray, BooleanBufferBuilder, BooleanBuilder, DecimalBuilder,
     FixedSizeBinaryArray, FixedSizeBinaryBuilder, GenericListArray, Int16BufferBuilder,
-    Int32Array, Int64Array, OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder,
+    Int32Array, Int64Array, MapArray, OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder,
     StringArray, StringBuilder, StructArray,
 };
 use arrow::buffer::{Buffer, MutableBuffer};
@@ -924,6 +924,147 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
     }
 }
 
+/// Implementation of a map array reader.
+pub struct MapArrayReader {
+    key_reader: Box<dyn ArrayReader>,
+    value_reader: Box<dyn ArrayReader>,
+    data_type: ArrowType,
+    map_def_level: i16,
+    map_rep_level: i16,
+    def_level_buffer: Option<Buffer>,
+    rep_level_buffer: Option<Buffer>,
+}
+
+impl MapArrayReader {
+    pub fn new(
+        key_reader: Box<dyn ArrayReader>,
+        value_reader: Box<dyn ArrayReader>,
+        data_type: ArrowType,
+        def_level: i16,
+        rep_level: i16,
+    ) -> Self {
+        Self {
+            key_reader,
+            value_reader,
+            data_type,
+            map_def_level: rep_level,
+            map_rep_level: def_level,
+            def_level_buffer: None,
+            rep_level_buffer: None,
+        }
+    }
+}
+
+impl ArrayReader for MapArrayReader {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn get_data_type(&self) -> &ArrowType {
+        &self.data_type
+    }
+
+    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        let key_array = self.key_reader.next_batch(batch_size)?;
+        let value_array = self.value_reader.next_batch(batch_size)?;
+
+        // Check that key and value have the same lengths
+        let key_length = key_array.len();
+        if key_length != value_array.len() {
+            return Err(general_err!(
+                "Map key and value should have the same lengths."
+            ));
+        }
+
+        let def_levels = self
+            .key_reader
+            .get_def_levels()
+            .ok_or_else(|| ArrowError("item_reader def levels are None.".to_string()))?;
+        let rep_levels = self
+            .key_reader
+            .get_rep_levels()
+            .ok_or_else(|| ArrowError("item_reader rep levels are None.".to_string()))?;
+
+        if !((def_levels.len() == rep_levels.len()) && (rep_levels.len() == key_length)) {
+            return Err(ArrowError(
+                "Expected item_reader def_levels and rep_levels to be same length as batch".to_string(),
+            ));
+        }
+
+        let entry_data_type = if let ArrowType::Map(field, _) = &self.data_type {
+            field.data_type().clone()
+        } else {
+            return Err(ArrowError("Expected a map arrow type".to_string()));
+        };
+
+        let entry_data = ArrayDataBuilder::new(entry_data_type)
+            .len(key_length)
+            .add_child_data(key_array.data().clone())
+            .add_child_data(value_array.data().clone())
+            .build();
+
+        let entry_len = rep_levels.iter().filter(|level| **level == 0).count();
+
+        // first item in each list has rep_level = 0, subsequent items have rep_level = 1
+        let mut offsets: Vec<i32> = Vec::new();
+        let mut cur_offset = 0;
+        def_levels.iter().zip(rep_levels).for_each(|(d, r)| {
+            if *r == 0 || d == &self.map_def_level {
+                offsets.push(cur_offset);
+            }
+            if d > &self.map_def_level {
+                cur_offset += 1;
+            }
+        });
+        offsets.push(cur_offset);
+
+        let num_bytes = bit_util::ceil(offsets.len(), 8);
+        // TODO: A useful optimization is to use the null count to fill with
+        // 0 or null, to reduce individual bits set in a loop.
+        // To favour dense data, set every slot to true, then unset
+        let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
+        let null_slice = null_buf.as_slice_mut();
+        let mut list_index = 0;
+        for i in 0..rep_levels.len() {
+            // If the level is lower than empty, then the slot is null.
+            // When a list is non-nullable, its empty level = null level,
+            // so this automatically factors that in.
+            if rep_levels[i] == 0 && def_levels[i] < self.map_def_level {
+                // should be empty list
+                bit_util::unset_bit(null_slice, list_index);
+            }
+            if rep_levels[i] == 0 {
+                list_index += 1;
+            }
+        }
+        let value_offsets = Buffer::from(&offsets.to_byte_slice());
+
+        // Now we can build array data
+        let array_data = ArrayDataBuilder::new(self.data_type.clone())
+            .len(entry_len)
+            .add_buffer(value_offsets)
+            .null_bit_buffer(null_buf.into())
+            .add_child_data(entry_data)
+            .build();
+
+        // self.def_level_buffer = Some(def_level_data_buffer.into());
+        // self.rep_level_buffer = rep_level_data;
+        Ok(Arc::new(MapArray::from(array_data)))
+    }
+
+    fn get_def_levels(&self) -> Option<&[i16]> {
+        self.def_level_buffer
+            .as_ref()
+            .map(|buf| unsafe { buf.typed_data() })
+    }
+
+    fn get_rep_levels(&self) -> Option<&[i16]> {
+        self.rep_level_buffer
+            .as_ref()
+            .map(|buf| unsafe { buf.typed_data() })
+    }
+}
+
 /// Implementation of struct array reader.
 pub struct StructArrayReader {
     children: Vec<Box<dyn ArrayReader>>,
@@ -1176,8 +1317,6 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
     for ArrayReaderBuilder
 {
     /// Build array reader for primitive type.
-    /// Currently we don't have a list reader implementation, so repeated type is not
-    /// supported yet.
     fn visit_primitive(
         &mut self,
         cur_type: TypePtr,
@@ -1251,15 +1390,80 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
     }
 
     /// Build array reader for map type.
-    /// Currently this is not supported.
     fn visit_map(
         &mut self,
-        _cur_type: Arc<Type>,
-        _context: &'a ArrayReaderBuilderContext,
+        map_type: Arc<Type>,
+        context: &'a ArrayReaderBuilderContext,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
-        Err(ArrowError(
-            "Reading parquet map array into arrow is not supported yet!".to_string(),
-        ))
+        let map_key_value = map_type.get_fields().first().ok_or_else(|| {
+            ArrowError("Map field must have a key_value entry".to_string())
+        })?;
+        let map_key = map_key_value
+            .get_fields()
+            .first()
+            .ok_or_else(|| ArrowError("Map entry must have a key".to_string()))?;
+        let map_value = map_key_value
+            .get_fields()
+            .get(1)
+            .ok_or_else(|| ArrowError("Map entry must have a value".to_string()))?;
+        let mut new_context = context.clone();
+        new_context.path.append(vec![map_type.name().to_string()]);
+
+        if let Repetition::OPTIONAL = map_type.get_basic_info().repetition() {
+            new_context.def_level += 1;
+            new_context.rep_level += 1;
+        }
+
+        let key_reader = {
+            let mut key_context = new_context.clone();
+            key_context.def_level += 1;
+            key_context.path.append(vec![map_key.name().to_string()]);
+            self.dispatch(map_key.clone(), &key_context)?.unwrap()
+        };
+        let value_reader = {
+            let mut value_context = new_context.clone();
+            if let Repetition::OPTIONAL = map_value.get_basic_info().repetition() {
+                value_context.def_level += 1;
+            }
+            self.dispatch(map_value.clone(), &value_context)?.unwrap()
+        };
+
+        let arrow_type = self
+            .arrow_schema
+            .field_with_name(map_type.name())
+            .ok()
+            .map(|f| f.data_type().to_owned())
+            .unwrap_or_else(|| {
+                ArrowType::Map(
+                    Box::new(Field::new(
+                        map_key_value.name(),
+                        ArrowType::Struct(vec![
+                            Field::new(
+                                map_key.name(),
+                                key_reader.get_data_type().clone(),
+                                false,
+                            ),
+                            Field::new(
+                                map_value.name(),
+                                value_reader.get_data_type().clone(),
+                                map_value.is_optional(),
+                            ),
+                        ]),
+                        map_type.is_optional(),
+                    )),
+                    false,
+                )
+            });
+
+        let key_array_reader: Box<dyn ArrayReader> = Box::new(MapArrayReader::new(
+            key_reader,
+            value_reader,
+            arrow_type,
+            new_context.def_level,
+            new_context.rep_level,
+        ));
+
+        Ok(Some(key_array_reader))
     }
 
     /// Build array reader for list type.
@@ -1269,10 +1473,11 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
         item_type: Arc<Type>,
         context: &'a ArrayReaderBuilderContext,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
-        let list_child = &list_type
+        let mut list_child = &list_type
             .get_fields()
             .first()
-            .ok_or_else(|| ArrowError("List field must have a child.".to_string()))?;
+            .ok_or_else(|| ArrowError("List field must have a child.".to_string()))?
+            .clone();
         let mut new_context = context.clone();
 
         new_context.path.append(vec![list_type.name().to_string()]);
@@ -1316,9 +1521,6 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             _ => {
                 // a list is a group type with a single child. The list child's
                 // name comes from the child's field name.
-                let mut list_child = list_type.get_fields().first().ok_or(ArrowError(
-                    "List GroupType should have a field".to_string(),
-                ))?;
                 // if the child's name is "list" and it has a child, then use this child
                 if list_child.name() == "list" && !list_child.get_fields().is_empty() {
                     list_child = list_child.get_fields().first().unwrap();

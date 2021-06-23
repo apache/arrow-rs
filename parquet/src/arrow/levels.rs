@@ -179,7 +179,9 @@ impl LevelInfo {
                     LevelType::Primitive(field.is_nullable()),
                 )]
             }
-            DataType::List(list_field) | DataType::LargeList(list_field) => {
+            DataType::List(list_field)
+            | DataType::LargeList(list_field)
+            | DataType::Map(list_field, _) => {
                 let child_offset = array_offsets[0] as usize;
                 let child_len = *array_offsets.last().unwrap() as usize;
                 // Calculate the list level
@@ -234,7 +236,10 @@ impl LevelInfo {
                             LevelType::Primitive(list_field.is_nullable()),
                         )]
                     }
-                    DataType::List(_) | DataType::LargeList(_) | DataType::Struct(_) => {
+                    DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _) => {
                         list_level.calculate_array_levels(&child_array, list_field)
                     }
                     DataType::FixedSizeList(_, _) => unimplemented!(),
@@ -663,7 +668,7 @@ impl LevelInfo {
                 };
                 ((0..=(len as i64)).collect(), array_mask)
             }
-            DataType::List(_) => {
+            DataType::List(_) | DataType::Map(_, _) => {
                 let data = array.data();
                 let offsets = unsafe { data.buffers()[0].typed_data::<i32>() };
                 let offsets = offsets
