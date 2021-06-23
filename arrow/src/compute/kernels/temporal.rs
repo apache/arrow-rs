@@ -123,7 +123,7 @@ where
         dt => {
             return {
                 Err(ArrowError::ComputeError(format!(
-                    "year does not support type {:?}",
+                    "minute does not support type {:?}",
                     dt
                 )))
             }
