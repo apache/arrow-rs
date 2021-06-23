@@ -1568,6 +1568,14 @@ impl ReaderBuilder {
     }
 }
 
+impl<R: Read> Iterator for Reader<R> {
+    type Item = Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.next().transpose()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -2944,5 +2952,36 @@ mod tests {
 
         assert_eq!(batch.num_columns(), 1);
         assert_eq!(batch.num_rows(), 3);
+    }
+
+    #[test]
+    fn test_json_iterator() {
+        let builder = ReaderBuilder::new().infer_schema(None).with_batch_size(5);
+        let reader: Reader<File> = builder
+            .build::<File>(File::open("test/data/basic.json").unwrap())
+            .unwrap();
+        let schema = reader.schema();
+        let (col_a_index, _) = schema.column_with_name("a").unwrap();
+
+        let mut sum_num_rows = 0;
+        let mut num_batches = 0;
+        let mut sum_a = 0;
+        for batch in reader {
+            let batch = batch.unwrap();
+            assert_eq!(4, batch.num_columns());
+            sum_num_rows += batch.num_rows();
+            num_batches += 1;
+            let batch_schema = batch.schema();
+            assert_eq!(schema, batch_schema);
+            let a_array = batch
+                .column(col_a_index)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap();
+            sum_a += (0..a_array.len()).map(|i| a_array.value(i)).sum::<i64>();
+        }
+        assert_eq!(12, sum_num_rows);
+        assert_eq!(3, num_batches);
+        assert_eq!(100000000000011, sum_a);
     }
 }
