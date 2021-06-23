@@ -17,15 +17,16 @@
 # under the License.
 
 import contextlib
+import datetime
+import decimal
 import string
 
 import pytest
 import pyarrow as pa
+import pytz
 
 from arrow_pyarrow_integration_testing import PyDataType, PyField, PySchema
 import arrow_pyarrow_integration_testing as rust
-
-from pytz import timezone
 
 
 @contextlib.contextmanager
@@ -52,9 +53,13 @@ _supported_pyarrow_types = [
     pa.time32("s"),
     pa.time64("us"),
     pa.date32(),
+    pa.timestamp("us"),
+    pa.timestamp("us", tz="UTC"),
+    pa.timestamp("us", tz="Europe/Paris"),
     pa.float16(),
     pa.float32(),
     pa.float64(),
+    pa.decimal128(19, 4),
     pa.string(),
     pa.binary(),
     pa.large_string(),
@@ -78,12 +83,8 @@ _supported_pyarrow_types = [
 ]
 
 _unsupported_pyarrow_types = [
-    pa.timestamp("us"),
-    pa.timestamp("us", tz="UTC"),
-    pa.timestamp("us", tz="Europe/Paris"),
-    pa.duration("s"),
-    pa.decimal128(19, 4),
     pa.decimal256(76, 38),
+    pa.duration("s"),
     pa.binary(10),
     pa.list_(pa.int32(), 2),
     pa.map_(pa.string(), pa.int32()),
@@ -212,58 +213,55 @@ def test_list_array():
     del b
 
 
-def test_timestamp_python(self):
+def test_timestamp_python():
     """
     Python -> Rust -> Python
     """
-    old_allocated = pyarrow.total_allocated_bytes()
-    py_array = [
+    data = [
         None,
-        datetime(2021, 1, 1, 1, 1, 1, 1),
-        datetime(2020, 3, 9, 1, 1, 1, 1),
+        datetime.datetime(2021, 1, 1, 1, 1, 1, 1),
+        datetime.datetime(2020, 3, 9, 1, 1, 1, 1),
     ]
-    a = pyarrow.array(py_array, pyarrow.timestamp("us"))
-    b = arrow_pyarrow_integration_testing.concatenate(a)
-    expected = pyarrow.array(py_array + py_array, pyarrow.timestamp("us"))
-    self.assertEqual(b, expected)
+    a = pa.array(data, pa.timestamp("us"))
+    b = rust.concatenate(a)
+    expected = pa.array(data + data, pa.timestamp("us"))
+    assert b == expected
     del a
     del b
     del expected
-    # No leak of C++ memory
-    self.assertEqual(old_allocated, pyarrow.total_allocated_bytes())
 
-def test_timestamp_tz_python(self):
+
+def test_timestamp_tz_python():
     """
     Python -> Rust -> Python
     """
-    old_allocated = pyarrow.total_allocated_bytes()
-    py_array = [
+    tzinfo = pytz.timezone("America/New_York")
+    pyarrow_type = pa.timestamp("us", tz="America/New_York")
+    data = [
         None,
-        datetime(2021, 1, 1, 1, 1, 1, 1, tzinfo=timezone("America/New_York")),
-        datetime(2020, 3, 9, 1, 1, 1, 1, tzinfo=timezone("America/New_York")),
+        datetime.datetime(2021, 1, 1, 1, 1, 1, 1, tzinfo=tzinfo),
+        datetime.datetime(2020, 3, 9, 1, 1, 1, 1, tzinfo=tzinfo),
     ]
-    a = pyarrow.array(py_array, pyarrow.timestamp("us", tz="America/New_York"))
-    b = arrow_pyarrow_integration_testing.concatenate(a)
-    expected = pyarrow.array(
-        py_array + py_array, pyarrow.timestamp("us", tz="America/New_York")
-    )
-    self.assertEqual(b, expected)
+    a = pa.array(data, type=pyarrow_type)
+    b = rust.concatenate(a)
+    expected = pa.array(data * 2, type=pyarrow_type)
+    assert b == expected
     del a
     del b
     del expected
-    # No leak of C++ memory
-    self.assertEqual(old_allocated, pyarrow.total_allocated_bytes())
 
-def test_decimal_python(self):
+
+def test_decimal_python():
     """
     Python -> Rust -> Python
     """
-    old_allocated = pyarrow.total_allocated_bytes()
-    py_array = [round(Decimal(123.45), 2), round(Decimal(-123.45), 2), None]
-    a = pyarrow.array(py_array, pyarrow.decimal128(6, 2))
-    b = arrow_pyarrow_integration_testing.round_trip(a)
-    self.assertEqual(a, b)
+    data = [
+        round(decimal.Decimal(123.45), 2),
+        round(decimal.Decimal(-123.45), 2),
+        None
+    ]
+    a = pa.array(data, pa.decimal128(6, 2))
+    b = rust.round_trip(a)
+    assert a == b
     del a
     del b
-    # No leak of C++ memory
-    self.assertEqual(old_allocated, pyarrow.total_allocated_bytes())
