@@ -57,6 +57,9 @@ pub fn concat(arrays: &[&Array]) -> Result<ArrayRef> {
         return Err(ArrowError::ComputeError(
             "concat requires input of at least one array".to_string(),
         ));
+    } else if arrays.len() == 1 {
+        let array = arrays[0];
+        return Ok(array.slice(0, array.len()));
     }
 
     if arrays
@@ -111,6 +114,21 @@ mod tests {
     fn test_concat_empty_vec() {
         let re = concat(&[]);
         assert!(re.is_err());
+    }
+
+    #[test]
+    fn test_concat_one_element_vec() -> Result<()> {
+        let arr = Arc::new(PrimitiveArray::<Int64Type>::from(vec![
+            Some(-1),
+            Some(2),
+            None,
+        ])) as ArrayRef;
+        let result = concat(&[arr.as_ref()])?;
+        assert_eq!(
+            &arr, &result,
+            "concatenating single element array gives back the same result"
+        );
+        Ok(())
     }
 
     #[test]
