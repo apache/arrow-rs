@@ -100,6 +100,72 @@ where
     Ok(b.finish())
 }
 
+/// Extracts the minutes of a given temporal array as an array of integers
+pub fn minute<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::new(array.len());
+    match array.data_type() {
+        &DataType::Date64 | &DataType::Timestamp(_, _) => {
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    b.append_null()?;
+                } else {
+                    match array.value_as_datetime(i) {
+                        Some(dt) => b.append_value(dt.minute() as i32)?,
+                        None => b.append_null()?,
+                    }
+                }
+            }
+        }
+        dt => {
+            return {
+                Err(ArrowError::ComputeError(format!(
+                    "year does not support type {:?}",
+                    dt
+                )))
+            }
+        }
+    }
+
+    Ok(b.finish())
+}
+
+/// Extracts the seconds of a given temporal array as an array of integers
+pub fn second<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::new(array.len());
+    match array.data_type() {
+        &DataType::Date64 | &DataType::Timestamp(_, _) => {
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    b.append_null()?;
+                } else {
+                    match array.value_as_datetime(i) {
+                        Some(dt) => b.append_value(dt.second() as i32)?,
+                        None => b.append_null()?,
+                    }
+                }
+            }
+        }
+        dt => {
+            return {
+                Err(ArrowError::ComputeError(format!(
+                    "year does not support type {:?}",
+                    dt
+                )))
+            }
+        }
+    }
+
+    Ok(b.finish())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +249,49 @@ mod tests {
         assert_eq!(2021, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2024, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_minute() {
+        let a: PrimitiveArray<Date64Type> =
+            vec![Some(1514764800000), None, Some(1550636625000)].into();
+
+        let b = minute(&a).unwrap();
+        assert_eq!(0, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(23, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_micro_minute() {
+        let a: TimestampMicrosecondArray =
+            vec![Some(1612025847000000), None, Some(1722015847000000)].into();
+
+        let b = minute(&a).unwrap();
+        assert_eq!(57, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(44, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_second() {
+        let a: PrimitiveArray<Date64Type> =
+            vec![Some(1514764800000), None, Some(1550636625000)].into();
+
+        let b = second(&a).unwrap();
+        assert_eq!(0, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(45, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_micro_second() {
+        let a: TimestampMicrosecondArray =
+            vec![Some(1612025847000000), None, Some(1722015847000000)].into();
+
+        let b = second(&a).unwrap();
+        assert_eq!(27, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(7, b.value(2));
     }
 }
