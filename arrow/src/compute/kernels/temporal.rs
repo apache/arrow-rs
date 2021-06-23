@@ -156,7 +156,7 @@ where
         dt => {
             return {
                 Err(ArrowError::ComputeError(format!(
-                    "year does not support type {:?}",
+                    "second does not support type {:?}",
                     dt
                 )))
             }
