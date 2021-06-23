@@ -1735,10 +1735,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             true,
         );
 
-        let struct_array = StructArray::from(vec![
-            (keys_field.clone(), keys_arr),
-            (values_field.clone(), values_arr),
-        ]);
+        let struct_array =
+            StructArray::from(vec![(keys_field, keys_arr), (values_field, values_arr)]);
 
         let offset_buffer = self.offsets_builder.finish();
         let null_bit_buffer = self.bitmap_builder.finish();

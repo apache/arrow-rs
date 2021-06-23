@@ -961,19 +961,19 @@ mod tests {
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Box::new(Field::new("entries", entries_struct_type.clone(), false)),
+                Box::new(Field::new("entries", entries_struct_type, false)),
                 false,
             ),
             true,
         );
-        let schema = Arc::new(Schema::new(vec![stocks_field.clone()]));
+        let schema = Arc::new(Schema::new(vec![stocks_field]));
         let builder = arrow::json::ReaderBuilder::new()
             .with_schema(schema)
             .with_batch_size(64);
         let mut reader = builder.build(std::io::Cursor::new(json_content)).unwrap();
 
         let batch = reader.next().unwrap().unwrap();
-        roundtrip("test_arrow_writer_map.parquet", batch, Some(2));
+        roundtrip("test_arrow_writer_map.parquet", batch, None);
     }
 
     #[test]

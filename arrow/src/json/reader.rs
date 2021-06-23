@@ -2296,10 +2296,7 @@ mod tests {
             ),
             true,
         );
-        let schema = Arc::new(Schema::new(vec![
-            account_field.clone(),
-            stocks_field.clone(),
-        ]));
+        let schema = Arc::new(Schema::new(vec![account_field, stocks_field.clone()]));
         let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
         // Note: account 456 has 'long' twice, to show that the JSON reader will overwrite
         // existing keys. This thus guarantees unique keys for the map
@@ -2329,12 +2326,12 @@ mod tests {
             .add_buffer(Buffer::from(
                 vec![0i32, 2, 4, 7, 7, 8, 8, 9].to_byte_slice(),
             ))
-            .add_child_data(expected_value_array_data.clone())
+            .add_child_data(expected_value_array_data)
             .null_bit_buffer(Buffer::from(vec![0b01010111]))
             .build();
         let expected_stocks_entries_data = ArrayDataBuilder::new(entries_struct_type)
             .len(7)
-            .add_child_data(expected_keys.clone())
+            .add_child_data(expected_keys)
             .add_child_data(expected_values)
             .build();
         let expected_stocks_data =
