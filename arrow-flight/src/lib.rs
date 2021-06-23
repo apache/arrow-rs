@@ -263,15 +263,7 @@ impl TryFrom<i32> for DescriptorType {
     type Error = ArrowError;
 
     fn try_from(value: i32) -> ArrowResult<Self> {
-        match value {
-            0 => Ok(DescriptorType::Unknown),
-            1 => Ok(DescriptorType::Cmd),
-            2 => Ok(DescriptorType::Path),
-            _ => Err(ArrowError::InvalidArgumentError(format!(
-                "invalid descriptor type: {}",
-                value
-            ))),
-        }
+        value.try_into()
     }
 }
 

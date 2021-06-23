@@ -75,7 +75,7 @@ pub fn flight_data_to_arrow_batch(
 
 /// Convert a `Schema` to `SchemaResult` by converting to an IPC message
 #[deprecated(
-    since = "4.3.0",
+    since = "4.4.0",
     note = "Use From trait, e.g.: SchemaAsIpc::new(schema, options).into()"
 )]
 pub fn flight_schema_from_arrow_schema(
@@ -87,7 +87,7 @@ pub fn flight_schema_from_arrow_schema(
 
 /// Convert a `Schema` to `FlightData` by converting to an IPC message
 #[deprecated(
-    since = "4.3.0",
+    since = "4.4.0",
     note = "Use From trait, e.g.: SchemaAsIpc::new(schema, options).into()"
 )]
 pub fn flight_data_from_arrow_schema(
@@ -99,7 +99,7 @@ pub fn flight_data_from_arrow_schema(
 
 /// Convert a `Schema` to bytes in the format expected in `FlightInfo.schema`
 #[deprecated(
-    since = "4.3.0",
+    since = "4.4.0",
     note = "Use TryFrom trait, e.g.: SchemaAsIpc::new(schema, options).try_into()"
 )]
 pub fn ipc_message_from_arrow_schema(
