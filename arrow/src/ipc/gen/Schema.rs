@@ -96,7 +96,7 @@ impl<'a> flatbuffers::Follow<'a> for MetadataVersion {
     type Inner = Self;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
+        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
         Self(b)
     }
 }
@@ -105,7 +105,7 @@ impl flatbuffers::Push for MetadataVersion {
     type Output = MetadataVersion;
     #[inline]
     fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        flatbuffers::emplace_scalar::<i16>(dst, self.0);
+        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
     }
 }
 
@@ -217,7 +217,7 @@ impl<'a> flatbuffers::Follow<'a> for Feature {
     type Inner = Self;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = flatbuffers::read_scalar_at::<i64>(buf, loc);
+        let b = unsafe { flatbuffers::read_scalar_at::<i64>(buf, loc) };
         Self(b)
     }
 }
@@ -226,7 +226,7 @@ impl flatbuffers::Push for Feature {
     type Output = Feature;
     #[inline]
     fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        flatbuffers::emplace_scalar::<i64>(dst, self.0);
+        unsafe { flatbuffers::emplace_scalar::<i64>(dst, self.0) };
     }
 }
 
@@ -305,7 +305,7 @@ impl<'a> flatbuffers::Follow<'a> for UnionMode {
     type Inner = Self;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
+        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
         Self(b)
     }
 }
@@ -314,7 +314,7 @@ impl flatbuffers::Push for UnionMode {
     type Output = UnionMode;
     #[inline]
     fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        flatbuffers::emplace_scalar::<i16>(dst, self.0);
+        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
     }
 }
 
@@ -396,7 +396,7 @@ impl<'a> flatbuffers::Follow<'a> for Precision {
     type Inner = Self;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
+        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
         Self(b)
     }
 }
@@ -405,7 +405,7 @@ impl flatbuffers::Push for Precision {
     type Output = Precision;
     #[inline]
     fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        flatbuffers::emplace_scalar::<i16>(dst, self.0);
+        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
     }
 }
 
@@ -484,7 +484,7 @@ impl<'a> flatbuffers::Follow<'a> for DateUnit {
     type Inner = Self;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
+        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
         Self(b)
     }
 }
@@ -493,7 +493,7 @@ impl flatbuffers::Push for DateUnit {
     type Output = DateUnit;
     #[inline]
     fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        flatbuffers::emplace_scalar::<i16>(dst, self.0);
+        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
     }
 }
 
@@ -586,7 +586,7 @@ impl<'a> flatbuffers::Follow<'a> for TimeUnit {
     type Inner = Self;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
+        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
         Self(b)
     }
 }
@@ -595,7 +595,7 @@ impl flatbuffers::Push for TimeUnit {
     type Output = TimeUnit;
     #[inline]
     fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        flatbuffers::emplace_scalar::<i16>(dst, self.0);
+        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
     }
 }
 
@@ -675,7 +675,7 @@ impl<'a> flatbuffers::Follow<'a> for IntervalUnit {
     type Inner = Self;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
+        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
         Self(b)
     }
 }
@@ -684,7 +684,7 @@ impl flatbuffers::Push for IntervalUnit {
     type Output = IntervalUnit;
     #[inline]
     fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        flatbuffers::emplace_scalar::<i16>(dst, self.0);
+        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
     }
 }
 
@@ -853,7 +853,7 @@ impl<'a> flatbuffers::Follow<'a> for Type {
     type Inner = Self;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = flatbuffers::read_scalar_at::<u8>(buf, loc);
+        let b = unsafe { flatbuffers::read_scalar_at::<u8>(buf, loc) };
         Self(b)
     }
 }
@@ -862,7 +862,7 @@ impl flatbuffers::Push for Type {
     type Output = Type;
     #[inline]
     fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        flatbuffers::emplace_scalar::<u8>(dst, self.0);
+        unsafe { flatbuffers::emplace_scalar::<u8>(dst, self.0) };
     }
 }
 
@@ -944,7 +944,7 @@ impl<'a> flatbuffers::Follow<'a> for DictionaryKind {
     type Inner = Self;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
+        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
         Self(b)
     }
 }
@@ -953,7 +953,7 @@ impl flatbuffers::Push for DictionaryKind {
     type Output = DictionaryKind;
     #[inline]
     fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        flatbuffers::emplace_scalar::<i16>(dst, self.0);
+        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
     }
 }
 
@@ -1034,7 +1034,7 @@ impl<'a> flatbuffers::Follow<'a> for Endianness {
     type Inner = Self;
     #[inline]
     fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
-        let b = flatbuffers::read_scalar_at::<i16>(buf, loc);
+        let b = unsafe { flatbuffers::read_scalar_at::<i16>(buf, loc) };
         Self(b)
     }
 }
@@ -1043,7 +1043,7 @@ impl flatbuffers::Push for Endianness {
     type Output = Endianness;
     #[inline]
     fn push(&self, dst: &mut [u8], _rest: &[u8]) {
-        flatbuffers::emplace_scalar::<i16>(dst, self.0);
+        unsafe { flatbuffers::emplace_scalar::<i16>(dst, self.0) };
     }
 }
 
