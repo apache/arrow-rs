@@ -251,7 +251,7 @@ impl RecordBatch {
     ///
     /// Panics if `offset` with `length` is greater than column length.
     pub fn slice(&self, offset: usize, length: usize) -> RecordBatch {
-        if self.schema.fields().len() == 0 {
+        if self.schema.fields().is_empty() {
             assert!((offset + length) == 0);
             return RecordBatch::new_empty(self.schema.clone());
         }
