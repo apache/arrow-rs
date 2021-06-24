@@ -2,6 +2,24 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 # Changelog
 
+## [4.4.0](https://github.com/apache/arrow-rs/tree/4.4.0) (2021-06-24)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/4.3.0...4.4.0)
+
+* 43b4f721fc31c7c6b700aea8bf4de8800a7f49bc implement second/minute helpers for temporal (#493) (#498)
+* 4d3f826b622273003d133ae9ec481850fb5bb058 concatenating single element array shortcut (#492) (#497)
+* eb1d1e158e2cde8c7f8efed5929d89803a12daa6 Doctest for GenericListArray. (#474) (#496)
+* c0f06d4d1bc5a716c7cab168c97f7ecd65615bc7 Add C data interface for decimal128 and timestamp (#453) (#495)
+* c1f9083ef6db9bdc3b3b6046284f0ca6be99c0ab Use partition for bool sort (#448) (#494)
+* d851decbabd5ff5f72af08602830199404fb08b4 remove stale comment and update unit tests (#472) (#487)
+* 1c3431a15bc7b3d57bb3399ecf8f2702dfcae459 Implement the Iterator trait for the json Reader. (#451) (#486)
+* 638a605a356306ce82ba2ac0b66aee81251cdaad remove clippy unnecessary wraps (#449) (#485)
+* 563a5067a9e722808a298817c153071fb51a6535 remove unnecessary wraps in sortk (#445) (#483)
+* b5e50efa6d8d7499e7785b2862eb60e19770ea11 window::shift to work for all array types (#388) (#464)
+* 93b51718671fecb9511b5eabf069940e07fa4b4c Add Decimal to CsvWriter and improve debug display (#406) (#465)
+* 153085f526939e83f7cad8d38cbdd176728b62af Backport clippy fixes to active release (#475)
+
+
 ## [4.3.0](https://github.com/apache/arrow-rs/tree/4.3.0) (2021-06-10)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/4.2.0...4.3.0)
