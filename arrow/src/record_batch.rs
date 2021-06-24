@@ -246,17 +246,27 @@ impl RecordBatch {
 
     /// Return a new RecordBatch where each column is sliced
     /// according to `offset` and `length`
-    pub fn slice(&self, offset: usize, length: usize) -> Result<RecordBatch> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset` with `length` is greater than column length.
+    pub fn slice(&self, offset: usize, length: usize) -> RecordBatch {
+        if self.schema.fields().len() == 0 {
+            assert!((offset + length) == 0);
+            return RecordBatch::new_empty(self.schema.clone());
+        }
+        assert!((offset + length) <= self.num_rows());
+
         let columns = self
             .columns()
             .iter()
             .map(|column| column.slice(offset, length))
             .collect();
 
-        Ok(Self {
+        Self {
             schema: self.schema.clone(),
             columns,
-        })
+        }
     }
 
     /// Create a `RecordBatch` from an iterable list of pairs of the
@@ -429,19 +439,20 @@ mod tests {
         let record_batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
                 .unwrap();
-        check_batch(record_batch)
+        check_batch(record_batch, 5)
     }
 
-    fn check_batch(record_batch: RecordBatch) {
-        assert_eq!(5, record_batch.num_rows());
+    fn check_batch(record_batch: RecordBatch, num_rows: usize) {
+        assert_eq!(num_rows, record_batch.num_rows());
         assert_eq!(2, record_batch.num_columns());
         assert_eq!(&DataType::Int32, record_batch.schema().field(0).data_type());
         assert_eq!(&DataType::Utf8, record_batch.schema().field(1).data_type());
-        assert_eq!(5, record_batch.column(0).data().len());
-        assert_eq!(5, record_batch.column(1).data().len());
+        assert_eq!(num_rows, record_batch.column(0).data().len());
+        assert_eq!(num_rows, record_batch.column(1).data().len());
     }
 
     #[test]
+    #[should_panic(expected = "assertion failed: (offset + length) <= self.num_rows()")]
     fn create_record_batch_slice() {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -458,10 +469,38 @@ mod tests {
 
         let offset = 2;
         let length = 5;
-        let record_batch_slice = record_batch.slice(offset, length).unwrap();
+        let record_batch_slice = record_batch.slice(offset, length);
 
         assert_eq!(record_batch_slice.schema().as_ref(), &expected_schema);
-        check_batch(record_batch_slice)
+        check_batch(record_batch_slice, 5);
+
+        let offset = 2;
+        let length = 0;
+        let record_batch_slice = record_batch.slice(offset, length);
+
+        assert_eq!(record_batch_slice.schema().as_ref(), &expected_schema);
+        check_batch(record_batch_slice, 0);
+
+        let offset = 2;
+        let length = 10;
+        let _record_batch_slice = record_batch.slice(offset, length);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed: (offset + length) == 0")]
+    fn create_record_batch_slice_empty_batch() {
+        let schema = Schema::new(vec![]);
+
+        let record_batch = RecordBatch::new_empty(Arc::new(schema));
+
+        let offset = 0;
+        let length = 0;
+        let record_batch_slice = record_batch.slice(offset, length);
+        assert_eq!(0, record_batch_slice.schema().fields().len());
+
+        let offset = 1;
+        let length = 2;
+        let _record_batch_slice = record_batch.slice(offset, length);
     }
 
     #[test]
@@ -483,7 +522,7 @@ mod tests {
             Field::new("b", DataType::Utf8, false),
         ]);
         assert_eq!(record_batch.schema().as_ref(), &expected_schema);
-        check_batch(record_batch);
+        check_batch(record_batch, 5);
     }
 
     #[test]
@@ -503,7 +542,7 @@ mod tests {
             Field::new("b", DataType::Utf8, true),
         ]);
         assert_eq!(record_batch.schema().as_ref(), &expected_schema);
-        check_batch(record_batch);
+        check_batch(record_batch, 5);
     }
 
     #[test]
