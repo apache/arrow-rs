@@ -31,13 +31,9 @@ fn build_test_schema() -> SchemaDescPtr {
     let message_type = "
         message test_schema {
             REQUIRED INT32 mandatory_int32_leaf;
-            REPEATED Group test_mid_int32 {
-                OPTIONAL INT32 optional_int32_leaf;
-            }
+            OPTIONAL INT32 optional_int32_leaf;
             REQUIRED BYTE_ARRAY mandatory_string_leaf (UTF8);
-            REPEATED Group test_mid_string {
-                OPTIONAL BYTE_ARRAY optional_string_leaf (UTF8);
-            }
+            OPTIONAL BYTE_ARRAY optional_string_leaf (UTF8);
         }
         ";
     parse_message_type(message_type)
