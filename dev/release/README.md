@@ -224,7 +224,7 @@ following commands
 
 ```shell
 (cd arrow && cargo publish)
-(cd arrow_flight && cargo publish)
+(cd arrow-flight && cargo publish)
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
 ```
