@@ -19,7 +19,6 @@
 
 use std::any::Any;
 use std::fmt;
-use std::mem;
 
 use crate::array::{Array, ArrayData};
 use crate::datatypes::*;
@@ -83,16 +82,6 @@ impl Array for NullArray {
     /// The null count of a `NullArray` always equals its length.
     fn null_count(&self) -> usize {
         self.data_ref().len()
-    }
-
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [NullArray].
-    fn get_buffer_memory_size(&self) -> usize {
-        self.data.get_buffer_memory_size()
-    }
-
-    /// Returns the total number of bytes of memory occupied physically by this [NullArray].
-    fn get_array_memory_size(&self) -> usize {
-        mem::size_of_val(self)
     }
 }
 

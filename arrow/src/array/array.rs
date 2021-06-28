@@ -198,10 +198,14 @@ pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
     }
 
     /// Returns the total number of bytes of memory occupied by the buffers owned by this array.
-    fn get_buffer_memory_size(&self) -> usize;
+    fn get_buffer_memory_size(&self) -> usize {
+        self.data_ref().get_buffer_memory_size()
+    }
 
     /// Returns the total number of bytes of memory occupied physically by this array.
-    fn get_array_memory_size(&self) -> usize;
+    fn get_array_memory_size(&self) -> usize {
+        self.data_ref().get_array_memory_size() + std::mem::size_of_val(self)
+    }
 
     /// returns two pointers that represent this array in the C Data Interface (FFI)
     fn to_raw(
@@ -575,6 +579,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn test_empty_primitive() {
         let array = new_empty_array(&DataType::Int32);
@@ -659,6 +664,65 @@ mod tests {
         assert_eq!(
             array.data().buffers()[0].len(),
             null_array.data().buffers()[0].len()
+        );
+    }
+
+    #[test]
+    fn test_memory_size_primitive() {
+        let arr = PrimitiveArray::<Int64Type>::from_iter_values(0..128);
+        let empty =
+            PrimitiveArray::<Int64Type>::from(ArrayData::new_empty(arr.data_type()));
+
+        // substract empty array to avoid magic numbers for the size of additional fields
+        assert_eq!(
+            arr.get_array_memory_size() - empty.get_array_memory_size(),
+            128 * std::mem::size_of::<i64>()
+        );
+    }
+
+    #[test]
+    fn test_memory_size_dictionary() {
+        let values = PrimitiveArray::<Int64Type>::from_iter_values(0..16);
+        let keys = PrimitiveArray::<Int16Type>::from_iter_values(
+            (0..256).map(|i| (i % values.len()) as i16),
+        );
+
+        let dict_data = ArrayData::builder(DataType::Dictionary(
+            Box::new(keys.data_type().clone()),
+            Box::new(values.data_type().clone()),
+        ))
+        .len(keys.len())
+        .buffers(keys.data_ref().buffers().to_vec())
+        .child_data(vec![ArrayData::builder(DataType::Int64)
+            .len(values.len())
+            .buffers(values.data_ref().buffers().to_vec())
+            .build()])
+        .build();
+
+        let empty_data = ArrayData::new_empty(&DataType::Dictionary(
+            Box::new(DataType::Int16),
+            Box::new(DataType::Int64),
+        ));
+
+        let arr = DictionaryArray::<Int16Type>::from(dict_data);
+        let empty = DictionaryArray::<Int16Type>::from(empty_data);
+
+        let expected_keys_size = 256 * std::mem::size_of::<i16>();
+        assert_eq!(
+            arr.keys().get_array_memory_size() - empty.keys().get_array_memory_size(),
+            expected_keys_size
+        );
+
+        let expected_values_size = 16 * std::mem::size_of::<i64>();
+        assert_eq!(
+            arr.values().get_array_memory_size() - empty.values().get_array_memory_size(),
+            expected_values_size
+        );
+
+        let expected_size = expected_keys_size + expected_values_size;
+        assert_eq!(
+            arr.get_array_memory_size() - empty.get_array_memory_size(),
+            expected_size
         );
     }
 }

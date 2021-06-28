@@ -18,7 +18,6 @@
 use std::any::Any;
 use std::fmt;
 use std::iter::IntoIterator;
-use std::mem;
 use std::{convert::From, iter::FromIterator};
 
 use super::{
@@ -208,18 +207,6 @@ impl<T: ArrowPrimitiveType> Array for DictionaryArray<T> {
 
     fn data(&self) -> &ArrayData {
         &self.data
-    }
-
-    fn get_buffer_memory_size(&self) -> usize {
-        // Since both `keys` and `values` derive (are references from) `data`, we only need to account for `data`.
-        self.data.get_buffer_memory_size()
-    }
-
-    fn get_array_memory_size(&self) -> usize {
-        self.data.get_array_memory_size()
-            + self.keys.get_array_memory_size()
-            + self.values.get_array_memory_size()
-            + mem::size_of_val(self)
     }
 }
 

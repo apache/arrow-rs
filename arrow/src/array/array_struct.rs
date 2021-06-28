@@ -19,7 +19,6 @@ use std::any::Any;
 use std::convert::{From, TryFrom};
 use std::fmt;
 use std::iter::IntoIterator;
-use std::mem;
 
 use super::{make_array, Array, ArrayData, ArrayRef};
 use crate::datatypes::DataType;
@@ -177,16 +176,6 @@ impl Array for StructArray {
     /// Returns the length (i.e., number of elements) of this array
     fn len(&self) -> usize {
         self.data_ref().len()
-    }
-
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [StructArray].
-    fn get_buffer_memory_size(&self) -> usize {
-        self.data.get_buffer_memory_size()
-    }
-
-    /// Returns the total number of bytes of memory occupied physically by this [StructArray].
-    fn get_array_memory_size(&self) -> usize {
-        self.data.get_array_memory_size() + mem::size_of_val(self)
     }
 }
 

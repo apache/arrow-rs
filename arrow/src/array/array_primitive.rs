@@ -150,16 +150,6 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     fn data(&self) -> &ArrayData {
         &self.data
     }
-
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [PrimitiveArray].
-    fn get_buffer_memory_size(&self) -> usize {
-        self.data.get_buffer_memory_size()
-    }
-
-    /// Returns the total number of bytes of memory occupied physically by this [PrimitiveArray].
-    fn get_array_memory_size(&self) -> usize {
-        self.data.get_array_memory_size() + mem::size_of::<RawPtrBox<T::Native>>()
-    }
 }
 
 fn as_datetime<T: ArrowPrimitiveType>(v: i64) -> Option<NaiveDateTime> {
