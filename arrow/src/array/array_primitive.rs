@@ -498,9 +498,6 @@ mod tests {
             assert!(arr.is_valid(i));
             assert_eq!(i as i32, arr.value(i));
         }
-
-        assert_eq!(64, arr.get_buffer_memory_size());
-        assert_eq!(136, arr.get_array_memory_size());
     }
 
     #[test]
@@ -520,9 +517,6 @@ mod tests {
                 assert!(!arr.is_valid(i));
             }
         }
-
-        assert_eq!(128, arr.get_buffer_memory_size());
-        assert_eq!(216, arr.get_array_memory_size());
     }
 
     #[test]

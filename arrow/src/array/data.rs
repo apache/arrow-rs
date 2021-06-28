@@ -354,12 +354,7 @@ impl ArrayData {
 
     /// Returns the total number of bytes of memory occupied physically by this [ArrayData].
     pub fn get_array_memory_size(&self) -> usize {
-        let mut size = 0;
-        // Calculate size of the fields that don't have [get_array_memory_size] method internally.
-        size += mem::size_of_val(self)
-            - mem::size_of_val(&self.buffers)
-            - mem::size_of_val(&self.null_bitmap)
-            - mem::size_of_val(&self.child_data);
+        let mut size = mem::size_of_val(self);
 
         // Calculate rest of the fields top down which contain actual data
         for buffer in &self.buffers {

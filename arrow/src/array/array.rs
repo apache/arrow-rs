@@ -207,7 +207,10 @@ pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
     /// This value will always be greater than returned by `get_buffer_memory_size()` and
     /// includes the overhead of the data structures that contain the pointers to the various buffers.
     fn get_array_memory_size(&self) -> usize {
+        // both data.get_array_memory_size and size_of_val(self) include ArrayData fields,
+        // to only count additional fields of this array substract size_of(ArrayData)
         self.data_ref().get_array_memory_size() + std::mem::size_of_val(self)
+            - std::mem::size_of::<ArrayData>()
     }
 
     /// returns two pointers that represent this array in the C Data Interface (FFI)
@@ -582,6 +585,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::iter::FromIterator;
 
     #[test]
     fn test_empty_primitive() {
@@ -671,6 +675,17 @@ mod tests {
     }
 
     #[test]
+    fn test_memory_size_null() {
+        let null_arr = NullArray::new(32);
+
+        assert_eq!(0, null_arr.get_buffer_memory_size());
+        assert_eq!(
+            std::mem::size_of::<NullArray>(),
+            null_arr.get_array_memory_size()
+        );
+    }
+
+    #[test]
     fn test_memory_size_primitive() {
         let arr = PrimitiveArray::<Int64Type>::from_iter_values(0..128);
         let empty =
@@ -680,6 +695,23 @@ mod tests {
         assert_eq!(
             arr.get_array_memory_size() - empty.get_array_memory_size(),
             128 * std::mem::size_of::<i64>()
+        );
+    }
+
+    #[test]
+    fn test_memory_size_primitive_nullable() {
+        let arr = PrimitiveArray::<Int64Type>::from_iter((0..128).map(|i| Some(i)));
+        let empty_with_bitmap = PrimitiveArray::<Int64Type>::from(
+            ArrayData::builder(arr.data_type().clone())
+                .add_buffer(MutableBuffer::new(0).into())
+                .null_bit_buffer(MutableBuffer::new_null(0).into())
+                .build(),
+        );
+
+        // substract empty array to avoid magic numbers for the size of additional fields
+        assert_eq!(
+            arr.get_array_memory_size() - empty_with_bitmap.get_array_memory_size(),
+            128 * std::mem::size_of::<i64>() + 64
         );
     }
 
