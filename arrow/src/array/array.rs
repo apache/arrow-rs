@@ -197,7 +197,8 @@ pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
         self.data_ref().null_count()
     }
 
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this array.
+    /// Returns the total number of bytes of memory pointed to by this array.
+    /// The buffers store bytes in the Arrow memory format, and include the data as well as the validity map.
     fn get_buffer_memory_size(&self) -> usize {
         self.data_ref().get_buffer_memory_size()
     }
