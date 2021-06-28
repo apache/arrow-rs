@@ -709,6 +709,7 @@ mod tests {
         );
 
         // substract empty array to avoid magic numbers for the size of additional fields
+        // the size of the validity bitmap is rounded up to 64 bytes
         assert_eq!(
             arr.get_array_memory_size() - empty_with_bitmap.get_array_memory_size(),
             128 * std::mem::size_of::<i64>() + 64
