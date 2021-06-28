@@ -204,6 +204,8 @@ pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
     }
 
     /// Returns the total number of bytes of memory occupied physically by this array.
+    /// This value will always be greater than returned by `get_buffer_memory_size()` and
+    /// includes the overhead of the data structures that contain the pointers to the various buffers.
     fn get_array_memory_size(&self) -> usize {
         self.data_ref().get_array_memory_size() + std::mem::size_of_val(self)
     }
