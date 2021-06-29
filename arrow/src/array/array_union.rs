@@ -80,7 +80,6 @@ use crate::error::{ArrowError, Result};
 
 use core::fmt;
 use std::any::Any;
-use std::mem;
 use std::mem::size_of;
 
 /// An Array that can represent slots of varying types.
@@ -275,25 +274,6 @@ impl Array for UnionArray {
 
     fn data(&self) -> &ArrayData {
         &self.data
-    }
-
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [UnionArray].
-    fn get_buffer_memory_size(&self) -> usize {
-        let mut size = self.data.get_buffer_memory_size();
-        for field in &self.boxed_fields {
-            size += field.get_buffer_memory_size();
-        }
-        size
-    }
-
-    /// Returns the total number of bytes of memory occupied physically by this [UnionArray].
-    fn get_array_memory_size(&self) -> usize {
-        let mut size = self.data.get_array_memory_size();
-        size += mem::size_of_val(self) - mem::size_of_val(&self.boxed_fields);
-        for field in &self.boxed_fields {
-            size += field.get_array_memory_size();
-        }
-        size
     }
 }
 

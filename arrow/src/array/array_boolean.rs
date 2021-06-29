@@ -18,7 +18,6 @@
 use std::borrow::Borrow;
 use std::convert::From;
 use std::iter::{FromIterator, IntoIterator};
-use std::mem;
 use std::{any::Any, fmt};
 
 use super::*;
@@ -113,16 +112,6 @@ impl Array for BooleanArray {
 
     fn data(&self) -> &ArrayData {
         &self.data
-    }
-
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [BooleanArray].
-    fn get_buffer_memory_size(&self) -> usize {
-        self.data.get_buffer_memory_size()
-    }
-
-    /// Returns the total number of bytes of memory occupied physically by this [BooleanArray].
-    fn get_array_memory_size(&self) -> usize {
-        self.data.get_array_memory_size() + mem::size_of_val(self)
     }
 }
 

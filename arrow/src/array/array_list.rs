@@ -17,7 +17,6 @@
 
 use std::any::Any;
 use std::fmt;
-use std::mem;
 
 use num::Num;
 
@@ -261,16 +260,6 @@ impl<OffsetSize: 'static + OffsetSizeTrait> Array for GenericListArray<OffsetSiz
     fn data(&self) -> &ArrayData {
         &self.data
     }
-
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [ListArray].
-    fn get_buffer_memory_size(&self) -> usize {
-        self.data.get_buffer_memory_size()
-    }
-
-    /// Returns the total number of bytes of memory occupied physically by this [ListArray].
-    fn get_array_memory_size(&self) -> usize {
-        self.data.get_array_memory_size() + mem::size_of_val(self)
-    }
 }
 
 impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericListArray<OffsetSize> {
@@ -443,18 +432,6 @@ impl Array for FixedSizeListArray {
 
     fn data(&self) -> &ArrayData {
         &self.data
-    }
-
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [FixedSizeListArray].
-    fn get_buffer_memory_size(&self) -> usize {
-        self.data.get_buffer_memory_size() + self.values().get_buffer_memory_size()
-    }
-
-    /// Returns the total number of bytes of memory occupied physically by this [FixedSizeListArray].
-    fn get_array_memory_size(&self) -> usize {
-        self.data.get_array_memory_size()
-            + self.values().get_array_memory_size()
-            + mem::size_of_val(self)
     }
 }
 
