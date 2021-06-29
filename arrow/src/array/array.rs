@@ -585,7 +585,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::iter::FromIterator;
 
     #[test]
     fn test_empty_primitive() {
@@ -683,6 +682,10 @@ mod tests {
             std::mem::size_of::<NullArray>(),
             null_arr.get_array_memory_size()
         );
+        assert_eq!(
+            std::mem::size_of::<NullArray>(),
+            std::mem::size_of::<ArrayData>(),
+        );
     }
 
     #[test]
@@ -706,6 +709,15 @@ mod tests {
                 .add_buffer(MutableBuffer::new(0).into())
                 .null_bit_buffer(MutableBuffer::new_null(0).into())
                 .build(),
+        );
+
+        // expected size is the size of the PrimitiveArray struct,
+        // which includes the optional validity buffer
+        // plus one buffer on the heap
+        assert_eq!(
+            std::mem::size_of::<PrimitiveArray<Int64Type>>()
+                + std::mem::size_of::<Buffer>(),
+            empty_with_bitmap.get_array_memory_size()
         );
 
         // substract empty array to avoid magic numbers for the size of additional fields
