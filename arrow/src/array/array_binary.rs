@@ -17,7 +17,6 @@
 
 use std::convert::{From, TryInto};
 use std::fmt;
-use std::mem;
 use std::{any::Any, iter::FromIterator};
 
 use super::{
@@ -198,16 +197,6 @@ impl<OffsetSize: BinaryOffsetSizeTrait> Array for GenericBinaryArray<OffsetSize>
 
     fn data(&self) -> &ArrayData {
         &self.data
-    }
-
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [$name].
-    fn get_buffer_memory_size(&self) -> usize {
-        self.data.get_buffer_memory_size()
-    }
-
-    /// Returns the total number of bytes of memory occupied physically by this [$name].
-    fn get_array_memory_size(&self) -> usize {
-        self.data.get_array_memory_size() + mem::size_of_val(self)
     }
 }
 
@@ -600,16 +589,6 @@ impl Array for FixedSizeBinaryArray {
     fn data(&self) -> &ArrayData {
         &self.data
     }
-
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [FixedSizeBinaryArray].
-    fn get_buffer_memory_size(&self) -> usize {
-        self.data.get_buffer_memory_size()
-    }
-
-    /// Returns the total number of bytes of memory occupied physically by this [FixedSizeBinaryArray].
-    fn get_array_memory_size(&self) -> usize {
-        self.data.get_array_memory_size() + mem::size_of_val(self)
-    }
 }
 
 /// A type of `DecimalArray` whose elements are binaries.
@@ -755,16 +734,6 @@ impl Array for DecimalArray {
 
     fn data(&self) -> &ArrayData {
         &self.data
-    }
-
-    /// Returns the total number of bytes of memory occupied by the buffers owned by this [DecimalArray].
-    fn get_buffer_memory_size(&self) -> usize {
-        self.data.get_buffer_memory_size()
-    }
-
-    /// Returns the total number of bytes of memory occupied physically by this [DecimalArray].
-    fn get_array_memory_size(&self) -> usize {
-        self.data.get_array_memory_size() + mem::size_of_val(self)
     }
 }
 
