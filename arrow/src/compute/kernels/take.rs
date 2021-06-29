@@ -522,7 +522,7 @@ where
         nulls = match indices.data_ref().null_buffer() {
             Some(buffer) => Some(buffer_bin_and(
                 buffer,
-                0,
+                indices.offset(),
                 &null_buf.into(),
                 0,
                 indices.len(),
@@ -1166,7 +1166,7 @@ mod tests {
     }
 
     #[test]
-    fn test_take_primitive_bool() {
+    fn test_take_bool() {
         let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]);
         // boolean
         test_take_boolean_arrays(
@@ -1174,6 +1174,25 @@ mod tests {
             &index,
             None,
             vec![Some(false), None, None, Some(false), Some(true)],
+        );
+    }
+
+    #[test]
+    fn test_take_bool_with_offset() {
+        let index =
+            UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(2), None]);
+        let index = index.slice(2, 4);
+        let index = index
+            .as_any()
+            .downcast_ref::<PrimitiveArray<UInt32Type>>()
+            .unwrap();
+
+        // boolean
+        test_take_boolean_arrays(
+            vec![Some(false), None, Some(true), Some(false), None],
+            &index,
+            None,
+            vec![None, Some(false), Some(true), None],
         );
     }
 
