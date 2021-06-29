@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_memory_size_primitive_nullable() {
-        let arr = PrimitiveArray::<Int64Type>::from_iter((0..128).map(|i| Some(i)));
+        let arr: PrimitiveArray<Int64Type> = (0..128).map(Some).collect();
         let empty_with_bitmap = PrimitiveArray::<Int64Type>::from(
             ArrayData::builder(arr.data_type().clone())
                 .add_buffer(MutableBuffer::new(0).into())
