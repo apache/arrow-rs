@@ -129,6 +129,14 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
     }
 }
 
+#[derive(Debug)]
+struct Stats<T: DataType> {
+    min: Option<T::T>,
+    max: Option<T::T>,
+    nulls_count: Option<u64>,
+    distinct_count: Option<u64>,
+}
+
 /// Convenience method to get the next ColumnWriter from the RowGroupWriter
 #[inline]
 #[allow(clippy::borrowed_box)]
@@ -236,7 +244,7 @@ fn write_leaf(
     let column = column.slice(levels.offset, levels.length);
     let written = match writer {
         ColumnWriter::Int32ColumnWriter(ref mut typed) => {
-            let values = match column.data_type() {
+            let (values, stats) = match column.data_type() {
                 ArrowDataType::Date64 => {
                     // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
                     let array = if let ArrowDataType::Date64 = column.data_type() {
@@ -250,7 +258,15 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
                         .expect("Unable to get int32 array");
-                    get_numeric_array_slice::<Int32Type, _>(&array, &indices)
+                    let values =
+                        get_numeric_array_slice::<Int32Type, _>(&array, &indices);
+                    let stats = Stats::<Int32Type> {
+                        min: arrow::compute::min(&array),
+                        max: arrow::compute::max(&array),
+                        nulls_count: Some(array.null_count() as u64),
+                        distinct_count: None,
+                    };
+                    (values, stats)
                 }
                 ArrowDataType::UInt32 => {
                     // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
@@ -259,11 +275,19 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::UInt32Array>()
                         .expect("Unable to get u32 array");
+                    let stats = Stats::<Int32Type> {
+                        min: arrow::compute::min(&array).map(|v| v as i32),
+                        max: arrow::compute::max(&array).map(|v| v as i32),
+                        nulls_count: Some(array.null_count() as u64),
+                        distinct_count: None,
+                    };
                     let array = arrow::compute::unary::<_, _, arrow::datatypes::Int32Type>(
                         array,
                         |x| x as i32,
                     );
-                    get_numeric_array_slice::<Int32Type, _>(&array, &indices)
+                    let values =
+                        get_numeric_array_slice::<Int32Type, _>(&array, &indices);
+                    (values, stats)
                 }
                 _ => {
                     let array = arrow::compute::cast(&column, &ArrowDataType::Int32)?;
@@ -271,13 +295,25 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
                         .expect("Unable to get i32 array");
-                    get_numeric_array_slice::<Int32Type, _>(&array, &indices)
+                    let values =
+                        get_numeric_array_slice::<Int32Type, _>(&array, &indices);
+                    let stats = Stats::<Int32Type> {
+                        min: arrow::compute::min(&array),
+                        max: arrow::compute::max(&array),
+                        nulls_count: Some(array.null_count() as u64),
+                        distinct_count: None,
+                    };
+                    (values, stats)
                 }
             };
-            typed.write_batch(
+            typed.write_batch_with_statistics(
                 values.as_slice(),
                 Some(levels.definition.as_slice()),
                 levels.repetition.as_deref(),
+                &stats.min,
+                &stats.max,
+                stats.nulls_count,
+                stats.distinct_count,
             )?
         }
         ColumnWriter::BoolColumnWriter(ref mut typed) => {
@@ -285,20 +321,33 @@ fn write_leaf(
                 .as_any()
                 .downcast_ref::<arrow_array::BooleanArray>()
                 .expect("Unable to get boolean array");
-            typed.write_batch(
+            typed.write_batch_with_statistics(
                 get_bool_array_slice(&array, &indices).as_slice(),
                 Some(levels.definition.as_slice()),
                 levels.repetition.as_deref(),
+                &arrow::compute::min_boolean(&array),
+                &arrow::compute::max_boolean(&array),
+                Some(array.null_count() as u64),
+                None,
             )?
         }
         ColumnWriter::Int64ColumnWriter(ref mut typed) => {
-            let values = match column.data_type() {
+            let (values, stats) = match column.data_type() {
                 ArrowDataType::Int64 => {
                     let array = column
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
                         .expect("Unable to get i64 array");
-                    get_numeric_array_slice::<Int64Type, _>(&array, &indices)
+                    let stats = Stats::<Int64Type> {
+                        min: arrow::compute::min(&array),
+                        max: arrow::compute::max(&array),
+                        nulls_count: Some(array.null_count() as u64),
+                        distinct_count: None,
+                    };
+                    (
+                        get_numeric_array_slice::<Int64Type, _>(&array, &indices),
+                        stats,
+                    )
                 }
                 ArrowDataType::UInt64 => {
                     // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
@@ -307,11 +356,20 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::UInt64Array>()
                         .expect("Unable to get u64 array");
+                    let stats = Stats::<Int64Type> {
+                        min: arrow::compute::min(&array).map(|v| v as i64),
+                        max: arrow::compute::max(&array).map(|v| v as i64),
+                        nulls_count: Some(array.null_count() as u64),
+                        distinct_count: None,
+                    };
                     let array = arrow::compute::unary::<_, _, arrow::datatypes::Int64Type>(
                         array,
                         |x| x as i64,
                     );
-                    get_numeric_array_slice::<Int64Type, _>(&array, &indices)
+                    (
+                        get_numeric_array_slice::<Int64Type, _>(&array, &indices),
+                        stats,
+                    )
                 }
                 _ => {
                     let array = arrow::compute::cast(&column, &ArrowDataType::Int64)?;
@@ -319,13 +377,26 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
                         .expect("Unable to get i64 array");
-                    get_numeric_array_slice::<Int64Type, _>(&array, &indices)
+                    let stats = Stats::<Int64Type> {
+                        min: arrow::compute::min(&array),
+                        max: arrow::compute::max(&array),
+                        nulls_count: Some(array.null_count() as u64),
+                        distinct_count: None,
+                    };
+                    (
+                        get_numeric_array_slice::<Int64Type, _>(&array, &indices),
+                        stats,
+                    )
                 }
             };
-            typed.write_batch(
+            typed.write_batch_with_statistics(
                 values.as_slice(),
                 Some(levels.definition.as_slice()),
                 levels.repetition.as_deref(),
+                &stats.min,
+                &stats.max,
+                stats.nulls_count,
+                stats.distinct_count,
             )?
         }
         ColumnWriter::Int96ColumnWriter(ref mut _typed) => {
@@ -336,10 +407,14 @@ fn write_leaf(
                 .as_any()
                 .downcast_ref::<arrow_array::Float32Array>()
                 .expect("Unable to get Float32 array");
-            typed.write_batch(
+            typed.write_batch_with_statistics(
                 get_numeric_array_slice::<FloatType, _>(&array, &indices).as_slice(),
                 Some(levels.definition.as_slice()),
                 levels.repetition.as_deref(),
+                &arrow::compute::min(&array),
+                &arrow::compute::max(&array),
+                Some(array.null_count() as u64),
+                None,
             )?
         }
         ColumnWriter::DoubleColumnWriter(ref mut typed) => {
@@ -347,10 +422,14 @@ fn write_leaf(
                 .as_any()
                 .downcast_ref::<arrow_array::Float64Array>()
                 .expect("Unable to get Float64 array");
-            typed.write_batch(
+            typed.write_batch_with_statistics(
                 get_numeric_array_slice::<DoubleType, _>(&array, &indices).as_slice(),
                 Some(levels.definition.as_slice()),
                 levels.repetition.as_deref(),
+                &arrow::compute::min(&array),
+                &arrow::compute::max(&array),
+                Some(array.null_count() as u64),
+                None,
             )?
         }
         ColumnWriter::ByteArrayColumnWriter(ref mut typed) => match column.data_type() {
@@ -370,10 +449,14 @@ fn write_leaf(
                     .as_any()
                     .downcast_ref::<arrow_array::StringArray>()
                     .expect("Unable to get LargeBinaryArray array");
-                typed.write_batch(
+                typed.write_batch_with_statistics(
                     get_string_array(&array).as_slice(),
                     Some(levels.definition.as_slice()),
                     levels.repetition.as_deref(),
+                    &arrow::compute::min_string(&array).map(|s| s.into()),
+                    &arrow::compute::max_string(&array).map(|s| s.into()),
+                    Some(array.null_count() as u64),
+                    None,
                 )?
             }
             ArrowDataType::LargeBinary => {
@@ -392,10 +475,14 @@ fn write_leaf(
                     .as_any()
                     .downcast_ref::<arrow_array::LargeStringArray>()
                     .expect("Unable to get LargeUtf8 array");
-                typed.write_batch(
+                typed.write_batch_with_statistics(
                     get_large_string_array(&array).as_slice(),
                     Some(levels.definition.as_slice()),
                     levels.repetition.as_deref(),
+                    &arrow::compute::min_string(&array).map(|s| s.into()),
+                    &arrow::compute::max_string(&array).map(|s| s.into()),
+                    Some(array.null_count() as u64),
+                    None,
                 )?
             }
             _ => unreachable!("Currently unreachable because data type not supported"),
