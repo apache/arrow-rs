@@ -703,10 +703,50 @@ mod tests {
         let batch =
             RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)]).unwrap();
 
-        // I think this setup is incorrect because this should pass
         assert_eq!(batch.column(0).data().null_count(), 1);
 
         let file = get_temp_file("test_arrow_writer_list.parquet", &[]);
+        let mut writer = ArrowWriter::try_new(file, Arc::new(schema), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    #[test]
+    fn arrow_writer_list_non_null() {
+        // define schema
+        let schema = Schema::new(vec![Field::new(
+            "a",
+            DataType::List(Box::new(Field::new("item", DataType::Int32, false))),
+            false,
+        )]);
+
+        // create some data
+        let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[1], [2, 3], [], [4, 5, 6], [7, 8, 9, 10]]
+        let a_value_offsets =
+            arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+
+        // Construct a list array from the above two
+        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+            "item",
+            DataType::Int32,
+            false,
+        ))))
+        .len(5)
+        .add_buffer(a_value_offsets)
+        .add_child_data(a_values.data().clone())
+        .build();
+        let a = ListArray::from(a_list_data);
+
+        // build a record batch
+        let batch =
+            RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)]).unwrap();
+
+        assert_eq!(batch.column(0).data().null_count(), 0);
+
+        let file = get_temp_file("test_arrow_writer_list_non_null.parquet", &[]);
         let mut writer = ArrowWriter::try_new(file, Arc::new(schema), None).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
