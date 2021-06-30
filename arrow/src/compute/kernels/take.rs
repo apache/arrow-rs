@@ -913,10 +913,10 @@ mod tests {
         );
 
         test_take_primitive_arrays_non_null::<Int64Type>(
-            vec![0, 1, 2, 3, 4, 5, 6],
+            vec![0, 10, 20, 30, 40, 50],
             &index,
             None,
-            vec![Some(2), Some(3), None, None],
+            vec![Some(20), Some(30), None, None],
         )
         .unwrap();
     }
@@ -934,10 +934,10 @@ mod tests {
         );
 
         test_take_primitive_arrays::<Int64Type>(
-            vec![None, None, Some(2), Some(3), Some(4), Some(5), Some(6)],
+            vec![None, None, Some(20), Some(30), Some(40), Some(50)],
             &index,
             None,
-            vec![Some(2), Some(3), None, None],
+            vec![Some(20), Some(30), None, None],
         )
         .unwrap();
     }
