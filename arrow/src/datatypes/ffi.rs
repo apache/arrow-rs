@@ -353,7 +353,7 @@ mod tests {
         // test that we assert the input type
         let c_schema = FFI_ArrowSchema::try_from(&DataType::Float64)?;
         let result = Schema::try_from(&c_schema);
-        assert_eq!(result.is_err(), true);
+        assert!(result.is_err());
         Ok(())
     }
 }
