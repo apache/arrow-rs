@@ -23,7 +23,7 @@ on:
 
 jobs:
 
-  docker:
+  integration:
     name: Integration Test
     runs-on: ubuntu-latest
     steps:
@@ -46,3 +46,54 @@ jobs:
         run: pip install -e dev/archery[docker]
       - name: Execute Docker Build
         run: archery docker run -e ARCHERY_INTEGRATION_WITH_RUST=1 conda-integration
+
+  # test FFI against the C-Data interface exposed by pyarrow
+  pyarrow-integration-test:
+    name: Test Pyarrow C Data Interface
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable]
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install ${{ matrix.rust }}
+          rustup default ${{ matrix.rust }}
+          rustup component add rustfmt clippy
+      - name: Cache Cargo
+        uses: actions/cache@v2
+        with:
+          path: /home/runner/.cargo
+          key: cargo-maturin-cache-
+      - name: Cache Rust dependencies
+        uses: actions/cache@v2
+        with:
+          path: /home/runner/target
+          # this key is not equal because maturin uses different compilation flags.
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-maturin-cache-${{ matrix.rust }}-
+      - uses: actions/setup-python@v2
+        with:
+          python-version: '3.7'
+      - name: Upgrade pip and setuptools
+        run: pip install --upgrade pip setuptools wheel
+      - name: Install python dependencies
+        run: pip install maturin==0.8.2 toml==0.10.1 pytest pytz
+      - name: Install nightly pyarrow wheel
+        # this points to a nightly pyarrow build containing neccessary
+        # API for integration testing (https://github.com/apache/arrow/pull/10529)
+        # the hardcoded version is wrong and should be removed either
+        # after https://issues.apache.org/jira/browse/ARROW-13083
+        # gets fixes or pyarrow 5.0 gets released
+        hardcoded version is wrong, bot contains
+        run: pip install --index-url https://pypi.fury.io/arrow-nightlies/ pyarrow==3.1.0.dev1030
+      - name: Run tests
+        env:
+          CARGO_HOME: "/home/runner/.cargo"
+          CARGO_TARGET_DIR: "/home/runner/target"
+        working-directory: arrow-pyarrow-integration-testing
+        run: |
+          maturin develop
+          pytest -v .

@@ -36,6 +36,8 @@ mod types;
 pub use types::*;
 mod datatype;
 pub use datatype::*;
+mod ffi;
+pub use ffi::*;
 
 /// A reference-counted reference to a [`Schema`](crate::datatypes::Schema).
 pub type SchemaRef = Arc<Schema>;
