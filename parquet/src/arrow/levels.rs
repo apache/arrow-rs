@@ -40,7 +40,7 @@
 //!
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
-use arrow::array::{make_array, ArrayRef, StructArray};
+use arrow::array::{make_array, ArrayRef, MapArray, StructArray};
 use arrow::datatypes::{DataType, Field};
 
 /// Keeps track of the level information per array that is needed to write an Arrow array to Parquet.
@@ -179,9 +179,7 @@ impl LevelInfo {
                     LevelType::Primitive(field.is_nullable()),
                 )]
             }
-            DataType::List(list_field)
-            | DataType::LargeList(list_field)
-            | DataType::Map(list_field, _) => {
+            DataType::List(list_field) | DataType::LargeList(list_field) => {
                 let child_offset = array_offsets[0] as usize;
                 let child_len = *array_offsets.last().unwrap() as usize;
                 // Calculate the list level
@@ -244,6 +242,43 @@ impl LevelInfo {
                     }
                     DataType::FixedSizeList(_, _) => unimplemented!(),
                     DataType::Union(_) => unimplemented!(),
+                }
+            }
+            DataType::Map(map_field, _) => {
+                // Calculate the map level
+                let map_level = self.calculate_child_levels(
+                    array_offsets,
+                    array_mask,
+                    // A map is treated like a list as it has repetition
+                    LevelType::List(field.is_nullable()),
+                );
+
+                let map_array = array.as_any().downcast_ref::<MapArray>().unwrap();
+
+                let key_array = map_array.keys();
+                let value_array = map_array.values();
+
+                if let DataType::Struct(fields) = map_field.data_type() {
+                    let key_field = &fields[0];
+                    let value_field = &fields[1];
+
+                    let mut map_levels = vec![];
+
+                    // Get key levels
+                    let mut key_levels =
+                        map_level.calculate_array_levels(&key_array, key_field);
+                    map_levels.append(&mut key_levels);
+
+                    let mut value_levels =
+                        map_level.calculate_array_levels(&value_array, value_field);
+                    map_levels.append(&mut value_levels);
+
+                    map_levels
+                } else {
+                    panic!(
+                        "Map field should be a struct, found {:?}",
+                        map_field.data_type()
+                    );
                 }
             }
             DataType::FixedSizeList(_, _) => unimplemented!(),
