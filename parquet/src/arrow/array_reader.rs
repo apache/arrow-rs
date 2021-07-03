@@ -1395,9 +1395,23 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
         map_type: Arc<Type>,
         context: &'a ArrayReaderBuilderContext,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
+        // Add map type to context
+        let mut new_context = context.clone();
+        new_context.path.append(vec![map_type.name().to_string()]);
+        if let Repetition::OPTIONAL = map_type.get_basic_info().repetition() {
+            new_context.def_level += 1;
+        }
+
+        // Add map entry (key_value) to context
         let map_key_value = map_type.get_fields().first().ok_or_else(|| {
             ArrowError("Map field must have a key_value entry".to_string())
         })?;
+        new_context
+            .path
+            .append(vec![map_key_value.name().to_string()]);
+        new_context.rep_level += 1;
+
+        // Get key and value, and create context for each
         let map_key = map_key_value
             .get_fields()
             .first()
@@ -1406,13 +1420,6 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             .get_fields()
             .get(1)
             .ok_or_else(|| ArrowError("Map entry must have a value".to_string()))?;
-        let mut new_context = context.clone();
-        new_context.path.append(vec![map_type.name().to_string()]);
-
-        if let Repetition::OPTIONAL = map_type.get_basic_info().repetition() {
-            new_context.def_level += 1;
-            new_context.rep_level += 1;
-        }
 
         let key_reader = {
             let mut key_context = new_context.clone();
