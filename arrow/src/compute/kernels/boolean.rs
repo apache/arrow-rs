@@ -24,12 +24,12 @@
 
 use std::ops::Not;
 
-use crate::array::{Array, ArrayData, BooleanArray, PrimitiveArray};
+use crate::array::{make_array, Array, ArrayData, ArrayRef, BooleanArray};
 use crate::buffer::{
     buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer, MutableBuffer,
 };
 use crate::compute::util::combine_option_bitmap;
-use crate::datatypes::{ArrowNumericType, DataType};
+use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util::{ceil, round_upto_multiple_of_64};
 use core::iter;
@@ -458,20 +458,9 @@ pub fn is_not_null(input: &Array) -> Result<BooleanArray> {
     Ok(BooleanArray::from(data))
 }
 
-/// Copies original array, setting null bit to true if a secondary comparison boolean array is set to true.
-/// Typically used to implement NULLIF.
-// NOTE: For now this only supports Primitive Arrays.  Although the code could be made generic, the issue
-// is that currently the bitmap operations result in a final bitmap which is aligned to bit 0, and thus
-// the left array's data needs to be sliced to a new offset, and for non-primitive arrays shifting the
-// data might be too complicated.   In the future, to avoid shifting left array's data, we could instead
-// shift the final bitbuffer to the right, prepending with 0's instead.
-pub fn nullif<T>(
-    left: &PrimitiveArray<T>,
-    right: &BooleanArray,
-) -> Result<PrimitiveArray<T>>
-where
-    T: ArrowNumericType,
-{
+/// Copies original array, setting null bit to true if a secondary comparison
+/// boolean array is set to true. Typically used to implement NULLIF.
+pub fn nullif(left: &ArrayRef, right: &BooleanArray) -> Result<ArrayRef> {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
             "Cannot perform comparison operation on arrays of different length"
@@ -479,80 +468,103 @@ where
         ));
     }
     let left_data = left.data();
-    let right_data = right.data();
 
-    // If left has no bitmap, create a new one with all values set for nullity op later
-    // left=0 (null)   right=null       output bitmap=null
-    // left=0          right=1          output bitmap=null
-    // left=1 (set)    right=null       output bitmap=set   (passthrough)
-    // left=1          right=1 & comp=true    output bitmap=null
-    // left=1          right=1 & comp=false   output bitmap=set
+    // If right has no trues and no nulls, then it will pass the left array
+    // unmodified.
+    if right.null_count() == 0
+        && right
+            .values()
+            .count_set_bits_offset(right.offset(), right.len())
+            == 0
+    {
+        return Ok(left.clone());
+    }
+
+    // Null bitmaps are inverted -- (true if valid).
     //
-    // Thus: result = left null bitmap & (!right_values | !right_bitmap)
-    //              OR left null bitmap & !(right_values & right_bitmap)
-    //
-    // Do the right expression !(right_values & right_bitmap) first since there are two steps
-    // TRICK: convert BooleanArray buffer as a bitmap for faster operation
+    // The output should be null if left_is_null | (!right_is_null & right_value).
+    // This corresponds to the output being valid if:
+    //  !(!left_is_valid | (right_is_valid & right_value)) =
+    //  left_is_valid & !(right_is_valid & right_value)
     let right_combo_buffer = match right.data().null_bitmap() {
-        Some(right_bitmap) => {
-            // NOTE: right values and bitmaps are combined and stay at bit offset right.offset()
-            (right.values() & &right_bitmap.bits).ok().map(|b| b.not())
+        Some(right_is_valid) => {
+            // NOTE: right values and bitmaps are combined and stay at bit offset
+            // right.offset()
+            (right_is_valid.buffer_ref() & right.values())?.not()
         }
-        None => Some(!right.values()),
+        None => !right.values(),
+    };
+
+    // Check again -- if all of the falses in the right corresponded to nulls, we
+    // can still pass  the left unmodified.
+    if right_combo_buffer.count_set_bits_offset(right.offset(), right.len()) == 0 {
+        return Ok(left.clone());
+    }
+
+    // Now, we shift the right buffer to align with hte left buffer.
+    let right_combo_buffer = if left.offset() == 0 {
+        // The left offset is 0. Just slice the right buffer to line up.
+        right_combo_buffer.bit_slice(right.offset(), right.len())
+    } else {
+        let bit_length = left.offset() + left.len();
+        let byte_length = (bit_length + 7) / 8;
+        let mut shift_builder = MutableBuffer::new(byte_length);
+        let (pad_bytes, pad_bits) = (left.offset() / 8, left.offset() % 8);
+
+        // Pad with a number of 0 bytes to cover the byte-aligned part of the left
+        // offset.
+        shift_builder.extend_zeros(pad_bytes);
+
+        // Pad with the non-aligned part of the left offset.
+        let used_right_bits = if pad_bits > 0 {
+            let right_bits = usize::min(8 - pad_bits, right.len());
+            let partial = right_combo_buffer.bit_slice(right.offset(), right_bits)[0];
+            let partial = partial << pad_bits;
+            shift_builder.push(partial);
+            right_bits
+        } else {
+            0
+        };
+        if used_right_bits < right.len() {
+            // Finally, copy over the remaining bits of `right`.
+            let remaining = right_combo_buffer.bit_slice(
+                right.offset() + used_right_bits,
+                right.len() - used_right_bits,
+            );
+            shift_builder.extend_from_slice(remaining.as_slice());
+        }
+
+        shift_builder.into()
     };
 
     // AND of original left null bitmap with right expression
-    // Here we take care of the possible offsets of the left and right arrays all at once.
+    // We've shifted the right buffer to line up with the left offset,
+    // so this can just do a straight-up `&`.
     let modified_null_buffer = match left_data.null_bitmap() {
-        Some(left_null_bitmap) => match right_combo_buffer {
-            Some(rcb) => Some(buffer_bin_and(
-                &left_null_bitmap.bits,
-                left_data.offset(),
-                &rcb,
-                right_data.offset(),
-                left_data.len(),
-            )),
-            None => Some(
-                left_null_bitmap
-                    .bits
-                    .bit_slice(left_data.offset(), left.len()),
-            ),
-        },
-        None => right_combo_buffer
-            .map(|rcb| rcb.bit_slice(right_data.offset(), right_data.len())),
-    };
-
-    // Align/shift left data on offset as needed, since new bitmaps are shifted and aligned to 0 already
-    // NOTE: this probably only works for primitive arrays.
-    let data_buffers = if left.offset() == 0 {
-        left_data.buffers().to_vec()
-    } else {
-        // Shift each data buffer by type's bit_width * offset.
-        left_data
-            .buffers()
-            .iter()
-            .map(|buf| buf.slice(left.offset() * T::get_byte_width()))
-            .collect::<Vec<_>>()
+        Some(left_is_valid) => (&right_combo_buffer & left_is_valid.buffer_ref())?,
+        None => right_combo_buffer,
     };
 
     // Construct new array with same values but modified null bitmap
-    // TODO: shift data buffer as needed
     let data = ArrayData::new(
-        T::DATA_TYPE,
+        left.data_type().clone(),
         left.len(),
         None, // force new to compute the number of null bits
-        modified_null_buffer,
-        0, // No need for offset since left data has been shifted
-        data_buffers,
+        Some(modified_null_buffer),
+        left.offset(),
+        left_data.buffers().to_vec(),
         left_data.child_data().to_vec(),
     );
-    Ok(PrimitiveArray::<T>::from(data))
+    Ok(make_array(data))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::{ArrayRef, Int32Array};
+    use crate::array::{
+        ArrayRef, BooleanBuilder, Int32Array, Int32Builder, StructArray, StructBuilder,
+    };
+    use crate::datatypes::Field;
     use std::sync::Arc;
 
     #[test]
@@ -1113,10 +1125,17 @@ mod tests {
 
     #[test]
     fn test_nullif_int_array() {
-        let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9)]);
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(15),
+            None,
+            Some(8),
+            Some(1),
+            Some(9),
+        ]));
         let comp =
             BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
         let res = nullif(&a, &comp).unwrap();
+        let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
 
         let expected = Int32Array::from(vec![
             Some(15),
@@ -1128,14 +1147,20 @@ mod tests {
             Some(9),
         ]);
 
-        assert_eq!(expected, res);
+        assert_eq!(&expected, res);
     }
 
     #[test]
     fn test_nullif_int_array_offset() {
-        let a = Int32Array::from(vec![None, Some(15), Some(8), Some(1), Some(9)]);
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            None,
+            Some(15),
+            Some(8),
+            Some(1),
+            Some(9),
+        ]));
         let a = a.slice(1, 3); // Some(15), Some(8), Some(1)
-        let a = a.as_any().downcast_ref::<Int32Array>().unwrap();
+
         let comp = BooleanArray::from(vec![
             Some(false),
             Some(false),
@@ -1148,12 +1173,261 @@ mod tests {
         let comp = comp.slice(2, 3); // Some(false), None, Some(true)
         let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
         let res = nullif(&a, &comp).unwrap();
+        let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
 
         let expected = Int32Array::from(vec![
             Some(15), // False => keep it
             Some(8),  // None => keep it
             None,     // true => None
         ]);
-        assert_eq!(&expected, &res)
+        assert_eq!(&expected, res)
+    }
+
+    #[test]
+    fn test_nullif_int_large_left_offset() {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(-1), // 0
+            Some(-1),
+            Some(-1),
+            Some(-1),
+            Some(-1),
+            Some(-1),
+            Some(-1),
+            Some(-1),
+            Some(-1), // 8
+            Some(-1),
+            Some(-1),
+            Some(-1),
+            Some(-1),
+            Some(-1),
+            Some(-1),
+            Some(-1),
+            None,     // 16
+            Some(15), // 17
+            Some(8),
+            Some(1),
+            Some(9),
+        ]));
+        let a = a.slice(17, 3); // Some(15), Some(8), Some(1)
+
+        let comp = BooleanArray::from(vec![
+            Some(false),
+            Some(false),
+            Some(false),
+            None,
+            Some(true),
+            Some(false),
+            None,
+        ]);
+        let comp = comp.slice(2, 3); // Some(false), None, Some(true)
+        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        let expected = Int32Array::from(vec![
+            Some(15), // False => keep it
+            Some(8),  // None => keep it
+            None,     // true => None
+        ]);
+        assert_eq!(&expected, res)
+    }
+
+    #[test]
+    fn test_nullif_int_large_right_offset() {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            None,     // 0
+            Some(15), // 1
+            Some(8),
+            Some(1),
+            Some(9),
+        ]));
+        let a = a.slice(1, 3); // Some(15), Some(8), Some(1)
+
+        let comp = BooleanArray::from(vec![
+            Some(false), // 0
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false), // 8
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false), // 16
+            Some(false), // 17
+            Some(false), // 18
+            None,
+            Some(true),
+            Some(false),
+            None,
+        ]);
+        let comp = comp.slice(18, 3); // Some(false), None, Some(true)
+        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        let expected = Int32Array::from(vec![
+            Some(15), // False => keep it
+            Some(8),  // None => keep it
+            None,     // true => None
+        ]);
+        assert_eq!(&expected, res)
+    }
+
+    #[test]
+    fn test_nullif_boolean_offset() {
+        let a: ArrayRef = Arc::new(BooleanArray::from(vec![
+            None,       // 0
+            Some(true), // 1
+            Some(false),
+            Some(true),
+            Some(true),
+        ]));
+        let a = a.slice(1, 3); // Some(true), Some(false), Some(true)
+
+        let comp = BooleanArray::from(vec![
+            Some(false), // 0
+            Some(false), // 1
+            Some(false), // 2
+            None,
+            Some(true),
+            Some(false),
+            None,
+        ]);
+        let comp = comp.slice(2, 3); // Some(false), None, Some(true)
+        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res = res.as_any().downcast_ref::<BooleanArray>().unwrap();
+
+        let expected = BooleanArray::from(vec![
+            Some(true),  // False => keep it
+            Some(false), // None => keep it
+            None,        // true => None
+        ]);
+        assert_eq!(&expected, res)
+    }
+
+    #[test]
+    fn test_nullif_passthrough_all_nonnull() {
+        // DO NOT SUBMIT: Write this test
+    }
+
+    #[test]
+    fn test_nullif_passthrough_all_null_or_true() {
+        // DO NOT SUBMIT: Write this test
+    }
+
+    struct Foo {
+        a: Option<i32>,
+        b: Option<bool>,
+        /// Whether the entry should be valid.
+        is_valid: bool,
+    }
+
+    impl Foo {
+        fn new_valid(a: i32, b: bool) -> Foo {
+            Self {
+                a: Some(a),
+                b: Some(b),
+                is_valid: true,
+            }
+        }
+
+        fn new_null() -> Foo {
+            Self {
+                a: None,
+                b: None,
+                is_valid: false,
+            }
+        }
+    }
+
+    /// Struct Array equality is a bit weird -- we need to have the *child values*
+    /// correct even if the enclosing struct indicates it is null. But we
+    /// also need the top level is_valid bits to be correct.
+    fn create_foo_struct(values: Vec<Foo>) -> StructArray {
+        let mut struct_array = StructBuilder::new(
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Boolean, true),
+            ],
+            vec![
+                Box::new(Int32Builder::new(values.len())),
+                Box::new(BooleanBuilder::new(values.len())),
+            ],
+        );
+
+        for value in values {
+            struct_array
+                .field_builder::<Int32Builder>(0)
+                .unwrap()
+                .append_option(value.a)
+                .unwrap();
+            struct_array
+                .field_builder::<BooleanBuilder>(1)
+                .unwrap()
+                .append_option(value.b)
+                .unwrap();
+            struct_array.append(value.is_valid).unwrap();
+        }
+
+        struct_array.finish()
+    }
+
+    #[test]
+    fn test_nullif_struct_slices() {
+        let struct_array = create_foo_struct(vec![
+            Foo::new_valid(7, true),
+            Foo::new_valid(15, false),
+            Foo::new_valid(8, true),
+            Foo::new_valid(12, false),
+            Foo::new_null(),
+            Foo::new_null(),
+            Foo::new_valid(42, true),
+        ]);
+
+        let struct_array: ArrayRef = Arc::new(struct_array);
+        // Some({a: 15, b: false}), Some({a: 8, b: true}), Some({a: 12, b: false}),
+        // None, None
+        let struct_array = struct_array.slice(1, 5);
+        let comp = BooleanArray::from(vec![
+            Some(false), // 0
+            Some(false), // 1
+            Some(false), // 2
+            None,
+            Some(true),
+            Some(false),
+            None,
+        ]);
+        let comp = comp.slice(2, 5); // Some(false), None, Some(true), Some(false), None
+        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let res = nullif(&struct_array, &comp).unwrap();
+        let res = res.as_any().downcast_ref::<StructArray>().unwrap();
+
+        let expected = create_foo_struct(vec![
+            // Some(false) -> keep
+            Foo::new_valid(15, false),
+            // None -> keep
+            Foo::new_valid(8, true),
+            // Some(true) -> null out. But child values are still there.
+            Foo {
+                a: Some(12),
+                b: Some(false),
+                is_valid: false,
+            },
+            // Some(false) -> keep, but was null
+            Foo::new_null(),
+            // None -> keep, but was null
+            Foo::new_null(),
+        ]);
+
+        assert_eq!(&expected, res);
     }
 }
