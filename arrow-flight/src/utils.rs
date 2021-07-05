@@ -17,15 +17,14 @@
 
 //! Utilities to assist with reading and writing Arrow data as Flight messages
 
-use std::convert::TryFrom;
-
-use crate::{FlightData, SchemaResult};
+use crate::{FlightData, IpcMessage, SchemaAsIpc, SchemaResult};
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::{ArrowError, Result};
-use arrow::ipc::{convert, reader, writer, writer::EncodedData, writer::IpcWriteOptions};
+use arrow::ipc::{reader, writer, writer::IpcWriteOptions};
 use arrow::record_batch::RecordBatch;
+use std::convert::TryInto;
 
 /// Convert a `RecordBatch` to a vector of `FlightData` representing the bytes of the dictionaries
 /// and a `FlightData` representing the bytes of the batch's values
@@ -46,97 +45,7 @@ pub fn flight_data_from_arrow_batch(
     (flight_dictionaries, flight_batch)
 }
 
-impl From<EncodedData> for FlightData {
-    fn from(data: EncodedData) -> Self {
-        FlightData {
-            data_header: data.ipc_message,
-            data_body: data.arrow_data,
-            ..Default::default()
-        }
-    }
-}
-
-/// Convert a `Schema` to `SchemaResult` by converting to an IPC message
-pub fn flight_schema_from_arrow_schema(
-    schema: &Schema,
-    options: &IpcWriteOptions,
-) -> SchemaResult {
-    SchemaResult {
-        schema: flight_schema_as_flatbuffer(schema, options),
-    }
-}
-
-/// Convert a `Schema` to `FlightData` by converting to an IPC message
-pub fn flight_data_from_arrow_schema(
-    schema: &Schema,
-    options: &IpcWriteOptions,
-) -> FlightData {
-    let data_header = flight_schema_as_flatbuffer(schema, options);
-    FlightData {
-        data_header,
-        ..Default::default()
-    }
-}
-
-/// Convert a `Schema` to bytes in the format expected in `FlightInfo.schema`
-pub fn ipc_message_from_arrow_schema(
-    arrow_schema: &Schema,
-    options: &IpcWriteOptions,
-) -> Result<Vec<u8>> {
-    let encoded_data = flight_schema_as_encoded_data(arrow_schema, options);
-
-    let mut schema = vec![];
-    arrow::ipc::writer::write_message(&mut schema, encoded_data, options)?;
-    Ok(schema)
-}
-
-fn flight_schema_as_flatbuffer(
-    arrow_schema: &Schema,
-    options: &IpcWriteOptions,
-) -> Vec<u8> {
-    let encoded_data = flight_schema_as_encoded_data(arrow_schema, options);
-    encoded_data.ipc_message
-}
-
-fn flight_schema_as_encoded_data(
-    arrow_schema: &Schema,
-    options: &IpcWriteOptions,
-) -> EncodedData {
-    let data_gen = writer::IpcDataGenerator::default();
-    data_gen.schema_to_bytes(arrow_schema, options)
-}
-
-/// Try convert `FlightData` into an Arrow Schema
-///
-/// Returns an error if the `FlightData` header is not a valid IPC schema
-impl TryFrom<&FlightData> for Schema {
-    type Error = ArrowError;
-    fn try_from(data: &FlightData) -> Result<Self> {
-        convert::schema_from_bytes(&data.data_header[..]).map_err(|err| {
-            ArrowError::ParseError(format!(
-                "Unable to convert flight data to Arrow schema: {}",
-                err
-            ))
-        })
-    }
-}
-
-/// Try convert `SchemaResult` into an Arrow Schema
-///
-/// Returns an error if the `FlightData` header is not a valid IPC schema
-impl TryFrom<&SchemaResult> for Schema {
-    type Error = ArrowError;
-    fn try_from(data: &SchemaResult) -> Result<Self> {
-        convert::schema_from_bytes(&data.schema[..]).map_err(|err| {
-            ArrowError::ParseError(format!(
-                "Unable to convert schema result to Arrow schema: {}",
-                err
-            ))
-        })
-    }
-}
-
-/// Convert a FlightData message to a RecordBatch
+/// Convert `FlightData` (with supplied schema and dictionaries) to an arrow `RecordBatch`.
 pub fn flight_data_to_arrow_batch(
     data: &FlightData,
     schema: SchemaRef,
@@ -164,4 +73,40 @@ pub fn flight_data_to_arrow_batch(
         })?
 }
 
-// TODO: add more explicit conversion that exposes flight descriptor and metadata options
+/// Convert a `Schema` to `SchemaResult` by converting to an IPC message
+#[deprecated(
+    since = "4.4.0",
+    note = "Use From trait, e.g.: SchemaAsIpc::new(schema, options).into()"
+)]
+pub fn flight_schema_from_arrow_schema(
+    schema: &Schema,
+    options: &IpcWriteOptions,
+) -> SchemaResult {
+    SchemaAsIpc::new(schema, options).into()
+}
+
+/// Convert a `Schema` to `FlightData` by converting to an IPC message
+#[deprecated(
+    since = "4.4.0",
+    note = "Use From trait, e.g.: SchemaAsIpc::new(schema, options).into()"
+)]
+pub fn flight_data_from_arrow_schema(
+    schema: &Schema,
+    options: &IpcWriteOptions,
+) -> FlightData {
+    SchemaAsIpc::new(schema, options).into()
+}
+
+/// Convert a `Schema` to bytes in the format expected in `FlightInfo.schema`
+#[deprecated(
+    since = "4.4.0",
+    note = "Use TryFrom trait, e.g.: SchemaAsIpc::new(schema, options).try_into()"
+)]
+pub fn ipc_message_from_arrow_schema(
+    schema: &Schema,
+    options: &IpcWriteOptions,
+) -> Result<Vec<u8>> {
+    let message = SchemaAsIpc::new(schema, options).try_into()?;
+    let IpcMessage(vals) = message;
+    Ok(vals)
+}
