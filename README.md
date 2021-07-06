@@ -69,13 +69,13 @@ US daylight savings time this corresponds to 16:00 UTC and at other times this i
 This is a standard cargo project with workspaces. To build it, you need to have `rust` and `cargo`:
 
 ```bash
-cd /rust && cargo build
+cargo build
 ```
 
 You can also use rust's official docker image:
 
 ```bash
-docker run --rm -v $(pwd)/rust:/rust -it rust /bin/bash -c "cd /rust && cargo build"
+docker run --rm -v $(pwd):/arrow-rs -it rust /bin/bash -c "cd /arrow-rs && rustup component add rustfmt && cargo build"
 ```
 
 The command above assumes that are in the root directory of the project, not in the same
@@ -84,7 +84,7 @@ directory as this README.md.
 You can also compile specific workspaces:
 
 ```bash
-cd /rust/arrow && cargo build
+cd arrow && cargo build
 ```
 
 ### Git Submodules
