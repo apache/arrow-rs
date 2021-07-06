@@ -31,6 +31,8 @@ name = "arrow_pyarrow_integration_testing"
 crate-type = ["cdylib"]
 
 [dependencies]
+# ensure we get the std version of rand so arrow builds without default features
+rand = { version = "0.8" }
 arrow = { path = "../arrow", version = "5.0.0-SNAPSHOT" }
 pyo3 = { version = "0.12.1", features = ["extension-module"] }
 

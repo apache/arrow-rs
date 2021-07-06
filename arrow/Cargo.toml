@@ -58,13 +58,12 @@ multiversion = "0.6.1"
 bitflags = "1.2.1"
 
 [features]
-default = ["csv", "ipc", "randstd"]
+default = ["csv", "ipc"]
 avx512 = []
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
 simd = ["packed_simd"]
 prettyprint = ["prettytable-rs"]
-randstd = ["rand/std", "rand/std_rng"]
 # this is only intended to be used in single-threaded programs: it verifies that
 # all allocated memory is being released (no memory leaks).
 # See README for details

@@ -125,8 +125,7 @@ where
     simd_result.write_to_slice_unaligned_unchecked(result);
 }
 
-// seednable_rng is not available when not build with randstd support
-#[cfg(all(test, randstd))]
+#[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
