@@ -31,7 +31,7 @@ name = "arrow_pyarrow_integration_testing"
 crate-type = ["cdylib"]
 
 [dependencies]
-arrow = { path = "../arrow", version = "5.0.0-SNAPSHOT", features=["std"] }
+arrow = { path = "../arrow", version = "5.0.0-SNAPSHOT" }
 pyo3 = { version = "0.12.1", features = ["extension-module"] }
 
 [package.metadata.maturin]

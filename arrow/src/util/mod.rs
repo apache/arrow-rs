@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "randstd")]
 pub mod bench_util;
 pub mod bit_chunk_iterator;
 pub mod bit_util;
+#[cfg(feature = "randstd")]
 pub mod data_gen;
 pub mod display;
 pub mod integration_util;
@@ -25,6 +27,7 @@ pub mod integration_util;
 pub mod pretty;
 pub(crate) mod serialization;
 pub mod string_writer;
+#[cfg(feature = "randstd")]
 pub mod test_util;
 
 mod trusted_len;
