@@ -591,7 +591,7 @@ where
 
                 let bitmask = T::mask_to_u64(&simd_result);
                 let bytes = bitmask.to_le_bytes();
-                &result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
+                result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
 
                 &mut result_slice[lanes / 8..]
             },
@@ -669,7 +669,7 @@ where
 
             let bitmask = T::mask_to_u64(&simd_result);
             let bytes = bitmask.to_le_bytes();
-            &result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
+            result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
 
             &mut result_slice[lanes / 8..]
         },

@@ -161,6 +161,12 @@ jobs:
           export CARGO_TARGET_DIR="/github/home/target"
           cd arrow
           cargo test --features "simd"
+      - name: Check new project build with simd features
+        run: |
+          export CARGO_HOME="/github/home/.cargo"
+          export CARGO_TARGET_DIR="/github/home/target"
+          cd arrow/test/dependency/simd
+          cargo check
 
   windows-and-macos:
     name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
