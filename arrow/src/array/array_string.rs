@@ -149,7 +149,10 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
         Self::from(data)
     }
 
-    pub(crate) fn from_vec(v: Vec<&str>) -> Self {
+    pub(crate) fn from_vec<Ptr>(v: Vec<Ptr>) -> Self
+    where
+        Ptr: AsRef<str>,
+    {
         let mut offsets =
             MutableBuffer::new((v.len() + 1) * std::mem::size_of::<OffsetSize>());
         let mut values = MutableBuffer::new(0);
@@ -158,9 +161,9 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
         offsets.push(length_so_far);
 
         for s in &v {
-            length_so_far += OffsetSize::from_usize(s.len()).unwrap();
+            length_so_far += OffsetSize::from_usize(s.as_ref().len()).unwrap();
             offsets.push(length_so_far);
-            values.extend_from_slice(s.as_bytes());
+            values.extend_from_slice(s.as_ref().as_bytes());
         }
         let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
             .len(v.len())
@@ -323,6 +326,14 @@ impl<OffsetSize: StringOffsetSizeTrait> From<Vec<&str>>
     for GenericStringArray<OffsetSize>
 {
     fn from(v: Vec<&str>) -> Self {
+        GenericStringArray::<OffsetSize>::from_vec(v)
+    }
+}
+
+impl<OffsetSize: StringOffsetSizeTrait> From<Vec<String>>
+    for GenericStringArray<OffsetSize>
+{
+    fn from(v: Vec<String>) -> Self {
         GenericStringArray::<OffsetSize>::from_vec(v)
     }
 }
@@ -529,5 +540,16 @@ mod tests {
         let string_array: StringArray = string_iter.collect();
         // but the actual number of items in the array should be 10
         assert_eq!(string_array.len(), 10);
+    }
+
+    #[test]
+    fn test_string_array_from_string_vec() {
+        let data = vec!["Foo".to_owned(), "Bar".to_owned(), "Baz".to_owned()];
+        let array = StringArray::from(data);
+
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.value(0), "Foo");
+        assert_eq!(array.value(1), "Bar");
+        assert_eq!(array.value(2), "Baz");
     }
 }
