@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Official Apache Parquet implementation in Rust
+# Apache Parquet Official Native Rust Implementation
 
 [![Crates.io](https://img.shields.io/crates/v/parquet.svg)](https://crates.io/crates/parquet)
 
