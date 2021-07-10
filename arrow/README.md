@@ -23,15 +23,6 @@
 
 This crate contains the official Native Rust implementation of [Apache Arrow](https://arrow.apache.org/) in memory format. Please see the API documents for additional details.
 
-## Usage
-
-Add this to your Cargo.toml:
-
-```toml
-[dependencies]
-arrow = "5.0"
-```
-
 ## Features
 
 
@@ -51,4 +42,17 @@ In order to compile Arrow for Web Assembly (the `wasm32-unknown-unknown` WASM ta
 ```toml
 [dependencies]
 arrow = {version = "5.0" default-features = false }
+```
+
+## Examples
+
+The examples folder shows how to construct some different types of Arrow
+arrays, including dynamic arrays:
+
+Examples can be run using the `cargo run --example` command. For example:
+
+```bash
+cargo run --example builders
+cargo run --example dynamic_types
+cargo run --example read_csv
 ```

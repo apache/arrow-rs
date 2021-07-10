@@ -21,19 +21,6 @@ cargo test --features memory-check --lib -- --test-threads 1
 
 This runs all unit-tests on a single thread and counts all allocations and de-allocations.
 
-## Examples
-
-The examples folder shows how to construct some different types of Arrow
-arrays, including dynamic arrays created at runtime.
-
-Examples can be run using the `cargo run --example` command. For example:
-
-```bash
-cargo run --example builders
-cargo run --example dynamic_types
-cargo run --example read_csv
-```
-
 ## IPC
 
 The expected flatc version is 1.12.0+, built from [flatbuffers](https://github.com/google/flatbuffers)

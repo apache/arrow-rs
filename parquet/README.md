@@ -21,15 +21,9 @@
 
 [![Crates.io](https://img.shields.io/crates/v/parquet.svg)](https://crates.io/crates/parquet)
 
-## Usage
+This crate contains the official Native Rust implementation of [Apache Parquet](https://parquet.apache.org/), which is part of the [Apache Arrow](https://arrow.apache.org/) project.
 
-Add this to your Cargo.toml:
-
-```toml
-[dependencies]
-parquet = "^4"
-```
-
+## Example
 
 Example usage of reading data:
 
