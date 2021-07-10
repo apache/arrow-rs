@@ -25,18 +25,17 @@ Welcome to the implementation of Arrow, the popular in-memory columnar format, i
 
 This repo contains the following main components:
 
-| Crate        | Description                                                        | Documentation                                                                         |
-| ------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| arrow        | Core functionality (memory layout, arrays, low level computations) | [(README)](arrow/README.md)                                                           |
-| parquet      | Support for Parquet columnar file format                           | [(README)](parquet/README.md)                                                         |
-| arrow-flight | Support for Arrow-Flight IPC protocol                              | [(README)](arrow-flight/README.md)                                                    |
+| Crate        | Description                                                        | Documentation                      |
+| ------------ | ------------------------------------------------------------------ | ---------------------------------- |
+| arrow        | Core functionality (memory layout, arrays, low level computations) | [(README)](arrow/README.md)        |
+| parquet      | Support for Parquet columnar file format                           | [(README)](parquet/README.md)      |
+| arrow-flight | Support for Arrow-Flight IPC protocol                              | [(README)](arrow-flight/README.md) |
 
 There are two related crates in a different repository
-| Crate        | Description                                                        | Documentation                                                                         |
+| Crate | Description | Documentation |
 | ------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| DataFusion   | In-memory query engine with SQL support                            | [(README)](https://github.com/apache/arrow-datafusion/blob/master/README.md)          |
-| Ballista     | Distributed query execution                                        | [(README)](https://github.com/apache/arrow-datafusion/blob/master/ballista/README.md) |
-
+| DataFusion | In-memory query engine with SQL support | [(README)](https://github.com/apache/arrow-datafusion/blob/master/README.md) |
+| Ballista | Distributed query execution | [(README)](https://github.com/apache/arrow-datafusion/blob/master/ballista/README.md) |
 
 Collectively, these crates support a vast array of functionality for analytic computations in Rust.
 

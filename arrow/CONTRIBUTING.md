@@ -1,4 +1,5 @@
 sfeatures
+
 ## Developer's guide
 
 Common information for all Rust libraries in this project, including
@@ -37,7 +38,6 @@ The above script will run the `flatc` compiler and perform some adjustments to t
 - Replace `type__` with `type_`
 - Remove `org::apache::arrow::flatbuffers` namespace
 - Add includes to each generated file
-
 
 ## Guidelines in usage of `unsafe`
 
