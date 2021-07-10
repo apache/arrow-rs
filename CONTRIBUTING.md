@@ -17,61 +17,122 @@
   under the License.
 -->
 
-# How to contribute to Apache Arrow
+## Developer's guide to Arrow Rust
 
-## Did you find a bug?
+### How to compile
 
-The Arrow project uses JIRA as a bug tracker. To report a bug, you'll have
-to first create an account on the
-[Apache Foundation JIRA](https://issues.apache.org/jira/). The JIRA server
-hosts bugs and issues for multiple Apache projects. The JIRA project name
-for Arrow is "ARROW".
+This is a standard cargo project with workspaces. To build it, you need to have `rust` and `cargo`:
 
-To be assigned to an issue, ask an Arrow JIRA admin to go to
-[Arrow Roles](https://issues.apache.org/jira/plugins/servlet/project-config/ARROW/roles),
-click "Add users to a role," and add you to the "Contributor" role. Most
-committers are authorized to do this; if you're a committer and aren't
-able to load that project admin page, have someone else add you to the
-necessary role.
+```bash
+cargo build
+```
 
-Before you create a new bug entry, we recommend you first
-[search](https://issues.apache.org/jira/projects/ARROW/issues/ARROW-5140?filter=allopenissues)
-among existing Arrow issues.
+You can also use rust's official docker image:
 
-When you create a new JIRA entry, please don't forget to fill the "Component"
-field. Arrow has many subcomponents and this helps triaging and filtering
-tremendously. Also, we conventionally prefix the issue title with the component
-name in brackets, such as "[C++] Crash in Array::Frobnicate()", so as to make
-lists more easy to navigate, and we'd be grateful if you did the same.
+```bash
+docker run --rm -v $(pwd):/arrow-rs -it rust /bin/bash -c "cd /arrow-rs && rustup component add rustfmt && cargo build"
+```
 
-## Did you write a patch that fixes a bug or brings an improvement?
+The command above assumes that are in the root directory of the project, not in the same
+directory as this README.md.
 
-First create a JIRA entry as described above. Then, submit your changes
-as a GitHub Pull Request. We'll ask you to prefix the pull request title
-with the JIRA issue number and the component name in brackets.
-(for example: "ARROW-2345: [C++] Fix crash in Array::Frobnicate()").
-Respecting this convention makes it easier for us to process the backlog
-of submitted Pull Requests.
+You can also compile specific workspaces:
 
-### Minor Fixes
+```bash
+cd arrow && cargo build
+```
 
-Any functionality change should have a JIRA opened. For minor changes that
-affect documentation, you do not need to open up a JIRA. Instead you can
-prefix the title of your PR with "MINOR: " if meets the following guidelines:
+### Git Submodules
 
-- Grammar, usage and spelling fixes that affect no more than 2 files
-- Documentation updates affecting no more than 2 files and not more
-  than 500 words.
+Before running tests and examples, it is necessary to set up the local development environment.
 
-## Do you want to propose a significant new feature or an important refactoring?
+The tests rely on test data that is contained in git submodules.
 
-We ask that all discussions about major changes in the codebase happen
-publicly on the [arrow-dev mailing-list](https://mail-archives.apache.org/mod_mbox/arrow-dev/).
+To pull down this data run the following:
 
-## Do you have questions about the source code, the build procedure or the development process?
+```bash
+git submodule update --init
+```
 
-You can also ask on the mailing-list, see above.
+This populates data in two git submodules:
 
-## Further information
+- `../parquet_testing/data` (sourced from https://github.com/apache/parquet-testing.git)
+- `../testing` (sourced from https://github.com/apache/arrow-testing)
 
-Please read our [development documentation](https://arrow.apache.org/docs/developers/contributing.html).
+By default, `cargo test` will look for these directories at their
+standard location. The following environment variables can be used to override the location:
+
+```bash
+# Optionally specify a different location for test data
+export PARQUET_TEST_DATA=$(cd ../parquet-testing/data; pwd)
+export ARROW_TEST_DATA=$(cd ../testing/data; pwd)
+```
+
+From here on, this is a pure Rust project and `cargo` can be used to run tests, benchmarks, docs and examples as usual.
+
+### Running the tests
+
+Run tests using the Rust standard `cargo test` command:
+
+```bash
+# run all tests.
+cargo test
+
+
+# run only tests for the arrow crate
+cargo test -p arrow
+```
+
+## Code Formatting
+
+Our CI uses `rustfmt` to check code formatting. Before submitting a
+PR be sure to run the following and check for lint issues:
+
+```bash
+cargo +stable fmt --all -- --check
+```
+
+## Clippy Lints
+
+We recommend using `clippy` for checking lints during development. While we do not yet enforce `clippy` checks, we recommend not introducing new `clippy` errors or warnings.
+
+Run the following to check for clippy lints.
+
+```bash
+cargo clippy
+```
+
+If you use Visual Studio Code with the `rust-analyzer` plugin, you can enable `clippy` to run each time you save a file. See https://users.rust-lang.org/t/how-to-use-clippy-in-vs-code-with-rust-analyzer/41881.
+
+One of the concerns with `clippy` is that it often produces a lot of false positives, or that some recommendations may hurt readability. We do not have a policy of which lints are ignored, but if you disagree with a `clippy` lint, you may disable the lint and briefly justify it.
+
+Search for `allow(clippy::` in the codebase to identify lints that are ignored/allowed. We currently prefer ignoring lints on the lowest unit possible.
+
+- If you are introducing a line that returns a lint warning or error, you may disable the lint on that line.
+- If you have several lints on a function or module, you may disable the lint on the function or module.
+- If a lint is pervasive across multiple modules, you may disable it at the crate level.
+
+## Git Pre-Commit Hook
+
+We can use [git pre-commit hook](https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks) to automate various kinds of git pre-commit checking/formatting.
+
+Suppose you are in the root directory of the project.
+
+First check if the file already exists:
+
+```bash
+ls -l .git/hooks/pre-commit
+```
+
+If the file already exists, to avoid mistakenly **overriding**, you MAY have to check
+the link source or file content. Else if not exist, let's safely soft link [pre-commit.sh](pre-commit.sh) as file `.git/hooks/pre-commit`:
+
+```bash
+ln -s  ../../rust/pre-commit.sh .git/hooks/pre-commit
+```
+
+If sometimes you want to commit without checking, just run `git commit` with `--no-verify`:
+
+```bash
+git commit --no-verify -m "... commit message ..."
+```
