@@ -174,6 +174,50 @@ impl Field {
         }
     }
 
+    pub fn parquet_type(&self) -> proc_macro2::TokenStream {
+        // TODO: Support group types
+        // TODO: Add length if dealing with fixedlenbinary
+
+        let field_name = &self.ident.to_string();
+        let physical_type = match self.ty.physical_type() {
+            parquet::basic::Type::BOOLEAN => quote! {
+                parquet::basic::Type::BOOLEAN
+            },
+            parquet::basic::Type::INT32 => quote! {
+                parquet::basic::Type::INT32
+            },
+            parquet::basic::Type::INT64 => quote! {
+                parquet::basic::Type::INT64
+            },
+            parquet::basic::Type::INT96 => quote! {
+                parquet::basic::Type::INT96
+            },
+            parquet::basic::Type::FLOAT => quote! {
+                parquet::basic::Type::FLOAT
+            },
+            parquet::basic::Type::DOUBLE => quote! {
+                parquet::basic::Type::DOUBLE
+            },
+            parquet::basic::Type::BYTE_ARRAY => quote! {
+                parquet::basic::Type::BYTE_ARRAY
+            },
+            parquet::basic::Type::FIXED_LEN_BYTE_ARRAY => quote! {
+                parquet::basic::Type::FIXED_LEN_BYTE_ARRAY
+            },
+        };
+        let logical_type = self.ty.logical_type();
+        let repetition = self.ty.repetition();
+        quote! {
+            fields.push(ParquetType::primitive_type_builder(#field_name, #physical_type)
+                .with_logical_type(#logical_type)
+                .with_repetition(#repetition)
+                .build()
+                .unwrap()
+                .into()
+            );
+        }
+    }
+
     fn option_into_vals(&self) -> proc_macro2::TokenStream {
         let field_name = &self.ident;
         let is_a_byte_buf = self.is_a_byte_buf;
@@ -408,6 +452,83 @@ impl Type {
             "f64" => BasicType::DOUBLE,
             "String" | "str" | "Uuid" => BasicType::BYTE_ARRAY,
             f => unimplemented!("{} currently is not supported", f),
+        }
+    }
+
+    fn logical_type(&self) -> proc_macro2::TokenStream {
+        let last_part = self.last_part();
+        let leaf_type = self.leaf_type_recursive();
+
+        match leaf_type {
+            Type::Array(ref first_type) => {
+                if let Type::TypePath(_) = **first_type {
+                    if last_part == "u8" {
+                        return quote! { None };
+                    }
+                }
+            }
+            Type::Vec(ref first_type) => {
+                if let Type::TypePath(_) = **first_type {
+                    if last_part == "u8" {
+                        return quote! { None };
+                    }
+                }
+            }
+            _ => (),
+        }
+
+        match last_part.trim() {
+            "bool" => quote! { None },
+            "u8" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 8,
+                is_signed: false,
+            })) },
+            "u16" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 16,
+                is_signed: false,
+            })) },
+            "u32" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 32,
+                is_signed: false,
+            })) },
+            "u64" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 64,
+                is_signed: false,
+            })) },
+            "i8" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 8,
+                is_signed: true,
+            })) },
+            "i16" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 16,
+                is_signed: true,
+            })) },
+            "i32" | "i64" => quote! { None },
+            "usize" => {
+                quote! { Some(LogicalType::INTEGER(IntType {
+                    bit_width: usize::BITS as i8,
+                    is_signed: false
+                })) }
+            }
+            "isize" => {
+                quote! { Some(LogicalType::INTEGER(IntType {
+                    bit_width: usize::BITS as i8,
+                    is_signed: true
+                })) }
+            }
+            "NaiveDate" => quote! { Some(LogicalType::DATE(Default::default())) },
+            "f32" | "f64" => quote! { None },
+            "String" | "str" => quote! { Some(LogicalType::STRING(Default::default())) },
+            "Uuid" => quote! { Some(LogicalType::UUID(Default::default())) },
+            f => unimplemented!("{} currently is not supported", f),
+        }
+    }
+
+    fn repetition(&self) -> proc_macro2::TokenStream {
+        match &self {
+            Type::Option(_) => quote! { Repetition::OPTIONAL },
+            Type::Reference(_, ty) => ty.repetition(),
+            _ => quote! { Repetition::REQUIRED },
         }
     }
 

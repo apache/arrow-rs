@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::schema::types::TypePtr;
+
 use super::super::errors::ParquetError;
 use super::super::file::writer::RowGroupWriter;
 
@@ -23,4 +25,7 @@ pub trait RecordWriter<T> {
         &self,
         row_group_writer: &mut Box<dyn RowGroupWriter>,
     ) -> Result<(), ParquetError>;
+
+    /// Generated schema
+    fn schema(&self) -> Result<TypePtr, ParquetError>;
 }

@@ -57,26 +57,24 @@ mod tests {
     #[test]
     fn test_parquet_derive_hello() {
         let file = get_temp_file("test_parquet_derive_hello", &[]);
-        let schema_str = "message schema {
+
+        // The schema is not required, but this tests that the generated
+        // schema agrees with what one would write by hand.
+        let schema_str = "message rust_schema {
             REQUIRED boolean         a_bool;
-            REQUIRED BINARY          a_str (UTF8);
-            REQUIRED BINARY          a_string (UTF8);
-            REQUIRED BINARY          a_borrowed_string (UTF8);
-            OPTIONAL BINARY          a_maybe_str (UTF8);
-            OPTIONAL BINARY          a_maybe_string (UTF8);
+            REQUIRED BINARY          a_str (STRING);
+            REQUIRED BINARY          a_string (STRING);
+            REQUIRED BINARY          a_borrowed_string (STRING);
+            OPTIONAL BINARY          maybe_a_str (STRING);
+            OPTIONAL BINARY          maybe_a_string (STRING);
             REQUIRED INT32           magic_number;
             REQUIRED FLOAT           low_quality_pi;
             REQUIRED DOUBLE          high_quality_pi;
             OPTIONAL FLOAT           maybe_pi;
             OPTIONAL DOUBLE          maybe_best_pi;
-            OPTIONAL BINARY          borrowed_maybe_a_string (UTF8);
-            OPTIONAL BINARY          borrowed_maybe_a_str (UTF8);
+            OPTIONAL BINARY          borrowed_maybe_a_string (STRING);
+            OPTIONAL BINARY          borrowed_maybe_a_str (STRING);
         }";
-
-        let schema = Arc::new(parse_message_type(schema_str).unwrap());
-
-        let props = Arc::new(WriterProperties::builder().build());
-        let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
 
         let a_str = "hello mother".to_owned();
         let a_borrowed_string = "cool news".to_owned();
@@ -98,6 +96,15 @@ mod tests {
             borrowed_maybe_a_string: &maybe_a_string,
             borrowed_maybe_a_str: &maybe_a_str,
         }];
+
+        let schema = Arc::new(parse_message_type(schema_str).unwrap());
+        let generated_schema = drs.as_slice().schema().unwrap();
+
+        assert_eq!(&schema, &generated_schema);
+
+        let props = Arc::new(WriterProperties::builder().build());
+        let mut writer =
+            SerializedFileWriter::new(file, generated_schema, props).unwrap();
 
         let mut row_group = writer.next_row_group().unwrap();
         drs.as_slice().write_to_row_group(&mut row_group).unwrap();

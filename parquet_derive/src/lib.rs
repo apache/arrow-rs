@@ -52,11 +52,6 @@ mod parquet_field;
 ///   pub a_str: &'a str,
 /// }
 ///
-/// let schema_str = "message schema {
-///   REQUIRED boolean         a_bool;
-///   REQUIRED BINARY          a_str (UTF8);
-/// }";
-///
 /// pub fn write_some_records() {
 ///   let samples = vec![
 ///     ACompleteRecord {
@@ -69,7 +64,7 @@ mod parquet_field;
 ///     }
 ///   ];
 ///
-///  let schema = Arc::new(parse_message_type(schema_str).unwrap());
+///  let schema = samples.as_slice().schema();
 ///
 ///  let props = Arc::new(WriterProperties::builder().build());
 ///  let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
@@ -101,9 +96,15 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
     let derived_for = input.ident;
     let generics = input.generics;
 
+    let field_types: Vec<proc_macro2::TokenStream> =
+        field_infos.iter().map(|x| x.parquet_type()).collect();
+
     (quote! {
     impl#generics RecordWriter<#derived_for#generics> for &[#derived_for#generics] {
-      fn write_to_row_group(&self, row_group_writer: &mut Box<parquet::file::writer::RowGroupWriter>) -> Result<(), parquet::errors::ParquetError> {
+      fn write_to_row_group(
+        &self,
+        row_group_writer: &mut Box<parquet::file::writer::RowGroupWriter>
+      ) -> Result<(), parquet::errors::ParquetError> {
         let mut row_group_writer = row_group_writer;
         let records = &self; // Used by all the writer snippets to be more clear
 
@@ -120,6 +121,22 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         );*
 
         Ok(())
+      }
+
+      fn schema(&self) -> Result<parquet::schema::types::TypePtr, parquet::errors::ParquetError> {
+        use parquet::schema::types::Type as ParquetType;
+        use parquet::schema::types::TypePtr;
+        use parquet::basic::LogicalType;
+        use parquet::basic::Repetition;
+
+        let mut fields: Vec<TypePtr> = Vec::new();
+        #(
+          #field_types
+        );*;
+        let group = parquet::schema::types::Type::group_type_builder("rust_schema")
+          .with_fields(&mut fields)
+          .build()?;
+        Ok(group.into())
       }
     }
   }).into()
