@@ -127,7 +127,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         use parquet::schema::types::Type as ParquetType;
         use parquet::schema::types::TypePtr;
         use parquet::basic::LogicalType;
-        use parquet::basic::Repetition;
+        use parquet::basic::*;
 
         let mut fields: Vec<TypePtr> = Vec::new();
         #(

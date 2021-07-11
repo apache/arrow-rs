@@ -245,7 +245,12 @@ impl Field {
         } else if is_a_byte_buf {
             quote! { Some((&inner[..]).into())}
         } else {
-            quote! { Some(inner) }
+            // Type might need converting to a physical type
+            match self.ty.physical_type() {
+                parquet::basic::Type::INT32 => quote! { Some(inner as i32) },
+                parquet::basic::Type::INT64 => quote! { Some(inner as i64) },
+                _ => quote! { Some(inner) },
+            }
         };
 
         quote! {
@@ -276,7 +281,12 @@ impl Field {
         } else if is_a_byte_buf {
             quote! { (&rec.#field_name[..]).into() }
         } else {
-            quote! { rec.#field_name }
+            // Type might need converting to a physical type
+            match self.ty.physical_type() {
+                parquet::basic::Type::INT32 => quote! { rec.#field_name as i32 },
+                parquet::basic::Type::INT64 => quote! { rec.#field_name as i64 },
+                _ => quote! { rec.#field_name },
+            }
         };
 
         quote! {
@@ -447,7 +457,14 @@ impl Type {
             "bool" => BasicType::BOOLEAN,
             "u8" | "u16" | "u32" => BasicType::INT32,
             "i8" | "i16" | "i32" | "NaiveDate" => BasicType::INT32,
-            "u64" | "i64" | "usize" | "NaiveDateTime" => BasicType::INT64,
+            "u64" | "i64" | "NaiveDateTime" => BasicType::INT64,
+            "usize" | "isize" => {
+                if usize::BITS == 64 {
+                    BasicType::INT64
+                } else {
+                    BasicType::INT32
+                }
+            }
             "f32" => BasicType::FLOAT,
             "f64" => BasicType::DOUBLE,
             "String" | "str" | "Uuid" => BasicType::BYTE_ARRAY,
@@ -626,7 +643,7 @@ mod test {
         assert_eq!(snippet,
                    (quote!{
                         {
-                            let vals : Vec < _ > = records . iter ( ) . map ( | rec | rec . counter ) . collect ( );
+                            let vals : Vec < _ > = records . iter ( ) . map ( | rec | rec . counter as i64 ) . collect ( );
 
                             if let parquet::column::writer::ColumnWriter::Int64ColumnWriter ( ref mut typed ) = column_writer {
                                 typed . write_batch ( & vals [ .. ] , None , None ) ?;
@@ -706,7 +723,7 @@ mod test {
 
                         let vals: Vec <_> = records.iter().filter_map( |rec| {
                             if let Some ( inner ) = rec . optional_dumb_int {
-                                Some ( inner )
+                                Some ( inner as i32 )
                             } else {
                                 None
                             }
@@ -757,12 +774,13 @@ mod test {
           struct ABasicStruct {
             yes_no: bool,
             name: String,
+            length: usize
           }
         };
 
         let fields = extract_fields(snippet);
         let processed: Vec<_> = fields.iter().map(|field| Field::from(field)).collect();
-        assert_eq!(processed.len(), 2);
+        assert_eq!(processed.len(), 3);
 
         assert_eq!(
             processed,
@@ -777,6 +795,12 @@ mod test {
                     ident: syn::Ident::new("name", proc_macro2::Span::call_site()),
                     ty: Type::TypePath(syn::parse_quote!(String)),
                     is_a_byte_buf: true,
+                    third_party_type: None,
+                },
+                Field {
+                    ident: syn::Ident::new("length", proc_macro2::Span::call_site()),
+                    ty: Type::TypePath(syn::parse_quote!(usize)),
+                    is_a_byte_buf: false,
                     third_party_type: None,
                 }
             ]
