@@ -1650,38 +1650,6 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         }
     }
 
-    // /// Try to create a `MapBuilder` from a [Field].
-    // ///
-    // /// Returns an error if the fild is not a Struct, or keys are nullable
-    // pub fn try_from_field(field: Field, capacity: usize) -> Result<Self> {
-    //     if let DataType::Struct(fields) = field.data_type() {
-    //         if fields.len() != 2 {
-    //             return Err(ArrowError::InvalidArgumentError(format!(
-    //                 "MapArray's struct field should have 2 child fields, found {}",
-    //                 fields.len()
-    //             )));
-    //         }
-    //         let keys_field = &fields[0];
-    //         let values_field = &fields[1];
-    //         let field_names = MapFieldNames {
-    //             entry: field.name().clone(),
-    //             key: keys_field.name().clone(),
-    //             value: values_field.name().clone(),
-    //         };
-    //         Ok(Self::with_capacity(
-    //             Some(field_names),
-    //             *make_builder(keys_field.data_type(), capacity),
-    //             *make_builder(values_field.data_type(), capacity),
-    //             capacity,
-    //         ))
-    //     } else {
-    //         Err(ArrowError::InvalidArgumentError(format!(
-    //             "Cannot create MapArray from {:?}",
-    //             field.data_type()
-    //         )))
-    //     }
-    // }
-
     pub fn keys(&mut self) -> &mut K {
         &mut self.key_builder
     }

@@ -312,7 +312,7 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
             let map = field.type_as_map().unwrap();
             let children = field.children().unwrap();
             if children.len() != 1 {
-                panic!("expect a list to have one child")
+                panic!("expect a map to have one child")
             }
             DataType::Map(Box::new(children.get(0).into()), map.keysSorted())
         }

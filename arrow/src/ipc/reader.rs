@@ -389,7 +389,7 @@ fn create_list_array(
         }
         make_array(builder.build())
     } else {
-        panic!("Cannot create list array from {:?}", data_type)
+        panic!("Cannot create list or map array from {:?}", data_type)
     }
 }
 

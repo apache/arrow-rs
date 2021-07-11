@@ -1047,8 +1047,6 @@ impl ArrayReader for MapArrayReader {
             .add_child_data(entry_data)
             .build();
 
-        // self.def_level_buffer = Some(def_level_data_buffer.into());
-        // self.rep_level_buffer = rep_level_data;
         Ok(Arc::new(MapArray::from(array_data)))
     }
 

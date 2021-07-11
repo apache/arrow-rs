@@ -952,8 +952,6 @@ mod tests {
         {"stocks":{"long": null, "long": "$CCC", "short": null}}
         {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
         "#;
-        // let value_list_type =
-        //     DataType::List(Box::new(Field::new("item", DataType::Utf8, false)));
         let entries_struct_type = DataType::Struct(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new("value", DataType::Utf8, true),
