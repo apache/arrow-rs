@@ -360,17 +360,17 @@ impl RecordBatch {
         if batches.is_empty() {
             return Ok(RecordBatch::new_empty(schema.clone()));
         }
-        let field_num = schema.fields().len();
         if let Some((i, _)) = batches
             .iter()
             .enumerate()
-            .find(|&(_, batch)| batch.num_columns() < field_num)
+            .find(|&(_, batch)| batch.schema() != *schema)
         {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "batches[{}] has insufficient number of columns as {} fields in schema.",
-                i, field_num,
+                "batches[{}] schema is different with argument schema.",
+                i
             )));
         }
+        let field_num = schema.fields().len();
         let mut arrays = Vec::with_capacity(field_num);
         for i in 0..field_num {
             let array = concat(
@@ -671,65 +671,54 @@ mod tests {
     }
 
     #[test]
-    fn concat_empty_record_batches() {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    fn concat_record_batches() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
+        let batch1 = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(StringArray::from(vec!["a", "b"])),
+            ],
+        )
+        .unwrap();
+        let batch2 = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![3, 4])),
+                Arc::new(StringArray::from(vec!["c", "d"])),
+            ],
+        )
+        .unwrap();
+        let new_batch = RecordBatch::concat(&schema, &[batch1, batch2]).unwrap();
+        assert_eq!(new_batch.schema().as_ref(), schema.as_ref());
+        assert_eq!(2, new_batch.num_columns());
+        assert_eq!(4, new_batch.num_rows());
+    }
+
+    #[test]
+    fn concat_empty_record_batch() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]));
         let batch = RecordBatch::concat(&schema, &[]).unwrap();
         assert_eq!(batch.schema().as_ref(), schema.as_ref());
         assert_eq!(0, batch.num_rows());
     }
 
     #[test]
-    fn concat_record_batches_of_same_schema() {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let batch1 = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![1, 2]))],
-        )
-        .unwrap();
-        let batch2 = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![3, 4]))],
-        )
-        .unwrap();
-        let new_batch = RecordBatch::concat(&schema, &[batch1, batch2]).unwrap();
-        assert_eq!(new_batch.schema().as_ref(), schema.as_ref());
-        assert_eq!(4, new_batch.num_rows());
-    }
-
-    #[test]
-    fn concat_record_batches_of_similar_schemas() {
-        let schema1 =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let schema2 = Arc::new(Schema::new(vec![
-            Field::new("b", DataType::Int32, false),
-            Field::new("c", DataType::Utf8, false),
-        ]));
-        let batch1 = RecordBatch::try_new(
-            schema1.clone(),
-            vec![Arc::new(Int32Array::from(vec![1, 2]))],
-        )
-        .unwrap();
-        let batch2 = RecordBatch::try_new(
-            schema2,
-            vec![
-                Arc::new(Int32Array::from(vec![3, 4])),
-                Arc::new(StringArray::from(vec!["a", "b"])),
-            ],
-        )
-        .unwrap();
-        let new_batch = RecordBatch::concat(&schema1, &[batch1, batch2]).unwrap();
-        assert_eq!(new_batch.schema().as_ref(), schema1.as_ref());
-        assert_eq!(4, new_batch.num_rows());
-    }
-
-    #[test]
-    fn concat_record_batches_of_different_column_num() {
+    fn concat_record_batches_of_different_schemas() {
         let schema1 = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Utf8, false),
         ]));
-        let schema2 =
-            Arc::new(Schema::new(vec![Field::new("c", DataType::Int32, false)]));
+        let schema2 = Arc::new(Schema::new(vec![
+            Field::new("c", DataType::Int32, false),
+            Field::new("d", DataType::Utf8, false),
+        ]));
         let batch1 = RecordBatch::try_new(
             schema1.clone(),
             vec![
@@ -738,39 +727,18 @@ mod tests {
             ],
         )
         .unwrap();
-        let batch2 =
-            RecordBatch::try_new(schema2, vec![Arc::new(Int32Array::from(vec![3, 4]))])
-                .unwrap();
-        match RecordBatch::concat(&schema1, &[batch1, batch2]) {
-            Err(ArrowError::InvalidArgumentError(s)) => {
-                assert_eq!(
-            "batches[1] has insufficient number of columns as 2 fields in schema.", s)
-            }
-            _ => panic!("should not be other result"),
-        }
-    }
-
-    #[test]
-    fn concat_record_batches_of_different_column_types() {
-        let schema1 =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let schema2 = Arc::new(Schema::new(vec![Field::new("b", DataType::Utf8, false)]));
-        let batch1 = RecordBatch::try_new(
-            schema1.clone(),
-            vec![Arc::new(Int32Array::from(vec![1, 2]))],
-        )
-        .unwrap();
         let batch2 = RecordBatch::try_new(
             schema2,
-            vec![Arc::new(StringArray::from(vec!["a", "b"]))],
+            vec![
+                Arc::new(Int32Array::from(vec![3, 4])),
+                Arc::new(StringArray::from(vec!["c", "d"])),
+            ],
         )
         .unwrap();
-        match RecordBatch::concat(&schema1, &[batch1, batch2]) {
-            Err(ArrowError::InvalidArgumentError(s)) => assert_eq!(
-                "It is not possible to concatenate arrays of different data types.",
-                s
-            ),
-            _ => panic!("should not be other result"),
-        }
+        let error = RecordBatch::concat(&schema1, &[batch1, batch2]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Invalid argument error: batches[1] schema is different with argument schema.",
+        );
     }
 }
