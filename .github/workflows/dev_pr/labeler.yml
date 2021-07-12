@@ -23,3 +23,6 @@ arrow-flight:
 
 parquet:
   - parquet/**/*
+
+parquet-derive:
+  - parquet_derive/**/*
