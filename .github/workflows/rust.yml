@@ -244,6 +244,7 @@ jobs:
           rustup component add rustfmt
       - name: Run
         run: cargo fmt --all -- --check
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -327,9 +328,9 @@ jobs:
           cd arrow
           cargo build --target wasm32-unknown-unknown
 
-  # test the projects can build without default features
+  # test builds with various feature flags
   default-build:
-    name: Check No Defaults on AMD64 Rust ${{ matrix.rust }}
+    name: Arrow Feature Flag Builds ${{ matrix.rust }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -338,15 +339,10 @@ jobs:
     container:
       image: ${{ matrix.arch }}/rust
       env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-        PARQUET_TEST_DATA: /__w/arrow/arrow/parquet-testing/data
+        # Disable debug symbol generation to speed up CI build and keep memory down
+        RUSTFLAGS: "-C debuginfo=0"
     steps:
       - uses: actions/checkout@v2
-        with:
-          submodules: true
       - name: Cache Cargo
         uses: actions/cache@v2
         with:
@@ -357,15 +353,22 @@ jobs:
         uses: actions/cache@v2
         with:
           path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-wasm32-cache-${{ matrix.rust }}
+          # this key equals the ones on `linux-build-lib` for re-use
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup override set ${{ matrix.rust }}
           rustup component add rustfmt
-      - name: Build arrow crate
+      - name: Build with default features
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow
-          cargo check --all-targets --no-default-features
+          cd arrow/test/dependency/default-features
+          cargo check
+      - name: Build with default-features=false
+        run: |
+          export CARGO_HOME="/github/home/.cargo"
+          export CARGO_TARGET_DIR="/github/home/target"
+          cd arrow/test/dependency/no-default-features
+          cargo check

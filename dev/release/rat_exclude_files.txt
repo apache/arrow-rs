@@ -3,6 +3,7 @@ testing/*
 target/*
 dev/release/rat_exclude_files.txt
 arrow/test/data/*
+arrow/test/dependency/*
 .gitattributes
 **.gitignore
 .gitmodules
