@@ -26,7 +26,4 @@ edition = "2018"
 [dependencies]
 arrow = { path = "../../../../arrow", version = "5.0.0-SNAPSHOT", default-features = false }
 
-# Workaround for https://github.com/apache/arrow-rs/issues/529
-rand = { version = "0.8" }
-
 [workspace]

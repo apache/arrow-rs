@@ -15,16 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "test_utils")]
 pub mod bench_util;
 pub mod bit_chunk_iterator;
 pub mod bit_util;
+#[cfg(feature = "test_utils")]
 pub mod data_gen;
 pub mod display;
+#[cfg(feature = "test_utils")]
 pub mod integration_util;
 #[cfg(feature = "prettyprint")]
 pub mod pretty;
 pub(crate) mod serialization;
 pub mod string_writer;
+#[cfg(feature = "test_utils")]
 pub mod test_util;
 
 mod trusted_len;

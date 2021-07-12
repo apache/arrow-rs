@@ -58,12 +58,15 @@ multiversion = "0.6.1"
 bitflags = "1.2.1"
 
 [features]
-default = ["csv", "ipc"]
+default = ["csv", "ipc", "test_utils"]
 avx512 = []
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
 simd = ["packed_simd"]
 prettyprint = ["prettytable-rs"]
+# The test utils feature enables code used in benchmarks and tests but
+# not the core arrow code itself
+test_utils = ["rand/std", "rand/std_rng"]
 # this is only intended to be used in single-threaded programs: it verifies that
 # all allocated memory is being released (no memory leaks).
 # See README for details

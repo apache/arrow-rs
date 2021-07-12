@@ -125,7 +125,7 @@ where
     simd_result.write_to_slice_unaligned_unchecked(result);
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test_utils"))]
 mod tests {
     use std::collections::HashSet;
 
