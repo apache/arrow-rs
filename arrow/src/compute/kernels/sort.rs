@@ -886,9 +886,9 @@ where
 }
 
 type LexicographicalCompareItem<'a> = (
-    &'a ArrayData,                              // data
-    Box<dyn Fn(usize, usize) -> Ordering + 'a>, // comparator
-    SortOptions,                                // sort_option
+    &'a ArrayData, // data
+    DynComparator, // comparator
+    SortOptions,   // sort_option
 );
 
 /// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
