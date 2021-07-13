@@ -43,7 +43,7 @@ indexmap = "1.6"
 rand = { version = "0.8", default-features = false }
 # getrandom is a dependency of rand, not (directly) of arrow
 # need to specify `js` feature to build on wasm
-getrandom = { version = "0.2", features = ["js"] }
+getrandom = { version = "0.2", optional = true }
 num = "0.4"
 csv_crate = { version = "1.1", optional = true, package="csv" }
 regex = "1.3"
@@ -64,6 +64,7 @@ csv = ["csv_crate"]
 ipc = ["flatbuffers"]
 simd = ["packed_simd"]
 prettyprint = ["prettytable-rs"]
+js = ["getrandom/js"]
 # The test utils feature enables code used in benchmarks and tests but
 # not the core arrow code itself
 test_utils = ["rand/std", "rand/std_rng"]

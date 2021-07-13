@@ -30,6 +30,7 @@ The arrow crate provides the following optional features:
 - `csv` (default) - support for reading and writing Arrow arrays to/from csv files
 - `ipc` (default) - support for the [arrow-flight]((https://crates.io/crates/arrow-flight) IPC and wire format
 - `prettyprint` - support for formatting record batches as textual columns
+- `js` - support for building arrow for WebAssembly / JavaScript
 - `simd` - (_Requires Nightly Rust_) alternate optimized
   implementations of some [compute](https://github.com/apache/arrow/tree/master/rust/arrow/src/compute)
   kernels using explicit SIMD processor intrinsics.
