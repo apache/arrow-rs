@@ -21,8 +21,15 @@
 
 [![Crates.io](https://img.shields.io/crates/v/arrow-flight.svg)](https://crates.io/crates/arrow-flight)
 
+## Usage
+
+Add this to your Cargo.toml:
+
+```toml
+[dependencies]
+arrow-flight = "5.0"
+```
+
 Apache Arrow Flight is a gRPC based protocol for exchanging Arrow data between processes. See the blog post [Introducing Apache Arrow Flight: A Framework for Fast Data Transport](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for more information.
 
-This crate simply provides the Rust implementation of the [Flight.proto](../../format/Flight.proto) gRPC protocol and provides an example that demonstrates how to build a Flight server implemented with Tonic.
-
-Note that building a Flight server also requires an implementation of Arrow IPC which is based on the Flatbuffers serialization framework. The Rust implementation of Arrow IPC is not yet complete although the generated Flatbuffers code is available as part of the core Arrow crate.
+This crate provides a Rust implementation of the [Flight.proto](../../format/Flight.proto) gRPC protocol and provides an example that demonstrates how to build a Flight server implemented with Tonic.
