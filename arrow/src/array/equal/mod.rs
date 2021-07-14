@@ -22,7 +22,7 @@
 use super::{
     Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
     FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
-    GenericStringArray, NullArray, OffsetSizeTrait, PrimitiveArray,
+    GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
     StringOffsetSizeTrait, StructArray,
 };
 
@@ -112,6 +112,12 @@ impl PartialEq for DecimalArray {
 }
 
 impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericListArray<OffsetSize> {
+    fn eq(&self, other: &Self) -> bool {
+        equal(self.data(), other.data())
+    }
+}
+
+impl PartialEq for MapArray {
     fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }

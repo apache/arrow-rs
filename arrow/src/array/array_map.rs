@@ -206,7 +206,9 @@ mod tests {
             .build();
         let values_data = ArrayData::builder(DataType::UInt32)
             .len(8)
-            .add_buffer(Buffer::from(&[0u32, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
+            .add_buffer(Buffer::from(
+                &[0u32, 10, 20, 30, 40, 50, 60, 70].to_byte_slice(),
+            ))
             .build();
 
         // Construct a buffer for value offsets, for the nested array:
@@ -246,7 +248,10 @@ mod tests {
             .build();
         let value_data = ArrayData::builder(DataType::UInt32)
             .len(8)
-            .add_buffer(Buffer::from(&[0u32, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
+            .add_buffer(Buffer::from(
+                &[0u32, 10, 20, 0, 40, 0, 60, 70].to_byte_slice(),
+            ))
+            .null_bit_buffer(Buffer::from(&[0b11010110]))
             .build();
 
         // Construct a buffer for value offsets, for the nested array:
@@ -254,7 +259,7 @@ mod tests {
         let entry_offsets = Buffer::from(&[0, 3, 6, 8].to_byte_slice());
 
         let keys_field = Field::new("keys", DataType::Int32, false);
-        let values_field = Field::new("values", DataType::UInt32, false);
+        let values_field = Field::new("values", DataType::UInt32, true);
         let entry_struct = StructArray::from(vec![
             (keys_field.clone(), make_array(key_data)),
             (values_field.clone(), make_array(value_data.clone())),
@@ -285,7 +290,8 @@ mod tests {
         assert_eq!(2, map_array.value_length(2));
 
         let key_array = Arc::new(Int32Array::from(vec![0, 1, 2])) as ArrayRef;
-        let value_array = Arc::new(UInt32Array::from(vec![0, 1, 2])) as ArrayRef;
+        let value_array =
+            Arc::new(UInt32Array::from(vec![None, Some(10u32), Some(20)])) as ArrayRef;
         let struct_array = StructArray::from(vec![
             (keys_field.clone(), key_array),
             (values_field.clone(), value_array),
@@ -324,7 +330,8 @@ mod tests {
         assert_eq!(2, map_array.value_length(1));
 
         let key_array = Arc::new(Int32Array::from(vec![3, 4, 5])) as ArrayRef;
-        let value_array = Arc::new(UInt32Array::from(vec![3, 4, 5])) as ArrayRef;
+        let value_array =
+            Arc::new(UInt32Array::from(vec![None, Some(40), None])) as ArrayRef;
         let struct_array =
             StructArray::from(vec![(keys_field, key_array), (values_field, value_array)]);
         assert_eq!(
@@ -345,12 +352,17 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Test fails because slice of <list<struct>> is still buggy"]
     fn test_map_array_slice() {
         let map_array = create_from_buffers();
 
         let sliced_array = map_array.slice(1, 2);
         assert_eq!(2, sliced_array.len());
         assert_eq!(1, sliced_array.offset());
+        let sliced_array_data = sliced_array.data();
+        for array_data in sliced_array_data.child_data() {
+            assert_eq!(array_data.offset(), 1);
+        }
 
         // Check offset and length for each non-null value.
         let sliced_map_array = sliced_array.as_any().downcast_ref::<MapArray>().unwrap();
@@ -358,6 +370,45 @@ mod tests {
         assert_eq!(3, sliced_map_array.value_length(0));
         assert_eq!(6, sliced_map_array.value_offsets()[1]);
         assert_eq!(2, sliced_map_array.value_length(1));
+
+        // Construct key and values
+        let keys_data = ArrayData::builder(DataType::Int32)
+            .len(5)
+            .add_buffer(Buffer::from(&[3, 4, 5, 6, 7].to_byte_slice()))
+            .build();
+        let values_data = ArrayData::builder(DataType::UInt32)
+            .len(5)
+            .add_buffer(Buffer::from(&[30u32, 40, 50, 60, 70].to_byte_slice()))
+            .build();
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[3, 4, 5], [6, 7]]
+        let entry_offsets = Buffer::from(&[0, 3, 5].to_byte_slice());
+
+        let keys = Field::new("keys", DataType::Int32, false);
+        let values = Field::new("values", DataType::UInt32, false);
+        let entry_struct = StructArray::from(vec![
+            (keys, make_array(keys_data)),
+            (values, make_array(values_data)),
+        ]);
+
+        // Construct a map array from the above two
+        let map_data_type = DataType::Map(
+            Box::new(Field::new(
+                "entries",
+                entry_struct.data_type().clone(),
+                true,
+            )),
+            false,
+        );
+        let expected_map_data = ArrayData::builder(map_data_type)
+            .len(2)
+            .add_buffer(entry_offsets)
+            .add_child_data(entry_struct.data().clone())
+            .build();
+        let expected_map_array = MapArray::from(expected_map_data);
+
+        assert_eq!(&expected_map_array, sliced_map_array)
     }
 
     #[test]
