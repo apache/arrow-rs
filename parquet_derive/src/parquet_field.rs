@@ -174,6 +174,50 @@ impl Field {
         }
     }
 
+    pub fn parquet_type(&self) -> proc_macro2::TokenStream {
+        // TODO: Support group types
+        // TODO: Add length if dealing with fixedlenbinary
+
+        let field_name = &self.ident.to_string();
+        let physical_type = match self.ty.physical_type() {
+            parquet::basic::Type::BOOLEAN => quote! {
+                parquet::basic::Type::BOOLEAN
+            },
+            parquet::basic::Type::INT32 => quote! {
+                parquet::basic::Type::INT32
+            },
+            parquet::basic::Type::INT64 => quote! {
+                parquet::basic::Type::INT64
+            },
+            parquet::basic::Type::INT96 => quote! {
+                parquet::basic::Type::INT96
+            },
+            parquet::basic::Type::FLOAT => quote! {
+                parquet::basic::Type::FLOAT
+            },
+            parquet::basic::Type::DOUBLE => quote! {
+                parquet::basic::Type::DOUBLE
+            },
+            parquet::basic::Type::BYTE_ARRAY => quote! {
+                parquet::basic::Type::BYTE_ARRAY
+            },
+            parquet::basic::Type::FIXED_LEN_BYTE_ARRAY => quote! {
+                parquet::basic::Type::FIXED_LEN_BYTE_ARRAY
+            },
+        };
+        let logical_type = self.ty.logical_type();
+        let repetition = self.ty.repetition();
+        quote! {
+            fields.push(ParquetType::primitive_type_builder(#field_name, #physical_type)
+                .with_logical_type(#logical_type)
+                .with_repetition(#repetition)
+                .build()
+                .unwrap()
+                .into()
+            );
+        }
+    }
+
     fn option_into_vals(&self) -> proc_macro2::TokenStream {
         let field_name = &self.ident;
         let is_a_byte_buf = self.is_a_byte_buf;
@@ -201,7 +245,12 @@ impl Field {
         } else if is_a_byte_buf {
             quote! { Some((&inner[..]).into())}
         } else {
-            quote! { Some(inner) }
+            // Type might need converting to a physical type
+            match self.ty.physical_type() {
+                parquet::basic::Type::INT32 => quote! { Some(inner as i32) },
+                parquet::basic::Type::INT64 => quote! { Some(inner as i64) },
+                _ => quote! { Some(inner) },
+            }
         };
 
         quote! {
@@ -232,7 +281,12 @@ impl Field {
         } else if is_a_byte_buf {
             quote! { (&rec.#field_name[..]).into() }
         } else {
-            quote! { rec.#field_name }
+            // Type might need converting to a physical type
+            match self.ty.physical_type() {
+                parquet::basic::Type::INT32 => quote! { rec.#field_name as i32 },
+                parquet::basic::Type::INT64 => quote! { rec.#field_name as i64 },
+                _ => quote! { rec.#field_name },
+            }
         };
 
         quote! {
@@ -403,11 +457,95 @@ impl Type {
             "bool" => BasicType::BOOLEAN,
             "u8" | "u16" | "u32" => BasicType::INT32,
             "i8" | "i16" | "i32" | "NaiveDate" => BasicType::INT32,
-            "u64" | "i64" | "usize" | "NaiveDateTime" => BasicType::INT64,
+            "u64" | "i64" | "NaiveDateTime" => BasicType::INT64,
+            "usize" | "isize" => {
+                if usize::BITS == 64 {
+                    BasicType::INT64
+                } else {
+                    BasicType::INT32
+                }
+            }
             "f32" => BasicType::FLOAT,
             "f64" => BasicType::DOUBLE,
             "String" | "str" | "Uuid" => BasicType::BYTE_ARRAY,
             f => unimplemented!("{} currently is not supported", f),
+        }
+    }
+
+    fn logical_type(&self) -> proc_macro2::TokenStream {
+        let last_part = self.last_part();
+        let leaf_type = self.leaf_type_recursive();
+
+        match leaf_type {
+            Type::Array(ref first_type) => {
+                if let Type::TypePath(_) = **first_type {
+                    if last_part == "u8" {
+                        return quote! { None };
+                    }
+                }
+            }
+            Type::Vec(ref first_type) => {
+                if let Type::TypePath(_) = **first_type {
+                    if last_part == "u8" {
+                        return quote! { None };
+                    }
+                }
+            }
+            _ => (),
+        }
+
+        match last_part.trim() {
+            "bool" => quote! { None },
+            "u8" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 8,
+                is_signed: false,
+            })) },
+            "u16" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 16,
+                is_signed: false,
+            })) },
+            "u32" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 32,
+                is_signed: false,
+            })) },
+            "u64" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 64,
+                is_signed: false,
+            })) },
+            "i8" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 8,
+                is_signed: true,
+            })) },
+            "i16" => quote! { Some(LogicalType::INTEGER(IntType {
+                bit_width: 16,
+                is_signed: true,
+            })) },
+            "i32" | "i64" => quote! { None },
+            "usize" => {
+                quote! { Some(LogicalType::INTEGER(IntType {
+                    bit_width: usize::BITS as i8,
+                    is_signed: false
+                })) }
+            }
+            "isize" => {
+                quote! { Some(LogicalType::INTEGER(IntType {
+                    bit_width: usize::BITS as i8,
+                    is_signed: true
+                })) }
+            }
+            "NaiveDate" => quote! { Some(LogicalType::DATE(Default::default())) },
+            "f32" | "f64" => quote! { None },
+            "String" | "str" => quote! { Some(LogicalType::STRING(Default::default())) },
+            "Uuid" => quote! { Some(LogicalType::UUID(Default::default())) },
+            f => unimplemented!("{} currently is not supported", f),
+        }
+    }
+
+    fn repetition(&self) -> proc_macro2::TokenStream {
+        match &self {
+            Type::Option(_) => quote! { Repetition::OPTIONAL },
+            Type::Reference(_, ty) => ty.repetition(),
+            _ => quote! { Repetition::REQUIRED },
         }
     }
 
@@ -505,7 +643,7 @@ mod test {
         assert_eq!(snippet,
                    (quote!{
                         {
-                            let vals : Vec < _ > = records . iter ( ) . map ( | rec | rec . counter ) . collect ( );
+                            let vals : Vec < _ > = records . iter ( ) . map ( | rec | rec . counter as i64 ) . collect ( );
 
                             if let parquet::column::writer::ColumnWriter::Int64ColumnWriter ( ref mut typed ) = column_writer {
                                 typed . write_batch ( & vals [ .. ] , None , None ) ?;
@@ -585,7 +723,7 @@ mod test {
 
                         let vals: Vec <_> = records.iter().filter_map( |rec| {
                             if let Some ( inner ) = rec . optional_dumb_int {
-                                Some ( inner )
+                                Some ( inner as i32 )
                             } else {
                                 None
                             }
@@ -636,12 +774,13 @@ mod test {
           struct ABasicStruct {
             yes_no: bool,
             name: String,
+            length: usize
           }
         };
 
         let fields = extract_fields(snippet);
         let processed: Vec<_> = fields.iter().map(|field| Field::from(field)).collect();
-        assert_eq!(processed.len(), 2);
+        assert_eq!(processed.len(), 3);
 
         assert_eq!(
             processed,
@@ -656,6 +795,12 @@ mod test {
                     ident: syn::Ident::new("name", proc_macro2::Span::call_site()),
                     ty: Type::TypePath(syn::parse_quote!(String)),
                     is_a_byte_buf: true,
+                    third_party_type: None,
+                },
+                Field {
+                    ident: syn::Ident::new("length", proc_macro2::Span::call_site()),
+                    ty: Type::TypePath(syn::parse_quote!(usize)),
+                    is_a_byte_buf: false,
                     third_party_type: None,
                 }
             ]

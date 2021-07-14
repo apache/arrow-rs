@@ -32,11 +32,18 @@ struct ACompleteRecord<'a> {
     pub a_borrowed_string: &'a String,
     pub maybe_a_str: Option<&'a str>,
     pub maybe_a_string: Option<String>,
-    pub magic_number: i32,
-    pub low_quality_pi: f32,
-    pub high_quality_pi: f64,
-    pub maybe_pi: Option<f32>,
-    pub maybe_best_pi: Option<f64>,
+    pub i16: i16,
+    pub i32: i32,
+    pub u64: u64,
+    pub maybe_u8: Option<u8>,
+    pub maybe_i16: Option<i16>,
+    pub maybe_u32: Option<u32>,
+    pub maybe_usize: Option<usize>,
+    pub isize: isize,
+    pub float: f32,
+    pub double: f64,
+    pub maybe_float: Option<f32>,
+    pub maybe_double: Option<f64>,
     pub borrowed_maybe_a_string: &'a Option<String>,
     pub borrowed_maybe_a_str: &'a Option<&'a str>,
 }
@@ -57,26 +64,31 @@ mod tests {
     #[test]
     fn test_parquet_derive_hello() {
         let file = get_temp_file("test_parquet_derive_hello", &[]);
-        let schema_str = "message schema {
+
+        // The schema is not required, but this tests that the generated
+        // schema agrees with what one would write by hand.
+        let schema_str = "message rust_schema {
             REQUIRED boolean         a_bool;
-            REQUIRED BINARY          a_str (UTF8);
-            REQUIRED BINARY          a_string (UTF8);
-            REQUIRED BINARY          a_borrowed_string (UTF8);
-            OPTIONAL BINARY          a_maybe_str (UTF8);
-            OPTIONAL BINARY          a_maybe_string (UTF8);
-            REQUIRED INT32           magic_number;
-            REQUIRED FLOAT           low_quality_pi;
-            REQUIRED DOUBLE          high_quality_pi;
-            OPTIONAL FLOAT           maybe_pi;
-            OPTIONAL DOUBLE          maybe_best_pi;
-            OPTIONAL BINARY          borrowed_maybe_a_string (UTF8);
-            OPTIONAL BINARY          borrowed_maybe_a_str (UTF8);
+            REQUIRED BINARY          a_str (STRING);
+            REQUIRED BINARY          a_string (STRING);
+            REQUIRED BINARY          a_borrowed_string (STRING);
+            OPTIONAL BINARY          maybe_a_str (STRING);
+            OPTIONAL BINARY          maybe_a_string (STRING);
+            REQUIRED INT32           i16 (INTEGER(16,true));
+            REQUIRED INT32           i32;
+            REQUIRED INT64           u64 (INTEGER(64,false));
+            OPTIONAL INT32           maybe_u8 (INTEGER(8,false));
+            OPTIONAL INT32           maybe_i16 (INTEGER(16,true));
+            OPTIONAL INT32           maybe_u32 (INTEGER(32,false));
+            OPTIONAL INT64           maybe_usize (INTEGER(64,false));
+            REQUIRED INT64           isize (INTEGER(64,true));
+            REQUIRED FLOAT           float;
+            REQUIRED DOUBLE          double;
+            OPTIONAL FLOAT           maybe_float;
+            OPTIONAL DOUBLE          maybe_double;
+            OPTIONAL BINARY          borrowed_maybe_a_string (STRING);
+            OPTIONAL BINARY          borrowed_maybe_a_str (STRING);
         }";
-
-        let schema = Arc::new(parse_message_type(schema_str).unwrap());
-
-        let props = Arc::new(WriterProperties::builder().build());
-        let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
 
         let a_str = "hello mother".to_owned();
         let a_borrowed_string = "cool news".to_owned();
@@ -90,14 +102,30 @@ mod tests {
             a_borrowed_string: &a_borrowed_string,
             maybe_a_str: Some(&a_str[..]),
             maybe_a_string: Some(a_str.clone()),
-            magic_number: 100,
-            low_quality_pi: 3.14,
-            high_quality_pi: 3.1415,
-            maybe_pi: Some(3.14),
-            maybe_best_pi: Some(3.1415),
+            i16: -45,
+            i32: 456,
+            u64: 4563424,
+            maybe_u8: None,
+            maybe_i16: Some(3),
+            maybe_u32: None,
+            maybe_usize: Some(4456),
+            isize: -365,
+            float: 3.5,
+            double: std::f64::NAN,
+            maybe_float: None,
+            maybe_double: Some(std::f64::MAX),
             borrowed_maybe_a_string: &maybe_a_string,
             borrowed_maybe_a_str: &maybe_a_str,
         }];
+
+        let schema = Arc::new(parse_message_type(schema_str).unwrap());
+        let generated_schema = drs.as_slice().schema().unwrap();
+
+        assert_eq!(&schema, &generated_schema);
+
+        let props = Arc::new(WriterProperties::builder().build());
+        let mut writer =
+            SerializedFileWriter::new(file, generated_schema, props).unwrap();
 
         let mut row_group = writer.next_row_group().unwrap();
         drs.as_slice().write_to_row_group(&mut row_group).unwrap();
