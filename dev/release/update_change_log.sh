@@ -18,7 +18,10 @@
 # under the License.
 #
 
-# invokes the changelog generator with the config located in
+# invokes the changelog generator from
+# https://github.com/github-changelog-generator/github-changelog-generator
+#
+# With the config located in
 # arrow-rs/.github_changelog_generator
 #
 # Usage:
