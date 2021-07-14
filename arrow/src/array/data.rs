@@ -383,15 +383,36 @@ impl ArrayData {
     pub fn slice(&self, offset: usize, length: usize) -> ArrayData {
         assert!((offset + length) <= self.len());
 
-        let mut new_data = self.clone();
+        if let DataType::Struct(_) = self.data_type() {
+            // Slice into children
+            let new_offset = self.offset + offset;
+            let new_data = ArrayData {
+                data_type: self.data_type().clone(),
+                len: length,
+                null_count: count_nulls(self.null_buffer(), new_offset, length),
+                offset: new_offset,
+                buffers: self.buffers.clone(),
+                // Slice child data, to propagate offsets down to them
+                child_data: self
+                    .child_data()
+                    .iter()
+                    .map(|data| data.slice(offset, length))
+                    .collect(),
+                null_bitmap: self.null_bitmap().clone(),
+            };
 
-        new_data.len = length;
-        new_data.offset = offset + self.offset;
+            new_data
+        } else {
+            let mut new_data = self.clone();
 
-        new_data.null_count =
-            count_nulls(new_data.null_buffer(), new_data.offset, new_data.len);
+            new_data.len = length;
+            new_data.offset = offset + self.offset;
 
-        new_data
+            new_data.null_count =
+                count_nulls(new_data.null_buffer(), new_data.offset, new_data.len);
+
+            new_data
+        }
     }
 
     /// Returns the `buffer` as a slice of type `T` starting at self.offset
