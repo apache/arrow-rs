@@ -37,11 +37,11 @@ The arrow crate provides the following optional features:
 
 ## Building for WASM
 
-In order to compile Arrow for Web Assembly (the `wasm32-unknown-unknown` WASM target), you will likely need to turn off this crate's default features.
+In order to compile Arrow for Web Assembly (the `wasm32-unknown-unknown` WASM target), you will likely need to turn off this crate's default features and use the `js` feature.
 
 ```toml
 [dependencies]
-arrow = {version = "5.0" default-features = false }
+arrow = {version = "5.0" default-features = false, features = ["js"] }
 ```
 
 ## Examples
