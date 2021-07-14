@@ -88,7 +88,7 @@ Now prepare a PR to update `CHANGELOG.md` and versions on `active_release` branc
 
 See [#298](https://github.com/apache/arrow-rs/pull/298) for an example.
 
-Here are the commands used to prepare the 4.1.0 release:
+Here are the commands that could be used to prepare the 5.1.0 release:
 
 ```bash
 git checkout active_release
@@ -102,7 +102,7 @@ CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
 git commit -a -m 'Create changelog'
 
 # update versions
-sed -i '' -e 's/5.0.0-SNAPSHOT/4.1.0/g' `find . -name 'Cargo.toml'`
+sed -i '' -e 's/5.0.0-SNAPSHOT/5.1.0/g' `find . -name 'Cargo.toml' -or -name '*.md'`
 git commit -a -m 'Update version'
 ```
 
