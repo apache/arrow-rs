@@ -332,7 +332,7 @@ jobs:
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
           cd arrow
-          cargo build --target wasm32-unknown-unknown
+          cargo build --features=js --target wasm32-unknown-unknown
 
   # test builds with various feature flags
   default-build:
