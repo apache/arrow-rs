@@ -12,3 +12,4 @@ filtered_rat.txt
 rat.txt
 # auto-generated
 arrow-flight/src/arrow.flight.protocol.rs
+.github/*
