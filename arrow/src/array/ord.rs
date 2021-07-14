@@ -27,7 +27,7 @@ use crate::error::{ArrowError, Result};
 use num::Float;
 
 /// Compare the values at two arbitrary indices in two arrays.
-pub type DynComparator<'a> = Box<dyn Fn(usize, usize) -> Ordering + 'a>;
+pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
 
 /// compares two floats, placing NaNs at last
 fn cmp_nans_last<T: Float>(a: &T, b: &T) -> Ordering {
@@ -39,60 +39,50 @@ fn cmp_nans_last<T: Float>(a: &T, b: &T) -> Ordering {
     }
 }
 
-fn compare_primitives<'a, T: ArrowPrimitiveType>(
-    left: &'a Array,
-    right: &'a Array,
-) -> DynComparator<'a>
+fn compare_primitives<T: ArrowPrimitiveType>(left: &Array, right: &Array) -> DynComparator
 where
     T::Native: Ord,
 {
-    let left = left.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
-    let right = right.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+    let left: PrimitiveArray<T> = PrimitiveArray::from(left.data().clone());
+    let right: PrimitiveArray<T> = PrimitiveArray::from(right.data().clone());
     Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
 }
 
-fn compare_boolean<'a>(left: &'a Array, right: &'a Array) -> DynComparator<'a> {
-    let left = left.as_any().downcast_ref::<BooleanArray>().unwrap();
-    let right = right.as_any().downcast_ref::<BooleanArray>().unwrap();
+fn compare_boolean(left: &Array, right: &Array) -> DynComparator {
+    let left: BooleanArray = BooleanArray::from(left.data().clone());
+    let right: BooleanArray = BooleanArray::from(right.data().clone());
+
     Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
 }
 
-fn compare_float<'a, T: ArrowPrimitiveType>(
-    left: &'a Array,
-    right: &'a Array,
-) -> DynComparator<'a>
+fn compare_float<T: ArrowPrimitiveType>(left: &Array, right: &Array) -> DynComparator
 where
     T::Native: Float,
 {
-    let left = left.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
-    let right = right.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+    let left: PrimitiveArray<T> = PrimitiveArray::from(left.data().clone());
+    let right: PrimitiveArray<T> = PrimitiveArray::from(right.data().clone());
     Box::new(move |i, j| cmp_nans_last(&left.value(i), &right.value(j)))
 }
 
-fn compare_string<'a, T>(left: &'a Array, right: &'a Array) -> DynComparator<'a>
+fn compare_string<T>(left: &Array, right: &Array) -> DynComparator
 where
     T: StringOffsetSizeTrait,
 {
-    let left = left
-        .as_any()
-        .downcast_ref::<GenericStringArray<T>>()
-        .unwrap();
-    let right = right
-        .as_any()
-        .downcast_ref::<GenericStringArray<T>>()
-        .unwrap();
+    let left: StringArray = StringArray::from(left.data().clone());
+    let right: StringArray = StringArray::from(right.data().clone());
+
     Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
 }
 
-fn compare_dict_string<'a, T>(left: &'a Array, right: &'a Array) -> DynComparator<'a>
+fn compare_dict_string<T>(left: &Array, right: &Array) -> DynComparator
 where
     T: ArrowDictionaryKeyType,
 {
     let left = left.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
     let right = right.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
-    let left_keys = left.keys();
-    let right_keys = right.keys();
 
+    let left_keys: PrimitiveArray<T> = PrimitiveArray::from(left.keys().data().clone());
+    let right_keys: PrimitiveArray<T> = PrimitiveArray::from(right.keys().data().clone());
     let left_values = StringArray::from(left.values().data().clone());
     let right_values = StringArray::from(right.values().data().clone());
 
@@ -125,7 +115,7 @@ where
 /// ```
 // This is a factory of comparisons.
 // The lifetime 'a enforces that we cannot use the closure beyond any of the array's lifetime.
-pub fn build_compare<'a>(left: &'a Array, right: &'a Array) -> Result<DynComparator<'a>> {
+pub fn build_compare(left: &Array, right: &Array) -> Result<DynComparator> {
     use DataType::*;
     use IntervalUnit::*;
     use TimeUnit::*;
