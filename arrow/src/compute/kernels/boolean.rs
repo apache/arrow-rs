@@ -480,6 +480,11 @@ pub fn nullif(left: &ArrayRef, right: &BooleanArray) -> Result<ArrayRef> {
         return Ok(left.clone());
     }
 
+    // If left is already all null, then it will pass the left array unmodified.
+    if left.null_count() == left.len() {
+        return Ok(left.clone());
+    }
+
     // Null bitmaps are inverted -- (true if valid).
     //
     // The output should be null if left_is_null | (!right_is_null & right_value).
@@ -496,8 +501,10 @@ pub fn nullif(left: &ArrayRef, right: &BooleanArray) -> Result<ArrayRef> {
     };
 
     // Check again -- if all of the falses in the right corresponded to nulls, we
-    // can still pass  the left unmodified.
-    if right_combo_buffer.count_set_bits_offset(right.offset(), right.len()) == 0 {
+    // can still pass the left unmodified.
+    if right_combo_buffer.count_set_bits_offset(right.offset(), right.len())
+        == right.len()
+    {
         return Ok(left.clone());
     }
 
@@ -1315,13 +1322,95 @@ mod tests {
     }
 
     #[test]
-    fn test_nullif_passthrough_all_nonnull() {
-        // DO NOT SUBMIT: Write this test
+    fn test_nullif_passthrough_all_false() {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            None,
+            Some(15),
+            Some(8),
+            None,
+            Some(9),
+        ]));
+        let a = a.slice(1, 3); // Some(15), Some(8), None
+
+        let comp = BooleanArray::from(vec![
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(false),
+        ]);
+        let comp = comp.slice(2, 3); // Some(false), None, Some(true)
+        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res_array = res.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        let expected = Int32Array::from(vec![
+            Some(15), // False => keep it
+            Some(8),  // False => keep it
+            None,     // False => keep it
+        ]);
+        assert_eq!(&expected, res_array);
+        assert!(Arc::ptr_eq(&a, &res));
     }
 
     #[test]
-    fn test_nullif_passthrough_all_null_or_true() {
-        // DO NOT SUBMIT: Write this test
+    fn test_nullif_passthrough_all_null_or_false() {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            None,
+            Some(15),
+            Some(8),
+            None,
+            Some(9),
+        ]));
+        let a = a.slice(1, 3); // Some(15), Some(8), None
+
+        let comp = BooleanArray::from(vec![
+            None,
+            Some(false),
+            Some(false),
+            Some(false),
+            None,
+            Some(false),
+            Some(false),
+        ]);
+        let comp = comp.slice(2, 3); // Some(false), Some(false), None
+        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res_array = res.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        let expected = Int32Array::from(vec![
+            Some(15), // False => keep it
+            Some(8),  // False => keep it
+            None,     // Null => keep it
+        ]);
+        assert_eq!(&expected, res_array);
+        assert!(Arc::ptr_eq(&a, &res));
+    }
+
+    #[test]
+    fn test_nullif_passthrough_all_already_null() {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None, None, None, None]));
+        let a = a.slice(1, 3); // None, None, None
+
+        let comp = BooleanArray::from(vec![
+            None,
+            Some(false),
+            Some(true),
+            Some(false),
+            None,
+            Some(false),
+            Some(false),
+        ]);
+        let comp = comp.slice(2, 3); // Some(true), Some(false), None
+        let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
+        let res = nullif(&a, &comp).unwrap();
+        let res_array = res.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        let expected = Int32Array::from(vec![None, None, None]);
+        assert_eq!(&expected, res_array);
+        assert!(Arc::ptr_eq(&a, &res));
     }
 
     struct Foo {
