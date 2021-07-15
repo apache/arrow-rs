@@ -136,7 +136,9 @@ impl TripletIter {
 
     /// Updates non-null value for current row.
     pub fn current_value(&self) -> Field {
-        assert!(!self.is_null(), "Value is null");
+        if self.is_null() {
+            return Field::Null;
+        }
         match *self {
             TripletIter::BoolTripletIter(ref typed) => {
                 Field::convert_bool(typed.column_descr(), *typed.current_value())
