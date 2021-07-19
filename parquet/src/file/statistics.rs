@@ -403,7 +403,7 @@ impl<T: DataType> TypedStatistics<T> {
 
     /// Whether or not min and max values are set.
     /// Normally both min/max values will be set to `Some(value)` or `None`.
-    fn has_min_max_set(&self) -> bool {
+    pub fn has_min_max_set(&self) -> bool {
         self.min.is_some() && self.max.is_some()
     }
 
