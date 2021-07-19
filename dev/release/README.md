@@ -21,13 +21,13 @@
 
 ## Branching
 
-We would maintain two branches: `active_release` and `master`.
+Arrow maintains two branches: `active_release` and `master`.
 
 - All new PRs are created and merged against `master`
 - All versions are created from the `active_release` branch
 - Once merged to master, changes are "cherry-picked" (via a hopefully soon to be automated process), to the `active_release` branch based on the judgement of the original PR author and maintainers.
 
-- We do not merge breaking api changes, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md) to the `active_release`
+- We do not merge breaking api changes, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md) to the `active_release` branch. Instead, they are merged to the `master` branch and included in the next major release.
 
 Please see the [original proposal](https://docs.google.com/document/d/1tMQ67iu8XyGGZuj--h9WQYB9inCk6c2sL_4xMTwENGc/edit?ts=60961758) document the rational of this change.
 
@@ -35,11 +35,11 @@ Please see the [original proposal](https://docs.google.com/document/d/1tMQ67iu8X
 
 We aim to release every other week from the `active_release` branch.
 
-Every other Monday, a maintainer proposes a minor (e.g. `4.1.0` to `4.2.0`) or patch (e.g `4.1.0` to `4.1.1`) release, depending on changes to the `active_release` in the previous 2 weeks, following the process beloe.
+Every other week, a maintainer proposes a minor (e.g. `4.1.0` to `4.2.0`) or patch (e.g `4.1.0` to `4.1.1`) release, depending on changes to the `active_release` in the previous 2 weeks, following the process below.
 
-If this release is approved by at least three PMC members, a new version from that tarball is released to crates.io later in the week.
+If this release is approved by at least three PMC members, that tarball is uploaded to the official apache distribution sites, a new version from that tarball is released to crates.io later in the week.
 
-Apache Arrow in general does synchronized major releases every three months. The Rust implementation aims to do its major releases in the same time frame.
+The overall Apache Arrow in general does synchronized major releases every three months. The Rust implementation aims to do its major releases in the same time frame.
 
 # Release Mechanics
 
@@ -62,7 +62,7 @@ crates.io, the Rust ecosystem's package manager.
 We create a `CHANGELOG.md` so our users know what has been changed between releases.
 
 The CHANGELOG is created automatically using
-[change_log.sh](https://github.com/apache/arrow-rs/blob/master/change_log.sh)
+[update_change_log.sh](https://github.com/apache/arrow-rs/blob/master/dev/release/update_change_log.sh)
 
 This script creates a changelog using github issues and the
 labels associated with them.
@@ -133,13 +133,13 @@ Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
 ### Create, sign, and upload tarball
 
-Run the `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps:
+Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps:
 
 ```shell
 ./dev/release/create-tarball.sh 4.1.0 2
 ```
 
-This script
+The `create-tarball.sh` script
 
 1. creates and uploads a release candidate tarball to the [arrow
    dev](https://dist.apache.org/repos/dist/dev/arrow) location on the
@@ -184,7 +184,7 @@ For the release to become "official" it needs at least three PMC members to vote
 
 #### Verifying Release Candidates
 
-There is a script in this repository which can be used to help `dev/release/verify-release-candidate.sh` assist the verification process. Run it like:
+The `dev/release/verify-release-candidate.sh` is a script in this repository that can assist in the verification process. Run it like:
 
 ```
 ./dev/release/verify-release-candidate.sh 4.1.0 2
@@ -201,6 +201,8 @@ Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/
 ```shell
 ./dev/release/release-tarball.sh 4.1.0 2
 ```
+
+Congratulations! The release is now offical!
 
 ### Publish on Crates.io
 
@@ -231,7 +233,7 @@ following commands
 
 # Backporting
 
-As of now, the plan for backporting to `active_release` is to do so semi-manually.
+As of the time of writing, backporting to `active_release` done semi-manually.
 
 _Note_: Since minor releases will be automatically picked up by other CI systems, it is CRITICAL to only cherry pick commits that are API compatible -- that is that do not require any code changes in crates that rely on arrow. API changes are released with the next major version.
 
@@ -243,7 +245,7 @@ Step 3a: If CI passes, merge cherry-pick PR
 
 Step 3b: If CI doesn't pass or some other changes are needed, the PR should be reviewed / approved as normal prior to merge
 
-For example, to backport `b2de5446cc1e45a0559fb39039d0545df1ac0d26` to active_release use the folliwing
+For example, to backport `b2de5446cc1e45a0559fb39039d0545df1ac0d26` to active_release, you could use the following command
 
 ```shell
 git clone git@github.com:apache/arrow-rs.git /tmp/arrow-rs
@@ -260,7 +262,7 @@ There are two labels that help keep track of backporting:
 
 You can find candidates to cherry pick using [this filter](https://github.com/apache/arrow-rs/pulls?q=is%3Apr+is%3Aclosed+-label%3Arelease-cherry-pick+-label%3Acherry-picked)
 
-## Rationale for creating PRs:
+## Rationale for creating PRs on cherry picked PRs:
 
 1. PRs are a natural place to run the CI tests to make sure there are no logical conflicts
 2. PRs offer a place for the original author / committers to comment and say it should/should not be backported.
