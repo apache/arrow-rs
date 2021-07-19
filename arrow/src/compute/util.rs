@@ -402,6 +402,40 @@ pub(super) mod tests {
         FixedSizeListArray::from(list_data)
     }
 
+    pub(crate) fn build_fixed_size_binary_nullable(
+        binary_values: Vec<Option<Vec<u8>>>,
+        length: <Int32Type as ArrowPrimitiveType>::Native,
+    ) -> FixedSizeBinaryArray {
+        let mut values = MutableBuffer::from_len_zeroed(0);
+        let mut binary_null_count = 0;
+        let array_len = binary_values.len();
+
+        let num_bytes = bit_util::ceil(array_len, 8);
+        let mut array_bitmap = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
+        for (idx, element) in binary_values.into_iter().enumerate() {
+            if let Some(items) = element {
+                debug_assert_eq!(length as usize, items.len());
+
+                values.extend(items.into_iter());
+            } else {
+                binary_null_count += 1;
+                bit_util::unset_bit(&mut array_bitmap.as_slice_mut(), idx);
+                values.extend(vec![0; length as usize].into_iter());
+            }
+        }
+
+        ArrayData::new(
+            DataType::FixedSizeBinary(length),
+            array_len,
+            Some(binary_null_count),
+            Some(array_bitmap.into()),
+            0,
+            vec![values.into()],
+            vec![],
+        )
+        .into()
+    }
+
     #[test]
     fn test_take_value_index_from_list() {
         let list = build_generic_list::<i32, Int32Type>(vec![
