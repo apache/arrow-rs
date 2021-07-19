@@ -772,6 +772,9 @@ fn sort_binary(
     options: &SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
+    println!("values: {:?}", values);
+    println!("indices: {:?}", value_indices);
+
     let values = values
         .as_any()
         .downcast_ref::<FixedSizeBinaryArray>()
@@ -781,6 +784,8 @@ fn sort_binary(
         .copied()
         .map(|index| (index, values.value(index as usize)))
         .collect();
+
+    println!("valids: {:?}", valids);
 
     let mut len = values.len();
     let descending = options.descending;
@@ -1026,8 +1031,7 @@ impl LexicographicalComparator<'_> {
 mod tests {
     use super::*;
     use crate::compute::util::tests::{
-        build_fixed_size_binary_nullable, build_fixed_size_list_nullable,
-        build_generic_list_nullable,
+        build_fixed_size_list_nullable, build_generic_list_nullable,
     };
     use rand::rngs::StdRng;
     use rand::{Rng, RngCore, SeedableRng};
@@ -1242,17 +1246,18 @@ mod tests {
         expected_data: Vec<Option<Vec<u8>>>,
         fixed_length: Option<i32>,
     ) {
-        if let Some(length) = fixed_length {
-            let input = Arc::new(build_fixed_size_binary_nullable(data.clone(), length));
+        if let Some(_) = fixed_length {
+            let input = Arc::new(
+                FixedSizeBinaryArray::try_from_sparse_iter(data.into_iter()).unwrap(),
+            );
             let sorted = match limit {
                 Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
                 None => sort(&(input as ArrayRef), options).unwrap(),
             };
-
-            let expected = Arc::new(build_fixed_size_binary_nullable(
-                expected_data.clone(),
-                length,
-            )) as ArrayRef;
+            let expected = Arc::new(
+                FixedSizeBinaryArray::try_from_sparse_iter(expected_data.into_iter())
+                    .unwrap(),
+            ) as ArrayRef;
 
             println!("array after sort: {:?}", sorted);
             println!("expected array:   {:?}", expected);
@@ -2480,6 +2485,84 @@ mod tests {
                 Some(vec![0, 0, 1]),
                 Some(vec![0, 0, 3]),
                 Some(vec![0, 0, 5]),
+                Some(vec![0, 0, 7]),
+            ],
+            Some(3),
+        );
+
+        // with nulls
+        test_sort_binary_arrays(
+            vec![
+                Some(vec![0, 0, 0]),
+                None,
+                Some(vec![0, 0, 3]),
+                Some(vec![0, 0, 7]),
+                Some(vec![0, 0, 1]),
+                None,
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            None,
+            vec![
+                Some(vec![0, 0, 0]),
+                Some(vec![0, 0, 1]),
+                Some(vec![0, 0, 3]),
+                Some(vec![0, 0, 7]),
+                None,
+                None,
+            ],
+            Some(3),
+        );
+
+        // descending
+        test_sort_binary_arrays(
+            vec![
+                Some(vec![0, 0, 0]),
+                None,
+                Some(vec![0, 0, 3]),
+                Some(vec![0, 0, 7]),
+                Some(vec![0, 0, 1]),
+                None,
+            ],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+            None,
+            vec![
+                Some(vec![0, 0, 7]),
+                Some(vec![0, 0, 3]),
+                Some(vec![0, 0, 1]),
+                Some(vec![0, 0, 0]),
+                None,
+                None,
+            ],
+            Some(3),
+        );
+
+        // nulls first
+        test_sort_binary_arrays(
+            vec![
+                Some(vec![0, 0, 0]),
+                None,
+                Some(vec![0, 0, 3]),
+                Some(vec![0, 0, 7]),
+                Some(vec![0, 0, 1]),
+                None,
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            None,
+            vec![
+                None,
+                None,
+                Some(vec![0, 0, 0]),
+                Some(vec![0, 0, 1]),
+                Some(vec![0, 0, 3]),
                 Some(vec![0, 0, 7]),
             ],
             Some(3),

@@ -264,10 +264,7 @@ where
                 .as_any()
                 .downcast_ref::<FixedSizeBinaryArray>()
                 .unwrap();
-            Ok(Arc::new(take_fixed_size_binary(
-                values, indices,
-                // *length as u32,
-            )?))
+            Ok(Arc::new(take_fixed_size_binary(values, indices)?))
         }
         t => unimplemented!("Take not supported for data type {:?}", t),
     }
@@ -773,7 +770,6 @@ where
 fn take_fixed_size_binary<IndexType>(
     values: &FixedSizeBinaryArray,
     indices: &PrimitiveArray<IndexType>,
-    // length: <UInt32Type as ArrowPrimitiveType>::Native,
 ) -> Result<FixedSizeBinaryArray>
 where
     IndexType: ArrowNumericType,
