@@ -778,9 +778,6 @@ fn sort_binary<S>(
 where
     S: BinaryOffsetSizeTrait,
 {
-    println!("values: {:?}", values);
-    println!("indices: {:?}", value_indices);
-
     let mut valids: Vec<(u32, &[u8])> = values
         .as_any()
         .downcast_ref::<FixedSizeBinaryArray>()
@@ -802,8 +799,6 @@ where
             },
         );
 
-    println!("valids: {:?}", valids);
-
     let mut len = values.len();
     let descending = options.descending;
     let nulls_len = null_indices.len();
@@ -821,8 +816,6 @@ where
         });
         null_indices.reverse();
     }
-
-    println!("valids after sort: {:?}", valids);
 
     let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
     if options.nulls_first {
@@ -1275,9 +1268,6 @@ mod tests {
                 FixedSizeBinaryArray::try_from_sparse_iter(expected_data.iter().cloned())
                     .unwrap(),
             ) as ArrayRef;
-
-            println!("array after sort: {:?}", sorted);
-            println!("expected array:   {:?}", expected);
 
             assert_eq!(&sorted, &expected);
         }

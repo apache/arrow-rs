@@ -817,9 +817,6 @@ where
     IndexType: ArrowNumericType,
     IndexType::Native: ToPrimitive,
 {
-    println!("going to take array: {:?}", values);
-    println!("with indices: {:?}", indices);
-
     let data_ref = values.data_ref();
     let array_iter = indices
         .values()
