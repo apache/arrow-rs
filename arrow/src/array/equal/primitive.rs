@@ -39,6 +39,14 @@ pub(super) fn primitive_equal<T>(
     let lhs_null_count = count_nulls(lhs_nulls, lhs_start, len);
     let rhs_null_count = count_nulls(rhs_nulls, rhs_start, len);
 
+    println!("lhs null buff: {:?}", lhs_nulls);
+    println!("rhs null buff: {:?}", rhs_nulls);
+
+    println!(
+        "null count, lhs: {}, rhs: {}",
+        lhs_null_count, rhs_null_count
+    );
+
     if lhs_null_count == 0 && rhs_null_count == 0 {
         // without nulls, we just need to compare slices
         equal_len(

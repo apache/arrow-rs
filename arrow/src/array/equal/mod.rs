@@ -146,6 +146,7 @@ fn equal_values(
     rhs_start: usize,
     len: usize,
 ) -> bool {
+    println!("hit");
     match lhs.data_type() {
         DataType::Null => null_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Boolean => {

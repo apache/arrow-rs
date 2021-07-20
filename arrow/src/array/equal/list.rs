@@ -64,6 +64,12 @@ fn offset_value_equal<T: OffsetSizeTrait>(
     let lhs_len = lhs_offsets[lhs_pos + len] - lhs_offsets[lhs_pos];
     let rhs_len = rhs_offsets[rhs_pos + len] - rhs_offsets[rhs_pos];
 
+    println!("lhs: {:?}", lhs_values);
+    println!("rhs: {:?}", rhs_values);
+
+    println!("lhs_len: {:?}", lhs_len);
+    println!("lhs_start: {:?}", lhs_start);
+
     lhs_len == rhs_len
         && equal_range(
             lhs_values,
@@ -127,6 +133,9 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
     let child_rhs_nulls =
         child_logical_null_buffer(rhs, rhs_nulls, rhs.child_data().get(0).unwrap());
 
+    println!("child lhs nulls: {:?}", child_lhs_nulls);
+    println!("child rhs nulls: {:?}", child_rhs_nulls);
+
     if lhs_null_count == 0 && rhs_null_count == 0 {
         lengths_equal(
             &lhs_offsets[lhs_start..lhs_start + len],
@@ -143,6 +152,9 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
                 .unwrap(),
         )
     } else {
+        println!("lhs: {:?}", lhs_values);
+        println!("rhs: {:?}", rhs_values);
+
         // get a ref of the parent null buffer bytes, to use in testing for nullness
         let lhs_null_bytes = lhs_nulls.unwrap().as_slice();
         let rhs_null_bytes = rhs_nulls.unwrap().as_slice();
@@ -151,8 +163,12 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
             let lhs_pos = lhs_start + i;
             let rhs_pos = rhs_start + i;
 
+            println!("pos: l: {}, r: {}", lhs_pos, rhs_pos);
+
             let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos + lhs.offset());
             let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos + rhs.offset());
+
+            println!("is null: l: {}, r: {}", lhs_is_null, rhs_is_null);
 
             lhs_is_null
                 || (lhs_is_null == rhs_is_null)
@@ -161,6 +177,8 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
                         rhs_values,
                         child_lhs_nulls.as_ref(),
                         child_rhs_nulls.as_ref(),
+                        // lhs_nulls,
+                        // rhs_nulls,
                         lhs_offsets,
                         rhs_offsets,
                         lhs_pos,
