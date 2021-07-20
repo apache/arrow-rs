@@ -160,6 +160,12 @@ impl InMemoryWriteableCursor {
         let inner = self.buffer.lock().unwrap();
         inner.get_ref().len()
     }
+
+    /// Returns true if the underlying buffer contains no elements
+    pub fn is_empty(&self) -> bool {
+        let inner = self.buffer.lock().unwrap();
+        inner.get_ref().is_empty()
+    }
 }
 
 impl TryClone for InMemoryWriteableCursor {
