@@ -214,7 +214,7 @@ pub fn build_filter(filter: &BooleanArray) -> Result<Filter> {
 }
 
 /// Remove null values by do a bitmask AND operation with null bits and the boolean bits.
-fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
+pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     let array_data = filter.data_ref();
     let null_bitmap = array_data.null_buffer().unwrap();
     let mask = filter.values();
