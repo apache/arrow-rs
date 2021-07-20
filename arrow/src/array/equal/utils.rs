@@ -187,7 +187,7 @@ fn logical_list_bitmap<OffsetSize: OffsetSizeTrait>(
     offsets
         .windows(2)
         .enumerate()
-        .take(offset_len - offset_start)
+        .take(parent_data.len())
         .for_each(|(index, window)| {
             let start = window[0].to_usize().unwrap();
             let end = window[1].to_usize().unwrap();

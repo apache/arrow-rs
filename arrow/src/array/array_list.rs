@@ -1090,4 +1090,76 @@ mod tests {
             .build();
         ListArray::from(list_data);
     }
+
+    #[test]
+    fn list_array_equality() {
+        // test scaffold
+        fn do_comparison(
+            lhs_data: Vec<Option<Vec<Option<i32>>>>,
+            rhs_data: Vec<Option<Vec<Option<i32>>>>,
+            should_equal: bool,
+        ) {
+            let lhs = ListArray::from_iter_primitive::<Int32Type, _, _>(lhs_data.clone());
+            let rhs = ListArray::from_iter_primitive::<Int32Type, _, _>(rhs_data.clone());
+            assert_eq!(lhs == rhs, should_equal);
+
+            let lhs = LargeListArray::from_iter_primitive::<Int32Type, _, _>(lhs_data);
+            let rhs = LargeListArray::from_iter_primitive::<Int32Type, _, _>(rhs_data);
+            assert_eq!(lhs == rhs, should_equal);
+        }
+
+        do_comparison(
+            vec![
+                Some(vec![Some(0), Some(1), Some(2)]),
+                None,
+                Some(vec![Some(3), None, Some(5)]),
+                Some(vec![Some(6), Some(7)]),
+            ],
+            vec![
+                Some(vec![Some(0), Some(1), Some(2)]),
+                None,
+                Some(vec![Some(3), None, Some(5)]),
+                Some(vec![Some(6), Some(7)]),
+            ],
+            true,
+        );
+
+        do_comparison(
+            vec![
+                None,
+                None,
+                Some(vec![Some(3), None, Some(5)]),
+                Some(vec![Some(6), Some(7)]),
+            ],
+            vec![
+                Some(vec![Some(0), Some(1), Some(2)]),
+                None,
+                Some(vec![Some(3), None, Some(5)]),
+                Some(vec![Some(6), Some(7)]),
+            ],
+            false,
+        );
+
+        do_comparison(
+            vec![
+                None,
+                None,
+                Some(vec![Some(3), None, Some(5)]),
+                Some(vec![Some(6), Some(7)]),
+            ],
+            vec![
+                None,
+                None,
+                Some(vec![Some(3), None, Some(5)]),
+                Some(vec![Some(0), Some(0)]),
+            ],
+            false,
+        );
+
+        do_comparison(
+            vec![None, None, Some(vec![Some(1)])],
+            vec![None, None, Some(vec![Some(2)])],
+            false,
+        );
+    }
 }

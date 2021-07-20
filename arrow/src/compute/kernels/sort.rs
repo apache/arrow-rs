@@ -2347,7 +2347,7 @@ mod tests {
                 nulls_first: true,
             }),
             Some(3),
-            vec![None, None, Some(vec![Some(2)])],
+            vec![None, None, Some(vec![Some(1)])],
             None,
         );
 
