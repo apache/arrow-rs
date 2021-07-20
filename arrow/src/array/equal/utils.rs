@@ -78,9 +78,6 @@ pub(super) fn equal_len(
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    println!("lhs slice: {:?}", &lhs_values[lhs_start..(lhs_start + len)]);
-    println!("rhs slice: {:?}", &rhs_values[rhs_start..(rhs_start + len)]);
-
     lhs_values[lhs_start..(lhs_start + len)] == rhs_values[rhs_start..(rhs_start + len)]
 }
 
@@ -190,7 +187,6 @@ fn logical_list_bitmap<OffsetSize: OffsetSizeTrait>(
     offsets
         .windows(2)
         .enumerate()
-        // .take(offset_len - offset_start)
         .take(parent_data.len())
         .for_each(|(index, window)| {
             let start = window[0].to_usize().unwrap();

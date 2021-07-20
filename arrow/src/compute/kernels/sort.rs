@@ -746,13 +746,7 @@ where
         null_indices.reverse();
     }
 
-    println!("valids after sort: {:?}", valids);
-
     let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
-
-    println!("null indices after sort:  {:?}", null_indices);
-    println!("valid indices after sort: {:?},", valid_indices);
-
     if options.nulls_first {
         null_indices.append(&mut valid_indices);
         null_indices.truncate(len);
@@ -1152,17 +1146,9 @@ mod tests {
             Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
             _ => sort(&(input as ArrayRef), options).unwrap(),
         };
-
-        println!("sorted: {:?}", sorted);
-
         let expected =
             Arc::new(build_generic_list_nullable::<i32, T>(expected_data.clone()))
                 as ArrayRef;
-
-        println!("expected: {:?}", expected);
-
-        let equal = sorted.eq(&expected);
-        println!("equal: {}", equal);
 
         assert_eq!(&sorted, &expected);
 
@@ -2387,52 +2373,6 @@ mod tests {
             vec![Some(vec![Some(1)]), None],
             None,
         );
-    }
-
-    #[test]
-    fn debug_limit_sort_list() {
-        test_sort_list_arrays::<Int32Type>(
-            vec![Some(vec![Some(1)]), None, None, Some(vec![Some(2)])],
-            Some(SortOptions {
-                descending: false,
-                nulls_first: true,
-            }),
-            Some(3),
-            vec![None, None, Some(vec![Some(1)])],
-            None,
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn debug_limit_sort_list_2() {
-        test_sort_list_arrays::<Int32Type>(
-            vec![Some(vec![Some(1)]), None, None, Some(vec![Some(2)])],
-            Some(SortOptions {
-                descending: false,
-                nulls_first: false,
-            }),
-            Some(1),
-            vec![Some(vec![Some(2)])],
-            None,
-        );
-    }
-
-    #[test]
-    #[ignore]
-    fn debug_limit_sort_list_3() {
-        let input = Arc::new(build_generic_list_nullable::<i32, UInt64Type>(vec![
-            None,
-            None,
-            Some(vec![Some(2)]),
-        ]));
-        let expected = Arc::new(build_generic_list_nullable::<i32, UInt64Type>(vec![
-            None,
-            None,
-            Some(vec![Some(1)]),
-        ]));
-
-        assert_eq!(input, expected);
     }
 
     #[test]
