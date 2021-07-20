@@ -94,13 +94,14 @@ pub fn sort_limit(
     take(values.as_ref(), &indices, None)
 }
 
+/// we can only do this if the T is primitive
 #[inline]
-fn sort_by<T, F>(array: &mut [T], limit: usize, cmp: F)
+fn sort_unstable_by<T, F>(array: &mut [T], limit: usize, cmp: F)
 where
     F: FnMut(&T, &T) -> Ordering,
 {
     if array.len() == limit {
-        array.sort_by(cmp);
+        array.sort_unstable_by(cmp);
     } else {
         partial_sort(array, limit, cmp);
     }
@@ -437,11 +438,11 @@ fn sort_boolean(
             .map(|index| (index, values.value(index as usize)))
             .collect::<Vec<(u32, bool)>>();
         if !descending {
-            sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+            sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
                 cmp(a.1, b.1)
             });
         } else {
-            sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+            sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
                 cmp(a.1, b.1).reverse()
             });
         }
@@ -531,11 +532,11 @@ where
         len = limit.min(len);
     }
     if !descending {
-        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
             cmp(a.1, b.1)
         });
     } else {
-        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
             cmp(a.1, b.1).reverse()
         });
         // reverse to keep a stable ordering
@@ -669,11 +670,11 @@ where
         len = limit.min(len);
     }
     if !descending {
-        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
             cmp(a.1, b.1)
         });
     } else {
-        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
             cmp(a.1, b.1).reverse()
         });
         // reverse to keep a stable ordering
@@ -735,11 +736,11 @@ where
         len = limit.min(len);
     }
     if !descending {
-        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
             cmp_array(a.1.as_ref(), b.1.as_ref())
         });
     } else {
-        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
             cmp_array(a.1.as_ref(), b.1.as_ref()).reverse()
         });
         // reverse to keep a stable ordering
@@ -864,7 +865,8 @@ pub fn lexsort_to_indices(
     }
 
     let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
-    sort_by(&mut value_indices, len, |a, b| {
+    // uint32 can be sorted unstably
+    sort_unstable_by(&mut value_indices, len, |a, b| {
         lexicographical_comparator.compare(a, b)
     });
 
