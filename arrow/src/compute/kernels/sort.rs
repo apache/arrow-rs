@@ -383,7 +383,10 @@ pub fn sort_to_indices(
                 }
             }
         }
-        DataType::FixedSizeBinary(_) => sort_binary(values, v, n, &options, limit),
+        DataType::Binary | DataType::FixedSizeBinary(_) => {
+            sort_binary::<i32>(values, v, n, &options, limit)
+        }
+        DataType::LargeBinary => sort_binary::<i64>(values, v, n, &options, limit),
         t => {
             return Err(ArrowError::ComputeError(format!(
                 "Sort not supported for data type {:?}",
@@ -765,25 +768,39 @@ where
     }
 }
 
-fn sort_binary(
+fn sort_binary<S>(
     values: &ArrayRef,
     value_indices: Vec<u32>,
     mut null_indices: Vec<u32>,
     options: &SortOptions,
     limit: Option<usize>,
-) -> UInt32Array {
+) -> UInt32Array
+where
+    S: BinaryOffsetSizeTrait,
+{
     println!("values: {:?}", values);
     println!("indices: {:?}", value_indices);
 
-    let values = values
+    let mut valids: Vec<(u32, &[u8])> = values
         .as_any()
         .downcast_ref::<FixedSizeBinaryArray>()
-        .unwrap();
-    let mut valids: Vec<(u32, &[u8])> = value_indices
-        .iter()
-        .copied()
-        .map(|index| (index, values.value(index as usize)))
-        .collect();
+        .map_or_else(
+            || {
+                let values = as_generic_binary_array::<S>(values);
+                value_indices
+                    .iter()
+                    .copied()
+                    .map(|index| (index, values.value(index as usize)))
+                    .collect()
+            },
+            |values| {
+                value_indices
+                    .iter()
+                    .copied()
+                    .map(|index| (index, values.value(index as usize)))
+                    .collect()
+            },
+        );
 
     println!("valids: {:?}", valids);
 
@@ -794,7 +811,6 @@ fn sort_binary(
     if let Some(limit) = limit {
         len = limit.min(len);
     }
-
     if !descending {
         sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
             a.1.cmp(b.1)
@@ -1246,16 +1262,17 @@ mod tests {
         expected_data: Vec<Option<Vec<u8>>>,
         fixed_length: Option<i32>,
     ) {
-        if let Some(_) = fixed_length {
+        // Fixed size binary array
+        if fixed_length.is_some() {
             let input = Arc::new(
-                FixedSizeBinaryArray::try_from_sparse_iter(data.into_iter()).unwrap(),
+                FixedSizeBinaryArray::try_from_sparse_iter(data.iter().cloned()).unwrap(),
             );
             let sorted = match limit {
                 Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
                 None => sort(&(input as ArrayRef), options).unwrap(),
             };
             let expected = Arc::new(
-                FixedSizeBinaryArray::try_from_sparse_iter(expected_data.into_iter())
+                FixedSizeBinaryArray::try_from_sparse_iter(expected_data.iter().cloned())
                     .unwrap(),
             ) as ArrayRef;
 
@@ -1264,6 +1281,35 @@ mod tests {
 
             assert_eq!(&sorted, &expected);
         }
+
+        // Generic size binary array
+        fn make_generic_binary_array<S: BinaryOffsetSizeTrait>(
+            data: &[Option<Vec<u8>>],
+        ) -> Arc<GenericBinaryArray<S>> {
+            Arc::new(GenericBinaryArray::<S>::from_opt_vec(
+                data.iter()
+                    .map(|binary| binary.as_ref().map(Vec::as_slice))
+                    .collect(),
+            ))
+        }
+
+        // BinaryArray
+        let input = make_generic_binary_array::<i32>(&data);
+        let sorted = match limit {
+            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+            None => sort(&(input as ArrayRef), options).unwrap(),
+        };
+        let expected = make_generic_binary_array::<i32>(&expected_data) as ArrayRef;
+        assert_eq!(&sorted, &expected);
+
+        // LargeBinaryArray
+        let input = make_generic_binary_array::<i64>(&data);
+        let sorted = match limit {
+            Some(_) => sort_limit(&(input as ArrayRef), options, limit).unwrap(),
+            None => sort(&(input as ArrayRef), options).unwrap(),
+        };
+        let expected = make_generic_binary_array::<i64>(&expected_data) as ArrayRef;
+        assert_eq!(&sorted, &expected);
     }
 
     #[test]
@@ -2566,6 +2612,75 @@ mod tests {
                 Some(vec![0, 0, 7]),
             ],
             Some(3),
+        );
+
+        // limit
+        test_sort_binary_arrays(
+            vec![
+                Some(vec![0, 0, 0]),
+                None,
+                Some(vec![0, 0, 3]),
+                Some(vec![0, 0, 7]),
+                Some(vec![0, 0, 1]),
+                None,
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            Some(4),
+            vec![None, None, Some(vec![0, 0, 0]), Some(vec![0, 0, 1])],
+            Some(3),
+        );
+
+        // var length
+        test_sort_binary_arrays(
+            vec![
+                Some(b"Hello".to_vec()),
+                None,
+                Some(b"from".to_vec()),
+                Some(b"Apache".to_vec()),
+                Some(b"Arrow-rs".to_vec()),
+                None,
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            None,
+            vec![
+                Some(b"Apache".to_vec()),
+                Some(b"Arrow-rs".to_vec()),
+                Some(b"Hello".to_vec()),
+                Some(b"from".to_vec()),
+                None,
+                None,
+            ],
+            None,
+        );
+
+        // limit
+        test_sort_binary_arrays(
+            vec![
+                Some(b"Hello".to_vec()),
+                None,
+                Some(b"from".to_vec()),
+                Some(b"Apache".to_vec()),
+                Some(b"Arrow-rs".to_vec()),
+                None,
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            Some(4),
+            vec![
+                None,
+                None,
+                Some(b"Apache".to_vec()),
+                Some(b"Arrow-rs".to_vec()),
+            ],
+            None,
         );
     }
 

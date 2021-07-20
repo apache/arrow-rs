@@ -17,6 +17,7 @@
 
 //! Defines take kernel for [Array]
 
+use std::iter::FromIterator;
 use std::{ops::AddAssign, sync::Arc};
 
 use crate::buffer::{Buffer, MutableBuffer};
@@ -259,6 +260,20 @@ where
             DataType::UInt64 => downcast_dict_take!(UInt64Type, values, indices),
             t => unimplemented!("Take not supported for dictionary key type {:?}", t),
         },
+        DataType::Binary => {
+            let values = values
+                .as_any()
+                .downcast_ref::<GenericBinaryArray<i32>>()
+                .unwrap();
+            Ok(Arc::new(take_binary(values, indices)?))
+        }
+        DataType::LargeBinary => {
+            let values = values
+                .as_any()
+                .downcast_ref::<GenericBinaryArray<i64>>()
+                .unwrap();
+            Ok(Arc::new(take_binary(values, indices)?))
+        }
         DataType::FixedSizeBinary(_) => {
             let values = values
                 .as_any()
@@ -767,6 +782,33 @@ where
     Ok(FixedSizeListArray::from(list_data))
 }
 
+fn take_binary<IndexType, OffsetType>(
+    values: &GenericBinaryArray<OffsetType>,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<GenericBinaryArray<OffsetType>>
+where
+    OffsetType: BinaryOffsetSizeTrait,
+    IndexType: ArrowNumericType,
+    IndexType::Native: ToPrimitive,
+{
+    let data_ref = values.data_ref();
+    let array_iter = indices
+        .values()
+        .iter()
+        .map(|idx| {
+            let idx = maybe_usize::<IndexType>(*idx)?;
+            if data_ref.is_valid(idx) {
+                Ok(Some(values.value(idx)))
+            } else {
+                Ok(None)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter();
+
+    Ok(GenericBinaryArray::<OffsetType>::from_iter(array_iter))
+}
+
 fn take_fixed_size_binary<IndexType>(
     values: &FixedSizeBinaryArray,
     indices: &PrimitiveArray<IndexType>,
@@ -784,8 +826,8 @@ where
         .iter()
         .map(|idx| {
             let idx = maybe_usize::<IndexType>(*idx)?;
-            if data_ref.is_valid(idx as usize) {
-                Ok(Some(values.value(idx as usize)))
+            if data_ref.is_valid(idx) {
+                Ok(Some(values.value(idx)))
             } else {
                 Ok(None)
             }
