@@ -17,7 +17,6 @@
 
 //! Defines take kernel for [Array]
 
-use std::iter::FromIterator;
 use std::{ops::AddAssign, sync::Arc};
 
 use crate::buffer::{Buffer, MutableBuffer};
@@ -806,7 +805,7 @@ where
         .collect::<Result<Vec<_>>>()?
         .into_iter();
 
-    Ok(GenericBinaryArray::<OffsetType>::from_iter(array_iter))
+    Ok(array_iter.collect::<GenericBinaryArray<OffsetType>>())
 }
 
 fn take_fixed_size_binary<IndexType>(
