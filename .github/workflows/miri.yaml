@@ -57,4 +57,4 @@ jobs:
           cargo clean
           # Currently only the arrow crate is tested with miri
           # IO related tests and some unsupported tests are skipped
-          cargo miri test -p arrow -- --skip csv --skip ipc --skip json || true
+          cargo miri test -p arrow -- --skip csv --skip ipc --skip json
