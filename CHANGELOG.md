@@ -17,7 +17,9 @@
   under the License.
 -->
 
-For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md)\n# Changelog
+For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md)
+
+# Changelog
 
 ## [5.0.0](https://github.com/apache/arrow-rs/tree/5.0.0) (2021-07-14)
 
