@@ -152,7 +152,7 @@ impl FFI_ArrowSchema {
     pub fn try_new(format: &str, children: Vec<FFI_ArrowSchema>) -> Result<Self> {
         let mut this = Self::empty();
 
-        let mut children_ptr = children
+        let children_ptr = children
             .into_iter()
             .map(Box::new)
             .map(Box::into_raw)
@@ -161,11 +161,14 @@ impl FFI_ArrowSchema {
         this.format = CString::new(format).unwrap().into_raw();
         this.release = Some(release_schema);
         this.n_children = children_ptr.len() as i64;
-        this.children = children_ptr.as_mut_ptr();
 
-        let private_data = Box::new(SchemaPrivateData {
+        let mut private_data = Box::new(SchemaPrivateData {
             children: children_ptr,
         });
+
+        // intentionally set from private_data (see https://github.com/apache/arrow-rs/issues/580)
+        this.children = private_data.children.as_mut_ptr();
+
         this.private_data = Box::into_raw(private_data) as *mut c_void;
 
         Ok(this)
