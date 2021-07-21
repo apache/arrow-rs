@@ -27,10 +27,15 @@ use TimeUnit::*;
 
 /// Sort the `ArrayRef` using `SortOptions`.
 ///
-/// Performs a stable sort on values and indices. Nulls are ordered according to the `nulls_first` flag in `options`.
-/// Floats are sorted using IEEE 754 totalOrder
+/// Performs a sort on values and indices. Nulls are ordered according
+/// to the `nulls_first` flag in `options`.  Floats are sorted using
+/// IEEE 754 totalOrder
 ///
-/// Returns an `ArrowError::ComputeError(String)` if the array type is either unsupported by `sort_to_indices` or `take`.
+/// Returns an `ArrowError::ComputeError(String)` if the array type is
+/// either unsupported by `sort_to_indices` or `take`.
+///
+/// Note: this is an unstable_sort, meaning it may not preserve the
+/// order of equal elements.
 ///
 /// # Example
 /// ```rust
