@@ -15,29 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::process::Command;
-
 fn main() {
-    // Set Parquet version, build hash and "created by" string.
+    // Set Parquet version and "created by" string.
     let version = env!("CARGO_PKG_VERSION");
-    let mut created_by = format!("parquet-rs version {}", version);
-    if let Ok(git_hash) = run(Command::new("git").arg("rev-parse").arg("HEAD")) {
-        created_by.push_str(format!(" (build {})", git_hash).as_str());
-        println!("cargo:rustc-env=PARQUET_BUILD={}", git_hash);
-    }
+    let created_by = format!("parquet-rs version {}", version);
     println!("cargo:rustc-env=PARQUET_VERSION={}", version);
     println!("cargo:rustc-env=PARQUET_CREATED_BY={}", created_by);
-}
-
-/// Runs command and returns either content of stdout for successful execution,
-/// or an error message otherwise.
-fn run(command: &mut Command) -> Result<String, String> {
-    println!("Running: `{:?}`", command);
-    match command.output() {
-        Ok(ref output) if output.status.success() => {
-            Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-        }
-        Ok(ref output) => Err(format!("Failed: `{:?}` ({})", command, output.status)),
-        Err(error) => Err(format!("Failed: `{:?}` ({})", command, error)),
-    }
 }
