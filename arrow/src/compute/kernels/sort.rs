@@ -765,7 +765,7 @@ where
 }
 
 /// Compare two `Array`s based on the ordering defined in [ord](crate::array::ord).
-fn cmp_array(a: &Array, b: &Array) -> Ordering {
+fn cmp_array(a: &dyn Array, b: &dyn Array) -> Ordering {
     let cmp_op = build_compare(a, b).unwrap();
     let length = a.len().max(b.len());
 

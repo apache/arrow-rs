@@ -52,7 +52,7 @@ fn compute_str_values_length<Offset: StringOffsetSizeTrait>(
 }
 
 /// Concatenate multiple [Array] of the same type into a single [ArrayRef].
-pub fn concat(arrays: &[&Array]) -> Result<ArrayRef> {
+pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef> {
     if arrays.is_empty() {
         return Err(ArrowError::ComputeError(
             "concat requires input of at least one array".to_string(),

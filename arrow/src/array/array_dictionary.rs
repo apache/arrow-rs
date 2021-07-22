@@ -201,7 +201,7 @@ impl<'a, T: ArrowPrimitiveType + ArrowDictionaryKeyType> FromIterator<&'a str>
 }
 
 impl<T: ArrowPrimitiveType> Array for DictionaryArray<T> {
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

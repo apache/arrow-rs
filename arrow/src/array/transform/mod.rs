@@ -38,12 +38,12 @@ mod structure;
 mod utils;
 mod variable_size;
 
-type ExtendNullBits<'a> = Box<Fn(&mut _MutableArrayData, usize, usize) + 'a>;
+type ExtendNullBits<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize) + 'a>;
 // function that extends `[start..start+len]` to the mutable array.
-// this is dynamic because different data_types influence how buffers and childs are extended.
-type Extend<'a> = Box<Fn(&mut _MutableArrayData, usize, usize, usize) + 'a>;
+// this is dynamic because different data_types influence how buffers and children are extended.
+type Extend<'a> = Box<dyn Fn(&mut _MutableArrayData, usize, usize, usize) + 'a>;
 
-type ExtendNulls = Box<Fn(&mut _MutableArrayData, usize) -> ()>;
+type ExtendNulls = Box<dyn Fn(&mut _MutableArrayData, usize)>;
 
 /// A mutable [ArrayData] that knows how to freeze itself into an [ArrayData].
 /// This is just a data container.
