@@ -234,7 +234,7 @@ fn append_struct_field_string(
 /// suitable for converting large arrays or record batches.
 pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<String> {
     if column.is_null(row) {
-        return Ok("".to_string());
+        return Ok("null".to_string());
     }
     match column.data_type() {
         DataType::Utf8 => make_string!(array::StringArray, column, row),
