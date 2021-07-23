@@ -205,6 +205,34 @@ pub fn make_string_from_decimal(column: &Arc<dyn Array>, row: usize) -> Result<S
     Ok(formatted_decimal)
 }
 
+fn append_struct_field_string(
+    target: &mut String,
+    name: &str,
+    field_col: &Arc<dyn Array>,
+    row: usize,
+) -> Result<()> {
+    target.push('"');
+    target.push_str(name);
+    target.push_str("\": ");
+
+    if field_col.is_null(row) {
+        target.push_str("null");
+    } else {
+        match field_col.data_type() {
+            DataType::Utf8 | DataType::LargeUtf8 => {
+                target.push('"');
+                target.push_str(array_value_to_string(field_col, row)?.as_str());
+                target.push('"');
+            }
+            _ => {
+                target.push_str(array_value_to_string(field_col, row)?.as_str());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Get the value at the given row in an array as a String.
 ///
 /// Note this function is quite inefficient and is unlikely to be
@@ -280,6 +308,31 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
                 column.data_type()
             ))),
         },
+        DataType::Struct(_) => {
+            let st = column
+                .as_any()
+                .downcast_ref::<array::StructArray>()
+                .ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(
+                        "Repl error: could not convert struct column to struct array."
+                            .to_string(),
+                    )
+                })?;
+
+            let mut s = String::new();
+            s.push('{');
+            let mut kv_iter = st.columns().into_iter().zip(st.column_names().into_iter());
+            if let Some((col, name)) = kv_iter.next() {
+                append_struct_field_string(&mut s, name, col, row)?;
+            }
+            for (col, name) in kv_iter {
+                s.push_str(", ");
+                append_struct_field_string(&mut s, name, col, row)?;
+            }
+            s.push('}');
+
+            Ok(s)
+        }
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Pretty printing not implemented for {:?} type",
             column.data_type()
