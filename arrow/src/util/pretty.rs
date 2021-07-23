@@ -106,9 +106,9 @@ mod tests {
     use crate::{
         array::{
             self, new_null_array, Array, Date32Array, Date64Array, PrimitiveBuilder,
-            StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
-            Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-            Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+            StringBuilder, StringDictionaryBuilder, Time32MillisecondArray,
+            Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+            TimestampMicrosecondArray, TimestampMillisecondArray,
             TimestampNanosecondArray, TimestampSecondArray,
         },
         datatypes::{DataType, Field, Int32Type, Schema},
@@ -148,14 +148,14 @@ mod tests {
         let table = pretty_format_batches(&[batch])?;
 
         let expected = vec![
-            "+------+------+",
-            "| a    | b    |",
-            "+------+------+",
-            "| a    | 1    |",
-            "| b    | null |",
-            "| null | 10   |",
-            "| d    | 100  |",
-            "+------+------+",
+            "+---+-----+",
+            "| a | b   |",
+            "+---+-----+",
+            "| a | 1   |",
+            "| b |     |",
+            "|   | 10  |",
+            "| d | 100 |",
+            "+---+-----+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
@@ -180,8 +180,8 @@ mod tests {
         let table = pretty_format_columns("a", &columns)?;
 
         let expected = vec![
-            "+------+", "| a    |", "+------+", "| a    |", "| b    |", "| null |",
-            "| d    |", "| e    |", "| null |", "| g    |", "+------+",
+            "+---+", "| a |", "+---+", "| a |", "| b |", "|   |", "| d |", "| e |",
+            "|   |", "| g |", "+---+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
@@ -212,14 +212,14 @@ mod tests {
         let table = pretty_format_batches(&[batch]).unwrap();
 
         let expected = vec![
-            "+------+------+------+",
-            "| a    | b    | c    |",
-            "+------+------+------+",
-            "| null | null | null |",
-            "| null | null | null |",
-            "| null | null | null |",
-            "| null | null | null |",
-            "+------+------+------+",
+            "+---+---+---+",
+            "| a | b | c |",
+            "+---+---+---+",
+            "|   |   |   |",
+            "|   |   |   |",
+            "|   |   |   |",
+            "|   |   |   |",
+            "+---+---+---+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();
@@ -252,7 +252,7 @@ mod tests {
             "| d1    |",
             "+-------+",
             "| one   |",
-            "| null  |",
+            "|       |",
             "| three |",
             "+-------+",
         ];
@@ -297,7 +297,7 @@ mod tests {
             "| f                   |",
             "+---------------------+",
             "| 1970-05-09 14:25:11 |",
-            "| null                |",
+            "|                     |",
             "+---------------------+",
         ];
         check_datetime!(TimestampSecondArray, 11111111, expected);
@@ -310,7 +310,7 @@ mod tests {
             "| f                       |",
             "+-------------------------+",
             "| 1970-01-01 03:05:11.111 |",
-            "| null                    |",
+            "|                         |",
             "+-------------------------+",
         ];
         check_datetime!(TimestampMillisecondArray, 11111111, expected);
@@ -323,7 +323,7 @@ mod tests {
             "| f                          |",
             "+----------------------------+",
             "| 1970-01-01 00:00:11.111111 |",
-            "| null                       |",
+            "|                            |",
             "+----------------------------+",
         ];
         check_datetime!(TimestampMicrosecondArray, 11111111, expected);
@@ -336,7 +336,7 @@ mod tests {
             "| f                             |",
             "+-------------------------------+",
             "| 1970-01-01 00:00:00.011111111 |",
-            "| null                          |",
+            "|                               |",
             "+-------------------------------+",
         ];
         check_datetime!(TimestampNanosecondArray, 11111111, expected);
@@ -349,7 +349,7 @@ mod tests {
             "| f          |",
             "+------------+",
             "| 1973-05-19 |",
-            "| null       |",
+            "|            |",
             "+------------+",
         ];
         check_datetime!(Date32Array, 1234, expected);
@@ -362,7 +362,7 @@ mod tests {
             "| f          |",
             "+------------+",
             "| 2005-03-18 |",
-            "| null       |",
+            "|            |",
             "+------------+",
         ];
         check_datetime!(Date64Array, 1111111100000, expected);
@@ -375,7 +375,7 @@ mod tests {
             "| f        |",
             "+----------+",
             "| 00:18:31 |",
-            "| null     |",
+            "|          |",
             "+----------+",
         ];
         check_datetime!(Time32SecondArray, 1111, expected);
@@ -388,7 +388,7 @@ mod tests {
             "| f            |",
             "+--------------+",
             "| 03:05:11.111 |",
-            "| null         |",
+            "|              |",
             "+--------------+",
         ];
         check_datetime!(Time32MillisecondArray, 11111111, expected);
@@ -401,7 +401,7 @@ mod tests {
             "| f               |",
             "+-----------------+",
             "| 00:00:11.111111 |",
-            "| null            |",
+            "|                 |",
             "+-----------------+",
         ];
         check_datetime!(Time64MicrosecondArray, 11111111, expected);
@@ -414,7 +414,7 @@ mod tests {
             "| f                  |",
             "+--------------------+",
             "| 00:00:00.011111111 |",
-            "| null               |",
+            "|                    |",
             "+--------------------+",
         ];
         check_datetime!(Time64NanosecondArray, 11111111, expected);
@@ -462,7 +462,7 @@ mod tests {
             "| f     |",
             "+-------+",
             "| 1.01  |",
-            "| null  |",
+            "|       |",
             "| 2.00  |",
             "| 30.40 |",
             "+-------+",
@@ -498,7 +498,7 @@ mod tests {
 
         let table = pretty_format_batches(&[batch])?;
         let expected = vec![
-            "+------+", "| f    |", "+------+", "| 101  |", "| null |", "| 200  |",
+            "+------+", "| f    |", "+------+", "| 101  |", "|      |", "| 200  |",
             "| 3040 |", "+------+",
         ];
 
