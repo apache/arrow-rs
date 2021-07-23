@@ -214,14 +214,19 @@ fn append_struct_field_string(
     target.push('"');
     target.push_str(name);
     target.push_str("\": ");
-    match field_col.data_type() {
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            target.push('"');
-            target.push_str(array_value_to_string(field_col, row)?.as_str());
-            target.push('"');
-        }
-        _ => {
-            target.push_str(array_value_to_string(field_col, row)?.as_str());
+
+    if field_col.is_null(row) {
+        target.push_str("null");
+    } else {
+        match field_col.data_type() {
+            DataType::Utf8 | DataType::LargeUtf8 => {
+                target.push('"');
+                target.push_str(array_value_to_string(field_col, row)?.as_str());
+                target.push('"');
+            }
+            _ => {
+                target.push_str(array_value_to_string(field_col, row)?.as_str());
+            }
         }
     }
 

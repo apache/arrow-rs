@@ -106,9 +106,9 @@ mod tests {
     use crate::{
         array::{
             self, new_null_array, Array, Date32Array, Date64Array, PrimitiveBuilder,
-            StringBuilder, StringDictionaryBuilder, Time32MillisecondArray,
-            Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-            TimestampMicrosecondArray, TimestampMillisecondArray,
+            StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
+            Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+            Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
             TimestampNanosecondArray, TimestampSecondArray,
         },
         datatypes::{DataType, Field, Int32Type, Schema},
