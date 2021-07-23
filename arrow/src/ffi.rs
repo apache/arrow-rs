@@ -122,17 +122,53 @@ pub struct FFI_ArrowSchema {
 
 struct SchemaPrivateData {
     children: Box<[*mut FFI_ArrowSchema]>,
+    format: CString,
+    name: Option<CString>,
+}
+
+impl Drop for FFI_ArrowSchema {
+    fn drop(&mut self) {
+        release_schema(self)
+    }
+}
+
+// calls the release callback of the schema
+fn release_schema(schema: &mut FFI_ArrowSchema) {
+    match schema.release {
+        None => (),
+        Some(release) => unsafe { 
+            release(schema);
+            assert!(schema.release.is_none());
+        },
+    };
 }
 
 // callback used to drop [FFI_ArrowSchema] when it is exported.
-unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
+unsafe extern "C" fn release_schema_callback(schema: *mut FFI_ArrowSchema) {
     if schema.is_null() {
         return;
     }
     let schema = &mut *schema;
 
+    // This should not be called on already released schema
+    assert!(schema.release.is_some());
+
+    // Release children
+    let children = std::slice::from_raw_parts(schema.children, schema.n_children as usize);
+    for child in children {
+        match child.as_mut() {
+            Some(child) => release_schema(child),
+            None => (),
+        }
+    }
+
+    // Release dictionary
+    match schema.dictionary.as_mut() {
+        Some(dictionary) => release_schema(dictionary),
+        None => (),
+    }
+    
     // take ownership back to release it.
-    CString::from_raw(schema.format as *mut c_char);
     if !schema.name.is_null() {
         CString::from_raw(schema.name as *mut c_char);
     }
@@ -144,6 +180,7 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
         drop(private_data);
     }
 
+    // Mark schema released
     schema.release = None;
 }
 
@@ -158,16 +195,18 @@ impl FFI_ArrowSchema {
             .map(Box::into_raw)
             .collect::<Box<_>>();
 
-        this.format = CString::new(format).unwrap().into_raw();
-        this.release = Some(release_schema);
+        this.release = Some(release_schema_callback);
         this.n_children = children_ptr.len() as i64;
 
         let mut private_data = Box::new(SchemaPrivateData {
             children: children_ptr,
+            format: CString::new(format).unwrap(),
+            name: None,
         });
 
         // intentionally set from private_data (see https://github.com/apache/arrow-rs/issues/580)
         this.children = private_data.children.as_mut_ptr();
+        this.format = private_data.format.as_ptr();
 
         this.private_data = Box::into_raw(private_data) as *mut c_void;
 
@@ -175,6 +214,7 @@ impl FFI_ArrowSchema {
     }
 
     pub fn with_name(mut self, name: &str) -> Result<Self> {
+        // TODO: should go in private data just like format
         self.name = CString::new(name).unwrap().into_raw();
         Ok(self)
     }
@@ -234,14 +274,6 @@ impl FFI_ArrowSchema {
     }
 }
 
-impl Drop for FFI_ArrowSchema {
-    fn drop(&mut self) {
-        match self.release {
-            None => (),
-            Some(release) => unsafe { release(self) },
-        };
-    }
-}
 
 // returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 // This is set by the Arrow specification
@@ -336,26 +368,56 @@ pub struct FFI_ArrowArray {
 
 impl Drop for FFI_ArrowArray {
     fn drop(&mut self) {
-        match self.release {
-            None => (),
-            Some(release) => unsafe { release(self) },
-        };
+        release_array(self);
     }
 }
 
+// calls the release callback of the array
+fn release_array(array: &mut FFI_ArrowArray) {
+    match array.release {
+        None => (),
+        Some(release) => unsafe { 
+            release(array);
+            assert!(array.release.is_none());
+        },
+    };
+}
+
 // callback used to drop [FFI_ArrowArray] when it is exported
-unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
+unsafe extern "C" fn release_array_callback(array: *mut FFI_ArrowArray) {
     if array.is_null() {
         return;
     }
     let array = &mut *array;
 
-    // take ownership of `private_data`, therefore dropping it`
-    let private = Box::from_raw(array.private_data as *mut ArrayPrivateData);
-    for child in private.children.iter() {
-        let _ = Box::from_raw(*child);
+    // This should not be called on already released array
+    assert!(array.release.is_some());
+
+    // Release children
+    let children = std::slice::from_raw_parts(array.children, array.n_children as usize);
+    for child in children {
+        match child.as_mut() {
+            Some(child) => release_array(child),
+            None => (),
+        }
     }
 
+    // Release dictionary
+    match array.dictionary.as_mut() {
+        Some(dictionary) => release_array(dictionary),
+        None => (),
+    }
+
+    // Deallocate all data directly owned by struct
+    if !array.private_data.is_null() {
+        let private_data = Box::from_raw(array.private_data as *mut ArrayPrivateData);
+        for child in private_data.children.iter() {
+            drop(Box::from_raw(*child))
+        }    
+        drop(private_data);
+    }
+    
+    // Mark array released
     array.release = None;
 }
 
@@ -411,7 +473,7 @@ impl FFI_ArrowArray {
             buffers: private_data.buffers_ptr.as_mut_ptr(),
             children: private_data.children.as_mut_ptr(),
             dictionary: std::ptr::null_mut(),
-            release: Some(release_array),
+            release: Some(release_array_callback),
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
     }
