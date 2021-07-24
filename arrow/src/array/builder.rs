@@ -1267,6 +1267,16 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringBuilder<OffsetSize> {
         self.append(false)
     }
 
+    /// Append an `Option` value to the array.
+    #[inline]
+    pub fn append_option(&mut self, value: Option<impl AsRef<str>>) -> Result<()> {
+        match value {
+            None => self.append_null()?,
+            Some(v) => self.append_value(v)?,
+        };
+        Ok(())
+    }
+
     /// Builds the `StringArray` and reset this builder.
     pub fn finish(&mut self) -> GenericStringArray<OffsetSize> {
         GenericStringArray::<OffsetSize>::from(self.builder.finish())
@@ -2989,6 +2999,21 @@ mod tests {
         assert_eq!("world", string_array.value(2));
         assert_eq!(5, string_array.value_offsets()[2]);
         assert_eq!(5, string_array.value_length(2));
+    }
+
+    #[test]
+    fn test_string_array_builder_append_option() {
+        let mut builder = StringBuilder::new(20);
+        builder.append_option(Some("hello")).unwrap();
+        builder.append_option(None::<&str>).unwrap();
+        builder.append_option(Some("world")).unwrap();
+
+        let string_array = builder.finish();
+
+        assert_eq!(3, string_array.len());
+        assert_eq!("hello", string_array.value(0));
+        assert!(string_array.is_null(1));
+        assert_eq!("world", string_array.value(2));
     }
 
     #[test]
