@@ -3006,14 +3006,16 @@ mod tests {
         let mut builder = StringBuilder::new(20);
         builder.append_option(Some("hello")).unwrap();
         builder.append_option(None::<&str>).unwrap();
+        builder.append_option(None::<String>).unwrap();
         builder.append_option(Some("world")).unwrap();
 
         let string_array = builder.finish();
 
-        assert_eq!(3, string_array.len());
+        assert_eq!(4, string_array.len());
         assert_eq!("hello", string_array.value(0));
         assert!(string_array.is_null(1));
-        assert_eq!("world", string_array.value(2));
+        assert!(string_array.is_null(2));
+        assert_eq!("world", string_array.value(3));
     }
 
     #[test]
