@@ -33,7 +33,7 @@ use std::mem::size_of;
 /// A `UnionArray` can have two possible memory layouts, "dense" or "sparse".  For more information
 /// on please see the [specification](https://arrow.apache.org/docs/format/Columnar.html#union-layout).
 ///
-/// Builders are provided for `UnionArray`'s involving primitive types.  `UnionArray`'s of nested
+/// [`UnionBuilder`]can be used to create  `UnionArray`'s of primitive types.  `UnionArray`'s of nested
 /// types are also supported but not via `UnionBuilder`, see the tests for examples.
 ///
 pub struct UnionArray {
