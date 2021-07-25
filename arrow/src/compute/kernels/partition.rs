@@ -73,6 +73,30 @@ impl<'a> LexicographicalPartitionIterator<'a> {
     }
 }
 
+/// Exponential search is to remedy for the case when array size and cardinality are both large
+/// see <https://en.wikipedia.org/wiki/Exponential_search>
+#[inline]
+fn exponential_search(
+    indices: &[usize],
+    target: &usize,
+    comparator: &LexicographicalComparator<'_>,
+) -> usize {
+    let mut bound = 1;
+    while bound < indices.len()
+        && comparator.compare(&indices[bound], target) != Ordering::Greater
+    {
+        bound *= 2;
+    }
+    // invariant after while loop:
+    // indices[bound / 2] <= target < indices[min(indices.len(), bound + 1)]
+    // where <= and < are defined by the comparator;
+    // note here we have right = min(indices.len(), bound + 1) because indices[bound] might
+    // actually be considered and must be included.
+    (bound / 2)
+        + indices[(bound / 2)..indices.len().min(bound + 1)]
+            .partition_point(|idx| comparator.compare(idx, target) != Ordering::Greater)
+}
+
 impl<'a> Iterator for LexicographicalPartitionIterator<'a> {
     type Item = Range<usize>;
 
@@ -87,11 +111,11 @@ impl<'a> Iterator for LexicographicalPartitionIterator<'a> {
             // be careful that idx is of type &usize which points to the actual value within value_indices, which itself
             // contains usize (0..row_count), providing access to lexicographical_comparator as pointers into the
             // original columnar data.
-            self.partition_point += self.value_indices[self.partition_point..]
-                .partition_point(|idx| {
-                    self.comparator.compare(idx, &self.partition_point)
-                        != Ordering::Greater
-                });
+            self.partition_point += exponential_search(
+                &self.value_indices[self.partition_point..],
+                &self.partition_point,
+                &self.comparator,
+            );
             let start = self.previous_partition_point;
             let end = self.partition_point;
             self.previous_partition_point = self.partition_point;
