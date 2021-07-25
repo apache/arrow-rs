@@ -41,7 +41,7 @@ In order to compile Arrow for Web Assembly (the `wasm32-unknown-unknown` WASM ta
 
 ```toml
 [dependencies]
-arrow = {version = "5.0" default-features = false, features = ["js"] }
+arrow = { version = "5.0", default-features = false, features = ["js"] }
 ```
 
 ## Examples
