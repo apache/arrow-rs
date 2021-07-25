@@ -25,7 +25,7 @@ use crate::{array::*, util::bit_chunk_iterator::BitChunkIterator};
 use std::iter::Enumerate;
 
 /// Function that can filter arbitrary arrays
-pub type Filter<'a> = Box<Fn(&ArrayData) -> ArrayData + 'a>;
+pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
 
 /// Internal state of [SlicesIterator]
 #[derive(Debug, PartialEq)]
@@ -245,7 +245,7 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// # Ok(())
 /// # }
 /// ```
-pub fn filter(array: &Array, predicate: &BooleanArray) -> Result<ArrayRef> {
+pub fn filter(array: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef> {
     if predicate.null_count() > 0 {
         // this greatly simplifies subsequent filtering code
         // now we only have a boolean mask to deal with

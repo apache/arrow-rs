@@ -143,7 +143,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 }
 
 impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

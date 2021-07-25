@@ -58,7 +58,7 @@ impl NullArray {
 }
 
 impl Array for NullArray {
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

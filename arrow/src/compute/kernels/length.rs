@@ -101,7 +101,7 @@ where
 /// * this only accepts StringArray/Utf8 and LargeString/LargeUtf8
 /// * length of null is null.
 /// * length is in number of bytes
-pub fn length(array: &Array) -> Result<ArrayRef> {
+pub fn length(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::Utf8 => Ok(octet_length::<i32, Int32Type>(array)),
         DataType::LargeUtf8 => Ok(octet_length::<i64, Int64Type>(array)),
@@ -117,7 +117,7 @@ pub fn length(array: &Array) -> Result<ArrayRef> {
 /// * this only accepts StringArray/Utf8 and LargeString/LargeUtf8
 /// * bit_length of null is null.
 /// * bit_length is in number of bits
-pub fn bit_length(array: &Array) -> Result<ArrayRef> {
+pub fn bit_length(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::Utf8 => Ok(bit_length_impl::<i32, Int32Type>(array)),
         DataType::LargeUtf8 => Ok(bit_length_impl::<i64, Int64Type>(array)),

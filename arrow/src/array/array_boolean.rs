@@ -106,7 +106,7 @@ impl BooleanArray {
 }
 
 impl Array for BooleanArray {
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

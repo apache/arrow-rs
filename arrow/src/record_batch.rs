@@ -40,7 +40,7 @@ use crate::error::{ArrowError, Result};
 #[derive(Clone, Debug)]
 pub struct RecordBatch {
     schema: SchemaRef,
-    columns: Vec<Arc<Array>>,
+    columns: Vec<Arc<dyn Array>>,
 }
 
 impl RecordBatch {

@@ -268,7 +268,7 @@ impl From<ArrayData> for UnionArray {
 }
 
 impl Array for UnionArray {
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
