@@ -15,64 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains the `UnionArray` type.
-//!
-//! Each slot in a `UnionArray` can have a value chosen from a number of types.  Each of the
-//! possible types are named like the fields of a [`StructArray`](crate::array::StructArray).
-//! A `UnionArray` can have two possible memory layouts, "dense" or "sparse".  For more information
-//! on please see the [specification](https://arrow.apache.org/docs/format/Columnar.html#union-layout).
-//!
-//! Builders are provided for `UnionArray`'s involving primitive types.  `UnionArray`'s of nested
-//! types are also supported but not via `UnionBuilder`, see the tests for examples.
-//!
-//! # Example: Dense Memory Layout
-//!
-//! ```
-//! use arrow::array::UnionBuilder;
-//! use arrow::datatypes::{Float64Type, Int32Type};
-//!
-//! # fn main() -> arrow::error::Result<()> {
-//! let mut builder = UnionBuilder::new_dense(3);
-//! builder.append::<Int32Type>("a", 1).unwrap();
-//! builder.append::<Float64Type>("b", 3.0).unwrap();
-//! builder.append::<Int32Type>("a", 4).unwrap();
-//! let union = builder.build().unwrap();
-//!
-//! assert_eq!(union.type_id(0), 0_i8);
-//! assert_eq!(union.type_id(1), 1_i8);
-//! assert_eq!(union.type_id(2), 0_i8);
-//!
-//! assert_eq!(union.value_offset(0), 0_i32);
-//! assert_eq!(union.value_offset(1), 0_i32);
-//! assert_eq!(union.value_offset(2), 1_i32);
-//!
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! # Example: Sparse Memory Layout
-//! ```
-//! use arrow::array::UnionBuilder;
-//! use arrow::datatypes::{Float64Type, Int32Type};
-//!
-//! # fn main() -> arrow::error::Result<()> {
-//! let mut builder = UnionBuilder::new_sparse(3);
-//! builder.append::<Int32Type>("a", 1).unwrap();
-//! builder.append::<Float64Type>("b", 3.0).unwrap();
-//! builder.append::<Int32Type>("a", 4).unwrap();
-//! let union = builder.build().unwrap();
-//!
-//! assert_eq!(union.type_id(0), 0_i8);
-//! assert_eq!(union.type_id(1), 1_i8);
-//! assert_eq!(union.type_id(2), 0_i8);
-//!
-//! assert_eq!(union.value_offset(0), 0_i32);
-//! assert_eq!(union.value_offset(1), 1_i32);
-//! assert_eq!(union.value_offset(2), 2_i32);
-//!
-//! # Ok(())
-//! # }
-//! ```
+/// Contains the `UnionArray` type.
+///
 use crate::array::{data::count_nulls, make_array, Array, ArrayData, ArrayRef};
 use crate::buffer::Buffer;
 use crate::datatypes::*;
@@ -83,6 +27,15 @@ use std::any::Any;
 use std::mem::size_of;
 
 /// An Array that can represent slots of varying types.
+///
+/// Each slot in a `UnionArray` can have a value chosen from a number of types.  Each of the
+/// possible types are named like the fields of a [`StructArray`](crate::array::StructArray).
+/// A `UnionArray` can have two possible memory layouts, "dense" or "sparse".  For more information
+/// on please see the [specification](https://arrow.apache.org/docs/format/Columnar.html#union-layout).
+///
+/// Builders are provided for `UnionArray`'s involving primitive types.  `UnionArray`'s of nested
+/// types are also supported but not via `UnionBuilder`, see the tests for examples.
+///
 pub struct UnionArray {
     data: ArrayData,
     boxed_fields: Vec<ArrayRef>,
