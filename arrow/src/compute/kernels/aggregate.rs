@@ -48,7 +48,7 @@ fn min_max_string<T: StringOffsetSizeTrait, F: Fn(&str, &str) -> bool>(
         n = array.value(0);
         for i in 1..data.len() {
             let item = array.value(i);
-            if cmp(&n, item) {
+            if cmp(n, item) {
                 n = item;
             }
         }
@@ -58,7 +58,7 @@ fn min_max_string<T: StringOffsetSizeTrait, F: Fn(&str, &str) -> bool>(
 
         for i in 0..data.len() {
             let item = array.value(i);
-            if data.is_valid(i) && (!has_value || cmp(&n, item)) {
+            if data.is_valid(i) && (!has_value || cmp(n, item)) {
                 has_value = true;
                 n = item;
             }

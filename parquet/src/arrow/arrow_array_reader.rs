@@ -311,7 +311,7 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                 let mut buffer_ptr = buf;
                 // create rep level decoder iterator
                 let rep_level_iter: Box<dyn ValueDecoder> =
-                    if Self::rep_levels_available(&column_desc) {
+                    if Self::rep_levels_available(column_desc) {
                         let mut rep_decoder = LevelDecoder::v1(
                             rep_level_encoding,
                             column_desc.max_rep_level(),
@@ -328,7 +328,7 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                     };
                 // create def level decoder iterator
                 let def_level_iter: Box<dyn ValueDecoder> =
-                    if Self::def_levels_available(&column_desc) {
+                    if Self::def_levels_available(column_desc) {
                         let mut def_decoder = LevelDecoder::v1(
                             def_level_encoding,
                             column_desc.max_def_level(),
@@ -367,7 +367,7 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                 let mut offset = 0;
                 // create rep level decoder iterator
                 let rep_level_iter: Box<dyn ValueDecoder> =
-                    if Self::rep_levels_available(&column_desc) {
+                    if Self::rep_levels_available(column_desc) {
                         let rep_levels_byte_len = rep_levels_byte_len as usize;
                         let mut rep_decoder =
                             LevelDecoder::v2(column_desc.max_rep_level());
@@ -386,7 +386,7 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                     };
                 // create def level decoder iterator
                 let def_level_iter: Box<dyn ValueDecoder> =
-                    if Self::def_levels_available(&column_desc) {
+                    if Self::def_levels_available(column_desc) {
                         let def_levels_byte_len = def_levels_byte_len as usize;
                         let mut def_decoder =
                             LevelDecoder::v2(column_desc.max_def_level());

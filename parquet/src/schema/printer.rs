@@ -55,7 +55,7 @@ use crate::schema::types::Type;
 /// information.
 #[allow(unused_must_use)]
 pub fn print_parquet_metadata(out: &mut dyn io::Write, metadata: &ParquetMetaData) {
-    print_file_metadata(out, &metadata.file_metadata());
+    print_file_metadata(out, metadata.file_metadata());
     writeln!(out);
     writeln!(out);
     writeln!(out, "num of row groups: {}", metadata.num_row_groups());
@@ -133,10 +133,7 @@ fn print_column_chunk_metadata(
         .map(|e| format!("{}", e))
         .collect();
     writeln!(out, "encodings: {}", encoding_strs.join(" "));
-    let file_path_str = match cc_metadata.file_path() {
-        None => "N/A",
-        Some(ref fp) => *fp,
-    };
+    let file_path_str = cc_metadata.file_path().unwrap_or("N/A");
     writeln!(out, "file path: {}", file_path_str);
     writeln!(out, "file offset: {}", cc_metadata.file_offset());
     writeln!(out, "num of values: {}", cc_metadata.num_values());
@@ -340,7 +337,7 @@ impl<'a> Printer<'a> {
 
                 self.indent += INDENT_WIDTH;
                 for c in fields {
-                    self.print(&c);
+                    self.print(c);
                     writeln!(self.output);
                 }
                 self.indent -= INDENT_WIDTH;

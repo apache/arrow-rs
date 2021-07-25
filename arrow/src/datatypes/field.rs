@@ -408,7 +408,7 @@ impl Field {
                                 continue;
                             }
                             is_new_field = false;
-                            self_field.try_merge(&from_field)?;
+                            self_field.try_merge(from_field)?;
                         }
                         if is_new_field {
                             nested_fields.push(from_field.clone());

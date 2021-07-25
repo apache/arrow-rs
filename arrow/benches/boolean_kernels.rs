@@ -35,7 +35,7 @@ fn bench_or(lhs: &BooleanArray, rhs: &BooleanArray) {
 }
 
 fn bench_not(array: &BooleanArray) {
-    criterion::black_box(boolean_kernels::not(&array).unwrap());
+    criterion::black_box(boolean_kernels::not(array).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -58,12 +58,12 @@ fn add_benchmark(c: &mut Criterion) {
         .unwrap();
 
     c.bench_function("and_sliced", |b| {
-        b.iter(|| bench_and(&array1_slice, &array2_slice))
+        b.iter(|| bench_and(array1_slice, array2_slice))
     });
     c.bench_function("or_sliced", |b| {
-        b.iter(|| bench_or(&array1_slice, &array2_slice))
+        b.iter(|| bench_or(array1_slice, array2_slice))
     });
-    c.bench_function("not_sliced", |b| b.iter(|| bench_not(&array1_slice)));
+    c.bench_function("not_sliced", |b| b.iter(|| bench_not(array1_slice)));
 }
 
 criterion_group!(benches, add_benchmark);

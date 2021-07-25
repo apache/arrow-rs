@@ -48,9 +48,9 @@ pub(super) fn combine_option_bitmap(
             None => Ok(Some(l.bit_slice(left_offset_in_bits, len_in_bits))),
 
             Some(r) => Ok(Some(buffer_bin_and(
-                &l,
+                l,
                 left_offset_in_bits,
-                &r,
+                r,
                 right_offset_in_bits,
                 len_in_bits,
             ))),
@@ -82,9 +82,9 @@ pub(super) fn compare_option_bitmap(
             None => Ok(Some(l.bit_slice(left_offset_in_bits, len_in_bits))),
 
             Some(r) => Ok(Some(buffer_bin_or(
-                &l,
+                l,
                 left_offset_in_bits,
-                &r,
+                r,
                 right_offset_in_bits,
                 len_in_bits,
             ))),

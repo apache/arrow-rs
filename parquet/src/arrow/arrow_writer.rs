@@ -250,7 +250,7 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
                         .expect("Unable to get int32 array");
-                    get_numeric_array_slice::<Int32Type, _>(&array, &indices)
+                    get_numeric_array_slice::<Int32Type, _>(array, &indices)
                 }
                 ArrowDataType::UInt32 => {
                     // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
@@ -271,7 +271,7 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
                         .expect("Unable to get i32 array");
-                    get_numeric_array_slice::<Int32Type, _>(&array, &indices)
+                    get_numeric_array_slice::<Int32Type, _>(array, &indices)
                 }
             };
             typed.write_batch(
@@ -286,7 +286,7 @@ fn write_leaf(
                 .downcast_ref::<arrow_array::BooleanArray>()
                 .expect("Unable to get boolean array");
             typed.write_batch(
-                get_bool_array_slice(&array, &indices).as_slice(),
+                get_bool_array_slice(array, &indices).as_slice(),
                 Some(levels.definition.as_slice()),
                 levels.repetition.as_deref(),
             )?
@@ -298,7 +298,7 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
                         .expect("Unable to get i64 array");
-                    get_numeric_array_slice::<Int64Type, _>(&array, &indices)
+                    get_numeric_array_slice::<Int64Type, _>(array, &indices)
                 }
                 ArrowDataType::UInt64 => {
                     // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
@@ -319,7 +319,7 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
                         .expect("Unable to get i64 array");
-                    get_numeric_array_slice::<Int64Type, _>(&array, &indices)
+                    get_numeric_array_slice::<Int64Type, _>(array, &indices)
                 }
             };
             typed.write_batch(
@@ -337,7 +337,7 @@ fn write_leaf(
                 .downcast_ref::<arrow_array::Float32Array>()
                 .expect("Unable to get Float32 array");
             typed.write_batch(
-                get_numeric_array_slice::<FloatType, _>(&array, &indices).as_slice(),
+                get_numeric_array_slice::<FloatType, _>(array, &indices).as_slice(),
                 Some(levels.definition.as_slice()),
                 levels.repetition.as_deref(),
             )?
@@ -348,7 +348,7 @@ fn write_leaf(
                 .downcast_ref::<arrow_array::Float64Array>()
                 .expect("Unable to get Float64 array");
             typed.write_batch(
-                get_numeric_array_slice::<DoubleType, _>(&array, &indices).as_slice(),
+                get_numeric_array_slice::<DoubleType, _>(array, &indices).as_slice(),
                 Some(levels.definition.as_slice()),
                 levels.repetition.as_deref(),
             )?
@@ -360,7 +360,7 @@ fn write_leaf(
                     .downcast_ref::<arrow_array::BinaryArray>()
                     .expect("Unable to get BinaryArray array");
                 typed.write_batch(
-                    get_binary_array(&array).as_slice(),
+                    get_binary_array(array).as_slice(),
                     Some(levels.definition.as_slice()),
                     levels.repetition.as_deref(),
                 )?
@@ -371,7 +371,7 @@ fn write_leaf(
                     .downcast_ref::<arrow_array::StringArray>()
                     .expect("Unable to get LargeBinaryArray array");
                 typed.write_batch(
-                    get_string_array(&array).as_slice(),
+                    get_string_array(array).as_slice(),
                     Some(levels.definition.as_slice()),
                     levels.repetition.as_deref(),
                 )?
@@ -382,7 +382,7 @@ fn write_leaf(
                     .downcast_ref::<arrow_array::LargeBinaryArray>()
                     .expect("Unable to get LargeBinaryArray array");
                 typed.write_batch(
-                    get_large_binary_array(&array).as_slice(),
+                    get_large_binary_array(array).as_slice(),
                     Some(levels.definition.as_slice()),
                     levels.repetition.as_deref(),
                 )?
@@ -393,7 +393,7 @@ fn write_leaf(
                     .downcast_ref::<arrow_array::LargeStringArray>()
                     .expect("Unable to get LargeUtf8 array");
                 typed.write_batch(
-                    get_large_string_array(&array).as_slice(),
+                    get_large_string_array(array).as_slice(),
                     Some(levels.definition.as_slice()),
                     levels.repetition.as_deref(),
                 )?
@@ -408,14 +408,14 @@ fn write_leaf(
                             .as_any()
                             .downcast_ref::<arrow_array::IntervalYearMonthArray>()
                             .unwrap();
-                        get_interval_ym_array_slice(&array, &indices)
+                        get_interval_ym_array_slice(array, &indices)
                     }
                     IntervalUnit::DayTime => {
                         let array = column
                             .as_any()
                             .downcast_ref::<arrow_array::IntervalDayTimeArray>()
                             .unwrap();
-                        get_interval_dt_array_slice(&array, &indices)
+                        get_interval_dt_array_slice(array, &indices)
                     }
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
@@ -423,14 +423,14 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::FixedSizeBinaryArray>()
                         .unwrap();
-                    get_fsb_array_slice(&array, &indices)
+                    get_fsb_array_slice(array, &indices)
                 }
                 ArrowDataType::Decimal(_, _) => {
                     let array = column
                         .as_any()
                         .downcast_ref::<arrow_array::DecimalArray>()
                         .unwrap();
-                    get_decimal_array_slice(&array, &indices)
+                    get_decimal_array_slice(array, &indices)
                 }
                 _ => {
                     return Err(ParquetError::NYI(

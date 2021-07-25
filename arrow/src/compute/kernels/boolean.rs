@@ -191,14 +191,14 @@ where
 
     let left_data = left.data_ref();
     let right_data = right.data_ref();
-    let null_bit_buffer = combine_option_bitmap(&left_data, &right_data, len)?;
+    let null_bit_buffer = combine_option_bitmap(left_data, right_data, len)?;
 
     let left_buffer = &left_data.buffers()[0];
     let right_buffer = &right_data.buffers()[0];
     let left_offset = left.offset();
     let right_offset = right.offset();
 
-    let values = op(&left_buffer, left_offset, &right_buffer, right_offset, len);
+    let values = op(left_buffer, left_offset, right_buffer, right_offset, len);
 
     let data = ArrayData::new(
         DataType::Boolean,
@@ -230,7 +230,7 @@ where
 /// # }
 /// ```
 pub fn and(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
-    binary_boolean_kernel(&left, &right, buffer_bin_and)
+    binary_boolean_kernel(left, right, buffer_bin_and)
 }
 
 /// Logical 'and' boolean values with Kleene logic
@@ -300,7 +300,7 @@ pub fn and_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanAr
 /// # }
 /// ```
 pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
-    binary_boolean_kernel(&left, &right, buffer_bin_or)
+    binary_boolean_kernel(left, right, buffer_bin_or)
 }
 
 /// Logical 'or' boolean values with Kleene logic
