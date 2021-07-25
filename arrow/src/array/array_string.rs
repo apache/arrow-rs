@@ -42,6 +42,9 @@ impl StringOffsetSizeTrait for i64 {
 }
 
 /// Generic struct for \[Large\]StringArray
+///
+/// See [`StringArray`] and [`LargeStringArray`] for storing
+/// specific string data.
 pub struct GenericStringArray<OffsetSize: StringOffsetSizeTrait> {
     data: ArrayData,
     value_offsets: RawPtrBox<OffsetSize>,
