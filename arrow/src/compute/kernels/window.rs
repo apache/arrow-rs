@@ -56,7 +56,7 @@ use num::{abs, clamp};
 /// let expected: Int32Array = vec![None, None, None].into();
 /// assert_eq!(res.as_ref(), &expected);
 /// ```
-pub fn shift(array: &Array, offset: i64) -> Result<ArrayRef> {
+pub fn shift(array: &dyn Array, offset: i64) -> Result<ArrayRef> {
     let value_len = array.len() as i64;
     if offset == 0 {
         Ok(make_array(array.data_ref().clone()))

@@ -77,7 +77,7 @@ macro_rules! downcast_dict_take {
 /// # }
 /// ```
 pub fn take<IndexType>(
-    values: &Array,
+    values: &dyn Array,
     indices: &PrimitiveArray<IndexType>,
     options: Option<TakeOptions>,
 ) -> Result<ArrayRef>
@@ -89,7 +89,7 @@ where
 }
 
 fn take_impl<IndexType>(
-    values: &Array,
+    values: &dyn Array,
     indices: &PrimitiveArray<IndexType>,
     options: Option<TakeOptions>,
 ) -> Result<ArrayRef>
