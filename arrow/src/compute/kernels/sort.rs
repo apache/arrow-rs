@@ -2552,6 +2552,31 @@ mod tests {
             Some(3),
         );
 
+        test_sort_binary_arrays(
+            vec![
+                Some(vec![3, 5, 7]),
+                None,
+                Some(vec![1, 7, 1]),
+                Some(vec![2, 7, 3]),
+                None,
+                Some(vec![1, 4, 3]),
+            ],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            None,
+            vec![
+                Some(vec![1, 4, 3]),
+                Some(vec![1, 7, 1]),
+                Some(vec![2, 7, 3]),
+                Some(vec![3, 5, 7]),
+                None,
+                None,
+            ],
+            Some(3),
+        );
+
         // descending
         test_sort_binary_arrays(
             vec![
