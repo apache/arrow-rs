@@ -259,6 +259,27 @@ where
             DataType::UInt64 => downcast_dict_take!(UInt64Type, values, indices),
             t => unimplemented!("Take not supported for dictionary key type {:?}", t),
         },
+        DataType::Binary => {
+            let values = values
+                .as_any()
+                .downcast_ref::<GenericBinaryArray<i32>>()
+                .unwrap();
+            Ok(Arc::new(take_binary(values, indices)?))
+        }
+        DataType::LargeBinary => {
+            let values = values
+                .as_any()
+                .downcast_ref::<GenericBinaryArray<i64>>()
+                .unwrap();
+            Ok(Arc::new(take_binary(values, indices)?))
+        }
+        DataType::FixedSizeBinary(_) => {
+            let values = values
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .unwrap();
+            Ok(Arc::new(take_fixed_size_binary(values, indices)?))
+        }
         t => unimplemented!("Take not supported for data type {:?}", t),
     }
 }
@@ -758,6 +779,59 @@ where
         .build();
 
     Ok(FixedSizeListArray::from(list_data))
+}
+
+fn take_binary<IndexType, OffsetType>(
+    values: &GenericBinaryArray<OffsetType>,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<GenericBinaryArray<OffsetType>>
+where
+    OffsetType: BinaryOffsetSizeTrait,
+    IndexType: ArrowNumericType,
+    IndexType::Native: ToPrimitive,
+{
+    let data_ref = values.data_ref();
+    let array_iter = indices
+        .values()
+        .iter()
+        .map(|idx| {
+            let idx = maybe_usize::<IndexType>(*idx)?;
+            if data_ref.is_valid(idx) {
+                Ok(Some(values.value(idx)))
+            } else {
+                Ok(None)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter();
+
+    Ok(array_iter.collect::<GenericBinaryArray<OffsetType>>())
+}
+
+fn take_fixed_size_binary<IndexType>(
+    values: &FixedSizeBinaryArray,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<FixedSizeBinaryArray>
+where
+    IndexType: ArrowNumericType,
+    IndexType::Native: ToPrimitive,
+{
+    let data_ref = values.data_ref();
+    let array_iter = indices
+        .values()
+        .iter()
+        .map(|idx| {
+            let idx = maybe_usize::<IndexType>(*idx)?;
+            if data_ref.is_valid(idx) {
+                Ok(Some(values.value(idx)))
+            } else {
+                Ok(None)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter();
+
+    FixedSizeBinaryArray::try_from_sparse_iter(array_iter)
 }
 
 /// `take` implementation for dictionary arrays
