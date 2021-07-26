@@ -59,6 +59,16 @@ pub fn as_large_list_array(arr: &ArrayRef) -> &LargeListArray {
     as_generic_list_array::<i64>(arr)
 }
 
+#[doc = "Force downcast ArrayRef to GenericBinaryArray"]
+#[inline]
+pub fn as_generic_binary_array<S: BinaryOffsetSizeTrait>(
+    arr: &ArrayRef,
+) -> &GenericBinaryArray<S> {
+    arr.as_any()
+        .downcast_ref::<GenericBinaryArray<S>>()
+        .expect("Unable to downcast to binary array")
+}
+
 macro_rules! array_downcast_fn {
     ($name: ident, $arrty: ty, $arrty_str:expr) => {
         #[doc = "Force downcast ArrayRef to "]
