@@ -106,9 +106,9 @@ mod tests {
     use crate::{
         array::{
             self, new_null_array, Array, Date32Array, Date64Array, PrimitiveBuilder,
-            StringBuilder, StringDictionaryBuilder, Time32MillisecondArray,
-            Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-            TimestampMicrosecondArray, TimestampMillisecondArray,
+            StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
+            Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+            Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
             TimestampNanosecondArray, TimestampSecondArray,
         },
         datatypes::{DataType, Field, Int32Type, Schema},
@@ -500,6 +500,65 @@ mod tests {
         let expected = vec![
             "+------+", "| f    |", "+------+", "| 101  |", "|      |", "| 200  |",
             "| 3040 |", "+------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_struct() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new(
+                "c1",
+                DataType::Struct(vec![
+                    Field::new("c11", DataType::Int32, false),
+                    Field::new(
+                        "c12",
+                        DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)]),
+                        false,
+                    ),
+                ]),
+                false,
+            ),
+            Field::new("c2", DataType::Utf8, false),
+        ]);
+
+        let c1 = StructArray::from(vec![
+            (
+                Field::new("c11", DataType::Int32, false),
+                Arc::new(Int32Array::from(vec![Some(1), None, Some(5)])) as ArrayRef,
+            ),
+            (
+                Field::new(
+                    "c12",
+                    DataType::Struct(vec![Field::new("c121", DataType::Utf8, false)]),
+                    false,
+                ),
+                Arc::new(StructArray::from(vec![(
+                    Field::new("c121", DataType::Utf8, false),
+                    Arc::new(StringArray::from(vec![Some("e"), Some("f"), Some("g")]))
+                        as ArrayRef,
+                )])) as ArrayRef,
+            ),
+        ]);
+        let c2 = StringArray::from(vec![Some("a"), Some("b"), Some("c")]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
+                .unwrap();
+
+        let table = pretty_format_batches(&[batch])?;
+        let expected = vec![
+            r#"+-------------------------------------+----+"#,
+            r#"| c1                                  | c2 |"#,
+            r#"+-------------------------------------+----+"#,
+            r#"| {"c11": 1, "c12": {"c121": "e"}}    | a  |"#,
+            r#"| {"c11": null, "c12": {"c121": "f"}} | b  |"#,
+            r#"| {"c11": 5, "c12": {"c121": "g"}}    | c  |"#,
+            r#"+-------------------------------------+----+"#,
         ];
 
         let actual: Vec<&str> = table.lines().collect();
