@@ -139,7 +139,6 @@
     clippy::upper_case_acronyms,
     clippy::vec_init_then_push
 )]
-#![allow(bare_trait_objects)]
 #![warn(missing_debug_implementations)]
 
 pub mod alloc;

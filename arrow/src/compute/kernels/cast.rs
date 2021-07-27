@@ -3620,7 +3620,7 @@ mod tests {
                 (
                     Field::new("a", DataType::Boolean, false),
                     Arc::new(BooleanArray::from(vec![false, false, true, true]))
-                        as Arc<Array>,
+                        as Arc<dyn Array>,
                 ),
                 (
                     Field::new("b", DataType::Int32, false),
