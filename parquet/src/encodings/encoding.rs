@@ -359,7 +359,7 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
     #[inline]
     fn put(&mut self, values: &[T::T]) -> Result<()> {
         for i in values {
-            self.put_one(&i)?
+            self.put_one(i)?
         }
         Ok(())
     }

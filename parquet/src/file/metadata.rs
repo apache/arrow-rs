@@ -359,8 +359,8 @@ impl ColumnChunkMetaData {
     ///
     /// If not set, assumed to belong to the same file as the metadata.
     /// This path is relative to the current file.
-    pub fn file_path(&self) -> Option<&String> {
-        self.file_path.as_ref()
+    pub fn file_path(&self) -> Option<&str> {
+        self.file_path.as_deref()
     }
 
     /// Byte offset in `file_path()`.
@@ -520,7 +520,7 @@ impl ColumnChunkMetaData {
         };
 
         ColumnChunk {
-            file_path: self.file_path().cloned(),
+            file_path: self.file_path().map(|s| s.to_owned()),
             file_offset: self.file_offset,
             meta_data: Some(column_metadata),
             offset_index_offset: None,

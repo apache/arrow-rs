@@ -36,7 +36,7 @@ pub fn flight_data_from_arrow_batch(
     let mut dictionary_tracker = writer::DictionaryTracker::new(false);
 
     let (encoded_dictionaries, encoded_batch) = data_gen
-        .encoded_batch(batch, &mut dictionary_tracker, &options)
+        .encoded_batch(batch, &mut dictionary_tracker, options)
         .expect("DictionaryTracker configured above to not error on replacement");
 
     let flight_dictionaries = encoded_dictionaries.into_iter().map(Into::into).collect();
@@ -68,7 +68,7 @@ pub fn flight_data_to_arrow_batch(
                 &data.data_body,
                 batch,
                 schema,
-                &dictionaries_by_field,
+                dictionaries_by_field,
             )
         })?
 }

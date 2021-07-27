@@ -26,19 +26,19 @@ use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
 
 fn bench_sum(arr_a: &Float32Array) {
-    criterion::black_box(sum(&arr_a).unwrap());
+    criterion::black_box(sum(arr_a).unwrap());
 }
 
 fn bench_min(arr_a: &Float32Array) {
-    criterion::black_box(min(&arr_a).unwrap());
+    criterion::black_box(min(arr_a).unwrap());
 }
 
 fn bench_max(arr_a: &Float32Array) {
-    criterion::black_box(max(&arr_a).unwrap());
+    criterion::black_box(max(arr_a).unwrap());
 }
 
 fn bench_min_string(arr_a: &StringArray) {
-    criterion::black_box(min_string(&arr_a).unwrap());
+    criterion::black_box(min_string(arr_a).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {

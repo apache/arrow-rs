@@ -110,7 +110,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 
     /// constructs a new iterator
     pub fn iter<'a>(&'a self) -> GenericListArrayIter<'a, OffsetSize> {
-        GenericListArrayIter::<'a, OffsetSize>::new(&self)
+        GenericListArrayIter::<'a, OffsetSize>::new(self)
     }
 
     #[inline]

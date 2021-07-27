@@ -429,7 +429,7 @@ pub fn read_record_batch(
         let triple = create_array(
             field_nodes,
             field.data_type(),
-            &buf,
+            buf,
             buffers,
             dictionaries,
             node_index,
@@ -475,10 +475,10 @@ pub fn read_dictionary(
             };
             // Read a single column
             let record_batch = read_record_batch(
-                &buf,
+                buf,
                 batch.data().unwrap(),
                 Arc::new(schema),
-                &dictionaries_by_field,
+                dictionaries_by_field,
             )?;
             Some(record_batch.column(0).clone())
         }

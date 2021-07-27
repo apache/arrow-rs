@@ -43,12 +43,12 @@ fn create_random_index(size: usize, null_density: f32) -> UInt32Array {
 }
 
 fn bench_take(values: &dyn Array, indices: &UInt32Array) {
-    criterion::black_box(take(values, &indices, None).unwrap());
+    criterion::black_box(take(values, indices, None).unwrap());
 }
 
 fn bench_take_bounds_check(values: &dyn Array, indices: &UInt32Array) {
     criterion::black_box(
-        take(values, &indices, Some(TakeOptions { check_bounds: true })).unwrap(),
+        take(values, indices, Some(TakeOptions { check_bounds: true })).unwrap(),
     );
 }
 

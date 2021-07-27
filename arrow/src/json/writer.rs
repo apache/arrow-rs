@@ -482,7 +482,7 @@ fn set_column_for_json_rows(
         }
         DataType::Dictionary(_, value_type) => {
             let slice = array.slice(0, row_count);
-            let hydrated = crate::compute::kernels::cast::cast(&slice, &value_type)
+            let hydrated = crate::compute::kernels::cast::cast(&slice, value_type)
                 .expect("cannot cast dictionary to underlying values");
             set_column_for_json_rows(rows, row_count, &hydrated, col_name)
         }

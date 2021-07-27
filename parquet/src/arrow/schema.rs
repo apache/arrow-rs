@@ -216,7 +216,7 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
 fn encode_arrow_schema(schema: &Schema) -> String {
     let options = writer::IpcWriteOptions::default();
     let data_gen = arrow::ipc::writer::IpcDataGenerator::default();
-    let mut serialized_schema = data_gen.schema_to_bytes(&schema, &options);
+    let mut serialized_schema = data_gen.schema_to_bytes(schema, &options);
 
     // manually prepending the length to the schema as arrow uses the legacy IPC format
     // TODO: change after addressing ARROW-9777

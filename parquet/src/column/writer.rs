@@ -807,7 +807,7 @@ impl<T: DataType> ColumnWriterImpl<T> {
     ) -> Result<Vec<u8>> {
         let size = max_buffer_size(encoding, max_level, levels.len());
         let mut encoder = LevelEncoder::v1(encoding, max_level, vec![0; size]);
-        encoder.put(&levels)?;
+        encoder.put(levels)?;
         encoder.consume()
     }
 
@@ -817,7 +817,7 @@ impl<T: DataType> ColumnWriterImpl<T> {
     fn encode_levels_v2(&self, levels: &[i16], max_level: i16) -> Result<Vec<u8>> {
         let size = max_buffer_size(Encoding::RLE, max_level, levels.len());
         let mut encoder = LevelEncoder::v2(max_level, vec![0; size]);
-        encoder.put(&levels)?;
+        encoder.put(levels)?;
         encoder.consume()
     }
 

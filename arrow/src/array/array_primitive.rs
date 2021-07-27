@@ -299,7 +299,7 @@ impl<'a, T: ArrowPrimitiveType> IntoIterator for &'a PrimitiveArray<T> {
 impl<'a, T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// constructs a new iterator
     pub fn iter(&'a self) -> PrimitiveIter<'a, T> {
-        PrimitiveIter::<'a, T>::new(&self)
+        PrimitiveIter::<'a, T>::new(self)
     }
 }
 
