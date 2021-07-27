@@ -72,8 +72,8 @@ impl Type {
     /// Returns [`BasicTypeInfo`] information about the type.
     pub fn get_basic_info(&self) -> &BasicTypeInfo {
         match *self {
-            Type::PrimitiveType { ref basic_info, .. } => &basic_info,
-            Type::GroupType { ref basic_info, .. } => &basic_info,
+            Type::PrimitiveType { ref basic_info, .. } => basic_info,
+            Type::GroupType { ref basic_info, .. } => basic_info,
         }
     }
 

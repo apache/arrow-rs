@@ -167,7 +167,7 @@ impl<'a> IntoIterator for &'a BooleanArray {
 impl<'a> BooleanArray {
     /// constructs a new iterator
     pub fn iter(&'a self) -> BooleanIter<'a> {
-        BooleanIter::<'a>::new(&self)
+        BooleanIter::<'a>::new(self)
     }
 }
 

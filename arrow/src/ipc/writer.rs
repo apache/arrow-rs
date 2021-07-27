@@ -190,7 +190,7 @@ impl IpcDataGenerator {
         for array in batch.columns() {
             let array_data = array.data();
             offset = write_array_data(
-                &array_data,
+                array_data,
                 &mut buffers,
                 &mut arrow_data,
                 &mut nodes,
@@ -243,7 +243,7 @@ impl IpcDataGenerator {
         let mut arrow_data: Vec<u8> = vec![];
 
         write_array_data(
-            &array_data,
+            array_data,
             &mut buffers,
             &mut arrow_data,
             &mut nodes,
@@ -628,7 +628,7 @@ pub fn write_message<W: Write>(
 
     write_continuation(
         &mut writer,
-        &write_options,
+        write_options,
         (aligned_size - prefix_size) as i32,
     )?;
 

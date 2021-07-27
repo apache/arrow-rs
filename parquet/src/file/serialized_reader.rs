@@ -199,7 +199,7 @@ impl<'a, R: ChunkReader> SerializedRowGroupReader<'a, R> {
 
 impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'a, R> {
     fn metadata(&self) -> &RowGroupMetaData {
-        &self.metadata
+        self.metadata
     }
 
     fn num_columns(&self) -> usize {

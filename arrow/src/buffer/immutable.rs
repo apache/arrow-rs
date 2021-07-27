@@ -188,14 +188,14 @@ impl Buffer {
             return self.slice(offset / 8);
         }
 
-        bitwise_unary_op_helper(&self, offset, len, |a| a)
+        bitwise_unary_op_helper(self, offset, len, |a| a)
     }
 
     /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
     /// in larger chunks and starting at arbitrary bit offsets.
     /// Note that both `offset` and `length` are measured in bits.
     pub fn bit_chunks(&self, offset: usize, len: usize) -> BitChunks {
-        BitChunks::new(&self.as_slice(), offset, len)
+        BitChunks::new(self.as_slice(), offset, len)
     }
 
     /// Returns the number of 1-bits in this buffer.

@@ -292,7 +292,7 @@ pub fn filter_record_batch(
     let filtered_arrays = record_batch
         .columns()
         .iter()
-        .map(|a| make_array(filter(&a.data())))
+        .map(|a| make_array(filter(a.data())))
         .collect();
     RecordBatch::try_new(record_batch.schema(), filtered_arrays)
 }

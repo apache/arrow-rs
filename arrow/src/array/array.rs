@@ -558,7 +558,7 @@ where
             writeln!(f, "  null,")?;
         } else {
             write!(f, "  ")?;
-            print_item(&array, i, f)?;
+            print_item(array, i, f)?;
             writeln!(f, ",")?;
         }
     }
@@ -574,7 +574,7 @@ where
                 writeln!(f, "  null,")?;
             } else {
                 write!(f, "  ")?;
-                print_item(&array, i, f)?;
+                print_item(array, i, f)?;
                 writeln!(f, ",")?;
             }
         }

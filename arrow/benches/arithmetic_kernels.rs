@@ -44,24 +44,24 @@ fn bench_add(arr_a: &ArrayRef, arr_b: &ArrayRef) {
 fn bench_subtract(arr_a: &ArrayRef, arr_b: &ArrayRef) {
     let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
     let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(subtract(&arr_a, &arr_b).unwrap());
+    criterion::black_box(subtract(arr_a, arr_b).unwrap());
 }
 
 fn bench_multiply(arr_a: &ArrayRef, arr_b: &ArrayRef) {
     let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
     let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(multiply(&arr_a, &arr_b).unwrap());
+    criterion::black_box(multiply(arr_a, arr_b).unwrap());
 }
 
 fn bench_divide(arr_a: &ArrayRef, arr_b: &ArrayRef) {
     let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
     let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(divide(&arr_a, &arr_b).unwrap());
+    criterion::black_box(divide(arr_a, arr_b).unwrap());
 }
 
 fn bench_divide_scalar(array: &ArrayRef, divisor: f32) {
     let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
-    criterion::black_box(divide_scalar(&array, divisor).unwrap());
+    criterion::black_box(divide_scalar(array, divisor).unwrap());
 }
 
 fn bench_limit(arr_a: &ArrayRef, max: usize) {

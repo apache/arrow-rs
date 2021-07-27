@@ -279,7 +279,7 @@ impl<W: Write> Writer<W> {
             .iter()
             .map(|array| match array.data_type() {
                 DataType::Dictionary(_, value_type) => {
-                    crate::compute::kernels::cast::cast(array, &value_type)
+                    crate::compute::kernels::cast::cast(array, value_type)
                         .expect("cannot cast dictionary to underlying values")
                 }
                 _ => array.clone(),

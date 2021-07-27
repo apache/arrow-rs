@@ -264,7 +264,7 @@ impl<'a, T: StringOffsetSizeTrait> IntoIterator for &'a GenericStringArray<T> {
 impl<'a, T: StringOffsetSizeTrait> GenericStringArray<T> {
     /// constructs a new iterator
     pub fn iter(&'a self) -> GenericStringIter<'a, T> {
-        GenericStringIter::<'a, T>::new(&self)
+        GenericStringIter::<'a, T>::new(self)
     }
 }
 
