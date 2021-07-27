@@ -412,7 +412,7 @@ mod tests {
             (
                 Field::new("b", DataType::Int16, false),
                 Arc::new(BooleanArray::from(vec![false, false, true, true]))
-                    as Arc<Array>,
+                    as Arc<dyn Array>,
             ),
             (
                 Field::new("c", DataType::Utf8, false),
@@ -515,7 +515,7 @@ mod tests {
         StructArray::from(vec![
             (
                 Field::new("b", DataType::Float32, false),
-                Arc::new(Float32Array::from(vec![1.1])) as Arc<Array>,
+                Arc::new(Float32Array::from(vec![1.1])) as Arc<dyn Array>,
             ),
             (
                 Field::new("c", DataType::Float64, false),

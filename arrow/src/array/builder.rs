@@ -3026,9 +3026,9 @@ mod tests {
         let mut fields = Vec::new();
         let mut field_builders = Vec::new();
         fields.push(Field::new("f1", DataType::Utf8, false));
-        field_builders.push(Box::new(string_builder) as Box<ArrayBuilder>);
+        field_builders.push(Box::new(string_builder) as Box<dyn ArrayBuilder>);
         fields.push(Field::new("f2", DataType::Int32, false));
-        field_builders.push(Box::new(int_builder) as Box<ArrayBuilder>);
+        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
 
         let mut builder = StructBuilder::new(fields, field_builders);
         assert_eq!(2, builder.num_fields());
@@ -3089,9 +3089,9 @@ mod tests {
         let mut fields = Vec::new();
         let mut field_builders = Vec::new();
         fields.push(Field::new("f1", DataType::Int32, false));
-        field_builders.push(Box::new(int_builder) as Box<ArrayBuilder>);
+        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
         fields.push(Field::new("f2", DataType::Boolean, false));
-        field_builders.push(Box::new(bool_builder) as Box<ArrayBuilder>);
+        field_builders.push(Box::new(bool_builder) as Box<dyn ArrayBuilder>);
 
         let mut builder = StructBuilder::new(fields, field_builders);
         builder
@@ -3182,7 +3182,7 @@ mod tests {
         let mut fields = Vec::new();
         let mut field_builders = Vec::new();
         fields.push(Field::new("f1", DataType::Int32, false));
-        field_builders.push(Box::new(int_builder) as Box<ArrayBuilder>);
+        field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
 
         let mut builder = StructBuilder::new(fields, field_builders);
         assert!(builder.field_builder::<BinaryBuilder>(0).is_none());
