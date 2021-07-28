@@ -1706,6 +1706,47 @@ impl FieldData {
 }
 
 /// Builder type for creating a new `UnionArray`.
+///
+/// Example: **Dense Memory Layout**
+///
+/// ```
+/// use arrow::array::UnionBuilder;
+/// use arrow::datatypes::{Float64Type, Int32Type};
+///
+/// let mut builder = UnionBuilder::new_dense(3);
+/// builder.append::<Int32Type>("a", 1).unwrap();
+/// builder.append::<Float64Type>("b", 3.0).unwrap();
+/// builder.append::<Int32Type>("a", 4).unwrap();
+/// let union = builder.build().unwrap();
+///
+/// assert_eq!(union.type_id(0), 0_i8);
+/// assert_eq!(union.type_id(1), 1_i8);
+/// assert_eq!(union.type_id(2), 0_i8);
+///
+/// assert_eq!(union.value_offset(0), 0_i32);
+/// assert_eq!(union.value_offset(1), 0_i32);
+/// assert_eq!(union.value_offset(2), 1_i32);
+/// ```
+///
+/// Example: **Sparse Memory Layout**
+/// ```
+/// use arrow::array::UnionBuilder;
+/// use arrow::datatypes::{Float64Type, Int32Type};
+///
+/// let mut builder = UnionBuilder::new_sparse(3);
+/// builder.append::<Int32Type>("a", 1).unwrap();
+/// builder.append::<Float64Type>("b", 3.0).unwrap();
+/// builder.append::<Int32Type>("a", 4).unwrap();
+/// let union = builder.build().unwrap();
+///
+/// assert_eq!(union.type_id(0), 0_i8);
+/// assert_eq!(union.type_id(1), 1_i8);
+/// assert_eq!(union.type_id(2), 0_i8);
+///
+/// assert_eq!(union.value_offset(0), 0_i32);
+/// assert_eq!(union.value_offset(1), 1_i32);
+/// assert_eq!(union.value_offset(2), 2_i32);
+/// ```
 #[derive(Debug)]
 pub struct UnionBuilder {
     /// The current number of slots in the array
