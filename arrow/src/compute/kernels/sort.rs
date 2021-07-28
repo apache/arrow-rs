@@ -801,11 +801,11 @@ where
         len = limit.min(len);
     }
     if !descending {
-        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
             a.1.cmp(b.1)
         });
     } else {
-        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
+        sort_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
             a.1.cmp(b.1).reverse()
         });
         null_indices.reverse();
