@@ -628,7 +628,7 @@ fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
     let keys: &PrimitiveArray<T> = values.keys();
 
     let dict = values.values();
-    let dict: &StringArray = as_string_array(&dict);
+    let dict: &StringArray = as_string_array(dict);
 
     sort_string_helper(
         keys,
@@ -658,7 +658,7 @@ where
 {
     let mut valids = value_indices
         .into_iter()
-        .map(|index| (index, value_fn(&values, index)))
+        .map(|index| (index, value_fn(values, index)))
         .collect::<Vec<(u32, &str)>>();
     let mut nulls = null_indices;
     let descending = options.descending;

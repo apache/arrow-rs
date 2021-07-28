@@ -70,9 +70,9 @@ impl Page {
     /// Returns internal byte buffer reference for this page.
     pub fn buffer(&self) -> &ByteBufferPtr {
         match self {
-            Page::DataPage { ref buf, .. } => &buf,
-            Page::DataPageV2 { ref buf, .. } => &buf,
-            Page::DictionaryPage { ref buf, .. } => &buf,
+            Page::DataPage { ref buf, .. } => buf,
+            Page::DataPageV2 { ref buf, .. } => buf,
+            Page::DictionaryPage { ref buf, .. } => buf,
         }
     }
 

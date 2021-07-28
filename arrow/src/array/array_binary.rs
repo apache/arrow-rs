@@ -174,7 +174,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
 impl<'a, T: BinaryOffsetSizeTrait> GenericBinaryArray<T> {
     /// constructs a new iterator
     pub fn iter(&'a self) -> GenericBinaryIter<'a, T> {
-        GenericBinaryIter::<'a, T>::new(&self)
+        GenericBinaryIter::<'a, T>::new(self)
     }
 }
 

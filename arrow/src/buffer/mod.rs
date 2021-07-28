@@ -39,7 +39,7 @@ impl<'a, 'b> BitAnd<&'b Buffer> for &'a Buffer {
         }
 
         let len_in_bits = self.len() * 8;
-        Ok(buffer_bin_and(&self, 0, &rhs, 0, len_in_bits))
+        Ok(buffer_bin_and(self, 0, rhs, 0, len_in_bits))
     }
 }
 
@@ -55,7 +55,7 @@ impl<'a, 'b> BitOr<&'b Buffer> for &'a Buffer {
 
         let len_in_bits = self.len() * 8;
 
-        Ok(buffer_bin_or(&self, 0, &rhs, 0, len_in_bits))
+        Ok(buffer_bin_or(self, 0, rhs, 0, len_in_bits))
     }
 }
 
@@ -64,6 +64,6 @@ impl Not for &Buffer {
 
     fn not(self) -> Buffer {
         let len_in_bits = self.len() * 8;
-        buffer_unary_not(&self, 0, len_in_bits)
+        buffer_unary_not(self, 0, len_in_bits)
     }
 }

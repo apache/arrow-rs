@@ -97,22 +97,22 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let (field1, strings, field2, ints) = struct_array_values(128);
     c.bench_function("struct_array_from_vec 128", |b| {
-        b.iter(|| struct_array_from_vec(&field1, &strings, &field2, &ints))
+        b.iter(|| struct_array_from_vec(field1, &strings, field2, &ints))
     });
 
     let (field1, strings, field2, ints) = struct_array_values(256);
     c.bench_function("struct_array_from_vec 256", |b| {
-        b.iter(|| struct_array_from_vec(&field1, &strings, &field2, &ints))
+        b.iter(|| struct_array_from_vec(field1, &strings, field2, &ints))
     });
 
     let (field1, strings, field2, ints) = struct_array_values(512);
     c.bench_function("struct_array_from_vec 512", |b| {
-        b.iter(|| struct_array_from_vec(&field1, &strings, &field2, &ints))
+        b.iter(|| struct_array_from_vec(field1, &strings, field2, &ints))
     });
 
     let (field1, strings, field2, ints) = struct_array_values(1024);
     c.bench_function("struct_array_from_vec 1024", |b| {
-        b.iter(|| struct_array_from_vec(&field1, &strings, &field2, &ints))
+        b.iter(|| struct_array_from_vec(field1, &strings, field2, &ints))
     });
 }
 

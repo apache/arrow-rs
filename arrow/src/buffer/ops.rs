@@ -287,7 +287,7 @@ pub fn buffer_bin_and(
     len_in_bits: usize,
 ) -> Buffer {
     bitwise_bin_op_helper(
-        &left,
+        left,
         left_offset_in_bits,
         right,
         right_offset_in_bits,
@@ -396,7 +396,7 @@ pub fn buffer_bin_or(
     len_in_bits: usize,
 ) -> Buffer {
     bitwise_bin_op_helper(
-        &left,
+        left,
         left_offset_in_bits,
         right,
         right_offset_in_bits,
@@ -424,6 +424,6 @@ pub fn buffer_unary_not(
     // Default implementation
     #[allow(unreachable_code)]
     {
-        bitwise_unary_op_helper(&left, offset_in_bits, len_in_bits, |a| !a)
+        bitwise_unary_op_helper(left, offset_in_bits, len_in_bits, |a| !a)
     }
 }

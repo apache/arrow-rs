@@ -1083,7 +1083,7 @@ where
     #[cfg(feature = "simd")]
     return simd_modulus(&left, &right);
     #[cfg(not(feature = "simd"))]
-    return math_modulus(&left, &right);
+    return math_modulus(left, right);
 }
 
 /// Perform `left / right` operation on two arrays. If either left or right value is null
@@ -1106,7 +1106,7 @@ where
     #[cfg(feature = "simd")]
     return simd_divide(&left, &right);
     #[cfg(not(feature = "simd"))]
-    return math_divide(&left, &right);
+    return math_divide(left, right);
 }
 
 /// Modulus every value in an array by a scalar. If any value in the array is null then the
@@ -1129,7 +1129,7 @@ where
     #[cfg(feature = "simd")]
     return simd_modulus_scalar(&array, modulo);
     #[cfg(not(feature = "simd"))]
-    return math_modulus_scalar(&array, modulo);
+    return math_modulus_scalar(array, modulo);
 }
 
 /// Divide every value in an array by a scalar. If any value in the array is null then the
@@ -1152,7 +1152,7 @@ where
     #[cfg(feature = "simd")]
     return simd_divide_scalar(&array, divisor);
     #[cfg(not(feature = "simd"))]
-    return math_divide_scalar(&array, divisor);
+    return math_divide_scalar(array, divisor);
 }
 
 #[cfg(test)]

@@ -217,7 +217,7 @@ impl ArrowJsonBatch {
                 if &col.name != field.name() {
                     return false;
                 }
-                let json_array: Vec<Value> = json_from_col(&col, field.data_type());
+                let json_array: Vec<Value> = json_from_col(col, field.data_type());
                 match field.data_type() {
                     DataType::Null => {
                         let arr: &NullArray =

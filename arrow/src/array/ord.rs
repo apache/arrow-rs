@@ -77,7 +77,7 @@ where
     let left: StringArray = StringArray::from(left.data().clone());
     let right: StringArray = StringArray::from(right.data().clone());
 
-    Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
+    Box::new(move |i, j| left.value(i).cmp(right.value(j)))
 }
 
 fn compare_dict_string<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
@@ -97,7 +97,7 @@ where
         let key_right = right_keys.value(j).to_usize().unwrap();
         let left = left_values.value(key_left);
         let right = right_values.value(key_right);
-        left.cmp(&right)
+        left.cmp(right)
     })
 }
 
