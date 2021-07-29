@@ -1184,7 +1184,7 @@ mod tests {
         assert_eq!(5, a.value(0));
         assert_eq!(6, b.value(0));
 
-        let c = add(&a, &b).unwrap();
+        let c = add(a, b).unwrap();
         assert_eq!(5, c.len());
         assert_eq!(11, c.value(0));
         assert_eq!(13, c.value(1));
@@ -1281,7 +1281,7 @@ mod tests {
         let a = a.as_any().downcast_ref::<Int32Array>().unwrap();
         let b = b.as_any().downcast_ref::<Int32Array>().unwrap();
 
-        let c = divide(&a, &b).unwrap();
+        let c = divide(a, b).unwrap();
         assert_eq!(5, c.len());
         assert_eq!(3, c.value(0));
         assert_eq!(2, c.value(1));
@@ -1299,7 +1299,7 @@ mod tests {
         let a = a.as_any().downcast_ref::<Int32Array>().unwrap();
         let b = b.as_any().downcast_ref::<Int32Array>().unwrap();
 
-        let c = modulus(&a, &b).unwrap();
+        let c = modulus(a, b).unwrap();
         assert_eq!(5, c.len());
         assert_eq!(0, c.value(0));
         assert_eq!(3, c.value(1));
@@ -1397,7 +1397,7 @@ mod tests {
         let b = b.slice(8, 6);
         let b = b.as_any().downcast_ref::<Int32Array>().unwrap();
 
-        let c = divide(&a, &b).unwrap();
+        let c = divide(a, b).unwrap();
         assert_eq!(6, c.len());
         assert_eq!(3, c.value(0));
         assert!(c.is_null(1));
@@ -1450,7 +1450,7 @@ mod tests {
         let b = b.slice(8, 6);
         let b = b.as_any().downcast_ref::<Int32Array>().unwrap();
 
-        let c = modulus(&a, &b).unwrap();
+        let c = modulus(a, b).unwrap();
         assert_eq!(6, c.len());
         assert_eq!(0, c.value(0));
         assert!(c.is_null(1));
@@ -1516,7 +1516,7 @@ mod tests {
         let b = b.slice(63, 65);
         let b = b.as_any().downcast_ref::<UInt8Array>().unwrap();
 
-        let actual = add(&a, &b).unwrap();
+        let actual = add(a, b).unwrap();
         let actual: Vec<Option<u8>> = actual.iter().collect();
         let expected: Vec<Option<u8>> = (63..63_u8 + 65_u8)
             .into_iter()
