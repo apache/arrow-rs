@@ -1738,15 +1738,15 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
         Arc::new(self.finish())
     }
 
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 
-    fn as_any_mut(&mut self) -> &mut Any {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
 
-    fn into_box_any(self: Box<Self>) -> Box<Any> {
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
 }

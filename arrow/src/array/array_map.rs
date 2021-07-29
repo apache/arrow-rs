@@ -155,7 +155,7 @@ impl MapArray {
 }
 
 impl Array for MapArray {
-    fn as_any(&self) -> &Any {
+    fn as_any(&self) -> &dyn Any {
         self
     }
 

@@ -245,7 +245,7 @@ impl PartialEq<Value> for MapArray {
 impl PartialEq<MapArray> for Value {
     fn eq(&self, arrow: &MapArray) -> bool {
         match self {
-            Value::Array(json_array) => arrow.equals_json_values(&json_array),
+            Value::Array(json_array) => arrow.equals_json_values(json_array),
             _ => false,
         }
     }
