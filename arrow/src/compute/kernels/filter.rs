@@ -292,7 +292,7 @@ pub fn filter_record_batch(
 
     let filtered_arrays = match num_colums {
         1 => {
-            vec![filter(record_batch.columns()[0].as_ref(), predicate)?.into()]
+            vec![filter(record_batch.columns()[0].as_ref(), predicate)?]
         }
         _ => {
             let filter = build_filter(predicate)?;
