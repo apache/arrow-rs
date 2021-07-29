@@ -818,7 +818,7 @@ mod tests {
         let a = BooleanArray::from(vec![None, Some(true), Some(false), None, Some(true)]);
         let a = a.slice(1, 4);
         let a = a.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let c = not(&a).unwrap();
+        let c = not(a).unwrap();
 
         let expected =
             BooleanArray::from(vec![Some(false), Some(true), None, Some(false)]);
@@ -883,7 +883,7 @@ mod tests {
         let b = b.slice(8, 4);
         let b = b.as_any().downcast_ref::<BooleanArray>().unwrap();
 
-        let c = and(&a, &b).unwrap();
+        let c = and(a, b).unwrap();
 
         let expected = BooleanArray::from(vec![false, false, false, true]);
 
@@ -906,7 +906,7 @@ mod tests {
         let b = b.slice(8, 4);
         let b = b.as_any().downcast_ref::<BooleanArray>().unwrap();
 
-        let c = and(&a, &b).unwrap();
+        let c = and(a, b).unwrap();
 
         let expected = BooleanArray::from(vec![false, false, false, true]);
 
@@ -924,7 +924,7 @@ mod tests {
         let a = a.slice(8, 4);
         let a = a.as_any().downcast_ref::<BooleanArray>().unwrap();
 
-        let c = and(&a, &b).unwrap();
+        let c = and(a, &b).unwrap();
 
         let expected = BooleanArray::from(vec![false, false, false, true]);
 
@@ -942,7 +942,7 @@ mod tests {
         let b = b.slice(8, 4);
         let b = b.as_any().downcast_ref::<BooleanArray>().unwrap();
 
-        let c = and(&a, &b).unwrap();
+        let c = and(&a, b).unwrap();
 
         let expected = BooleanArray::from(vec![false, false, false, true]);
 
@@ -967,7 +967,7 @@ mod tests {
         let b = b.slice(2, 4);
         let b = b.as_any().downcast_ref::<BooleanArray>().unwrap();
 
-        let c = and(&a, &b).unwrap();
+        let c = and(a, b).unwrap();
 
         let expected =
             BooleanArray::from(vec![Some(false), Some(false), None, Some(true)]);
@@ -1147,7 +1147,7 @@ mod tests {
         ]);
         let comp = comp.slice(2, 3); // Some(false), None, Some(true)
         let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(&a, &comp).unwrap();
+        let res = nullif(a, comp).unwrap();
 
         let expected = Int32Array::from(vec![
             Some(15), // False => keep it

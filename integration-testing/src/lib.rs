@@ -405,7 +405,7 @@ fn array_from_json(
             let null_buf = create_null_buf(&json_col);
             let children = json_col.children.clone().unwrap();
             let child_array = array_from_json(
-                &child_field,
+                child_field,
                 children.get(0).unwrap().clone(),
                 dictionaries,
             )?;
@@ -428,7 +428,7 @@ fn array_from_json(
             let null_buf = create_null_buf(&json_col);
             let children = json_col.children.clone().unwrap();
             let child_array = array_from_json(
-                &child_field,
+                child_field,
                 children.get(0).unwrap().clone(),
                 dictionaries,
             )?;
@@ -454,7 +454,7 @@ fn array_from_json(
         DataType::FixedSizeList(child_field, _) => {
             let children = json_col.children.clone().unwrap();
             let child_array = array_from_json(
-                &child_field,
+                child_field,
                 children.get(0).unwrap().clone(),
                 dictionaries,
             )?;

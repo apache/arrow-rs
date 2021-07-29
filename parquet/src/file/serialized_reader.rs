@@ -481,7 +481,7 @@ mod tests {
             .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
             .flat_map(|r| {
                 let schema = "message schema { OPTIONAL INT32 id; }";
-                let proj = parse_message_type(&schema).ok();
+                let proj = parse_message_type(schema).ok();
 
                 r.into_iter().project(proj).unwrap()
             })
