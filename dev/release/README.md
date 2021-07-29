@@ -68,6 +68,7 @@ This script creates a changelog using github issues and the
 labels associated with them.
 
 ## CHANGELOG for maintenance releases
+
 At the time of writing, the `update_change_log.sh` script does not work well with branches as it seems to intermix issues that were resolved in master.
 
 To generate a bare bones CHANGELOG for maintenance releases, you can use a command similar to the following to get all changes between 5.0.0 and the active_release.
