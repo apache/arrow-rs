@@ -288,12 +288,21 @@ pub fn filter_record_batch(
         return filter_record_batch(record_batch, &predicate);
     }
 
-    let filter = build_filter(predicate)?;
-    let filtered_arrays = record_batch
-        .columns()
-        .iter()
-        .map(|a| make_array(filter(a.data())))
-        .collect();
+    let num_colums = record_batch.columns().len();
+
+    let filtered_arrays = match num_colums {
+        1 => {
+            vec![filter(record_batch.columns()[0].as_ref(), predicate)?.into()]
+        }
+        _ => {
+            let filter = build_filter(predicate)?;
+            record_batch
+                .columns()
+                .iter()
+                .map(|a| make_array(filter(a.data())))
+                .collect()
+        }
+    };
     RecordBatch::try_new(record_batch.schema(), filtered_arrays)
 }
 
