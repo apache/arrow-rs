@@ -34,6 +34,6 @@ docker run -it --rm -e CHANGELOG_GITHUB_TOKEN=$CHANGELOG_GITHUB_TOKEN -v "$(pwd)
     --user apache \
     --project arrow-rs \
     --since-tag 4.0.0 \
-    --future-release 5.0.0
+    --future-release 5.1.0
 
 sed -i "s/\\\n/\n\n/" CHANGELOG.md
