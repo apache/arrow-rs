@@ -21,9 +21,9 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 # Changelog
 
-## [5.0.1](https://github.com/apache/arrow-rs/tree/5.0.1) (2021-07-29)
+## [5.1.0](https://github.com/apache/arrow-rs/tree/5.0.1) (2021-07-29)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/5.0.0...5.0.1)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/5.0.0...5.1.0)
 
 * 6d222fa9390d975a5dbf119102da235ad2116581 Doctests for BinaryArray and LargeBinaryArray. (#625) (#630)
 * f241bc72467ae9c0f3a79a9ad27d47a3ca739c9e Cherry pick Sort binary to active_release (#621)
