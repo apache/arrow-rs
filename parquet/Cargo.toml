@@ -17,7 +17,7 @@
 
 [package]
 name = "parquet"
-version = "5.0.0"
+version = "5.1.0"
 license = "Apache-2.0"
 description = "Apache Parquet implementation in Rust"
 homepage = "https://github.com/apache/arrow-rs"
@@ -41,7 +41,7 @@ lz4 = { version = "1.23", optional = true }
 zstd = { version = "0.9", optional = true }
 chrono = "0.4"
 num-bigint = "0.4"
-arrow = { path = "../arrow", version = "5.0.0", optional = true }
+arrow = { path = "../arrow", version = "5.1.0", optional = true }
 base64 = { version = "0.13", optional = true }
 clap = { version = "2.33.3", optional = true }
 serde_json = { version = "1.0", features = ["preserve_order"], optional = true }
@@ -54,7 +54,7 @@ snap = "1.0"
 brotli = "3.3"
 flate2 = "1.0"
 lz4 = "1.23"
-arrow = { path = "../arrow", version = "5.0.0" }
+arrow = { path = "../arrow", version = "5.1.0" }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 
 [features]
