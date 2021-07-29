@@ -3229,7 +3229,7 @@ mod tests {
     where
         T: ArrowNumericType,
     {
-        let c = cast(&array, dt).unwrap();
+        let c = cast(array, dt).unwrap();
         let a = c.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
         let mut v: Vec<String> = vec![];
         for i in 0..array.len() {
@@ -3533,7 +3533,7 @@ mod tests {
         for array in get_arrays_of_all_types() {
             for to_type in &all_types {
                 println!("Test casting {:?} --> {:?}", array.data_type(), to_type);
-                let cast_result = cast(&array, &to_type);
+                let cast_result = cast(&array, to_type);
                 let reported_cast_ability = can_cast_types(array.data_type(), to_type);
 
                 // check for mismatch

@@ -1015,7 +1015,7 @@ mod tests {
 
         test_take_primitive_arrays_non_null::<Int64Type>(
             vec![0, 10, 20, 30, 40, 50],
-            &index,
+            index,
             None,
             vec![Some(20), Some(30), None, None],
         )
@@ -1036,7 +1036,7 @@ mod tests {
 
         test_take_primitive_arrays::<Int64Type>(
             vec![None, None, Some(20), Some(30), Some(40), Some(50)],
-            &index,
+            index,
             None,
             vec![Some(20), Some(30), None, None],
         )
@@ -1291,7 +1291,7 @@ mod tests {
         // boolean
         test_take_boolean_arrays(
             vec![Some(false), None, Some(true), Some(false), None],
-            &index,
+            index,
             None,
             vec![None, Some(false), Some(true), None],
         );

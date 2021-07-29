@@ -290,7 +290,7 @@ mod tests {
         } else {
             LevelEncoder::v1(enc, max_level, vec![0; size])
         };
-        encoder.put(&levels).expect("put() should be OK");
+        encoder.put(levels).expect("put() should be OK");
         let encoded_levels = encoder.consume().expect("consume() should be OK");
 
         let byte_buf = ByteBufferPtr::new(encoded_levels);
@@ -322,7 +322,7 @@ mod tests {
         } else {
             LevelEncoder::v1(enc, max_level, vec![0; size])
         };
-        encoder.put(&levels).expect("put() should be OK");
+        encoder.put(levels).expect("put() should be OK");
         let encoded_levels = encoder.consume().expect("consume() should be OK");
 
         let byte_buf = ByteBufferPtr::new(encoded_levels);
@@ -408,7 +408,7 @@ mod tests {
         let mut found_err = false;
         // Insert a large number of values, so we run out of space
         for _ in 0..100 {
-            if let Err(err) = encoder.put(&levels) {
+            if let Err(err) = encoder.put(levels) {
                 assert!(format!("{}", err).contains("Not enough bytes left"));
                 found_err = true;
                 break;

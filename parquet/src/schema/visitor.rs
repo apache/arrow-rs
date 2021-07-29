@@ -225,7 +225,7 @@ mod tests {
             }
         ";
 
-        let parquet_type = Arc::new(parse_message_type(&message_type).unwrap());
+        let parquet_type = Arc::new(parse_message_type(message_type).unwrap());
 
         let mut visitor = TestVisitor::new(parquet_type.clone());
         for f in parquet_type.get_fields() {
