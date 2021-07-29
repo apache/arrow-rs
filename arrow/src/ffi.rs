@@ -777,7 +777,7 @@ mod tests {
 
         // perform some operation
         let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-        let array = kernels::arithmetic::add(&array, &array).unwrap();
+        let array = kernels::arithmetic::add(array, array).unwrap();
 
         // verify
         assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
@@ -982,7 +982,7 @@ mod tests {
 
         // perform some operation
         let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let array = kernels::boolean::not(&array)?;
+        let array = kernels::boolean::not(array)?;
 
         // verify
         assert_eq!(

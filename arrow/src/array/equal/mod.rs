@@ -307,11 +307,11 @@ mod tests {
         let a = a.data();
         let b = NullArray::new(12);
         let b = b.data();
-        test_equal(&a, &b, true);
+        test_equal(a, b, true);
 
         let b = NullArray::new(10);
         let b = b.data();
-        test_equal(&a, &b, false);
+        test_equal(a, b, false);
 
         // Test the case where offset != 0
 
@@ -330,11 +330,11 @@ mod tests {
         let a = a.data();
         let b = BooleanArray::from(vec![false, false, true]);
         let b = b.data();
-        test_equal(&a, &b, true);
+        test_equal(a, b, true);
 
         let b = BooleanArray::from(vec![false, false, false]);
         let b = b.data();
-        test_equal(&a, &b, false);
+        test_equal(a, b, false);
     }
 
     #[test]
@@ -343,15 +343,15 @@ mod tests {
         let a = a.data();
         let b = BooleanArray::from(vec![Some(false), None, None, Some(true)]);
         let b = b.data();
-        test_equal(&a, &b, true);
+        test_equal(a, b, true);
 
         let b = BooleanArray::from(vec![None, None, None, Some(true)]);
         let b = b.data();
-        test_equal(&a, &b, false);
+        test_equal(a, b, false);
 
         let b = BooleanArray::from(vec![Some(true), None, None, Some(true)]);
         let b = b.data();
-        test_equal(&a, &b, false);
+        test_equal(a, b, false);
     }
 
     #[test]
@@ -382,7 +382,7 @@ mod tests {
         let a = a.data();
         let b = BooleanArray::from(vector.clone());
         let b = b.data();
-        test_equal(&a, &b, true);
+        test_equal(a, b, true);
 
         // Elements fill in `u8`s + suffix bits.
         vector.push(true);
@@ -390,7 +390,7 @@ mod tests {
         let a = a.data();
         let b = BooleanArray::from(vector);
         let b = b.data();
-        test_equal(&a, &b, true);
+        test_equal(a, b, true);
     }
 
     #[test]
@@ -428,7 +428,7 @@ mod tests {
             let lhs = lhs.data();
             let rhs = Int32Array::from(rhs);
             let rhs = rhs.data();
-            test_equal(&lhs, &rhs, expected);
+            test_equal(lhs, rhs, expected);
         }
     }
 
@@ -588,7 +588,7 @@ mod tests {
         let b = StringArray::from(vec![Some("b")]);
         let b = b.data();
 
-        test_equal(&a, &b, true);
+        test_equal(&a, b, true);
     }
 
     #[test]
@@ -609,11 +609,11 @@ mod tests {
         let a = a.data();
         let b = NullArray::new(2);
         let b = b.data();
-        test_equal(&a, &b, true);
+        test_equal(a, b, true);
 
         let b = NullArray::new(1);
         let b = b.data();
-        test_equal(&a, &b, false);
+        test_equal(a, b, false);
     }
 
     fn create_list_array<U: AsRef<[i32]>, T: AsRef<[Option<U>]>>(data: T) -> ArrayData {
@@ -1016,7 +1016,7 @@ mod tests {
         let b = StructArray::try_from(vec![("f1", strings), ("f2", ints)]).unwrap();
         let b = b.data();
 
-        test_equal(&a, &b, true);
+        test_equal(a, b, true);
     }
 
     #[test]

@@ -128,7 +128,7 @@ async fn send_batch(
     options: &writer::IpcWriteOptions,
 ) -> Result {
     let (dictionary_flight_data, mut batch_flight_data) =
-        arrow_flight::utils::flight_data_from_arrow_batch(batch, &options);
+        arrow_flight::utils::flight_data_from_arrow_batch(batch, options);
 
     upload_tx
         .send_all(&mut stream::iter(dictionary_flight_data).map(Ok))
@@ -166,7 +166,7 @@ async fn verify_data(
             consume_flight_location(
                 location,
                 ticket.clone(),
-                &expected_data,
+                expected_data,
                 expected_schema.clone(),
             )
             .await?;

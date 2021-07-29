@@ -1042,7 +1042,7 @@ mod tests {
         let b = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let b_slice = b.slice(5, 5);
         let c = b_slice.as_any().downcast_ref().unwrap();
-        let d = eq(&c, &a).unwrap();
+        let d = eq(c, &a).unwrap();
         assert!(d.value(0));
         assert!(d.value(1));
         assert!(d.value(2));
@@ -1238,7 +1238,7 @@ mod tests {
         let b: Int32Array = (100..200).map(Some).collect();
         let b = b.slice(50, 50);
         let b = b.as_any().downcast_ref::<Int32Array>().unwrap();
-        let actual = lt(&a, &b).unwrap();
+        let actual = lt(a, b).unwrap();
         let expected: BooleanArray = (0..50).map(|_| Some(true)).collect();
         assert_eq!(expected, actual);
     }
@@ -1248,7 +1248,7 @@ mod tests {
         let a: Int32Array = (0..100).map(Some).collect();
         let a = a.slice(50, 50);
         let a = a.as_any().downcast_ref::<Int32Array>().unwrap();
-        let actual = lt_scalar(&a, 200).unwrap();
+        let actual = lt_scalar(a, 200).unwrap();
         let expected: BooleanArray = (0..50).map(|_| Some(true)).collect();
         assert_eq!(expected, actual);
     }

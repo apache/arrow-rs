@@ -294,7 +294,7 @@ async fn record_batch_from_message(
         data_body,
         ipc_batch,
         schema_ref,
-        &dictionaries_by_field,
+        dictionaries_by_field,
     );
 
     arrow_batch_result.map_err(|e| {
