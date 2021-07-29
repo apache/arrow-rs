@@ -1587,4 +1587,90 @@ mod tests {
             panic!("Levels should not be equal, to reflect the difference in struct nullness");
         }
     }
+
+    #[test]
+    fn test_map_array() {
+        // Note: we are using the JSON Arrow reader for brevity
+        let json_content = r#"
+        {"stocks":{"long": "$AAA", "short": "$BBB"}}
+        {"stocks":{"long": null, "long": "$CCC", "short": null}}
+        {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
+        "#;
+        let entries_struct_type = DataType::Struct(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+        ]);
+        let stocks_field = Field::new(
+            "stocks",
+            DataType::Map(
+                Box::new(Field::new("entries", entries_struct_type, false)),
+                false,
+            ),
+            // not nullable, so the keys have max level = 1
+            false,
+        );
+        let schema = Arc::new(Schema::new(vec![stocks_field]));
+        let builder = arrow::json::ReaderBuilder::new()
+            .with_schema(schema)
+            .with_batch_size(64);
+        let mut reader = builder.build(std::io::Cursor::new(json_content)).unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+
+        let expected_batch_level = LevelInfo {
+            definition: vec![0; 3],
+            repetition: None,
+            array_offsets: (0..=3).collect(),
+            array_mask: vec![true, true, true],
+            max_definition: 0,
+            level_type: LevelType::Root,
+            offset: 0,
+            length: 3,
+        };
+
+        let batch_level = LevelInfo::new(0, 3);
+        assert_eq!(&batch_level, &expected_batch_level);
+
+        // calculate the map's level
+        let mut levels = vec![];
+        batch
+            .columns()
+            .iter()
+            .zip(batch.schema().fields())
+            .for_each(|(array, field)| {
+                let mut array_levels = batch_level.calculate_array_levels(array, field);
+                levels.append(&mut array_levels);
+            });
+        assert_eq!(levels.len(), 2);
+
+        // test key levels
+        let list_level = levels.get(0).unwrap();
+
+        let expected_level = LevelInfo {
+            definition: vec![1; 7],
+            repetition: Some(vec![0, 1, 0, 1, 0, 1, 1]),
+            array_offsets: vec![0, 2, 4, 7],
+            array_mask: vec![true; 7],
+            max_definition: 1,
+            level_type: LevelType::Primitive(false),
+            offset: 0,
+            length: 7,
+        };
+        assert_eq!(list_level, &expected_level);
+
+        // test values levels
+        let list_level = levels.get(1).unwrap();
+
+        let expected_level = LevelInfo {
+            definition: vec![2, 2, 2, 1, 2, 1, 2],
+            repetition: Some(vec![0, 1, 0, 1, 0, 1, 1]),
+            array_offsets: vec![0, 2, 4, 7],
+            array_mask: vec![true, true, true, false, true, false, true],
+            max_definition: 2,
+            level_type: LevelType::Primitive(true),
+            offset: 0,
+            length: 7,
+        };
+        assert_eq!(list_level, &expected_level);
+    }
 }
