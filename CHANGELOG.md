@@ -25,6 +25,8 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/5.0.0...5.1.0)
 
+* 89932505dbe34904886fddb0da9c2e43ea6eaea3 Add links in docstrings (#605) (#633)
+* bf2e4f0966dfeba320afc347d7df407f7c76c82a Fix clippy lints for Rust 1.54 (#631) (#634)
 * 6d222fa9390d975a5dbf119102da235ad2116581 Doctests for BinaryArray and LargeBinaryArray. (#625) (#630)
 * f241bc72467ae9c0f3a79a9ad27d47a3ca739c9e Cherry pick Sort binary to active_release (#621)
 * ffe436a21b4c9deda2e019b4214f938c6384fcdb resolve unnecessary borrow clippy lints (#613) (#622)
@@ -46,4 +48,3 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 * 5057839b51b3b90b41bebeb205deb38bd6380014 Doctest for StructArray. (#562) (#567)
 * 332baca3ed24b516bb166f931db39f6bad19fab8 make has_min_max_set as pub fn (#559) (#566)
 * 2998db4a07b5f9cd8da292d7e7e990a19b0b7535 Bump prost and tonic (#560) (#565)
-*
