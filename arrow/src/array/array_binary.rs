@@ -42,6 +42,8 @@ impl BinaryOffsetSizeTrait for i64 {
     const DATA_TYPE: DataType = DataType::LargeBinary;
 }
 
+/// See [`BinaryArray`] and [`LargeBinaryArray`] for storing
+/// binary data.
 pub struct GenericBinaryArray<OffsetSize: BinaryOffsetSizeTrait> {
     data: ArrayData,
     value_offsets: RawPtrBox<OffsetSize>,
