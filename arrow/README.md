@@ -57,8 +57,6 @@ let array = Float64Array::from(Arc::new(data));
 println!("{:?}", array.value(1));
 ```
 
-NOTE: We plan to deprecate and make these modules private as part of a follow on release, as part of our journey of redesigning this crate.
-
 ## Building for WASM
 
 In order to compile Arrow for Web Assembly (the `wasm32-unknown-unknown` WASM target), you will likely need to turn off this crate's default features and use the `js` feature.
