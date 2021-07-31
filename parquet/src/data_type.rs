@@ -109,9 +109,21 @@ impl fmt::Display for Int96 {
 
 /// Rust representation for BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY Parquet physical types.
 /// Value is backed by a byte buffer.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ByteArray {
     data: Option<ByteBufferPtr>,
+}
+
+// Special case Debug that prints out byte arrays that are vaid utf8 as &str's
+impl std::fmt::Debug for ByteArray {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug_struct = f.debug_struct("ByteArray");
+        match self.as_utf8() {
+            Ok(s) => debug_struct.field("data", &s),
+            Err(_) => debug_struct.field("data", &self.data),
+        };
+        debug_struct.finish()
+    }
 }
 
 impl PartialOrd for ByteArray {
