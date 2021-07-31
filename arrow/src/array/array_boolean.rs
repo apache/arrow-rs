@@ -98,9 +98,11 @@ impl BooleanArray {
 
     /// Returns the boolean value at index `i`.
     ///
-    /// Note this doesn't do any bound checking, for performance reason.
+    /// Panics of offset `i` is out of bounds
     pub fn value(&self, i: usize) -> bool {
         assert!(i < self.len());
+        // Safety:
+        // `i < self.len()
         unsafe { self.value_unchecked(i) }
     }
 }
