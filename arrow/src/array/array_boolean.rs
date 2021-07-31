@@ -100,7 +100,7 @@ impl BooleanArray {
     ///
     /// Note this doesn't do any bound checking, for performance reason.
     pub fn value(&self, i: usize) -> bool {
-        debug_assert!(i < self.len());
+        assert!(i < self.len());
         unsafe { self.value_unchecked(i) }
     }
 }
