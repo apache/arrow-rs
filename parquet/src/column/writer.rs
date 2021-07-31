@@ -1688,6 +1688,137 @@ mod tests {
     }
 
     #[test]
+    fn test_bool_statistics() {
+        let stats = statistics_roundtrip::<BoolType>(&[true, false, false, true]);
+        assert!(stats.has_min_max_set());
+        // should this be BooleanStatistics??
+        if let Statistics::Int32(stats) = stats {
+            assert_eq!(stats.min(), &0);
+            assert_eq!(stats.max(), &1);
+        } else {
+            panic!("expecting Statistics::Int32, got {:?}", stats);
+        }
+    }
+
+    #[test]
+    fn test_int32_statistics() {
+        let stats = statistics_roundtrip::<Int32Type>(&[-1, 3, -2, 2]);
+        assert!(stats.has_min_max_set());
+        if let Statistics::Int32(stats) = stats {
+            assert_eq!(stats.min(), &-2);
+            assert_eq!(stats.max(), &3);
+        } else {
+            panic!("expecting Statistics::Int32, got {:?}", stats);
+        }
+    }
+
+    #[test]
+    fn test_int64_statistics() {
+        let stats = statistics_roundtrip::<Int64Type>(&[-1, 3, -2, 2]);
+        assert!(stats.has_min_max_set());
+        if let Statistics::Int64(stats) = stats {
+            assert_eq!(stats.min(), &-2);
+            assert_eq!(stats.max(), &3);
+        } else {
+            panic!("expecting Statistics::Int64, got {:?}", stats);
+        }
+    }
+
+    // // TODO test int 96 stats -- this was failing
+    // #[test]
+    // fn test_int96_statistics() {
+    //     let input = vec![-1, 3, -2, 2].into_iter()
+    //         .map(to_i96)
+    //         .collect::<Vec<Int96>>();
+
+    //     let stats = statistics_roundtrip::<Int96Type>(&input);
+    //     assert!(stats.has_min_max_set());
+    //     if let Statistics::Int96(stats) = stats {
+    //         assert_eq!(stats.min(), &to_i96(-2));
+    //         assert_eq!(stats.max(), &to_i96(3));
+    //     } else {
+    //         panic!("expecting Statistics::Int96, got {:?}", stats);
+    //     }
+    // }
+
+    // fn to_i96(v: i64) -> Int96 {
+    //     // get 64 bytes
+    //     let mut bytes: [u8; 12] = [0,0,0,0,0,0,0,0,0,0,0,0];
+
+    //     if v.to_le_bytes() == v.to_ne_bytes() {
+    //         // little endian
+    //         bytes[0..8].clone_from_slice(&v.to_ne_bytes());
+    //     }
+    //     else {
+    //         // big endian
+    //         bytes[4..12].clone_from_slice(&v.to_ne_bytes());
+    //     }
+    //     Int96::from_ne_bytes(bytes)
+    // }
+
+    #[test]
+    fn test_float_statistics() {
+        let stats = statistics_roundtrip::<FloatType>(&[-1.0, 3.0, -2.0, 2.0]);
+        assert!(stats.has_min_max_set());
+        if let Statistics::Float(stats) = stats {
+            assert_eq!(stats.min(), &-2.0);
+            assert_eq!(stats.max(), &3.0);
+        } else {
+            panic!("expecting Statistics::Float, got {:?}", stats);
+        }
+    }
+
+    #[test]
+    fn test_double_statistics() {
+        let stats = statistics_roundtrip::<DoubleType>(&[-1.0, 3.0, -2.0, 2.0]);
+        assert!(stats.has_min_max_set());
+        if let Statistics::Double(stats) = stats {
+            assert_eq!(stats.min(), &-2.0);
+            assert_eq!(stats.max(), &3.0);
+        } else {
+            panic!("expecting Statistics::Double, got {:?}", stats);
+        }
+    }
+
+    #[test]
+    fn test_byte_array_statistics() {
+        let input = vec!["aawaa", "zz", "aaw", "m", "qrs"]
+            .iter()
+            .map(|&s| s.into())
+            .collect::<Vec<ByteArray>>();
+
+        let stats = statistics_roundtrip::<ByteArrayType>(&input);
+        assert!(stats.has_min_max_set());
+        if let Statistics::ByteArray(stats) = stats {
+            assert_eq!(stats.min(), &ByteArray::from("aaw"));
+            assert_eq!(stats.max(), &ByteArray::from("zz"));
+        } else {
+            panic!("expecting Statistics::ByteArray, got {:?}", stats);
+        }
+    }
+
+    #[test]
+    fn test_fixed_len_byte_array_statistics() {
+        let input = vec!["aawaa", "zz   ", "aaw  ", "m    ", "qrs  "]
+            .iter()
+            .map(|&s| {
+                let b: ByteArray = s.into();
+                b.into()
+            })
+            .collect::<Vec<FixedLenByteArray>>();
+
+        let stats = statistics_roundtrip::<FixedLenByteArrayType>(&input);
+        assert!(stats.has_min_max_set());
+        // should it be FixedLenByteArray?
+        if let Statistics::ByteArray(stats) = stats {
+            assert_eq!(stats.min(), &ByteArray::from("aaw  "));
+            assert_eq!(stats.max(), &ByteArray::from("zz   "));
+        } else {
+            panic!("expecting Statistics::ByteArray, got {:?}", stats);
+        }
+    }
+
+    #[test]
     fn test_float_statistics_nan_middle() {
         let stats = statistics_roundtrip::<FloatType>(&[1.0, f32::NAN, 2.0]);
         assert!(stats.has_min_max_set());
