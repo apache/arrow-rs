@@ -296,6 +296,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::List(_) => Arc::new(ListArray::from(data)) as ArrayRef,
         DataType::LargeList(_) => Arc::new(LargeListArray::from(data)) as ArrayRef,
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,
+        DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
         DataType::Union(_) => Arc::new(UnionArray::from(data)) as ArrayRef,
         DataType::FixedSizeList(_, _) => {
             Arc::new(FixedSizeListArray::from(data)) as ArrayRef
@@ -452,6 +453,9 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                 .map(|field| ArrayData::new_empty(field.data_type()))
                 .collect(),
         )),
+        DataType::Map(field, _keys_sorted) => {
+            new_null_list_array::<i32>(data_type, field.data_type(), length)
+        }
         DataType::Union(_) => {
             unimplemented!("Creating null Union array not yet supported")
         }
@@ -650,6 +654,28 @@ mod tests {
             DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
         let array = new_null_array(&data_type, 9);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
+        assert_eq!(a.len(), 9);
+        assert_eq!(a.value_offsets()[9], 0i32);
+        for i in 0..9 {
+            assert!(a.is_null(i));
+        }
+    }
+
+    #[test]
+    fn test_null_map() {
+        let data_type = DataType::Map(
+            Box::new(Field::new(
+                "entry",
+                DataType::Struct(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("key", DataType::Int32, true),
+                ]),
+                false,
+            )),
+            false,
+        );
+        let array = new_null_array(&data_type, 9);
+        let a = array.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(a.len(), 9);
         assert_eq!(a.value_offsets()[9], 0i32);
         for i in 0..9 {

@@ -40,7 +40,7 @@
 //!
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
-use arrow::array::{make_array, ArrayRef, StructArray};
+use arrow::array::{make_array, ArrayRef, MapArray, StructArray};
 use arrow::datatypes::{DataType, Field};
 
 /// Keeps track of the level information per array that is needed to write an Arrow array to Parquet.
@@ -234,11 +234,51 @@ impl LevelInfo {
                             LevelType::Primitive(list_field.is_nullable()),
                         )]
                     }
-                    DataType::List(_) | DataType::LargeList(_) | DataType::Struct(_) => {
+                    DataType::List(_)
+                    | DataType::LargeList(_)
+                    | DataType::Struct(_)
+                    | DataType::Map(_, _) => {
                         list_level.calculate_array_levels(&child_array, list_field)
                     }
                     DataType::FixedSizeList(_, _) => unimplemented!(),
                     DataType::Union(_) => unimplemented!(),
+                }
+            }
+            DataType::Map(map_field, _) => {
+                // Calculate the map level
+                let map_level = self.calculate_child_levels(
+                    array_offsets,
+                    array_mask,
+                    // A map is treated like a list as it has repetition
+                    LevelType::List(field.is_nullable()),
+                );
+
+                let map_array = array.as_any().downcast_ref::<MapArray>().unwrap();
+
+                let key_array = map_array.keys();
+                let value_array = map_array.values();
+
+                if let DataType::Struct(fields) = map_field.data_type() {
+                    let key_field = &fields[0];
+                    let value_field = &fields[1];
+
+                    let mut map_levels = vec![];
+
+                    // Get key levels
+                    let mut key_levels =
+                        map_level.calculate_array_levels(&key_array, key_field);
+                    map_levels.append(&mut key_levels);
+
+                    let mut value_levels =
+                        map_level.calculate_array_levels(&value_array, value_field);
+                    map_levels.append(&mut value_levels);
+
+                    map_levels
+                } else {
+                    panic!(
+                        "Map field should be a struct, found {:?}",
+                        map_field.data_type()
+                    );
                 }
             }
             DataType::FixedSizeList(_, _) => unimplemented!(),
@@ -663,7 +703,7 @@ impl LevelInfo {
                 };
                 ((0..=(len as i64)).collect(), array_mask)
             }
-            DataType::List(_) => {
+            DataType::List(_) | DataType::Map(_, _) => {
                 let data = array.data();
                 let offsets = unsafe { data.buffers()[0].typed_data::<i32>() };
                 let offsets = offsets
@@ -1546,5 +1586,91 @@ mod tests {
         if struct_non_null_level == struct_null_level {
             panic!("Levels should not be equal, to reflect the difference in struct nullness");
         }
+    }
+
+    #[test]
+    fn test_map_array() {
+        // Note: we are using the JSON Arrow reader for brevity
+        let json_content = r#"
+        {"stocks":{"long": "$AAA", "short": "$BBB"}}
+        {"stocks":{"long": null, "long": "$CCC", "short": null}}
+        {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
+        "#;
+        let entries_struct_type = DataType::Struct(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+        ]);
+        let stocks_field = Field::new(
+            "stocks",
+            DataType::Map(
+                Box::new(Field::new("entries", entries_struct_type, false)),
+                false,
+            ),
+            // not nullable, so the keys have max level = 1
+            false,
+        );
+        let schema = Arc::new(Schema::new(vec![stocks_field]));
+        let builder = arrow::json::ReaderBuilder::new()
+            .with_schema(schema)
+            .with_batch_size(64);
+        let mut reader = builder.build(std::io::Cursor::new(json_content)).unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+
+        let expected_batch_level = LevelInfo {
+            definition: vec![0; 3],
+            repetition: None,
+            array_offsets: (0..=3).collect(),
+            array_mask: vec![true, true, true],
+            max_definition: 0,
+            level_type: LevelType::Root,
+            offset: 0,
+            length: 3,
+        };
+
+        let batch_level = LevelInfo::new(0, 3);
+        assert_eq!(&batch_level, &expected_batch_level);
+
+        // calculate the map's level
+        let mut levels = vec![];
+        batch
+            .columns()
+            .iter()
+            .zip(batch.schema().fields())
+            .for_each(|(array, field)| {
+                let mut array_levels = batch_level.calculate_array_levels(array, field);
+                levels.append(&mut array_levels);
+            });
+        assert_eq!(levels.len(), 2);
+
+        // test key levels
+        let list_level = levels.get(0).unwrap();
+
+        let expected_level = LevelInfo {
+            definition: vec![1; 7],
+            repetition: Some(vec![0, 1, 0, 1, 0, 1, 1]),
+            array_offsets: vec![0, 2, 4, 7],
+            array_mask: vec![true; 7],
+            max_definition: 1,
+            level_type: LevelType::Primitive(false),
+            offset: 0,
+            length: 7,
+        };
+        assert_eq!(list_level, &expected_level);
+
+        // test values levels
+        let list_level = levels.get(1).unwrap();
+
+        let expected_level = LevelInfo {
+            definition: vec![2, 2, 2, 1, 2, 1, 2],
+            repetition: Some(vec![0, 1, 0, 1, 0, 1, 1]),
+            array_offsets: vec![0, 2, 4, 7],
+            array_mask: vec![true, true, true, false, true, false, true],
+            max_definition: 2,
+            level_type: LevelType::Primitive(true),
+            offset: 0,
+            length: 7,
+        };
+        assert_eq!(list_level, &expected_level);
     }
 }

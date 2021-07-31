@@ -126,7 +126,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             buffer.push(0i64);
             [buffer, MutableBuffer::new(capacity * mem::size_of::<u8>())]
         }
-        DataType::List(_) => {
+        DataType::List(_) | DataType::Map(_, _) => {
             // offset buffer always starts with a zero
             let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i32>());
             buffer.push(0i32);
@@ -475,6 +475,9 @@ impl ArrayData {
                 .iter()
                 .map(|field| Self::new_empty(field.data_type()))
                 .collect(),
+            DataType::Map(field, _) => {
+                vec![Self::new_empty(field.data_type())]
+            }
             DataType::Union(_) => unimplemented!(),
             DataType::Dictionary(_, data_type) => {
                 vec![Self::new_empty(data_type)]

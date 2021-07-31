@@ -106,7 +106,7 @@ pub(super) fn child_logical_null_buffer(
         Bitmap::from(Buffer::from(vec![0b11111111; ceil]))
     });
     match parent_data.data_type() {
-        DataType::List(_) => Some(logical_list_bitmap::<i32>(
+        DataType::List(_) | DataType::Map(_, _) => Some(logical_list_bitmap::<i32>(
             parent_data,
             parent_bitmap,
             self_null_bitmap,

@@ -199,6 +199,15 @@ fn write_leaves(
             }
             Ok(())
         }
+        ArrowDataType::Map(_, _) => {
+            let map_array: &arrow_array::MapArray = array
+                .as_any()
+                .downcast_ref::<arrow_array::MapArray>()
+                .expect("Unable to get map array");
+            write_leaves(&mut row_group_writer, &map_array.keys(), &mut levels)?;
+            write_leaves(&mut row_group_writer, &map_array.values(), &mut levels)?;
+            Ok(())
+        }
         ArrowDataType::Dictionary(_, value_type) => {
             // cast dictionary to a primitive
             let array = arrow::compute::cast(array, value_type)?;
@@ -933,6 +942,36 @@ mod tests {
             batch,
             Some(SMALL_SIZE / 2),
         );
+    }
+
+    #[test]
+    fn arrow_writer_map() {
+        // Note: we are using the JSON Arrow reader for brevity
+        let json_content = r#"
+        {"stocks":{"long": "$AAA", "short": "$BBB"}}
+        {"stocks":{"long": null, "long": "$CCC", "short": null}}
+        {"stocks":{"hedged": "$YYY", "long": null, "short": "$D"}}
+        "#;
+        let entries_struct_type = DataType::Struct(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+        ]);
+        let stocks_field = Field::new(
+            "stocks",
+            DataType::Map(
+                Box::new(Field::new("entries", entries_struct_type, false)),
+                false,
+            ),
+            true,
+        );
+        let schema = Arc::new(Schema::new(vec![stocks_field]));
+        let builder = arrow::json::ReaderBuilder::new()
+            .with_schema(schema)
+            .with_batch_size(64);
+        let mut reader = builder.build(std::io::Cursor::new(json_content)).unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        roundtrip("test_arrow_writer_map.parquet", batch, None);
     }
 
     #[test]

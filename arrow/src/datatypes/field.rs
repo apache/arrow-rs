@@ -271,6 +271,35 @@ impl Field {
                             ));
                         }
                     },
+                    DataType::Map(_, keys_sorted) => {
+                        match map.get("children") {
+                            Some(Value::Array(values)) if values.len() == 1 => {
+                                let child = Self::from(&values[0])?;
+                                // child must be a struct
+                                match child.data_type() {
+                                    DataType::Struct(map_fields) if map_fields.len() == 2 => {
+                                        DataType::Map(Box::new(child), keys_sorted)
+                                    }
+                                    t  => {
+                                        return Err(ArrowError::ParseError(
+                                            format!("Map children should be a struct with 2 fields, found {:?}",  t)
+                                        ))
+                                    }
+                                }
+                            }
+                            Some(_) => {
+                                return Err(ArrowError::ParseError(
+                                    "Field 'children' must be an array with 1 element"
+                                        .to_string(),
+                                ))
+                            }
+                            None => {
+                                return Err(ArrowError::ParseError(
+                                    "Field missing 'children' attribute".to_string(),
+                                ));
+                            }
+                        }
+                    }
                     _ => data_type,
                 };
 
@@ -329,6 +358,9 @@ impl Field {
             DataType::List(field) => vec![field.to_json()],
             DataType::LargeList(field) => vec![field.to_json()],
             DataType::FixedSizeList(field, _) => vec![field.to_json()],
+            DataType::Map(field, _) => {
+                vec![field.to_json()]
+            }
             _ => vec![],
         };
         match self.data_type() {
@@ -468,6 +500,7 @@ impl Field {
             | DataType::Interval(_)
             | DataType::LargeList(_)
             | DataType::List(_)
+            | DataType::Map(_, _)
             | DataType::Dictionary(_, _)
             | DataType::FixedSizeList(_, _)
             | DataType::FixedSizeBinary(_)
