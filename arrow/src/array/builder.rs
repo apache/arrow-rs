@@ -472,6 +472,35 @@ pub trait ArrayBuilder: Any + Send {
 }
 
 ///  Array builder for fixed-width primitive types
+///
+/// # Example
+///
+/// Create a `BooleanArray` from a `BooleanBuilder`
+///
+/// ```
+///     use arrow::array::{Array, BooleanArray, BooleanBuilder};
+///
+///     let mut b = BooleanBuilder::new(4);
+///     b.append_value(true);
+///     b.append_null();
+///     b.append_value(false);
+///     b.append_value(true);
+///     let arr = b.finish();
+///
+///     assert_eq!(4, arr.len());
+///     assert_eq!(1, arr.null_count());
+///     assert_eq!(true, arr.value(0));
+///     assert!(arr.is_valid(0));
+///     assert!(!arr.is_null(0));
+///     assert!(!arr.is_valid(1));
+///     assert!(arr.is_null(1));
+///     assert_eq!(false, arr.value(2));
+///     assert!(arr.is_valid(2));
+///     assert!(!arr.is_null(2));
+///     assert_eq!(true, arr.value(3));
+///     assert!(arr.is_valid(3));
+///     assert!(!arr.is_null(3));
+/// ```
 #[derive(Debug)]
 pub struct BooleanBuilder {
     values_builder: BooleanBufferBuilder,
