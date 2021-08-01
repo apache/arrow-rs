@@ -20,6 +20,8 @@
 use chrono::{Datelike, Timelike};
 
 use crate::array::*;
+use crate::buffer::Buffer;
+use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 /// Extracts the hours of a given temporal array as an array of integers
@@ -164,6 +166,53 @@ where
     }
 
     Ok(b.finish())
+}
+
+pub fn add_time<DateTime, TimeDelta>(
+    date_time: &PrimitiveArray<DateTime>,
+    time_delta: &PrimitiveArray<TimeDelta>,
+) -> Result<PrimitiveArray<DateTime>>
+where
+    DateTime: ArrowTimestampType,
+    TimeDelta: ArrowTimeDeltaType,
+{
+    if date_time.len() != time_delta.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform add_time on arrays of different length".to_string(),
+        ));
+    }
+    let null_bit_buffer = combine_option_bitmap(
+        date_time.data_ref(),
+        time_delta.data_ref(),
+        date_time.len(),
+    )?;
+
+    let values = date_time
+        .values()
+        .iter()
+        .zip(time_delta.values().iter())
+        .map(|(date_time, time_delta)| {
+            let date_time = DateTime::to_datetime(*date_time);
+            let date_time = TimeDelta::add_time(date_time, *time_delta);
+            DateTime::from_datetime(date_time)
+        });
+    // JUSTIFICATION
+    //  Benefit
+    //      ~60% speedup
+    //  Soundness
+    //      `values` is an iterator with a known size.
+    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
+
+    let data = ArrayData::new(
+        DateTime::DATA_TYPE,
+        date_time.len(),
+        None,
+        null_bit_buffer,
+        0,
+        vec![buffer],
+        vec![],
+    );
+    Ok(PrimitiveArray::<DateTime>::from(data))
 }
 
 #[cfg(test)]

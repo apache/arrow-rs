@@ -15,6 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use chrono::{Duration, NaiveDateTime};
+use chronoutil::relative_duration::RelativeDuration;
+
+use crate::temporal_conversions::{
+    timestamp_ms_to_datetime, timestamp_ns_to_datetime, timestamp_s_to_datetime,
+    timestamp_us_to_datetime,
+};
+
 use super::{ArrowPrimitiveType, DataType, IntervalUnit, TimeUnit};
 
 // BooleanType is special: its bit-width is not the size of the primitive type, and its `index`
@@ -152,34 +160,115 @@ impl ArrowTemporalType for Time64MicrosecondType {}
 impl ArrowTemporalType for Time64NanosecondType {}
 // impl ArrowTemporalType for IntervalYearMonthType {}
 // impl ArrowTemporalType for IntervalDayTimeType {}
-impl ArrowTemporalType for DurationSecondType {}
-impl ArrowTemporalType for DurationMillisecondType {}
-impl ArrowTemporalType for DurationMicrosecondType {}
-impl ArrowTemporalType for DurationNanosecondType {}
+// impl ArrowTemporalType for DurationSecondType {}
+// impl ArrowTemporalType for DurationMillisecondType {}
+// impl ArrowTemporalType for DurationMicrosecondType {}
+// impl ArrowTemporalType for DurationNanosecondType {}
 
 /// A timestamp type allows us to create array builders that take a timestamp.
 pub trait ArrowTimestampType: ArrowTemporalType {
     /// Returns the `TimeUnit` of this timestamp.
     fn get_time_unit() -> TimeUnit;
+
+    /// Return the `chrono::NavieDateTime` from the given value.
+    fn to_datetime(value: Self::Native) -> NaiveDateTime;
+
+    fn from_datetime(datetime: NaiveDateTime) -> Self::Native;
 }
 
 impl ArrowTimestampType for TimestampSecondType {
     fn get_time_unit() -> TimeUnit {
         TimeUnit::Second
     }
+
+    fn to_datetime(value: Self::Native) -> NaiveDateTime {
+        timestamp_s_to_datetime(value)
+    }
+
+    fn from_datetime(datetime: NaiveDateTime) -> Self::Native {
+        datetime.timestamp()
+    }
 }
 impl ArrowTimestampType for TimestampMillisecondType {
     fn get_time_unit() -> TimeUnit {
         TimeUnit::Millisecond
+    }
+
+    fn to_datetime(value: Self::Native) -> NaiveDateTime {
+        timestamp_ms_to_datetime(value)
+    }
+
+    fn from_datetime(datetime: NaiveDateTime) -> Self::Native {
+        datetime.timestamp_millis()
     }
 }
 impl ArrowTimestampType for TimestampMicrosecondType {
     fn get_time_unit() -> TimeUnit {
         TimeUnit::Microsecond
     }
+
+    fn to_datetime(value: Self::Native) -> NaiveDateTime {
+        timestamp_us_to_datetime(value)
+    }
+
+    fn from_datetime(datetime: NaiveDateTime) -> Self::Native {
+        datetime.timestamp_nanos() / 1000
+    }
 }
 impl ArrowTimestampType for TimestampNanosecondType {
     fn get_time_unit() -> TimeUnit {
         TimeUnit::Nanosecond
+    }
+
+    fn to_datetime(value: Self::Native) -> NaiveDateTime {
+        timestamp_ns_to_datetime(value)
+    }
+
+    fn from_datetime(datetime: NaiveDateTime) -> Self::Native {
+        datetime.timestamp_nanos()
+    }
+}
+
+pub trait ArrowTimeDeltaType: ArrowPrimitiveType {
+    fn add_time(time: NaiveDateTime, value: Self::Native) -> NaiveDateTime;
+}
+
+impl ArrowTimeDeltaType for IntervalDayTimeType {
+    fn add_time(time: NaiveDateTime, value: Self::Native) -> NaiveDateTime {
+        // DayTime is represented as a 64 bit value -- 32 bit day and 32 bit milliseconds.
+        let days = RelativeDuration::days(value >> 32);
+        let milliseconds = Duration::milliseconds((value as i32) as i64);
+        time + days + milliseconds
+    }
+}
+
+impl ArrowTimeDeltaType for IntervalYearMonthType {
+    fn add_time(time: NaiveDateTime, value: Self::Native) -> NaiveDateTime {
+        // YearMonth is represented as a 32 bit value containing the number of months.
+        time + RelativeDuration::months(value)
+    }
+}
+
+impl ArrowTimeDeltaType for DurationSecondType {
+    fn add_time(time: NaiveDateTime, value: Self::Native) -> NaiveDateTime {
+        time + Duration::seconds(value)
+    }
+}
+
+impl ArrowTimeDeltaType for DurationMillisecondType {
+    fn add_time(time: NaiveDateTime, value: Self::Native) -> NaiveDateTime {
+        time + Duration::milliseconds(value)
+    }
+}
+
+impl ArrowTimeDeltaType for DurationMicrosecondType {
+    fn add_time(time: NaiveDateTime, value: Self::Native) -> NaiveDateTime {
+        time + Duration::microseconds(value)
+    }
+}
+
+impl ArrowTimeDeltaType for DurationNanosecondType {
+    fn add_time(time: NaiveDateTime, value: Self::Native) -> NaiveDateTime {
+        time + Duration::nanoseconds(value)
     }
 }
