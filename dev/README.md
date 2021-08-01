@@ -30,8 +30,8 @@ We have provided a script to assist with verifying release candidates:
 bash dev/release/verify-release-candidate.sh 0.7.0 0
 ```
 
-Currently this only works on Linux (patches to expand to macOS welcome!). Read
-the script for information about system dependencies.
+This works on Linux and macOS. Read the script for information about system
+dependencies.
 
 On Windows, we have a script that verifies C++ and Python (requires Visual
 Studio 2015):
