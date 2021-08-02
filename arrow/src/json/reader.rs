@@ -935,7 +935,8 @@ impl Decoder {
                             } else {
                                 value.as_f64().map(num::cast::cast)
                             }
-                        }).flatten()
+                        })
+                        .flatten()
                 })
                 .collect::<PrimitiveArray<T>>(),
         ))
