@@ -168,6 +168,10 @@ where
     Ok(b.finish())
 }
 
+/// Add the given `time_delta` to each time in the `date_time` array.
+///
+/// # Errors
+/// If the arrays of different lengths.
 pub fn add_time<DateTime, TimeDelta>(
     date_time: &PrimitiveArray<DateTime>,
     time_delta: &PrimitiveArray<TimeDelta>,
@@ -217,6 +221,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use chrono::{Duration, NaiveDateTime};
+    use chronoutil::RelativeDuration;
+
     use super::*;
 
     #[test]
@@ -342,5 +349,39 @@ mod tests {
         assert_eq!(27, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(7, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_add_timestamp_s_interval_day() {
+        let time1 = NaiveDateTime::from_timestamp(1612025847, 70);
+        let time2 = NaiveDateTime::from_timestamp(1722015847, 7000);
+
+        let timestamp: TimestampSecondArray =
+            vec![Some(time1.timestamp()), None, Some(time2.timestamp()), None].into();
+        let days5_ms700 = (5i64 << 32) + 700;
+        let delta: IntervalDayTimeArray =
+            vec![Some(days5_ms700), Some(days5_ms700), None, None].into();
+
+        let actual = add_time(&timestamp, &delta).unwrap();
+        let time1_plus = time1 + RelativeDuration::days(5) + Duration::milliseconds(700);
+        let expected: TimestampSecondArray =
+            vec![Some(time1_plus.timestamp()), None, None, None].into();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_temporal_array_add_timestamp_s_interval_month() {
+        let time1 = NaiveDateTime::from_timestamp(1612025847, 70);
+        let time2 = NaiveDateTime::from_timestamp(1722015847, 7000);
+
+        let timestamp: TimestampSecondArray =
+            vec![Some(time1.timestamp()), None, Some(time2.timestamp()), None].into();
+        let delta: IntervalYearMonthArray = vec![Some(5), Some(5), None, None].into();
+
+        let actual = add_time(&timestamp, &delta).unwrap();
+        let time1_plus = time1 + RelativeDuration::months(5);
+        let expected: TimestampSecondArray =
+            vec![Some(time1_plus.timestamp()), None, None, None].into();
+        assert_eq!(actual, expected);
     }
 }
