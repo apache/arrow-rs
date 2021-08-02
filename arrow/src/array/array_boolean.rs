@@ -47,6 +47,23 @@ use crate::util::bit_util;
 ///     assert_eq!(true, arr.value(3));
 /// ```
 ///
+/// Using `from_iter`
+/// ```
+///     use arrow::array::{Array, BooleanArray};
+///     let v = vec![Some(false), Some(true), Some(false), Some(true)];
+///     let arr = v.into_iter().collect::<BooleanArray>();
+///     assert_eq!(4, arr.len());
+///     assert_eq!(0, arr.offset());
+///     assert_eq!(0, arr.null_count());
+///     assert!(arr.is_valid(0));
+///     assert_eq!(false, arr.value(0));
+///     assert!(arr.is_valid(1));
+///     assert_eq!(true, arr.value(1));
+///     assert!(arr.is_valid(2));
+///     assert_eq!(false, arr.value(2));
+///     assert!(arr.is_valid(3));
+///     assert_eq!(true, arr.value(3));
+/// ```
 pub struct BooleanArray {
     data: ArrayData,
     /// Pointer to the value array. The lifetime of this must be <= to the value buffer
@@ -267,6 +284,20 @@ mod tests {
                 assert!(arr.is_valid(i));
                 assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {}", i)
             }
+        }
+    }
+
+    #[test]
+    fn test_boolean_array_from_iter() {
+        let v = vec![Some(false), Some(true), Some(false), Some(true)];
+        let arr = v.into_iter().collect::<BooleanArray>();
+        assert_eq!(4, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(0, arr.null_count());
+        for i in 0..3 {
+            assert!(!arr.is_null(i));
+            assert!(arr.is_valid(i));
+            assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {}", i)
         }
     }
 
