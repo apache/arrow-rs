@@ -1933,6 +1933,7 @@ mod tests {
             .unwrap();
         assert_eq!(1, aa.value(0));
         assert_eq!(-10, aa.value(1));
+        assert_eq!(1627668684594000000, aa.value(2));
         let bb = batch
             .column(b.0)
             .as_any()
