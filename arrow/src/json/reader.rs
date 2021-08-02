@@ -926,8 +926,16 @@ impl Decoder {
             rows.iter()
                 .map(|row| {
                     row.get(&col_name)
-                        .and_then(|value| value.as_f64())
-                        .and_then(num::cast::cast)
+                        .and_then(|value| {
+                            if value.is_i64() {
+                                value.as_i64().map(num::cast::cast)
+                            } else if value.is_u64() {
+                                value.as_u64().map(num::cast::cast)
+                            } else {
+                                value.as_f64().map(num::cast::cast)
+                            }
+                        })
+                        .flatten()
                 })
                 .collect::<PrimitiveArray<T>>(),
         ))
@@ -1831,6 +1839,7 @@ mod tests {
             .unwrap();
         assert_eq!(1, aa.value(0));
         assert_eq!(-10, aa.value(1));
+        assert_eq!(1627668684594000000, aa.value(2));
         let bb = batch
             .column(b.0)
             .as_any()
