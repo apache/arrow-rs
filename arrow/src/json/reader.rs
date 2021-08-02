@@ -927,8 +927,15 @@ impl Decoder {
             rows.iter()
                 .map(|row| {
                     row.get(&col_name)
-                        .and_then(|value| value.as_f64())
-                        .and_then(num::cast::cast)
+                        .and_then(|value| {
+                            if value.is_i64() {
+                                value.as_i64().map(num::cast::cast)
+                            } else if value.is_u64() {
+                                value.as_u64().map(num::cast::cast)
+                            } else {
+                                value.as_f64().map(num::cast::cast)
+                            }
+                        }).flatten()
                 })
                 .collect::<PrimitiveArray<T>>(),
         ))
