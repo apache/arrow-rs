@@ -46,7 +46,10 @@ macro_rules! compare_op {
         let null_bit_buffer =
             combine_option_bitmap($left.data_ref(), $right.data_ref(), $left.len())?;
 
-        let comparison = (0..$left.len()).map(|i| $op($left.value(i), $right.value(i)));
+        // Safety:
+        // `i < $left.len()` and $left.len() == $right.len()
+        let comparison = (0..$left.len())
+            .map(|i| unsafe { $op($left.value_unchecked(i), $right.value_unchecked(i)) });
         // same size as $left.len() and $right.len()
         let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
 
@@ -121,8 +124,10 @@ macro_rules! compare_op_primitive {
 macro_rules! compare_op_scalar {
     ($left: expr, $right:expr, $op:expr) => {{
         let null_bit_buffer = $left.data().null_buffer().cloned();
-
-        let comparison = (0..$left.len()).map(|i| $op($left.value(i), $right));
+        // Safety:
+        // `i < $left.len()`
+        let comparison =
+            (0..$left.len()).map(|i| unsafe { $op($left.value_unchecked(i), $right) });
         // same as $left.len()
         let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
 

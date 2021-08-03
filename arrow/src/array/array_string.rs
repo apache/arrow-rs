@@ -81,6 +81,7 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
     /// Returns the element at index
     /// # Safety
     /// caller is responsible for ensuring that index is within the array bounds
+    #[inline]
     pub unsafe fn value_unchecked(&self, i: usize) -> &str {
         let end = self.value_offsets().get_unchecked(i + 1);
         let start = self.value_offsets().get_unchecked(i);
@@ -103,28 +104,12 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
     }
 
     /// Returns the element at index `i` as &str
+    #[inline]
     pub fn value(&self, i: usize) -> &str {
         assert!(i < self.data.len(), "StringArray out of bounds access");
-        //Soundness: length checked above, offset buffer length is 1 larger than logical array length
-        let end = unsafe { self.value_offsets().get_unchecked(i + 1) };
-        let start = unsafe { self.value_offsets().get_unchecked(i) };
-
-        // Soundness
-        // pointer alignment & location is ensured by RawPtrBox
-        // buffer bounds/offset is ensured by the value_offset invariants
-        // ISSUE: utf-8 well formedness is not checked
-        unsafe {
-            // Safety of `to_isize().unwrap()`
-            // `start` and `end` are &OffsetSize, which is a generic type that implements the
-            // OffsetSizeTrait. Currently, only i32 and i64 implement OffsetSizeTrait,
-            // both of which should cleanly cast to isize on an architecture that supports
-            // 32/64-bit offsets
-            let slice = std::slice::from_raw_parts(
-                self.value_data.as_ptr().offset(start.to_isize().unwrap()),
-                (*end - *start).to_usize().unwrap(),
-            );
-            std::str::from_utf8_unchecked(slice)
-        }
+        // Safety:
+        // `i < self.data.len()
+        unsafe { self.value_unchecked(i) }
     }
 
     fn from_list(v: GenericListArray<OffsetSize>) -> Self {
