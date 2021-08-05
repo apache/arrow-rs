@@ -101,6 +101,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (LargeUtf8, Date64) => true,
         (LargeUtf8, Timestamp(TimeUnit::Nanosecond, None)) => true,
         (LargeUtf8, _) => DataType::is_numeric(to_type),
+        (Timestamp(_, _), Utf8) | (Timestamp(_, _), LargeUtf8) => true,
         (_, Utf8) | (_, LargeUtf8) => {
             DataType::is_numeric(from_type) || from_type == &Binary
         }
@@ -468,6 +469,20 @@ pub fn cast_with_options(
             Int64 => cast_numeric_to_string::<Int64Type, i32>(array),
             Float32 => cast_numeric_to_string::<Float32Type, i32>(array),
             Float64 => cast_numeric_to_string::<Float64Type, i32>(array),
+            Timestamp(unit, _) => match unit {
+                TimeUnit::Nanosecond => {
+                    cast_timestamp_to_string::<TimestampNanosecondType, i32>(array)
+                }
+                TimeUnit::Microsecond => {
+                    cast_timestamp_to_string::<TimestampMicrosecondType, i32>(array)
+                }
+                TimeUnit::Millisecond => {
+                    cast_timestamp_to_string::<TimestampMillisecondType, i32>(array)
+                }
+                TimeUnit::Second => {
+                    cast_timestamp_to_string::<TimestampSecondType, i32>(array)
+                }
+            },
             Binary => {
                 let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
                 Ok(Arc::new(
@@ -508,6 +523,20 @@ pub fn cast_with_options(
             Int64 => cast_numeric_to_string::<Int64Type, i64>(array),
             Float32 => cast_numeric_to_string::<Float32Type, i64>(array),
             Float64 => cast_numeric_to_string::<Float64Type, i64>(array),
+            Timestamp(unit, _) => match unit {
+                TimeUnit::Nanosecond => {
+                    cast_timestamp_to_string::<TimestampNanosecondType, i64>(array)
+                }
+                TimeUnit::Microsecond => {
+                    cast_timestamp_to_string::<TimestampMicrosecondType, i64>(array)
+                }
+                TimeUnit::Millisecond => {
+                    cast_timestamp_to_string::<TimestampMillisecondType, i64>(array)
+                }
+                TimeUnit::Second => {
+                    cast_timestamp_to_string::<TimestampSecondType, i64>(array)
+                }
+            },
             Binary => {
                 let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
                 Ok(Arc::new(
@@ -1001,6 +1030,28 @@ where
     // Soundness:
     //  The iterator is trustedLen because it comes from an `PrimitiveArray`.
     unsafe { PrimitiveArray::<R>::from_trusted_len_iter(iter) }
+}
+
+/// Cast timestamp types to Utf8/LargeUtf8
+fn cast_timestamp_to_string<T, OffsetSize>(array: &ArrayRef) -> Result<ArrayRef>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: From<<T as ArrowPrimitiveType>::Native>,
+    OffsetSize: StringOffsetSizeTrait,
+{
+    let array = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+
+    Ok(Arc::new(
+        (0..array.len())
+            .map(|ix| {
+                if array.is_null(ix) {
+                    None
+                } else {
+                    array.value_as_datetime(ix).map(|v| v.to_string())
+                }
+            })
+            .collect::<GenericStringArray<OffsetSize>>(),
+    ))
 }
 
 /// Cast numeric types to Utf8
@@ -2168,6 +2219,22 @@ mod tests {
         assert_eq!(&DataType::Int64, c.data_type());
         assert_eq!(864000000005, c.value(0));
         assert_eq!(1545696000001, c.value(1));
+        assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_timestamp_to_string() {
+        let a = TimestampMillisecondArray::from_opt_vec(
+            vec![Some(864000000005), Some(1545696000001), None],
+            Some("UTC".to_string()),
+        );
+        let array = Arc::new(a) as ArrayRef;
+        dbg!(&array);
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(&DataType::Utf8, c.data_type());
+        assert_eq!("1997-05-19 00:00:00.005", c.value(0));
+        assert_eq!("2018-12-25 00:00:00.001", c.value(1));
         assert!(c.is_null(2));
     }
 
