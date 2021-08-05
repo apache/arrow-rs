@@ -52,7 +52,7 @@ packed_simd = { version = "0.3", optional = true, package = "packed_simd_2" }
 chrono = "0.4"
 flatbuffers = { version = "=2.0.0", optional = true }
 hex = "0.4"
-prettytable-rs = { version = "0.8.0", optional = true }
+comfy-table = { version = "4.0", optional = true }
 lexical-core = "^0.7"
 multiversion = "0.6.1"
 bitflags = "1.2.1"
@@ -63,7 +63,7 @@ avx512 = []
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
 simd = ["packed_simd"]
-prettyprint = ["prettytable-rs"]
+prettyprint = ["comfy-table"]
 js = ["getrandom/js"]
 # The test utils feature enables code used in benchmarks and tests but
 # not the core arrow code itself

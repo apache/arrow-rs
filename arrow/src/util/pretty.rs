@@ -20,8 +20,7 @@
 
 use crate::{array::ArrayRef, record_batch::RecordBatch};
 
-use prettytable::format;
-use prettytable::{Cell, Row, Table};
+use comfy_table::{Cell, Table};
 
 use crate::error::Result;
 
@@ -39,20 +38,20 @@ pub fn pretty_format_columns(col_name: &str, results: &[ArrayRef]) -> Result<Str
 
 ///! Prints a visual representation of record batches to stdout
 pub fn print_batches(results: &[RecordBatch]) -> Result<()> {
-    create_table(results)?.printstd();
+    println!("{}", create_table(results)?);
     Ok(())
 }
 
 ///! Prints a visual representation of a list of column to stdout
 pub fn print_columns(col_name: &str, results: &[ArrayRef]) -> Result<()> {
-    create_column(col_name, results)?.printstd();
+    println!("{}", create_column(col_name, results)?);
     Ok(())
 }
 
 ///! Convert a series of record batches into a table
 fn create_table(results: &[RecordBatch]) -> Result<Table> {
     let mut table = Table::new();
-    table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
+    table.load_preset("||--+-++|    ++++++");
 
     if results.is_empty() {
         return Ok(table);
@@ -64,7 +63,7 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
     for field in schema.fields() {
         header.push(Cell::new(&field.name()));
     }
-    table.set_titles(Row::new(header));
+    table.set_header(header);
 
     for batch in results {
         for row in 0..batch.num_rows() {
@@ -73,7 +72,7 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
                 let column = batch.column(col);
                 cells.push(Cell::new(&array_value_to_string(&column, row)?));
             }
-            table.add_row(Row::new(cells));
+            table.add_row(cells);
         }
     }
 
@@ -82,19 +81,19 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
 
 fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
     let mut table = Table::new();
-    table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
+    table.load_preset("||--+-++|    ++++++");
 
     if columns.is_empty() {
         return Ok(table);
     }
 
     let header = vec![Cell::new(field)];
-    table.set_titles(Row::new(header));
+    table.set_header(header);
 
     for col in columns {
         for row in 0..col.len() {
             let cells = vec![Cell::new(&array_value_to_string(&col, row)?)];
-            table.add_row(Row::new(cells));
+            table.add_row(cells);
         }
     }
 
