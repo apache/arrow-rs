@@ -1724,37 +1724,26 @@ mod tests {
         }
     }
 
-    // // TODO test int 96 stats -- this was failing
-    // #[test]
-    // fn test_int96_statistics() {
-    //     let input = vec![-1, 3, -2, 2].into_iter()
-    //         .map(to_i96)
-    //         .collect::<Vec<Int96>>();
+    #[test]
+    fn test_int96_statistics() {
+        let input = vec![
+            Int96::from(vec![1, 20, 30]),
+            Int96::from(vec![3, 20, 10]),
+            Int96::from(vec![0, 20, 30]),
+            Int96::from(vec![2, 20, 30]),
+        ]
+        .into_iter()
+        .collect::<Vec<Int96>>();
 
-    //     let stats = statistics_roundtrip::<Int96Type>(&input);
-    //     assert!(stats.has_min_max_set());
-    //     if let Statistics::Int96(stats) = stats {
-    //         assert_eq!(stats.min(), &to_i96(-2));
-    //         assert_eq!(stats.max(), &to_i96(3));
-    //     } else {
-    //         panic!("expecting Statistics::Int96, got {:?}", stats);
-    //     }
-    // }
-
-    // fn to_i96(v: i64) -> Int96 {
-    //     // get 64 bytes
-    //     let mut bytes: [u8; 12] = [0,0,0,0,0,0,0,0,0,0,0,0];
-
-    //     if v.to_le_bytes() == v.to_ne_bytes() {
-    //         // little endian
-    //         bytes[0..8].clone_from_slice(&v.to_ne_bytes());
-    //     }
-    //     else {
-    //         // big endian
-    //         bytes[4..12].clone_from_slice(&v.to_ne_bytes());
-    //     }
-    //     Int96::from_ne_bytes(bytes)
-    // }
+        let stats = statistics_roundtrip::<Int96Type>(&input);
+        assert!(stats.has_min_max_set());
+        if let Statistics::Int96(stats) = stats {
+            assert_eq!(stats.min(), &Int96::from(vec![0, 20, 30]));
+            assert_eq!(stats.max(), &Int96::from(vec![3, 20, 10]));
+        } else {
+            panic!("expecting Statistics::Int96, got {:?}", stats);
+        }
+    }
 
     #[test]
     fn test_float_statistics() {
