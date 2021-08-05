@@ -1691,7 +1691,8 @@ mod tests {
     fn test_bool_statistics() {
         let stats = statistics_roundtrip::<BoolType>(&[true, false, false, true]);
         assert!(stats.has_min_max_set());
-        // should this be BooleanStatistics??
+        // should it be BooleanStatistics??
+        // https://github.com/apache/arrow-rs/issues/659
         if let Statistics::Int32(stats) = stats {
             assert_eq!(stats.min(), &0);
             assert_eq!(stats.max(), &1);
@@ -1799,6 +1800,7 @@ mod tests {
         let stats = statistics_roundtrip::<FixedLenByteArrayType>(&input);
         assert!(stats.has_min_max_set());
         // should it be FixedLenByteArray?
+        // https://github.com/apache/arrow-rs/issues/660
         if let Statistics::ByteArray(stats) = stats {
             assert_eq!(stats.min(), &ByteArray::from("aaw  "));
             assert_eq!(stats.max(), &ByteArray::from("zz   "));
