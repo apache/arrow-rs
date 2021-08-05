@@ -593,7 +593,7 @@ pub(crate) mod private {
     use crate::util::bit_util::{BitReader, BitWriter};
     use crate::util::memory::ByteBufferPtr;
 
-    use arrow::util::bit_util::round_upto_multiple_of_64;
+    use arrow::util::bit_util::round_upto_power_of_2;
     use byteorder::ByteOrder;
     use std::convert::TryInto;
 
@@ -679,7 +679,7 @@ pub(crate) mod private {
                     (bit_writer.capacity() - bit_writer.bytes_written()) * 8;
                 let bits_needed = values.len() - bits_available;
                 let bytes_needed = (bits_needed + 7) / 8;
-                let bytes_needed = round_upto_multiple_of_64(bytes_needed);
+                let bytes_needed = round_upto_power_of_2(bytes_needed, 256);
                 bit_writer.extend(bytes_needed);
             }
             for value in values {
