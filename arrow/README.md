@@ -23,9 +23,13 @@
 
 This crate contains the official Native Rust implementation of [Apache Arrow](https://arrow.apache.org/) in memory format. Please see the API documents for additional details.
 
+## Versioning / Releases
+
+Unlike many other crates in the Rust ecosystem which spend extended time in "pre 1.0.0" state, releasing versions 0.x, the arrow-rs crate follows the versioning scheme of the overall [Apache Arrow](https://arrow.apache.org/) project in an effort to signal which language implementations have been integration tested with each other.
+
 ## Features
 
-The arrow crate provides the following optional features:
+The arrow crate provides the following features which may be enabled:
 
 - `csv` (default) - support for reading and writing Arrow arrays to/from csv files
 - `ipc` (default) - support for the [arrow-flight]((https://crates.io/crates/arrow-flight) IPC and wire format
@@ -34,6 +38,24 @@ The arrow crate provides the following optional features:
 - `simd` - (_Requires Nightly Rust_) alternate optimized
   implementations of some [compute](https://github.com/apache/arrow/tree/master/rust/arrow/src/compute)
   kernels using explicit SIMD processor intrinsics.
+
+## Safety
+
+TLDR: You should avoid using the `alloc` and `buffer` and `bitmap` modules if at all possible. These modules contain `unsafe` code and are easy to misuse.
+
+As with all open source code, you should carefully evaluate the suitability of `arrow` for your project, taking into consideration your needs and risk tolerance prior to use.
+
+_Background_: There are various parts of the `arrow` crate which use `unsafe` and `transmute` code internally. We are actively working as a community to minimize undefined behavior and remove `unsafe` usage to align more with Rust's core principles of safety (e.g. the arrow2 project).
+
+As `arrow` exists today, it is fairly easy to misuse the APIs, leading to undefined behavior, and it is especially easy to misuse code in modules named above. For an example, as described in [the arrow2 crate](https://github.com/jorgecarleitao/arrow2#why), the following code compiles, does not panic, but results in undefined behavior:
+
+```rust
+let buffer = Buffer::from_slic_ref(&[0i32, 2i32])
+let data = ArrayData::new(DataType::Int64, 10, 0, None, 0, vec![buffer], vec![]);
+let array = Float64Array::from(Arc::new(data));
+
+println!("{:?}", array.value(1));
+```
 
 ## Building for WASM
 
