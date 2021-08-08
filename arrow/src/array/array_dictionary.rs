@@ -153,6 +153,22 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for DictionaryArray<T> {
 }
 
 /// Constructs a `DictionaryArray` from an iterator of optional strings.
+///
+/// # Example:
+/// ```
+/// use arrow::array::{DictionaryArray, PrimitiveArray, StringArray};
+/// use arrow::datatypes::Int8Type;
+///
+/// let test = vec!["a", "a", "b", "c"];
+/// let array: DictionaryArray<Int8Type> = test
+///     .iter()
+///     .map(|&x| if x == "b" { None } else { Some(x) })
+///     .collect();
+/// assert_eq!(
+///     "DictionaryArray {keys: PrimitiveArray<Int8>\n[\n  0,\n  0,\n  null,\n  1,\n] values: StringArray\n[\n  \"a\",\n  \"c\",\n]}\n",
+///     format!("{:?}", array)
+/// );
+/// ```
 impl<'a, T: ArrowPrimitiveType + ArrowDictionaryKeyType> FromIterator<Option<&'a str>>
     for DictionaryArray<T>
 {
@@ -181,6 +197,20 @@ impl<'a, T: ArrowPrimitiveType + ArrowDictionaryKeyType> FromIterator<Option<&'a
 }
 
 /// Constructs a `DictionaryArray` from an iterator of strings.
+///
+/// # Example:
+///
+/// ```
+/// use arrow::array::{DictionaryArray, PrimitiveArray, StringArray};
+/// use arrow::datatypes::Int8Type;
+///
+/// let test = vec!["a", "a", "b", "c"];
+/// let array: DictionaryArray<Int8Type> = test.into_iter().collect();
+/// assert_eq!(
+///     "DictionaryArray {keys: PrimitiveArray<Int8>\n[\n  0,\n  0,\n  1,\n  2,\n] values: StringArray\n[\n  \"a\",\n  \"b\",\n  \"c\",\n]}\n",
+///     format!("{:?}", array)
+/// );
+/// ```
 impl<'a, T: ArrowPrimitiveType + ArrowDictionaryKeyType> FromIterator<&'a str>
     for DictionaryArray<T>
 {
