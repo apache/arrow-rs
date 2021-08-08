@@ -919,7 +919,7 @@ impl<T: DataType> ColumnWriterImpl<T> {
         };
         match self.descr.physical_type() {
             Type::INT32 => gen_stats_section!(i32, int32, min, max, distinct, nulls),
-            Type::BOOLEAN => gen_stats_section!(i32, int32, min, max, distinct, nulls),
+            Type::BOOLEAN => gen_stats_section!(bool, boolean, min, max, distinct, nulls),
             Type::INT64 => gen_stats_section!(i64, int64, min, max, distinct, nulls),
             Type::INT96 => gen_stats_section!(Int96, int96, min, max, distinct, nulls),
             Type::FLOAT => gen_stats_section!(f32, float, min, max, distinct, nulls),
@@ -1691,13 +1691,11 @@ mod tests {
     fn test_bool_statistics() {
         let stats = statistics_roundtrip::<BoolType>(&[true, false, false, true]);
         assert!(stats.has_min_max_set());
-        // should it be BooleanStatistics??
-        // https://github.com/apache/arrow-rs/issues/659
-        if let Statistics::Int32(stats) = stats {
-            assert_eq!(stats.min(), &0);
-            assert_eq!(stats.max(), &1);
+        if let Statistics::Boolean(stats) = stats {
+            assert_eq!(stats.min(), &false);
+            assert_eq!(stats.max(), &true);
         } else {
-            panic!("expecting Statistics::Int32, got {:?}", stats);
+            panic!("expecting Statistics::Boolean, got {:?}", stats);
         }
     }
 
