@@ -227,7 +227,7 @@ fn write_leaves(
         ArrowDataType::FixedSizeList(_, _) | ArrowDataType::Union(_) => {
             Err(ParquetError::NYI(
                 format!(
-                    "Attempting to write an Arrow type {:?} to parquet that is not yet implemented", 
+                    "Attempting to write an Arrow type {:?} to parquet that is not yet implemented",
                     array.data_type()
                 )
             ))
@@ -1197,6 +1197,32 @@ mod tests {
             [true, false].iter().cycle().copied().take(SMALL_SIZE),
             "bool_single_column",
         );
+    }
+
+    #[test]
+    fn bool_large_single_column() {
+        let values = Arc::new(
+            [None, Some(true), Some(false)]
+                .iter()
+                .cycle()
+                .copied()
+                .take(200_000)
+                .collect::<BooleanArray>(),
+        );
+        let schema =
+            Schema::new(vec![Field::new("col", values.data_type().clone(), true)]);
+        let expected_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
+        let file = get_temp_file("bool_large_single_column", &[]);
+
+        let mut writer = ArrowWriter::try_new(
+            file.try_clone().unwrap(),
+            expected_batch.schema(),
+            None,
+        )
+        .expect("Unable to write file");
+        writer.write(&expected_batch).unwrap();
+        writer.close().unwrap();
     }
 
     #[test]
