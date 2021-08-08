@@ -101,12 +101,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
     /// Returns the primitive value at index `i`.
     ///
-    /// Note this doesn't do any bound checking, for performance reason.
-    /// # Safety
-    /// caller must ensure that the passed in offset is less than the array len()
+    /// Panics of offset `i` is out of bounds
     #[inline]
     pub fn value(&self, i: usize) -> T::Native {
-        debug_assert!(i < self.len());
+        assert!(i < self.len());
         unsafe { self.value_unchecked(i) }
     }
 
