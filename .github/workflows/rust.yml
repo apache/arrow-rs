@@ -327,12 +327,14 @@ jobs:
           rustup override set ${{ matrix.rust }}
           rustup component add rustfmt
           rustup target add wasm32-unknown-unknown
+          rustup target add wasm32-wasi
       - name: Build arrow crate
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
           cd arrow
-          cargo build --features=js --target wasm32-unknown-unknown
+          cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
+          cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
 
   # test builds with various feature flags
   default-build:
