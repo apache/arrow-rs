@@ -2095,6 +2095,40 @@ impl UnionBuilder {
 /// Array builder for `DictionaryArray`. For example to map a set of byte indices
 /// to f32 values. Note that the use of a `HashMap` here will not scale to very large
 /// arrays or result in an ordered dictionary.
+///
+/// # Example:
+///
+/// ```
+///  use arrow::array::{
+///      Array, PrimitiveBuilder, PrimitiveDictionaryBuilder,
+///      UInt8Array, UInt32Array,
+///    };
+///  use arrow::datatypes::{UInt8Type, UInt32Type};
+///
+///  let key_builder = PrimitiveBuilder::<UInt8Type>::new(3);
+///  let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
+///  let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+///  builder.append(12345678).unwrap();
+///  builder.append_null().unwrap();
+///  builder.append(22345678).unwrap();
+///  let array = builder.finish();
+///
+///  assert_eq!(
+///      array.keys(),
+///      &UInt8Array::from(vec![Some(0), None, Some(1)])
+///  );
+///
+///  // Values are polymorphic and so require a downcast.
+///  let av = array.values();
+///  let ava: &UInt32Array = av.as_any().downcast_ref::<UInt32Array>().unwrap();
+///  let avs: &[u32] = ava.values();
+///
+///  assert!(!array.is_null(0));
+///  assert!(array.is_null(1));
+///  assert!(!array.is_null(2));
+///
+///  assert_eq!(avs, &[12345678, 22345678]);
+/// ```
 #[derive(Debug)]
 pub struct PrimitiveDictionaryBuilder<K, V>
 where
