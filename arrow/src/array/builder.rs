@@ -1062,6 +1062,11 @@ pub struct FixedSizeBinaryBuilder {
     builder: FixedSizeListBuilder<UInt8Builder>,
 }
 
+///
+/// Array Builder for [`DecimalArray`]
+///
+/// See [`DecimalArray`] for example.
+///
 #[derive(Debug)]
 pub struct DecimalBuilder {
     builder: FixedSizeListBuilder<UInt8Builder>,
