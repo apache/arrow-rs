@@ -59,11 +59,13 @@ println!("{:?}", array.value(1));
 
 ## Building for WASM
 
-In order to compile Arrow for Web Assembly (the `wasm32-unknown-unknown` WASM target), you will likely need to turn off this crate's default features and use the `js` feature.
+Arrow can compile to WebAssembly using the `wasm32-unknown-unknown` and `wasm32-wasi` targets.
+
+In order to compile Arrow for `wasm32-unknown-unknown` you will need to disable default features, then include the desired features, but exclude test dependencies (the `test_utils` feature). For example, use this snippet in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-arrow = { version = "5.0", default-features = false, features = ["js"] }
+arrow = { version = "5.0", default-features = false, features = ["csv", "ipc", "simd"] }
 ```
 
 ## Examples
