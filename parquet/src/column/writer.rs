@@ -924,10 +924,27 @@ impl<T: DataType> ColumnWriterImpl<T> {
             Type::INT96 => gen_stats_section!(Int96, int96, min, max, distinct, nulls),
             Type::FLOAT => gen_stats_section!(f32, float, min, max, distinct, nulls),
             Type::DOUBLE => gen_stats_section!(f64, double, min, max, distinct, nulls),
-            Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
+            Type::BYTE_ARRAY => {
                 let min = min.as_ref().map(|v| ByteArray::from(v.as_bytes().to_vec()));
                 let max = max.as_ref().map(|v| ByteArray::from(v.as_bytes().to_vec()));
                 Statistics::byte_array(min, max, distinct, nulls, false)
+            }
+            Type::FIXED_LEN_BYTE_ARRAY => {
+                let min = min
+                    .as_ref()
+                    .map(|v| ByteArray::from(v.as_bytes().to_vec()))
+                    .map(|ba| {
+                        let ba: FixedLenByteArray = ba.into();
+                        ba
+                    });
+                let max = max
+                    .as_ref()
+                    .map(|v| ByteArray::from(v.as_bytes().to_vec()))
+                    .map(|ba| {
+                        let ba: FixedLenByteArray = ba.into();
+                        ba
+                    });
+                Statistics::fixed_len_byte_array(min, max, distinct, nulls, false)
             }
         }
     }
@@ -1797,13 +1814,13 @@ mod tests {
 
         let stats = statistics_roundtrip::<FixedLenByteArrayType>(&input);
         assert!(stats.has_min_max_set());
-        // should it be FixedLenByteArray?
-        // https://github.com/apache/arrow-rs/issues/660
-        if let Statistics::ByteArray(stats) = stats {
-            assert_eq!(stats.min(), &ByteArray::from("aaw  "));
-            assert_eq!(stats.max(), &ByteArray::from("zz   "));
+        if let Statistics::FixedLenByteArray(stats) = stats {
+            let expected_min: FixedLenByteArray = ByteArray::from("aaw  ").into();
+            assert_eq!(stats.min(), &expected_min);
+            let expected_max: FixedLenByteArray = ByteArray::from("zz   ").into();
+            assert_eq!(stats.max(), &expected_max);
         } else {
-            panic!("expecting Statistics::ByteArray, got {:?}", stats);
+            panic!("expecting Statistics::FixedLenByteArray, got {:?}", stats);
         }
     }
 
