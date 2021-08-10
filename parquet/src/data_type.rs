@@ -128,23 +128,18 @@ impl std::fmt::Debug for ByteArray {
 
 impl PartialOrd for ByteArray {
     fn partial_cmp(&self, other: &ByteArray) -> Option<Ordering> {
-        if self.data.is_some() && other.data.is_some() {
-            match self.len().cmp(&other.len()) {
-                Ordering::Greater => Some(Ordering::Greater),
-                Ordering::Less => Some(Ordering::Less),
-                Ordering::Equal => {
-                    for (v1, v2) in self.data().iter().zip(other.data().iter()) {
-                        match v1.cmp(v2) {
-                            Ordering::Greater => return Some(Ordering::Greater),
-                            Ordering::Less => return Some(Ordering::Less),
-                            _ => {}
-                        }
-                    }
-                    Some(Ordering::Equal)
-                }
+        // sort nulls first (consistent with PartialCmp on Option)
+        //
+        // Since ByteBuffer doesn't implement PartialOrd, so can't
+        // derive an implementation
+        match (&self.data, &other.data) {
+            (None, None) => Some(Ordering::Equal),
+            (None, Some(_)) => Some(Ordering::Less),
+            (Some(_), None) => Some(Ordering::Greater),
+            (Some(self_data), Some(other_data)) => {
+                // compare slices directly
+                self_data.data().partial_cmp(other_data.data())
             }
-        } else {
-            None
         }
     }
 }
@@ -593,6 +588,7 @@ pub(crate) mod private {
     use crate::util::bit_util::{BitReader, BitWriter};
     use crate::util::memory::ByteBufferPtr;
 
+    use arrow::util::bit_util::round_upto_power_of_2;
     use byteorder::ByteOrder;
     use std::convert::TryInto;
 
@@ -674,7 +670,12 @@ pub(crate) mod private {
             bit_writer: &mut BitWriter,
         ) -> Result<()> {
             if bit_writer.bytes_written() + values.len() / 8 >= bit_writer.capacity() {
-                bit_writer.extend(256);
+                let bits_available =
+                    (bit_writer.capacity() - bit_writer.bytes_written()) * 8;
+                let bits_needed = values.len() - bits_available;
+                let bytes_needed = (bits_needed + 7) / 8;
+                let bytes_needed = round_upto_power_of_2(bytes_needed, 256);
+                bit_writer.extend(bytes_needed);
             }
             for value in values {
                 if !bit_writer.put_value(*value as u64, 1) {
@@ -1368,7 +1369,7 @@ mod tests {
         let ba4 = ByteArray::from(vec![]);
         let ba5 = ByteArray::from(vec![2, 2, 3]);
 
-        assert!(ba1 > ba2);
+        assert!(ba1 < ba2);
         assert!(ba3 > ba1);
         assert!(ba1 > ba4);
         assert_eq!(ba1, ba11);

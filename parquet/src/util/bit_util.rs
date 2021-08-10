@@ -223,7 +223,7 @@ impl BitWriter {
         }
     }
 
-    /// Extend buffer size
+    /// Extend buffer size by `increment` bytes
     #[inline]
     pub fn extend(&mut self, increment: usize) {
         self.max_bytes += increment;
@@ -231,7 +231,7 @@ impl BitWriter {
         self.buffer.extend(extra);
     }
 
-    /// Report buffer size
+    /// Report buffer size, in bytes
     #[inline]
     pub fn capacity(&mut self) -> usize {
         self.max_bytes
@@ -332,6 +332,7 @@ impl BitWriter {
         self.max_bytes
     }
 
+    /// Writes the entire byte `value` at the byte `offset`
     pub fn write_at(&mut self, offset: usize, value: u8) {
         self.buffer[offset] = value;
     }
