@@ -196,11 +196,26 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
     }
 }
 
+impl<'a, Ptr, OffsetSize: StringOffsetSizeTrait> FromIterator<&'a Option<Ptr>>
+    for GenericStringArray<OffsetSize>
+where
+    Ptr: AsRef<str> + 'a,
+{
+    /// Creates a [`GenericStringArray`] based on an iterator of `Option` references.
+    fn from_iter<I: IntoIterator<Item = &'a Option<Ptr>>>(iter: I) -> Self {
+        // Convert each owned Ptr into &str and wrap in an owned `Option`
+        let iter = iter.into_iter().map(|o| o.as_ref().map(|p| p.as_ref()));
+        // Build a `GenericStringArray` with the resulting iterator
+        iter.collect::<GenericStringArray<OffsetSize>>()
+    }
+}
+
 impl<'a, Ptr, OffsetSize: StringOffsetSizeTrait> FromIterator<Option<Ptr>>
     for GenericStringArray<OffsetSize>
 where
     Ptr: AsRef<str>,
 {
+    /// Creates a [`GenericStringArray`] based on an iterator of `Option`s
     fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
         let iter = iter.into_iter();
         let (_, data_len) = iter.size_hint();
@@ -358,6 +373,7 @@ impl<T: StringOffsetSizeTrait> From<GenericListArray<T>> for GenericStringArray<
 
 #[cfg(test)]
 mod tests {
+
     use crate::array::{ListBuilder, StringBuilder};
 
     use super::*;
@@ -484,17 +500,23 @@ mod tests {
 
     #[test]
     fn test_string_array_from_iter() {
-        let data = vec![Some("hello"), None, Some("arrow")];
+        let data = [Some("hello"), None, Some("arrow")];
+        let data_vec = data.to_vec();
         // from Vec<Option<&str>>
-        let array1 = StringArray::from(data.clone());
+        let array1 = StringArray::from(data_vec.clone());
         // from Iterator<Option<&str>>
-        let array2: StringArray = data.clone().into_iter().collect();
+        let array2: StringArray = data_vec.clone().into_iter().collect();
         // from Iterator<Option<String>>
-        let array3: StringArray =
-            data.into_iter().map(|x| x.map(|s| s.to_string())).collect();
+        let array3: StringArray = data_vec
+            .into_iter()
+            .map(|x| x.map(|s| s.to_string()))
+            .collect();
+        // from Iterator<&Option<&str>>
+        let array4: StringArray = data.iter().collect::<StringArray>();
 
         assert_eq!(array1, array2);
         assert_eq!(array2, array3);
+        assert_eq!(array3, array4);
     }
 
     #[test]
