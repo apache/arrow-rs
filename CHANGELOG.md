@@ -25,6 +25,8 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/5.1.0...5.2.0)
 
+* [aed425968162b22e3ced31a81cc876d6dcdebca5][https://github.com/apache/arrow-rs/commit/aed425968162b22e3ced31a81cc876d6dcdebca5] Write boolean stats for boolean columns (not i32 stats) (#661) (#682)
+* [6a96f5fd9babd42d9f603a9b48242cf5f2f283b8][https://github.com/apache/arrow-rs/commit/6a96f5fd9babd42d9f603a9b48242cf5f2f283b8] Write FixedLenByteArray stats for FixedLenByteArray columns (not ByteArray stats) (#662) (#683)
 * [72f240735dc91b306689f7281e896385dc27f4c9][https://github.com/apache/arrow-rs/commit/72f240735dc91b306689f7281e896385dc27f4c9] Allow creation of String arrays from &Option<&str> iterators (#680) (#686)
 * [52bbc81c9c4cd8a05a0573709a0982a902524e87][https://github.com/apache/arrow-rs/commit/52bbc81c9c4cd8a05a0573709a0982a902524e87] Doctests for DictionaryArray::from_iter, PrimitiveDictionaryBuilder and DecimalBuilder. (#673) (#679)
 * [03af5e490a6ba0567eaebaff60ec155d2e3dc35f][https://github.com/apache/arrow-rs/commit/03af5e490a6ba0567eaebaff60ec155d2e3dc35f] Add some do comments to parquet bit_util (#663) (#678)
