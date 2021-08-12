@@ -201,7 +201,7 @@ impl<'a, Ptr, OffsetSize: StringOffsetSizeTrait> FromIterator<&'a Option<Ptr>>
 where
     Ptr: AsRef<str> + 'a,
 {
-    /// Creates a `GenericStringArray` based on an iterator of `Option` references.
+    /// Creates a [`GenericStringArray`] based on an iterator of `Option` references.
     fn from_iter<I: IntoIterator<Item = &'a Option<Ptr>>>(iter: I) -> Self {
         // Convert each owned Ptr into &str and wrap in an owned `Option`
         let iter = iter.into_iter().map(|o| o.as_ref().map(|p| p.as_ref()));
@@ -215,7 +215,7 @@ impl<'a, Ptr, OffsetSize: StringOffsetSizeTrait> FromIterator<Option<Ptr>>
 where
     Ptr: AsRef<str>,
 {
-    /// Creates a `GenericStringArray` based on an iterator of `Option`s
+    /// Creates a [`GenericStringArray`] based on an iterator of `Option`s
     fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
         let iter = iter.into_iter();
         let (_, data_len) = iter.size_hint();
