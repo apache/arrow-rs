@@ -77,6 +77,11 @@ To generate a bare bones CHANGELOG for maintenance releases, you can use a comma
 git log --pretty=oneline 5.0.0..apache/active_release
 ```
 
+This command will make markdown links that work when rendered outside of github:
+```shell
+git log --pretty=oneline 5.1.0..apache/active_release | sed -e 's|\(^[0-9a-f]*\) |[\1][https://github.com/apache/arrow-rs/commit/\1] |'
+```
+
 # Mechanics of creating a release
 
 ## Prepare the release branch and tags
