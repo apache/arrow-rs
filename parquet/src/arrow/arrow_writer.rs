@@ -1728,4 +1728,34 @@ mod tests {
         let stats = column.statistics().unwrap();
         assert_eq!(stats.null_count(), 2);
     }
+
+    #[test]
+    // This writes a list in row groups of 1 record, to check that the reader will
+    // correctly read the right number of values across row group boundaries
+    // to fill the required number of list slots.
+    // See https://github.com/apache/arrow-rs/issues/518, as this test fixes that.
+    fn list_single_column_string() {
+        let a_values = StringArray::from(vec![
+            "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        ]);
+        let a_value_offsets =
+            arrow::buffer::Buffer::from(&[0, 1, 3, 3, 6, 10].to_byte_slice());
+        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+            "item",
+            DataType::Utf8,
+            false,
+        ))))
+        .len(5)
+        .add_buffer(a_value_offsets)
+        .null_bit_buffer(Buffer::from(vec![0b00011011]))
+        .add_child_data(a_values.data().clone())
+        .build();
+
+        assert_eq!(a_list_data.null_count(), 1);
+
+        let a = ListArray::from(a_list_data);
+        let values = Arc::new(a);
+
+        one_column_roundtrip("list_single_column_string", values, true, Some(1));
+    }
 }
