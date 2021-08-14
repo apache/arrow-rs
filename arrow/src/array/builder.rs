@@ -2657,7 +2657,7 @@ mod tests {
         let mut buffer = BooleanBufferBuilder::new(16);
         buffer.append_n(8, true);
         buffer.append_n(8, false);
-        assert_eq!(buffer.get_bit(0), true);
+        assert!(buffer.get_bit(0));
     }
 
     #[test]
@@ -2665,7 +2665,7 @@ mod tests {
         let mut buffer = BooleanBufferBuilder::new(16);
         buffer.append_n(8, true);
         buffer.append_n(8, false);
-        assert_eq!(buffer.get_bit(15), false);
+        assert!(!buffer.get_bit(15));
     }
 
     #[test]
@@ -2674,7 +2674,7 @@ mod tests {
         buffer.append_n(4, false);
         buffer.append_n(8, true);
         buffer.append_n(4, false);
-        assert_eq!(buffer.get_bit(11), true);
+        assert!(buffer.get_bit(11));
     }
 
     #[test]
