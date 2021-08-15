@@ -312,6 +312,11 @@ impl BooleanBufferBuilder {
     }
 
     #[inline]
+    pub fn get_bit(&mut self, index: usize) -> bool {
+        bit_util::get_bit(self.buffer.as_slice(), index)
+    }
+
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -2645,6 +2650,31 @@ mod tests {
         buffer.set_bit(13, false);
         assert_eq!(buffer.len(), 15);
         assert_eq!(buffer.finish().as_slice(), &[0b01010110_u8, 0b1011100_u8]);
+    }
+
+    #[test]
+    fn test_bool_buffer_builder_get_first_bit() {
+        let mut buffer = BooleanBufferBuilder::new(16);
+        buffer.append_n(8, true);
+        buffer.append_n(8, false);
+        assert!(buffer.get_bit(0));
+    }
+
+    #[test]
+    fn test_bool_buffer_builder_get_last_bit() {
+        let mut buffer = BooleanBufferBuilder::new(16);
+        buffer.append_n(8, true);
+        buffer.append_n(8, false);
+        assert!(!buffer.get_bit(15));
+    }
+
+    #[test]
+    fn test_bool_buffer_builder_get_an_inner_bit() {
+        let mut buffer = BooleanBufferBuilder::new(16);
+        buffer.append_n(4, false);
+        buffer.append_n(8, true);
+        buffer.append_n(4, false);
+        assert!(buffer.get_bit(11));
     }
 
     #[test]
