@@ -18,12 +18,10 @@
 //! This library demonstrates a minimal usage of Rust's C data interface to pass
 //! arrays from and to Python.
 
-use std::error;
 use std::sync::Arc;
 
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
-//use libc::uintptr_t;
 
 use arrow::array::{ArrayData, ArrayRef, Int64Array};
 use arrow::compute::kernels;
@@ -114,7 +112,7 @@ fn round_trip_record_batch(obj: RecordBatch) -> PyResult<RecordBatch> {
 }
 
 #[pymodule]
-fn arrow_pyarrow_integration_testing(py: Python, m: &PyModule) -> PyResult<()> {
+fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(double))?;
     m.add_wrapped(wrap_pyfunction!(double_py))?;
     m.add_wrapped(wrap_pyfunction!(substring))?;
