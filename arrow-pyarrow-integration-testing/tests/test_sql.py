@@ -119,7 +119,7 @@ def test_type_roundtrip(pyarrow_type):
 
 @pytest.mark.parametrize("pyarrow_type", _unsupported_pyarrow_types, ids=str)
 def test_type_roundtrip_raises(pyarrow_type):
-    with pytest.raises(Exception):
+    with pytest.raises(pa.ArrowException):
         rust.round_trip_type(pyarrow_type)
 
 

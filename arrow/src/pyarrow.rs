@@ -22,7 +22,7 @@ use std::convert::{From, TryFrom};
 use std::sync::Arc;
 
 use libc::uintptr_t;
-use pyo3::exceptions::PyException;
+use pyo3::import_exception;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
@@ -33,9 +33,12 @@ use crate::ffi;
 use crate::ffi::FFI_ArrowSchema;
 use crate::record_batch::RecordBatch;
 
+import_exception!(pyarrow, ArrowException);
+pub type PyArrowException = ArrowException;
+
 impl From<ArrowError> for PyErr {
     fn from(err: ArrowError) -> PyErr {
-        PyException::new_err(err.to_string())
+        PyArrowException::new_err(err.to_string())
     }
 }
 
@@ -116,9 +119,8 @@ impl PyArrowConvert for ArrayData {
             (array_pointer as uintptr_t, schema_pointer as uintptr_t),
         )?;
 
-        let ffi_array = unsafe {
-            ffi::ArrowArray::try_from_raw(array_pointer, schema_pointer)?
-        };
+        let ffi_array =
+            unsafe { ffi::ArrowArray::try_from_raw(array_pointer, schema_pointer)? };
         let data = ArrayData::try_from(ffi_array)?;
 
         Ok(data)

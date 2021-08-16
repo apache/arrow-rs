@@ -19,10 +19,8 @@
 //! arrays from and to Python.
 
 use std::error;
-use std::fmt;
 use std::sync::Arc;
 
-use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 //use libc::uintptr_t;
@@ -34,43 +32,6 @@ use arrow::error::ArrowError;
 use arrow::pyarrow::PyArrowConvert;
 use arrow::record_batch::RecordBatch;
 
-/// an error that bridges ArrowError with a Python error
-#[derive(Debug)]
-enum PyO3ArrowError {
-    ArrowError(ArrowError),
-}
-
-impl fmt::Display for PyO3ArrowError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            PyO3ArrowError::ArrowError(ref e) => e.fmt(f),
-        }
-    }
-}
-
-impl error::Error for PyO3ArrowError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match *self {
-            // The cause is the underlying implementation error type. Is implicitly
-            // cast to the trait object `&error::Error`. This works because the
-            // underlying type already implements the `Error` trait.
-            PyO3ArrowError::ArrowError(ref e) => Some(e),
-        }
-    }
-}
-
-impl From<ArrowError> for PyO3ArrowError {
-    fn from(err: ArrowError) -> PyO3ArrowError {
-        PyO3ArrowError::ArrowError(err)
-    }
-}
-
-impl From<PyO3ArrowError> for PyErr {
-    fn from(err: PyO3ArrowError) -> PyErr {
-        PyOSError::new_err(err.to_string())
-    }
-}
-
 /// Returns `array + array` of an int64 array.
 #[pyfunction]
 fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
@@ -78,10 +39,11 @@ fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
     let array = ArrayRef::from_pyarrow(array)?;
 
     // perform some operation
-    let array = array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
-        PyO3ArrowError::ArrowError(ArrowError::ParseError("Expects an int64".to_string()))
-    })?;
-    let array = kernels::arithmetic::add(array, array).map_err(PyO3ArrowError::from)?;
+    let array = array
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .ok_or(ArrowError::ParseError("Expects an int64".to_string()))?;
+    let array = kernels::arithmetic::add(array, array)?;
 
     // export
     array.to_pyarrow(py)
@@ -110,8 +72,7 @@ fn substring(array: ArrayData, start: i64) -> PyResult<ArrayData> {
     let array = ArrayRef::from(array);
 
     // substring
-    let array = kernels::substring::substring(array.as_ref(), start, &None)
-        .map_err(PyO3ArrowError::from)?;
+    let array = kernels::substring::substring(array.as_ref(), start, &None)?;
 
     Ok(array.data().to_owned())
 }
@@ -122,8 +83,7 @@ fn concatenate(array: ArrayData, py: Python) -> PyResult<PyObject> {
     let array = ArrayRef::from(array);
 
     // concat
-    let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()])
-        .map_err(PyO3ArrowError::from)?;
+    let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()])?;
 
     array.to_pyarrow(py)
 }
@@ -154,7 +114,7 @@ fn round_trip_record_batch(obj: RecordBatch) -> PyResult<RecordBatch> {
 }
 
 #[pymodule]
-fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> {
+fn arrow_pyarrow_integration_testing(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(double))?;
     m.add_wrapped(wrap_pyfunction!(double_py))?;
     m.add_wrapped(wrap_pyfunction!(substring))?;
