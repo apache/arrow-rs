@@ -50,11 +50,11 @@ const NANOSECONDS: i64 = 1_000_000_000;
 /// ```
 /// use arrow::array::{Array, PrimitiveArray};
 /// use arrow::datatypes::Int32Type;
-/// let arr: PrimitiveArray<Int32Type> = PrimitiveArray::from_iter_values(0..10);
+/// let arr: PrimitiveArray<Int32Type> = PrimitiveArray::from_iter_values((0..10).map(|x| x + 1));
 /// assert_eq!(10, arr.len());
 /// assert_eq!(0, arr.null_count());
 /// for i in 0..10i32 {
-///     assert_eq!(i, arr.value(i as usize));
+///     assert_eq!(i + 1, arr.value(i as usize));
 /// }
 /// ```
 pub struct PrimitiveArray<T: ArrowPrimitiveType> {
