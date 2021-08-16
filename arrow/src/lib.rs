@@ -156,6 +156,8 @@ pub mod ffi;
 #[cfg(feature = "ipc")]
 pub mod ipc;
 pub mod json;
+#[cfg(feature = "pyarrow")]
+pub mod pyarrow;
 pub mod record_batch;
 pub mod temporal_conversions;
 pub mod tensor;

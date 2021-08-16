@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
+use std::convert::{From, TryFrom};
 use std::fmt;
 use std::sync::Arc;
-use std::{any::Any, convert::TryFrom};
 
 use super::*;
 use crate::array::equal_json::JsonEqual;
@@ -331,6 +332,12 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
         DataType::Decimal(_, _) => Arc::new(DecimalArray::from(data)) as ArrayRef,
         dt => panic!("Unexpected data type {:?}", dt),
+    }
+}
+
+impl From<ArrayData> for ArrayRef {
+    fn from(data: ArrayData) -> Self {
+        make_array(data)
     }
 }
 
