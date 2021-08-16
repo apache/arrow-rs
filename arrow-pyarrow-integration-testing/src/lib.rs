@@ -81,7 +81,7 @@ fn double(array: &PyAny, py: Python) -> PyResult<PyObject> {
     let array = array.as_any().downcast_ref::<Int64Array>().ok_or_else(|| {
         PyO3ArrowError::ArrowError(ArrowError::ParseError("Expects an int64".to_string()))
     })?;
-    let array = kernels::arithmetic::add(&array, &array).map_err(PyO3ArrowError::from)?;
+    let array = kernels::arithmetic::add(array, array).map_err(PyO3ArrowError::from)?;
 
     // export
     array.to_pyarrow(py)
