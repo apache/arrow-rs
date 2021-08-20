@@ -3170,7 +3170,7 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("c1", DataType::Binary, true)]);
         let binary_values = BinaryArray::from(vec![
-            "\u{2081}\u{2082}\u{2083}".as_bytes(),
+            "₁₂₃".as_bytes(),
             "foo".as_bytes(),
         ]);
         let expected_batch =
