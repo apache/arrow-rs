@@ -3169,10 +3169,7 @@ mod tests {
         let data = batch.columns().iter().collect::<Vec<_>>();
 
         let schema = Schema::new(vec![Field::new("c1", DataType::Binary, true)]);
-        let binary_values = BinaryArray::from(vec![
-            "₁₂₃".as_bytes(),
-            "foo".as_bytes(),
-        ]);
+        let binary_values = BinaryArray::from(vec!["₁₂₃".as_bytes(), "foo".as_bytes()]);
         let expected_batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(binary_values)])
                 .unwrap();
