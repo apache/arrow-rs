@@ -658,6 +658,28 @@ mod tests {
     }
 
     #[test]
+    fn test_null_map() {
+        let data_type = DataType::Map(
+            Box::new(Field::new(
+                "entry",
+                DataType::Struct(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int32, true),
+                ]),
+                false,
+            )),
+            false,
+        );
+        let array = new_null_array(&data_type, 9);
+        let a = array.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(a.len(), 9);
+        assert_eq!(a.value_offsets()[9], 0i32);
+        for i in 0..9 {
+            assert!(a.is_null(i));
+        }
+    }
+
+    #[test]
     fn test_null_dictionary() {
         let values = vec![None, None, None, None, None, None, None, None, None]
             as Vec<Option<&str>>;

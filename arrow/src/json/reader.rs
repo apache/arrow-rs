@@ -1224,6 +1224,14 @@ impl Decoder {
                             })
                             .collect::<StringArray>(),
                     ) as ArrayRef),
+                    DataType::Binary => Ok(Arc::new(
+                        rows.iter()
+                            .map(|row| {
+                                let maybe_value = row.get(field.name());
+                                maybe_value.and_then(|value| value.as_str())
+                            })
+                            .collect::<BinaryArray>(),
+                    ) as ArrayRef),
                     DataType::List(ref list_field) => {
                         match list_field.data_type() {
                             DataType::Dictionary(ref key_ty, _) => {
@@ -2961,6 +2969,38 @@ mod tests {
 
         assert_eq!(batch.num_columns(), 1);
         assert_eq!(batch.num_rows(), 3);
+    }
+
+    #[test]
+    fn test_json_read_binary_structs() {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Binary, true)]);
+        let decoder = Decoder::new(Arc::new(schema), 1024, None);
+        let batch = decoder
+            .next_batch(
+                &mut vec![
+                    Ok(serde_json::json!({
+                        "c1": "₁₂₃",
+                    })),
+                    Ok(serde_json::json!({
+                        "c1": "foo",
+                    })),
+                ]
+                .into_iter(),
+            )
+            .unwrap()
+            .unwrap();
+        let data = batch.columns().iter().collect::<Vec<_>>();
+
+        let schema = Schema::new(vec![Field::new("c1", DataType::Binary, true)]);
+        let binary_values = BinaryArray::from(vec!["₁₂₃".as_bytes(), "foo".as_bytes()]);
+        let expected_batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(binary_values)])
+                .unwrap();
+        let expected_data = expected_batch.columns().iter().collect::<Vec<_>>();
+
+        assert_eq!(data, expected_data);
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.num_rows(), 2);
     }
 
     #[test]
