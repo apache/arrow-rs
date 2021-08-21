@@ -668,7 +668,7 @@ mod tests {
                 "entry",
                 DataType::Struct(vec![
                     Field::new("key", DataType::Utf8, false),
-                    Field::new("key", DataType::Int32, true),
+                    Field::new("value", DataType::Int32, true),
                 ]),
                 false,
             )),
