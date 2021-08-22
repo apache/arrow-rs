@@ -36,6 +36,9 @@ pub trait TryClone: Sized {
 pub trait ParquetReader: Read + Seek + Length + TryClone {}
 impl<T: Read + Seek + Length + TryClone> ParquetReader for T {}
 
+pub trait ThreadSafeParquetReader: ParquetReader + Send + Sync + 'static {}
+impl<T: ParquetReader + Send + Sync + 'static> ThreadSafeParquetReader for T {}
+
 // Read/Write wrappers for `File`.
 
 /// Position trait returns the current position in the stream.
@@ -54,8 +57,8 @@ pub trait Position {
 /// while preserving independent position, which is not available with `try_clone()`.
 ///
 /// Designed after `arrow::io::RandomAccessFile` and `std::io::BufReader`
-pub struct FileSource<R: ParquetReader> {
-    reader: RefCell<R>,
+pub struct FileSource<R: ThreadSafeParquetReader> {
+    reader: Mutext<R>,
     start: u64,     // start position in a file
     end: u64,       // end position in a file
     buf: Vec<u8>,   // buffer where bytes read in advance are stored
@@ -63,7 +66,7 @@ pub struct FileSource<R: ParquetReader> {
     buf_cap: usize, // current number of bytes read into the buffer
 }
 
-impl<R: ParquetReader> fmt::Debug for FileSource<R> {
+impl<R: ThreadSafeParquetReader> fmt::Debug for FileSource<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FileSource")
             .field("reader", &"OPAQUE")
@@ -76,7 +79,7 @@ impl<R: ParquetReader> fmt::Debug for FileSource<R> {
     }
 }
 
-impl<R: ParquetReader> FileSource<R> {
+impl<R: ThreadSafeParquetReader> FileSource<R> {
     /// Creates new file reader with start and length from a file handle
     pub fn new(fd: &R, start: u64, length: usize) -> Self {
         let reader = RefCell::new(fd.try_clone().unwrap());
@@ -118,7 +121,7 @@ impl<R: ParquetReader> FileSource<R> {
     }
 }
 
-impl<R: ParquetReader> Read for FileSource<R> {
+impl<R: ThreadSafeParquetReader> Read for FileSource<R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let bytes_to_read = cmp::min(buf.len(), (self.end - self.start) as usize);
         let buf = &mut buf[0..bytes_to_read];
@@ -142,13 +145,13 @@ impl<R: ParquetReader> Read for FileSource<R> {
     }
 }
 
-impl<R: ParquetReader> Position for FileSource<R> {
+impl<R: ThreadSafeParquetReader> Position for FileSource<R> {
     fn pos(&self) -> u64 {
         self.start
     }
 }
 
-impl<R: ParquetReader> Length for FileSource<R> {
+impl<R: ThreadSafeParquetReader> Length for FileSource<R> {
     fn len(&self) -> u64 {
         self.end - self.start
     }
