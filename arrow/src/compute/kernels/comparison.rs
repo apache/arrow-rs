@@ -549,7 +549,10 @@ pub fn regexp_matches_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
         }
     } else {
         let re = Regex::new(pattern.as_str()).map_err(|e| {
-            ArrowError::ComputeError(format!("Regular expression did not compile: {:?}", e))
+            ArrowError::ComputeError(format!(
+                "Regular expression did not compile: {:?}",
+                e
+            ))
         })?;
         for i in 0..array.len() {
             let value = array.value(i);
@@ -668,7 +671,10 @@ pub fn regexp_not_matches_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
         }
     } else {
         let re = Regex::new(pattern.as_str()).map_err(|e| {
-            ArrowError::ComputeError(format!("Regular expression did not compile: {:?}", e))
+            ArrowError::ComputeError(format!(
+                "Regular expression did not compile: {:?}",
+                e
+            ))
         })?;
         for i in 0..array.len() {
             let value = array.value(i);
