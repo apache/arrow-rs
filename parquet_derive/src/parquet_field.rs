@@ -479,7 +479,7 @@ impl Type {
             "f32" => BasicType::FLOAT,
             "f64" => BasicType::DOUBLE,
             "String" | "str" | "Uuid" => BasicType::BYTE_ARRAY,
-            f => unimplemented!("{} currently is not supported (1000)", f),
+            f => unimplemented!("{} currently is not supported", f),
         }
     }
 
@@ -549,7 +549,7 @@ impl Type {
             "f32" | "f64" => quote! { None },
             "String" | "str" => quote! { Some(LogicalType::STRING(Default::default())) },
             "Uuid" => quote! { Some(LogicalType::UUID(Default::default())) },
-            f => unimplemented!("{} currently is not supported (2000)", f),
+            f => unimplemented!("{} currently is not supported", f),
         }
     }
 
