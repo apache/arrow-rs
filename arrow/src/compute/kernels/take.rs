@@ -302,20 +302,17 @@ impl Default for TakeOptions {
 }
 
 #[inline(always)]
-fn maybe_usize<I: ArrowPrimitiveType>(index: I::Native) -> Result<usize> {
+fn maybe_usize<I: ArrowNativeType>(index: I) -> Result<usize> {
     index
         .to_usize()
         .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))
 }
 
 // take implementation when neither values nor indices contain nulls
-fn take_no_nulls<T, I>(
-    values: &[T::Native],
-    indices: &[I::Native],
-) -> Result<(Buffer, Option<Buffer>)>
+fn take_no_nulls<T, I>(values: &[T], indices: &[I]) -> Result<(Buffer, Option<Buffer>)>
 where
-    T: ArrowPrimitiveType,
-    I: ArrowNumericType,
+    T: ArrowNativeType,
+    I: ArrowNativeType,
 {
     let values = indices
         .iter()
@@ -329,12 +326,11 @@ where
 // take implementation when only values contain nulls
 fn take_values_nulls<T, I>(
     values: &PrimitiveArray<T>,
-    indices: &[I::Native],
+    indices: &[I],
 ) -> Result<(Buffer, Option<Buffer>)>
 where
     T: ArrowPrimitiveType,
-    I: ArrowNumericType,
-    I::Native: ToPrimitive,
+    I: ArrowNativeType,
 {
     let num_bytes = bit_util::ceil(indices.len(), 8);
     let mut nulls = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
@@ -366,21 +362,21 @@ where
 
 // take implementation when only indices contain nulls
 fn take_indices_nulls<T, I>(
-    values: &[T::Native],
+    values: &[T],
     indices: &PrimitiveArray<I>,
 ) -> Result<(Buffer, Option<Buffer>)>
 where
-    T: ArrowPrimitiveType,
+    T: ArrowNativeType,
     I: ArrowNumericType,
     I::Native: ToPrimitive,
 {
     let values = indices.values().iter().map(|index| {
-        let index = maybe_usize::<I>(*index)?;
+        let index = maybe_usize::<I::Native>(*index)?;
         Result::Ok(match values.get(index) {
             Some(value) => *value,
             None => {
                 if indices.is_null(index) {
-                    T::Native::default()
+                    T::default()
                 } else {
                     panic!("Out-of-bounds index {}", index)
                 }
@@ -418,7 +414,7 @@ where
     let values_values = values.values();
     let values = indices.iter().enumerate().map(|(i, index)| match index {
         Some(index) => {
-            let index = maybe_usize::<I>(index)?;
+            let index = maybe_usize::<I::Native>(index)?;
             if values.is_null(index) {
                 null_count += 1;
                 bit_util::unset_bit(null_slice, i);
@@ -471,17 +467,17 @@ where
         (false, false) => {
             // * no nulls
             // * all `indices.values()` are valid
-            take_no_nulls::<T, I>(values.values(), indices.values())?
+            take_no_nulls::<T::Native, I::Native>(values.values(), indices.values())?
         }
         (true, false) => {
             // * nulls come from `values` alone
             // * all `indices.values()` are valid
-            take_values_nulls::<T, I>(values, indices.values())?
+            take_values_nulls::<T, I::Native>(values, indices.values())?
         }
         (false, true) => {
             // in this branch it is unsound to read and use `index.values()`,
             // as doing so is UB when they come from a null slot.
-            take_indices_nulls::<T, I>(values.values(), indices)?
+            take_indices_nulls::<T::Native, I>(values.values(), indices)?
         }
         (true, true) => {
             // in this branch it is unsound to read and use `index.values()`,
@@ -795,7 +791,7 @@ where
         .values()
         .iter()
         .map(|idx| {
-            let idx = maybe_usize::<IndexType>(*idx)?;
+            let idx = maybe_usize::<IndexType::Native>(*idx)?;
             if data_ref.is_valid(idx) {
                 Ok(Some(values.value(idx)))
             } else {
@@ -821,7 +817,7 @@ where
         .values()
         .iter()
         .map(|idx| {
-            let idx = maybe_usize::<IndexType>(*idx)?;
+            let idx = maybe_usize::<IndexType::Native>(*idx)?;
             if data_ref.is_valid(idx) {
                 Ok(Some(values.value(idx)))
             } else {
