@@ -332,20 +332,30 @@ where
     T: ArrowPrimitiveType,
     I: ArrowNativeType,
 {
+    take_values_nulls_inner(values.data(), values.values(), indices)
+}
+
+fn take_values_nulls_inner<T, I>(
+    values_data: &ArrayData,
+    values: &[T],
+    indices: &[I],
+) -> Result<(Buffer, Option<Buffer>)>
+where
+    T: ArrowNativeType,
+    I: ArrowNativeType,
+{
     let num_bytes = bit_util::ceil(indices.len(), 8);
     let mut nulls = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
     let null_slice = nulls.as_slice_mut();
     let mut null_count = 0;
 
-    let values_values = values.values();
-
     let values = indices.iter().enumerate().map(|(i, index)| {
         let index = maybe_usize::<I>(*index)?;
-        if values.is_null(index) {
+        if values_data.is_null(index) {
             null_count += 1;
             bit_util::unset_bit(null_slice, i);
         }
-        Result::Ok(values_values[index])
+        Result::Ok(values[index])
     });
     // Soundness: `slice.map` is `TrustedLen`.
     let buffer = unsafe { Buffer::try_from_trusted_len_iter(values)? };
@@ -370,12 +380,24 @@ where
     I: ArrowNumericType,
     I::Native: ToPrimitive,
 {
-    let values = indices.values().iter().map(|index| {
-        let index = maybe_usize::<I::Native>(*index)?;
+    take_indices_nulls_inner(values, indices.values(), indices.data())
+}
+
+fn take_indices_nulls_inner<T, I>(
+    values: &[T],
+    indices: &[I],
+    indices_data: &ArrayData,
+) -> Result<(Buffer, Option<Buffer>)>
+where
+    T: ArrowNativeType,
+    I: ArrowNativeType,
+{
+    let values = indices.iter().map(|index| {
+        let index = maybe_usize::<I>(*index)?;
         Result::Ok(match values.get(index) {
             Some(value) => *value,
             None => {
-                if indices.is_null(index) {
+                if indices_data.is_null(index) {
                     T::default()
                 } else {
                     panic!("Out-of-bounds index {}", index)
@@ -389,10 +411,9 @@ where
 
     Ok((
         buffer,
-        indices
-            .data_ref()
+        indices_data
             .null_buffer()
-            .map(|b| b.bit_slice(indices.offset(), indices.len())),
+            .map(|b| b.bit_slice(indices_data.offset(), indices.len())),
     ))
 }
 
@@ -406,25 +427,41 @@ where
     I: ArrowNumericType,
     I::Native: ToPrimitive,
 {
+    take_values_indices_nulls_inner(
+        values.values(),
+        values.data(),
+        indices.values(),
+        indices.data(),
+    )
+}
+
+fn take_values_indices_nulls_inner<T, I>(
+    values: &[T],
+    values_data: &ArrayData,
+    indices: &[I],
+    indices_data: &ArrayData,
+) -> Result<(Buffer, Option<Buffer>)>
+where
+    T: ArrowNativeType,
+    I: ArrowNativeType,
+{
     let num_bytes = bit_util::ceil(indices.len(), 8);
     let mut nulls = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
     let null_slice = nulls.as_slice_mut();
     let mut null_count = 0;
 
-    let values_values = values.values();
-    let values = indices.iter().enumerate().map(|(i, index)| match index {
-        Some(index) => {
-            let index = maybe_usize::<I::Native>(index)?;
-            if values.is_null(index) {
+    let values = indices.iter().enumerate().map(|(i, &index)| {
+        if indices_data.is_null(i) {
+            null_count += 1;
+            bit_util::unset_bit(null_slice, i);
+            Ok(T::default())
+        } else {
+            let index = maybe_usize::<I>(index)?;
+            if values_data.is_null(index) {
                 null_count += 1;
                 bit_util::unset_bit(null_slice, i);
             }
-            Result::Ok(values_values[index])
-        }
-        None => {
-            null_count += 1;
-            bit_util::unset_bit(null_slice, i);
-            Ok(T::Native::default())
+            Result::Ok(values[index])
         }
     });
     // Soundness: `slice.map` is `TrustedLen`.
