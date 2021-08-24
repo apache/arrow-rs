@@ -46,7 +46,7 @@ struct ACompleteRecord<'a> {
     pub maybe_double: Option<f64>,
     pub borrowed_maybe_a_string: &'a Option<String>,
     pub borrowed_maybe_a_str: &'a Option<&'a str>,
-    pub now: chrono::NaiveDateTime
+    pub now: chrono::NaiveDateTime,
 }
 
 #[cfg(test)]
@@ -120,7 +120,7 @@ mod tests {
             maybe_double: Some(std::f64::MAX),
             borrowed_maybe_a_string: &maybe_a_string,
             borrowed_maybe_a_str: &maybe_a_str,
-            now: chrono::Utc::now().naive_local()
+            now: chrono::Utc::now().naive_local(),
         }];
 
         let generated_schema = drs.as_slice().schema().unwrap();

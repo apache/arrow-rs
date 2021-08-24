@@ -1108,7 +1108,7 @@ mod test {
         let converted_type = time.ty.converted_type();
         assert_eq!(
             converted_type.unwrap().to_string(),
-            quote!{ ConvertedType::TIMESTAMP_MILLIS }.to_string()
+            quote! { ConvertedType::TIMESTAMP_MILLIS }.to_string()
         );
     }
 }
