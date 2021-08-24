@@ -1099,10 +1099,10 @@ impl ValueDecoder for DeltaByteArrayValueDecoder {
     ) -> Result<usize> {
         num_values = std::cmp::min(num_values, self.decoder.values_left());
         let mut values_read = 0;
+        let mut buf = [ByteArray::new()];
         while values_read < num_values {
-            let mut buf = [ByteArray::new()];
             let num_read = self.decoder.get(&mut buf)?;
-            assert_eq!(num_read, 1);
+            debug_assert_eq!(num_read, 1);
 
             read_bytes(buf[0].data(), 1);
 
@@ -1686,8 +1686,8 @@ mod tests {
             ColumnWriter::ByteArrayColumnWriter(c) => {
                 c.write_batch(
                     &[ByteArray::from("foo"), ByteArray::from("bar")],
-                    Some(&[1, 1]),
-                    Some(&[0, 0]),
+                    Some(&[0, 1, 0, 0, 1, 0]),
+                    Some(&[0, 0, 0, 0, 0, 0]),
                 )
                 .unwrap();
             }
@@ -1718,7 +1718,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             strings.into_iter().collect::<Vec<_>>(),
-            vec![Some("foo"), Some("bar")]
+            vec![None, Some("foo"), None, None, Some("bar"), None]
         );
     }
 }
