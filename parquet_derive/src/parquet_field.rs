@@ -557,8 +557,8 @@ impl Type {
         let last_part = self.last_part();
 
         match last_part.trim() {
-            "NaiveDateTime" => Some(quote!{ ConvertedType::TIMESTAMP_MILLIS }),
-            _ => None
+            "NaiveDateTime" => Some(quote! { ConvertedType::TIMESTAMP_MILLIS }),
+            _ => None,
         }
     }
 
@@ -1106,6 +1106,9 @@ mod test {
         let time = Field::from(&fields[0]);
 
         let converted_type = time.ty.converted_type();
-        assert_eq!(converted_type.unwrap().to_string(), quote!{ ConvertedType::TIMESTAMP_MILLIS }.to_string());
+        assert_eq!(
+            converted_type.unwrap().to_string(),
+            quote!{ ConvertedType::TIMESTAMP_MILLIS }.to_string()
+        );
     }
 }

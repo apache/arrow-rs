@@ -46,7 +46,7 @@ struct ACompleteRecord<'a> {
     pub maybe_double: Option<f64>,
     pub borrowed_maybe_a_string: &'a Option<String>,
     pub borrowed_maybe_a_str: &'a Option<&'a str>,
-    pub now: chrono::NaiveDateTime,
+    pub now: chrono::NaiveDateTime
 }
 
 #[cfg(test)]
