@@ -35,6 +35,10 @@ pub(super) fn set_bits(
     offset_read: usize,
     len: usize,
 ) -> usize {
+    // write to write_data until it is at a whole-byte offset
+    // create bit chunk iterator for data
+    // write whole bytes from iterator to write_data
+
     let mut count = 0;
     (0..len).for_each(|i| {
         if bit_util::get_bit(data, offset_read + i) {
@@ -73,4 +77,57 @@ pub(super) unsafe fn get_last_offset<T: OffsetSizeTrait>(
     let (prefix, offsets, suffix) = offset_buffer.as_slice().align_to::<T>();
     debug_assert!(prefix.is_empty() && suffix.is_empty());
     *offsets.get_unchecked(offsets.len() - 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_set_bits_aligned() {
+        let mut destination: Vec<u8> = vec![0b01010101, 0b00000000];
+        let source: &[u8] = &[0b00110011];
+
+        let destination_offset = 8;
+        let source_offset = 0;
+
+        let len = 8;
+
+        let expected_data: &[u8] = &[0b01010101, 0b00110011];
+        let expected_null_count = 4;
+        let result = set_bits(
+            destination.as_mut_slice(),
+            source,
+            destination_offset,
+            source_offset,
+            len,
+        );
+
+        assert_eq!(destination, expected_data);
+        assert_eq!(result, expected_null_count);
+    }
+
+    #[test]
+    fn test_set_bits_unaligned() {
+        let mut destination: Vec<u8> = vec![0, 0];
+        let source: &[u8] = &[0b11111111];
+
+        let destination_offset = 4;
+        let source_offset = 2;
+
+        let len = 6;
+
+        let expected_data: &[u8] = &[0b11110000, 0b00000011];
+        let expected_null_count = 0;
+        let result = set_bits(
+            destination.as_mut_slice(),
+            source,
+            destination_offset,
+            source_offset,
+            len,
+        );
+
+        assert_eq!(destination, expected_data);
+        assert_eq!(result, expected_null_count);
+    }
 }
