@@ -30,3 +30,4 @@ publish = false
 [dependencies]
 parquet = { path = "../parquet", version = "6.0.0-SNAPSHOT" }
 parquet_derive = { path = "../parquet_derive", version = "6.0.0-SNAPSHOT" }
+chrono = "0.4.19"
