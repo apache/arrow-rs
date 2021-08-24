@@ -522,15 +522,31 @@ where
     T::Native: std::cmp::PartialOrd,
     F: Fn(T::Native, T::Native) -> std::cmp::Ordering,
 {
-    let values = as_primitive_array::<T>(values);
-    let descending = options.descending;
-
     // create tuples that are used for sorting
-    let mut valids = value_indices
-        .into_iter()
-        .map(|index| (index, values.value(index as usize)))
-        .collect::<Vec<(u32, T::Native)>>();
+    let valids = {
+        let values = as_primitive_array::<T>(values);
+        value_indices
+            .into_iter()
+            .map(|index| (index, values.value(index as usize)))
+            .collect::<Vec<(u32, T::Native)>>()
+    };
+    sort_primitive_inner(values, null_indices, cmp, options, limit, valids)
+}
 
+// sort is instantiated a lot so we only compile this inner version for each native type
+fn sort_primitive_inner<T, F>(
+    values: &ArrayRef,
+    null_indices: Vec<u32>,
+    cmp: F,
+    options: &SortOptions,
+    limit: Option<usize>,
+    mut valids: Vec<(u32, T)>,
+) -> UInt32Array
+where
+    T: ArrowNativeType,
+    T: std::cmp::PartialOrd,
+    F: Fn(T, T) -> std::cmp::Ordering,
+{
     let mut nulls = null_indices;
 
     let valids_len = valids.len();
@@ -540,7 +556,7 @@ where
     if let Some(limit) = limit {
         len = limit.min(len);
     }
-    if !descending {
+    if !options.descending {
         sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
             cmp(a.1, b.1)
         });
