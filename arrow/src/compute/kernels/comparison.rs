@@ -451,7 +451,13 @@ pub fn nlike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
 }
 
 /// Perform SQL `array ~ regex_array` operation on [`StringArray`] / [`LargeStringArray`].
-pub fn regexp_matches_utf8<OffsetSize: StringOffsetSizeTrait>(
+/// If `regex_array` element has an empty value, the corresponding result value is always true.
+///
+/// `flags_array` are optional [`StringArray`] / [`LargeStringArray`] flag, which allow
+/// special search modes, such as case insensitive and multi-line mode.
+/// See the documentation [here](https://docs.rs/regex/1.5.4/regex/#grouping-and-flags)
+/// for more information.
+pub fn regexp_is_match_utf8<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     regex_array: &GenericStringArray<OffsetSize>,
     flags_array: Option<&GenericStringArray<OffsetSize>>,
@@ -531,7 +537,9 @@ pub fn regexp_matches_utf8<OffsetSize: StringOffsetSizeTrait>(
 
 /// Perform SQL `array ~ regex_array` operation on [`StringArray`] /
 /// [`LargeStringArray`] and a scalar.
-pub fn regexp_matches_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
+///
+/// See the documentation on [`regexp_is_match_utf8`] for more details.
+pub fn regexp_is_match_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     regex: &str,
     flag: Option<&str>,
@@ -557,128 +565,6 @@ pub fn regexp_matches_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
         for i in 0..array.len() {
             let value = array.value(i);
             result.append(re.is_match(value));
-        }
-    }
-
-    let data = ArrayData::new(
-        DataType::Boolean,
-        array.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![result.finish()],
-        vec![],
-    );
-    Ok(BooleanArray::from(data))
-}
-
-/// Perform SQL `array !~ regex_array` operation on [`StringArray`] / [`LargeStringArray`].
-pub fn regexp_not_matches_utf8<OffsetSize: StringOffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
-    regex_array: &GenericStringArray<OffsetSize>,
-    flags_array: Option<&GenericStringArray<OffsetSize>>,
-) -> Result<BooleanArray> {
-    if array.len() != regex_array.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
-        ));
-    }
-    let null_bit_buffer =
-        combine_option_bitmap(array.data_ref(), regex_array.data_ref(), array.len())?;
-
-    let mut patterns: HashMap<String, Regex> = HashMap::new();
-    let mut result = BooleanBufferBuilder::new(array.len());
-
-    let complete_pattern = match flags_array {
-        Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
-            |(pattern, flags)| {
-                pattern.map(|pattern| match flags {
-                    Some(flag) => format!("(?{}){}", flag, pattern),
-                    None => pattern.to_string(),
-                })
-            },
-        )) as Box<dyn Iterator<Item = Option<String>>>,
-        None => Box::new(
-            regex_array
-                .iter()
-                .map(|pattern| pattern.map(|pattern| pattern.to_string())),
-        ),
-    };
-
-    array
-        .iter()
-        .zip(complete_pattern)
-        .map(|(value, pattern)| {
-            match (value, pattern) {
-                // Required for Postgres compatibility:
-                // SELECT 'foobarbequebaz' !~ ''); = false
-                (Some(_), Some(pattern)) if pattern == *"" => {
-                    result.append(false);
-                }
-                (Some(value), Some(pattern)) => {
-                    let existing_pattern = patterns.get(&pattern);
-                    let re = match existing_pattern {
-                        Some(re) => re.clone(),
-                        None => {
-                            let re = Regex::new(pattern.as_str()).map_err(|e| {
-                                ArrowError::ComputeError(format!(
-                                    "Regular expression did not compile: {:?}",
-                                    e
-                                ))
-                            })?;
-                            patterns.insert(pattern, re.clone());
-                            re
-                        }
-                    };
-                    result.append(!re.is_match(value));
-                }
-                _ => result.append(true),
-            }
-            Ok(())
-        })
-        .collect::<Result<Vec<()>>>()?;
-
-    let data = ArrayData::new(
-        DataType::Boolean,
-        array.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![result.finish()],
-        vec![],
-    );
-    Ok(BooleanArray::from(data))
-}
-
-/// Perform SQL `array !~ regex_array` operation on [`StringArray`] /
-/// [`LargeStringArray`] and a scalar.
-pub fn regexp_not_matches_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
-    regex: &str,
-    flag: Option<&str>,
-) -> Result<BooleanArray> {
-    let null_bit_buffer = array.data().null_buffer().cloned();
-    let mut result = BooleanBufferBuilder::new(array.len());
-
-    let pattern = match flag {
-        Some(flag) => format!("(?{}){}", flag, regex),
-        None => regex.to_string(),
-    };
-    if pattern == *"" {
-        for _i in 0..array.len() {
-            result.append(false);
-        }
-    } else {
-        let re = Regex::new(pattern.as_str()).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Regular expression did not compile: {:?}",
-                e
-            ))
-        })?;
-        for i in 0..array.len() {
-            let value = array.value(i);
-            result.append(!re.is_match(value));
         }
     }
 
@@ -1942,78 +1828,41 @@ mod tests {
         vec![false, false, true, true]
     );
     test_flag_utf8!(
-        test_utf8_array_regexp_matches,
+        test_utf8_array_regexp_is_match,
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
         vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
-        regexp_matches_utf8,
+        regexp_is_match_utf8,
         vec![true, false, true, false, false, true]
     );
     test_flag_utf8!(
-        test_utf8_array_regexp_matches_insensitive,
+        test_utf8_array_regexp_is_match_insensitive,
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
         vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
         vec!["i"; 6],
-        regexp_matches_utf8,
+        regexp_is_match_utf8,
         vec![true, true, true, true, false, true]
-    );
-    test_flag_utf8!(
-        test_utf8_array_regexp_not_matches,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
-        vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
-        regexp_not_matches_utf8,
-        vec![false, true, false, true, true, false]
-    );
-    test_flag_utf8!(
-        test_utf8_array_regexp_not_matches_insensitive,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
-        vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
-        vec!["i"; 6],
-        regexp_not_matches_utf8,
-        vec![false, false, false, false, true, false]
     );
 
     test_flag_utf8_scalar!(
-        test_utf8_array_regexp_matches_scalar,
+        test_utf8_array_regexp_is_match_scalar,
         vec!["arrow", "ARROW", "parquet", "PARQUET"],
         "^ar",
-        regexp_matches_utf8_scalar,
+        regexp_is_match_utf8_scalar,
         vec![true, false, false, false]
     );
     test_flag_utf8_scalar!(
-        test_utf8_array_regexp_matches_empty_scalar,
+        test_utf8_array_regexp_is_match_empty_scalar,
         vec!["arrow", "ARROW", "parquet", "PARQUET"],
         "",
-        regexp_matches_utf8_scalar,
+        regexp_is_match_utf8_scalar,
         vec![true, true, true, true]
     );
     test_flag_utf8_scalar!(
-        test_utf8_array_regexp_matches_insensitive_scalar,
+        test_utf8_array_regexp_is_match_insensitive_scalar,
         vec!["arrow", "ARROW", "parquet", "PARQUET"],
         "^ar",
         "i",
-        regexp_matches_utf8_scalar,
+        regexp_is_match_utf8_scalar,
         vec![true, true, false, false]
-    );
-    test_flag_utf8_scalar!(
-        test_utf8_array_regexp_not_matches_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
-        "^ar",
-        regexp_not_matches_utf8_scalar,
-        vec![false, true, true, true]
-    );
-    test_flag_utf8_scalar!(
-        test_utf8_array_regexp_not_matches_empty_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
-        "",
-        regexp_not_matches_utf8_scalar,
-        vec![false, false, false, false]
-    );
-    test_flag_utf8_scalar!(
-        test_utf8_array_regexp_not_matches_insensitive_scalar,
-        vec!["arrow", "ARROW", "parquet", "PARQUET"],
-        "^ar",
-        "i",
-        regexp_not_matches_utf8_scalar,
-        vec![false, false, true, true]
     );
 }
