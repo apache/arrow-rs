@@ -741,24 +741,12 @@ where
         );
 
     let mut len = values.len();
-    let nulls_len = null_indices.len();
     let descending = options.descending;
 
     if let Some(limit) = limit {
         len = limit.min(len);
     }
-
-    if !descending {
-        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-            cmp_array(a.1.as_ref(), b.1.as_ref())
-        });
-    } else {
-        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-            cmp_array(a.1.as_ref(), b.1.as_ref()).reverse()
-        });
-        // reverse to keep a stable ordering
-        null_indices.reverse();
-    }
+    sort_valids_array(descending, &mut valids, &mut null_indices, len);
 
     let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
     if options.nulls_first {
@@ -1046,6 +1034,26 @@ fn sort_valids<T, U>(
     } else {
         sort_unstable_by(valids, len.saturating_sub(nulls_len), |a, b| {
             cmp(a.1, b.1).reverse()
+        });
+        // reverse to keep a stable ordering
+        nulls.reverse();
+    }
+}
+
+fn sort_valids_array<T>(
+    descending: bool,
+    valids: &mut [(u32, ArrayRef)],
+    nulls: &mut [T],
+    len: usize,
+) {
+    let nulls_len = nulls.len();
+    if !descending {
+        sort_unstable_by(valids, len.saturating_sub(nulls_len), |a, b| {
+            cmp_array(a.1.as_ref(), b.1.as_ref())
+        });
+    } else {
+        sort_unstable_by(valids, len.saturating_sub(nulls_len), |a, b| {
+            cmp_array(a.1.as_ref(), b.1.as_ref()).reverse()
         });
         // reverse to keep a stable ordering
         nulls.reverse();
