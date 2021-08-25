@@ -425,7 +425,7 @@ impl Default for SortOptions {
 fn sort_boolean(
     values: &ArrayRef,
     value_indices: Vec<u32>,
-    null_indices: Vec<u32>,
+    mut null_indices: Vec<u32>,
     options: &SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
@@ -446,15 +446,8 @@ fn sort_boolean(
             .into_iter()
             .map(|index| (index, values.value(index as usize)))
             .collect::<Vec<(u32, bool)>>();
-        if !descending {
-            sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-                cmp(a.1, b.1)
-            });
-        } else {
-            sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-                cmp(a.1, b.1).reverse()
-            });
-        }
+
+        sort_valids(descending, &mut valids, &mut null_indices, len, cmp);
         valids
     } else {
         // when limit is not present, we have a better way than sorting: we can just partition
@@ -465,13 +458,13 @@ fn sort_boolean(
             .map(|index| (index, values.value(index as usize)))
             .partition(|(_, value)| *value == descending);
         a.extend(b);
+        if descending {
+            null_indices.reverse();
+        }
         a
     };
 
-    let mut nulls = null_indices;
-    if descending {
-        nulls.reverse();
-    }
+    let nulls = null_indices;
 
     // collect results directly into a buffer instead of a vec to avoid another aligned allocation
     let result_capacity = len * std::mem::size_of::<u32>();
@@ -556,17 +549,8 @@ where
     if let Some(limit) = limit {
         len = limit.min(len);
     }
-    if !options.descending {
-        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-            cmp(a.1, b.1)
-        });
-    } else {
-        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-            cmp(a.1, b.1).reverse()
-        });
-        // reverse to keep a stable ordering
-        nulls.reverse();
-    }
+
+    sort_valids(options.descending, &mut valids, &mut nulls, len, cmp);
 
     // collect results directly into a buffer instead of a vec to avoid another aligned allocation
     let result_capacity = len * std::mem::size_of::<u32>();
@@ -689,22 +673,12 @@ where
     let mut nulls = null_indices;
     let descending = options.descending;
     let mut len = values.len();
-    let nulls_len = nulls.len();
 
     if let Some(limit) = limit {
         len = limit.min(len);
     }
-    if !descending {
-        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-            cmp(a.1, b.1)
-        });
-    } else {
-        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-            cmp(a.1, b.1).reverse()
-        });
-        // reverse to keep a stable ordering
-        nulls.reverse();
-    }
+
+    sort_valids(descending, &mut valids, &mut nulls, len, cmp);
     // collect the order of valid tuplies
     let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
 
@@ -773,6 +747,7 @@ where
     if let Some(limit) = limit {
         len = limit.min(len);
     }
+
     if !descending {
         sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
             cmp_array(a.1.as_ref(), b.1.as_ref())
@@ -830,21 +805,12 @@ where
 
     let mut len = values.len();
     let descending = options.descending;
-    let nulls_len = null_indices.len();
 
     if let Some(limit) = limit {
         len = limit.min(len);
     }
-    if !descending {
-        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-            a.1.cmp(b.1)
-        });
-    } else {
-        sort_unstable_by(&mut valids, len.saturating_sub(nulls_len), |a, b| {
-            a.1.cmp(b.1).reverse()
-        });
-        null_indices.reverse();
-    }
+
+    sort_valids(descending, &mut valids, &mut null_indices, len, cmp);
 
     let mut valid_indices: Vec<u32> = valids.iter().map(|tuple| tuple.0).collect();
     if options.nulls_first {
@@ -1062,6 +1028,27 @@ impl LexicographicalComparator<'_> {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(LexicographicalComparator { compare_items })
+    }
+}
+
+fn sort_valids<T, U>(
+    descending: bool,
+    valids: &mut [(u32, T)],
+    nulls: &mut [U],
+    len: usize,
+    mut cmp: impl FnMut(T, T) -> Ordering,
+) where
+    T: ?Sized + Copy,
+{
+    let nulls_len = nulls.len();
+    if !descending {
+        sort_unstable_by(valids, len.saturating_sub(nulls_len), |a, b| cmp(a.1, b.1));
+    } else {
+        sort_unstable_by(valids, len.saturating_sub(nulls_len), |a, b| {
+            cmp(a.1, b.1).reverse()
+        });
+        // reverse to keep a stable ordering
+        nulls.reverse();
     }
 }
 
