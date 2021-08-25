@@ -723,7 +723,7 @@ where
 fn sort_list<S, T>(
     values: &ArrayRef,
     value_indices: Vec<u32>,
-    mut null_indices: Vec<u32>,
+    null_indices: Vec<u32>,
     options: &SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array
@@ -731,6 +731,19 @@ where
     S: OffsetSizeTrait,
     T: ArrowPrimitiveType,
     T::Native: std::cmp::PartialOrd,
+{
+    sort_list_inner::<S>(values, value_indices, null_indices, options, limit)
+}
+
+fn sort_list_inner<S>(
+    values: &ArrayRef,
+    value_indices: Vec<u32>,
+    mut null_indices: Vec<u32>,
+    options: &SortOptions,
+    limit: Option<usize>,
+) -> UInt32Array
+where
+    S: OffsetSizeTrait,
 {
     let mut valids: Vec<(u32, ArrayRef)> = values
         .as_any()
