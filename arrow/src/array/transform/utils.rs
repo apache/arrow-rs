@@ -48,8 +48,11 @@ pub(super) fn set_bits(
     if bits_to_align > 0 {
         bits_to_align = std::cmp::min(len, 8 - bits_to_align);
     }
-    let bytes_to_copy = ceil(offset_write + bits_to_align, 8)
-        ..ceil(offset_write + len - bits_to_align, 8);
+    let bytes_to_copy = {
+        let first_full_byte = ceil(offset_write + bits_to_align, 8);
+        let last_full_byte = ceil(offset_write + len - bits_to_align, 8);
+        first_full_byte..last_full_byte
+    };
 
     let chunks = BitChunks::new(data, offset_read + bits_to_align, len - bits_to_align);
     let mut bytes: Vec<u8> = Vec::with_capacity(bytes_to_copy.len());
@@ -58,9 +61,9 @@ pub(super) fn set_bits(
         bytes.extend_from_slice(&chunk.to_ne_bytes());
     });
 
-    let remainder_bits = &chunks.remainder_len();
+    let remainder_offset = len - &chunks.remainder_len();
     (0..bits_to_align)
-        .chain(len - remainder_bits..len)
+        .chain(remainder_offset..len)
         .for_each(|i| {
             if bit_util::get_bit(data, offset_read + i) {
                 bit_util::set_bit(write_data, offset_write + i);
@@ -71,6 +74,7 @@ pub(super) fn set_bits(
     bytes_to_copy.zip(bytes.iter()).for_each(|(i, b)| {
         write_data[i] = *b;
     });
+
     null_count as usize
 }
 
