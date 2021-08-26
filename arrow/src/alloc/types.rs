@@ -36,7 +36,7 @@ pub unsafe trait NativeType:
 }
 
 macro_rules! create_native {
-    ($native_ty:ty,$($impl_pattern:pat)|+) => {
+    ($native_ty:ty,$($impl_pattern:pat_param)|+) => {
         unsafe impl NativeType for $native_ty {
             type Bytes = [u8; std::mem::size_of::<Self>()];
 
