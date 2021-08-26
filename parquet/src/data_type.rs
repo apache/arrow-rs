@@ -1265,7 +1265,7 @@ impl FromBytes for FixedLenByteArray {
 
 /// Macro to reduce repetition in making type assertions on the physical type against `T`
 macro_rules! ensure_phys_ty {
-    ($($ty: pat)|+ , $err: literal) => {
+    ($($ty:pat_param)|+ , $err: literal) => {
         match T::get_physical_type() {
             $($ty => (),)*
             _ => panic!($err),
