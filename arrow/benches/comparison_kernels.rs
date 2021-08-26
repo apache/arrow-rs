@@ -119,6 +119,15 @@ fn bench_nlike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
         .unwrap();
 }
 
+fn bench_regexp_is_match_utf8_scalar(arr_a: &StringArray, value_b: &str) {
+    regexp_is_match_utf8_scalar(
+        criterion::black_box(arr_a),
+        criterion::black_box(value_b),
+        None,
+    )
+    .unwrap();
+}
+
 fn add_benchmark(c: &mut Criterion) {
     let size = 65536;
     let arr_a = create_primitive_array_with_seed::<Float32Type>(size, 0.0, 42);
@@ -194,6 +203,14 @@ fn add_benchmark(c: &mut Criterion) {
 
     c.bench_function("nlike_utf8 scalar complex", |b| {
         b.iter(|| bench_nlike_utf8_scalar(&arr_string, "%xx_xx%xxx"))
+    });
+
+    c.bench_function("egexp_matches_utf8 scalar starts with", |b| {
+        b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "^xx"))
+    });
+
+    c.bench_function("egexp_matches_utf8 scalar ends with", |b| {
+        b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "xx$"))
     });
 }
 
