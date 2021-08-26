@@ -73,6 +73,24 @@ pub(super) fn set_bits(
     null_count as usize
 }
 
+pub(super) fn set_bits_old(
+    write_data: &mut [u8],
+    data: &[u8],
+    offset_write: usize,
+    offset_read: usize,
+    len: usize,
+) -> usize {
+    let mut count = 0;
+    (0..len).for_each(|i| {
+        if bit_util::get_bit(data, offset_read + i) {
+            bit_util::set_bit(write_data, offset_write + i);
+        } else {
+            count += 1;
+        }
+    });
+    count
+}
+
 pub(super) fn extend_offsets<T: OffsetSizeTrait>(
     buffer: &mut MutableBuffer,
     mut last_offset: T,
@@ -137,23 +155,85 @@ mod tests {
     }
 
     #[test]
-    fn test_set_bits_unaligned_unset() {
-        let mut destination: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    fn test_set_bits_unaligned_destination_start() {
+        let mut destination: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let source: &[u8] = &[
+            0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111,
+            0b11100111, 0b11100111,
+        ];
+
+        let destination_offset = 3;
+        let source_offset = 0;
+
+        let len = 64;
+
+        let expected_data: &[u8] = &[
+            0b00111000, 0b00111111, 0b00111111, 0b00111111, 0b00111111, 0b00111111,
+            0b00111111, 0b00111111, 0b00000111, 0b00000000,
+        ];
+        let expected_null_count = 16;
+        let result = set_bits(
+            destination.as_mut_slice(),
+            source,
+            destination_offset,
+            source_offset,
+            len,
+        );
+
+        assert_eq!(destination, expected_data);
+        assert_eq!(result, expected_null_count);
+    }
+
+    #[test]
+    fn test_set_bits_unaligned_destination_end() {
+        let mut destination: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let source: &[u8] = &[
+            0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111,
+            0b11100111, 0b11100111,
+        ];
+
+        let destination_offset = 8;
+        let source_offset = 0;
+
+        let len = 62;
+
+        let expected_data: &[u8] = &[
+            0, 0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111,
+            0b11100111, 0b00100111, 0,
+        ];
+        let expected_null_count = 16;
+        let result = set_bits(
+            destination.as_mut_slice(),
+            source,
+            destination_offset,
+            source_offset,
+            len,
+        );
+
+        assert_eq!(destination, expected_data);
+        assert_eq!(result, expected_null_count);
+    }
+
+    #[test]
+    fn test_set_bits_unaligned() {
+        let mut destination: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         let source: &[u8] = &[
             0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111,
             0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111,
+            0b11100111, 0b11100111, 0b11100111,
         ];
 
-        let destination_offset = 4;
-        let source_offset = 4;
+        let destination_offset = 3;
+        let source_offset = 5;
 
-        let len = 88;
+        let len = 95;
 
         let expected_data: &[u8] = &[
-            0b11100000, 0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111,
-            0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b11100111, 0b0000111,
+            0b11111000, 0b11111001, 0b11111001, 0b11111001, 0b11111001, 0b11111001,
+            0b11111001, 0b11111001, 0b11111001, 0b11111001, 0b11111001, 0b11111001,
+            0b00000001,
         ];
-        let expected_null_count = 22;
+        let expected_null_count = 23;
         let result = set_bits(
             destination.as_mut_slice(),
             source,
