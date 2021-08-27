@@ -54,7 +54,7 @@ pub(super) fn set_bits(
     let chunks = BitChunks::new(data, offset_read + bits_to_align, len - bits_to_align);
     chunks.iter().for_each(|chunk| {
         null_count += chunk.count_zeros();
-        chunk.to_ne_bytes().iter().for_each(|b| {
+        chunk.to_le_bytes().iter().for_each(|b| {
             write_data[byte_index] = *b;
             byte_index += 1;
         })
