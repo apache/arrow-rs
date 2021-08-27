@@ -61,7 +61,7 @@ pub(super) fn set_bits(
     });
 
     // Set individual bits both to align write_data to a byte offset and the remainder bits not covered by the bit chunk iterator
-    let remainder_offset = len - &chunks.remainder_len();
+    let remainder_offset = len - chunks.remainder_len();
     (0..bits_to_align)
         .chain(remainder_offset..len)
         .for_each(|i| {
