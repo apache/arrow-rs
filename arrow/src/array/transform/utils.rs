@@ -50,6 +50,7 @@ pub(super) fn set_bits(
     }
     let mut byte_index = ceil(offset_write + bits_to_align, 8);
 
+    // Set full bytes provided by bit chunk iterator
     let chunks = BitChunks::new(data, offset_read + bits_to_align, len - bits_to_align);
     chunks.iter().for_each(|chunk| {
         null_count += chunk.count_zeros();
@@ -59,6 +60,7 @@ pub(super) fn set_bits(
         })
     });
 
+    // Set individual bits both to align write_data to a byte offset and the remainder bits not covered by the bit chunk iterator
     let remainder_offset = len - &chunks.remainder_len();
     (0..bits_to_align)
         .chain(remainder_offset..len)
@@ -71,24 +73,6 @@ pub(super) fn set_bits(
         });
 
     null_count as usize
-}
-
-pub(super) fn set_bits_old(
-    write_data: &mut [u8],
-    data: &[u8],
-    offset_write: usize,
-    offset_read: usize,
-    len: usize,
-) -> usize {
-    let mut count = 0;
-    (0..len).for_each(|i| {
-        if bit_util::get_bit(data, offset_read + i) {
-            bit_util::set_bit(write_data, offset_write + i);
-        } else {
-            count += 1;
-        }
-    });
-    count
 }
 
 pub(super) fn extend_offsets<T: OffsetSizeTrait>(
