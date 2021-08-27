@@ -30,6 +30,7 @@ include = [
     "Cargo.toml",
 ]
 edition = "2018"
+rust = "1.53"
 
 [lib]
 name = "arrow"
@@ -62,8 +63,8 @@ ipc = ["flatbuffers"]
 simd = ["packed_simd"]
 prettyprint = ["comfy-table"]
 # The test utils feature enables code used in benchmarks and tests but
-# not the core arrow code itself. Be aware that `rand` must be kept as 
-# an optional dependency for supporting compile to wasm32-unknown-unknown 
+# not the core arrow code itself. Be aware that `rand` must be kept as
+# an optional dependency for supporting compile to wasm32-unknown-unknown
 # target without assuming an environment containing JavaScript.
 test_utils = ["rand"]
 # this is only intended to be used in single-threaded programs: it verifies that
