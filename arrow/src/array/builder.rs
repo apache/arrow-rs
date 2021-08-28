@@ -261,6 +261,20 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         self.len += slice.len();
     }
 
+    #[inline]
+    pub fn append_trusted_len_iter(&mut self, iter: impl IntoIterator<Item = T>) {
+        let iter = iter.into_iter();
+        let len = iter
+            .size_hint()
+            .1
+            .expect("append_trusted_len_iter expects upper bound");
+        self.reserve(len);
+        for v in iter {
+            self.buffer.push(v)
+        }
+        self.len += len;
+    }
+
     /// Resets this builder and returns an immutable [`Buffer`](crate::buffer::Buffer).
     ///
     /// # Example:
@@ -695,6 +709,14 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         Ok(())
     }
 
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) -> Result<()> {
+        self.materialize_bitmap_builder();
+        self.bitmap_builder.as_mut().unwrap().append_n(n, false);
+        self.values_builder.advance(n);
+        Ok(())
+    }
+
     /// Appends an `Option<T>` into the builder
     #[inline]
     pub fn append_option(&mut self, v: Option<T::Native>) -> Result<()> {
@@ -734,6 +756,25 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             b.append_slice(is_valid);
         }
         self.values_builder.append_slice(values);
+        Ok(())
+    }
+
+    /// Appends values from a trusted length iterator.
+    #[inline]
+    pub fn append_trusted_len_iter(
+        &mut self,
+        iter: impl IntoIterator<Item = T::Native>,
+    ) -> Result<()> {
+        let mut iter = iter.into_iter();
+        let len = iter
+            .size_hint()
+            .1
+            .expect("append_trusted_len_iter requires an upper bound");
+
+        if let Some(b) = self.bitmap_builder.as_mut() {
+            b.append_n(len, true);
+        }
+        self.values_builder.append_trusted_len_iter(iter);
         Ok(())
     }
 
