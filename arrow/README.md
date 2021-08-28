@@ -23,6 +23,10 @@
 
 This crate contains the official Native Rust implementation of [Apache Arrow](https://arrow.apache.org/) in memory format. Please see the API documents for additional details.
 
+## Rust Version Compatbility
+
+This crate is tested with the latest stable version of Rust. We do not currrently test against other, older versions of the Rust compiler.
+
 ## Versioning / Releases
 
 Unlike many other crates in the Rust ecosystem which spend extended time in "pre 1.0.0" state, releasing versions 0.x, the arrow-rs crate follows the versioning scheme of the overall [Apache Arrow](https://arrow.apache.org/) project in an effort to signal which language implementations have been integration tested with each other.

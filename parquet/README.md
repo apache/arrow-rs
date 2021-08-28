@@ -42,6 +42,10 @@ while let Some(record) = iter.next() {
 
 See [crate documentation](https://docs.rs/crate/parquet) on available API.
 
+## Rust Version Compatbility
+
+This crate is tested with the latest stable version of Rust. We do not currrently test against other, older versions of the Rust compiler.
+
 ## Upgrading from versions prior to 4.0
 
 If you are upgrading from version 3.0 or previous of this crate, you
