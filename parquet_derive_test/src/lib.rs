@@ -46,6 +46,7 @@ struct ACompleteRecord<'a> {
     pub maybe_double: Option<f64>,
     pub borrowed_maybe_a_string: &'a Option<String>,
     pub borrowed_maybe_a_str: &'a Option<&'a str>,
+    pub now: chrono::NaiveDateTime,
 }
 
 #[cfg(test)]
@@ -88,7 +89,10 @@ mod tests {
             OPTIONAL DOUBLE          maybe_double;
             OPTIONAL BINARY          borrowed_maybe_a_string (STRING);
             OPTIONAL BINARY          borrowed_maybe_a_str (STRING);
+            REQUIRED INT64           now (TIMESTAMP_MILLIS);
         }";
+
+        let schema = Arc::new(parse_message_type(schema_str).unwrap());
 
         let a_str = "hello mother".to_owned();
         let a_borrowed_string = "cool news".to_owned();
@@ -116,9 +120,9 @@ mod tests {
             maybe_double: Some(std::f64::MAX),
             borrowed_maybe_a_string: &maybe_a_string,
             borrowed_maybe_a_str: &maybe_a_str,
+            now: chrono::Utc::now().naive_local(),
         }];
 
-        let schema = Arc::new(parse_message_type(schema_str).unwrap());
         let generated_schema = drs.as_slice().schema().unwrap();
 
         assert_eq!(&schema, &generated_schema);

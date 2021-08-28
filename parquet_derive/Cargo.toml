@@ -30,11 +30,6 @@ edition = "2018"
 [lib]
 proc-macro = true
 
-[features]
-chrono = []
-bigdecimal = []
-uuid = []
-
 [dependencies]
 proc-macro2 = "1.0"
 quote = "1.0"
