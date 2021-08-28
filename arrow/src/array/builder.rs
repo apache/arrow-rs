@@ -261,8 +261,11 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         self.len += slice.len();
     }
 
+    /// # Safety
+    /// This requires the iterator be a trusted length. This could instead require
+    /// the iterator implement `TrustedLen` once that is stabilized.
     #[inline]
-    pub fn append_trusted_len_iter(&mut self, iter: impl IntoIterator<Item = T>) {
+    pub unsafe fn append_trusted_len_iter(&mut self, iter: impl IntoIterator<Item = T>) {
         let iter = iter.into_iter();
         let len = iter
             .size_hint()
@@ -760,12 +763,16 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     }
 
     /// Appends values from a trusted length iterator.
+    ///
+    /// # Safety
+    /// This requires the iterator be a trusted length. This could instead require
+    /// the iterator implement `TrustedLen` once that is stabilized.
     #[inline]
-    pub fn append_trusted_len_iter(
+    pub unsafe fn append_trusted_len_iter(
         &mut self,
         iter: impl IntoIterator<Item = T::Native>,
     ) -> Result<()> {
-        let mut iter = iter.into_iter();
+        let iter = iter.into_iter();
         let len = iter
             .size_hint()
             .1
