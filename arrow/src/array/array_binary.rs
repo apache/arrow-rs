@@ -744,12 +744,22 @@ impl DecimalArray {
 
     #[inline]
     pub fn value_as_string(&self, row: usize) -> String {
-        let decimal_string = self.value(row).to_string();
+        let value = self.value(row);
+        let value_str = value.to_string();
+
         if self.scale == 0 {
-            decimal_string
+            value_str
         } else {
-            let splits = decimal_string.split_at(decimal_string.len() - self.scale);
-            format!("{}.{}", splits.0, splits.1)
+            let (sign, rest) = value_str.split_at(if value >= 0 { 0 } else { 1 });
+
+            if rest.len() > self.scale {
+                // Decimal separator is in the middle of the string
+                let (whole, decimal) = value_str.split_at(value_str.len() - self.scale);
+                format!("{}.{}", whole, decimal)
+            } else {
+                // String has to be padded
+                format!("{}0.{:0>width$}", sign, rest, width = self.scale)
+            }
         }
     }
 
@@ -1238,6 +1248,23 @@ mod tests {
         assert_eq!(8_887_000_000, decimal_array.value(0));
         assert_eq!(-8_887_000_000, decimal_array.value(1));
         assert_eq!(16, decimal_array.value_length());
+    }
+
+    #[test]
+    fn test_decimal_array_value_as_string() {
+        let mut decimal_builder = DecimalBuilder::new(7, 5, 3);
+        for value in [123450, -123450, 100, -100, 10, -10, 0] {
+            decimal_builder.append_value(value).unwrap();
+        }
+        let arr = decimal_builder.finish();
+
+        assert_eq!("123.450", arr.value_as_string(0));
+        assert_eq!("-123.450", arr.value_as_string(1));
+        assert_eq!("0.100", arr.value_as_string(2));
+        assert_eq!("-0.100", arr.value_as_string(3));
+        assert_eq!("0.010", arr.value_as_string(4));
+        assert_eq!("-0.010", arr.value_as_string(5));
+        assert_eq!("0.000", arr.value_as_string(6));
     }
 
     #[test]
