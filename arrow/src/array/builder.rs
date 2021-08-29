@@ -2788,6 +2788,35 @@ mod tests {
     }
 
     #[test]
+    fn test_primitive_array_builder_i32_append_iter() {
+        let mut builder = Int32Array::builder(5);
+        unsafe { builder.append_trusted_len_iter(0..5) }.unwrap();
+        let arr = builder.finish();
+        assert_eq!(5, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(0, arr.null_count());
+        for i in 0..5 {
+            assert!(!arr.is_null(i));
+            assert!(arr.is_valid(i));
+            assert_eq!(i as i32, arr.value(i));
+        }
+    }
+
+    #[test]
+    fn test_primitive_array_builder_i32_append_nulls() {
+        let mut builder = Int32Array::builder(5);
+        builder.append_nulls(5).unwrap();
+        let arr = builder.finish();
+        assert_eq!(5, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(5, arr.null_count());
+        for i in 0..5 {
+            assert!(arr.is_null(i));
+            assert!(!arr.is_valid(i));
+        }
+    }
+
+    #[test]
     fn test_primitive_array_builder_date32() {
         let mut builder = Date32Array::builder(5);
         for i in 0..5 {
