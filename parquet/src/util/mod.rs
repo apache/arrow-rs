@@ -22,7 +22,9 @@ pub mod bit_util;
 mod bit_packing;
 pub mod cursor;
 pub mod hash_util;
+#[cfg(feature = "test")]
 pub(crate) mod test_common;
+#[cfg(feature = "test")]
 pub use self::test_common::page_util::{
     DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator,
 };

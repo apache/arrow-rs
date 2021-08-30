@@ -680,6 +680,15 @@ impl From<Vec<u8>> for BitReader {
     }
 }
 
+/// Returns the nearest multiple of `factor` that is `>=` than `num`. Here `factor` must
+/// be a power of 2.
+///
+/// Copied from the arrow crate to make arrow optional
+pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
+    debug_assert!(factor > 0 && (factor & (factor - 1)) == 0);
+    (num + (factor - 1)) & !(factor - 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_common::*;
