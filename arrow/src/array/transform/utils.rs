@@ -35,6 +35,7 @@ pub(super) fn resize_for_bits(buffer: &mut MutableBuffer, len: usize) {
 
 /// sets all bits on `write_data` on the range `[offset_write..offset_write+len]` to be equal to the
 /// bits on `data` on the range `[offset_read..offset_read+len]`
+/// returns the number of `0` bits `data[offset_read..offset_read+len]`
 pub(super) fn set_bits(
     write_data: &mut [u8],
     data: &[u8],
@@ -48,15 +49,15 @@ pub(super) fn set_bits(
     if bits_to_align > 0 {
         bits_to_align = std::cmp::min(len, 8 - bits_to_align);
     }
-    let mut byte_index = ceil(offset_write + bits_to_align, 8);
+    let mut write_byte_index = ceil(offset_write + bits_to_align, 8);
 
-    // Set full bytes provided by bit chunk iterator
+    // Set full bytes provided by bit chunk iterator (which iterates in 64 bits at a time)
     let chunks = BitChunks::new(data, offset_read + bits_to_align, len - bits_to_align);
     chunks.iter().for_each(|chunk| {
         null_count += chunk.count_zeros();
         chunk.to_le_bytes().iter().for_each(|b| {
-            write_data[byte_index] = *b;
-            byte_index += 1;
+            write_data[write_byte_index] = *b;
+            write_byte_index += 1;
         })
     });
 
