@@ -78,16 +78,19 @@ jobs:
         with:
           python-version: '3.7'
       - name: Upgrade pip and setuptools
-        run: pip install --upgrade pip setuptools wheel
-      - name: Install python dependencies
-        run: pip install maturin==0.8.2 toml==0.10.1 pytest pytz
-      - name: Install nightly pyarrow wheel
-        run: pip install pyarrow>=5.0
+        run: pip install --upgrade pip setuptools wheel virtualenv
+      - name: Create virtualenv and install dependencies
+        run: |
+          virtualenv venv
+          source venv/bin/activate
+          pip install maturin toml pytest pytz pyarrow>=5.0
       - name: Run tests
         env:
           CARGO_HOME: "/home/runner/.cargo"
           CARGO_TARGET_DIR: "/home/runner/target"
-        working-directory: arrow-pyarrow-integration-testing
         run: |
+          source venv/bin/activate
+          pushd arrow-pyarrow-integration-testing
           maturin develop
           pytest -v .
+          popd
