@@ -21,7 +21,7 @@
 use std::convert::{From, TryFrom};
 use std::sync::Arc;
 
-use libc::uintptr_t;
+use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -51,7 +51,7 @@ impl PyArrowConvert for DataType {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        value.call_method1("_export_to_c", (c_schema_ptr as uintptr_t,))?;
+        value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
         let dtype = DataType::try_from(&c_schema)?;
         Ok(dtype)
     }
@@ -61,7 +61,8 @@ impl PyArrowConvert for DataType {
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
         let class = module.getattr("DataType")?;
-        let dtype = class.call_method1("_import_from_c", (c_schema_ptr as uintptr_t,))?;
+        let dtype =
+            class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
         Ok(dtype.into())
     }
 }
@@ -70,7 +71,7 @@ impl PyArrowConvert for Field {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        value.call_method1("_export_to_c", (c_schema_ptr as uintptr_t,))?;
+        value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
         let field = Field::try_from(&c_schema)?;
         Ok(field)
     }
@@ -80,7 +81,8 @@ impl PyArrowConvert for Field {
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
         let module = py.import("pyarrow")?;
         let class = module.getattr("Field")?;
-        let dtype = class.call_method1("_import_from_c", (c_schema_ptr as uintptr_t,))?;
+        let dtype =
+            class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
         Ok(dtype.into())
     }
 }
@@ -89,7 +91,7 @@ impl PyArrowConvert for Schema {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
         let c_schema = FFI_ArrowSchema::empty();
         let c_schema_ptr = &c_schema as *const FFI_ArrowSchema;
-        value.call_method1("_export_to_c", (c_schema_ptr as uintptr_t,))?;
+        value.call_method1("_export_to_c", (c_schema_ptr as Py_uintptr_t,))?;
         let schema = Schema::try_from(&c_schema)?;
         Ok(schema)
     }
@@ -100,7 +102,7 @@ impl PyArrowConvert for Schema {
         let module = py.import("pyarrow")?;
         let class = module.getattr("Schema")?;
         let schema =
-            class.call_method1("_import_from_c", (c_schema_ptr as uintptr_t,))?;
+            class.call_method1("_import_from_c", (c_schema_ptr as Py_uintptr_t,))?;
         Ok(schema.into())
     }
 }
@@ -116,7 +118,10 @@ impl PyArrowConvert for ArrayData {
         // In particular, `_export_to_c` can go out of bounds
         value.call_method1(
             "_export_to_c",
-            (array_pointer as uintptr_t, schema_pointer as uintptr_t),
+            (
+                array_pointer as Py_uintptr_t,
+                schema_pointer as Py_uintptr_t,
+            ),
         )?;
 
         let ffi_array =
@@ -134,7 +139,10 @@ impl PyArrowConvert for ArrayData {
         let class = module.getattr("Array")?;
         let array = class.call_method1(
             "_import_from_c",
-            (array_pointer as uintptr_t, schema_pointer as uintptr_t),
+            (
+                array_pointer as Py_uintptr_t,
+                schema_pointer as Py_uintptr_t,
+            ),
         )?;
         Ok(array.to_object(py))
     }
