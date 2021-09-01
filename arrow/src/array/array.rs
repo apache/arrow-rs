@@ -448,18 +448,15 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                     .clone(),
             ],
         )),
-        DataType::Struct(fields) => make_array(ArrayData::new(
-            data_type.clone(),
-            length,
-            Some(length),
-            Some(MutableBuffer::new_null(length).into()),
-            0,
-            vec![],
-            fields
+        DataType::Struct(fields) => {
+            let fields: Vec<_> = fields
                 .iter()
-                .map(|field| ArrayData::new_empty(field.data_type()))
-                .collect(),
-        )),
+                .map(|field| (field.clone(), new_null_array(field.data_type(), length)))
+                .collect();
+
+            let null_buffer = MutableBuffer::new_null(length);
+            Arc::new(StructArray::from((fields, null_buffer.into())))
+        }
         DataType::Map(field, _keys_sorted) => {
             new_null_list_array::<i32>(data_type, field.data_type(), length)
         }
@@ -642,6 +639,23 @@ mod tests {
         for i in 0..9 {
             assert!(a.is_null(i));
         }
+    }
+
+    #[test]
+    fn test_null_struct() {
+        let struct_type =
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+        let array = new_null_array(&struct_type, 9);
+
+        let a = array.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(a.len(), 9);
+        assert_eq!(a.column(0).len(), 9);
+        for i in 0..9 {
+            assert!(a.is_null(i));
+        }
+
+        // Make sure we can slice the resulting array.
+        a.slice(0, 5);
     }
 
     #[test]
