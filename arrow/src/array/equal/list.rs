@@ -138,7 +138,7 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
             child_rhs_nulls.as_ref(),
             lhs_offsets[lhs_start].to_usize().unwrap(),
             rhs_offsets[rhs_start].to_usize().unwrap(),
-            (lhs_offsets[len] - lhs_offsets[lhs_start])
+            (lhs_offsets[lhs_start + len] - lhs_offsets[lhs_start])
                 .to_usize()
                 .unwrap(),
         )

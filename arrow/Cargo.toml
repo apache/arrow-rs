@@ -50,6 +50,8 @@ chrono = "0.4"
 flatbuffers = { version = "=2.0.0", optional = true }
 hex = "0.4"
 comfy-table = { version = "4.0", optional = true, default-features = false }
+prettytable-rs = { version = "0.8.0", optional = true }
+pyo3 = { version = "0.14", optional = true }
 lexical-core = "^0.7"
 multiversion = "0.6.1"
 bitflags = "1.2.1"
@@ -62,14 +64,15 @@ ipc = ["flatbuffers"]
 simd = ["packed_simd"]
 prettyprint = ["comfy-table"]
 # The test utils feature enables code used in benchmarks and tests but
-# not the core arrow code itself. Be aware that `rand` must be kept as 
-# an optional dependency for supporting compile to wasm32-unknown-unknown 
+# not the core arrow code itself. Be aware that `rand` must be kept as
+# an optional dependency for supporting compile to wasm32-unknown-unknown
 # target without assuming an environment containing JavaScript.
 test_utils = ["rand"]
 # this is only intended to be used in single-threaded programs: it verifies that
 # all allocated memory is being released (no memory leaks).
 # See README for details
 memory-check = []
+pyarrow = ["pyo3"]
 
 [dev-dependencies]
 rand = "0.8"

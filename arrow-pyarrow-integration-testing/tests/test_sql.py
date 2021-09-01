@@ -25,7 +25,6 @@ import pytest
 import pyarrow as pa
 import pytz
 
-from arrow_pyarrow_integration_testing import PyDataType, PyField, PySchema
 import arrow_pyarrow_integration_testing as rust
 
 
@@ -113,43 +112,42 @@ _unsupported_pyarrow_types = [
 
 @pytest.mark.parametrize("pyarrow_type", _supported_pyarrow_types, ids=str)
 def test_type_roundtrip(pyarrow_type):
-    ty = PyDataType.from_pyarrow(pyarrow_type)
-    restored = ty.to_pyarrow()
+    restored = rust.round_trip_type(pyarrow_type)
     assert restored == pyarrow_type
     assert restored is not pyarrow_type
 
 
 @pytest.mark.parametrize("pyarrow_type", _unsupported_pyarrow_types, ids=str)
 def test_type_roundtrip_raises(pyarrow_type):
-    with pytest.raises(Exception):
-        PyDataType.from_pyarrow(pyarrow_type)
+    with pytest.raises(pa.ArrowException):
+        rust.round_trip_type(pyarrow_type)
 
 
 def test_dictionary_type_roundtrip():
     # the dictionary type conversion is incomplete
     pyarrow_type = pa.dictionary(pa.int32(), pa.string())
-    ty = PyDataType.from_pyarrow(pyarrow_type)
-    assert ty.to_pyarrow() == pa.int32()
+    ty = rust.round_trip_type(pyarrow_type)
+    assert ty == pa.int32()
 
 
 @pytest.mark.parametrize('pyarrow_type', _supported_pyarrow_types, ids=str)
 def test_field_roundtrip(pyarrow_type):
     pyarrow_field = pa.field("test", pyarrow_type, nullable=True)
-    field = PyField.from_pyarrow(pyarrow_field)
-    assert field.to_pyarrow() == pyarrow_field
+    field = rust.round_trip_field(pyarrow_field)
+    assert field == pyarrow_field
 
     if pyarrow_type != pa.null():
         # A null type field may not be non-nullable
         pyarrow_field = pa.field("test", pyarrow_type, nullable=False)
-        field = PyField.from_pyarrow(pyarrow_field)
-        assert field.to_pyarrow() == pyarrow_field
+        field = rust.round_trip_field(pyarrow_field)
+        assert field == pyarrow_field
 
 
 def test_schema_roundtrip():
     pyarrow_fields = zip(string.ascii_lowercase, _supported_pyarrow_types)
     pyarrow_schema = pa.schema(pyarrow_fields)
-    schema = PySchema.from_pyarrow(pyarrow_schema)
-    assert schema.to_pyarrow() == pyarrow_schema
+    schema = rust.round_trip_schema(pyarrow_schema)
+    assert schema == pyarrow_schema
 
 
 def test_primitive_python():
@@ -205,7 +203,7 @@ def test_list_array():
     Python -> Rust -> Python
     """
     a = pa.array([[], None, [1, 2], [4, 5, 6]], pa.list_(pa.int64()))
-    b = rust.round_trip(a)
+    b = rust.round_trip_array(a)
     b.validate(full=True)
     assert a.to_pylist() == b.to_pylist()
     assert a.type == b.type
@@ -261,7 +259,7 @@ def test_decimal_python():
         None
     ]
     a = pa.array(data, pa.decimal128(6, 2))
-    b = rust.round_trip(a)
+    b = rust.round_trip_array(a)
     assert a == b
     del a
     del b
