@@ -118,6 +118,8 @@ jobs:
           cargo run --example dynamic_types
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
+          # Exit arrow directory
+          cd ..
           (cd parquet && cargo check --no-default-features)
           (cd arrow && cargo check --no-default-features)
           (cd arrow-flight && cargo check --no-default-features)
