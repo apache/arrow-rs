@@ -239,7 +239,7 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cargo clippy --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
+          cargo clippy --features test_common --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
 
   lint:
     name: Lint
