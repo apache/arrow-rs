@@ -23,6 +23,7 @@ use std::mem::size_of;
 use std::result::Result::Ok;
 use std::sync::Arc;
 use std::vec::Vec;
+use parquet_format::TimeUnit;
 
 use arrow::array::{
     new_empty_array, Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryArray,
@@ -50,6 +51,7 @@ use arrow::datatypes::{
     TimestampMillisecondType as ArrowTimestampMillisecondType,
     TimestampNanosecondType as ArrowTimestampNanosecondType,
     TimestampSecondType as ArrowTimestampSecondType, ToByteSlice,
+    TimeUnit::{Microsecond, Nanosecond, Millisecond},
     UInt16Type as ArrowUInt16Type, UInt32Type as ArrowUInt32Type,
     UInt64Type as ArrowUInt64Type, UInt8Type as ArrowUInt8Type,
 };
@@ -64,7 +66,7 @@ use crate::arrow::converter::{
 use crate::arrow::record_reader::buffer::{ScalarValue, ValuesBuffer};
 use crate::arrow::record_reader::{GenericRecordReader, RecordReader};
 use crate::arrow::schema::parquet_to_arrow_field;
-use crate::basic::{ConvertedType, Repetition, Type as PhysicalType};
+use crate::basic::{ConvertedType, Repetition, Type as PhysicalType, LogicalType};
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::column::reader::ColumnReaderImpl;
@@ -457,6 +459,24 @@ where
                     }
                 }
                 Arc::new(builder.finish()) as ArrayRef
+            }
+            ArrowType::Timestamp(ArrowTimeUnit::Nanosecond, ref tz) => {
+                if let Some(LogicalType::TIMESTAMP(t)) = self.column_desc.logical_type() {
+                    match t.unit {
+                        TimeUnit::MICROS(_) => {
+                            let a = arrow::compute::cast(&array, &ArrowType::Timestamp(Microsecond, tz.clone()))?;
+                            arrow::compute::cast(&a, &ArrowType::Timestamp(Nanosecond, tz.clone()))?
+                        }
+                        TimeUnit::MILLIS(_) => {
+                            let a = arrow::compute::cast(&array, &ArrowType::Timestamp(Millisecond, tz.clone()))?;
+                            arrow::compute::cast(&a, &ArrowType::Timestamp(Nanosecond, tz.clone()))?
+                        }
+                        _ => arrow::compute::cast(&array, &target_type.clone())?
+                    }
+                }
+                else {
+                    arrow::compute::cast(&array, &target_type.clone())?
+                }
             }
             _ => arrow::compute::cast(&array, &target_type)?,
         };
