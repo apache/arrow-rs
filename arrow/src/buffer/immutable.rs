@@ -184,7 +184,7 @@ impl Buffer {
     /// If the offset is byte-aligned the returned buffer is a shallow clone,
     /// otherwise a new buffer is allocated and filled with a copy of the bits in the range.
     pub fn bit_slice(&self, offset: usize, len: usize) -> Self {
-        if offset % 8 == 0 && len % 8 == 0 {
+        if offset % 8 == 0 {
             return self.slice(offset / 8);
         }
 
