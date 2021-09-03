@@ -122,8 +122,12 @@ macro_rules! compare_op_primitive {
 }
 
 macro_rules! compare_op_scalar {
-    ($left: expr, $right:expr, $op:expr) => {{
-        let null_bit_buffer = $left.data().null_buffer().cloned();
+    ($left:expr, $right:expr, $op:expr) => {{
+        let null_bit_buffer = $left
+            .data()
+            .null_buffer()
+            .map(|b| b.bit_slice($left.offset(), $left.len()));
+
         // Safety:
         // `i < $left.len()`
         let comparison =
@@ -146,7 +150,10 @@ macro_rules! compare_op_scalar {
 
 macro_rules! compare_op_scalar_primitive {
     ($left: expr, $right:expr, $op:expr) => {{
-        let null_bit_buffer = $left.data().null_buffer().cloned();
+        let null_bit_buffer = $left
+            .data()
+            .null_buffer()
+            .map(|b| b.bit_slice($left.offset(), $left.len()));
 
         let mut values = MutableBuffer::from_len_zeroed(($left.len() + 7) / 8);
         let lhs_chunks_iter = $left.values().chunks_exact(8);
@@ -1186,6 +1193,18 @@ mod tests {
     }
 
     #[test]
+    fn test_primitive_array_eq_scalar_with_slice() {
+        let a = Int32Array::from(vec![Some(1), None, Some(2), Some(3)]);
+        let a = a.slice(1, 3);
+        let a: &Int32Array = as_primitive_array(&a);
+        let a_eq = eq_scalar(a, 2).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![None, Some(true), Some(false)])
+        );
+    }
+
+    #[test]
     fn test_primitive_array_neq() {
         cmp_i64!(
             neq,
@@ -1527,6 +1546,18 @@ mod tests {
                 }
             }
         };
+    }
+
+    #[test]
+    fn test_utf8_eq_scalar_on_slice() {
+        let a = StringArray::from(vec![Some("hi"), None, Some("hello"), Some("world")]);
+        let a = a.slice(1, 3);
+        let a = as_string_array(&a);
+        let a_eq = eq_utf8_scalar(a, "hello").unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![None, Some(true), Some(false)])
+        );
     }
 
     macro_rules! test_utf8_scalar {
