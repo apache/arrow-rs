@@ -30,7 +30,10 @@ fn into_primitive_array_data<I: ArrowPrimitiveType, O: ArrowPrimitiveType>(
         O::DATA_TYPE,
         array.len(),
         None,
-        array.data_ref().null_buffer().cloned(),
+        array
+            .data_ref()
+            .null_buffer()
+            .map(|b| b.bit_slice(array.offset(), array.len())),
         0,
         vec![buffer],
         vec![],
@@ -71,4 +74,23 @@ where
 
     let data = into_primitive_array_data::<_, O>(array, buffer);
     PrimitiveArray::<O>::from(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::array::{as_primitive_array, Float64Array};
+
+    #[test]
+    fn test_unary_f64_slice() {
+        let input =
+            Float64Array::from(vec![Some(5.1f64), None, Some(6.8), None, Some(7.2)]);
+        let input_slice = input.slice(1, 4);
+        let input_slice: &Float64Array = as_primitive_array(&input_slice);
+        let result = unary(input_slice, |n| n.round());
+        assert_eq!(
+            result,
+            Float64Array::from(vec![None, Some(7.0), None, Some(7.0)])
+        )
+    }
 }
