@@ -51,7 +51,7 @@ flatbuffers = { version = "=2.0.0", optional = true }
 hex = "0.4"
 comfy-table = { version = "4.0", optional = true, default-features = false }
 pyo3 = { version = "0.14", optional = true }
-lexical-core = "^0.7"
+lexical-core = "^0.8"
 multiversion = "0.6.1"
 bitflags = "1.2.1"
 
