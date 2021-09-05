@@ -33,7 +33,7 @@ use crate::datatypes::{ArrowNumericType, DataType};
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util::{ceil, round_upto_multiple_of_64};
 use core::iter;
-use lexical_core::Integer;
+use num::Zero;
 
 fn binary_boolean_kleene_kernel<F>(
     left: &BooleanArray,
