@@ -1594,6 +1594,9 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Interval(IntervalUnit::DayTime) => {
             Box::new(IntervalDayTimeBuilder::new(capacity))
         }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            Box::new(IntervalMonthDayNanoBuilder::new(capacity))
+        }
         DataType::Duration(TimeUnit::Second) => {
             Box::new(DurationSecondBuilder::new(capacity))
         }
@@ -1937,6 +1940,7 @@ impl FieldData {
             | DataType::Time64(_)
             | DataType::Interval(IntervalUnit::DayTime)
             | DataType::Duration(_) => self.append_null::<Int64Type>()?,
+            DataType::Interval(IntervalUnit::MonthDayNano) => self.append_null::<IntervalMonthDayNanoType>()?,
             DataType::UInt8 => self.append_null::<UInt8Type>()?,
             DataType::UInt16 => self.append_null::<UInt16Type>()?,
             DataType::UInt32 => self.append_null::<UInt32Type>()?,

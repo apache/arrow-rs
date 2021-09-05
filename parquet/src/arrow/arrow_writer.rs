@@ -426,6 +426,13 @@ fn write_leaf(
                             .unwrap();
                         get_interval_dt_array_slice(array, &indices)
                     }
+                    IntervalUnit::MonthDayNano => {
+                        let array = column
+                            .as_any()
+                            .downcast_ref::<arrow_array::IntervalMonthDayNanoArray>()
+                            .unwrap();
+                        get_interval_mdn_array_slice(array, &indices)
+                    }
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
                     let array = column
@@ -538,6 +545,20 @@ fn get_interval_dt_array_slice(
         prefix.append(&mut value);
         debug_assert_eq!(prefix.len(), 12);
         values.push(FixedLenByteArray::from(ByteArray::from(prefix)));
+    }
+    values
+}
+
+/// Returns 16-byte values representing 3 values of months, days (4-bytes each) and nanoseconds (8-bytes).
+fn get_interval_mdn_array_slice(
+    array: &arrow_array::IntervalMonthDayNanoArray,
+    indices: &[usize],
+) -> Vec<FixedLenByteArray> {
+    let mut values = Vec::with_capacity(indices.len());
+    for i in indices {
+        let value = array.value(*i).to_le_bytes().to_vec();
+        debug_assert_eq!(value.len(), 16);
+        values.push(FixedLenByteArray::from(ByteArray::from(value)));
     }
     values
 }

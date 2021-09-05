@@ -67,6 +67,12 @@ pub trait ArrowNativeType:
     fn from_i64(_: i64) -> Option<Self> {
         None
     }
+
+    /// Convert native type from i128.
+    #[inline]
+    fn from_i128(_: i128) -> Option<Self> {
+        None
+    }
 }
 
 /// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
@@ -201,6 +207,35 @@ impl ArrowNativeType for i64 {
     }
 }
 
+impl JsonSerializable for i128 {
+    fn into_json_value(self) -> Option<Value> {
+        Some(self.into())
+    }
+}
+
+impl ArrowNativeType for i128 {
+    #[inline]
+    fn from_usize(v: usize) -> Option<Self> {
+        num::FromPrimitive::from_usize(v)
+    }
+
+    #[inline]
+    fn to_usize(&self) -> Option<usize> {
+        num::ToPrimitive::to_usize(self)
+    }
+
+    #[inline]
+    fn to_isize(&self) -> Option<isize> {
+        num::ToPrimitive::to_isize(self)
+    }
+
+    /// Convert native type from i128.
+    #[inline]
+    fn from_i128(val: i128) -> Option<Self> {
+        Some(val)
+    }
+}
+
 impl JsonSerializable for u8 {
     fn into_json_value(self) -> Option<Value> {
         Some(self.into())
@@ -277,6 +312,29 @@ impl JsonSerializable for u64 {
 }
 
 impl ArrowNativeType for u64 {
+    #[inline]
+    fn from_usize(v: usize) -> Option<Self> {
+        num::FromPrimitive::from_usize(v)
+    }
+
+    #[inline]
+    fn to_usize(&self) -> Option<usize> {
+        num::ToPrimitive::to_usize(self)
+    }
+
+    #[inline]
+    fn to_isize(&self) -> Option<isize> {
+        num::ToPrimitive::to_isize(self)
+    }
+}
+
+impl JsonSerializable for u128 {
+    fn into_json_value(self) -> Option<Value> {
+        Some(self.into())
+    }
+}
+
+impl ArrowNativeType for u128 {
     #[inline]
     fn from_usize(v: usize) -> Option<Self> {
         num::FromPrimitive::from_usize(v)

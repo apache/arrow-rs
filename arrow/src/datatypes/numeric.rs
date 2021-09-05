@@ -348,6 +348,7 @@ make_numeric_type!(Time64MicrosecondType, i64, i64x8, m64x8);
 make_numeric_type!(Time64NanosecondType, i64, i64x8, m64x8);
 make_numeric_type!(IntervalYearMonthType, i32, i32x16, m32x16);
 make_numeric_type!(IntervalDayTimeType, i64, i64x8, m64x8);
+make_numeric_type!(IntervalMonthDayNanoType, i128, i128x4, m128x4);
 make_numeric_type!(DurationSecondType, i64, i64x8, m64x8);
 make_numeric_type!(DurationMillisecondType, i64, i64x8, m64x8);
 make_numeric_type!(DurationMicrosecondType, i64, i64x8, m64x8);

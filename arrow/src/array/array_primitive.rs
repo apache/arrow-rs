@@ -419,6 +419,7 @@ def_numeric_from_vec!(Time64MicrosecondType);
 def_numeric_from_vec!(Time64NanosecondType);
 def_numeric_from_vec!(IntervalYearMonthType);
 def_numeric_from_vec!(IntervalDayTimeType);
+def_numeric_from_vec!(IntervalMonthDayNanoType);
 def_numeric_from_vec!(DurationSecondType);
 def_numeric_from_vec!(DurationMillisecondType);
 def_numeric_from_vec!(DurationMicrosecondType);
@@ -624,6 +625,22 @@ mod tests {
         assert!(arr.is_null(1));
         assert_eq!(-5, arr.value(2));
         assert_eq!(-5, arr.values()[2]);
+
+        // a month_day_nano interval contains months, days and nanoseconds,
+        // but we do not yet have accessors for the values
+        let arr = IntervalMonthDayNanoArray::from(vec![
+            Some(100000000000000000000),
+            None,
+            Some(-500000000000000000000),
+        ]);
+        assert_eq!(3, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(1, arr.null_count());
+        assert_eq!(100000000000000000000, arr.value(0));
+        assert_eq!(100000000000000000000, arr.values()[0]);
+        assert!(arr.is_null(1));
+        assert_eq!(-500000000000000000000, arr.value(2));
+        assert_eq!(-500000000000000000000, arr.values()[2]);
     }
 
     #[test]

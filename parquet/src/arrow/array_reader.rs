@@ -58,7 +58,8 @@ use crate::arrow::converter::{
     BinaryArrayConverter, BinaryConverter, Converter, DecimalArrayConverter,
     DecimalConverter, FixedLenBinaryConverter, FixedSizeArrayConverter,
     Int96ArrayConverter, Int96Converter, IntervalDayTimeArrayConverter,
-    IntervalDayTimeConverter, IntervalYearMonthArrayConverter,
+    IntervalDayTimeConverter, IntervalMonthDayNanoArrayConverter,
+    IntervalMonthDayNanoConverter, IntervalYearMonthArrayConverter,
     IntervalYearMonthConverter, LargeBinaryArrayConverter, LargeBinaryConverter,
     LargeUtf8ArrayConverter, LargeUtf8Converter,
 };
@@ -1800,6 +1801,20 @@ impl<'a> ArrayReaderBuilder {
                             Ok(Box::new(ComplexObjectArrayReader::<
                                 FixedLenByteArrayType,
                                 IntervalYearMonthConverter,
+                            >::new(
+                                page_iterator,
+                                column_desc,
+                                converter,
+                                arrow_type,
+                            )?))
+                        }
+                        Some(ArrowType::Interval(IntervalUnit::MonthDayNano)) => {
+                            let converter = IntervalMonthDayNanoConverter::new(
+                                IntervalMonthDayNanoArrayConverter {},
+                            );
+                            Ok(Box::new(ComplexObjectArrayReader::<
+                                FixedLenByteArrayType,
+                                IntervalMonthDayNanoConverter,
                             >::new(
                                 page_iterator,
                                 column_desc,

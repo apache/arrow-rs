@@ -309,7 +309,8 @@ fn create_primitive_array(
         | Timestamp(_, _)
         | Date64
         | Duration(_)
-        | Interval(IntervalUnit::DayTime) => {
+        | Interval(IntervalUnit::DayTime)
+        | Interval(IntervalUnit::MonthDayNano) => {
             let mut builder = ArrayData::builder(data_type.clone())
                 .len(length)
                 .buffers(buffers[1..].to_vec())

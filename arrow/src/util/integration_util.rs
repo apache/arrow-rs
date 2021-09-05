@@ -286,6 +286,10 @@ impl ArrowJsonBatch {
                             .collect::<Vec<Value>>();
                         arr.equals_json(&x.iter().collect::<Vec<&Value>>()[..])
                     }
+                    DataType::Interval(IntervalUnit::MonthDayNano) => {
+                        let arr = IntervalMonthDayNanoArray::from(arr.data().clone());
+                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
+                    }
                     DataType::UInt8 => {
                         let arr = arr.as_any().downcast_ref::<UInt8Array>().unwrap();
                         arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])

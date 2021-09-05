@@ -97,6 +97,11 @@ make_type!(
     DataType::Interval(IntervalUnit::DayTime)
 );
 make_type!(
+    IntervalMonthDayNanoType,
+    i128,
+    DataType::Interval(IntervalUnit::MonthDayNano)
+);
+make_type!(
     DurationSecondType,
     i64,
     DataType::Duration(TimeUnit::Second)
@@ -152,6 +157,7 @@ impl ArrowTemporalType for Time64MicrosecondType {}
 impl ArrowTemporalType for Time64NanosecondType {}
 // impl ArrowTemporalType for IntervalYearMonthType {}
 // impl ArrowTemporalType for IntervalDayTimeType {}
+// impl ArrowTemporalType for IntervalMonthDayNanoType {}
 impl ArrowTemporalType for DurationSecondType {}
 impl ArrowTemporalType for DurationMillisecondType {}
 impl ArrowTemporalType for DurationMicrosecondType {}

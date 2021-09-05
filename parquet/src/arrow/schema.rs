@@ -2013,18 +2013,19 @@ mod tests {
                 ),
                 Field::new("c19", DataType::Interval(IntervalUnit::DayTime), false),
                 Field::new("c20", DataType::Interval(IntervalUnit::YearMonth), false),
+                Field::new("c21", DataType::Interval(IntervalUnit::MonthDayNano), false),
                 Field::new(
-                    "c21",
+                    "c22",
                     DataType::List(Box::new(Field::new("list", DataType::Boolean, true))),
                     false,
                 ),
                 // Field::new(
-                //     "c22",
+                //     "c23",
                 //     DataType::FixedSizeList(Box::new(DataType::Boolean), 5),
                 //     false,
                 // ),
                 // Field::new(
-                //     "c23",
+                //     "c24",
                 //     DataType::List(Box::new(DataType::LargeList(Box::new(
                 //         DataType::Struct(vec![
                 //             Field::new("a", DataType::Int16, true),
@@ -2034,21 +2035,21 @@ mod tests {
                 //     true,
                 // ),
                 Field::new(
-                    "c24",
+                    "c25",
                     DataType::Struct(vec![
                         Field::new("a", DataType::Utf8, false),
                         Field::new("b", DataType::UInt16, false),
                     ]),
                     false,
                 ),
-                Field::new("c25", DataType::Interval(IntervalUnit::YearMonth), true),
-                Field::new("c26", DataType::Interval(IntervalUnit::DayTime), true),
-                // Field::new("c27", DataType::Duration(TimeUnit::Second), false),
-                // Field::new("c28", DataType::Duration(TimeUnit::Millisecond), false),
-                // Field::new("c29", DataType::Duration(TimeUnit::Microsecond), false),
-                // Field::new("c30", DataType::Duration(TimeUnit::Nanosecond), false),
+                Field::new("c26", DataType::Interval(IntervalUnit::YearMonth), true),
+                Field::new("c27", DataType::Interval(IntervalUnit::DayTime), true),
+                // Field::new("c28", DataType::Duration(TimeUnit::Second), false),
+                // Field::new("c29", DataType::Duration(TimeUnit::Millisecond), false),
+                // Field::new("c30", DataType::Duration(TimeUnit::Microsecond), false),
+                // Field::new("c31", DataType::Duration(TimeUnit::Nanosecond), false),
                 Field::new_dict(
-                    "c31",
+                    "c32",
                     DataType::Dictionary(
                         Box::new(DataType::Int32),
                         Box::new(DataType::Utf8),
@@ -2057,10 +2058,10 @@ mod tests {
                     123,
                     true,
                 ),
-                Field::new("c32", DataType::LargeBinary, true),
-                Field::new("c33", DataType::LargeUtf8, true),
+                Field::new("c33", DataType::LargeBinary, true),
+                Field::new("c34", DataType::LargeUtf8, true),
                 // Field::new(
-                //     "c34",
+                //     "c35",
                 //     DataType::LargeList(Box::new(DataType::List(Box::new(
                 //         DataType::Struct(vec![
                 //             Field::new("a", DataType::Int16, true),
@@ -2069,12 +2070,12 @@ mod tests {
                 //     )))),
                 //     true,
                 // ),
-                Field::new("c35", DataType::Null, true),
-                Field::new("c36", DataType::Decimal(2, 1), false),
-                Field::new("c37", DataType::Decimal(50, 20), false),
-                Field::new("c38", DataType::Decimal(18, 12), true),
+                Field::new("c36", DataType::Null, true),
+                Field::new("c37", DataType::Decimal(2, 1), false),
+                Field::new("c38", DataType::Decimal(50, 20), false),
+                Field::new("c39", DataType::Decimal(18, 12), true),
                 Field::new(
-                    "c39",
+                    "c40",
                     DataType::Map(
                         Box::new(Field::new(
                             "key_value",
@@ -2097,7 +2098,7 @@ mod tests {
                     true,
                 ),
                 Field::new(
-                    "c40",
+                    "c41",
                     DataType::Map(
                         Box::new(Field::new(
                             "my_entries",
