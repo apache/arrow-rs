@@ -29,7 +29,6 @@ use num::{One, Zero};
 use crate::buffer::Buffer;
 #[cfg(feature = "simd")]
 use crate::buffer::MutableBuffer;
-#[cfg(not(feature = "simd"))]
 use crate::compute::kernels::arity::unary;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes;
