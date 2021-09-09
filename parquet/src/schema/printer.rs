@@ -249,13 +249,13 @@ fn print_logical_and_converted(
                 ConvertedType::NONE => format!(""),
                 decimal @ ConvertedType::DECIMAL => {
                     // For decimal type we should print precision and scale if they
-                    // are > 0, e.g. DECIMAL(9, 2) -
+                    // are > 0, e.g. DECIMAL(9,2) -
                     // DECIMAL(9) - DECIMAL
                     let precision_scale = match (precision, scale) {
                         (p, s) if p > 0 && s > 0 => {
-                            format!("{}, {}", p, s)
+                            format!("({},{})", p, s)
                         }
-                        (p, 0) if p > 0 => format!("{}", p),
+                        (p, 0) if p > 0 => format!("({})", p),
                         _ => format!(""),
                     };
                     format!("{}{}", decimal, precision_scale)
@@ -292,8 +292,8 @@ impl<'a> Printer<'a> {
                 let logical_type_str = print_logical_and_converted(
                     &basic_info.logical_type(),
                     basic_info.converted_type(),
-                    scale,
                     precision,
+                    scale,
                 );
                 if logical_type_str.is_empty() {
                     write!(
@@ -588,7 +588,10 @@ mod tests {
 
     #[inline]
     fn decimal_length_from_precision(precision: usize) -> i32 {
-        (10.0_f64.powi(precision as i32).log2() / 8.0).ceil() as i32
+        let max_val = 10.0_f64.powi(precision as i32) - 1.0;
+        let bits_unsigned = max_val.log2().ceil();
+        let bits_signed = bits_unsigned + 1.0;
+        (bits_signed / 8.0).ceil() as i32
     }
 
     #[test]
@@ -629,6 +632,20 @@ mod tests {
                 .build()
                 .unwrap(),
                 "REPEATED FIXED_LEN_BYTE_ARRAY (14) decimal (DECIMAL(32,20));",
+            ),
+            (
+                Type::primitive_type_builder(
+                    "decimal",
+                    PhysicalType::FIXED_LEN_BYTE_ARRAY,
+                )
+                .with_converted_type(ConvertedType::DECIMAL)
+                .with_precision(19)
+                .with_scale(4)
+                .with_length(decimal_length_from_precision(19))
+                .with_repetition(Repetition::OPTIONAL)
+                .build()
+                .unwrap(),
+                "OPTIONAL FIXED_LEN_BYTE_ARRAY (9) decimal (DECIMAL(19,4));",
             ),
         ];
 
