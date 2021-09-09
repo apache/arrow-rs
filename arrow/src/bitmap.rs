@@ -45,7 +45,7 @@ impl Bitmap {
     }
 
     pub fn len(&self) -> usize {
-        self.bits.len()
+        self.bits.len() * 8
     }
 
     pub fn is_empty(&self) -> bool {
@@ -117,9 +117,9 @@ mod tests {
 
     #[test]
     fn test_bitmap_length() {
-        assert_eq!(64, Bitmap::new(63 * 8).len());
-        assert_eq!(64, Bitmap::new(64 * 8).len());
-        assert_eq!(128, Bitmap::new(65 * 8).len());
+        assert_eq!(512, Bitmap::new(63 * 8).len());
+        assert_eq!(512, Bitmap::new(64 * 8).len());
+        assert_eq!(1024, Bitmap::new(65 * 8).len());
     }
 
     #[test]
