@@ -585,10 +585,9 @@ impl AsBytes for str {
 
 pub(crate) mod private {
     use crate::encodings::decoding::PlainDecoderDetails;
-    use crate::util::bit_util::{BitReader, BitWriter};
+    use crate::util::bit_util::{round_upto_power_of_2, BitReader, BitWriter};
     use crate::util::memory::ByteBufferPtr;
 
-    use arrow::util::bit_util::round_upto_power_of_2;
     use byteorder::ByteOrder;
     use std::convert::TryInto;
 
