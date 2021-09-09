@@ -261,6 +261,23 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         self.len += slice.len();
     }
 
+    /// # Safety
+    /// This requires the iterator be a trusted length. This could instead require
+    /// the iterator implement `TrustedLen` once that is stabilized.
+    #[inline]
+    pub unsafe fn append_trusted_len_iter(&mut self, iter: impl IntoIterator<Item = T>) {
+        let iter = iter.into_iter();
+        let len = iter
+            .size_hint()
+            .1
+            .expect("append_trusted_len_iter expects upper bound");
+        self.reserve(len);
+        for v in iter {
+            self.buffer.push(v)
+        }
+        self.len += len;
+    }
+
     /// Resets this builder and returns an immutable [`Buffer`](crate::buffer::Buffer).
     ///
     /// # Example:
@@ -695,6 +712,14 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         Ok(())
     }
 
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) -> Result<()> {
+        self.materialize_bitmap_builder();
+        self.bitmap_builder.as_mut().unwrap().append_n(n, false);
+        self.values_builder.advance(n);
+        Ok(())
+    }
+
     /// Appends an `Option<T>` into the builder
     #[inline]
     pub fn append_option(&mut self, v: Option<T::Native>) -> Result<()> {
@@ -734,6 +759,29 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             b.append_slice(is_valid);
         }
         self.values_builder.append_slice(values);
+        Ok(())
+    }
+
+    /// Appends values from a trusted length iterator.
+    ///
+    /// # Safety
+    /// This requires the iterator be a trusted length. This could instead require
+    /// the iterator implement `TrustedLen` once that is stabilized.
+    #[inline]
+    pub unsafe fn append_trusted_len_iter(
+        &mut self,
+        iter: impl IntoIterator<Item = T::Native>,
+    ) -> Result<()> {
+        let iter = iter.into_iter();
+        let len = iter
+            .size_hint()
+            .1
+            .expect("append_trusted_len_iter requires an upper bound");
+
+        if let Some(b) = self.bitmap_builder.as_mut() {
+            b.append_n(len, true);
+        }
+        self.values_builder.append_trusted_len_iter(iter);
         Ok(())
     }
 
@@ -2736,6 +2784,35 @@ mod tests {
             assert!(!arr.is_null(i));
             assert!(arr.is_valid(i));
             assert_eq!(i as i32, arr.value(i));
+        }
+    }
+
+    #[test]
+    fn test_primitive_array_builder_i32_append_iter() {
+        let mut builder = Int32Array::builder(5);
+        unsafe { builder.append_trusted_len_iter(0..5) }.unwrap();
+        let arr = builder.finish();
+        assert_eq!(5, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(0, arr.null_count());
+        for i in 0..5 {
+            assert!(!arr.is_null(i));
+            assert!(arr.is_valid(i));
+            assert_eq!(i as i32, arr.value(i));
+        }
+    }
+
+    #[test]
+    fn test_primitive_array_builder_i32_append_nulls() {
+        let mut builder = Int32Array::builder(5);
+        builder.append_nulls(5).unwrap();
+        let arr = builder.finish();
+        assert_eq!(5, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(5, arr.null_count());
+        for i in 0..5 {
+            assert!(arr.is_null(i));
+            assert!(!arr.is_valid(i));
         }
     }
 
