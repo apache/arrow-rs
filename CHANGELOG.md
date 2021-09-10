@@ -21,6 +21,21 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 # Changelog
 
+## [5.4.0](https://github.com/apache/arrow-rs/tree/5.4.0) (2021-09-10)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/5.3.0...5.4.0)
+
+* [5d13a4d9eddf43d2fbec4d1cb50228f63e42d61f](https://github.com/apache/arrow-rs/commit/5d13a4d9eddf43d2fbec4d1cb50228f63e42d61f) Optimize array::transform::utils::set_bits ([#716](https://github.com/apache/arrow-rs/pull/716)) ([#761](https://github.com/apache/arrow-rs/pull/761))
+* [b77b135c7932c129e2888c6b04bc345e300a33bc](https://github.com/apache/arrow-rs/commit/b77b135c7932c129e2888c6b04bc345e300a33bc) fix: new_null_array for structs ([#736](https://github.com/apache/arrow-rs/pull/736)) ([#760](https://github.com/apache/arrow-rs/pull/760))
+* [f0d9e89e76e5c05f0c3fe826ca922ebd3d9fb933](https://github.com/apache/arrow-rs/commit/f0d9e89e76e5c05f0c3fe826ca922ebd3d9fb933) Add `append_nulls` and `append_trusted_len_iter` to `PrimitiveBuilder` ([#728](https://github.com/apache/arrow-rs/pull/728)) ([#759](https://github.com/apache/arrow-rs/pull/759))
+* [4e9f4ab4a90ef95dca5a162df963d729a0b11118](https://github.com/apache/arrow-rs/commit/4e9f4ab4a90ef95dca5a162df963d729a0b11118) fix: Scalar math operations on slices ([#743](https://github.com/apache/arrow-rs/pull/743)) ([#758](https://github.com/apache/arrow-rs/pull/758))
+* [9196a2a38de83dd0ce5230223b9e2577e84ecfbb](https://github.com/apache/arrow-rs/commit/9196a2a38de83dd0ce5230223b9e2577e84ecfbb) Cherry pick 0e7c4c5f: make chrono time emit converted type ([#757](https://github.com/apache/arrow-rs/pull/757))
+* [486d5a3280445632c3253af27bc0e30f8ddd9cc3](https://github.com/apache/arrow-rs/commit/486d5a3280445632c3253af27bc0e30f8ddd9cc3) fix: Comparisons against scalar slices ([#741](https://github.com/apache/arrow-rs/pull/741)) ([#756](https://github.com/apache/arrow-rs/pull/756))
+* [b5ea3f65e6f5a8797a83d21949ed3efd859f725c](https://github.com/apache/arrow-rs/commit/b5ea3f65e6f5a8797a83d21949ed3efd859f725c) fix: Handle slices in unary kernel ([#739](https://github.com/apache/arrow-rs/pull/739)) ([#755](https://github.com/apache/arrow-rs/pull/755))
+* [605aa322fe1d66cebf854044f63a4f29f5c55123](https://github.com/apache/arrow-rs/commit/605aa322fe1d66cebf854044f63a4f29f5c55123) Add a note on rust compiler testing and compatibility ([#726](https://github.com/apache/arrow-rs/pull/726)) ([#754](https://github.com/apache/arrow-rs/pull/754))
+* [f68afccffb1f751d93a1b23526027b00190c3a9b](https://github.com/apache/arrow-rs/commit/f68afccffb1f751d93a1b23526027b00190c3a9b) Fix decimal value_as_string ([#722](https://github.com/apache/arrow-rs/pull/722)) ([#753](https://github.com/apache/arrow-rs/pull/753))
+* [b8352fd69081f1ab4517e67e89e21cc6442f17a6](https://github.com/apache/arrow-rs/commit/b8352fd69081f1ab4517e67e89e21cc6442f17a6) Fix decimal repr in schema ([#721](https://github.com/apache/arrow-rs/pull/721)) ([#752](https://github.com/apache/arrow-rs/pull/752))
+
 ## [5.3.0](https://github.com/apache/arrow-rs/tree/5.3.0) (2021-08-26)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/5.2.0...5.3.0)
