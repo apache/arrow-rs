@@ -29,7 +29,6 @@ use num::{One, Zero};
 use crate::buffer::Buffer;
 #[cfg(feature = "simd")]
 use crate::buffer::MutableBuffer;
-#[cfg(not(feature = "simd"))]
 use crate::compute::kernels::arity::unary;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes;
@@ -83,7 +82,10 @@ where
         T::DATA_TYPE,
         array.len(),
         None,
-        array.data_ref().null_buffer().cloned(),
+        array
+            .data_ref()
+            .null_buffer()
+            .map(|b| b.bit_slice(array.offset(), array.len())),
         0,
         vec![result.into()],
         vec![],
@@ -132,7 +134,10 @@ where
         T::DATA_TYPE,
         array.len(),
         None,
-        array.data_ref().null_buffer().cloned(),
+        array
+            .data_ref()
+            .null_buffer()
+            .map(|b| b.bit_slice(array.offset(), array.len())),
         0,
         vec![result.into()],
         vec![],
@@ -338,19 +343,7 @@ where
         return Err(ArrowError::DivideByZero);
     }
 
-    let values = array.values().iter().map(|value| *value % modulo);
-    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        array.len(),
-        None,
-        array.data_ref().null_buffer().cloned(),
-        0,
-        vec![buffer],
-        vec![],
-    );
-    Ok(PrimitiveArray::<T>::from(data))
+    Ok(unary(array, |value| value % modulo))
 }
 
 /// Scalar-divisor version of `math_divide`.
@@ -366,19 +359,7 @@ where
         return Err(ArrowError::DivideByZero);
     }
 
-    let values = array.values().iter().map(|value| *value / divisor);
-    let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
-
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        array.len(),
-        None,
-        array.data_ref().null_buffer().cloned(),
-        0,
-        vec![buffer],
-        vec![],
-    );
-    Ok(PrimitiveArray::<T>::from(data))
+    Ok(unary(array, |value| value / divisor))
 }
 
 /// SIMD vectorized version of `math_op` above.
@@ -914,7 +895,10 @@ where
         T::DATA_TYPE,
         array.len(),
         None,
-        array.data_ref().null_buffer().cloned(),
+        array
+            .data_ref()
+            .null_buffer()
+            .map(|b| b.bit_slice(array.offset(), array.len())),
         0,
         vec![result.into()],
         vec![],
@@ -960,7 +944,10 @@ where
         T::DATA_TYPE,
         array.len(),
         None,
-        array.data_ref().null_buffer().cloned(),
+        array
+            .data_ref()
+            .null_buffer()
+            .map(|b| b.bit_slice(array.offset(), array.len())),
         0,
         vec![result.into()],
         vec![],
@@ -1264,12 +1251,32 @@ mod tests {
     }
 
     #[test]
+    fn test_primitive_array_divide_scalar_sliced() {
+        let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
+        let a = a.slice(1, 4);
+        let a = as_primitive_array(&a);
+        let actual = divide_scalar(a, 3).unwrap();
+        let expected = Int32Array::from(vec![None, Some(3), Some(2), None]);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn test_primitive_array_modulus_scalar() {
         let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
         let b = 3;
         let c = modulus_scalar(&a, b).unwrap();
         let expected = Int32Array::from(vec![0, 2, 0, 2, 1]);
         assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_primitive_array_modulus_scalar_sliced() {
+        let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
+        let a = a.slice(1, 4);
+        let a = as_primitive_array(&a);
+        let actual = modulus_scalar(a, 3).unwrap();
+        let expected = Int32Array::from(vec![None, Some(0), Some(2), None]);
+        assert_eq!(actual, expected);
     }
 
     #[test]
