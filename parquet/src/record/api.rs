@@ -90,6 +90,7 @@ impl Row {
     }
 }
 
+/// Iterator of columns in a Row.
 pub struct RowColumnIter<'a> {
     fields: &'a Vec<(String, Field)>,
     curr: usize,
