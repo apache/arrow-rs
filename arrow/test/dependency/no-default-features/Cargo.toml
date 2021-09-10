@@ -24,6 +24,6 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-arrow = { path = "../../../../arrow", version = "5.3.0", default-features = false }
+arrow = { path = "../../../../arrow", version = "5.4.0", default-features = false }
 
 [workspace]
