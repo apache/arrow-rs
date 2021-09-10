@@ -37,7 +37,7 @@ use crate::error::{ArrowError, Result};
 /// serialization and computation functions, possibly incremental.
 /// See also [CSV reader](crate::csv::Reader) and
 /// [JSON reader](crate::json::Reader).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RecordBatch {
     schema: SchemaRef,
     columns: Vec<Arc<dyn Array>>,
@@ -419,18 +419,6 @@ impl From<&StructArray> for RecordBatch {
     }
 }
 
-impl PartialEq for RecordBatch {
-    fn eq(&self, other: &RecordBatch) -> bool {
-        let batches_equal = true;
-        for i in 0..self.num_columns() {
-            if self.column(i) != other.column(i) {
-                return false;
-            }
-        }
-        batches_equal
-    }
-}
-
 impl From<RecordBatch> for StructArray {
     fn from(batch: RecordBatch) -> Self {
         batch
@@ -786,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn record_batch_inequality() {
+    fn record_batch_vals_ne() {
         let id_arr1 = Int32Array::from(vec![1, 2, 3, 4]);
         let val_arr1 = Int32Array::from(vec![5, 6, 7, 8]);
         let schema1 = Schema::new(vec![
@@ -799,6 +787,101 @@ mod tests {
         let schema2 = Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("val", DataType::Int32, false),
+        ]);
+
+        let batch1 = RecordBatch::try_new(
+            Arc::new(schema1),
+            vec![Arc::new(id_arr1), Arc::new(val_arr1)],
+        )
+        .unwrap();
+
+        let batch2 = RecordBatch::try_new(
+            Arc::new(schema2),
+            vec![Arc::new(id_arr2), Arc::new(val_arr2)],
+        )
+        .unwrap();
+
+        assert_ne!(batch1, batch2);
+    }
+
+    #[test]
+    fn record_batch_column_names_ne() {
+        let id_arr1 = Int32Array::from(vec![1, 2, 3, 4]);
+        let val_arr1 = Int32Array::from(vec![5, 6, 7, 8]);
+        let schema1 = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("val", DataType::Int32, false),
+        ]);
+
+        let id_arr2 = Int32Array::from(vec![1, 2, 3, 4]);
+        let val_arr2 = Int32Array::from(vec![5, 6, 7, 8]);
+        let schema2 = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("num", DataType::Int32, false),
+        ]);
+
+        let batch1 = RecordBatch::try_new(
+            Arc::new(schema1),
+            vec![Arc::new(id_arr1), Arc::new(val_arr1)],
+        )
+        .unwrap();
+
+        let batch2 = RecordBatch::try_new(
+            Arc::new(schema2),
+            vec![Arc::new(id_arr2), Arc::new(val_arr2)],
+        )
+        .unwrap();
+
+        assert_ne!(batch1, batch2);
+    }
+
+    #[test]
+    fn record_batch_column_number_ne() {
+        let id_arr1 = Int32Array::from(vec![1, 2, 3, 4]);
+        let val_arr1 = Int32Array::from(vec![5, 6, 7, 8]);
+        let schema1 = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("val", DataType::Int32, false),
+        ]);
+
+        let id_arr2 = Int32Array::from(vec![1, 2, 3, 4]);
+        let val_arr2 = Int32Array::from(vec![5, 6, 7, 8]);
+        let num_arr2 = Int32Array::from(vec![5, 6, 7, 8]);
+        let schema2 = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("val", DataType::Int32, false),
+            Field::new("num", DataType::Int32, false),
+        ]);
+
+        let batch1 = RecordBatch::try_new(
+            Arc::new(schema1),
+            vec![Arc::new(id_arr1), Arc::new(val_arr1)],
+        )
+        .unwrap();
+
+        let batch2 = RecordBatch::try_new(
+            Arc::new(schema2),
+            vec![Arc::new(id_arr2), Arc::new(val_arr2), Arc::new(num_arr2)],
+        )
+        .unwrap();
+
+        assert_ne!(batch1, batch2);
+    }
+
+    #[test]
+    fn record_batch_row_count_ne() {
+        let id_arr1 = Int32Array::from(vec![1, 2, 3]);
+        let val_arr1 = Int32Array::from(vec![5, 6, 7]);
+        let schema1 = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("val", DataType::Int32, false),
+        ]);
+
+        let id_arr2 = Int32Array::from(vec![1, 2, 3, 4]);
+        let val_arr2 = Int32Array::from(vec![5, 6, 7, 8]);
+        let schema2 = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("num", DataType::Int32, false),
         ]);
 
         let batch1 = RecordBatch::try_new(
