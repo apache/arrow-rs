@@ -244,10 +244,10 @@ mod tests {
     fn length_offsets() -> Result<()> {
         let a = StringArray::from(vec![Some("hello"), Some(" "), Some("world"), None]);
         let b = a.slice(1, 3);
-        let result = bit_length(b.as_ref())?;
+        let result = length(b.as_ref())?;
         let result: &Int32Array = as_primitive_array(&result);
 
-        let expected = Int32Array::from(vec![Some(8), Some(40), None]);
+        let expected = Int32Array::from(vec![Some(1), Some(5), None]);
         assert_eq!(&expected, result);
 
         Ok(())
