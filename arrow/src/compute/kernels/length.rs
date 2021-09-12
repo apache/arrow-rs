@@ -53,9 +53,8 @@ where
 
     let null_bit_buffer = array
         .data_ref()
-        .null_bitmap()
-        .as_ref()
-        .map(|b| b.bits.clone());
+        .null_buffer()
+        .map(|b| b.bit_slice(array.offset(), array.len()));
 
     let data = ArrayData::new(
         data_type,
@@ -243,18 +242,13 @@ mod tests {
     /// Tests with an offset
     #[test]
     fn length_offsets() -> Result<()> {
-        let a = StringArray::from(vec!["hello", " ", "world"]);
-        let b = make_array(
-            ArrayData::builder(DataType::Utf8)
-                .len(2)
-                .offset(1)
-                .buffers(a.data_ref().buffers().to_vec())
-                .build(),
-        );
+        let a = StringArray::from(vec![Some("hello"), Some(" "), Some("world"), None]);
+        let b = a.slice(1, 3);
         let result = length(b.as_ref())?;
+        let result: &Int32Array = as_primitive_array(&result);
 
-        let expected = Int32Array::from(vec![1, 5]);
-        assert_eq!(expected.data(), result.data());
+        let expected = Int32Array::from(vec![Some(1), Some(5), None]);
+        assert_eq!(&expected, result);
 
         Ok(())
     }
@@ -371,18 +365,13 @@ mod tests {
     /// Tests with an offset
     #[test]
     fn bit_length_offsets() -> Result<()> {
-        let a = StringArray::from(vec!["hello", " ", "world"]);
-        let b = make_array(
-            ArrayData::builder(DataType::Utf8)
-                .len(2)
-                .offset(1)
-                .buffers(a.data_ref().buffers().to_vec())
-                .build(),
-        );
+        let a = StringArray::from(vec![Some("hello"), Some(" "), Some("world"), None]);
+        let b = a.slice(1, 3);
         let result = bit_length(b.as_ref())?;
+        let result: &Int32Array = as_primitive_array(&result);
 
-        let expected = Int32Array::from(vec![8, 40]);
-        assert_eq!(expected.data(), result.data());
+        let expected = Int32Array::from(vec![Some(8), Some(40), None]);
+        assert_eq!(&expected, result);
 
         Ok(())
     }
