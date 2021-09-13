@@ -232,6 +232,18 @@ where
         as_datetime::<T>(i64::from(self.value(i)))
     }
 
+    /// Returns value as a chrono `NaiveDateTime`, handling time resolution with the provided tz
+    ///
+    /// functionally it is same as `value_as_datetime`, however it adds
+    /// the passed tz to the to-be-returned NaiveDateTime
+    pub fn value_as_datetime_with_tz(
+        &self,
+        i: usize,
+        tz: FixedOffset,
+    ) -> Option<NaiveDateTime> {
+        as_datetime::<T>(i64::from(self.value(i))).map(|datetime| datetime + tz)
+    }
+
     /// Returns value as a chrono `NaiveDate` by using `Self::datetime()`
     ///
     /// If a data type cannot be converted to `NaiveDate`, a `None` is returned
