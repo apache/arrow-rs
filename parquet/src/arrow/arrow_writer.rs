@@ -426,12 +426,13 @@ fn write_leaf(
                             .unwrap();
                         get_interval_dt_array_slice(array, &indices)
                     }
-                    IntervalUnit::MonthDayNano => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow_array::IntervalMonthDayNanoArray>()
-                            .unwrap();
-                        get_interval_mdn_array_slice(array, &indices)
+                    _ => {
+                        return Err(ParquetError::NYI(
+                            format!(
+                                "Attempting to write an Arrow type {:?} to parquet that is not yet implemented",
+                                interval_unit
+                            )
+                        ));
                     }
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
@@ -545,20 +546,6 @@ fn get_interval_dt_array_slice(
         prefix.append(&mut value);
         debug_assert_eq!(prefix.len(), 12);
         values.push(FixedLenByteArray::from(ByteArray::from(prefix)));
-    }
-    values
-}
-
-/// Returns 16-byte values representing 3 values of months, days (4-bytes each) and nanoseconds (8-bytes).
-fn get_interval_mdn_array_slice(
-    array: &arrow_array::IntervalMonthDayNanoArray,
-    indices: &[usize],
-) -> Vec<FixedLenByteArray> {
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        let value = array.value(*i).to_le_bytes().to_vec();
-        debug_assert_eq!(value.len(), 16);
-        values.push(FixedLenByteArray::from(ByteArray::from(value)));
     }
     values
 }
@@ -1460,6 +1447,17 @@ mod tests {
         required_and_optional::<IntervalDayTimeArray, _>(
             0..SMALL_SIZE as i64,
             "interval_day_time_single_column",
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Attempting to write an Arrow type MonthDayNano to parquet that is not yet implemented"
+    )]
+    fn interval_month_day_nano_single_column() {
+        required_and_optional::<IntervalMonthDayNanoArray, _>(
+            0..SMALL_SIZE as i128,
+            "interval_month_day_nano_single_column",
         );
     }
 

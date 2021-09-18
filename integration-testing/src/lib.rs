@@ -210,29 +210,6 @@ fn array_from_json(
             let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
         }
-        DataType::Interval(IntervalUnit::MonthDayNano) => {
-            let mut b = IntervalMonthDayNanoBuilder::new(json_col.count);
-            for (is_valid, value) in json_col
-                .validity
-                .as_ref()
-                .unwrap()
-                .iter()
-                .zip(json_col.data.unwrap())
-            {
-                match is_valid {
-                    1 => b.append_value(match value {
-                        Value::Number(n) => n.as_i64().unwrap() as i128,
-                        Value::String(s) => {
-                            s.parse().expect("Unable to parse string as i64")
-                        }
-                        _ => panic!("Unable to parse {:?} as number", value),
-                    }),
-                    _ => b.append_null(),
-                }?;
-            }
-            let array = Arc::new(b.finish()) as ArrayRef;
-            arrow::compute::cast(&array, field.data_type())
-        }
         DataType::UInt8 => {
             let mut b = UInt8Builder::new(json_col.count);
             for (is_valid, value) in json_col

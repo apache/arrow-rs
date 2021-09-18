@@ -19,10 +19,9 @@ use crate::data_type::{ByteArray, DataType, FixedLenByteArray, Int96};
 // TODO: clean up imports (best done when there are few moving parts)
 use arrow::array::{
     Array, ArrayRef, BinaryBuilder, DecimalBuilder, FixedSizeBinaryBuilder,
-    IntervalDayTimeArray, IntervalDayTimeBuilder, IntervalMonthDayNanoArray,
-    IntervalMonthDayNanoBuilder, IntervalYearMonthArray, IntervalYearMonthBuilder,
-    LargeBinaryBuilder, LargeStringBuilder, PrimitiveBuilder, PrimitiveDictionaryBuilder,
-    StringBuilder, StringDictionaryBuilder,
+    IntervalDayTimeArray, IntervalDayTimeBuilder, IntervalYearMonthArray,
+    IntervalYearMonthBuilder, LargeBinaryBuilder, LargeStringBuilder, PrimitiveBuilder,
+    PrimitiveDictionaryBuilder, StringBuilder, StringDictionaryBuilder,
 };
 use arrow::compute::cast;
 use std::convert::{From, TryInto};
@@ -160,46 +159,6 @@ impl Converter<Vec<Option<FixedLenByteArray>>, IntervalDayTimeArray>
                 Some(array) => builder.append_value(i64::from_le_bytes(
                     array.data()[4..12].try_into().unwrap(),
                 )),
-                None => builder.append_null(),
-            }?
-        }
-
-        Ok(builder.finish())
-    }
-}
-
-/// An Arrow Interval converter, which reads the last 16 bytes of a Parquet interval,
-/// and interprets it as an i128 value representing the Arrow MonthDayNano value
-pub struct IntervalMonthDayNanoArrayConverter {}
-
-impl IntervalMonthDayNanoArrayConverter {
-    fn from_bytes_to_i128(b: &[u8]) -> i128 {
-        assert!(
-            b.len() <= 16,
-            "IntervalMonthDayNanoArray supports only up to size 16"
-        );
-        let first_bit = b[0] & 128u8 == 128u8;
-        let mut result = if first_bit { [255u8; 16] } else { [0u8; 16] };
-        for (i, v) in b.iter().enumerate() {
-            result[i + (16 - b.len())] = *v;
-        }
-        i128::from_be_bytes(result)
-    }
-}
-
-impl Converter<Vec<Option<FixedLenByteArray>>, IntervalMonthDayNanoArray>
-    for IntervalMonthDayNanoArrayConverter
-{
-    fn convert(
-        &self,
-        source: Vec<Option<FixedLenByteArray>>,
-    ) -> Result<IntervalMonthDayNanoArray> {
-        let mut builder = IntervalMonthDayNanoBuilder::new(source.len());
-        for v in source {
-            match v {
-                Some(array) => {
-                    builder.append_value(Self::from_bytes_to_i128(array.data()))
-                }
                 None => builder.append_null(),
             }?
         }
@@ -428,11 +387,6 @@ pub type IntervalDayTimeConverter = ArrayRefConverter<
     Vec<Option<FixedLenByteArray>>,
     IntervalDayTimeArray,
     IntervalDayTimeArrayConverter,
->;
-pub type IntervalMonthDayNanoConverter = ArrayRefConverter<
-    Vec<Option<FixedLenByteArray>>,
-    IntervalMonthDayNanoArray,
-    IntervalMonthDayNanoArrayConverter,
 >;
 
 pub type DecimalConverter = ArrayRefConverter<
