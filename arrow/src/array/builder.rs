@@ -329,7 +329,7 @@ impl BooleanBufferBuilder {
     }
 
     #[inline]
-    pub fn get_bit(&mut self, index: usize) -> bool {
+    pub fn get_bit(&self, index: usize) -> bool {
         bit_util::get_bit(self.buffer.as_slice(), index)
     }
 
@@ -2548,6 +2548,17 @@ mod tests {
         let mut buffer = BooleanBufferBuilder::new(16);
         buffer.append_n(8, true);
         buffer.append_n(8, false);
+        assert!(buffer.get_bit(0));
+    }
+
+    #[test]
+    fn test_bool_buffer_builder_get_first_bit_not_requires_mutability() {
+        let buffer = {
+            let mut buffer = BooleanBufferBuilder::new(16);
+            buffer.append_n(8, true);
+            buffer
+        };
+
         assert!(buffer.get_bit(0));
     }
 
