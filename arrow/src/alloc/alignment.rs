@@ -62,7 +62,7 @@ pub const ALIGNMENT: usize = 1 << 6;
 // - https://github.com/torvalds/linux/blob/master/Documentation/devicetree/bindings/riscv/sifive-l2-cache.txt#L41
 // in general all of them are the same.
 /// Cache and allocation multiple alignment size
-#[cfg(target_arch = "riscv")]
+#[cfg(target_arch = "riscv64")]
 pub const ALIGNMENT: usize = 1 << 6;
 
 // This size is same across all hardware for this architecture.
