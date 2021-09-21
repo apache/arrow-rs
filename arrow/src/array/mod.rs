@@ -133,15 +133,75 @@ pub use self::array::make_array;
 pub use self::array::new_empty_array;
 pub use self::array::new_null_array;
 
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow::array::Int8Array;
+/// let arr : Int8Array = [Some(1), Some(2)].into_iter().collect();
+/// ```
 pub type Int8Array = PrimitiveArray<Int8Type>;
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow::array::Int16Array;
+/// let arr : Int16Array = [Some(1), Some(2)].into_iter().collect();
+/// ```
 pub type Int16Array = PrimitiveArray<Int16Type>;
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow::array::Int32Array;
+/// let arr : Int32Array = [Some(1), Some(2)].into_iter().collect();
+/// ```
 pub type Int32Array = PrimitiveArray<Int32Type>;
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow::array::Int64Array;
+/// let arr : Int64Array = [Some(1), Some(2)].into_iter().collect();
+/// ```
 pub type Int64Array = PrimitiveArray<Int64Type>;
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow::array::UInt8Array;
+/// let arr : UInt8Array = [Some(1), Some(2)].into_iter().collect();
+/// ```
 pub type UInt8Array = PrimitiveArray<UInt8Type>;
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow::array::UInt16Array;
+/// let arr : UInt16Array = [Some(1), Some(2)].into_iter().collect();
+/// ```
 pub type UInt16Array = PrimitiveArray<UInt16Type>;
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow::array::UInt32Array;
+/// let arr : UInt32Array = [Some(1), Some(2)].into_iter().collect();
+/// ```
 pub type UInt32Array = PrimitiveArray<UInt32Type>;
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow::array::UInt64Array;
+/// let arr : UInt64Array = [Some(1), Some(2)].into_iter().collect();
+/// ```
 pub type UInt64Array = PrimitiveArray<UInt64Type>;
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow::array::Float32Array;
+/// let arr : Float32Array = [Some(1.0), Some(2.0)].into_iter().collect();
+/// ```
 pub type Float32Array = PrimitiveArray<Float32Type>;
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow::array::Float64Array;
+/// let arr : Float64Array = [Some(1.0), Some(2.0)].into_iter().collect();
+/// ```
 pub type Float64Array = PrimitiveArray<Float64Type>;
 
 pub type Int8DictionaryArray = DictionaryArray<Int8Type>;
