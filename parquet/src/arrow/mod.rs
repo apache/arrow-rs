@@ -48,6 +48,39 @@
 //!    }
 //!}
 //! ```
+//!# Example of writing Arrow record batch to Parquet file
+//!
+//!```rust, no_run
+//! use arrow::array::Int32Array;
+//! use arrow::datatypes::{DataType, Field, Schema};
+//! use arrow::record_batch::RecordBatch;
+//! use parquet::arrow::arrow_writer::ArrowWriter;
+//! use parquet::file::properties::WriterProperties;
+//! use std::fs::File;
+//! use std::sync::Arc;
+//! let ids = Int32Array::from(vec![1, 2, 3, 4]);
+//! let vals = Int32Array::from(vec![5, 6, 7, 8]);
+//! let schema = Arc::new(Schema::new(vec![
+//!     Field::new("id", DataType::Int32, false),
+//!     Field::new("val", DataType::Int32, false),
+//! ]));
+//!
+//! let file = File::create("data.parquet").unwrap();
+//!
+//! let batch =
+//!     RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(ids), Arc::new(vals)]).unwrap();
+//! let batches = vec![batch];
+//!
+//! let props = WriterProperties::builder().build();
+//!
+//! let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).unwrap();
+//!
+//! for batch in batches {
+//!     writer.write(&batch).expect("Writing batch");
+//! }
+//! writer.close().unwrap();
+//!
+//!
 
 pub mod array_reader;
 pub mod arrow_array_reader;
