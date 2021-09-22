@@ -56,7 +56,10 @@
 
 //! `WriterProperties` can be used to set several configuration options
 //! ```rust, no_run
+//! use parquet::file::properties::WriterProperties;
 //! use parquet::basic::{ Compression, Encoding };
+//! use parquet::file::properties::WriterVersion;
+//!
 //! // File compression
 //! let props = WriterProperties::builder()
 //!     .set_compression(Compression::SNAPPY)
