@@ -1181,7 +1181,6 @@ mod tests {
         assert_eq!(Some(VNumber(Number::from(1))), 1u16.into_json_value());
         assert_eq!(Some(VNumber(Number::from(1))), 1u32.into_json_value());
         assert_eq!(Some(VNumber(Number::from(1))), 1u64.into_json_value());
-        assert_eq!(Some(VNumber(Number::from(1))), 1u128.into_json_value());
         assert_eq!(
             Some(VNumber(Number::from_f64(0.01f64).unwrap())),
             0.01.into_json_value()

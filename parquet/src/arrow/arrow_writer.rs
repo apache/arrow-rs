@@ -1452,7 +1452,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Attempting to write an Arrow type MonthDayNano to parquet that is not yet implemented"
+        expected = "Attempting to write an Arrow interval type MonthDayNano to parquet that is not yet implemented"
     )]
     fn interval_month_day_nano_single_column() {
         required_and_optional::<IntervalMonthDayNanoArray, _>(
