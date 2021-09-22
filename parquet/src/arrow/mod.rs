@@ -20,34 +20,6 @@
 //!
 //! This mod provides API for converting between arrow and parquet.
 //!
-//! # Example of reading parquet file into arrow record batch
-//!
-//! ```rust, no_run
-//! use arrow::record_batch::RecordBatchReader;
-//! use parquet::file::reader::SerializedFileReader;
-//! use parquet::arrow::{ParquetFileArrowReader, ArrowReader};
-//! use std::sync::Arc;
-//! use std::fs::File;
-//!
-//! let file = File::open("parquet.file").unwrap();
-//! let file_reader = SerializedFileReader::new(file).unwrap();
-//! let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
-//!
-//! println!("Converted arrow schema is: {}", arrow_reader.get_schema().unwrap());
-//! println!("Arrow schema after projection is: {}",
-//!    arrow_reader.get_schema_by_columns(vec![2, 4, 6], true).unwrap());
-//!
-//! let mut record_batch_reader = arrow_reader.get_record_reader(2048).unwrap();
-//!
-//! for maybe_record_batch in record_batch_reader {
-//!    let record_batch = maybe_record_batch.unwrap();
-//!    if record_batch.num_rows() > 0 {
-//!        println!("Read {} records.", record_batch.num_rows());
-//!    } else {
-//!        println!("End of file!");
-//!    }
-//!}
-//! ```
 //!# Example of writing Arrow record batch to Parquet file
 //!
 //!```rust, no_run
@@ -71,6 +43,7 @@
 //!     RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(ids), Arc::new(vals)]).unwrap();
 //! let batches = vec![batch];
 //!
+//! // Default writer properties
 //! let props = WriterProperties::builder().build();
 //!
 //! let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).unwrap();
@@ -79,8 +52,57 @@
 //!     writer.write(&batch).expect("Writing batch");
 //! }
 //! writer.close().unwrap();
+//! ```
+
+//! `WriterProperties` can be used to set several configuration options
+//! ```rust, no_run
+//! use parquet::basic::{ Compression, Encoding };
+//! // File compression
+//! let props = WriterProperties::builder()
+//!     .set_compression(Compression::SNAPPY)
+//!     .build();
+//! // Max row group size compression
+//! let props = WriterProperties::builder()
+//!     .set_max_row_group_size(100)
+//!     .build();
+//! // File encoding
+//! let props = WriterProperties::builder()
+//!     .set_encoding(Encoding::RLE)
+//!     .build();
+//! // Parquet Version
+//! let props = WriterProperties::builder()
+//!     .set_writer_version(WriterVersion::PARQUET_1_0)
+//!     .build();
+//! ```
 //!
+//! # Example of reading parquet file into arrow record batch
 //!
+//! ```rust, no_run
+//! use arrow::record_batch::RecordBatchReader;
+//! use parquet::file::reader::SerializedFileReader;
+//! use parquet::arrow::{ParquetFileArrowReader, ArrowReader};
+//! use std::sync::Arc;
+//! use std::fs::File;
+//!
+//! let file = File::open("data.parquet").unwrap();
+//! let file_reader = SerializedFileReader::new(file).unwrap();
+//! let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
+//!
+//! println!("Converted arrow schema is: {}", arrow_reader.get_schema().unwrap());
+//! println!("Arrow schema after projection is: {}",
+//!    arrow_reader.get_schema_by_columns(vec![0, 1], true).unwrap());
+//!
+//! let mut record_batch_reader = arrow_reader.get_record_reader(2048).unwrap();
+//!
+//! for maybe_record_batch in record_batch_reader {
+//!    let record_batch = maybe_record_batch.unwrap();
+//!    if record_batch.num_rows() > 0 {
+//!        println!("Read {} records.", record_batch.num_rows());
+//!    } else {
+//!        println!("End of file!");
+//!    }
+//!}
+//! ```
 
 pub mod array_reader;
 pub mod arrow_array_reader;
