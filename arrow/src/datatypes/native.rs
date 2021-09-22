@@ -328,29 +328,6 @@ impl ArrowNativeType for u64 {
     }
 }
 
-impl JsonSerializable for u128 {
-    fn into_json_value(self) -> Option<Value> {
-        Some(self.into())
-    }
-}
-
-impl ArrowNativeType for u128 {
-    #[inline]
-    fn from_usize(v: usize) -> Option<Self> {
-        num::FromPrimitive::from_usize(v)
-    }
-
-    #[inline]
-    fn to_usize(&self) -> Option<usize> {
-        num::ToPrimitive::to_usize(self)
-    }
-
-    #[inline]
-    fn to_isize(&self) -> Option<isize> {
-        num::ToPrimitive::to_isize(self)
-    }
-}
-
 impl JsonSerializable for f32 {
     fn into_json_value(self) -> Option<Value> {
         Number::from_f64(f64::round(self as f64 * 1000.0) / 1000.0).map(Value::Number)

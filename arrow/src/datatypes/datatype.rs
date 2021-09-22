@@ -158,7 +158,7 @@ pub enum TimeUnit {
     Nanosecond,
 }
 
-/// YEAR_MONTH, DAY_TIME, MonthDayNano interval in SQL style.
+/// YEAR_MONTH, DAY_TIME, Month_Day_Nano interval in SQL style.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum IntervalUnit {
     /// Indicates the number of elapsed whole months, stored as 4-byte integers.

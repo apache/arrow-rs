@@ -627,7 +627,8 @@ mod tests {
         assert_eq!(-5, arr.values()[2]);
 
         // a month_day_nano interval contains months, days and nanoseconds,
-        // but we do not yet have accessors for the values
+        // but we do not yet have accessors for the values.
+        // TODO: implement month, day, and nanos access method for month_day_nano.
         let arr = IntervalMonthDayNanoArray::from(vec![
             Some(100000000000000000000),
             None,
