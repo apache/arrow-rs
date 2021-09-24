@@ -142,6 +142,68 @@ fn create_bool_bench_batch_non_null(
     )?)
 }
 
+fn create_list_primitive_bench_batch(
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+) -> Result<RecordBatch> {
+    let fields = vec![
+        Field::new(
+            "_1",
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+            true,
+        ),
+        Field::new(
+            "_2",
+            DataType::List(Box::new(Field::new("item", DataType::Boolean, true))),
+            true,
+        ),
+        Field::new(
+            "_3",
+            DataType::LargeList(Box::new(Field::new("item", DataType::Utf8, true))),
+            true,
+        ),
+    ];
+    let schema = Schema::new(fields);
+    Ok(create_random_batch(
+        Arc::new(schema),
+        size,
+        null_density,
+        true_density,
+    )?)
+}
+
+fn create_list_primitive_bench_batch_non_null(
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+) -> Result<RecordBatch> {
+    let fields = vec![
+        Field::new(
+            "_1",
+            DataType::List(Box::new(Field::new("item", DataType::Int32, false))),
+            false,
+        ),
+        Field::new(
+            "_2",
+            DataType::List(Box::new(Field::new("item", DataType::Boolean, false))),
+            false,
+        ),
+        Field::new(
+            "_3",
+            DataType::LargeList(Box::new(Field::new("item", DataType::Utf8, false))),
+            false,
+        ),
+    ];
+    let schema = Schema::new(fields);
+    Ok(create_random_batch(
+        Arc::new(schema),
+        size,
+        null_density,
+        true_density,
+    )?)
+}
+
 fn _create_nested_bench_batch(
     size: usize,
     null_density: f32,
@@ -226,7 +288,7 @@ fn write_batch(batch: &RecordBatch) -> Result<()> {
 
 fn bench_primitive_writer(c: &mut Criterion) {
     let batch = create_primitive_bench_batch(4096, 0.25, 0.75).unwrap();
-    let mut group = c.benchmark_group("write_batch");
+    let mut group = c.benchmark_group("write_batch primitive");
     group.throughput(Throughput::Bytes(
         batch
             .columns()
@@ -302,8 +364,8 @@ fn bench_primitive_writer(c: &mut Criterion) {
 }
 
 // This bench triggers a write error, it is ignored for now
-fn _bench_nested_writer(c: &mut Criterion) {
-    let batch = _create_nested_bench_batch(4096, 0.25, 0.75).unwrap();
+fn bench_nested_writer(c: &mut Criterion) {
+    let batch = create_list_primitive_bench_batch(4096, 0.25, 0.75).unwrap();
     let mut group = c.benchmark_group("write_batch nested");
     group.throughput(Throughput::Bytes(
         batch
@@ -312,9 +374,11 @@ fn _bench_nested_writer(c: &mut Criterion) {
             .map(|f| f.get_array_memory_size() as u64)
             .sum(),
     ));
-    group.bench_function("4096 values", |b| b.iter(|| write_batch(&batch).unwrap()));
+    group.bench_function("4096 values primitive list", |b| {
+        b.iter(|| write_batch(&batch).unwrap())
+    });
 
-    let batch = create_primitive_bench_batch(4096, 0.25, 0.75).unwrap();
+    let batch = create_list_primitive_bench_batch_non_null(4096, 0.25, 0.75).unwrap();
     group.throughput(Throughput::Bytes(
         batch
             .columns()
@@ -322,10 +386,12 @@ fn _bench_nested_writer(c: &mut Criterion) {
             .map(|f| f.get_array_memory_size() as u64)
             .sum(),
     ));
-    group.bench_function("4096 values", |b| b.iter(|| write_batch(&batch).unwrap()));
+    group.bench_function("4096 values primitive list non-null", |b| {
+        b.iter(|| write_batch(&batch).unwrap())
+    });
 
     group.finish();
 }
 
-criterion_group!(benches, bench_primitive_writer);
+criterion_group!(benches, bench_primitive_writer, bench_nested_writer);
 criterion_main!(benches);
