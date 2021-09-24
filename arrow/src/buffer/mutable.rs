@@ -530,12 +530,22 @@ impl MutableBuffer {
             std::ptr::write(dst, item?);
             dst = dst.add(1);
         }
-        assert_eq!(
-            dst.offset_from(buffer.data.as_ptr() as *mut T) as usize,
-            upper,
-            "Trusted iterator length was not accurately reported"
-        );
-        buffer.len = len;
+        // try_from_trusted_len_iter is instantiated a lot, so we extract part of it into a less
+        // generic method to reduce compile time
+        unsafe fn finalize_buffer<T>(
+            dst: *mut T,
+            buffer: &mut MutableBuffer,
+            upper: usize,
+            len: usize,
+        ) {
+            assert_eq!(
+                dst.offset_from(buffer.data.as_ptr() as *mut T) as usize,
+                upper,
+                "Trusted iterator length was not accurately reported"
+            );
+            buffer.len = len;
+        }
+        finalize_buffer(dst, &mut buffer, upper, len);
         Ok(buffer)
     }
 }
