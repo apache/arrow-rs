@@ -23,7 +23,7 @@ pub use immutable::*;
 mod mutable;
 pub use mutable::*;
 mod ops;
-pub(super) use ops::*;
+pub use ops::*;
 
 use crate::error::{ArrowError, Result};
 use std::ops::{BitAnd, BitOr, Not};
