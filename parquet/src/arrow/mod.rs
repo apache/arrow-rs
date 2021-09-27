@@ -54,8 +54,8 @@
 //! writer.close().unwrap();
 //! ```
 
-//! `WriterProperties` can be used to set several configuration options
-//! ```rust, no_run
+//! `WriterProperties` can be used to set Parquet file options
+//! ```rust
 //! use parquet::file::properties::WriterProperties;
 //! use parquet::basic::{ Compression, Encoding };
 //! use parquet::file::properties::WriterVersion;
@@ -64,23 +64,11 @@
 //! let props = WriterProperties::builder()
 //!     .set_compression(Compression::SNAPPY)
 //!     .build();
-//! // Max row group size compression
-//! let props = WriterProperties::builder()
-//!     .set_max_row_group_size(100)
-//!     .build();
-//! // File encoding
-//! let props = WriterProperties::builder()
-//!     .set_encoding(Encoding::RLE)
-//!     .build();
-//! // Parquet Version
-//! let props = WriterProperties::builder()
-//!     .set_writer_version(WriterVersion::PARQUET_1_0)
-//!     .build();
 //! ```
 //!
 //! # Example of reading parquet file into arrow record batch
 //!
-//! ```rust, no_run
+//! ```rust
 //! use arrow::record_batch::RecordBatchReader;
 //! use parquet::file::reader::SerializedFileReader;
 //! use parquet::arrow::{ParquetFileArrowReader, ArrowReader};
