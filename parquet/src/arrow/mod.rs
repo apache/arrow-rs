@@ -22,7 +22,7 @@
 //!
 //!# Example of writing Arrow record batch to Parquet file
 //!
-//!```rust, no_run
+//!```rust
 //! use arrow::array::Int32Array;
 //! use arrow::datatypes::{DataType, Field, Schema};
 //! use arrow::record_batch::RecordBatch;
