@@ -68,12 +68,35 @@
 //!
 //! # Example of reading parquet file into arrow record batch
 //!
-//! ```rust, no_run
+//! ```rust
 //! use arrow::record_batch::RecordBatchReader;
 //! use parquet::file::reader::SerializedFileReader;
 //! use parquet::arrow::{ParquetFileArrowReader, ArrowReader};
 //! use std::sync::Arc;
 //! use std::fs::File;
+//!
+//! # use arrow::array::Int32Array;
+//! # use arrow::datatypes::{DataType, Field, Schema};
+//! # use arrow::record_batch::RecordBatch;
+//! # use parquet::arrow::arrow_writer::ArrowWriter;
+//! # let ids = Int32Array::from(vec![1, 2, 3, 4]);
+//! # let schema = Arc::new(Schema::new(vec![
+//! #    Field::new("id", DataType::Int32, false),
+//! # ]));
+//! #
+//! # // Write to a memory buffer (can also write to a File)
+//! # let file = File::create("data.parquet").unwrap();
+//! #
+//! # let batch =
+//! #    RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(ids)]).unwrap();
+//! # let batches = vec![batch];
+//! #
+//! # let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), None).unwrap();
+//! #
+//! # for batch in batches {
+//! #     writer.write(&batch).expect("Writing batch");
+//! # }
+//! # writer.close().unwrap();
 //!
 //! let file = File::open("data.parquet").unwrap();
 //! let file_reader = SerializedFileReader::new(file).unwrap();
