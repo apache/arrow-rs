@@ -104,7 +104,7 @@
 //!
 //! println!("Converted arrow schema is: {}", arrow_reader.get_schema().unwrap());
 //! println!("Arrow schema after projection is: {}",
-//!    arrow_reader.get_schema_by_columns(vec![0, 1], true).unwrap());
+//!    arrow_reader.get_schema_by_columns(vec![0], true).unwrap());
 //!
 //! let mut record_batch_reader = arrow_reader.get_record_reader(2048).unwrap();
 //!
