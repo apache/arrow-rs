@@ -27,13 +27,15 @@ use crate::{
     error::{ArrowError, Result},
 };
 
-fn unary_offsets_string<O, F>(
+fn unary_offsets_string<O, F, T>(
     array: &GenericStringArray<O>,
-    data_type: DataType,
+    _data_type: DataType,
     op: F,
 ) -> ArrayRef
 where
+    T: ArrowPrimitiveType,
     O: StringOffsetSizeTrait + ArrowNativeType,
+    T::Native: StringOffsetSizeTrait,
     F: Fn(O) -> O,
 {
     // note: offsets are stored as u8, but they can be interpreted as OffsetSize
@@ -56,14 +58,10 @@ where
         .null_buffer()
         .map(|b| b.bit_slice(array.offset(), array.len()));
 
-    let data = ArrayData::new(
-        data_type,
+    let data = ArrayData::new_primitive::<T>(
         array.len(),
-        None,
         null_bit_buffer,
-        0,
-        vec![buffer],
-        vec![],
+        buffer,
     );
     make_array(data)
 }
@@ -78,7 +76,7 @@ where
         .as_any()
         .downcast_ref::<GenericStringArray<O>>()
         .unwrap();
-    unary_offsets_string::<O, _>(array, T::DATA_TYPE, |x| x)
+    unary_offsets_string::<O, _, T>(array, T::DATA_TYPE, |x| x)
 }
 
 fn bit_length_impl<O: StringOffsetSizeTrait, T: ArrowPrimitiveType>(
@@ -92,7 +90,7 @@ where
         .downcast_ref::<GenericStringArray<O>>()
         .unwrap();
     let bits_in_bytes = O::from_usize(8).unwrap();
-    unary_offsets_string::<O, _>(array, T::DATA_TYPE, |x| x * bits_in_bytes)
+    unary_offsets_string::<O, _, T>(array, T::DATA_TYPE, |x| x * bits_in_bytes)
 }
 
 /// Returns an array of Int32/Int64 denoting the number of bytes in each string in the array.

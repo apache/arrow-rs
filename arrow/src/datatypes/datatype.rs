@@ -477,6 +477,12 @@ impl DataType {
         )
     }
 
+    /// Returns true if this type is numeric: (UInt*, Unit*, or Float*).
+    pub fn is_primitive(t: &DataType) -> bool {
+        use DataType::*;
+        DataType::is_numeric(t) || matches!(t, Time32(_) | Time64(_) | Date32 | Date64 | Timestamp(_, _) | Duration(_) | Interval(_))
+    }
+
     /// Compares the datatype with another, ignoring nested field names
     /// and metadata.
     pub(crate) fn equals_datatype(&self, other: &DataType) -> bool {

@@ -520,15 +520,17 @@ impl FixedSizeBinaryArray {
         }
 
         let size = size.unwrap_or(0);
-        let array_data = ArrayData::new(
-            DataType::FixedSizeBinary(size as i32),
-            len,
-            None,
-            Some(null_buf.into()),
-            0,
-            vec![buffer.into()],
-            vec![],
-        );
+        let array_data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::FixedSizeBinary(size as i32),
+                len,
+                None,
+                Some(null_buf.into()),
+                0,
+                vec![buffer.into()],
+                vec![],
+            )
+        };
         Ok(FixedSizeBinaryArray::from(array_data))
     }
 

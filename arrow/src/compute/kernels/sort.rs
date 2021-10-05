@@ -488,14 +488,10 @@ fn sort_boolean(
         }
     }
 
-    let result_data = ArrayData::new(
-        DataType::UInt32,
+    let result_data = ArrayData::new_primitive::<UInt32Type>(
         len,
-        Some(0),
         None,
-        0,
-        vec![result.into()],
-        vec![],
+        result.into(),
     );
 
     UInt32Array::from(result_data)
@@ -574,14 +570,10 @@ where
         }
     }
 
-    let result_data = ArrayData::new(
-        DataType::UInt32,
+    let result_data = ArrayData::new_primitive::<UInt32Type>(
         len,
-        Some(0),
         None,
-        0,
-        vec![result.into()],
-        vec![],
+        result.into(),
     );
 
     UInt32Array::from(result_data)

@@ -1388,26 +1388,28 @@ impl Decoder {
             &[],
         )?;
 
-        Ok(make_array(ArrayData::new(
-            map_type.clone(),
-            rows_len,
-            None,
-            Some(list_bitmap.into()),
-            0,
-            vec![Buffer::from_slice_ref(&list_offsets)],
-            vec![ArrayData::new(
-                struct_field.data_type().clone(),
-                struct_children[0].len(),
+        unsafe {
+            Ok(make_array(ArrayData::new_unchecked(
+                map_type.clone(),
+                rows_len,
                 None,
-                None,
+                Some(list_bitmap.into()),
                 0,
-                vec![],
-                struct_children
-                    .into_iter()
-                    .map(|array| array.data().clone())
-                    .collect(),
-            )],
-        )))
+                vec![Buffer::from_slice_ref(&list_offsets)],
+                vec![ArrayData::new_unchecked(
+                    struct_field.data_type().clone(),
+                    struct_children[0].len(),
+                    None,
+                    None,
+                    0,
+                    vec![],
+                    struct_children
+                        .into_iter()
+                        .map(|array| array.data().clone())
+                        .collect(),
+                )],
+            )))
+        }
     }
 
     #[inline(always)]

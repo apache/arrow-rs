@@ -29,7 +29,7 @@ use crate::buffer::{
     buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer, MutableBuffer,
 };
 use crate::compute::util::combine_option_bitmap;
-use crate::datatypes::{ArrowNumericType, DataType};
+use crate::datatypes::ArrowNumericType;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util::{ceil, round_upto_multiple_of_64};
 use core::iter;
@@ -159,14 +159,10 @@ where
     let bool_buffer: Buffer = value_buffer.into();
     let bool_valid_buffer: Buffer = valid_buffer.into();
 
-    let array_data = ArrayData::new(
-        DataType::Boolean,
+    let array_data = ArrayData::new_boolean(
         len,
-        None,
         Some(bool_valid_buffer),
-        left_offset,
-        vec![bool_buffer],
-        vec![],
+        bool_buffer,
     );
 
     Ok(BooleanArray::from(array_data))
@@ -200,14 +196,10 @@ where
 
     let values = op(left_buffer, left_offset, right_buffer, right_offset, len);
 
-    let data = ArrayData::new(
-        DataType::Boolean,
+    let data = ArrayData::new_boolean(
         len,
-        None,
         null_bit_buffer,
-        0,
-        vec![values],
-        vec![],
+        values,
     );
     Ok(BooleanArray::from(data))
 }
@@ -380,14 +372,10 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray> {
 
     let values = buffer_unary_not(&data.buffers()[0], left_offset, len);
 
-    let data = ArrayData::new(
-        DataType::Boolean,
+    let data = ArrayData::new_boolean(
         len,
-        None,
         null_bit_buffer,
-        0,
-        vec![values],
-        vec![],
+        values,
     );
     Ok(BooleanArray::from(data))
 }
@@ -419,7 +407,7 @@ pub fn is_null(input: &dyn Array) -> Result<BooleanArray> {
     };
 
     let data =
-        ArrayData::new(DataType::Boolean, len, None, None, 0, vec![output], vec![]);
+        ArrayData::new_boolean(len, None, output);
 
     Ok(BooleanArray::from(data))
 }
@@ -452,8 +440,7 @@ pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray> {
         Some(buffer) => buffer.bit_slice(input.offset(), len),
     };
 
-    let data =
-        ArrayData::new(DataType::Boolean, len, None, None, 0, vec![output], vec![]);
+    let data = ArrayData::new_boolean(len, None, output);
 
     Ok(BooleanArray::from(data))
 }
@@ -524,27 +511,20 @@ where
 
     // Align/shift left data on offset as needed, since new bitmaps are shifted and aligned to 0 already
     // NOTE: this probably only works for primitive arrays.
-    let data_buffers = if left.offset() == 0 {
-        left_data.buffers().to_vec()
+    let data_buffer = if left.offset() == 0 {
+        left_data.buffers()[0].clone()
     } else {
         // Shift each data buffer by type's bit_width * offset.
         left_data
-            .buffers()
-            .iter()
-            .map(|buf| buf.slice(left.offset() * T::get_byte_width()))
-            .collect::<Vec<_>>()
+            .buffers()[0].slice(left.offset() * T::get_byte_width())
     };
 
     // Construct new array with same values but modified null bitmap
     // TODO: shift data buffer as needed
-    let data = ArrayData::new(
-        T::DATA_TYPE,
+    let data = ArrayData::new_primitive::<T>(
         left.len(),
-        None, // force new to compute the number of null bits
         modified_null_buffer,
-        0, // No need for offset since left data has been shifted
-        data_buffers,
-        left_data.child_data().to_vec(),
+        data_buffer
     );
     Ok(PrimitiveArray::<T>::from(data))
 }

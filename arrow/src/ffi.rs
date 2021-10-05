@@ -514,15 +514,17 @@ pub trait ArrowArrayRef {
             .map(|d| d.unwrap())
             .collect();
 
-        Ok(ArrayData::new(
-            data_type,
-            len,
-            Some(null_count),
-            null_bit_buffer,
-            offset,
-            buffers,
-            child_data,
-        ))
+        unsafe {
+            Ok(ArrayData::new_unchecked(
+                data_type,
+                len,
+                Some(null_count),
+                null_bit_buffer,
+                offset,
+                buffers,
+                child_data,
+            ))
+        }
     }
 
     /// returns all buffers, as organized by Rust (i.e. null buffer is skipped)

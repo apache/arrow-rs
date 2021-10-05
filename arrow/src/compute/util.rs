@@ -184,16 +184,20 @@ pub(super) mod tests {
         offset: usize,
         null_bit_buffer: Option<Buffer>,
     ) -> Arc<ArrayData> {
-        // empty vec for buffers and children is not really correct, but for these tests we only care about the null bitmap
-        Arc::new(ArrayData::new(
-            DataType::UInt8,
-            len,
-            None,
-            null_bit_buffer,
-            offset,
-            vec![],
-            vec![],
-        ))
+        if let Some(ref b) = null_bit_buffer {
+            assert!(b.len()*8 >= offset+len);
+        }
+        unsafe {
+            Arc::new(ArrayData::new_unchecked(
+                DataType::UInt8,
+                len,
+                None,
+                null_bit_buffer,
+                offset,
+                vec![Buffer::from(vec![0; offset + len])],
+                vec![],
+            ))
+        }
     }
 
     #[test]

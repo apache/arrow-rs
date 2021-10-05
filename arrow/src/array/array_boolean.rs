@@ -212,14 +212,10 @@ impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray {
             }
         });
 
-        let data = ArrayData::new(
-            DataType::Boolean,
+        let data = ArrayData::new_boolean(
             data_len,
-            None,
             Some(null_buf.into()),
-            0,
-            vec![val_buf.into()],
-            vec![],
+            val_buf.into(),
         );
         BooleanArray::from(data)
     }

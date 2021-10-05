@@ -26,17 +26,13 @@ fn into_primitive_array_data<I: ArrowPrimitiveType, O: ArrowPrimitiveType>(
     array: &PrimitiveArray<I>,
     buffer: Buffer,
 ) -> ArrayData {
-    ArrayData::new(
-        O::DATA_TYPE,
+    ArrayData::new_primitive::<O>(
         array.len(),
-        None,
         array
             .data_ref()
             .null_buffer()
             .map(|b| b.bit_slice(array.offset(), array.len())),
-        0,
-        vec![buffer],
-        vec![],
+        buffer,
     )
 }
 

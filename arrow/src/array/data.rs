@@ -21,7 +21,7 @@
 use std::mem;
 use std::sync::Arc;
 
-use crate::datatypes::{DataType, IntervalUnit};
+use crate::datatypes::{DataType, IntervalUnit, ArrowPrimitiveType};
 use crate::{bitmap::Bitmap, datatypes::ArrowNativeType};
 use crate::{
     buffer::{Buffer, MutableBuffer},
@@ -238,8 +238,57 @@ pub struct ArrayData {
 
 pub type ArrayDataRef = Arc<ArrayData>;
 
+fn validate_null_bitmap(len: usize, null_bit_buffer: Option<Buffer>) -> (usize, Option<Bitmap>) {
+    let null_count = count_nulls(null_bit_buffer.as_ref(), 0, len);
+    match null_bit_buffer {
+        Some(b) => {
+            assert!(b.len()*8 >= len);
+            (null_count, Some(Bitmap::from(b)))
+        },
+        None => (0_usize, None),
+    }
+}
+
 impl ArrayData {
-    pub fn new(
+    pub fn new_primitive<T: ArrowPrimitiveType>(
+        len: usize,
+        null_bit_buffer: Option<Buffer>,
+        buffer: Buffer,
+    ) -> Self {
+        assert!(buffer.len() >= len*T::get_byte_width());
+        let (null_count, null_bitmap) = validate_null_bitmap(len, null_bit_buffer);
+
+        Self {
+            data_type: T::DATA_TYPE,
+            len,
+            null_count,
+            offset: 0,
+            buffers: vec![buffer],
+            child_data: vec![],
+            null_bitmap,
+        }
+    }
+
+    pub fn new_boolean(
+        len: usize,
+        null_bit_buffer: Option<Buffer>,
+        buffer: Buffer,
+    ) -> Self {
+        assert!(buffer.len()*8 >= len);
+        let (null_count, null_bitmap) = validate_null_bitmap(len, null_bit_buffer);
+
+        Self {
+            data_type: DataType::Boolean,
+            len,
+            null_count,
+            offset: 0,
+            buffers: vec![buffer],
+            child_data: vec![],
+            null_bitmap,
+        }
+    }
+
+    pub unsafe fn new_unchecked(
         data_type: DataType,
         len: usize,
         null_count: Option<usize>,
@@ -485,7 +534,9 @@ impl ArrayData {
             DataType::Float16 => unreachable!(),
         };
 
-        Self::new(data_type.clone(), 0, Some(0), None, 0, buffers, child_data)
+        unsafe {
+            Self::new_unchecked(data_type.clone(), 0, Some(0), None, 0, buffers, child_data)
+        }
     }
 }
 
@@ -565,15 +616,18 @@ impl ArrayDataBuilder {
     }
 
     pub fn build(self) -> ArrayData {
-        ArrayData::new(
-            self.data_type,
-            self.len,
-            self.null_count,
-            self.null_bit_buffer,
-            self.offset,
-            self.buffers,
-            self.child_data,
-        )
+        // TODO: this should validate the ArrayData before returning
+        unsafe {
+            ArrayData::new_unchecked(
+                self.data_type,
+                self.len,
+                self.null_count,
+                self.null_bit_buffer,
+                self.offset,
+                self.buffers,
+                self.child_data,
+            )
+        }
     }
 }
 
@@ -582,12 +636,14 @@ mod tests {
     use super::*;
 
     use crate::buffer::Buffer;
+    use crate::datatypes::Int32Type;
     use crate::util::bit_util;
 
     #[test]
     fn test_new() {
-        let arr_data =
-            ArrayData::new(DataType::Boolean, 10, Some(1), None, 2, vec![], vec![]);
+        let arr_data = unsafe {
+            ArrayData::new_unchecked(DataType::Boolean, 10, Some(1), None, 2, vec![], vec![])
+        };
         assert_eq!(10, arr_data.len());
         assert_eq!(1, arr_data.null_count());
         assert_eq!(2, arr_data.offset());
@@ -597,14 +653,10 @@ mod tests {
 
     #[test]
     fn test_builder() {
-        let child_arr_data = ArrayData::new(
-            DataType::Int32,
+        let child_arr_data = ArrayData::new_primitive::<Int32Type>(
             5,
-            Some(0),
             None,
-            0,
-            vec![Buffer::from_slice_ref(&[1i32, 2, 3, 4, 5])],
-            vec![],
+            Buffer::from_slice_ref(&[1i32, 2, 3, 4, 5]),
         );
         let v = vec![0, 1, 2, 3];
         let b1 = Buffer::from(&v[..]);

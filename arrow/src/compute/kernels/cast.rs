@@ -691,47 +691,59 @@ pub fn cast_with_options(
         // end numeric casts
 
         // temporal casts
-        (Int32, Date32) => cast_array_data::<Date32Type>(array, to_type.clone()),
+        (Int32, Date32) => unsafe {
+            cast_array_data::<Date32Type>(array, to_type.clone())
+        },
         (Int32, Date64) => cast_with_options(
             &cast_with_options(array, &DataType::Date32, cast_options)?,
             &DataType::Date64,
             cast_options,
         ),
-        (Int32, Time32(TimeUnit::Second)) => {
+        (Int32, Time32(TimeUnit::Second)) => unsafe {
             cast_array_data::<Time32SecondType>(array, to_type.clone())
         }
-        (Int32, Time32(TimeUnit::Millisecond)) => {
+        (Int32, Time32(TimeUnit::Millisecond)) => unsafe {
             cast_array_data::<Time32MillisecondType>(array, to_type.clone())
         }
         // No support for microsecond/nanosecond with i32
-        (Date32, Int32) => cast_array_data::<Int32Type>(array, to_type.clone()),
+        (Date32, Int32) => unsafe {
+            cast_array_data::<Int32Type>(array, to_type.clone())
+        },
         (Date32, Int64) => cast_with_options(
             &cast_with_options(array, &DataType::Int32, cast_options)?,
             &DataType::Int64,
             cast_options,
         ),
-        (Time32(_), Int32) => cast_array_data::<Int32Type>(array, to_type.clone()),
-        (Int64, Date64) => cast_array_data::<Date64Type>(array, to_type.clone()),
+        (Time32(_), Int32) => unsafe {
+            cast_array_data::<Int32Type>(array, to_type.clone())
+        },
+        (Int64, Date64) => unsafe {
+            cast_array_data::<Date64Type>(array, to_type.clone())
+        },
         (Int64, Date32) => cast_with_options(
             &cast_with_options(array, &DataType::Int32, cast_options)?,
             &DataType::Date32,
             cast_options,
         ),
         // No support for second/milliseconds with i64
-        (Int64, Time64(TimeUnit::Microsecond)) => {
+        (Int64, Time64(TimeUnit::Microsecond)) => unsafe {
             cast_array_data::<Time64MicrosecondType>(array, to_type.clone())
         }
-        (Int64, Time64(TimeUnit::Nanosecond)) => {
+        (Int64, Time64(TimeUnit::Nanosecond)) => unsafe {
             cast_array_data::<Time64NanosecondType>(array, to_type.clone())
         }
 
-        (Date64, Int64) => cast_array_data::<Int64Type>(array, to_type.clone()),
+        (Date64, Int64) => unsafe {
+            cast_array_data::<Int64Type>(array, to_type.clone())
+        },
         (Date64, Int32) => cast_with_options(
             &cast_with_options(array, &DataType::Int64, cast_options)?,
             &DataType::Int32,
             cast_options,
         ),
-        (Time64(_), Int64) => cast_array_data::<Int64Type>(array, to_type.clone()),
+        (Time64(_), Int64) => unsafe {
+            cast_array_data::<Int64Type>(array, to_type.clone())
+        },
         (Date32, Date64) => {
             let date_array = array.as_any().downcast_ref::<Date32Array>().unwrap();
 
@@ -783,14 +795,18 @@ pub fn cast_with_options(
             let array_ref = Arc::new(converted) as ArrayRef;
             use TimeUnit::*;
             match to_unit {
-                Microsecond => cast_array_data::<TimestampMicrosecondType>(
-                    &array_ref,
-                    to_type.clone(),
-                ),
-                Nanosecond => cast_array_data::<TimestampNanosecondType>(
-                    &array_ref,
-                    to_type.clone(),
-                ),
+                Microsecond => unsafe {
+                    cast_array_data::<TimestampMicrosecondType>(
+                        &array_ref,
+                        to_type.clone(),
+                    )
+                },
+                Nanosecond => unsafe {
+                    cast_array_data::<TimestampNanosecondType>(
+                        &array_ref,
+                        to_type.clone(),
+                    )
+                },
                 _ => unreachable!("array type not supported"),
             }
         }
@@ -835,8 +851,10 @@ pub fn cast_with_options(
                 _ => unreachable!("array type not supported"),
             }
         }
-        (Timestamp(_, _), Int64) => cast_array_data::<Int64Type>(array, to_type.clone()),
-        (Int64, Timestamp(to_unit, _)) => {
+        (Timestamp(_, _), Int64) => unsafe {
+            cast_array_data::<Int64Type>(array, to_type.clone())
+        }
+        (Int64, Timestamp(to_unit, _)) => unsafe {
             use TimeUnit::*;
             match to_unit {
                 Second => cast_array_data::<TimestampSecondType>(array, to_type.clone()),
@@ -871,21 +889,27 @@ pub fn cast_with_options(
             let array_ref = Arc::new(converted) as ArrayRef;
             use TimeUnit::*;
             match to_unit {
-                Second => {
+                Second => unsafe {
                     cast_array_data::<TimestampSecondType>(&array_ref, to_type.clone())
                 }
-                Millisecond => cast_array_data::<TimestampMillisecondType>(
-                    &array_ref,
-                    to_type.clone(),
-                ),
-                Microsecond => cast_array_data::<TimestampMicrosecondType>(
-                    &array_ref,
-                    to_type.clone(),
-                ),
-                Nanosecond => cast_array_data::<TimestampNanosecondType>(
-                    &array_ref,
-                    to_type.clone(),
-                ),
+                Millisecond => unsafe {
+                    cast_array_data::<TimestampMillisecondType>(
+                        &array_ref,
+                        to_type.clone(),
+                    )
+                },
+                Microsecond => unsafe {
+                    cast_array_data::<TimestampMicrosecondType>(
+                        &array_ref,
+                        to_type.clone(),
+                    )
+                },
+                Nanosecond => unsafe {
+                    cast_array_data::<TimestampNanosecondType>(
+                        &array_ref,
+                        to_type.clone(),
+                    )
+                },
             }
         }
         (Timestamp(from_unit, _), Date32) => {
@@ -918,7 +942,7 @@ pub fn cast_with_options(
                         &Date64Array::from(vec![from_size / to_size; array.len()]),
                     )?) as ArrayRef)
                 }
-                std::cmp::Ordering::Equal => {
+                std::cmp::Ordering::Equal => unsafe {
                     cast_array_data::<Date64Type>(array, to_type.clone())
                 }
                 std::cmp::Ordering::Greater => {
@@ -931,7 +955,7 @@ pub fn cast_with_options(
             }
         }
         // date64 to timestamp might not make sense,
-        (Int64, Duration(to_unit)) => {
+        (Int64, Duration(to_unit)) => unsafe {
             use TimeUnit::*;
             match to_unit {
                 Second => cast_array_data::<DurationSecondType>(array, to_type.clone()),
@@ -985,11 +1009,12 @@ const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 /// Arrays should have the same primitive data type, otherwise this should fail.
 /// We do not perform this check on primitive data types as we only use this
 /// function internally, where it is guaranteed to be infallible.
-fn cast_array_data<TO>(array: &ArrayRef, to_type: DataType) -> Result<ArrayRef>
+// Safety: from and to data types must have the same layout
+unsafe fn cast_array_data<TO>(array: &ArrayRef, to_type: DataType) -> Result<ArrayRef>
 where
     TO: ArrowNumericType,
 {
-    let data = ArrayData::new(
+    let data = ArrayData::new_unchecked(
         to_type,
         array.len(),
         Some(array.null_count()),
@@ -1432,19 +1457,21 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
             }
 
             // keys are data, child_data is values (dictionary)
-            let data = ArrayData::new(
-                to_type.clone(),
-                cast_keys.len(),
-                Some(cast_keys.null_count()),
-                cast_keys
-                    .data()
-                    .null_bitmap()
-                    .clone()
-                    .map(|bitmap| bitmap.bits),
-                cast_keys.data().offset(),
-                cast_keys.data().buffers().to_vec(),
-                vec![cast_values.data().clone()],
-            );
+            let data = unsafe {
+                ArrayData::new_unchecked(
+                    to_type.clone(),
+                    cast_keys.len(),
+                    Some(cast_keys.null_count()),
+                    cast_keys
+                        .data()
+                        .null_bitmap()
+                        .clone()
+                        .map(|bitmap| bitmap.bits),
+                    cast_keys.data().offset(),
+                    cast_keys.data().buffers().to_vec(),
+                    vec![cast_values.data().clone()],
+                )
+            };
 
             // create the appropriate array type
             let new_array: ArrayRef = match **to_index_type {
@@ -1648,19 +1675,21 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
         )
     };
 
-    let list_data = ArrayData::new(
-        to_type.clone(),
-        array.len(),
-        Some(cast_array.null_count()),
-        cast_array
-            .data()
-            .null_bitmap()
-            .clone()
-            .map(|bitmap| bitmap.bits),
-        0,
-        vec![offsets.into()],
-        vec![cast_array.data().clone()],
-    );
+    let list_data = unsafe {
+        ArrayData::new_unchecked(
+            to_type.clone(),
+            array.len(),
+            Some(cast_array.null_count()),
+            cast_array
+                .data()
+                .null_bitmap()
+                .clone()
+                .map(|bitmap| bitmap.bits),
+            0,
+            vec![offsets.into()],
+            vec![cast_array.data().clone()],
+        )
+    };
     let list_array =
         Arc::new(GenericListArray::<OffsetSize>::from(list_data)) as ArrayRef;
 
@@ -1677,20 +1706,22 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
     let data = array.data_ref();
     let underlying_array = make_array(data.child_data()[0].clone());
     let cast_array = cast_with_options(&underlying_array, to.data_type(), cast_options)?;
-    let array_data = ArrayData::new(
-        to_type.clone(),
-        array.len(),
-        Some(cast_array.null_count()),
-        cast_array
-            .data()
-            .null_bitmap()
-            .clone()
-            .map(|bitmap| bitmap.bits),
-        array.offset(),
-        // reuse offset buffer
-        data.buffers().to_vec(),
-        vec![cast_array.data().clone()],
-    );
+    let array_data = unsafe {
+        ArrayData::new_unchecked(
+            to_type.clone(),
+            array.len(),
+            Some(cast_array.null_count()),
+            cast_array
+                .data()
+                .null_bitmap()
+                .clone()
+                .map(|bitmap| bitmap.bits),
+            array.offset(),
+            // reuse offset buffer
+            data.buffers().to_vec(),
+            vec![cast_array.data().clone()],
+        )
+    };
     let list = GenericListArray::<OffsetSize>::from(array_data);
     Ok(Arc::new(list) as ArrayRef)
 }

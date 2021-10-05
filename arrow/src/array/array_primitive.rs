@@ -124,14 +124,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Creates a PrimitiveArray based on an iterator of values without nulls
     pub fn from_iter_values<I: IntoIterator<Item = T::Native>>(iter: I) -> Self {
         let val_buf: Buffer = iter.into_iter().collect();
-        let data = ArrayData::new(
-            T::DATA_TYPE,
+        let data = ArrayData::new_primitive::<T>(
             val_buf.len() / mem::size_of::<<T as ArrowPrimitiveType>::Native>(),
             None,
-            None,
-            0,
-            vec![val_buf],
-            vec![],
+            val_buf,
         );
         PrimitiveArray::from(data)
     }
@@ -140,14 +136,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn from_value(value: T::Native, count: usize) -> Self {
         // # Safety: length is known
         let val_buf = unsafe { Buffer::from_trusted_len_iter((0..count).map(|_| value)) };
-        let data = ArrayData::new(
-            T::DATA_TYPE,
+        let data = ArrayData::new_primitive::<T>(
             val_buf.len() / mem::size_of::<<T as ArrowPrimitiveType>::Native>(),
             None,
-            None,
-            0,
-            vec![val_buf],
-            vec![],
+            val_buf,
         );
         PrimitiveArray::from(data)
     }
@@ -338,14 +330,10 @@ impl<T: ArrowPrimitiveType, Ptr: Borrow<Option<<T as ArrowPrimitiveType>::Native
             })
             .collect();
 
-        let data = ArrayData::new(
-            T::DATA_TYPE,
+        let data = ArrayData::new_primitive::<T>(
             null_buf.len(),
-            None,
             Some(null_buf.into()),
-            0,
-            vec![buffer],
-            vec![],
+            buffer,
         );
         PrimitiveArray::from(data)
     }
@@ -369,7 +357,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         let (null, buffer) = trusted_len_unzip(iterator);
 
         let data =
-            ArrayData::new(T::DATA_TYPE, len, None, Some(null), 0, vec![buffer], vec![]);
+            ArrayData::new_primitive::<T>(len, Some(null), buffer);
         PrimitiveArray::from(data)
     }
 }

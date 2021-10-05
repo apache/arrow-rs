@@ -74,18 +74,20 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
         new_values.extend_from_slice(&data[start..start + length]);
     });
 
-    let data = ArrayData::new(
-        <OffsetSize as StringOffsetSizeTrait>::DATA_TYPE,
-        array.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![
-            Buffer::from_slice_ref(&new_offsets),
-            Buffer::from_slice_ref(&new_values),
-        ],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            <OffsetSize as StringOffsetSizeTrait>::DATA_TYPE,
+            array.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![
+                Buffer::from_slice_ref(&new_offsets),
+                Buffer::from_slice_ref(&new_values),
+            ],
+            vec![],
+        )
+    };
     Ok(make_array(data))
 }
 

@@ -523,14 +523,10 @@ where
         }
     };
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
+    let data = ArrayData::new_primitive::<T>(
         indices.len(),
-        None,
         nulls,
-        0,
-        vec![buffer],
-        vec![],
+        buffer,
     );
     Ok(PrimitiveArray::<T>::from(data))
 }
@@ -598,14 +594,10 @@ where
         };
     }
 
-    let data = ArrayData::new(
-        DataType::Boolean,
+    let data = ArrayData::new_boolean(
         indices.len(),
-        None,
         nulls,
-        0,
-        vec![val_buf.into()],
-        vec![],
+        val_buf.into(),
     );
     Ok(BooleanArray::from(data))
 }
@@ -884,15 +876,17 @@ where
     let new_keys = take_primitive::<T, I>(values.keys(), indices)?;
     let new_keys_data = new_keys.data_ref();
 
-    let data = ArrayData::new(
-        values.data_type().clone(),
-        new_keys.len(),
-        Some(new_keys_data.null_count()),
-        new_keys_data.null_buffer().cloned(),
-        0,
-        new_keys_data.buffers().to_vec(),
-        values.data().child_data().to_vec(),
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            values.data_type().clone(),
+            new_keys.len(),
+            Some(new_keys_data.null_count()),
+            new_keys_data.null_buffer().cloned(),
+            0,
+            new_keys_data.buffers().to_vec(),
+            values.data().child_data().to_vec(),
+        )
+    };
 
     Ok(DictionaryArray::<T>::from(data))
 }

@@ -182,14 +182,10 @@ where
     //      `values` is an iterator with a known size.
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
+    let data = ArrayData::new_primitive::<T>(
         left.len(),
-        None,
         null_bit_buffer,
-        0,
-        vec![buffer],
-        vec![],
+        buffer,
     );
     Ok(PrimitiveArray::<T>::from(data))
 }
@@ -250,14 +246,10 @@ where
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     }?;
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
+    let data = ArrayData::new_primitive::<T>(
         left.len(),
-        None,
         null_bit_buffer,
-        0,
-        vec![buffer],
-        vec![],
+        buffer,
     );
     Ok(PrimitiveArray::<T>::from(data))
 }
@@ -318,14 +310,10 @@ where
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     }?;
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
+    let data = ArrayData::new_primitive::<T>(
         left.len(),
-        None,
         null_bit_buffer,
-        0,
-        vec![buffer],
-        vec![],
+        buffer,
     );
     Ok(PrimitiveArray::<T>::from(data))
 }

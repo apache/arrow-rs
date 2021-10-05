@@ -130,15 +130,18 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for DictionaryArray<T> {
                 panic!("DictionaryArray's data type must match.")
             };
             // create a zero-copy of the keys' data
-            let keys = PrimitiveArray::<T>::from(ArrayData::new(
-                T::DATA_TYPE,
-                data.len(),
-                Some(data.null_count()),
-                data.null_buffer().cloned(),
-                data.offset(),
-                data.buffers().to_vec(),
-                vec![],
-            ));
+            let keys_data = unsafe {
+                ArrayData::new_unchecked(
+                    T::DATA_TYPE,
+                    data.len(),
+                    Some(data.null_count()),
+                    data.null_buffer().cloned(),
+                    data.offset(),
+                    data.buffers().to_vec(),
+                    vec![],
+                )
+            };
+            let keys = PrimitiveArray::<T>::from(keys_data);
             let values = make_array(data.child_data()[0].clone());
             Self {
                 data,
