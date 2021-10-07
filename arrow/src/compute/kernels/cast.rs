@@ -1680,12 +1680,8 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
     let array_data = ArrayData::new(
         to_type.clone(),
         array.len(),
-        Some(cast_array.null_count()),
-        cast_array
-            .data()
-            .null_bitmap()
-            .clone()
-            .map(|bitmap| bitmap.bits),
+        Some(data.null_count()),
+        data.null_bitmap().clone().map(|bitmap| bitmap.bits),
         array.offset(),
         // reuse offset buffer
         data.buffers().to_vec(),
@@ -2025,7 +2021,6 @@ mod tests {
 
     #[test]
     fn test_cast_list_i32_to_list_u16() {
-        // Construct a value array
         let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 100000000])
             .data()
             .clone();
@@ -2033,6 +2028,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref(&[0, 3, 6, 8]);
 
         // Construct a list array from the above two
+        // [[0,0,0], [-1, -2, -1], [2, 100000000]]
         let list_data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
@@ -2047,9 +2043,13 @@ mod tests {
             &DataType::List(Box::new(Field::new("item", DataType::UInt16, true))),
         )
         .unwrap();
+
+        // For the ListArray itself, there are no null values (as there were no nulls when they went in)
+        //
         // 3 negative values should get lost when casting to unsigned,
         // 1 value should overflow
-        assert_eq!(4, cast_array.null_count());
+        assert_eq!(0, cast_array.null_count());
+
         // offsets should be the same
         assert_eq!(
             list_array.data().buffers().to_vec(),
@@ -2061,23 +2061,21 @@ mod tests {
             .downcast_ref::<ListArray>()
             .unwrap();
         assert_eq!(DataType::UInt16, array.value_type());
-        assert_eq!(4, array.values().null_count());
         assert_eq!(3, array.value_length(0));
         assert_eq!(3, array.value_length(1));
         assert_eq!(2, array.value_length(2));
-        let values = array.values();
-        let u16arr = values.as_any().downcast_ref::<UInt16Array>().unwrap();
-        assert_eq!(8, u16arr.len());
-        assert_eq!(4, u16arr.null_count());
 
-        assert_eq!(0, u16arr.value(0));
-        assert_eq!(0, u16arr.value(1));
-        assert_eq!(0, u16arr.value(2));
-        assert!(!u16arr.is_valid(3));
-        assert!(!u16arr.is_valid(4));
-        assert!(!u16arr.is_valid(5));
-        assert_eq!(2, u16arr.value(6));
-        assert!(!u16arr.is_valid(7));
+        // expect 4 nulls: negative numbers and overflow
+        let values = array.values();
+        assert_eq!(4, values.null_count());
+        let u16arr = values.as_any().downcast_ref::<UInt16Array>().unwrap();
+
+        let expected: UInt16Array =
+            vec![Some(0), Some(0), Some(0), None, None, None, Some(2), None]
+                .into_iter()
+                .collect();
+
+        assert_eq!(u16arr, &expected);
     }
 
     #[test]
