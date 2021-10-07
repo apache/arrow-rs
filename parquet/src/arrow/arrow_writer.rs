@@ -461,15 +461,25 @@ fn write_leaf(
 macro_rules! def_get_binary_array_fn {
     ($name:ident, $ty:ty) => {
         fn $name(array: &$ty) -> Vec<ByteArray> {
-            let mut values = Vec::with_capacity(array.len() - array.null_count());
-            for i in 0..array.len() {
-                if array.is_valid(i) {
-                    let bytes: Vec<u8> = array.value(i).into();
-                    let bytes = ByteArray::from(bytes);
-                    values.push(bytes);
-                }
-            }
-            values
+            let mut byte_array = ByteArray::new();
+            let ptr = crate::memory::ByteBufferPtr::new(
+                unsafe { array.value_data().typed_data::<u8>() }.to_vec(),
+            );
+            byte_array.set_data(ptr);
+            array
+                .value_offsets()
+                .windows(2)
+                .zip(0..array.len())
+                .filter_map(|(offsets, i)| {
+                    if array.is_valid(i) {
+                        let start = offsets[0] as usize;
+                        let len = offsets[1] as usize - start;
+                        Some(byte_array.slice(start, len))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
         }
     };
 }
