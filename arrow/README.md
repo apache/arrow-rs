@@ -21,15 +21,15 @@
 
 [![Crates.io](https://img.shields.io/crates/v/arrow.svg)](https://crates.io/crates/arrow)
 
-This crate contains the official Native Rust implementation of [Apache Arrow](https://arrow.apache.org/) in memory format. Please see the API documents for additional details.
+This crate contains the official Native Rust implementation of [Apache Arrow][arrow] in memory format. Please see the API documents for additional details.
 
-## Rust Version Compatbility
+## Rust Version Compatibility
 
-This crate is tested with the latest stable version of Rust. We do not currrently test against other, older versions of the Rust compiler.
+This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
 
 ## Versioning / Releases
 
-Unlike many other crates in the Rust ecosystem which spend extended time in "pre 1.0.0" state, releasing versions 0.x, the arrow-rs crate follows the versioning scheme of the overall [Apache Arrow](https://arrow.apache.org/) project in an effort to signal which language implementations have been integration tested with each other.
+Unlike many other crates in the Rust ecosystem which spend extended time in "pre 1.0.0" state, releasing versions 0.x, the arrow-rs crate follows the versioning scheme of the overall [Apache Arrow][arrow] project in an effort to signal which language implementations have been integration tested with each other.
 
 ## Features
 
@@ -54,7 +54,7 @@ _Background_: There are various parts of the `arrow` crate which use `unsafe` an
 As `arrow` exists today, it is fairly easy to misuse the APIs, leading to undefined behavior, and it is especially easy to misuse code in modules named above. For an example, as described in [the arrow2 crate](https://github.com/jorgecarleitao/arrow2#why), the following code compiles, does not panic, but results in undefined behavior:
 
 ```rust
-let buffer = Buffer::from_slic_ref(&[0i32, 2i32])
+let buffer = Buffer::from_slice_ref(&[0i32, 2i32])
 let data = ArrayData::new(DataType::Int64, 10, 0, None, 0, vec![buffer], vec![]);
 let array = Float64Array::from(Arc::new(data));
 
@@ -84,3 +84,5 @@ cargo run --example builders
 cargo run --example dynamic_types
 cargo run --example read_csv
 ```
+
+[arrow]: https://arrow.apache.org/

@@ -21,21 +21,22 @@
 
 [![Coverage Status](https://codecov.io/gh/apache/arrow-rs/rust/branch/master/graph/badge.svg)](https://codecov.io/gh/apache/arrow-rs?branch=master)
 
-Welcome to the implementation of Arrow, the popular in-memory columnar format, in [Rust](https://www.rust-lang.org/).
+Welcome to the implementation of Arrow, the popular in-memory columnar format, in [Rust][rust].
 
 This repo contains the following main components:
 
-| Crate        | Description                                                        | Documentation                      |
-| ------------ | ------------------------------------------------------------------ | ---------------------------------- |
-| arrow        | Core functionality (memory layout, arrays, low level computations) | [(README)](arrow/README.md)        |
-| parquet      | Support for Parquet columnar file format                           | [(README)](parquet/README.md)      |
-| arrow-flight | Support for Arrow-Flight IPC protocol                              | [(README)](arrow-flight/README.md) |
+| Crate        | Description                                                        | Documentation              |
+| ------------ | ------------------------------------------------------------------ | -------------------------- |
+| arrow        | Core functionality (memory layout, arrays, low level computations) | [(README)][arrow-readme]   |
+| parquet      | Support for Parquet columnar file format                           | [(README)][parquet-readme] |
+| arrow-flight | Support for Arrow-Flight IPC protocol                              | [(README)][flight-readme]  |
 
 There are two related crates in a different repository
-| Crate | Description | Documentation |
-| ------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| DataFusion | In-memory query engine with SQL support | [(README)](https://github.com/apache/arrow-datafusion/blob/master/README.md) |
-| Ballista | Distributed query execution | [(README)](https://github.com/apache/arrow-datafusion/blob/master/ballista/README.md) |
+
+| Crate      | Description                             | Documentation                 |
+| ---------- | --------------------------------------- | ----------------------------- |
+| DataFusion | In-memory query engine with SQL support | [(README)][datafusion-readme] |
+| Ballista   | Distributed query execution             | [(README)][ballista-readme]   |
 
 Collectively, these crates support a vast array of functionality for analytic computations in Rust.
 
@@ -52,7 +53,15 @@ The `dev@arrow.apache.org` mailing list serves as the core communication channel
 The Rust Arrow community also uses the official [ASF Slack](https://s.apache.org/slack-invite) for informal discussions and coordination. This is
 a great place to meet other contributors and get guidance on where to contribute. Join us in the `#arrow-rust` channel.
 
-Unlike other parts of the Arrow ecosystem, the Rust implementation uses [github issues](https://github.com/apache/arrow-rs/issues) as the system of record for new features
+Unlike other parts of the Arrow ecosystem, the Rust implementation uses [GitHub issues][issues] as the system of record for new features
 and bug fixes and this plays a critical role in the release process.
 
-For design discussions we generally collaborate on Google documents and file a github issue linking to the document.
+For design discussions we generally collaborate on Google documents and file a GitHub issue linking to the document.
+
+[rust]: https://www.rust-lang.org/
+[arrow-readme]: arrow/README.md
+[parquet-readme]: parquet/README.md
+[flight-readme]: arrow-flight/README.md
+[datafusion-readme]: https://github.com/apache/arrow-datafusion/blob/master/README.md
+[ballista-readme]: https://github.com/apache/arrow-datafusion/blob/master/ballista/README.md
+[issues]: https://github.com/apache/arrow-rs/issues
