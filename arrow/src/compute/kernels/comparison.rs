@@ -781,15 +781,17 @@ where
         &remainder_bitmask.to_le_bytes()[0..bit_util::ceil(left_remainder.len(), 8)];
     result_remainder.copy_from_slice(remainder_mask_as_bytes);
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        len,
-        None,
-        null_bit_buffer,
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            len,
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -864,15 +866,17 @@ where
     // null count is the same as in the input since the right side of the scalar comparison cannot be null
     let null_count = left.null_count();
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        len,
-        Some(null_count),
-        null_bit_buffer,
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            len,
+            Some(null_count),
+            null_bit_buffer,
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
