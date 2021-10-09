@@ -421,7 +421,8 @@ fn array_from_json(
                 .add_buffer(Buffer::from(&offsets.to_byte_slice()))
                 .add_child_data(child_array.data().clone())
                 .null_bit_buffer(null_buf)
-                .build();
+                .build()
+                .unwrap();
             Ok(Arc::new(ListArray::from(list_data)))
         }
         DataType::LargeList(child_field) => {
@@ -448,7 +449,8 @@ fn array_from_json(
                 .add_buffer(Buffer::from(&offsets.to_byte_slice()))
                 .add_child_data(child_array.data().clone())
                 .null_bit_buffer(null_buf)
-                .build();
+                .build()
+                .unwrap();
             Ok(Arc::new(LargeListArray::from(list_data)))
         }
         DataType::FixedSizeList(child_field, _) => {
@@ -463,7 +465,8 @@ fn array_from_json(
                 .len(json_col.count)
                 .add_child_data(child_array.data().clone())
                 .null_bit_buffer(null_buf)
-                .build();
+                .build()
+                .unwrap();
             Ok(Arc::new(FixedSizeListArray::from(list_data)))
         }
         DataType::Struct(fields) => {
@@ -478,7 +481,7 @@ fn array_from_json(
                 array_data = array_data.add_child_data(array.data().clone());
             }
 
-            let array = StructArray::from(array_data.build());
+            let array = StructArray::from(array_data.build().unwrap());
             Ok(Arc::new(array))
         }
         DataType::Dictionary(key_type, value_type) => {
@@ -557,7 +560,8 @@ fn dictionary_array_from_json(
                 .add_buffer(keys.data().buffers()[0].clone())
                 .null_bit_buffer(null_buf)
                 .add_child_data(values.data().clone())
-                .build();
+                .build()
+                .unwrap();
 
             let array = match dict_key {
                 DataType::Int8 => {

@@ -31,9 +31,11 @@ fn array_from_vec(n: usize) {
     for i in 0..n {
         v.push((i & 0xffff) as u8);
     }
-    let arr_data = ArrayDataBuilder::new(DataType::Int32)
-        .add_buffer(Buffer::from(v))
-        .build();
+    let arr_data = unsafe {
+        ArrayDataBuilder::new(DataType::Int32)
+            .add_buffer(Buffer::from(v))
+            .build_unchecked()
+    };
     criterion::black_box(Int32Array::from(arr_data));
 }
 

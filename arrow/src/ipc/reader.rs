@@ -189,7 +189,8 @@ fn create_array(
             let data = ArrayData::builder(data_type.clone())
                 .len(length)
                 .offset(0)
-                .build();
+                .build()
+                .unwrap();
             node_index += 1;
             // no buffer increases
             make_array(data)
@@ -230,7 +231,7 @@ fn create_primitive_array(
             if null_count > 0 {
                 builder = builder.null_bit_buffer(buffers[0].clone())
             }
-            builder.build()
+            builder.build().unwrap()
         }
         FixedSizeBinary(_) => {
             // read 3 buffers
@@ -241,7 +242,7 @@ fn create_primitive_array(
             if null_count > 0 {
                 builder = builder.null_bit_buffer(buffers[0].clone())
             }
-            builder.build()
+            unsafe { builder.build_unchecked() }
         }
         Int8
         | Int16
@@ -261,7 +262,8 @@ fn create_primitive_array(
                 if null_count > 0 {
                     builder = builder.null_bit_buffer(buffers[0].clone())
                 }
-                let values = Arc::new(Int64Array::from(builder.build())) as ArrayRef;
+                let data = unsafe { builder.build_unchecked() };
+                let values = Arc::new(Int64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.data().clone()
@@ -273,7 +275,7 @@ fn create_primitive_array(
                 if null_count > 0 {
                     builder = builder.null_bit_buffer(buffers[0].clone())
                 }
-                builder.build()
+                unsafe { builder.build_unchecked() }
             }
         }
         Float32 => {
@@ -286,7 +288,8 @@ fn create_primitive_array(
                 if null_count > 0 {
                     builder = builder.null_bit_buffer(buffers[0].clone())
                 }
-                let values = Arc::new(Float64Array::from(builder.build())) as ArrayRef;
+                let data = unsafe { builder.build_unchecked() };
+                let values = Arc::new(Float64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.data().clone()
@@ -298,7 +301,7 @@ fn create_primitive_array(
                 if null_count > 0 {
                     builder = builder.null_bit_buffer(buffers[0].clone())
                 }
-                builder.build()
+                unsafe { builder.build_unchecked() }
             }
         }
         Boolean
@@ -317,7 +320,7 @@ fn create_primitive_array(
             if null_count > 0 {
                 builder = builder.null_bit_buffer(buffers[0].clone())
             }
-            builder.build()
+            unsafe { builder.build_unchecked() }
         }
         Decimal(_, _) => {
             // read 3 buffers
@@ -328,7 +331,7 @@ fn create_primitive_array(
             if null_count > 0 {
                 builder = builder.null_bit_buffer(buffers[0].clone())
             }
-            builder.build()
+            unsafe { builder.build_unchecked() }
         }
         t => panic!("Data type {:?} either unsupported or not primitive", t),
     };
@@ -354,7 +357,7 @@ fn create_list_array(
         if null_count > 0 {
             builder = builder.null_bit_buffer(buffers[0].clone())
         }
-        make_array(builder.build())
+        make_array(unsafe { builder.build_unchecked() })
     } else if let DataType::LargeList(_) = *data_type {
         let null_count = field_node.null_count() as usize;
         let mut builder = ArrayData::builder(data_type.clone())
@@ -365,7 +368,7 @@ fn create_list_array(
         if null_count > 0 {
             builder = builder.null_bit_buffer(buffers[0].clone())
         }
-        make_array(builder.build())
+        make_array(unsafe { builder.build_unchecked() })
     } else if let DataType::FixedSizeList(_, _) = *data_type {
         let null_count = field_node.null_count() as usize;
         let mut builder = ArrayData::builder(data_type.clone())
@@ -376,7 +379,7 @@ fn create_list_array(
         if null_count > 0 {
             builder = builder.null_bit_buffer(buffers[0].clone())
         }
-        make_array(builder.build())
+        make_array(unsafe { builder.build_unchecked() })
     } else if let DataType::Map(_, _) = *data_type {
         let null_count = field_node.null_count() as usize;
         let mut builder = ArrayData::builder(data_type.clone())
@@ -387,7 +390,7 @@ fn create_list_array(
         if null_count > 0 {
             builder = builder.null_bit_buffer(buffers[0].clone())
         }
-        make_array(builder.build())
+        make_array(unsafe { builder.build_unchecked() })
     } else {
         panic!("Cannot create list or map array from {:?}", data_type)
     }
@@ -411,7 +414,7 @@ fn create_dictionary_array(
         if null_count > 0 {
             builder = builder.null_bit_buffer(buffers[0].clone())
         }
-        make_array(builder.build())
+        make_array(unsafe { builder.build_unchecked() })
     } else {
         unreachable!("Cannot create dictionary array from {:?}", data_type)
     }

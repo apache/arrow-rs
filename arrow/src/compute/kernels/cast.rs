@@ -989,15 +989,17 @@ fn cast_array_data<TO>(array: &ArrayRef, to_type: DataType) -> Result<ArrayRef>
 where
     TO: ArrowNumericType,
 {
-    let data = ArrayData::new(
-        to_type,
-        array.len(),
-        Some(array.null_count()),
-        array.data().null_bitmap().clone().map(|bitmap| bitmap.bits),
-        array.data().offset(),
-        array.data().buffers().to_vec(),
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            to_type,
+            array.len(),
+            Some(array.null_count()),
+            array.data().null_bitmap().clone().map(|bitmap| bitmap.bits),
+            array.data().offset(),
+            array.data().buffers().to_vec(),
+            vec![],
+        )
+    };
     Ok(Arc::new(PrimitiveArray::<TO>::from(data)) as ArrayRef)
 }
 
@@ -1432,19 +1434,21 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
             }
 
             // keys are data, child_data is values (dictionary)
-            let data = ArrayData::new(
-                to_type.clone(),
-                cast_keys.len(),
-                Some(cast_keys.null_count()),
-                cast_keys
-                    .data()
-                    .null_bitmap()
-                    .clone()
-                    .map(|bitmap| bitmap.bits),
-                cast_keys.data().offset(),
-                cast_keys.data().buffers().to_vec(),
-                vec![cast_values.data().clone()],
-            );
+            let data = unsafe {
+                ArrayData::new_unchecked(
+                    to_type.clone(),
+                    cast_keys.len(),
+                    Some(cast_keys.null_count()),
+                    cast_keys
+                        .data()
+                        .null_bitmap()
+                        .clone()
+                        .map(|bitmap| bitmap.bits),
+                    cast_keys.data().offset(),
+                    cast_keys.data().buffers().to_vec(),
+                    vec![cast_values.data().clone()],
+                )
+            };
 
             // create the appropriate array type
             let new_array: ArrayRef = match **to_index_type {
@@ -1648,19 +1652,21 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
         )
     };
 
-    let list_data = ArrayData::new(
-        to_type.clone(),
-        array.len(),
-        Some(cast_array.null_count()),
-        cast_array
-            .data()
-            .null_bitmap()
-            .clone()
-            .map(|bitmap| bitmap.bits),
-        0,
-        vec![offsets.into()],
-        vec![cast_array.data().clone()],
-    );
+    let list_data = unsafe {
+        ArrayData::new_unchecked(
+            to_type.clone(),
+            array.len(),
+            Some(cast_array.null_count()),
+            cast_array
+                .data()
+                .null_bitmap()
+                .clone()
+                .map(|bitmap| bitmap.bits),
+            0,
+            vec![offsets.into()],
+            vec![cast_array.data().clone()],
+        )
+    };
     let list_array =
         Arc::new(GenericListArray::<OffsetSize>::from(list_data)) as ArrayRef;
 
@@ -1677,16 +1683,18 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
     let data = array.data_ref();
     let underlying_array = make_array(data.child_data()[0].clone());
     let cast_array = cast_with_options(&underlying_array, to.data_type(), cast_options)?;
-    let array_data = ArrayData::new(
-        to_type.clone(),
-        array.len(),
-        Some(data.null_count()),
-        data.null_bitmap().clone().map(|bitmap| bitmap.bits),
-        array.offset(),
-        // reuse offset buffer
-        data.buffers().to_vec(),
-        vec![cast_array.data().clone()],
-    );
+    let array_data = unsafe {
+        ArrayData::new_unchecked(
+            to_type.clone(),
+            array.len(),
+            Some(data.null_count()),
+            data.null_bitmap().clone().map(|bitmap| bitmap.bits),
+            array.offset(),
+            // reuse offset buffer
+            data.buffers().to_vec(),
+            vec![cast_array.data().clone()],
+        )
+    };
     let list = GenericListArray::<OffsetSize>::from(array_data);
     Ok(Arc::new(list) as ArrayRef)
 }
@@ -1735,8 +1743,11 @@ where
     if let Some(buf) = list_data.null_buffer() {
         builder = builder.null_bit_buffer(buf.clone())
     }
-    let data = builder.build();
-    Ok(Arc::new(GenericStringArray::<OffsetSizeTo>::from(data)))
+    let array_data = unsafe { builder.build_unchecked() };
+
+    Ok(Arc::new(GenericStringArray::<OffsetSizeTo>::from(
+        array_data,
+    )))
 }
 
 /// Cast the container type of List/Largelist array but not the inner types.
@@ -1811,8 +1822,8 @@ where
     if let Some(buf) = data.null_buffer() {
         builder = builder.null_bit_buffer(buf.clone())
     }
-    let data = builder.build();
-    Ok(make_array(data))
+    let array_data = unsafe { builder.build_unchecked() };
+    Ok(make_array(array_data))
 }
 
 #[cfg(test)]
@@ -2035,7 +2046,8 @@ mod tests {
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
         let list_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
 
         let cast_array = cast(
@@ -2097,7 +2109,8 @@ mod tests {
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
         let list_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
 
         cast(
@@ -3746,7 +3759,8 @@ mod tests {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
             .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
-            .build();
+            .build()
+            .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
@@ -3759,7 +3773,8 @@ mod tests {
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
         ListArray::from(list_data)
     }
 
@@ -3768,7 +3783,8 @@ mod tests {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
             .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
-            .build();
+            .build()
+            .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
@@ -3781,7 +3797,8 @@ mod tests {
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
         LargeListArray::from(list_data)
     }
 
@@ -3790,7 +3807,8 @@ mod tests {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(10)
             .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
-            .build();
+            .build()
+            .unwrap();
 
         // Construct a fixed size list array from the above two
         let list_data_type = DataType::FixedSizeList(
@@ -3800,7 +3818,8 @@ mod tests {
         let list_data = ArrayData::builder(list_data_type)
             .len(5)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
         FixedSizeListArray::from(list_data)
     }
 
@@ -3810,7 +3829,8 @@ mod tests {
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(3)
             .add_buffer(Buffer::from(&values[..]))
-            .build();
+            .build()
+            .unwrap();
         FixedSizeBinaryArray::from(array_data)
     }
 

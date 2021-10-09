@@ -710,7 +710,8 @@ mod tests {
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.data().clone())
         .null_bit_buffer(Buffer::from(vec![0b00011011]))
-        .build();
+        .build()
+        .unwrap();
         let a = ListArray::from(a_list_data);
 
         // build a record batch
@@ -749,7 +750,8 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.data().clone())
-        .build();
+        .build()
+        .unwrap();
         let a = ListArray::from(a_list_data);
 
         // build a record batch
@@ -870,7 +872,8 @@ mod tests {
             .len(5)
             .add_buffer(g_value_offsets.clone())
             .add_child_data(g_value.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let g = ListArray::from(g_list_data);
         // The difference between g and h is that h has a null bitmap
         let h_list_data = ArrayData::builder(struct_field_h.data_type().clone())
@@ -878,7 +881,8 @@ mod tests {
             .add_buffer(g_value_offsets)
             .add_child_data(g_value.data().clone())
             .null_bit_buffer(Buffer::from(vec![0b00011011]))
-            .build();
+            .build()
+            .unwrap();
         let h = ListArray::from(h_list_data);
 
         let e = StructArray::from(vec![
@@ -998,13 +1002,15 @@ mod tests {
             .len(6)
             .null_bit_buffer(Buffer::from(vec![0b00100111]))
             .add_child_data(c.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
             .null_bit_buffer(Buffer::from(vec![0b00101111]))
             .add_child_data(b.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let a = StructArray::from(a_data);
 
         assert_eq!(a.null_count(), 1);
@@ -1033,12 +1039,14 @@ mod tests {
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
             .add_child_data(c.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
             .add_child_data(b.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let a = StructArray::from(a_data);
 
         assert_eq!(a.null_count(), 0);
@@ -1068,13 +1076,15 @@ mod tests {
             .len(6)
             .null_bit_buffer(Buffer::from(vec![0b00100111]))
             .add_child_data(c.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let b = StructArray::from(b_data);
         // a intentionally has no null buffer, to test that this is handled correctly
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
             .add_child_data(b.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let a = StructArray::from(a_data);
 
         assert_eq!(a.null_count(), 0);
@@ -1525,7 +1535,8 @@ mod tests {
         .add_buffer(a_value_offsets)
         .null_bit_buffer(Buffer::from(vec![0b00011011]))
         .add_child_data(a_values.data().clone())
-        .build();
+        .build()
+        .unwrap();
 
         assert_eq!(a_list_data.null_count(), 1);
 
@@ -1549,7 +1560,8 @@ mod tests {
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.data().clone())
         .null_bit_buffer(Buffer::from(vec![0b00011011]))
-        .build();
+        .build()
+        .unwrap();
 
         // I think this setup is incorrect because this should pass
         assert_eq!(a_list_data.null_count(), 1);

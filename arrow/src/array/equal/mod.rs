@@ -682,7 +682,8 @@ mod tests {
         .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
         .add_child_data(c_values.data().clone())
         .null_bit_buffer(Buffer::from(vec![0b00001001]))
-        .build();
+        .build()
+        .unwrap();
 
         let d_values = Int32Array::from(vec![
             Some(1),
@@ -703,7 +704,8 @@ mod tests {
         .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
         .add_child_data(d_values.data().clone())
         .null_bit_buffer(Buffer::from(vec![0b00001001]))
-        .build();
+        .build()
+        .unwrap();
         test_equal(&c, &d, true);
     }
 
@@ -1054,7 +1056,8 @@ mod tests {
         .len(5)
         .add_child_data(strings.data_ref().clone())
         .add_child_data(ints.data_ref().clone())
-        .build();
+        .build()
+        .unwrap();
         let a = crate::array::make_array(a);
 
         let b = ArrayData::builder(DataType::Struct(vec![
@@ -1065,7 +1068,8 @@ mod tests {
         .len(5)
         .add_child_data(strings.data_ref().clone())
         .add_child_data(ints_non_null.data_ref().clone())
-        .build();
+        .build()
+        .unwrap();
         let b = crate::array::make_array(b);
 
         test_equal(a.data_ref(), b.data_ref(), true);
@@ -1080,7 +1084,8 @@ mod tests {
         .len(5)
         .add_child_data(strings.data_ref().clone())
         .add_child_data(c_ints_non_null.data_ref().clone())
-        .build();
+        .build()
+        .unwrap();
         let c = crate::array::make_array(c);
 
         test_equal(a.data_ref(), c.data_ref(), false);
@@ -1094,7 +1099,8 @@ mod tests {
         .null_bit_buffer(Buffer::from(vec![0b00011110]))
         .len(5)
         .add_child_data(a.data_ref().clone())
-        .build();
+        .build()
+        .unwrap();
         let a = crate::array::make_array(a);
 
         // reconstruct b, but with different data where the first struct is null
@@ -1113,7 +1119,8 @@ mod tests {
         .len(5)
         .add_child_data(strings.data_ref().clone())
         .add_child_data(ints_non_null.data_ref().clone())
-        .build();
+        .build()
+        .unwrap();
 
         let b = ArrayData::builder(DataType::Struct(vec![Field::new(
             "f3",
@@ -1123,7 +1130,8 @@ mod tests {
         .null_bit_buffer(Buffer::from(vec![0b00011110]))
         .len(5)
         .add_child_data(b)
-        .build();
+        .build()
+        .unwrap();
         let b = crate::array::make_array(b);
 
         test_equal(a.data_ref(), b.data_ref(), true);
@@ -1155,7 +1163,8 @@ mod tests {
         .null_bit_buffer(Buffer::from(vec![0b00001010]))
         .len(5)
         .add_child_data(strings1.data_ref().clone())
-        .build();
+        .build()
+        .unwrap();
         let a = crate::array::make_array(a);
 
         let b = ArrayData::builder(DataType::Struct(vec![Field::new(
@@ -1166,7 +1175,8 @@ mod tests {
         .null_bit_buffer(Buffer::from(vec![0b00001010]))
         .len(5)
         .add_child_data(strings2.data_ref().clone())
-        .build();
+        .build()
+        .unwrap();
         let b = crate::array::make_array(b);
 
         test_equal(a.data_ref(), b.data_ref(), true);
@@ -1187,7 +1197,8 @@ mod tests {
         .null_bit_buffer(Buffer::from(vec![0b00001011]))
         .len(5)
         .add_child_data(strings3.data_ref().clone())
-        .build();
+        .build()
+        .unwrap();
         let c = crate::array::make_array(c);
 
         test_equal(a.data_ref(), c.data_ref(), false);

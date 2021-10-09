@@ -133,8 +133,8 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
             builder = builder.null_bit_buffer(bitmap.bits.clone())
         }
 
-        let data = builder.build();
-        Self::from(data)
+        let array_data = unsafe { builder.build_unchecked() };
+        Self::from(array_data)
     }
 
     pub(crate) fn from_vec<Ptr>(v: Vec<Ptr>) -> Self
@@ -156,8 +156,8 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
         let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
             .len(v.len())
             .add_buffer(offsets.into())
-            .add_buffer(values.into())
-            .build();
+            .add_buffer(values.into());
+        let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
     }
 
@@ -190,8 +190,8 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
         let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
             .len(data_len)
             .add_buffer(offsets.into())
-            .add_buffer(values.into())
-            .build();
+            .add_buffer(values.into());
+        let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
     }
 }
@@ -249,8 +249,8 @@ where
             .len(data_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into())
-            .null_bit_buffer(null_buf.into())
-            .build();
+            .null_bit_buffer(null_buf.into());
+        let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
     }
 }
@@ -475,7 +475,8 @@ mod tests {
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
-            .build();
+            .build()
+            .unwrap();
         let string_array = StringArray::from(array_data);
         string_array.value(4);
     }

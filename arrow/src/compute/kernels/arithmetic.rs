@@ -182,15 +182,17 @@ where
     //      `values` is an iterator with a known size.
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![buffer],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -250,15 +252,17 @@ where
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     }?;
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![buffer],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -318,15 +322,17 @@ where
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     }?;
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![buffer],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 

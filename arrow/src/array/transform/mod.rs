@@ -638,7 +638,7 @@ impl<'a> MutableArrayData<'a> {
 
     /// Creates a [ArrayData] from the pushed regions up to this point, consuming `self`.
     pub fn freeze(self) -> ArrayData {
-        self.data.freeze(self.dictionary).build()
+        unsafe { self.data.freeze(self.dictionary).build_unchecked() }
     }
 
     /// Creates a [ArrayDataBuilder] from the pushed regions up to this point, consuming `self`.
@@ -1150,7 +1150,7 @@ mod tests {
         ]);
         let list_value_offsets =
             Buffer::from_slice_ref(&[0i32, 3, 5, 11, 13, 13, 15, 15, 17]);
-        let expected_list_data = ArrayData::new(
+        let expected_list_data = ArrayData::try_new(
             DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
             8,
             None,
@@ -1158,7 +1158,8 @@ mod tests {
             0,
             vec![list_value_offsets],
             vec![expected_int_array.data().clone()],
-        );
+        )
+        .unwrap();
         assert_eq!(finished, expected_list_data);
 
         Ok(())
@@ -1231,7 +1232,7 @@ mod tests {
         ]);
         let list_value_offsets =
             Buffer::from_slice_ref(&[0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
-        let expected_list_data = ArrayData::new(
+        let expected_list_data = ArrayData::try_new(
             DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
             12,
             None,
@@ -1239,7 +1240,8 @@ mod tests {
             0,
             vec![list_value_offsets],
             vec![expected_int_array.data().clone()],
-        );
+        )
+        .unwrap();
         assert_eq!(result, expected_list_data);
 
         Ok(())
@@ -1302,7 +1304,7 @@ mod tests {
             // extend b[0..0]
         ]);
         let list_value_offsets = Buffer::from_slice_ref(&[0, 3, 5, 6, 9, 10, 13]);
-        let expected_list_data = ArrayData::new(
+        let expected_list_data = ArrayData::try_new(
             DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
             6,
             None,
@@ -1310,7 +1312,8 @@ mod tests {
             0,
             vec![list_value_offsets],
             vec![expected_string_array.data().clone()],
-        );
+        )
+        .unwrap();
         assert_eq!(result, expected_list_data);
         Ok(())
     }

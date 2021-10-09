@@ -1028,7 +1028,8 @@ mod tests {
             .add_buffer(a_value_offsets)
             .add_child_data(a_values.data().clone())
             .null_bit_buffer(Buffer::from(vec![0b00011111]))
-            .build();
+            .build()
+            .unwrap();
         let a = ListArray::from(a_list_data);
 
         let b = Int32Array::from(vec![1, 2, 3, 4, 5]);
@@ -1079,14 +1080,16 @@ mod tests {
             .add_buffer(a_value_offsets)
             .null_bit_buffer(Buffer::from(vec![0b00000111]))
             .add_child_data(a_values.data().clone())
-            .build();
+            .build()
+            .unwrap();
 
         let c1_value_offsets = Buffer::from(&[0, 2, 2, 3].to_byte_slice());
         let c1_list_data = ArrayData::builder(field_c1.data_type().clone())
             .len(3)
             .add_buffer(c1_value_offsets)
             .add_child_data(a_list_data)
-            .build();
+            .build()
+            .unwrap();
 
         let c1 = ListArray::from(c1_list_data);
         let c2 = StringArray::from(vec![Some("foo"), Some("bar"), None]);
@@ -1160,7 +1163,8 @@ mod tests {
             .add_buffer(c1_value_offsets)
             .add_child_data(struct_values.data().clone())
             .null_bit_buffer(Buffer::from(vec![0b00000101]))
-            .build();
+            .build()
+            .unwrap();
         let c1 = ListArray::from(c1_list_data);
 
         let c2 = Int32Array::from(vec![1, 2, 3]);

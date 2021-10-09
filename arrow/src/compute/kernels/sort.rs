@@ -488,15 +488,17 @@ fn sort_boolean(
         }
     }
 
-    let result_data = ArrayData::new(
-        DataType::UInt32,
-        len,
-        Some(0),
-        None,
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let result_data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::UInt32,
+            len,
+            Some(0),
+            None,
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
 
     UInt32Array::from(result_data)
 }
@@ -574,15 +576,17 @@ where
         }
     }
 
-    let result_data = ArrayData::new(
-        DataType::UInt32,
-        len,
-        Some(0),
-        None,
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let result_data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::UInt32,
+            len,
+            Some(0),
+            None,
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
 
     UInt32Array::from(result_data)
 }

@@ -53,15 +53,17 @@ macro_rules! compare_op {
         // same size as $left.len() and $right.len()
         let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
 
-        let data = ArrayData::new(
-            DataType::Boolean,
-            $left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![Buffer::from(buffer)],
-            vec![],
-        );
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                $left.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![Buffer::from(buffer)],
+                vec![],
+            )
+        };
         Ok(BooleanArray::from(data))
     }};
 }
@@ -108,15 +110,17 @@ macro_rules! compare_op_primitive {
                     *last |= if $op(lhs, rhs) { 1 << i } else { 0 };
                 });
         };
-        let data = ArrayData::new(
-            DataType::Boolean,
-            $left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![Buffer::from(values)],
-            vec![],
-        );
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                $left.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![Buffer::from(values)],
+                vec![],
+            )
+        };
         Ok(BooleanArray::from(data))
     }};
 }
@@ -135,15 +139,17 @@ macro_rules! compare_op_scalar {
         // same as $left.len()
         let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
 
-        let data = ArrayData::new(
-            DataType::Boolean,
-            $left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![Buffer::from(buffer)],
-            vec![],
-        );
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                $left.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![Buffer::from(buffer)],
+                vec![],
+            )
+        };
         Ok(BooleanArray::from(data))
     }};
 }
@@ -175,15 +181,17 @@ macro_rules! compare_op_scalar_primitive {
             });
         };
 
-        let data = ArrayData::new(
-            DataType::Boolean,
-            $left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![Buffer::from(values)],
-            vec![],
-        );
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                $left.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![Buffer::from(values)],
+                vec![],
+            )
+        };
         Ok(BooleanArray::from(data))
     }};
 }
@@ -270,15 +278,17 @@ pub fn like_utf8<OffsetSize: StringOffsetSizeTrait>(
         result.append(re.is_match(haystack));
     }
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![result.finish()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.finish()],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -340,15 +350,17 @@ pub fn like_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
         }
     };
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![bool_buf.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![bool_buf.into()],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -392,15 +404,17 @@ pub fn nlike_utf8<OffsetSize: StringOffsetSizeTrait>(
         result.append(!re.is_match(haystack));
     }
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![result.finish()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.finish()],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -445,15 +459,17 @@ pub fn nlike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
         }
     }
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![result.finish()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.finish()],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -530,15 +546,17 @@ pub fn regexp_is_match_utf8<OffsetSize: StringOffsetSizeTrait>(
         })
         .collect::<Result<Vec<()>>>()?;
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        array.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![result.finish()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            array.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.finish()],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -575,15 +593,17 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
         }
     }
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        array.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![result.finish()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            array.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.finish()],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -1046,15 +1066,17 @@ where
         }
     }
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        left.len(),
-        None,
-        None,
-        0,
-        vec![bool_buf.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            None,
+            0,
+            vec![bool_buf.into()],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -1104,15 +1126,17 @@ where
         }
     }
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        left.len(),
-        None,
-        None,
-        0,
-        vec![bool_buf.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            None,
+            0,
+            vec![bool_buf.into()],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -1453,7 +1477,8 @@ mod tests {
             .add_buffer(value_offsets)
             .add_child_data(value_data)
             .null_bit_buffer(Buffer::from([0b00001011]))
-            .build();
+            .build()
+            .unwrap();
 
         //  [[0, 1, 2], [3, 4, 5], null, [6, null, 7]]
         let list_array = LargeListArray::from(list_data);

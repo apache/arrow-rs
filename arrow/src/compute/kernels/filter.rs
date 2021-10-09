@@ -224,8 +224,10 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 
     let array_data = ArrayData::builder(DataType::Boolean)
         .len(filter.len())
-        .add_buffer(new_mask)
-        .build();
+        .add_buffer(new_mask);
+
+    let array_data = unsafe { array_data.build_unchecked() };
+
     BooleanArray::from(array_data)
 }
 
@@ -566,7 +568,8 @@ mod tests {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
             .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
-            .build();
+            .build()
+            .unwrap();
 
         let value_offsets = Buffer::from_slice_ref(&[0i64, 3, 6, 8, 8]);
 
@@ -577,7 +580,8 @@ mod tests {
             .add_buffer(value_offsets)
             .add_child_data(value_data)
             .null_bit_buffer(Buffer::from([0b00000111]))
-            .build();
+            .build()
+            .unwrap();
 
         //  a = [[0, 1, 2], [3, 4, 5], [6, 7], null]
         let a = LargeListArray::from(list_data);
@@ -588,7 +592,8 @@ mod tests {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&[3, 4, 5]))
-            .build();
+            .build()
+            .unwrap();
 
         let value_offsets = Buffer::from_slice_ref(&[0i64, 3, 3]);
 
@@ -599,7 +604,8 @@ mod tests {
             .add_buffer(value_offsets)
             .add_child_data(value_data)
             .null_bit_buffer(Buffer::from([0b00000001]))
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(&make_array(expected), &result);
     }

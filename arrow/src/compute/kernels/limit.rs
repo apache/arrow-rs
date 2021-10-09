@@ -92,7 +92,8 @@ mod tests {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(10)
             .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
-            .build();
+            .build()
+            .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1], null, [2, 3], null, [4, 5], null, [6, 7, 8], null, [9]]
@@ -113,7 +114,8 @@ mod tests {
             .add_buffer(value_offsets)
             .add_child_data(value_data)
             .null_bit_buffer(Buffer::from(null_bits))
-            .build();
+            .build()
+            .unwrap();
         let list_array: ArrayRef = Arc::new(ListArray::from(list_data));
 
         let limit_array = limit(&list_array, 6);
@@ -144,12 +146,14 @@ mod tests {
             .len(5)
             .add_buffer(Buffer::from([0b00010000]))
             .null_bit_buffer(Buffer::from([0b00010001]))
-            .build();
+            .build()
+            .unwrap();
         let int_data = ArrayData::builder(DataType::Int32)
             .len(5)
             .add_buffer(Buffer::from_slice_ref(&[0, 28, 42, 0, 0]))
             .null_bit_buffer(Buffer::from([0b00000110]))
-            .build();
+            .build()
+            .unwrap();
 
         let mut field_types = vec![];
         field_types.push(Field::new("a", DataType::Boolean, false));
@@ -159,7 +163,8 @@ mod tests {
             .add_child_data(boolean_data.clone())
             .add_child_data(int_data.clone())
             .null_bit_buffer(Buffer::from([0b00010111]))
-            .build();
+            .build()
+            .unwrap();
         let struct_array = StructArray::from(struct_array_data);
 
         assert_eq!(5, struct_array.len());

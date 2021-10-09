@@ -56,15 +56,17 @@ where
         .null_buffer()
         .map(|b| b.bit_slice(array.offset(), array.len()));
 
-    let data = ArrayData::new(
-        data_type,
-        array.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            data_type,
+            array.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![buffer],
+            vec![],
+        )
+    };
     make_array(data)
 }
 

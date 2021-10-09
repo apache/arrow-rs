@@ -82,9 +82,11 @@ impl UnionArray {
         if let Some(bitmap) = bitmap_data {
             builder = builder.null_bit_buffer(bitmap)
         }
-        let data = match value_offsets {
-            Some(b) => builder.add_buffer(b).build(),
-            None => builder.build(),
+        let data = unsafe {
+            match value_offsets {
+                Some(b) => builder.add_buffer(b).build_unchecked(),
+                None => builder.build_unchecked(),
+            }
         };
         Self::from(data)
     }

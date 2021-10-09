@@ -523,15 +523,17 @@ where
         }
     };
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        indices.len(),
-        None,
-        nulls,
-        0,
-        vec![buffer],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            indices.len(),
+            None,
+            nulls,
+            0,
+            vec![buffer],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -598,15 +600,17 @@ where
         };
     }
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        indices.len(),
-        None,
-        nulls,
-        0,
-        vec![val_buf.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            indices.len(),
+            None,
+            nulls,
+            0,
+            vec![val_buf.into()],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -713,14 +717,17 @@ where
         };
     }
 
-    let mut data = ArrayData::builder(<OffsetSize as StringOffsetSizeTrait>::DATA_TYPE)
-        .len(data_len)
-        .add_buffer(offsets_buffer.into())
-        .add_buffer(values.into());
+    let mut array_data =
+        ArrayData::builder(<OffsetSize as StringOffsetSizeTrait>::DATA_TYPE)
+            .len(data_len)
+            .add_buffer(offsets_buffer.into())
+            .add_buffer(values.into());
     if let Some(null_buffer) = nulls {
-        data = data.null_bit_buffer(null_buffer);
+        array_data = array_data.null_bit_buffer(null_buffer);
     }
-    Ok(GenericStringArray::<OffsetSize>::from(data.build()))
+    let array_data = unsafe { array_data.build_unchecked() };
+
+    Ok(GenericStringArray::<OffsetSize>::from(array_data))
 }
 
 /// `take` implementation for list arrays
@@ -768,8 +775,10 @@ where
         .null_bit_buffer(null_buf.into())
         .offset(0)
         .add_child_data(taken.data().clone())
-        .add_buffer(value_offsets)
-        .build();
+        .add_buffer(value_offsets);
+
+    let list_data = unsafe { list_data.build_unchecked() };
+
     Ok(GenericListArray::<OffsetType::Native>::from(list_data))
 }
 
@@ -808,8 +817,9 @@ where
         .len(indices.len())
         .null_bit_buffer(null_buf.into())
         .offset(0)
-        .add_child_data(taken.data().clone())
-        .build();
+        .add_child_data(taken.data().clone());
+
+    let list_data = unsafe { list_data.build_unchecked() };
 
     Ok(FixedSizeListArray::from(list_data))
 }
@@ -884,15 +894,17 @@ where
     let new_keys = take_primitive::<T, I>(values.keys(), indices)?;
     let new_keys_data = new_keys.data_ref();
 
-    let data = ArrayData::new(
-        values.data_type().clone(),
-        new_keys.len(),
-        Some(new_keys_data.null_count()),
-        new_keys_data.null_buffer().cloned(),
-        0,
-        new_keys_data.buffers().to_vec(),
-        values.data().child_data().to_vec(),
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            values.data_type().clone(),
+            new_keys.len(),
+            Some(new_keys_data.null_count()),
+            new_keys_data.null_buffer().cloned(),
+            0,
+            new_keys_data.buffers().to_vec(),
+            values.data().child_data().to_vec(),
+        )
+    };
 
     Ok(DictionaryArray::<T>::from(data))
 }
@@ -1383,7 +1395,8 @@ mod tests {
                 .len(3)
                 .add_buffer(value_offsets)
                 .add_child_data(value_data)
-                .build();
+                .build()
+                .unwrap();
             let list_array = $list_array_type::from(list_data);
 
             // index returns: [[2,3], null, [-1,-2,-1], [2,3], [0,0,0]]
@@ -1421,7 +1434,8 @@ mod tests {
                 )
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
-                .build();
+                .build()
+                .unwrap();
             let expected_list_array = $list_array_type::from(expected_list_data);
 
             assert_eq!(a, &expected_list_array);
@@ -1458,7 +1472,8 @@ mod tests {
                 .add_buffer(value_offsets)
                 .null_bit_buffer(Buffer::from([0b10111101, 0b00000000]))
                 .add_child_data(value_data)
-                .build();
+                .build()
+                .unwrap();
             let list_array = $list_array_type::from(list_data);
 
             // index returns: [[null], null, [-1,-2,3], [2,null], [0,null,0]]
@@ -1495,7 +1510,8 @@ mod tests {
                 )
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
-                .build();
+                .build()
+                .unwrap();
             let expected_list_array = $list_array_type::from(expected_list_data);
 
             assert_eq!(a, &expected_list_array);
@@ -1531,7 +1547,8 @@ mod tests {
                 .add_buffer(value_offsets)
                 .null_bit_buffer(Buffer::from([0b01111101]))
                 .add_child_data(value_data)
-                .build();
+                .build()
+                .unwrap();
             let list_array = $list_array_type::from(list_data);
 
             // index returns: [null, null, [-1,-2,3], [5,null], [0,null,0]]
@@ -1569,7 +1586,8 @@ mod tests {
                 .null_bit_buffer(Buffer::from(null_bits))
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
-                .build();
+                .build()
+                .unwrap();
             let expected_list_array = $list_array_type::from(expected_list_data);
 
             assert_eq!(a, &expected_list_array);
@@ -1698,7 +1716,8 @@ mod tests {
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
         let list_array = ListArray::from(list_data);
 
         let index = UInt32Array::from(vec![1000]);

@@ -26,18 +26,20 @@ fn into_primitive_array_data<I: ArrowPrimitiveType, O: ArrowPrimitiveType>(
     array: &PrimitiveArray<I>,
     buffer: Buffer,
 ) -> ArrayData {
-    ArrayData::new(
-        O::DATA_TYPE,
-        array.len(),
-        None,
-        array
-            .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice(array.offset(), array.len())),
-        0,
-        vec![buffer],
-        vec![],
-    )
+    unsafe {
+        ArrayData::new_unchecked(
+            O::DATA_TYPE,
+            array.len(),
+            None,
+            array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(array.offset(), array.len())),
+            0,
+            vec![buffer],
+            vec![],
+        )
+    }
 }
 
 /// Applies an unary and infalible function to a primitive array.

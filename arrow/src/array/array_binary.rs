@@ -137,8 +137,8 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
             .len(v.len())
             .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_buffer(Buffer::from_slice_ref(&values))
-            .build();
+            .add_buffer(Buffer::from_slice_ref(&values));
+        let array_data = unsafe { array_data.build_unchecked() };
         GenericBinaryArray::<OffsetSize>::from(array_data)
     }
 
@@ -168,7 +168,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
             builder = builder.null_bit_buffer(bitmap.bits.clone())
         }
 
-        let data = builder.build();
+        let data = unsafe { builder.build_unchecked() };
         Self::from(data)
     }
 }
@@ -263,8 +263,8 @@ where
             .len(data_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
-            .null_bit_buffer(null_buf.into())
-            .build();
+            .null_bit_buffer(null_buf.into());
+        let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
     }
 }
@@ -520,15 +520,17 @@ impl FixedSizeBinaryArray {
         }
 
         let size = size.unwrap_or(0);
-        let array_data = ArrayData::new(
-            DataType::FixedSizeBinary(size as i32),
-            len,
-            None,
-            Some(null_buf.into()),
-            0,
-            vec![buffer.into()],
-            vec![],
-        );
+        let array_data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::FixedSizeBinary(size as i32),
+                len,
+                None,
+                Some(null_buf.into()),
+                0,
+                vec![buffer.into()],
+                vec![],
+            )
+        };
         Ok(FixedSizeBinaryArray::from(array_data))
     }
 
@@ -586,8 +588,8 @@ impl FixedSizeBinaryArray {
         let size = size.unwrap_or(0);
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(size as i32))
             .len(len)
-            .add_buffer(buffer.into())
-            .build();
+            .add_buffer(buffer.into());
+        let array_data = unsafe { array_data.build_unchecked() };
         Ok(FixedSizeBinaryArray::from(array_data))
     }
 
@@ -639,7 +641,7 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
             builder = builder.null_bit_buffer(bitmap.bits.clone())
         }
 
-        let data = builder.build();
+        let data = unsafe { builder.build_unchecked() };
         Self::from(data)
     }
 }
@@ -787,8 +789,8 @@ impl DecimalArray {
             builder = builder.null_bit_buffer(bitmap.bits.clone())
         }
 
-        let data = builder.build();
-        Self::from(data)
+        let array_data = unsafe { builder.build_unchecked() };
+        Self::from(array_data)
     }
     pub fn precision(&self) -> usize {
         self.precision
@@ -865,7 +867,8 @@ mod tests {
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
-            .build();
+            .build()
+            .unwrap();
         let binary_array = BinaryArray::from(array_data);
         assert_eq!(3, binary_array.len());
         assert_eq!(0, binary_array.null_count());
@@ -895,7 +898,8 @@ mod tests {
             .offset(1)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
-            .build();
+            .build()
+            .unwrap();
         let binary_array = BinaryArray::from(array_data);
         assert_eq!(
             [b'p', b'a', b'r', b'q', b'u', b'e', b't'],
@@ -919,7 +923,8 @@ mod tests {
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
-            .build();
+            .build()
+            .unwrap();
         let binary_array = LargeBinaryArray::from(array_data);
         assert_eq!(3, binary_array.len());
         assert_eq!(0, binary_array.null_count());
@@ -949,7 +954,8 @@ mod tests {
             .offset(1)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
-            .build();
+            .build()
+            .unwrap();
         let binary_array = LargeBinaryArray::from(array_data);
         assert_eq!(
             [b'p', b'a', b'r', b'q', b'u', b'e', b't'],
@@ -972,7 +978,8 @@ mod tests {
         let values_data = ArrayData::builder(DataType::UInt8)
             .len(12)
             .add_buffer(Buffer::from(&values[..]))
-            .build();
+            .build()
+            .unwrap();
         let offsets: [i32; 4] = [0, 5, 5, 12];
 
         // Array data: ["hello", "", "parquet"]
@@ -980,7 +987,8 @@ mod tests {
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
-            .build();
+            .build()
+            .unwrap();
         let binary_array1 = BinaryArray::from(array_data1);
 
         let data_type =
@@ -989,7 +997,8 @@ mod tests {
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_child_data(values_data)
-            .build();
+            .build()
+            .unwrap();
         let list_array = ListArray::from(array_data2);
         let binary_array2 = BinaryArray::from(list_array);
 
@@ -1016,7 +1025,8 @@ mod tests {
         let values_data = ArrayData::builder(DataType::UInt8)
             .len(12)
             .add_buffer(Buffer::from(&values[..]))
-            .build();
+            .build()
+            .unwrap();
         let offsets: [i64; 4] = [0, 5, 5, 12];
 
         // Array data: ["hello", "", "parquet"]
@@ -1024,7 +1034,8 @@ mod tests {
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
-            .build();
+            .build()
+            .unwrap();
         let binary_array1 = LargeBinaryArray::from(array_data1);
 
         let data_type =
@@ -1033,7 +1044,8 @@ mod tests {
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_child_data(values_data)
-            .build();
+            .build()
+            .unwrap();
         let list_array = LargeListArray::from(array_data2);
         let binary_array2 = LargeBinaryArray::from(list_array);
 
@@ -1113,7 +1125,8 @@ mod tests {
         let values_data = ArrayData::builder(DataType::UInt32)
             .len(12)
             .add_buffer(Buffer::from_slice_ref(&values))
-            .build();
+            .build()
+            .unwrap();
         let offsets: [i32; 4] = [0, 5, 5, 12];
 
         let data_type =
@@ -1122,7 +1135,8 @@ mod tests {
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_child_data(values_data)
-            .build();
+            .build()
+            .unwrap();
         let list_array = ListArray::from(array_data);
         BinaryArray::from(list_array);
     }
@@ -1134,7 +1148,8 @@ mod tests {
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(3)
             .add_buffer(Buffer::from(&values[..]))
-            .build();
+            .build()
+            .unwrap();
         let fixed_size_binary_array = FixedSizeBinaryArray::from(array_data);
         assert_eq!(3, fixed_size_binary_array.len());
         assert_eq!(0, fixed_size_binary_array.null_count());
@@ -1162,7 +1177,8 @@ mod tests {
             .len(2)
             .offset(1)
             .add_buffer(Buffer::from(&values[..]))
-            .build();
+            .build()
+            .unwrap();
         let fixed_size_binary_array = FixedSizeBinaryArray::from(array_data);
         assert_eq!(
             [b't', b'h', b'e', b'r', b'e'],
@@ -1188,8 +1204,9 @@ mod tests {
         let values_data = ArrayData::builder(DataType::UInt32)
             .len(12)
             .add_buffer(Buffer::from_slice_ref(&values))
-            .add_child_data(ArrayData::builder(DataType::Boolean).build())
-            .build();
+            .add_child_data(ArrayData::builder(DataType::Boolean).build().unwrap())
+            .build()
+            .unwrap();
 
         let array_data = ArrayData::builder(DataType::FixedSizeList(
             Box::new(Field::new("item", DataType::Binary, false)),
@@ -1197,7 +1214,8 @@ mod tests {
         ))
         .len(3)
         .add_child_data(values_data)
-        .build();
+        .build()
+        .unwrap();
         let list_array = FixedSizeListArray::from(array_data);
         FixedSizeBinaryArray::from(list_array);
     }
@@ -1212,7 +1230,8 @@ mod tests {
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
-            .build();
+            .build()
+            .unwrap();
         let binary_array = BinaryArray::from(array_data);
         binary_array.value(4);
     }
@@ -1224,7 +1243,8 @@ mod tests {
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(3)
             .add_buffer(Buffer::from(&values[..]))
-            .build();
+            .build()
+            .unwrap();
         let arr = FixedSizeBinaryArray::from(array_data);
         assert_eq!(
             "FixedSizeBinaryArray<5>\n[\n  [104, 101, 108, 108, 111],\n  [116, 104, 101, 114, 101],\n  [97, 114, 114, 111, 119],\n]",
@@ -1243,7 +1263,8 @@ mod tests {
         let array_data = ArrayData::builder(DataType::Decimal(23, 6))
             .len(2)
             .add_buffer(Buffer::from(&values[..]))
-            .build();
+            .build()
+            .unwrap();
         let decimal_array = DecimalArray::from(array_data);
         assert_eq!(8_887_000_000, decimal_array.value(0));
         assert_eq!(-8_887_000_000, decimal_array.value(1));
