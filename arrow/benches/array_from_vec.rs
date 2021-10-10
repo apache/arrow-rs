@@ -22,21 +22,11 @@ use criterion::Criterion;
 extern crate arrow;
 
 use arrow::array::*;
-use arrow::buffer::Buffer;
-use arrow::datatypes::*;
 use std::{convert::TryFrom, sync::Arc};
 
 fn array_from_vec(n: usize) {
-    let mut v: Vec<u8> = Vec::with_capacity(n);
-    for i in 0..n {
-        v.push((i & 0xffff) as u8);
-    }
-    let arr_data = unsafe {
-        ArrayDataBuilder::new(DataType::Int32)
-            .add_buffer(Buffer::from(v))
-            .build_unchecked()
-    };
-    criterion::black_box(Int32Array::from(arr_data));
+    let v: Vec<i32> = (0..n as i32).collect();
+    criterion::black_box(Int32Array::from(v));
 }
 
 fn array_string_from_vec(n: usize) {
