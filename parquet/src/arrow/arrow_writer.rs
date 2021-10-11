@@ -469,8 +469,8 @@ macro_rules! def_get_binary_array_fn {
             array
                 .value_offsets()
                 .windows(2)
-                .zip(0..array.len())
-                .filter_map(|(offsets, i)| {
+                .enumerate()
+                .filter_map(|(i, offsets)| {
                     if array.is_valid(i) {
                         let start = offsets[0] as usize;
                         let len = offsets[1] as usize - start;
