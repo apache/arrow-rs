@@ -1057,8 +1057,7 @@ impl Decoder {
                     .flat_map(|row| match row {
                         Value::Array(values) if !values.is_empty() => {
                             values.iter().for_each(|value| {
-                                if let Value::Null = value {
-                                } else {
+                                if !value.is_null() {
                                     bit_util::set_bit(
                                         null_buffer.as_slice_mut(),
                                         struct_index,
