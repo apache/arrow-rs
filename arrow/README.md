@@ -42,6 +42,7 @@ The arrow crate provides the following features which may be enabled:
 - `simd` - (_Requires Nightly Rust_) alternate optimized
   implementations of some [compute](https://github.com/apache/arrow/tree/master/rust/arrow/src/compute)
   kernels using explicit SIMD processor intrinsics.
+- `chrono-tz` - support of parsing timezone using [chrono-tz](https://docs.rs/chrono-tz/0.6.0/chrono_tz/)
 
 ## Safety
 

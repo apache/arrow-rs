@@ -25,6 +25,7 @@ use crate::error::{ArrowError, Result};
 
 use chrono::format::strftime::StrftimeItems;
 use chrono::format::{parse, Parsed};
+use chrono::FixedOffset;
 
 macro_rules! extract_component_from_array {
     ($array:ident, $builder:ident, $extract_fn:ident, $using:ident) => {
@@ -46,25 +47,25 @@ macro_rules! extract_component_from_array {
                 "Expected format [+-]XX:XX".to_string()
             )
         } else {
-            match parse(&mut $parsed, $tz, StrftimeItems::new("%z")) {
+            let fixed_offset = match parse(&mut $parsed, $tz, StrftimeItems::new("%z")) {
                 Ok(_) => match $parsed.to_fixed_offset() {
-                    Ok(fixed_offset) => {
-                        for i in 0..$array.len() {
-                            if $array.is_null(i) {
-                                $builder.append_null()?;
-                            } else {
-                                match $array.$using(i, fixed_offset) {
-                                    Some(dt) => {
-                                        $builder.append_value(dt.$extract_fn() as i32)?
-                                    }
-                                    None => $builder.append_null()?,
-                                }
-                            }
-                        }
-                    }
+                    Ok(fo) => fo,
                     err => return_compute_error_with!("Invalid timezone", err),
                 },
-                err => return_compute_error_with!("Unable to parse timezone", err),
+                _ => match using_chrono_tz($tz) {
+                    Some(fo) => fo,
+                    err => return_compute_error_with!("Unable to parse timezone", err),
+                },
+            };
+            for i in 0..$array.len() {
+                if $array.is_null(i) {
+                    $builder.append_null()?;
+                } else {
+                    match $array.$using(i, fixed_offset) {
+                        Some(dt) => $builder.append_value(dt.$extract_fn() as i32)?,
+                        None => $builder.append_null()?,
+                    }
+                }
             }
         }
     };
@@ -74,6 +75,24 @@ macro_rules! return_compute_error_with {
     ($msg:expr, $param:expr) => {
         return { Err(ArrowError::ComputeError(format!("{}: {:?}", $msg, $param))) }
     };
+}
+
+/// Parse the given string into a string representing fixed-offset
+#[cfg(not(feature = "chrono-tz"))]
+pub fn using_chrono_tz(_: &str) -> Option<FixedOffset> {
+    None
+}
+
+/// Parse the given string into a string representing fixed-offset
+#[cfg(feature = "chrono-tz")]
+pub fn using_chrono_tz(tz: &str) -> Option<FixedOffset> {
+    use chrono::{Offset, TimeZone};
+    tz.parse::<chrono_tz::Tz>()
+        .map(|tz| {
+            tz.offset_from_utc_datetime(&chrono::NaiveDateTime::from_timestamp(0, 0))
+                .fix()
+        })
+        .ok()
 }
 
 /// Extracts the hours of a given temporal array as an array of integers
@@ -388,6 +407,31 @@ mod tests {
         let a = Arc::new(TimestampSecondArray::from_vec(
             vec![60 * 60 * 10],
             Some("01:00".to_string()),
+        ));
+        assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
+    }
+
+    #[cfg(feature = "chrono-tz")]
+    #[test]
+    fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
+        use std::sync::Arc;
+
+        let a = Arc::new(TimestampSecondArray::from_vec(
+            vec![60 * 60 * 10],
+            Some("Asia/Kolkata".to_string()),
+        ));
+        let b = hour(&a).unwrap();
+        assert_eq!(15, b.value(0));
+    }
+
+    #[cfg(not(feature = "chrono-tz"))]
+    #[test]
+    fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
+        use std::sync::Arc;
+
+        let a = Arc::new(TimestampSecondArray::from_vec(
+            vec![60 * 60 * 10],
+            Some("Asia/Kolkatta".to_string()),
         ));
         assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
     }
