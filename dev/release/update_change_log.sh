@@ -36,7 +36,7 @@ pushd ${SOURCE_TOP_DIR}
 docker run -it --rm -e CHANGELOG_GITHUB_TOKEN=$CHANGELOG_GITHUB_TOKEN -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user apache \
     --project arrow-rs \
-    --since-tag 4.0.0 \
-    --future-release 5.0.0
+    --since-tag 5.0.0 \
+    --future-release 6.0.0
 
 sed -i "s/\\\n/\n\n/" CHANGELOG.md

@@ -21,6 +21,153 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 
 # Changelog
 
+## [6.0.0](https://github.com/apache/arrow-rs/tree/6.0.0) (2021-10-13)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/5.5.0...6.0.0)
+
+**Breaking changes:**
+
+- Replace `ArrayData::new()` with `ArrayData::try_new()` and `unsafe ArrayData::new_unchecked` [\#822](https://github.com/apache/arrow-rs/pull/822) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Update Bitmap::len to return bits rather than bytes [\#749](https://github.com/apache/arrow-rs/pull/749) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([matthewmturner](https://github.com/matthewmturner))
+- use sort\_unstable\_by in primitive sorting [\#552](https://github.com/apache/arrow-rs/pull/552) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Jimexist](https://github.com/Jimexist))
+- New MapArray support [\#491](https://github.com/apache/arrow-rs/pull/491) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([nevi-me](https://github.com/nevi-me))
+
+**Implemented enhancements:**
+
+- Improve parquet binary writer speed by reducing allocations [\#819](https://github.com/apache/arrow-rs/issues/819)
+- Expose buffer operations [\#808](https://github.com/apache/arrow-rs/issues/808)
+- Add doc examples of writing parquet files using `ArrowWriter` [\#788](https://github.com/apache/arrow-rs/issues/788)
+
+**Fixed bugs:**
+
+- JSON reader can create null struct children on empty lists [\#825](https://github.com/apache/arrow-rs/issues/825)
+- Incorrect null count for cast kernel for list arrays [\#815](https://github.com/apache/arrow-rs/issues/815)
+- `minute` and `second` temporal kernels do not respect timezone [\#500](https://github.com/apache/arrow-rs/issues/500)
+- Fix data corruption in json decoder f64-to-i64 cast [\#652](https://github.com/apache/arrow-rs/pull/652) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([xianwill](https://github.com/xianwill))
+
+**Documentation updates:**
+
+- Doctest for PrimitiveArray using from\_iter\_values. [\#694](https://github.com/apache/arrow-rs/pull/694) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([novemberkilo](https://github.com/novemberkilo))
+- Doctests for BinaryArray and LargeBinaryArray. [\#625](https://github.com/apache/arrow-rs/pull/625) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([novemberkilo](https://github.com/novemberkilo))
+- Add links in docstrings [\#605](https://github.com/apache/arrow-rs/pull/605) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+
+
+## [5.5.0](https://github.com/apache/arrow-rs/tree/5.5.0) (2021-09-24)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/5.4.0...5.5.0)
+
+**Implemented enhancements:**
+
+- parquet should depend on a small set of arrow features [\#800](https://github.com/apache/arrow-rs/issues/800)
+- Support equality on RecordBatch [\#735](https://github.com/apache/arrow-rs/issues/735)
+
+**Fixed bugs:**
+
+- Converting from string to timestamp uses microseconds instead of milliseconds [\#780](https://github.com/apache/arrow-rs/issues/780)
+- Document has no link to `RowColumIter` [\#762](https://github.com/apache/arrow-rs/issues/762)
+- length on slices with null doesn't work [\#744](https://github.com/apache/arrow-rs/issues/744)
+
+## [5.4.0](https://github.com/apache/arrow-rs/tree/5.4.0) (2021-09-10)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/5.3.0...5.4.0)
+
+**Implemented enhancements:**
+
+- Upgrade lexical-core to 0.8 [\#747](https://github.com/apache/arrow-rs/issues/747)
+- `append_nulls` and `append_trusted_len_iter` for PrimitiveBuilder [\#725](https://github.com/apache/arrow-rs/issues/725)
+- Optimize MutableArrayData::extend for null buffers [\#397](https://github.com/apache/arrow-rs/issues/397)
+
+**Fixed bugs:**
+
+- Arithmetic with scalars doesn't work on slices [\#742](https://github.com/apache/arrow-rs/issues/742)
+- Comparisons with scalar don't work on slices [\#740](https://github.com/apache/arrow-rs/issues/740)
+- `unary` kernel doesn't respect offset [\#738](https://github.com/apache/arrow-rs/issues/738)
+- `new_null_array` creates invalid struct arrays [\#734](https://github.com/apache/arrow-rs/issues/734)
+- --no-default-features is broken for parquet [\#733](https://github.com/apache/arrow-rs/issues/733) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- `Bitmap::len` returns the number of bytes, not bits. [\#730](https://github.com/apache/arrow-rs/issues/730)
+- Decimal logical type is formatted incorrectly by print\_schema [\#713](https://github.com/apache/arrow-rs/issues/713)
+- parquet\_derive does not support chrono time values [\#711](https://github.com/apache/arrow-rs/issues/711)
+- Numeric overflow when formatting Decimal type [\#710](https://github.com/apache/arrow-rs/issues/710)
+- The integration tests are not running [\#690](https://github.com/apache/arrow-rs/issues/690)
+
+**Closed issues:**
+
+- Question: Is there no way to create a DictionaryArray with a pre-arranged mapping? [\#729](https://github.com/apache/arrow-rs/issues/729)
+
+## [5.3.0](https://github.com/apache/arrow-rs/tree/5.3.0) (2021-08-26)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/5.2.0...5.3.0)
+
+**Implemented enhancements:**
+
+- Add optimized filter kernel for regular expression matching [\#697](https://github.com/apache/arrow-rs/issues/697)
+- Can't cast from timestamp array to string array [\#587](https://github.com/apache/arrow-rs/issues/587)
+
+**Fixed bugs:**
+
+- 'Encoding DELTA\_BYTE\_ARRAY is not supported' with parquet arrow readers [\#708](https://github.com/apache/arrow-rs/issues/708)
+- Support reading json string into binary data type. [\#701](https://github.com/apache/arrow-rs/issues/701)
+
+**Closed issues:**
+
+- Resolve Issues with `prettytable-rs` dependency [\#69](https://github.com/apache/arrow-rs/issues/69) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+
+## [5.2.0](https://github.com/apache/arrow-rs/tree/5.2.0) (2021-08-12)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/5.1.0...5.2.0)
+
+**Implemented enhancements:**
+
+- Make rand an optional dependency [\#671](https://github.com/apache/arrow-rs/issues/671)
+- Remove undefined behavior in `value` method of boolean and primitive arrays [\#645](https://github.com/apache/arrow-rs/issues/645)
+- Avoid materialization of indices in filter\_record\_batch for single arrays [\#636](https://github.com/apache/arrow-rs/issues/636)
+- Add a note about arrow crate security / safety [\#627](https://github.com/apache/arrow-rs/issues/627)
+- Allow the creation of String arrays from an interator of &Option\<&str\> [\#598](https://github.com/apache/arrow-rs/issues/598)
+- Support arrow map datatype [\#395](https://github.com/apache/arrow-rs/issues/395)
+
+**Fixed bugs:**
+
+- Parquet fixed length byte array columns write byte array statistics [\#660](https://github.com/apache/arrow-rs/issues/660) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Parquet boolean columns write Int32 statistics [\#659](https://github.com/apache/arrow-rs/issues/659) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Writing Parquet with a boolean column fails [\#657](https://github.com/apache/arrow-rs/issues/657)
+- JSON decoder data corruption for large i64/u64 [\#653](https://github.com/apache/arrow-rs/issues/653)
+- Incorrect min/max statistics for strings in parquet files [\#641](https://github.com/apache/arrow-rs/issues/641) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+
+**Closed issues:**
+
+- Release candidate verifying script seems work on macOS [\#640](https://github.com/apache/arrow-rs/issues/640)
+- Update CONTRIBUTING  [\#342](https://github.com/apache/arrow-rs/issues/342)
+
+## [5.1.0](https://github.com/apache/arrow-rs/tree/5.1.0) (2021-07-29)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/5.0.0...5.1.0)
+
+**Implemented enhancements:**
+
+- Make FFI\_ArrowArray empty\(\) public [\#602](https://github.com/apache/arrow-rs/issues/602)
+- exponential sort can be used to speed up lexico partition kernel [\#586](https://github.com/apache/arrow-rs/issues/586)
+- Implement sort\(\) for binary array [\#568](https://github.com/apache/arrow-rs/issues/568)
+- primitive sorting can be improved and more consistent with and without `limit` if sorted unstably [\#553](https://github.com/apache/arrow-rs/issues/553)
+
+**Fixed bugs:**
+
+- Confusing memory usage with CSV reader [\#623](https://github.com/apache/arrow-rs/issues/623)
+- FFI implementation deviates from specification for array release  [\#595](https://github.com/apache/arrow-rs/issues/595)
+- Parquet file content is different if `~/.cargo` is in a git checkout [\#589](https://github.com/apache/arrow-rs/issues/589)
+- Ensure output of MIRI is checked for success [\#581](https://github.com/apache/arrow-rs/issues/581)
+- MIRI failure in `array::ffi::tests::test_struct` and other ffi tests [\#580](https://github.com/apache/arrow-rs/issues/580)
+- ListArray equality check may return wrong result [\#570](https://github.com/apache/arrow-rs/issues/570)
+- cargo audit failed [\#561](https://github.com/apache/arrow-rs/issues/561)
+- ArrayData::slice\(\) does not work for nested types such as StructArray [\#554](https://github.com/apache/arrow-rs/issues/554)
+
+**Documentation updates:**
+
+- More examples of how to construct Arrays [\#301](https://github.com/apache/arrow-rs/issues/301)
+
+**Closed issues:**
+
+- Implement StringBuilder::append\_option [\#263](https://github.com/apache/arrow-rs/issues/263) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+
 ## [5.0.0](https://github.com/apache/arrow-rs/tree/5.0.0) (2021-07-14)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/4.4.0...5.0.0)
