@@ -1048,31 +1048,27 @@ impl Decoder {
             }
             DataType::Struct(fields) => {
                 // extract list values, with non-lists converted to Value::Null
-                let array_item_count = rows
-                    .iter()
-                    .map(|row| match row {
-                        Value::Array(values) => values.len(),
-                        _ => 1,
-                    })
-                    .sum();
+                let array_item_count = cur_offset.to_usize().unwrap();
                 let num_bytes = bit_util::ceil(array_item_count, 8);
                 let mut null_buffer = MutableBuffer::from_len_zeroed(num_bytes);
                 let mut struct_index = 0;
                 let rows: Vec<Value> = rows
                     .iter()
-                    .flat_map(|row| {
-                        if let Value::Array(values) = row {
-                            values.iter().for_each(|_| {
-                                bit_util::set_bit(
-                                    null_buffer.as_slice_mut(),
-                                    struct_index,
-                                );
+                    .flat_map(|row| match row {
+                        Value::Array(values) if !values.is_empty() => {
+                            values.iter().for_each(|value| {
+                                if !value.is_null() {
+                                    bit_util::set_bit(
+                                        null_buffer.as_slice_mut(),
+                                        struct_index,
+                                    );
+                                }
                                 struct_index += 1;
                             });
                             values.clone()
-                        } else {
-                            struct_index += 1;
-                            vec![Value::Null]
+                        }
+                        _ => {
+                            vec![]
                         }
                     })
                     .collect();
@@ -2209,6 +2205,7 @@ mod tests {
         {"a": [{"b": true, "c": {"d": "c_text"}}, {"b": null, "c": {"d": "d_text"}}, {"b": true, "c": {"d": null}}]}
         {"a": null}
         {"a": []}
+        {"a": [null]}
         "#;
         let mut reader = builder.build(Cursor::new(json_content)).unwrap();
 
@@ -2243,23 +2240,23 @@ mod tests {
             .null_bit_buffer(Buffer::from(vec![0b00111111]))
             .build();
         let a_list = ArrayDataBuilder::new(a_field.data_type().clone())
-            .len(5)
-            .add_buffer(Buffer::from_slice_ref(&[0i32, 2, 3, 6, 6, 6]))
+            .len(6)
+            .add_buffer(Buffer::from_slice_ref(&[0i32, 2, 3, 6, 6, 6, 7]))
             .add_child_data(a)
-            .null_bit_buffer(Buffer::from(vec![0b00010111]))
+            .null_bit_buffer(Buffer::from(vec![0b00110111]))
             .build();
         let expected = make_array(a_list);
 
         // compare `a` with result from json reader
         let batch = reader.next().unwrap().unwrap();
         let read = batch.column(0);
-        assert_eq!(read.len(), 5);
+        assert_eq!(read.len(), 6);
         // compare the arrays the long way around, to better detect differences
         let read: &ListArray = read.as_any().downcast_ref::<ListArray>().unwrap();
         let expected = expected.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(
             read.data().buffers()[0],
-            Buffer::from_slice_ref(&[0i32, 2, 3, 6, 6, 6])
+            Buffer::from_slice_ref(&[0i32, 2, 3, 6, 6, 6, 7])
         );
         // compare list null buffers
         assert_eq!(read.data().null_buffer(), expected.data().null_buffer());
