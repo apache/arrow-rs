@@ -998,11 +998,13 @@ impl Decoder {
                         });
                     }
                 });
-                ArrayData::builder(list_field.data_type().clone())
-                    .len(valid_len)
-                    .add_buffer(bool_values.into())
-                    .null_bit_buffer(bool_nulls.into())
-                    .build()
+                unsafe {
+                    ArrayData::builder(list_field.data_type().clone())
+                        .len(valid_len)
+                        .add_buffer(bool_values.into())
+                        .null_bit_buffer(bool_nulls.into())
+                        .build_unchecked()
+                }
             }
             DataType::Int8 => self.read_primitive_list_values::<Int8Type>(rows),
             DataType::Int16 => self.read_primitive_list_values::<Int16Type>(rows),
@@ -1076,11 +1078,15 @@ impl Decoder {
                     self.build_struct_array(rows.as_slice(), fields.as_slice(), &[])?;
                 let data_type = DataType::Struct(fields.clone());
                 let buf = null_buffer.into();
-                ArrayDataBuilder::new(data_type)
-                    .len(rows.len())
-                    .null_bit_buffer(buf)
-                    .child_data(arrays.into_iter().map(|a| a.data().clone()).collect())
-                    .build()
+                unsafe {
+                    ArrayDataBuilder::new(data_type)
+                        .len(rows.len())
+                        .null_bit_buffer(buf)
+                        .child_data(
+                            arrays.into_iter().map(|a| a.data().clone()).collect(),
+                        )
+                        .build_unchecked()
+                }
             }
             datatype => {
                 return Err(ArrowError::JsonError(format!(
@@ -1094,8 +1100,8 @@ impl Decoder {
             .len(list_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_child_data(array_data)
-            .null_bit_buffer(list_nulls.into())
-            .build();
+            .null_bit_buffer(list_nulls.into());
+        let list_data = unsafe { list_data.build_unchecked() };
         Ok(Arc::new(GenericListArray::<OffsetSize>::from(list_data)))
     }
 
@@ -1291,8 +1297,8 @@ impl Decoder {
                             .null_bit_buffer(null_buffer.into())
                             .child_data(
                                 arrays.into_iter().map(|a| a.data().clone()).collect(),
-                            )
-                            .build();
+                            );
+                        let data = unsafe { data.build_unchecked() };
                         Ok(make_array(data))
                     }
                     DataType::Map(map_field, _) => self.build_map_array(
@@ -1384,26 +1390,28 @@ impl Decoder {
             &[],
         )?;
 
-        Ok(make_array(ArrayData::new(
-            map_type.clone(),
-            rows_len,
-            None,
-            Some(list_bitmap.into()),
-            0,
-            vec![Buffer::from_slice_ref(&list_offsets)],
-            vec![ArrayData::new(
-                struct_field.data_type().clone(),
-                struct_children[0].len(),
+        unsafe {
+            Ok(make_array(ArrayData::new_unchecked(
+                map_type.clone(),
+                rows_len,
                 None,
-                None,
+                Some(list_bitmap.into()),
                 0,
-                vec![],
-                struct_children
-                    .into_iter()
-                    .map(|array| array.data().clone())
-                    .collect(),
-            )],
-        )))
+                vec![Buffer::from_slice_ref(&list_offsets)],
+                vec![ArrayData::new_unchecked(
+                    struct_field.data_type().clone(),
+                    struct_children[0].len(),
+                    None,
+                    None,
+                    0,
+                    vec![],
+                    struct_children
+                        .into_iter()
+                        .map(|array| array.data().clone())
+                        .collect(),
+                )],
+            )))
+        }
     }
 
     #[inline(always)]
@@ -2159,14 +2167,16 @@ mod tests {
             .len(4)
             .add_child_data(d.data().clone())
             .null_bit_buffer(Buffer::from(vec![0b00000101]))
-            .build();
+            .build()
+            .unwrap();
         let b = BooleanArray::from(vec![Some(true), Some(false), Some(true), None]);
         let a = ArrayDataBuilder::new(a_field.data_type().clone())
             .len(4)
             .add_child_data(b.data().clone())
             .add_child_data(c)
             .null_bit_buffer(Buffer::from(vec![0b00000111]))
-            .build();
+            .build()
+            .unwrap();
         let expected = make_array(a);
 
         // compare `a` with result from json reader
@@ -2223,7 +2233,8 @@ mod tests {
             .len(7)
             .add_child_data(d.data().clone())
             .null_bit_buffer(Buffer::from(vec![0b00111011]))
-            .build();
+            .build()
+            .unwrap();
         let b = BooleanArray::from(vec![
             Some(true),
             Some(false),
@@ -2238,13 +2249,15 @@ mod tests {
             .add_child_data(b.data().clone())
             .add_child_data(c.clone())
             .null_bit_buffer(Buffer::from(vec![0b00111111]))
-            .build();
+            .build()
+            .unwrap();
         let a_list = ArrayDataBuilder::new(a_field.data_type().clone())
             .len(6)
             .add_buffer(Buffer::from_slice_ref(&[0i32, 2, 3, 6, 6, 6, 7]))
             .add_child_data(a)
             .null_bit_buffer(Buffer::from(vec![0b00110111]))
-            .build();
+            .build()
+            .unwrap();
         let expected = make_array(a_list);
 
         // compare `a` with result from json reader
@@ -2342,18 +2355,21 @@ mod tests {
             ))
             .add_child_data(expected_value_array_data)
             .null_bit_buffer(Buffer::from(vec![0b01010111]))
-            .build();
+            .build()
+            .unwrap();
         let expected_stocks_entries_data = ArrayDataBuilder::new(entries_struct_type)
             .len(7)
             .add_child_data(expected_keys)
             .add_child_data(expected_values)
-            .build();
+            .build()
+            .unwrap();
         let expected_stocks_data =
             ArrayDataBuilder::new(stocks_field.data_type().clone())
                 .len(3)
                 .add_buffer(Buffer::from(vec![0i32, 2, 4, 7].to_byte_slice()))
                 .add_child_data(expected_stocks_entries_data)
-                .build();
+                .build()
+                .unwrap();
 
         let expected_stocks = make_array(expected_stocks_data);
 

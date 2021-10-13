@@ -52,7 +52,8 @@ impl NullArray {
     /// other [`DataType`].
     ///
     pub fn new(length: usize) -> Self {
-        let array_data = ArrayData::builder(DataType::Null).len(length).build();
+        let array_data = ArrayData::builder(DataType::Null).len(length);
+        let array_data = unsafe { array_data.build_unchecked() };
         NullArray::from(array_data)
     }
 }

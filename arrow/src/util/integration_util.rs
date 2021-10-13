@@ -944,7 +944,8 @@ mod tests {
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let lists = ListArray::from(list_data);
 
         let structs_int32s = Int32Array::from(vec![None, Some(-2), None]);

@@ -324,25 +324,20 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
             array_data = array_data.null_bit_buffer(b);
         }
 
+        let array_data = unsafe { array_data.build_unchecked() };
         let array = match T::get_physical_type() {
-            PhysicalType::BOOLEAN => {
-                Arc::new(BooleanArray::from(array_data.build())) as ArrayRef
-            }
+            PhysicalType::BOOLEAN => Arc::new(BooleanArray::from(array_data)) as ArrayRef,
             PhysicalType::INT32 => {
-                Arc::new(PrimitiveArray::<ArrowInt32Type>::from(array_data.build()))
-                    as ArrayRef
+                Arc::new(PrimitiveArray::<ArrowInt32Type>::from(array_data)) as ArrayRef
             }
             PhysicalType::INT64 => {
-                Arc::new(PrimitiveArray::<ArrowInt64Type>::from(array_data.build()))
-                    as ArrayRef
+                Arc::new(PrimitiveArray::<ArrowInt64Type>::from(array_data)) as ArrayRef
             }
             PhysicalType::FLOAT => {
-                Arc::new(PrimitiveArray::<ArrowFloat32Type>::from(array_data.build()))
-                    as ArrayRef
+                Arc::new(PrimitiveArray::<ArrowFloat32Type>::from(array_data)) as ArrayRef
             }
             PhysicalType::DOUBLE => {
-                Arc::new(PrimitiveArray::<ArrowFloat64Type>::from(array_data.build()))
-                    as ArrayRef
+                Arc::new(PrimitiveArray::<ArrowFloat64Type>::from(array_data)) as ArrayRef
             }
             PhysicalType::INT96
             | PhysicalType::BYTE_ARRAY
@@ -904,8 +899,9 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             .add_buffer(value_offsets)
             .add_child_data(batch_values.data().clone())
             .null_bit_buffer(null_buf.into())
-            .offset(next_batch_array.offset())
-            .build();
+            .offset(next_batch_array.offset());
+
+        let list_data = unsafe { list_data.build_unchecked() };
 
         let result_array = GenericListArray::<OffsetSize>::from(list_data);
         Ok(Arc::new(result_array))
@@ -1000,8 +996,8 @@ impl ArrayReader for MapArrayReader {
         let entry_data = ArrayDataBuilder::new(entry_data_type)
             .len(key_length)
             .add_child_data(key_array.data().clone())
-            .add_child_data(value_array.data().clone())
-            .build();
+            .add_child_data(value_array.data().clone());
+        let entry_data = unsafe { entry_data.build_unchecked() };
 
         let entry_len = rep_levels.iter().filter(|level| **level == 0).count();
 
@@ -1044,8 +1040,9 @@ impl ArrayReader for MapArrayReader {
             .len(entry_len)
             .add_buffer(value_offsets)
             .null_bit_buffer(null_buf.into())
-            .add_child_data(entry_data)
-            .build();
+            .add_child_data(entry_data);
+
+        let array_data = unsafe { array_data.build_unchecked() };
 
         Ok(Arc::new(MapArray::from(array_data)))
     }
@@ -1192,8 +1189,8 @@ impl ArrayReader for StructArrayReader {
                     .iter()
                     .map(|x| x.data().clone())
                     .collect::<Vec<ArrayData>>(),
-            )
-            .build();
+            );
+        let array_data = unsafe { array_data.build_unchecked() };
 
         // calculate struct rep level data, since struct doesn't add to repetition
         // levels, here we just need to keep repetition levels of first array

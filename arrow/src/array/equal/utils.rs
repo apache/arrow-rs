@@ -214,7 +214,8 @@ mod tests {
             .add_buffer(Buffer::from(
                 vec![1i32, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].to_byte_slice(),
             ))
-            .build();
+            .build()
+            .unwrap();
 
         let data = ArrayData::builder(DataType::List(Box::new(Field::new(
             "item",
@@ -225,7 +226,8 @@ mod tests {
         .add_buffer(Buffer::from(vec![0, 0, 3, 5, 6, 9, 10, 11].to_byte_slice()))
         .null_bit_buffer(Buffer::from(vec![0b01011010]))
         .add_child_data(child_data.clone())
-        .build();
+        .build()
+        .unwrap();
 
         // Get the child logical null buffer. The child is non-nullable, but because the list has nulls,
         // we expect the child to logically have some nulls, inherited from the parent:
@@ -250,7 +252,8 @@ mod tests {
         // the null_bit_buffer doesn't have an offset, i.e. cleared the 3 offset bits 0b[---]01011[010]
         .null_bit_buffer(Buffer::from(vec![0b00001011]))
         .add_child_data(child_data)
-        .build();
+        .build()
+        .unwrap();
 
         let nulls = child_logical_null_buffer(
             &data,

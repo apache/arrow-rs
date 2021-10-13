@@ -124,15 +124,17 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Creates a PrimitiveArray based on an iterator of values without nulls
     pub fn from_iter_values<I: IntoIterator<Item = T::Native>>(iter: I) -> Self {
         let val_buf: Buffer = iter.into_iter().collect();
-        let data = ArrayData::new(
-            T::DATA_TYPE,
-            val_buf.len() / mem::size_of::<<T as ArrowPrimitiveType>::Native>(),
-            None,
-            None,
-            0,
-            vec![val_buf],
-            vec![],
-        );
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                T::DATA_TYPE,
+                val_buf.len() / mem::size_of::<<T as ArrowPrimitiveType>::Native>(),
+                None,
+                None,
+                0,
+                vec![val_buf],
+                vec![],
+            )
+        };
         PrimitiveArray::from(data)
     }
 
@@ -140,15 +142,17 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     pub fn from_value(value: T::Native, count: usize) -> Self {
         // # Safety: length is known
         let val_buf = unsafe { Buffer::from_trusted_len_iter((0..count).map(|_| value)) };
-        let data = ArrayData::new(
-            T::DATA_TYPE,
-            val_buf.len() / mem::size_of::<<T as ArrowPrimitiveType>::Native>(),
-            None,
-            None,
-            0,
-            vec![val_buf],
-            vec![],
-        );
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                T::DATA_TYPE,
+                val_buf.len() / mem::size_of::<<T as ArrowPrimitiveType>::Native>(),
+                None,
+                None,
+                0,
+                vec![val_buf],
+                vec![],
+            )
+        };
         PrimitiveArray::from(data)
     }
 }
@@ -350,15 +354,17 @@ impl<T: ArrowPrimitiveType, Ptr: Borrow<Option<<T as ArrowPrimitiveType>::Native
             })
             .collect();
 
-        let data = ArrayData::new(
-            T::DATA_TYPE,
-            null_buf.len(),
-            None,
-            Some(null_buf.into()),
-            0,
-            vec![buffer],
-            vec![],
-        );
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                T::DATA_TYPE,
+                null_buf.len(),
+                None,
+                Some(null_buf.into()),
+                0,
+                vec![buffer],
+                vec![],
+            )
+        };
         PrimitiveArray::from(data)
     }
 }
@@ -380,8 +386,15 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
 
         let (null, buffer) = trusted_len_unzip(iterator);
 
-        let data =
-            ArrayData::new(T::DATA_TYPE, len, None, Some(null), 0, vec![buffer], vec![]);
+        let data = ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            len,
+            None,
+            Some(null),
+            0,
+            vec![buffer],
+            vec![],
+        );
         PrimitiveArray::from(data)
     }
 }
@@ -395,8 +408,8 @@ macro_rules! def_numeric_from_vec {
             fn from(data: Vec<<$ty as ArrowPrimitiveType>::Native>) -> Self {
                 let array_data = ArrayData::builder($ty::DATA_TYPE)
                     .len(data.len())
-                    .add_buffer(Buffer::from_slice_ref(&data))
-                    .build();
+                    .add_buffer(Buffer::from_slice_ref(&data));
+                let array_data = unsafe { array_data.build_unchecked() };
                 PrimitiveArray::from(array_data)
             }
         }
@@ -446,8 +459,8 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
         let array_data =
             ArrayData::builder(DataType::Timestamp(T::get_time_unit(), timezone))
                 .len(data.len())
-                .add_buffer(Buffer::from_slice_ref(&data))
-                .build();
+                .add_buffer(Buffer::from_slice_ref(&data));
+        let array_data = unsafe { array_data.build_unchecked() };
         PrimitiveArray::from(array_data)
     }
 }
@@ -476,8 +489,8 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
             ArrayData::builder(DataType::Timestamp(T::get_time_unit(), timezone))
                 .len(data_len)
                 .add_buffer(val_buf.into())
-                .null_bit_buffer(null_buf.into())
-                .build();
+                .null_bit_buffer(null_buf.into());
+        let array_data = unsafe { array_data.build_unchecked() };
         PrimitiveArray::from(array_data)
     }
 }
@@ -887,7 +900,8 @@ mod tests {
             .len(5)
             .offset(2)
             .add_buffer(buf)
-            .build();
+            .build()
+            .unwrap();
         let arr = Int32Array::from(data);
         assert_eq!(buf2, arr.data.buffers()[0]);
         assert_eq!(5, arr.len());
@@ -936,7 +950,7 @@ mod tests {
     #[should_panic(expected = "PrimitiveArray data should contain a single buffer only \
                                (values buffer)")]
     fn test_primitive_array_invalid_buffer_len() {
-        let data = ArrayData::builder(DataType::Int32).len(5).build();
+        let data = ArrayData::builder(DataType::Int32).len(5).build().unwrap();
         Int32Array::from(data);
     }
 

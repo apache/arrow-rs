@@ -147,8 +147,9 @@ impl From<Vec<bool>> for BooleanArray {
         }
         let array_data = ArrayData::builder(DataType::Boolean)
             .len(data.len())
-            .add_buffer(mut_buf.into())
-            .build();
+            .add_buffer(mut_buf.into());
+
+        let array_data = unsafe { array_data.build_unchecked() };
         BooleanArray::from(array_data)
     }
 }
@@ -212,15 +213,17 @@ impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray {
             }
         });
 
-        let data = ArrayData::new(
-            DataType::Boolean,
-            data_len,
-            None,
-            Some(null_buf.into()),
-            0,
-            vec![val_buf.into()],
-            vec![],
-        );
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                data_len,
+                None,
+                Some(null_buf.into()),
+                0,
+                vec![val_buf.into()],
+                vec![],
+            )
+        };
         BooleanArray::from(data)
     }
 }
@@ -313,7 +316,8 @@ mod tests {
             .len(5)
             .offset(2)
             .add_buffer(buf)
-            .build();
+            .build()
+            .unwrap();
         let arr = BooleanArray::from(data);
         assert_eq!(&buf2, arr.values());
         assert_eq!(5, arr.len());
@@ -328,7 +332,10 @@ mod tests {
     #[should_panic(expected = "BooleanArray data should contain a single buffer only \
                                (values buffer)")]
     fn test_boolean_array_invalid_buffer_len() {
-        let data = ArrayData::builder(DataType::Boolean).len(5).build();
+        let data = ArrayData::builder(DataType::Boolean)
+            .len(5)
+            .build()
+            .unwrap();
         BooleanArray::from(data);
     }
 }

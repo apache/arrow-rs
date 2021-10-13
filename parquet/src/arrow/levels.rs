@@ -1304,7 +1304,8 @@ mod tests {
             .add_buffer(a_value_offsets)
             .null_bit_buffer(Buffer::from(vec![0b00011011]))
             .add_child_data(a_values.data().clone())
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(a_list_data.null_count(), 1);
 
@@ -1407,7 +1408,8 @@ mod tests {
             .len(5)
             .add_buffer(g_value_offsets)
             .add_child_data(g_value.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let g = ListArray::from(g_list_data);
 
         let e = StructArray::from(vec![
