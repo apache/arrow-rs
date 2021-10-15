@@ -59,7 +59,7 @@ use crate::record_batch::RecordBatch;
 use csv_crate::{ByteRecord, StringRecord};
 
 lazy_static! {
-    static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d+\.\d+)$").unwrap();
+    static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d*\.\d+)$").unwrap();
     static ref INTEGER_RE: Regex = Regex::new(r"^-?(\d+)$").unwrap();
     static ref BOOLEAN_RE: Regex = RegexBuilder::new(r"^(true)$|^(false)$")
         .case_insensitive(true)
@@ -1341,6 +1341,7 @@ mod tests {
         assert_eq!(infer_field_schema("\"123\""), DataType::Utf8);
         assert_eq!(infer_field_schema("10"), DataType::Int64);
         assert_eq!(infer_field_schema("10.2"), DataType::Float64);
+        assert_eq!(infer_field_schema(".2"), DataType::Float64);
         assert_eq!(infer_field_schema("true"), DataType::Boolean);
         assert_eq!(infer_field_schema("false"), DataType::Boolean);
         assert_eq!(infer_field_schema("2020-11-08"), DataType::Date32);
