@@ -53,7 +53,7 @@
 //! }
 //! writer.close().unwrap();
 //! ```
-
+//!
 //! `WriterProperties` can be used to set Parquet file options
 //! ```rust
 //! use parquet::file::properties::WriterProperties;
