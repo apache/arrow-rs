@@ -64,7 +64,6 @@
 //! let props = WriterProperties::builder()
 //!     .set_compression(Compression::SNAPPY)
 //!     .build();
-//! # std::fs::remove_file("data.parquet").unwrap();
 //! ```
 //!
 //! # Example of reading parquet file into arrow record batch
@@ -117,7 +116,6 @@
 //!        println!("End of file!");
 //!    }
 //!}
-//! # std::fs::remove_file("data.parquet").unwrap();
 //! ```
 
 pub mod array_reader;
