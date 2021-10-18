@@ -53,7 +53,7 @@
 //! }
 //! writer.close().unwrap();
 //! ```
-
+//!
 //! `WriterProperties` can be used to set Parquet file options
 //! ```rust
 //! use parquet::file::properties::WriterProperties;
@@ -64,6 +64,7 @@
 //! let props = WriterProperties::builder()
 //!     .set_compression(Compression::SNAPPY)
 //!     .build();
+//! # std::fs::remove_file(&file).unwrap();
 //! ```
 //!
 //! # Example of reading parquet file into arrow record batch
@@ -116,6 +117,7 @@
 //!        println!("End of file!");
 //!    }
 //!}
+//! # std::fs::remove_file(&file).unwrap();
 //! ```
 
 pub mod array_reader;
