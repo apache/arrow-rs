@@ -6,3 +6,5 @@ rusty-tags.vi
 .idea/
 .vscode
 venv/*
+# created by doctests
+parquet/data.parquet
