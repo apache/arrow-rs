@@ -708,8 +708,6 @@ impl Parser for TimestampMicrosecondType {
             DataType::Timestamp(TimeUnit::Microsecond, None) => {
                 let nanos = string_to_timestamp_nanos(string).ok();
                 nanos.map(|x| x / 1000)
-                // let date_time = string.parse::<chrono::NaiveDateTime>().ok()?;
-                // Self::Native::from_i64(date_time.timestamp_nanos() / 1000)
             }
             _ => None,
         }
