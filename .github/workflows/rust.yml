@@ -389,5 +389,5 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd parquet_derive/test/dependency/no-default-features
+          cd parquet_derive/test/dependency/default-features
           cargo check
