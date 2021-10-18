@@ -270,7 +270,7 @@ pub fn infer_schema_from_files(
     has_header: bool,
 ) -> Result<Schema> {
     let mut schemas = vec![];
-    let mut records_to_read = max_read_records.unwrap_or(std::usize::MAX);
+    let mut records_to_read = max_read_records.unwrap_or(usize::MAX);
 
     for fname in files.iter() {
         let (schema, records_read) = infer_file_schema(
