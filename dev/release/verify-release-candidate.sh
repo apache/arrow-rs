@@ -132,7 +132,24 @@ test_source_distribution() {
     */Cargo.toml
 
   cargo build
-  cargo test
+  cargo test --all
+
+  # verify that the crates can be published to crates.io
+  pushd arrow
+    cargo publish --dry-run
+  popd
+
+  pushd arrow-flight
+    cargo publish --dry-run
+  popd
+
+  pushd parquet
+    cargo publish --dry-run
+  popd
+
+  pushd parquet_derive
+    cargo publish --dry-run
+  popd
 }
 
 TEST_SUCCESS=no
