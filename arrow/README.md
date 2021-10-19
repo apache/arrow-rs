@@ -36,7 +36,7 @@ Unlike many other crates in the Rust ecosystem which spend extended time in "pre
 The arrow crate provides the following features which may be enabled:
 
 - `csv` (default) - support for reading and writing Arrow arrays to/from csv files
-- `ipc` (default) - support for the [arrow-flight]((https://crates.io/crates/arrow-flight) IPC and wire format
+- `ipc` (default) - support for the [arrow-flight](https://crates.io/crates/arrow-flight) IPC and wire format
 - `prettyprint` - support for formatting record batches as textual columns
 - `js` - support for building arrow for WebAssembly / JavaScript
 - `simd` - (_Requires Nightly Rust_) alternate optimized
