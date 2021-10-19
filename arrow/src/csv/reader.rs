@@ -1385,7 +1385,7 @@ mod tests {
             }
             _ => panic!(
                 "Unexpected failure converting {} to local datetime",
-                stringify! { naive_datetime }
+                naive_datetime
             ),
         };
         let utc_offset_nanos = utc_offset_secs * 1_000_000_000;
