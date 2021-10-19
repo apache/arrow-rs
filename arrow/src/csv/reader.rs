@@ -1372,7 +1372,7 @@ mod tests {
         );
     }
 
-    /// Interprets a naive_datetime (with no explicit timzone offset)
+    /// Interprets a naive_datetime (with no explicit timezone offset)
     /// using the local timezone and returns the timestamp in UTC (0
     /// offset)
     fn naive_datetime_to_timestamp(naive_datetime: &NaiveDateTime) -> i64 {
@@ -1383,7 +1383,7 @@ mod tests {
             LocalResult::Single(local_offset) => {
                 local_offset.fix().local_minus_utc() as i64
             }
-            _ => panic!("Unexpected failure converting to local datetime"),
+            _ => panic!("Unexpected failure converting {} to local datetime", stringify!{ naive_datetime }),
         };
         let utc_offset_nanos = utc_offset_secs * 1_000_000_000;
         naive_datetime.timestamp_nanos() - utc_offset_nanos
