@@ -1383,7 +1383,10 @@ mod tests {
             LocalResult::Single(local_offset) => {
                 local_offset.fix().local_minus_utc() as i64
             }
-            _ => panic!("Unexpected failure converting {} to local datetime", stringify!{ naive_datetime }),
+            _ => panic!(
+                "Unexpected failure converting {} to local datetime",
+                stringify! { naive_datetime }
+            ),
         };
         let utc_offset_nanos = utc_offset_secs * 1_000_000_000;
         naive_datetime.timestamp_nanos() - utc_offset_nanos
