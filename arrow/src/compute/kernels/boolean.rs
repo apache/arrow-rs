@@ -175,7 +175,7 @@ where
 }
 
 /// Helper function to implement binary kernels
-fn binary_boolean_kernel<F>(
+pub(crate) fn binary_boolean_kernel<F>(
     left: &BooleanArray,
     right: &BooleanArray,
     op: F,
