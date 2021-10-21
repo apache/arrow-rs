@@ -25,7 +25,8 @@ repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 keywords = [ "parquet" ]
 readme = "README.md"
-edition = "2018"
+edition = "2021"
+rust-version = "1.56"
 
 [lib]
 proc-macro = true
