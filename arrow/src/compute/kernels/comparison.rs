@@ -674,7 +674,7 @@ fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
     let left_offset = left.offset();
 
     let values = if right {
-        left.values().clone()
+        left.values().bit_slice(left_offset, len)
     } else {
         buffer_unary_not(left.values(), left.offset(), left.len())
     };
@@ -705,7 +705,7 @@ fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
     let values = if right {
         buffer_unary_not(left.values(), left.offset(), left.len())
     } else {
-        left.values().clone()
+        left.values().bit_slice(left_offset, len)
     };
 
     let data = unsafe {
