@@ -699,32 +699,9 @@ fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
 
 /// Perform `left != right` operation on [`BooleanArray`] and a scalar
 fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    let len = left.len();
-    let left_offset = left.offset();
-
-    let values = if right {
-        buffer_unary_not(left.values(), left.offset(), left.len())
-    } else {
-        left.values().bit_slice(left_offset, len)
-    };
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            len,
-            None,
-            left.data_ref()
-                .null_bitmap()
-                .as_ref()
-                .map(|b| b.bits.bit_slice(left_offset, len)),
-            0,
-            vec![values],
-            vec![],
-        )
-    };
-
-    Ok(BooleanArray::from(data))
+    eq_bool_scalar(left, !right)
 }
+
 /// Perform `left != right` operation on [`StringArray`] / [`LargeStringArray`].
 pub fn neq_utf8<OffsetSize: StringOffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
