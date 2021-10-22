@@ -2340,35 +2340,41 @@ mod tests {
         let f64_array: ArrayRef = Arc::new(Float64Array::from(f64_values));
 
         let f64_expected = vec![
-            "-9223372036854776000.0",
-            "-2147483648.0",
-            "-32768.0",
-            "-128.0",
-            "0.0",
-            "255.0",
-            "65535.0",
-            "4294967295.0",
-            "18446744073709552000.0",
+            -9223372036854776000.0,
+            -2147483648.0,
+            -32768.0,
+            -128.0,
+            0.0,
+            255.0,
+            65535.0,
+            4294967295.0,
+            18446744073709552000.0,
         ];
         assert_eq!(
             f64_expected,
             get_cast_values::<Float64Type>(&f64_array, &DataType::Float64)
+                .iter()
+                .map(|i| i.parse::<f64>().unwrap())
+                .collect::<Vec<f64>>()
         );
 
         let f32_expected = vec![
-            "-9223372000000000000.0",
-            "-2147483600.0",
-            "-32768.0",
-            "-128.0",
-            "0.0",
-            "255.0",
-            "65535.0",
-            "4294967300.0",
-            "18446744000000000000.0",
+            -9223372000000000000.0,
+            -2147483600.0,
+            -32768.0,
+            -128.0,
+            0.0,
+            255.0,
+            65535.0,
+            4294967300.0,
+            18446744000000000000.0,
         ];
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&f64_array, &DataType::Float32)
+                .iter()
+                .map(|i| i.parse::<f32>().unwrap())
+                .collect::<Vec<f32>>()
         );
 
         let i64_expected = vec![
@@ -2615,28 +2621,24 @@ mod tests {
         ];
         let u64_array: ArrayRef = Arc::new(UInt64Array::from(u64_values));
 
-        let f64_expected = vec![
-            "0.0",
-            "255.0",
-            "65535.0",
-            "4294967295.0",
-            "18446744073709552000.0",
-        ];
+        let f64_expected =
+            vec![0.0, 255.0, 65535.0, 4294967295.0, 18446744073709552000.0];
         assert_eq!(
             f64_expected,
             get_cast_values::<Float64Type>(&u64_array, &DataType::Float64)
+                .iter()
+                .map(|i| i.parse::<f64>().unwrap())
+                .collect::<Vec<f64>>()
         );
 
-        let f32_expected = vec![
-            "0.0",
-            "255.0",
-            "65535.0",
-            "4294967300.0",
-            "18446744000000000000.0",
-        ];
+        let f32_expected =
+            vec![0.0, 255.0, 65535.0, 4294967300.0, 18446744000000000000.0];
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&u64_array, &DataType::Float32)
+                .iter()
+                .map(|i| i.parse::<f32>().unwrap())
+                .collect::<Vec<f32>>()
         );
 
         let i64_expected = vec!["0", "255", "65535", "4294967295", "null"];
@@ -2908,35 +2910,41 @@ mod tests {
         let i64_array: ArrayRef = Arc::new(Int64Array::from(i64_values));
 
         let f64_expected = vec![
-            "-9223372036854776000.0",
-            "-2147483648.0",
-            "-32768.0",
-            "-128.0",
-            "0.0",
-            "127.0",
-            "32767.0",
-            "2147483647.0",
-            "9223372036854776000.0",
+            -9223372036854776000.0,
+            -2147483648.0,
+            -32768.0,
+            -128.0,
+            0.0,
+            127.0,
+            32767.0,
+            2147483647.0,
+            9223372036854776000.0,
         ];
         assert_eq!(
             f64_expected,
             get_cast_values::<Float64Type>(&i64_array, &DataType::Float64)
+                .iter()
+                .map(|i| i.parse::<f64>().unwrap())
+                .collect::<Vec<f64>>()
         );
 
         let f32_expected = vec![
-            "-9223372000000000000.0",
-            "-2147483600.0",
-            "-32768.0",
-            "-128.0",
-            "0.0",
-            "127.0",
-            "32767.0",
-            "2147483600.0",
-            "9223372000000000000.0",
+            -9223372000000000000.0,
+            -2147483600.0,
+            -32768.0,
+            -128.0,
+            0.0,
+            127.0,
+            32767.0,
+            2147483600.0,
+            9223372000000000000.0,
         ];
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&i64_array, &DataType::Float32)
+                .iter()
+                .map(|i| i.parse::<f32>().unwrap())
+                .collect::<Vec<f32>>()
         );
 
         let i64_expected = vec![
