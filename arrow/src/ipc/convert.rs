@@ -779,13 +779,14 @@ mod tests {
                 ),
                 Field::new(
                     "struct<dictionary<int32, utf8>>",
-                    DataType::Struct(vec![
-                        Field::new("dictionary<int32, utf8>",
-                                   DataType::Dictionary(
-                                       Box::new(DataType::Int32),
-                                       Box::new(DataType::Utf8)),
-                                       false),
-                    ]),
+                    DataType::Struct(vec![Field::new(
+                        "dictionary<int32, utf8>",
+                        DataType::Dictionary(
+                            Box::new(DataType::Int32),
+                            Box::new(DataType::Utf8),
+                        ),
+                        false,
+                    )]),
                     false,
                 ),
                 Field::new(
