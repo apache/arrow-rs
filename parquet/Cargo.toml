@@ -55,7 +55,6 @@ brotli = "3.3"
 flate2 = "1.0"
 lz4 = "1.23"
 serde_json = { version = "1.0", features = ["preserve_order"] }
-arrow = { path = "../arrow", version = "7.0.0-SNAPSHOT", default-features = false, features = ["test_utils"] }
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
