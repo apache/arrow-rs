@@ -624,8 +624,15 @@ pub fn eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     compare_op_scalar!(left, right, |a, b| a == b)
 }
 
-/// Perform `left == right` operation on [`BooleanArray`]
-fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+#[inline]
+fn binary_boolean_op<F>(
+    left: &BooleanArray,
+    right: &BooleanArray,
+    op: F,
+) -> Result<BooleanArray>
+where
+    F: Copy + Fn(u64, u64) -> u64,
+{
     binary_boolean_kernel(
         left,
         right,
@@ -640,32 +647,40 @@ fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
                 right,
                 right_offset_in_bits,
                 len_in_bits,
-                |a, b| !(a ^ b),
+                op,
             )
         },
     )
 }
 
+/// Perform `left == right` operation on [`BooleanArray`]
+fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+    binary_boolean_op(left, right, |a, b| !(a ^ b))
+}
+
 /// Perform `left != right` operation on [`BooleanArray`]
 fn neq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
-    binary_boolean_kernel(
-        left,
-        right,
-        |left: &Buffer,
-         left_offset_in_bits: usize,
-         right: &Buffer,
-         right_offset_in_bits: usize,
-         len_in_bits: usize| {
-            bitwise_bin_op_helper(
-                left,
-                left_offset_in_bits,
-                right,
-                right_offset_in_bits,
-                len_in_bits,
-                |a, b| (a ^ b),
-            )
-        },
-    )
+    binary_boolean_op(left, right, |a, b| (a ^ b))
+}
+
+/// Perform `left < right` operation on [`BooleanArray`]
+fn lt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+    binary_boolean_op(left, right, |a, b| ((!a) & b))
+}
+
+/// Perform `left <= right` operation on [`BooleanArray`]
+fn lt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+    binary_boolean_op(left, right, |a, b| !(a & (!b)))
+}
+
+/// Perform `left > right` operation on [`BooleanArray`]
+fn gt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+    binary_boolean_op(left, right, |a, b| (a & (!b)))
+}
+
+/// Perform `left >= right` operation on [`BooleanArray`]
+fn gt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+    binary_boolean_op(left, right, |a, b| !((!a) & b))
 }
 
 /// Perform `left == right` operation on [`BooleanArray`] and a scalar
@@ -1354,7 +1369,7 @@ mod tests {
             vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
                 .into();
         let b: BooleanArray =
-            vec![Some(true), Some(true), Some(false), Some(false), None,  Some(false)]
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
                 .into();
 
         let res: Vec<Option<bool>> = neq_bool(&a, &b).unwrap().iter().collect();
@@ -1362,6 +1377,74 @@ mod tests {
         assert_eq!(
             res,
             vec![Some(false), Some(true), Some(false), Some(true), None, None]
+        )
+    }
+
+    #[test]
+    fn test_boolean_array_lt() {
+        let a: BooleanArray =
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
+                .into();
+        let b: BooleanArray =
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
+                .into();
+
+        let res: Vec<Option<bool>> = lt_bool(&a, &b).unwrap().iter().collect();
+
+        assert_eq!(
+            res,
+            vec![Some(false), Some(true), Some(false), Some(false), None, None]
+        )
+    }
+
+    #[test]
+    fn test_boolean_array_lt_eq() {
+        let a: BooleanArray =
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
+                .into();
+        let b: BooleanArray =
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
+                .into();
+
+        let res: Vec<Option<bool>> = lt_eq_bool(&a, &b).unwrap().iter().collect();
+
+        assert_eq!(
+            res,
+            vec![Some(true), Some(true), Some(true), Some(false), None, None]
+        )
+    }
+
+    #[test]
+    fn test_boolean_array_gt() {
+        let a: BooleanArray =
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
+                .into();
+        let b: BooleanArray =
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
+                .into();
+
+        let res: Vec<Option<bool>> = gt_bool(&a, &b).unwrap().iter().collect();
+
+        assert_eq!(
+            res,
+            vec![Some(false), Some(false), Some(false), Some(true), None, None]
+        )
+    }
+
+    #[test]
+    fn test_boolean_array_gt_eq() {
+        let a: BooleanArray =
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
+                .into();
+        let b: BooleanArray =
+            vec![Some(true), Some(true), Some(false), Some(false), None, Some(false)]
+                .into();
+
+        let res: Vec<Option<bool>> = gt_eq_bool(&a, &b).unwrap().iter().collect();
+
+        assert_eq!(
+            res,
+            vec![Some(true), Some(false), Some(true), Some(true), None, None]
         )
     }
 
