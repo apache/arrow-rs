@@ -4,6 +4,7 @@ target/*
 dev/release/rat_exclude_files.txt
 arrow/test/data/*
 arrow/test/dependency/*
+parquet_derive/test/dependency/*
 .gitattributes
 **.gitignore
 .gitmodules

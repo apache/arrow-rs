@@ -341,9 +341,9 @@ jobs:
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
 
-  # test builds with various feature flags
+  # test builds with various feature flag combinations outside the main workspace
   default-build:
-    name: Arrow Feature Flag Builds ${{ matrix.rust }}
+    name: Feature Flag Builds ${{ matrix.rust }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -373,15 +373,21 @@ jobs:
           rustup toolchain install ${{ matrix.rust }}
           rustup override set ${{ matrix.rust }}
           rustup component add rustfmt
-      - name: Build with default features
+      - name: Arrow Build with default features
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
           cd arrow/test/dependency/default-features
           cargo check
-      - name: Build with default-features=false
+      - name: Arrow Build with default-features=false
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
           cd arrow/test/dependency/no-default-features
+          cargo check
+      - name: Parquet Derive build with default-features
+        run: |
+          export CARGO_HOME="/github/home/.cargo"
+          export CARGO_TARGET_DIR="/github/home/target"
+          cd parquet_derive/test/dependency/default-features
           cargo check
