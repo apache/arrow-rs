@@ -26,7 +26,8 @@ use regex::Regex;
 use std::collections::HashMap;
 
 use crate::array::*;
-use crate::buffer::{Buffer, MutableBuffer};
+use crate::buffer::{bitwise_bin_op_helper, buffer_unary_not, Buffer, MutableBuffer};
+use crate::compute::binary_boolean_kernel;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{ArrowNumericType, DataType};
 use crate::error::{ArrowError, Result};
@@ -621,6 +622,84 @@ pub fn eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     right: &str,
 ) -> Result<BooleanArray> {
     compare_op_scalar!(left, right, |a, b| a == b)
+}
+
+/// Perform `left == right` operation on [`BooleanArray`]
+fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+    binary_boolean_kernel(
+        left,
+        right,
+        |left: &Buffer,
+         left_offset_in_bits: usize,
+         right: &Buffer,
+         right_offset_in_bits: usize,
+         len_in_bits: usize| {
+            bitwise_bin_op_helper(
+                left,
+                left_offset_in_bits,
+                right,
+                right_offset_in_bits,
+                len_in_bits,
+                |a, b| !(a ^ b),
+            )
+        },
+    )
+}
+
+/// Perform `left != right` operation on [`BooleanArray`]
+fn neq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+    binary_boolean_kernel(
+        left,
+        right,
+        |left: &Buffer,
+         left_offset_in_bits: usize,
+         right: &Buffer,
+         right_offset_in_bits: usize,
+         len_in_bits: usize| {
+            bitwise_bin_op_helper(
+                left,
+                left_offset_in_bits,
+                right,
+                right_offset_in_bits,
+                len_in_bits,
+                |a, b| (a ^ b),
+            )
+        },
+    )
+}
+
+/// Perform `left == right` operation on [`BooleanArray`] and a scalar
+fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+    let len = left.len();
+    let left_offset = left.offset();
+
+    let values = if right {
+        left.values().bit_slice(left_offset, len)
+    } else {
+        buffer_unary_not(left.values(), left.offset(), left.len())
+    };
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            len,
+            None,
+            left.data_ref()
+                .null_bitmap()
+                .as_ref()
+                .map(|b| b.bits.bit_slice(left_offset, len)),
+            0,
+            vec![values],
+            vec![],
+        )
+    };
+
+    Ok(BooleanArray::from(data))
+}
+
+/// Perform `left != right` operation on [`BooleanArray`] and a scalar
+fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+    eq_bool_scalar(left, !right)
 }
 
 /// Perform `left != right` operation on [`StringArray`] / [`LargeStringArray`].
@@ -1250,6 +1329,67 @@ mod tests {
             8,
             vec![true, true, false, true, true, true, true, false, true, true]
         );
+    }
+
+    #[test]
+    fn test_boolean_array_eq() {
+        let a: BooleanArray =
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
+                .into();
+        let b: BooleanArray =
+            vec![Some(true), Some(true), Some(false), Some(false), None,  Some(false)]
+                .into();
+
+        let res: Vec<Option<bool>> = eq_bool(&a, &b).unwrap().iter().collect();
+
+        assert_eq!(
+            res,
+            vec![Some(true), Some(false), Some(true), Some(false), None, None]
+        )
+    }
+
+    #[test]
+    fn test_boolean_array_neq() {
+        let a: BooleanArray =
+            vec![Some(true), Some(false), Some(false), Some(true), Some(true), None]
+                .into();
+        let b: BooleanArray =
+            vec![Some(true), Some(true), Some(false), Some(false), None,  Some(false)]
+                .into();
+
+        let res: Vec<Option<bool>> = neq_bool(&a, &b).unwrap().iter().collect();
+
+        assert_eq!(
+            res,
+            vec![Some(false), Some(true), Some(false), Some(true), None, None]
+        )
+    }
+
+    #[test]
+    fn test_boolean_array_eq_scalar() {
+        let a: BooleanArray = vec![Some(true), Some(false), None].into();
+
+        let res1: Vec<Option<bool>> = eq_bool_scalar(&a, false).unwrap().iter().collect();
+
+        assert_eq!(res1, vec![Some(false), Some(true), None]);
+
+        let res2: Vec<Option<bool>> = eq_bool_scalar(&a, true).unwrap().iter().collect();
+
+        assert_eq!(res2, vec![Some(true), Some(false), None]);
+    }
+
+    #[test]
+    fn test_boolean_array_neq_scalar() {
+        let a: BooleanArray = vec![Some(true), Some(false), None].into();
+
+        let res1: Vec<Option<bool>> =
+            neq_bool_scalar(&a, false).unwrap().iter().collect();
+
+        assert_eq!(res1, vec![Some(true), Some(false), None]);
+
+        let res2: Vec<Option<bool>> = neq_bool_scalar(&a, true).unwrap().iter().collect();
+
+        assert_eq!(res2, vec![Some(false), Some(true), None]);
     }
 
     #[test]
