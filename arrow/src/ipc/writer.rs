@@ -143,7 +143,7 @@ impl IpcDataGenerator {
         column: &ArrayRef,
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
-        write_options: &IpcWriteOptions
+        write_options: &IpcWriteOptions,
     ) -> Result<()> {
         // TODO: Handle other nested types (map, list, etc)
         match column.data_type() {
@@ -836,6 +836,7 @@ mod tests {
     use ipc::MetadataVersion;
 
     use crate::array::*;
+    use crate::datatypes::Field;
     use crate::ipc::reader::*;
     use crate::util::integration_util::*;
 
@@ -1232,7 +1233,7 @@ mod tests {
             false,
         )]));
 
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(union)]).unwrap();
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(union)]).unwrap();
 
         let gen = IpcDataGenerator {};
         let mut dict_tracker = DictionaryTracker::new(false);
@@ -1262,7 +1263,7 @@ mod tests {
             false,
         )]));
 
-        let batch = RecordBatch::try_new(schema.clone(), vec![struct_array]).unwrap();
+        let batch = RecordBatch::try_new(schema, vec![struct_array]).unwrap();
 
         let gen = IpcDataGenerator {};
         let mut dict_tracker = DictionaryTracker::new(false);
