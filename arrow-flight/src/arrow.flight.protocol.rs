@@ -229,7 +229,7 @@ pub mod flight_service_client {
     impl<T> FlightServiceClient<T>
     where
         T: tonic::client::GrpcService<tonic::body::BoxBody>,
-        T::ResponseBody: Body + Send + Sync + 'static,
+        T::ResponseBody: Body + Send + 'static,
         T::Error: Into<StdError>,
         <T::ResponseBody as Body>::Error: Into<StdError> + Send,
     {
@@ -513,7 +513,6 @@ pub mod flight_service_server {
         #[doc = "Server streaming response type for the Handshake method."]
         type HandshakeStream: futures_core::Stream<Item = Result<super::HandshakeResponse, tonic::Status>>
             + Send
-            + Sync
             + 'static;
         #[doc = ""]
         #[doc = " Handshake between client and server. Depending on the server, the"]
@@ -527,7 +526,6 @@ pub mod flight_service_server {
         #[doc = "Server streaming response type for the ListFlights method."]
         type ListFlightsStream: futures_core::Stream<Item = Result<super::FlightInfo, tonic::Status>>
             + Send
-            + Sync
             + 'static;
         #[doc = ""]
         #[doc = " Get a list of available streams given a particular criteria. Most flight"]
@@ -567,7 +565,6 @@ pub mod flight_service_server {
         #[doc = "Server streaming response type for the DoGet method."]
         type DoGetStream: futures_core::Stream<Item = Result<super::FlightData, tonic::Status>>
             + Send
-            + Sync
             + 'static;
         #[doc = ""]
         #[doc = " Retrieve a single stream associated with a particular descriptor"]
@@ -581,7 +578,6 @@ pub mod flight_service_server {
         #[doc = "Server streaming response type for the DoPut method."]
         type DoPutStream: futures_core::Stream<Item = Result<super::PutResult, tonic::Status>>
             + Send
-            + Sync
             + 'static;
         #[doc = ""]
         #[doc = " Push a stream to the flight service associated with a particular"]
@@ -597,7 +593,6 @@ pub mod flight_service_server {
         #[doc = "Server streaming response type for the DoExchange method."]
         type DoExchangeStream: futures_core::Stream<Item = Result<super::FlightData, tonic::Status>>
             + Send
-            + Sync
             + 'static;
         #[doc = ""]
         #[doc = " Open a bidirectional data channel for a given descriptor. This"]
@@ -612,7 +607,6 @@ pub mod flight_service_server {
         #[doc = "Server streaming response type for the DoAction method."]
         type DoActionStream: futures_core::Stream<Item = Result<super::Result, tonic::Status>>
             + Send
-            + Sync
             + 'static;
         #[doc = ""]
         #[doc = " Flight services can support an arbitrary number of simple actions in"]
@@ -628,7 +622,6 @@ pub mod flight_service_server {
         #[doc = "Server streaming response type for the ListActions method."]
         type ListActionsStream: futures_core::Stream<Item = Result<super::ActionType, tonic::Status>>
             + Send
-            + Sync
             + 'static;
         #[doc = ""]
         #[doc = " A flight service exposes all of the available action types that it has"]
@@ -674,7 +667,7 @@ pub mod flight_service_server {
     impl<T, B> tonic::codegen::Service<http::Request<B>> for FlightServiceServer<T>
     where
         T: FlightService,
-        B: Body + Send + Sync + 'static,
+        B: Body + Send + 'static,
         B::Error: Into<StdError> + Send + 'static,
     {
         type Response = http::Response<tonic::body::BoxBody>;
