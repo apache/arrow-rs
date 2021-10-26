@@ -24,7 +24,6 @@ use crate::error::{ArrowError, Result};
 
 use core::fmt;
 use std::any::Any;
-use std::mem::size_of;
 
 /// An Array that can represent slots of varying types.
 ///
@@ -177,7 +176,9 @@ impl UnionArray {
                 Some(b) => b.count_set_bits_offset(0, index),
                 None => index,
             };
-            self.data().buffers()[1].as_slice()[valid_slots * size_of::<i32>()] as i32
+            // safety: reinterpreting is safe since the offset buffer contains `i32` values and is
+            // properly aligned.
+            unsafe { self.data().buffers()[1].typed_data::<i32>()[valid_slots] }
         } else {
             index as i32
         }
@@ -324,6 +325,48 @@ mod tests {
         );
 
         assert_eq!(expected_array_values.len(), union.len());
+        for (i, expected_value) in expected_array_values.iter().enumerate() {
+            assert!(!union.is_null(i));
+            let slot = union.value(i);
+            let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert_eq!(slot.len(), 1);
+            let value = slot.value(0);
+            assert_eq!(expected_value, &value);
+        }
+    }
+
+    #[test]
+    fn test_dense_i32_large() {
+        let mut builder = UnionBuilder::new_dense(1024);
+
+        let expected_type_ids = vec![0_i8; 1024];
+        let expected_value_offsets: Vec<_> = (0..1024).collect();
+        let expected_array_values: Vec<_> = (1..=1024).collect();
+
+        expected_array_values
+            .iter()
+            .for_each(|v| builder.append::<Int32Type>("a", *v).unwrap());
+
+        let union = builder.build().unwrap();
+
+        // Check type ids
+        assert_eq!(
+            union.data().buffers()[0],
+            Buffer::from_slice_ref(&expected_type_ids)
+        );
+        for (i, id) in expected_type_ids.iter().enumerate() {
+            assert_eq!(id, &union.type_id(i));
+        }
+
+        // Check offsets
+        assert_eq!(
+            union.data().buffers()[1],
+            Buffer::from_slice_ref(&expected_value_offsets)
+        );
+        for (i, id) in expected_value_offsets.iter().enumerate() {
+            assert_eq!(&union.value_offset(i), id);
+        }
+
         for (i, expected_value) in expected_array_values.iter().enumerate() {
             assert!(!union.is_null(i));
             let slot = union.value(i);
