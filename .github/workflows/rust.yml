@@ -291,9 +291,9 @@ jobs:
 
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-          
-          cargo install cargo-tarpaulin
-          cargo tarpaulin --out Xml
+
+          cargo install --version 0.18.2 cargo-tarpaulin
+          cargo tarpaulin --all --out Xml
       - name: Report coverage
         continue-on-error: true
         run: bash <(curl -s https://codecov.io/bash)
