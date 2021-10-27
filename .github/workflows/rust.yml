@@ -46,7 +46,7 @@ jobs:
           # these represent dependencies downloaded by cargo
           # and thus do not depend on the OS, arch nor rust version.
           path: /github/home/.cargo
-          key: cargo-cache-
+          key: cargo-cache2-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
@@ -91,7 +91,7 @@ jobs:
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-
+          key: cargo-cache2-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
@@ -148,7 +148,7 @@ jobs:
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-
+          key: cargo-cache2-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
@@ -223,7 +223,7 @@ jobs:
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-
+          key: cargo-cache2-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
@@ -287,10 +287,8 @@ jobs:
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
 
-          # 2020-11-15: There is a cargo-tarpaulin regression in 0.17.0
-          # see https://github.com/xd009642/tarpaulin/issues/618
-          cargo install --version 0.16.0 cargo-tarpaulin
-          cargo tarpaulin --out Xml
+          cargo install --version 0.18.2 cargo-tarpaulin
+          cargo tarpaulin --all --out Xml
       - name: Report coverage
         continue-on-error: true
         run: bash <(curl -s https://codecov.io/bash)
@@ -320,7 +318,7 @@ jobs:
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-
+          key: cargo-cache2-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
@@ -341,9 +339,9 @@ jobs:
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
 
-  # test builds with various feature flags
+  # test builds with various feature flag combinations outside the main workspace
   default-build:
-    name: Arrow Feature Flag Builds ${{ matrix.rust }}
+    name: Feature Flag Builds ${{ matrix.rust }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -361,7 +359,7 @@ jobs:
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache-
+          key: cargo-cache2-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
@@ -373,15 +371,21 @@ jobs:
           rustup toolchain install ${{ matrix.rust }}
           rustup override set ${{ matrix.rust }}
           rustup component add rustfmt
-      - name: Build with default features
+      - name: Arrow Build with default features
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
           cd arrow/test/dependency/default-features
           cargo check
-      - name: Build with default-features=false
+      - name: Arrow Build with default-features=false
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
           cd arrow/test/dependency/no-default-features
+          cargo check
+      - name: Parquet Derive build with default-features
+        run: |
+          export CARGO_HOME="/github/home/.cargo"
+          export CARGO_TARGET_DIR="/github/home/target"
+          cd parquet_derive/test/dependency/default-features
           cargo check

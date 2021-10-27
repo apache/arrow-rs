@@ -52,6 +52,7 @@ use std::sync::Arc;
 use crate::array::{
     ArrayRef, BooleanArray, DictionaryArray, PrimitiveArray, StringArray,
 };
+use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
@@ -694,8 +695,7 @@ impl Parser for TimestampNanosecondType {
     fn parse(string: &str) -> Option<i64> {
         match Self::DATA_TYPE {
             DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-                let date_time = string.parse::<chrono::NaiveDateTime>().ok()?;
-                Self::Native::from_i64(date_time.timestamp_nanos())
+                string_to_timestamp_nanos(string).ok()
             }
             _ => None,
         }
@@ -706,8 +706,8 @@ impl Parser for TimestampMicrosecondType {
     fn parse(string: &str) -> Option<i64> {
         match Self::DATA_TYPE {
             DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                let date_time = string.parse::<chrono::NaiveDateTime>().ok()?;
-                Self::Native::from_i64(date_time.timestamp_nanos() / 1000)
+                let nanos = string_to_timestamp_nanos(string).ok();
+                nanos.map(|x| x / 1000)
             }
             _ => None,
         }
@@ -979,6 +979,7 @@ mod tests {
     use crate::array::*;
     use crate::compute::cast;
     use crate::datatypes::Field;
+    use chrono::{prelude::*, LocalResult};
 
     #[test]
     fn test_csv() {
@@ -1369,6 +1370,98 @@ mod tests {
         assert_eq!(
             parse_item::<Date64Type>("1900-02-28T12:34:56").unwrap(),
             -2203932304000
+        );
+    }
+
+    /// Interprets a naive_datetime (with no explicit timezone offset)
+    /// using the local timezone and returns the timestamp in UTC (0
+    /// offset)
+    fn naive_datetime_to_timestamp(naive_datetime: &NaiveDateTime) -> i64 {
+        // Note: Use chrono APIs that are different than
+        // naive_datetime_to_timestamp to compute the utc offset to
+        // try and double check the logic
+        let utc_offset_secs = match Local.offset_from_local_datetime(naive_datetime) {
+            LocalResult::Single(local_offset) => {
+                local_offset.fix().local_minus_utc() as i64
+            }
+            _ => panic!(
+                "Unexpected failure converting {} to local datetime",
+                naive_datetime
+            ),
+        };
+        let utc_offset_nanos = utc_offset_secs * 1_000_000_000;
+        naive_datetime.timestamp_nanos() - utc_offset_nanos
+    }
+
+    #[test]
+    fn test_parse_timestamp_microseconds() {
+        assert_eq!(
+            parse_item::<TimestampMicrosecondType>("1970-01-01T00:00:00Z").unwrap(),
+            0
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(2018, 11, 13),
+            NaiveTime::from_hms_nano(17, 11, 10, 0),
+        );
+        assert_eq!(
+            parse_item::<TimestampMicrosecondType>("2018-11-13T17:11:10").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime) / 1000
+        );
+        assert_eq!(
+            parse_item::<TimestampMicrosecondType>("2018-11-13 17:11:10").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime) / 1000
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(2018, 11, 13),
+            NaiveTime::from_hms_nano(17, 11, 10, 11000000),
+        );
+        assert_eq!(
+            parse_item::<TimestampMicrosecondType>("2018-11-13T17:11:10.011").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime) / 1000
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(1900, 2, 28),
+            NaiveTime::from_hms_nano(12, 34, 56, 0),
+        );
+        assert_eq!(
+            parse_item::<TimestampMicrosecondType>("1900-02-28T12:34:56").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime) / 1000
+        );
+    }
+
+    #[test]
+    fn test_parse_timestamp_nanoseconds() {
+        assert_eq!(
+            parse_item::<TimestampNanosecondType>("1970-01-01T00:00:00Z").unwrap(),
+            0
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(2018, 11, 13),
+            NaiveTime::from_hms_nano(17, 11, 10, 0),
+        );
+        assert_eq!(
+            parse_item::<TimestampNanosecondType>("2018-11-13T17:11:10").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime)
+        );
+        assert_eq!(
+            parse_item::<TimestampNanosecondType>("2018-11-13 17:11:10").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime)
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(2018, 11, 13),
+            NaiveTime::from_hms_nano(17, 11, 10, 11000000),
+        );
+        assert_eq!(
+            parse_item::<TimestampNanosecondType>("2018-11-13T17:11:10.011").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime)
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(1900, 2, 28),
+            NaiveTime::from_hms_nano(12, 34, 56, 0),
+        );
+        assert_eq!(
+            parse_item::<TimestampNanosecondType>("1900-02-28T12:34:56").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime)
         );
     }
 

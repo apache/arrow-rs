@@ -371,19 +371,14 @@ impl<'a> Parser<'a> {
                                     "Failed to parse scale for DECIMAL type",
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
-                                logical = Some(LogicalType::DECIMAL(DecimalType {
-                                    scale,
-                                    precision,
-                                }));
-                                converted = ConvertedType::from(logical.clone());
                             } else {
-                                scale = 0;
-                                logical = Some(LogicalType::DECIMAL(DecimalType {
-                                    scale,
-                                    precision,
-                                }));
-                                converted = ConvertedType::from(logical.clone());
+                                scale = 0
                             }
+                            logical = Some(LogicalType::DECIMAL(DecimalType {
+                                scale,
+                                precision,
+                            }));
+                            converted = ConvertedType::from(logical.clone());
                         }
                     }
                     LogicalType::TIME(_) => {
