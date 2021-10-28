@@ -51,16 +51,15 @@ const MURMUR_R: i32 = 47;
 ///
 /// SAFTETY Only safe on platforms which support unaligned loads (like x86_64)
 unsafe fn murmur_hash2_64a(data_bytes: &[u8], seed: u64) -> u64 {
+    use std::convert::TryInto;
     let len = data_bytes.len();
     let len_64 = (len / 8) * 8;
-    let data_bytes_64 = std::slice::from_raw_parts(
-        &data_bytes[0..len_64] as *const [u8] as *const u64,
-        len / 8,
-    );
 
     let mut h = seed ^ (MURMUR_PRIME.wrapping_mul(data_bytes.len() as u64));
-    for v in data_bytes_64 {
-        let mut k = *v;
+    for mut k in data_bytes
+        .chunks_exact(8)
+        .map(|chunk| u64::from_ne_bytes(chunk.try_into().unwrap()))
+    {
         k = k.wrapping_mul(MURMUR_PRIME);
         k ^= k >> MURMUR_R;
         k = k.wrapping_mul(MURMUR_PRIME);
