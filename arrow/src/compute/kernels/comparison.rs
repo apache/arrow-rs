@@ -477,6 +477,122 @@ pub fn nlike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     Ok(BooleanArray::from(data))
 }
 
+/// Perform SQL `left ILIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn ilike_utf8<OffsetSize: StringOffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &GenericStringArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    let mut map = HashMap::new();
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length"
+                .to_string(),
+        ));
+    }
+
+    let null_bit_buffer =
+        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
+
+    let mut result = BooleanBufferBuilder::new(left.len());
+    for i in 0..left.len() {
+        let haystack = left.value(i);
+        let pat = right.value(i);
+        let re = if let Some(ref regex) = map.get(pat) {
+            regex
+        } else {
+            let re_pattern = pat.replace("%", ".*").replace("_", ".");
+            let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+                ArrowError::ComputeError(format!(
+                    "Unable to build regex from ILIKE pattern: {}",
+                    e
+                ))
+            })?;
+            map.insert(pat, re);
+            map.get(pat).unwrap()
+        };
+        result.append(re.is_match(haystack));
+    }
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.finish()],
+            vec![],
+        )
+    };
+    Ok(BooleanArray::from(data))
+}
+
+/// Perform SQL `left ILIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn ilike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &str,
+) -> Result<BooleanArray> {
+    let null_bit_buffer = left.data().null_buffer().cloned();
+    let mut result = BooleanBufferBuilder::new(left.len());
+
+    if !right.contains(is_like_pattern) {
+        // fast path, can use equals
+        for i in 0..left.len() {
+            result.append(left.value(i) == right);
+        }
+    } else if right.ends_with('%') && !right[..right.len() - 1].contains(is_like_pattern)
+    {
+        // fast path, can use ends_with
+        for i in 0..left.len() {
+            result.append(
+                left.value(i)
+                    .to_uppercase()
+                    .starts_with(&right[..right.len() - 1].to_uppercase()),
+            );
+        }
+    } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
+        // fast path, can use starts_with
+        for i in 0..left.len() {
+            result.append(
+                left.value(i)
+                    .to_uppercase()
+                    .ends_with(&right[1..].to_uppercase()),
+            );
+        }
+    } else {
+        let re_pattern = right.replace("%", ".*").replace("_", ".");
+        let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+            ArrowError::ComputeError(format!(
+                "Unable to build regex from ILIKE pattern: {}",
+                e
+            ))
+        })?;
+        for i in 0..left.len() {
+            let haystack = left.value(i);
+            result.append(re.is_match(haystack));
+        }
+    }
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.finish()],
+            vec![],
+        )
+    };
+    Ok(BooleanArray::from(data))
+}
+
 /// Perform SQL `array ~ regex_array` operation on [`StringArray`] / [`LargeStringArray`].
 /// If `regex_array` element has an empty value, the corresponding result value is always true.
 ///
@@ -2129,21 +2245,6 @@ mod tests {
     );
 
     test_utf8!(
-        test_utf8_array_nlike,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
-        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
-        nlike_utf8,
-        vec![false, false, false, true, true, false, true]
-    );
-    test_utf8_scalar!(
-        test_utf8_array_nlike_scalar,
-        vec!["arrow", "parquet", "datafusion", "flight"],
-        "%ar%",
-        nlike_utf8_scalar,
-        vec![false, false, true, true]
-    );
-
-    test_utf8!(
         test_utf8_array_eq,
         vec!["arrow", "arrow", "arrow", "arrow"],
         vec!["arrow", "parquet", "datafusion", "flight"],
@@ -2156,6 +2257,21 @@ mod tests {
         "arrow",
         eq_utf8_scalar,
         vec![true, false, false, false]
+    );
+
+    test_utf8!(
+        test_utf8_array_nlike,
+        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
+        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
+        nlike_utf8,
+        vec![false, false, false, true, true, false, true]
+    );
+    test_utf8_scalar!(
+        test_utf8_array_nlike_scalar,
+        vec!["arrow", "parquet", "datafusion", "flight"],
+        "%ar%",
+        nlike_utf8_scalar,
+        vec![false, false, true, true]
     );
 
     test_utf8_scalar!(
@@ -2188,6 +2304,53 @@ mod tests {
         "arrow_",
         nlike_utf8_scalar,
         vec![true, false, true, true]
+    );
+
+    test_utf8!(
+        test_utf8_array_ilike,
+        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
+        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
+        ilike_utf8,
+        vec![true, true, true, false, false, true, false]
+    );
+    test_utf8_scalar!(
+        test_utf8_array_ilike_scalar,
+        vec!["arrow", "parquet", "datafusion", "flight"],
+        "%AR%",
+        ilike_utf8_scalar,
+        vec![true, true, false, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_scalar_start,
+        vec!["arrow", "parrow", "arrows", "ARR"],
+        "aRRow%",
+        ilike_utf8_scalar,
+        vec![true, false, true, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_scalar_end,
+        vec!["ArroW", "parrow", "ARRowS", "arr"],
+        "%arrow",
+        ilike_utf8_scalar,
+        vec![true, true, false, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_scalar_equals,
+        vec!["arrow", "parrow", "arrows", "arr"],
+        "arrow",
+        ilike_utf8_scalar,
+        vec![true, false, false, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_ilike_scalar_one,
+        vec!["arrow", "arrows", "parrow", "arr"],
+        "arrow_",
+        ilike_utf8_scalar,
+        vec![false, true, false, false]
     );
 
     test_utf8!(
