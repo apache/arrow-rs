@@ -17,7 +17,7 @@
 
 /// Contains the `UnionArray` type.
 ///
-use crate::array::{data::count_nulls, make_array, Array, ArrayData, ArrayRef};
+use crate::array::{make_array, Array, ArrayData, ArrayRef};
 use crate::buffer::Buffer;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
@@ -48,15 +48,15 @@ impl UnionArray {
     /// caller and assumes that each of the components are correct and consistent with each other.
     /// See `try_new` for an alternative that validates the data provided.
     ///
-    /// # Data Consistency
+    /// # Safety
     ///
     /// The `type_ids` `Buffer` should contain `i8` values.  These values should be greater than
     /// zero and must be less than the number of children provided in `child_arrays`.  These values
     /// are used to index into the `child_arrays`.
     ///
     /// The `value_offsets` `Buffer` is only provided in the case of a dense union, sparse unions
-    /// should use `None`.  If provided the `value_offsets` `Buffer` should contain `i32` values.
-    /// These values should be greater than zero and must be less than the length of the overall
+    /// should use `None`.  If provided the `value_offsets` `Buffer` should contain `i32` values
+    /// Thee values in this array should be greater than zero and must be less than the length of the overall
     /// array.
     ///
     /// In both cases above we use signed integer types to maintain compatibility with other
@@ -65,7 +65,7 @@ impl UnionArray {
     /// In both of the cases above we are accepting `Buffer`'s which are assumed to be representing
     /// `i8` and `i32` values respectively.  `Buffer` objects are untyped and no attempt is made
     /// to ensure that the data provided is valid.
-    pub fn new(
+    pub unsafe fn new_unchecked(
         type_ids: Buffer,
         value_offsets: Option<Buffer>,
         child_arrays: Vec<(Field, ArrayRef)>,
@@ -74,22 +74,28 @@ impl UnionArray {
         let (field_types, field_values): (Vec<_>, Vec<_>) =
             child_arrays.into_iter().unzip();
         let len = type_ids.len();
-        let mut builder = ArrayData::builder(DataType::Union(field_types))
+
+        let mode = if value_offsets.is_some() {
+            UnionMode::Dense
+        } else {
+            UnionMode::Sparse
+        };
+
+        let mut builder = ArrayData::builder(DataType::Union(field_types, mode))
             .add_buffer(type_ids)
             .child_data(field_values.into_iter().map(|a| a.data().clone()).collect())
             .len(len);
         if let Some(bitmap) = bitmap_data {
             builder = builder.null_bit_buffer(bitmap)
         }
-        let data = unsafe {
-            match value_offsets {
-                Some(b) => builder.add_buffer(b).build_unchecked(),
-                None => builder.build_unchecked(),
-            }
+        let data = match value_offsets {
+            Some(b) => builder.add_buffer(b).build_unchecked(),
+            None => builder.build_unchecked(),
         };
         Self::from(data)
     }
-    /// Attempts to create a new `UnionArray` and validates the inputs provided.
+
+    /// Attempts to create a new `UnionArray`, validating the inputs provided.
     pub fn try_new(
         type_ids: Buffer,
         value_offsets: Option<Buffer>,
@@ -97,8 +103,7 @@ impl UnionArray {
         bitmap: Option<Buffer>,
     ) -> Result<Self> {
         if let Some(b) = &value_offsets {
-            let nulls = count_nulls(bitmap.as_ref(), 0, type_ids.len());
-            if ((type_ids.len() - nulls) * 4) != b.len() {
+            if ((type_ids.len()) * 4) != b.len() {
                 return Err(ArrowError::InvalidArgumentError(
                     "Type Ids and Offsets represent a different number of array slots."
                         .to_string(),
@@ -137,7 +142,10 @@ impl UnionArray {
             }
         }
 
-        let new_self = Self::new(type_ids, value_offsets, child_arrays, bitmap);
+        // Unsafe Justification: arguments were validated above (and
+        // re-revalidated as part of data().validate() below)
+        let new_self =
+            unsafe { Self::new_unchecked(type_ids, value_offsets, child_arrays, bitmap) };
         new_self.data().validate()?;
 
         Ok(new_self)
@@ -173,15 +181,9 @@ impl UnionArray {
     pub fn value_offset(&self, index: usize) -> i32 {
         assert!(index - self.offset() < self.len());
         if self.is_dense() {
-            // In format v4 unions had their own validity bitmap and offsets are compressed by omitting null values
-            // Starting with v5 unions don't have a validity bitmap and it's possible to directly index into the offsets buffer
-            let valid_slots = match self.data.null_buffer() {
-                Some(b) => b.count_set_bits_offset(0, index),
-                None => index,
-            };
             // safety: reinterpreting is safe since the offset buffer contains `i32` values and is
             // properly aligned.
-            unsafe { self.data().buffers()[1].typed_data::<i32>()[valid_slots] }
+            unsafe { self.data().buffers()[1].typed_data::<i32>()[index] }
         } else {
             index as i32
         }
@@ -202,7 +204,7 @@ impl UnionArray {
     /// Returns the names of the types in the union.
     pub fn type_names(&self) -> Vec<&str> {
         match self.data.data_type() {
-            DataType::Union(fields) => fields
+            DataType::Union(fields, _) => fields
                 .iter()
                 .map(|f| f.name().as_str())
                 .collect::<Vec<&str>>(),
@@ -212,7 +214,10 @@ impl UnionArray {
 
     /// Returns whether the `UnionArray` is dense (or sparse if `false`).
     fn is_dense(&self) -> bool {
-        self.data().buffers().len() == 2
+        match self.data.data_type() {
+            DataType::Union(_, mode) => mode == &UnionMode::Dense,
+            _ => unreachable!("Union array's data type is not a union!"),
+        }
     }
 }
 

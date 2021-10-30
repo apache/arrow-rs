@@ -159,7 +159,7 @@ impl IpcDataGenerator {
                     )?;
                 }
             }
-            DataType::Union(fields) => {
+            DataType::Union(fields, _) => {
                 let union = as_union_array(column);
                 for (field, ref column) in fields
                     .iter()
