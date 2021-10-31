@@ -139,17 +139,9 @@ test_source_distribution() {
     cargo publish --dry-run
   popd
 
-  pushd arrow-flight
-    cargo publish --dry-run
-  popd
+  # Note can't verify parquet/arrow-flight/parquet-derive until arrow is actually published
+  # as they depend on arrow
 
-  pushd parquet
-    cargo publish --dry-run
-  popd
-
-  pushd parquet_derive
-    cargo publish --dry-run
-  popd
 }
 
 TEST_SUCCESS=no
