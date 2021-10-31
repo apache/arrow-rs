@@ -95,6 +95,20 @@ pub fn using_chrono_tz(tz: &str) -> Option<FixedOffset> {
         .ok()
 }
 
+/// Parse the given string into a string representing fixed-offset
+/// taking into account that this is a function of time and can vary depending on daylight saving
+/// For example: Australia/Sydney is +10:00 or +11:00 depending on DST.
+#[cfg(feature = "chrono-tz")]
+pub fn using_chrono_tz_and_naive_date_time(
+    tz: &str,
+    dt: chrono::NaiveDateTime,
+) -> Option<FixedOffset> {
+    use chrono::{Offset, TimeZone};
+    tz.parse::<chrono_tz::Tz>()
+        .map(|tz| tz.offset_from_utc_datetime(&dt).fix())
+        .ok()
+}
+
 /// Extracts the hours of a given temporal array as an array of integers
 pub fn hour<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
@@ -434,5 +448,21 @@ mod tests {
             Some("Asia/Kolkatta".to_string()),
         ));
         assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
+    }
+
+    #[cfg(feature = "chrono-tz")]
+    #[test]
+    fn test_using_chrono_tz() {
+        let sydney_offset = FixedOffset::east(10 * 60 * 60);
+        assert_eq!(
+            using_chrono_tz(&"Australia/Sydney".to_string()),
+            Some(sydney_offset)
+        );
+
+        let nyc_offset = FixedOffset::west(5 * 60 * 60);
+        assert_eq!(
+            using_chrono_tz(&"America/New_York".to_string()),
+            Some(nyc_offset)
+        );
     }
 }
