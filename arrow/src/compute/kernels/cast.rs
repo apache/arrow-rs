@@ -63,11 +63,9 @@ pub const DEFAULT_CAST_OPTIONS: CastOptions = CastOptions { safe: true };
 /// If this function returns true to stay consistent with the `cast` kernel below.
 pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     use self::DataType::*;
-    if from_type == to_type {
-        return true;
-    }
 
     match (from_type, to_type) {
+        (a, b) if a == b => true,
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
         (LargeList(list_from), LargeList(list_to)) => {
@@ -296,11 +294,8 @@ pub fn cast_with_options(
     use DataType::*;
     let from_type = array.data_type();
 
-    // clone array if types are the same
-    if from_type == to_type {
-        return Ok(array.clone());
-    }
     match (from_type, to_type) {
+        (a, b) if a == b => Ok(array.clone()),
         (Struct(_), _) => Err(ArrowError::CastError(
             "Cannot cast from struct to other types".to_string(),
         )),
