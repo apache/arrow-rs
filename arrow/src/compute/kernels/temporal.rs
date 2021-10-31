@@ -448,6 +448,22 @@ mod tests {
         assert_eq!(15, b.value(0));
     }
 
+    #[cfg(feature = "chrono-tz")]
+    #[test]
+    fn test_temporal_array_timestamp_hour_with_dst_timezone_using_chrono_tz() {
+        //
+        // 1635577147 converts to 2021-10-30 17:59:07 in time zone Australia/Sydney (AEDT)
+        // The offset (difference to UTC) is +11:00. Note that daylight savings is in effect on 2021-10-30.
+        // When daylight savings is not in effect, Australia/Sydney has an offset difference of +10:00.
+
+        let a = TimestampMillisecondArray::from_opt_vec(
+            vec![Some(1635577147000)],
+            Some("Australia/Sydney".to_string()),
+        );
+        let b = hour(&a).unwrap();
+        assert_eq!(17, b.value(0));
+    }
+
     #[cfg(not(feature = "chrono-tz"))]
     #[test]
     fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
