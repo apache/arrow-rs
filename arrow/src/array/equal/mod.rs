@@ -25,11 +25,11 @@ use super::{
     GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
     StringOffsetSizeTrait, StructArray,
 };
-
 use crate::{
     buffer::Buffer,
     datatypes::{ArrowPrimitiveType, DataType, IntervalUnit},
 };
+use half::f16;
 
 mod boolean;
 mod decimal;
@@ -251,7 +251,9 @@ fn equal_values(
             ),
             _ => unreachable!(),
         },
-        DataType::Float16 => unreachable!(),
+        DataType::Float16 => primitive_equal::<f16>(
+            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
+        ),
         DataType::Map(_, _) => {
             list_equal::<i32>(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
         }
