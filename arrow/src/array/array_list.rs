@@ -768,7 +768,7 @@ mod tests {
             .add_child_data(value_data)
             .build()
             .unwrap();
-        FixedSizeListArray::from(list_data);
+        drop(FixedSizeListArray::from(list_data));
     }
 
     #[test]
@@ -1050,7 +1050,7 @@ mod tests {
             .add_child_data(value_data)
             .build()
             .unwrap();
-        ListArray::from(list_data);
+        drop(ListArray::from(list_data));
     }
 
     #[test]
@@ -1066,7 +1066,7 @@ mod tests {
             .add_buffer(value_offsets)
             .build()
             .unwrap();
-        ListArray::from(list_data);
+        drop(ListArray::from(list_data));
     }
 
     #[test]
@@ -1088,7 +1088,7 @@ mod tests {
             .add_child_data(value_data)
             .build()
             .unwrap();
-        ListArray::from(list_data);
+        drop(ListArray::from(list_data));
     }
 
     #[test]
@@ -1101,7 +1101,7 @@ mod tests {
             .add_buffer(buf2)
             .build()
             .unwrap();
-        Int32Array::from(array_data);
+        drop(Int32Array::from(array_data));
     }
 
     #[test]
@@ -1124,7 +1124,7 @@ mod tests {
             .add_child_data(value_data)
             .build()
             .unwrap();
-        ListArray::from(list_data);
+        drop(ListArray::from(list_data));
     }
 
     #[test]

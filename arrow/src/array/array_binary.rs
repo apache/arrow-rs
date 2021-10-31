@@ -1138,7 +1138,7 @@ mod tests {
             .build()
             .unwrap();
         let list_array = ListArray::from(array_data);
-        BinaryArray::from(list_array);
+        drop(BinaryArray::from(list_array));
     }
 
     #[test]
@@ -1217,7 +1217,7 @@ mod tests {
         .build()
         .unwrap();
         let list_array = FixedSizeListArray::from(array_data);
-        FixedSizeBinaryArray::from(list_array);
+        drop(FixedSizeBinaryArray::from(list_array));
     }
 
     #[test]
