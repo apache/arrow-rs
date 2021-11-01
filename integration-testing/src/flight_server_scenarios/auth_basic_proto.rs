@@ -110,7 +110,8 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<SchemaResult>, Status> {
-        self.check_auth(request.metadata()).await?;
+        let metadata = request.metadata();
+        self.check_auth(metadata).await?;
         Err(Status::unimplemented("Not yet implemented"))
     }
 
@@ -191,7 +192,8 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        self.check_auth(request.metadata()).await?;
+        let metadata = request.metadata();
+        self.check_auth(metadata).await?;
         Err(Status::unimplemented("Not yet implemented"))
     }
 
@@ -219,7 +221,8 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoExchangeStream>, Status> {
-        self.check_auth(request.metadata()).await?;
+        let metadata = request.metadata();
+        self.check_auth(metadata).await?;
         Err(Status::unimplemented("Not yet implemented"))
     }
 }
