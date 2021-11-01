@@ -24,7 +24,8 @@ repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
 keywords = [ "arrow" ]
-edition = "2018"
+edition = "2021"
+rust-version = "1.56"
 
 [lib]
 name = "arrow_pyarrow_integration_testing"
