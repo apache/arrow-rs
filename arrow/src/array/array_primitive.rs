@@ -951,7 +951,7 @@ mod tests {
                                (values buffer)")]
     fn test_primitive_array_invalid_buffer_len() {
         let data = ArrayData::builder(DataType::Int32).len(5).build().unwrap();
-        Int32Array::from(data);
+        drop(Int32Array::from(data));
     }
 
     #[test]
