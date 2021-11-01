@@ -25,7 +25,7 @@ extern crate quote;
 
 extern crate parquet;
 
-use syn::{parse_macro_input, Data, DataStruct, DeriveInput};
+use ::syn::{parse_macro_input, Data, DataStruct, DeriveInput};
 
 mod parquet_field;
 
@@ -103,7 +103,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
     impl #generics RecordWriter<#derived_for #generics> for &[#derived_for #generics] {
       fn write_to_row_group(
         &self,
-        row_group_writer: &mut Box<parquet::file::writer::RowGroupWriter>
+        row_group_writer: &mut Box<dyn parquet::file::writer::RowGroupWriter>
       ) -> Result<(), parquet::errors::ParquetError> {
         let mut row_group_writer = row_group_writer;
         let records = &self; // Used by all the writer snippets to be more clear

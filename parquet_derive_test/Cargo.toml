@@ -24,8 +24,9 @@ homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 keywords = [ "parquet" ]
-edition = "2018"
+edition = "2021"
 publish = false
+rust-version = "1.56"
 
 [dependencies]
 parquet = { path = "../parquet", version = "7.0.0-SNAPSHOT" }

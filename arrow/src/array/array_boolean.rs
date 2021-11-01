@@ -336,6 +336,6 @@ mod tests {
             .len(5)
             .build()
             .unwrap();
-        BooleanArray::from(data);
+        drop(BooleanArray::from(data));
     }
 }

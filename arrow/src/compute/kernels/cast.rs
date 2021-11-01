@@ -68,6 +68,44 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     }
 
     match (from_type, to_type) {
+        (
+            Null,
+            Boolean
+            | Int8
+            | UInt8
+            | Int16
+            | UInt16
+            | Int32
+            | UInt32
+            | Float32
+            | Date32
+            | Time32(_)
+            | Int64
+            | UInt64
+            | Float64
+            | Date64
+            | List(_)
+            | Dictionary(_, _),
+        )
+        | (
+            Boolean
+            | Int8
+            | UInt8
+            | Int16
+            | UInt16
+            | Int32
+            | UInt32
+            | Float32
+            | Date32
+            | Time32(_)
+            | Int64
+            | UInt64
+            | Float64
+            | Date64
+            | List(_)
+            | Dictionary(_, _),
+            Null,
+        ) => true,
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
         (LargeList(list_from), LargeList(list_to)) => {
@@ -93,133 +131,71 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 
         (Utf8, LargeUtf8) => true,
         (LargeUtf8, Utf8) => true,
-        (Utf8, Date32) => true,
-        (Utf8, Date64) => true,
-        (Utf8, Timestamp(TimeUnit::Nanosecond, None)) => true,
+        (Utf8, Date32 | Date64 | Timestamp(TimeUnit::Nanosecond, None)) => true,
         (Utf8, _) => DataType::is_numeric(to_type),
-        (LargeUtf8, Date32) => true,
-        (LargeUtf8, Date64) => true,
-        (LargeUtf8, Timestamp(TimeUnit::Nanosecond, None)) => true,
+        (LargeUtf8, Date32 | Date64 | Timestamp(TimeUnit::Nanosecond, None)) => true,
         (LargeUtf8, _) => DataType::is_numeric(to_type),
         (Timestamp(_, _), Utf8) | (Timestamp(_, _), LargeUtf8) => true,
-        (_, Utf8) | (_, LargeUtf8) => {
-            DataType::is_numeric(from_type) || from_type == &Binary
-        }
+        (_, Utf8 | LargeUtf8) => DataType::is_numeric(from_type) || from_type == &Binary,
 
         // start numeric casts
-        (UInt8, UInt16) => true,
-        (UInt8, UInt32) => true,
-        (UInt8, UInt64) => true,
-        (UInt8, Int8) => true,
-        (UInt8, Int16) => true,
-        (UInt8, Int32) => true,
-        (UInt8, Int64) => true,
-        (UInt8, Float32) => true,
-        (UInt8, Float64) => true,
+        (
+            UInt8,
+            UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (UInt16, UInt8) => true,
-        (UInt16, UInt32) => true,
-        (UInt16, UInt64) => true,
-        (UInt16, Int8) => true,
-        (UInt16, Int16) => true,
-        (UInt16, Int32) => true,
-        (UInt16, Int64) => true,
-        (UInt16, Float32) => true,
-        (UInt16, Float64) => true,
+        (
+            UInt16,
+            UInt8 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (UInt32, UInt8) => true,
-        (UInt32, UInt16) => true,
-        (UInt32, UInt64) => true,
-        (UInt32, Int8) => true,
-        (UInt32, Int16) => true,
-        (UInt32, Int32) => true,
-        (UInt32, Int64) => true,
-        (UInt32, Float32) => true,
-        (UInt32, Float64) => true,
+        (
+            UInt32,
+            UInt8 | UInt16 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (UInt64, UInt8) => true,
-        (UInt64, UInt16) => true,
-        (UInt64, UInt32) => true,
-        (UInt64, Int8) => true,
-        (UInt64, Int16) => true,
-        (UInt64, Int32) => true,
-        (UInt64, Int64) => true,
-        (UInt64, Float32) => true,
-        (UInt64, Float64) => true,
+        (
+            UInt64,
+            UInt8 | UInt16 | UInt32 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (Int8, UInt8) => true,
-        (Int8, UInt16) => true,
-        (Int8, UInt32) => true,
-        (Int8, UInt64) => true,
-        (Int8, Int16) => true,
-        (Int8, Int32) => true,
-        (Int8, Int64) => true,
-        (Int8, Float32) => true,
-        (Int8, Float64) => true,
+        (
+            Int8,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int16 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (Int16, UInt8) => true,
-        (Int16, UInt16) => true,
-        (Int16, UInt32) => true,
-        (Int16, UInt64) => true,
-        (Int16, Int8) => true,
-        (Int16, Int32) => true,
-        (Int16, Int64) => true,
-        (Int16, Float32) => true,
-        (Int16, Float64) => true,
+        (
+            Int16,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (Int32, UInt8) => true,
-        (Int32, UInt16) => true,
-        (Int32, UInt32) => true,
-        (Int32, UInt64) => true,
-        (Int32, Int8) => true,
-        (Int32, Int16) => true,
-        (Int32, Int64) => true,
-        (Int32, Float32) => true,
-        (Int32, Float64) => true,
+        (
+            Int32,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (Int64, UInt8) => true,
-        (Int64, UInt16) => true,
-        (Int64, UInt32) => true,
-        (Int64, UInt64) => true,
-        (Int64, Int8) => true,
-        (Int64, Int16) => true,
-        (Int64, Int32) => true,
-        (Int64, Float32) => true,
-        (Int64, Float64) => true,
+        (
+            Int64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Float32 | Float64,
+        ) => true,
 
-        (Float32, UInt8) => true,
-        (Float32, UInt16) => true,
-        (Float32, UInt32) => true,
-        (Float32, UInt64) => true,
-        (Float32, Int8) => true,
-        (Float32, Int16) => true,
-        (Float32, Int32) => true,
-        (Float32, Int64) => true,
-        (Float32, Float64) => true,
+        (
+            Float32,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float64,
+        ) => true,
 
-        (Float64, UInt8) => true,
-        (Float64, UInt16) => true,
-        (Float64, UInt32) => true,
-        (Float64, UInt64) => true,
-        (Float64, Int8) => true,
-        (Float64, Int16) => true,
-        (Float64, Int32) => true,
-        (Float64, Int64) => true,
-        (Float64, Float32) => true,
+        (
+            Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32,
+        ) => true,
         // end numeric casts
 
         // temporal casts
-        (Int32, Date32) => true,
-        (Int32, Date64) => true,
-        (Int32, Time32(_)) => true,
-        (Date32, Int32) => true,
-        (Date32, Int64) => true,
+        (Int32, Date32 | Date64 | Time32(_)) => true,
+        (Date32, Int32 | Int64) => true,
         (Time32(_), Int32) => true,
-        (Int64, Date64) => true,
-        (Int64, Date32) => true,
-        (Int64, Time64(_)) => true,
-        (Date64, Int64) => true,
-        (Date64, Int32) => true,
+        (Int64, Date64 | Date32 | Time64(_)) => true,
+        (Date64, Int64 | Int32) => true,
         (Time64(_), Int64) => true,
         (Date32, Date64) => true,
         (Date64, Date32) => true,
@@ -233,12 +209,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Timestamp(_, _), Int64) => true,
         (Int64, Timestamp(_, _)) => true,
-        (Timestamp(_, _), Timestamp(_, _)) => true,
-        (Timestamp(_, _), Date32) => true,
-        (Timestamp(_, _), Date64) => true,
+        (Timestamp(_, _), Timestamp(_, _) | Date32 | Date64) => true,
         // date64 to timestamp might not make sense,
         (Int64, Duration(_)) => true,
-        (Null, Int32) => true,
         (_, _) => false,
     }
 }
@@ -301,6 +274,44 @@ pub fn cast_with_options(
         return Ok(array.clone());
     }
     match (from_type, to_type) {
+        (
+            Null,
+            Boolean
+            | Int8
+            | UInt8
+            | Int16
+            | UInt16
+            | Int32
+            | UInt32
+            | Float32
+            | Date32
+            | Time32(_)
+            | Int64
+            | UInt64
+            | Float64
+            | Date64
+            | List(_)
+            | Dictionary(_, _),
+        )
+        | (
+            Boolean
+            | Int8
+            | UInt8
+            | Int16
+            | UInt16
+            | Int32
+            | UInt32
+            | Float32
+            | Date32
+            | Time32(_)
+            | Int64
+            | UInt64
+            | Float64
+            | Date64
+            | List(_)
+            | Dictionary(_, _),
+            Null,
+        ) => Ok(new_null_array(to_type, array.len())),
         (Struct(_), _) => Err(ArrowError::CastError(
             "Cannot cast from struct to other types".to_string(),
         )),
@@ -946,10 +957,6 @@ pub fn cast_with_options(
                 }
             }
         }
-
-        // null to primitive/flat types
-        (Null, Int32) => Ok(Arc::new(Int32Array::from(vec![None; array.len()]))),
-
         (_, _) => Err(ArrowError::CastError(format!(
             "Casting from {:?} to {:?} not supported",
             from_type, to_type,
@@ -3518,17 +3525,39 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_null_array_to_int32() {
-        let array = Arc::new(NullArray::new(6)) as ArrayRef;
+    fn test_cast_null_array_from_and_to_others() {
+        macro_rules! typed_test {
+            ($ARR_TYPE:ident, $DATATYPE:ident, $TYPE:tt) => {{
+                {
+                    let array = Arc::new(NullArray::new(6)) as ArrayRef;
+                    let expected = $ARR_TYPE::from(vec![None; 6]);
+                    let cast_type = DataType::$DATATYPE;
+                    let cast_array = cast(&array, &cast_type).expect("cast failed");
+                    let cast_array = as_primitive_array::<$TYPE>(&cast_array);
+                    assert_eq!(cast_array.data_type(), &cast_type);
+                    assert_eq!(cast_array, &expected);
+                }
+                {
+                    let array = Arc::new($ARR_TYPE::from(vec![None; 4])) as ArrayRef;
+                    let expected = NullArray::new(4);
+                    let cast_array = cast(&array, &DataType::Null).expect("cast failed");
+                    let cast_array = as_null_array(&cast_array);
+                    assert_eq!(cast_array.data_type(), &DataType::Null);
+                    assert_eq!(cast_array, &expected);
+                }
+            }};
+        }
 
-        let expected = Int32Array::from(vec![None; 6]);
+        typed_test!(Int16Array, Int16, Int16Type);
+        typed_test!(Int32Array, Int32, Int32Type);
+        typed_test!(Int64Array, Int64, Int64Type);
 
-        // Cast to a dictionary (same value type, Utf8)
-        let cast_type = DataType::Int32;
-        let cast_array = cast(&array, &cast_type).expect("cast failed");
-        let cast_array = as_primitive_array::<Int32Type>(&cast_array);
-        assert_eq!(cast_array.data_type(), &cast_type);
-        assert_eq!(cast_array, &expected);
+        typed_test!(UInt16Array, UInt16, UInt16Type);
+        typed_test!(UInt32Array, UInt32, UInt32Type);
+        typed_test!(UInt64Array, UInt64, UInt64Type);
+
+        typed_test!(Float32Array, Float32, Float32Type);
+        typed_test!(Float64Array, Float64, Float64Type);
     }
 
     /// Print the `DictionaryArray` `array` as a vector of strings
