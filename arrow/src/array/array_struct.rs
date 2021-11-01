@@ -408,7 +408,7 @@ mod tests {
         expected = "the field data types must match the array data in a StructArray"
     )]
     fn test_struct_array_from_mismatched_types() {
-        StructArray::from(vec![
+        drop(StructArray::from(vec![
             (
                 Field::new("b", DataType::Int16, false),
                 Arc::new(BooleanArray::from(vec![false, false, true, true]))
@@ -418,7 +418,7 @@ mod tests {
                 Field::new("c", DataType::Utf8, false),
                 Arc::new(Int32Array::from(vec![42, 28, 19, 31])),
             ),
-        ]);
+        ]));
     }
 
     #[test]
@@ -515,7 +515,7 @@ mod tests {
         expected = "all child arrays of a StructArray must have the same length"
     )]
     fn test_invalid_struct_child_array_lengths() {
-        StructArray::from(vec![
+        drop(StructArray::from(vec![
             (
                 Field::new("b", DataType::Float32, false),
                 Arc::new(Float32Array::from(vec![1.1])) as Arc<dyn Array>,
@@ -524,6 +524,6 @@ mod tests {
                 Field::new("c", DataType::Float64, false),
                 Arc::new(Float64Array::from(vec![2.2, 3.3])),
             ),
-        ]);
+        ]));
     }
 }
