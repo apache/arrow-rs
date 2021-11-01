@@ -49,7 +49,6 @@ const MURMUR_R: i32 = 47;
 
 /// Rust implementation of MurmurHash2, 64-bit version for 64-bit platforms
 fn murmur_hash2_64a(data_bytes: &[u8], seed: u64) -> u64 {
-    use std::convert::TryInto;
     let len = data_bytes.len();
     let len_64 = (len / 8) * 8;
 
