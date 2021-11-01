@@ -77,7 +77,7 @@ impl<'a> Tokenizer<'a> {
     pub fn from_str(string: &'a str) -> Self {
         let vec = string
             .split_whitespace()
-            .flat_map(|t| Self::split_token(t))
+            .flat_map(Self::split_token)
             .collect();
         Tokenizer {
             tokens: vec,

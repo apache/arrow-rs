@@ -85,10 +85,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
         Data::Union(_) => unimplemented!("Union currently is not supported"),
     };
 
-    let field_infos: Vec<_> = fields
-        .iter()
-        .map(|f: &syn::Field| parquet_field::Field::from(f))
-        .collect();
+    let field_infos: Vec<_> = fields.iter().map(parquet_field::Field::from).collect();
 
     let writer_snippets: Vec<proc_macro2::TokenStream> =
         field_infos.iter().map(|x| x.writer_snippet()).collect();
