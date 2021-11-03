@@ -2270,6 +2270,7 @@ mod tests {
         regexp_is_match_utf8,
         vec![true, false, true, false, false, true]
     );
+    #[cfg_attr(miri, ignore)] // error: this test uses too much memory to run on CI
     test_flag_utf8!(
         test_utf8_array_regexp_is_match_insensitive,
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
