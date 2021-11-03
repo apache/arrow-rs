@@ -2036,6 +2036,41 @@ mod tests {
         };
     }
 
+    // These macros are the same as `test_flag_utf8` but they are not run under miri
+    macro_rules! test_flag_utf8_skip_miri {
+        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+            #[test]
+            #[cfg_attr(miri, ignore)]
+            fn $test_name() {
+                let left = StringArray::from($left);
+                let right = StringArray::from($right);
+                let res = $op(&left, &right, None).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(v, expected[i]);
+                }
+            }
+        };
+        ($test_name:ident, $left:expr, $right:expr, $flag:expr, $op:expr, $expected:expr) => {
+            #[test]
+            #[cfg_attr(miri, ignore)]
+            fn $test_name() {
+                let left = StringArray::from($left);
+                let right = StringArray::from($right);
+                let flag = Some(StringArray::from($flag));
+                let res = $op(&left, &right, flag.as_ref()).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(v, expected[i]);
+                }
+            }
+        };
+    }
+
     macro_rules! test_flag_utf8_scalar {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
             #[test]
@@ -2270,8 +2305,8 @@ mod tests {
         regexp_is_match_utf8,
         vec![true, false, true, false, false, true]
     );
-    #[cfg_attr(miri, ignore)] // error: this test uses too much memory to run on CI
-    test_flag_utf8!(
+        // error: this test uses too much memory to run on CI
+    test_flag_utf8_skip_miri!(
         test_utf8_array_regexp_is_match_insensitive,
         vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrow"],
         vec!["^ar", "^AR", "ow$", "OW$", "foo", ""],
