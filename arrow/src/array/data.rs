@@ -673,7 +673,7 @@ impl ArrayData {
             }
             DataType::Dictionary(key_type, _value_type) => {
                 // At the moment, constructing a DictionaryArray will also check this
-                if !DataType::is_integer(key_type) {
+                if !DataType::is_dictionary_key_type(key_type) {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Dictionary values must be integer, but was {}",
                         key_type
