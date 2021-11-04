@@ -656,37 +656,37 @@ where
 }
 
 /// Perform `left == right` operation on [`BooleanArray`]
-fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| !(a ^ b))
 }
 
 /// Perform `left != right` operation on [`BooleanArray`]
-fn neq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn neq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| (a ^ b))
 }
 
 /// Perform `left < right` operation on [`BooleanArray`]
-fn lt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn lt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| ((!a) & b))
 }
 
 /// Perform `left <= right` operation on [`BooleanArray`]
-fn lt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn lt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| !(a & (!b)))
 }
 
 /// Perform `left > right` operation on [`BooleanArray`]
-fn gt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn gt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| (a & (!b)))
 }
 
 /// Perform `left >= right` operation on [`BooleanArray`]
-fn gt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn gt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| !((!a) & b))
 }
 
 /// Perform `left == right` operation on [`BooleanArray`] and a scalar
-fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
     let len = left.len();
     let left_offset = left.offset();
 
@@ -715,7 +715,7 @@ fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
 }
 
 /// Perform `left != right` operation on [`BooleanArray`] and a scalar
-fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
     eq_bool_scalar(left, !right)
 }
 
