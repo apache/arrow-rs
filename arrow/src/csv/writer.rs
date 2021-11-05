@@ -35,7 +35,7 @@
 //!     Field::new("c1", DataType::Utf8, false),
 //!     Field::new("c2", DataType::Float64, true),
 //!     Field::new("c3", DataType::UInt32, false),
-//!     Field::new("c3", DataType::Boolean, true),
+//!     Field::new("c4", DataType::Boolean, true),
 //! ]);
 //! let c1 = StringArray::from(vec![
 //!     "Lorem ipsum dolor sit amet",
