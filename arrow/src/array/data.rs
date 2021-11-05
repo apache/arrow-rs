@@ -709,7 +709,7 @@ impl ArrayData {
         }
 
         // Justification: buffer size was validated above
-        let offsets = unsafe { buffer.typed_data::<T>() };
+        let offsets = unsafe { &(buffer.typed_data::<T>()[self.offset..]) };
 
         let first_offset = offsets[0].to_usize().ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!(
@@ -1541,6 +1541,26 @@ mod tests {
             vec![],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_validate_offsets_first_too_large_skipped() {
+        let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
+        // 10 is off the end of the buffer, but offset starts at 1 so it is skipped
+        let offsets_buffer = Buffer::from_slice_ref(&[10i32, 2i32, 3i32, 4i32]);
+        let data = ArrayData::try_new(
+            DataType::Utf8,
+            2,
+            None,
+            None,
+            1,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+        let array: StringArray = data.into();
+        let expected: StringArray = vec![Some("c"), Some("d")].into_iter().collect();
+        assert_eq!(array, expected);
     }
 
     #[test]
