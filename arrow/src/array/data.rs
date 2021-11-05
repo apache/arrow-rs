@@ -725,20 +725,6 @@ impl ArrayData {
             ))
         })?;
 
-        let data_extent = last_offset.checked_sub(first_offset).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Underflow computing offset extent {} - {} in {}",
-                first_offset, last_offset, self.data_type
-            ))
-        })?;
-
-        if values_length < data_extent {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Length spanned by offsets in {} ({}) is larger than the values array size ({})",
-                self.data_type, data_extent, values_length
-            )));
-        }
-
         if first_offset > values_length {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "First offset {} of {} is larger than values length {}",
@@ -753,7 +739,6 @@ impl ArrayData {
             )));
         }
 
-        // Probably unreachable given check for underflow computing offset
         if first_offset > last_offset {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "First offset {} in {} is smaller than last offset {}",
@@ -1488,7 +1473,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Underflow computing offset extent 4 - 3 in Utf8")]
+    #[should_panic(expected = "First offset 4 in Utf8 is smaller than last offset 3")]
     fn test_validate_offsets_range_too_small() {
         let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
         // start offset is larger than end
@@ -1506,9 +1491,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Length spanned by offsets in Utf8 (10) is larger than the values array size (6)"
-    )]
+    #[should_panic(expected = "Last offset 10 of Utf8 is larger than values length 6")]
     fn test_validate_offsets_range_too_large() {
         let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
         // 10 is off the end of the buffer
