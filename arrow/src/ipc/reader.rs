@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Length spanned by offsets in Utf8 (687865856) is larger than the values array size (41)"
+        expected = "Last offset 687865856 of Utf8 is larger than values length 41"
     )]
     fn read_dictionary_be_not_implemented() {
         // The offsets are not translated for big-endian files
