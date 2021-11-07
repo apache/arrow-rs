@@ -68,7 +68,7 @@
 use std::io::Write;
 
 #[cfg(feature = "chrono-tz")]
-use crate::compute::kernels::temporal::using_chrono_tz_and_naive_date_time;
+use crate::compute::kernels::temporal::using_chrono_tz_and_utc_naive_date_time;
 #[cfg(feature = "chrono-tz")]
 use chrono::{DateTime, Utc};
 
@@ -316,7 +316,7 @@ impl<W: Write> Writer<W> {
         };
         match time_zone {
             None => Ok(format!("{}Z", datetime.format(&self.timestamp_format))),
-            Some(tzs) => match using_chrono_tz_and_naive_date_time(tzs, datetime) {
+            Some(tzs) => match using_chrono_tz_and_utc_naive_date_time(tzs, datetime) {
                 Some(tz) => {
                     let utc_time = DateTime::<Utc>::from_utc(datetime, Utc);
                     Ok(format!(
