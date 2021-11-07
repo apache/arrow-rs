@@ -217,6 +217,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "chrono-tz")]
     use chrono::NaiveDate;
 
     #[test]
