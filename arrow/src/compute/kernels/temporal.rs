@@ -485,27 +485,43 @@ mod tests {
         // Sunday, 3 October 2021, 3:00:00 am local daylight time instead.
 
         // Sydney 2021-04-04T02:30:00+11:00 is 2021-04-03T15:30:00Z
-        let utc_just_before_sydney_dst_ends = NaiveDate::from_ymd(2021,4,3).and_hms_nano(15,30,0,0);
+        let utc_just_before_sydney_dst_ends =
+            NaiveDate::from_ymd(2021, 4, 3).and_hms_nano(15, 30, 0, 0);
         assert_eq!(
-            using_chrono_tz_and_utc_naive_date_time(&sydney_tz, utc_just_before_sydney_dst_ends),
+            using_chrono_tz_and_utc_naive_date_time(
+                &sydney_tz,
+                utc_just_before_sydney_dst_ends
+            ),
             Some(sydney_offset_with_dst)
         );
         // Sydney 2021-04-04T02:30:00+10:00 is 2021-04-03T16:30:00Z
-        let utc_just_after_sydney_dst_ends = NaiveDate::from_ymd(2021,4,3).and_hms_nano(16,30,0,0);
+        let utc_just_after_sydney_dst_ends =
+            NaiveDate::from_ymd(2021, 4, 3).and_hms_nano(16, 30, 0, 0);
         assert_eq!(
-            using_chrono_tz_and_utc_naive_date_time(&sydney_tz, utc_just_after_sydney_dst_ends),
+            using_chrono_tz_and_utc_naive_date_time(
+                &sydney_tz,
+                utc_just_after_sydney_dst_ends
+            ),
             Some(sydney_offset_without_dst)
         );
         // Sydney 2021-10-03T01:30:00+10:00 is 2021-10-02T15:30:00Z
-        let utc_just_before_sydney_dst_starts = NaiveDate::from_ymd(2021,10,2).and_hms_nano(15,30,0,0);
+        let utc_just_before_sydney_dst_starts =
+            NaiveDate::from_ymd(2021, 10, 2).and_hms_nano(15, 30, 0, 0);
         assert_eq!(
-            using_chrono_tz_and_utc_naive_date_time(&sydney_tz, utc_just_before_sydney_dst_starts),
+            using_chrono_tz_and_utc_naive_date_time(
+                &sydney_tz,
+                utc_just_before_sydney_dst_starts
+            ),
             Some(sydney_offset_without_dst)
         );
         // Sydney 2021-04-04T03:30:00+11:00 is 2021-10-02T16:30:00Z
-        let utc_just_after_sydney_dst_starts = NaiveDate::from_ymd(2022,10,2).and_hms_nano(16,30,0,0);
+        let utc_just_after_sydney_dst_starts =
+            NaiveDate::from_ymd(2022, 10, 2).and_hms_nano(16, 30, 0, 0);
         assert_eq!(
-            using_chrono_tz_and_utc_naive_date_time(&sydney_tz, utc_just_after_sydney_dst_starts),
+            using_chrono_tz_and_utc_naive_date_time(
+                &sydney_tz,
+                utc_just_after_sydney_dst_starts
+            ),
             Some(sydney_offset_with_dst)
         );
     }
