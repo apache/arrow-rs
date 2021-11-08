@@ -107,6 +107,36 @@ impl Field {
         self.nullable
     }
 
+    /// Returns a (flattened) vector containing all fields contained within this field (including it self)
+    pub(crate) fn fields(&self) -> Vec<&Field> {
+        let mut collected_fields = vec![self];
+        match &self.data_type {
+            DataType::Struct(fields) | DataType::Union(fields) => {
+                collected_fields.extend(fields.iter().map(|f| f.fields()).flatten())
+            }
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::Map(field, _) => collected_fields.push(field),
+            _ => (),
+        }
+
+        collected_fields
+    }
+
+    /// Returns a vector containing all (potentially nested) `Field` instances selected by the
+    /// dictionary ID they use
+    #[inline]
+    pub(crate) fn fields_with_dict_id(&self, id: i64) -> Vec<&Field> {
+        self.fields()
+            .into_iter()
+            .filter(|&field| {
+                matches!(field.data_type(), DataType::Dictionary(_, _))
+                    && field.dict_id == id
+            })
+            .collect()
+    }
+
     /// Returns the dictionary ID, if this is a dictionary type.
     #[inline]
     pub const fn dict_id(&self) -> Option<i64> {
@@ -570,5 +600,63 @@ impl Field {
 impl std::fmt::Display for Field {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{DataType, Field};
+
+    #[test]
+    fn test_fields_with_dict_id() {
+        let dict1 = Field::new_dict(
+            "dict1",
+            DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
+            false,
+            10,
+            false,
+        );
+        let dict2 = Field::new_dict(
+            "dict2",
+            DataType::Dictionary(DataType::Int32.into(), DataType::Int8.into()),
+            false,
+            20,
+            false,
+        );
+
+        let field = Field::new(
+            "struct<dict1, list[struct<dict2, list[struct<dict1]>]>",
+            DataType::Struct(vec![
+                dict1.clone(),
+                Field::new(
+                    "list[struct<dict1, list[struct<dict2>]>]",
+                    DataType::List(Box::new(Field::new(
+                        "struct<dict1, list[struct<dict2>]>",
+                        DataType::Struct(vec![
+                            dict1.clone(),
+                            Field::new(
+                                "list[struct<dict2>]",
+                                DataType::List(Box::new(Field::new(
+                                    "struct<dict2>",
+                                    DataType::Struct(vec![dict2.clone()]),
+                                    false,
+                                ))),
+                                false,
+                            ),
+                        ]),
+                        false,
+                    ))),
+                    false,
+                ),
+            ]),
+            false,
+        );
+
+        for field in field.fields_with_dict_id(10) {
+            assert_eq!(dict1, *field);
+        }
+        for field in field.fields_with_dict_id(20) {
+            assert_eq!(dict2, *field);
+        }
     }
 }

@@ -495,7 +495,7 @@ pub fn read_dictionary(
     // in the reader. Note that a dictionary batch may be shared between many fields.
     // We don't currently record the isOrdered field. This could be general
     // attributes of arrays.
-    for (i, field) in schema.fields().iter().enumerate() {
+    for (i, field) in schema.all_fields().iter().enumerate() {
         if field.dict_id() == Some(id) {
             // Add (possibly multiple) array refs to the dictionaries array.
             dictionaries_by_field[i] = Some(dictionary_values.clone());
@@ -582,7 +582,7 @@ impl<R: Read + Seek> FileReader<R> {
         let schema = ipc::convert::fb_to_schema(ipc_schema);
 
         // Create an array of optional dictionary value arrays, one per field.
-        let mut dictionaries_by_field = vec![None; schema.fields().len()];
+        let mut dictionaries_by_field = vec![None; schema.all_fields().len()];
         for block in footer.dictionaries().unwrap() {
             // read length from end of offset
             let mut message_size: [u8; 4] = [0; 4];
@@ -923,7 +923,7 @@ mod tests {
 
     use flate2::read::GzDecoder;
 
-    use crate::util::integration_util::*;
+    use crate::{datatypes, util::integration_util::*};
 
     #[test]
     fn read_generated_files_014() {
@@ -1162,6 +1162,38 @@ mod tests {
                     != 0.0
             );
         })
+    }
+
+    #[test]
+    fn test_roundtrip_nested_dict() {
+        let inner: DictionaryArray<datatypes::Int32Type> =
+            vec!["a", "b", "a"].into_iter().collect();
+
+        let array = Arc::new(inner) as ArrayRef;
+
+        let dctfield = Field::new("dict", array.data_type().clone(), false);
+
+        let s = StructArray::from(vec![(dctfield, array)]);
+        let struct_array = Arc::new(s) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "struct",
+            struct_array.data_type().clone(),
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![struct_array]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ipc::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let reader = ipc::reader::FileReader::try_new(std::io::Cursor::new(buf)).unwrap();
+        let batch2: std::result::Result<Vec<_>, _> = reader.collect();
+
+        assert_eq!(batch, batch2.unwrap()[0]);
     }
 
     /// Read gzipped JSON file
