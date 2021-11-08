@@ -184,7 +184,8 @@ pub(super) mod tests {
         offset: usize,
         null_bit_buffer: Option<Buffer>,
     ) -> Arc<ArrayData> {
-        // empty vec for buffers and children is not really correct, but for these tests we only care about the null bitmap
+        let buffer = Buffer::from(&vec![11; len]);
+
         Arc::new(
             ArrayData::try_new(
                 DataType::UInt8,
@@ -192,7 +193,7 @@ pub(super) mod tests {
                 None,
                 null_bit_buffer,
                 offset,
-                vec![],
+                vec![buffer],
                 vec![],
             )
             .unwrap(),
