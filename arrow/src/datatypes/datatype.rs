@@ -477,6 +477,16 @@ impl DataType {
         )
     }
 
+    /// Returns true if this type is valid as a dictionary key
+    /// (e.g. [`super::ArrowDictionaryKeyType`]
+    pub fn is_dictionary_key_type(t: &DataType) -> bool {
+        use DataType::*;
+        matches!(
+            t,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64
+        )
+    }
+
     /// Compares the datatype with another, ignoring nested field names
     /// and metadata.
     pub(crate) fn equals_datatype(&self, other: &DataType) -> bool {

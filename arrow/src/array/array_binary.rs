@@ -891,10 +891,18 @@ mod tests {
             assert!(binary_array.is_valid(i));
             assert!(!binary_array.is_null(i));
         }
+    }
+
+    #[test]
+    fn test_binary_array_with_offsets() {
+        let values: [u8; 12] = [
+            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
+        ];
+        let offsets: [i32; 4] = [0, 5, 5, 12];
 
         // Test binary array with offset
         let array_data = ArrayData::builder(DataType::Binary)
-            .len(4)
+            .len(2)
             .offset(1)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
@@ -947,10 +955,18 @@ mod tests {
             assert!(binary_array.is_valid(i));
             assert!(!binary_array.is_null(i));
         }
+    }
+
+    #[test]
+    fn test_large_binary_array_with_offsets() {
+        let values: [u8; 12] = [
+            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
+        ];
+        let offsets: [i64; 4] = [0, 5, 5, 12];
 
         // Test binary array with offset
         let array_data = ArrayData::builder(DataType::LargeBinary)
-            .len(4)
+            .len(2)
             .offset(1)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
@@ -1196,26 +1212,25 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "FixedSizeBinaryArray can only be created from list array of u8 values \
-                    (i.e. FixedSizeList<PrimitiveArray<u8>>)."
+        expected = "FixedSizeBinaryArray can only be created from FixedSizeList<u8> arrays"
     )]
     fn test_fixed_size_binary_array_from_incorrect_list_array() {
         let values: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         let values_data = ArrayData::builder(DataType::UInt32)
             .len(12)
             .add_buffer(Buffer::from_slice_ref(&values))
-            .add_child_data(ArrayData::builder(DataType::Boolean).build().unwrap())
             .build()
             .unwrap();
 
-        let array_data = ArrayData::builder(DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Binary, false)),
-            4,
-        ))
-        .len(3)
-        .add_child_data(values_data)
-        .build()
-        .unwrap();
+        let array_data = unsafe {
+            ArrayData::builder(DataType::FixedSizeList(
+                Box::new(Field::new("item", DataType::Binary, false)),
+                4,
+            ))
+            .len(3)
+            .add_child_data(values_data)
+            .build_unchecked()
+        };
         let list_array = FixedSizeListArray::from(array_data);
         FixedSizeBinaryArray::from(list_array);
     }
