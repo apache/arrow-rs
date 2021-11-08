@@ -552,9 +552,10 @@ mod tests {
             assert!(!list_array.is_null(i));
         }
 
-        // Now test with a non-zero offset
+        // Now test with a non-zero offset (skip first element)
+        //  [[3, 4, 5], [6, 7]]
         let list_data = ArrayData::builder(list_data_type)
-            .len(3)
+            .len(2)
             .offset(1)
             .add_buffer(value_offsets)
             .add_child_data(value_data.clone())
@@ -565,7 +566,7 @@ mod tests {
         let values = list_array.values();
         assert_eq!(&value_data, values.data());
         assert_eq!(DataType::Int32, list_array.value_type());
-        assert_eq!(3, list_array.len());
+        assert_eq!(2, list_array.len());
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[1]);
         assert_eq!(2, list_array.value_length(1));
@@ -642,8 +643,9 @@ mod tests {
         }
 
         // Now test with a non-zero offset
+        //  [[3, 4, 5], [6, 7]]
         let list_data = ArrayData::builder(list_data_type)
-            .len(3)
+            .len(2)
             .offset(1)
             .add_buffer(value_offsets)
             .add_child_data(value_data.clone())
@@ -654,7 +656,7 @@ mod tests {
         let values = list_array.values();
         assert_eq!(&value_data, values.data());
         assert_eq!(DataType::Int32, list_array.value_type());
-        assert_eq!(3, list_array.len());
+        assert_eq!(2, list_array.len());
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[1]);
         assert_eq!(2, list_array.value_length(1));
@@ -763,11 +765,12 @@ mod tests {
             Box::new(Field::new("item", DataType::Int32, false)),
             3,
         );
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
+        let list_data = unsafe {
+            ArrayData::builder(list_data_type)
+                .len(3)
+                .add_child_data(value_data)
+                .build_unchecked()
+        };
         drop(FixedSizeListArray::from(list_data));
     }
 
@@ -1038,18 +1041,20 @@ mod tests {
         expected = "ListArray data should contain a single buffer only (value offsets)"
     )]
     fn test_list_array_invalid_buffer_len() {
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
+        let value_data = unsafe {
+            ArrayData::builder(DataType::Int32)
+                .len(8)
+                .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
+                .build_unchecked()
+        };
         let list_data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
+        let list_data = unsafe {
+            ArrayData::builder(list_data_type)
+                .len(3)
+                .add_child_data(value_data)
+                .build_unchecked()
+        };
         drop(ListArray::from(list_data));
     }
 
@@ -1061,11 +1066,12 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref(&[0, 2, 5, 7]);
         let list_data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .build()
-            .unwrap();
+        let list_data = unsafe {
+            ArrayData::builder(list_data_type)
+                .len(3)
+                .add_buffer(value_offsets)
+                .build_unchecked()
+        };
         drop(ListArray::from(list_data));
     }
 
@@ -1112,18 +1118,20 @@ mod tests {
         let buf2 = buf.slice(1);
 
         let values: [i32; 8] = [0; 8];
-        let value_data = ArrayData::builder(DataType::Int32)
-            .add_buffer(Buffer::from_slice_ref(&values))
-            .build()
-            .unwrap();
+        let value_data = unsafe {
+            ArrayData::builder(DataType::Int32)
+                .add_buffer(Buffer::from_slice_ref(&values))
+                .build_unchecked()
+        };
 
         let list_data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
-        let list_data = ArrayData::builder(list_data_type)
-            .add_buffer(buf2)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
+        let list_data = unsafe {
+            ArrayData::builder(list_data_type)
+                .add_buffer(buf2)
+                .add_child_data(value_data)
+                .build_unchecked()
+        };
         drop(ListArray::from(list_data));
     }
 

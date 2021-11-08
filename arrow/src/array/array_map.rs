@@ -320,7 +320,7 @@ mod tests {
 
         // Now test with a non-zero offset
         let map_data = ArrayData::builder(map_array.data_type().clone())
-            .len(3)
+            .len(2)
             .offset(1)
             .add_buffer(map_array.data().buffers()[0].clone())
             .add_child_data(map_array.data().child_data()[0].clone())
@@ -331,7 +331,7 @@ mod tests {
         let values = map_array.values();
         assert_eq!(&value_data, values.data());
         assert_eq!(DataType::UInt32, map_array.value_type());
-        assert_eq!(3, map_array.len());
+        assert_eq!(2, map_array.len());
         assert_eq!(0, map_array.null_count());
         assert_eq!(6, map_array.value_offsets()[1]);
         assert_eq!(2, map_array.value_length(1));
