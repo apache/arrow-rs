@@ -228,6 +228,68 @@ where
     compare_op_scalar_primitive!(left, right, op)
 }
 
+fn is_like_pattern(c: char) -> bool {
+    c == '%' || c == '_'
+}
+
+/// Evaluate regex `op(left)` matching `right` on [`StringArray`] / [`LargeStringArray`]
+///
+/// If `negate_regex` is true, the regex expression will be negated. (for example, with `not like`)
+fn regex_like<OffsetSize, F>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &GenericStringArray<OffsetSize>,
+    negate_regex: bool,
+    op: F,
+) -> Result<BooleanArray>
+where
+    OffsetSize: StringOffsetSizeTrait,
+    F: Fn(&str) -> Result<Regex>,
+{
+    let mut map = HashMap::new();
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length"
+                .to_string(),
+        ));
+    }
+
+    let null_bit_buffer =
+        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
+
+    let mut result = BooleanBufferBuilder::new(left.len());
+    for i in 0..left.len() {
+        let haystack = left.value(i);
+        let pat = right.value(i);
+        let re = if let Some(ref regex) = map.get(pat) {
+            regex
+        } else {
+            let re_pattern = pat.replace("%", ".*").replace("_", ".");
+            let re = op(&re_pattern)?;
+            map.insert(pat, re);
+            map.get(pat).unwrap()
+        };
+
+        result.append(if negate_regex {
+            !re.is_match(haystack)
+        } else {
+            re.is_match(haystack)
+        });
+    }
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.finish()],
+            vec![],
+        )
+    };
+    Ok(BooleanArray::from(data))
+}
+
 /// Perform SQL `left LIKE right` operation on [`StringArray`] / [`LargeStringArray`].
 ///
 /// There are two wildcards supported with the LIKE operator:
@@ -250,54 +312,14 @@ pub fn like_utf8<OffsetSize: StringOffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    let mut map = HashMap::new();
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
-        ));
-    }
-
-    let null_bit_buffer =
-        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
-
-    let mut result = BooleanBufferBuilder::new(left.len());
-    for i in 0..left.len() {
-        let haystack = left.value(i);
-        let pat = right.value(i);
-        let re = if let Some(ref regex) = map.get(pat) {
-            regex
-        } else {
-            let re_pattern = pat.replace("%", ".*").replace("_", ".");
-            let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
-                ArrowError::ComputeError(format!(
-                    "Unable to build regex from LIKE pattern: {}",
-                    e
-                ))
-            })?;
-            map.insert(pat, re);
-            map.get(pat).unwrap()
-        };
-
-        result.append(re.is_match(haystack));
-    }
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.finish()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
-}
-
-fn is_like_pattern(c: char) -> bool {
-    c == '%' || c == '_'
+    regex_like(left, right, false, |re_pattern| {
+        Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+            ArrowError::ComputeError(format!(
+                "Unable to build regex from LIKE pattern: {}",
+                e
+            ))
+        })
+    })
 }
 
 /// Perform SQL `left LIKE right` operation on [`StringArray`] /
@@ -376,50 +398,14 @@ pub fn nlike_utf8<OffsetSize: StringOffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    let mut map = HashMap::new();
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
-        ));
-    }
-
-    let null_bit_buffer =
-        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
-
-    let mut result = BooleanBufferBuilder::new(left.len());
-    for i in 0..left.len() {
-        let haystack = left.value(i);
-        let pat = right.value(i);
-        let re = if let Some(ref regex) = map.get(pat) {
-            regex
-        } else {
-            let re_pattern = pat.replace("%", ".*").replace("_", ".");
-            let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
-                ArrowError::ComputeError(format!(
-                    "Unable to build regex from LIKE pattern: {}",
-                    e
-                ))
-            })?;
-            map.insert(pat, re);
-            map.get(pat).unwrap()
-        };
-
-        result.append(!re.is_match(haystack));
-    }
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.finish()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    regex_like(left, right, true, |re_pattern| {
+        Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
+            ArrowError::ComputeError(format!(
+                "Unable to build regex from LIKE pattern: {}",
+                e
+            ))
+        })
+    })
 }
 
 /// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
@@ -485,49 +471,14 @@ pub fn ilike_utf8<OffsetSize: StringOffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    let mut map = HashMap::new();
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
-        ));
-    }
-
-    let null_bit_buffer =
-        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
-
-    let mut result = BooleanBufferBuilder::new(left.len());
-    for i in 0..left.len() {
-        let haystack = left.value(i);
-        let pat = right.value(i);
-        let re = if let Some(ref regex) = map.get(pat) {
-            regex
-        } else {
-            let re_pattern = pat.replace("%", ".*").replace("_", ".");
-            let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-                ArrowError::ComputeError(format!(
-                    "Unable to build regex from ILIKE pattern: {}",
-                    e
-                ))
-            })?;
-            map.insert(pat, re);
-            map.get(pat).unwrap()
-        };
-        result.append(re.is_match(haystack));
-    }
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::Boolean,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.finish()],
-            vec![],
-        )
-    };
-    Ok(BooleanArray::from(data))
+    regex_like(left, right, false, |re_pattern| {
+        Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+            ArrowError::ComputeError(format!(
+                "Unable to build regex from ILIKE pattern: {}",
+                e
+            ))
+        })
+    })
 }
 
 /// Perform SQL `left ILIKE right` operation on [`StringArray`] /
