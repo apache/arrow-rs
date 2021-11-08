@@ -111,8 +111,9 @@ impl Field {
     pub(crate) fn fields(&self) -> Vec<&Field> {
         let mut collected_fields = vec![self];
         match &self.data_type {
-            DataType::Struct(fields) | DataType::Union(fields) => collected_fields
-                .extend(fields.iter().map(|f| f.fields()).flatten()),
+            DataType::Struct(fields) | DataType::Union(fields) => {
+                collected_fields.extend(fields.iter().map(|f| f.fields()).flatten())
+            }
             DataType::List(field)
             | DataType::LargeList(field)
             | DataType::FixedSizeList(field, _)
@@ -129,13 +130,9 @@ impl Field {
     pub(crate) fn fields_with_dict_id(&self, id: i64) -> Vec<&Field> {
         self.fields()
             .into_iter()
-            .filter_map(|field| {
-                match field.data_type() {
-                    DataType::Dictionary(_, _) if field.dict_id == id => {
-                        Some(field)
-                    }
-                    _ => None
-                }
+            .filter(|&field| {
+                matches!(field.data_type(), DataType::Dictionary(_, _))
+                    && field.dict_id == id
             })
             .collect()
     }
