@@ -112,7 +112,7 @@ impl Field {
         let mut collected_fields = vec![self];
         match &self.data_type {
             DataType::Struct(fields) | DataType::Union(fields) => collected_fields
-                .append(&mut fields.iter().map(|f| f.fields()).flatten().collect()),
+                .extend(fields.iter().map(|f| f.fields()).flatten()),
             DataType::List(field)
             | DataType::LargeList(field)
             | DataType::FixedSizeList(field, _)
@@ -123,29 +123,21 @@ impl Field {
         collected_fields
     }
 
-    /// Adds all (potentially nested) `Field` instances selected by the dictionary ID they use into
-    /// the `dictfields` vector.
-    fn collect_fields_with_dict_id<'a>(
-        &'a self,
-        dictfields: &'_ mut Vec<&'a Field>,
-        id: i64,
-    ) {
-        for field in self.fields() {
-            if let DataType::Dictionary(_, _) = field.data_type() {
-                if field.dict_id == id {
-                    dictfields.push(field);
-                }
-            }
-        }
-    }
-
     /// Returns a vector containing all (potentially nested) `Field` instances selected by the
     /// dictionary ID they use
     #[inline]
     pub(crate) fn fields_with_dict_id(&self, id: i64) -> Vec<&Field> {
-        let mut fields = Vec::new();
-        self.collect_fields_with_dict_id(&mut fields, id);
-        fields
+        self.fields()
+            .into_iter()
+            .filter_map(|field| {
+                match field.data_type() {
+                    DataType::Dictionary(_, _) if field.dict_id == id => {
+                        Some(field)
+                    }
+                    _ => None
+                }
+            })
+            .collect()
     }
 
     /// Returns the dictionary ID, if this is a dictionary type.
