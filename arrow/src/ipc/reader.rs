@@ -969,13 +969,28 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(
+        expected = "Last offset 687865856 of Utf8 is larger than values length 41"
+    )]
+    fn read_dictionary_be_not_implemented() {
+        // The offsets are not translated for big-endian files
+        // https://github.com/apache/arrow-rs/issues/859
+        let testdata = crate::util::test_util::arrow_test_data();
+        let file = File::open(format!(
+                "{}/arrow-ipc-stream/integration/1.0.0-bigendian/generated_dictionary.arrow_file",
+                testdata
+            ))
+            .unwrap();
+        FileReader::try_new(file).unwrap();
+    }
+
+    #[test]
     fn read_generated_be_files_should_work() {
         // complementary to the previous test
         let testdata = crate::util::test_util::arrow_test_data();
         let paths = vec![
             "generated_interval",
             "generated_datetime",
-            "generated_dictionary",
             "generated_map",
             "generated_nested",
             "generated_null_trivial",

@@ -2153,6 +2153,7 @@ mod tests {
         assert_eq!(4, values.null_count());
         let u16arr = values.as_any().downcast_ref::<UInt16Array>().unwrap();
 
+        // expect 4 nulls: negative numbers and overflow
         let expected: UInt16Array =
             vec![Some(0), Some(0), Some(0), None, None, None, Some(2), None]
                 .into_iter()
