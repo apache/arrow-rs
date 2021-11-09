@@ -26,7 +26,8 @@ authors = ["Apache Arrow <dev@arrow.apache.org>"]
 keywords = [ "arrow", "parquet", "hadoop" ]
 readme = "README.md"
 build = "build.rs"
-edition = "2018"
+edition = "2021"
+rust-version = "1.56"
 
 [dependencies]
 # update note: pin `parquet-format` to specific version until it does not break at minor

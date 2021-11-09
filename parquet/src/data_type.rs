@@ -36,7 +36,7 @@ use crate::util::{
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
-#[derive(Clone, Debug, PartialOrd)]
+#[derive(Clone, Debug, PartialOrd, Default)]
 pub struct Int96 {
     value: Option<[u32; 3]>,
 }
@@ -75,12 +75,6 @@ impl Int96 {
     }
 }
 
-impl Default for Int96 {
-    fn default() -> Self {
-        Self { value: None }
-    }
-}
-
 impl PartialEq for Int96 {
     fn eq(&self, other: &Int96) -> bool {
         match (&self.value, &other.value) {
@@ -109,7 +103,7 @@ impl fmt::Display for Int96 {
 
 /// Rust representation for BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY Parquet physical types.
 /// Value is backed by a byte buffer.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ByteArray {
     data: Option<ByteBufferPtr>,
 }
@@ -228,12 +222,6 @@ impl From<ByteBuffer> for ByteArray {
         Self {
             data: Some(buf.consume()),
         }
-    }
-}
-
-impl Default for ByteArray {
-    fn default() -> Self {
-        ByteArray { data: None }
     }
 }
 

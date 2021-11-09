@@ -580,10 +580,8 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
         Some(flag) => format!("(?{}){}", flag, regex),
         None => regex.to_string(),
     };
-    if pattern == *"" {
-        for _i in 0..array.len() {
-            result.append(true);
-        }
+    if pattern.is_empty() {
+        result.append_n(array.len(), true);
     } else {
         let re = Regex::new(pattern.as_str()).map_err(|e| {
             ArrowError::ComputeError(format!(
@@ -597,6 +595,7 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
         }
     }
 
+    let buffer = result.finish();
     let data = unsafe {
         ArrayData::new_unchecked(
             DataType::Boolean,
@@ -604,7 +603,7 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             None,
             null_bit_buffer,
             0,
-            vec![result.finish()],
+            vec![buffer],
             vec![],
         )
     };
@@ -657,37 +656,37 @@ where
 }
 
 /// Perform `left == right` operation on [`BooleanArray`]
-fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| !(a ^ b))
 }
 
 /// Perform `left != right` operation on [`BooleanArray`]
-fn neq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn neq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| (a ^ b))
 }
 
 /// Perform `left < right` operation on [`BooleanArray`]
-fn lt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn lt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| ((!a) & b))
 }
 
 /// Perform `left <= right` operation on [`BooleanArray`]
-fn lt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn lt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| !(a & (!b)))
 }
 
 /// Perform `left > right` operation on [`BooleanArray`]
-fn gt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn gt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| (a & (!b)))
 }
 
 /// Perform `left >= right` operation on [`BooleanArray`]
-fn gt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
+pub fn gt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
     binary_boolean_op(left, right, |a, b| !((!a) & b))
 }
 
 /// Perform `left == right` operation on [`BooleanArray`] and a scalar
-fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
     let len = left.len();
     let left_offset = left.offset();
 
@@ -716,7 +715,7 @@ fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
 }
 
 /// Perform `left != right` operation on [`BooleanArray`] and a scalar
-fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+pub fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
     eq_bool_scalar(left, !right)
 }
 
