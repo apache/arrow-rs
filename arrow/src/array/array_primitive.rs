@@ -894,7 +894,7 @@ mod tests {
     #[test]
     fn test_primitive_array_builder() {
         // Test building a primitive array with ArrayData builder and offset
-        let buf = Buffer::from_slice_ref(&[0, 1, 2, 3, 4]);
+        let buf = Buffer::from_slice_ref(&[0i32, 1, 2, 3, 4, 5, 6]);
         let buf2 = buf.clone();
         let data = ArrayData::builder(DataType::Int32)
             .len(5)
@@ -950,8 +950,16 @@ mod tests {
     #[should_panic(expected = "PrimitiveArray data should contain a single buffer only \
                                (values buffer)")]
     fn test_primitive_array_invalid_buffer_len() {
-        let data = ArrayData::builder(DataType::Int32).len(5).build().unwrap();
-        Int32Array::from(data);
+        let buffer = Buffer::from_slice_ref(&[0i32, 1, 2, 3, 4]);
+        let data = unsafe {
+            ArrayData::builder(DataType::Int32)
+                .add_buffer(buffer.clone())
+                .add_buffer(buffer)
+                .len(5)
+                .build_unchecked()
+        };
+
+        drop(Int32Array::from(data));
     }
 
     #[test]

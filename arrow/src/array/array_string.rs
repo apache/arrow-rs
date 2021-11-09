@@ -405,7 +405,7 @@ mod tests {
     #[should_panic(expected = "[Large]StringArray expects Datatype::[Large]Utf8")]
     fn test_string_array_from_int() {
         let array = LargeStringArray::from(vec!["a", "b"]);
-        StringArray::from(array.data().clone());
+        drop(StringArray::from(array.data().clone()));
     }
 
     #[test]

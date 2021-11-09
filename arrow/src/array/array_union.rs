@@ -137,7 +137,10 @@ impl UnionArray {
             }
         }
 
-        Ok(Self::new(type_ids, value_offsets, child_arrays, bitmap))
+        let new_self = Self::new(type_ids, value_offsets, child_arrays, bitmap);
+        new_self.data().validate()?;
+
+        Ok(new_self)
     }
 
     /// Accesses the child array for `type_id`.
