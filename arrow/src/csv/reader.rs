@@ -1343,6 +1343,8 @@ mod tests {
         assert_eq!(infer_field_schema("10"), DataType::Int64);
         assert_eq!(infer_field_schema("10.2"), DataType::Float64);
         assert_eq!(infer_field_schema(".2"), DataType::Float64);
+        // Should be parsed as Float or Int. See https://github.com/apache/arrow-rs/issues/929
+        assert_eq!(infer_field_schema("2."), DataType::Utf8);
         assert_eq!(infer_field_schema("true"), DataType::Boolean);
         assert_eq!(infer_field_schema("false"), DataType::Boolean);
         assert_eq!(infer_field_schema("2020-11-08"), DataType::Date32);
