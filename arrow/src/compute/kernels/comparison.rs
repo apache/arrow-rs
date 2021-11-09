@@ -580,10 +580,8 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
         Some(flag) => format!("(?{}){}", flag, regex),
         None => regex.to_string(),
     };
-    if pattern == *"" {
-        for _i in 0..array.len() {
-            result.append(true);
-        }
+    if pattern.is_empty() {
+        result.append_n(array.len(), true);
     } else {
         let re = Regex::new(pattern.as_str()).map_err(|e| {
             ArrowError::ComputeError(format!(
@@ -597,6 +595,7 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
         }
     }
 
+    let buffer = result.finish();
     let data = unsafe {
         ArrayData::new_unchecked(
             DataType::Boolean,
@@ -604,7 +603,7 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             None,
             null_bit_buffer,
             0,
-            vec![result.finish()],
+            vec![buffer],
             vec![],
         )
     };
