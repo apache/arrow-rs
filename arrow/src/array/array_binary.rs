@@ -1272,8 +1272,41 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_append_error_value() {
+        let mut decimal_builder = DecimalBuilder::new(10, 5, 3);
+        let mut result = decimal_builder.append_value(123456);
+        let mut error = result.unwrap_err();
+        assert_eq!(
+            "Decimal error: The value of 123456 i128 is not compatible with Decimal(5,3)",
+            error.to_string()
+        );
+        decimal_builder.append_value(12345).unwrap();
+        let arr = decimal_builder.finish();
+        assert_eq!("12.345", arr.value_as_string(0));
+
+        decimal_builder = DecimalBuilder::new(10, 2, 1);
+        result = decimal_builder.append_value(100);
+        error = result.unwrap_err();
+        assert_eq!(
+            "Decimal error: The value of 100 i128 is not compatible with Decimal(2,1)",
+            error.to_string()
+        );
+        decimal_builder.append_value(99).unwrap();
+        result = decimal_builder.append_value(-100);
+        error = result.unwrap_err();
+        assert_eq!(
+            "Decimal error: The value of -100 i128 is not compatible with Decimal(2,1)",
+            error.to_string()
+        );
+        decimal_builder.append_value(-99).unwrap();
+        let arr = decimal_builder.finish();
+        assert_eq!("9.9", arr.value_as_string(0));
+        assert_eq!("-9.9", arr.value_as_string(1));
+    }
+
+    #[test]
     fn test_decimal_array_value_as_string() {
-        let mut decimal_builder = DecimalBuilder::new(7, 5, 3);
+        let mut decimal_builder = DecimalBuilder::new(7, 6, 3);
         for value in [123450, -123450, 100, -100, 10, -10, 0] {
             decimal_builder.append_value(value).unwrap();
         }

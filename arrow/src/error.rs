@@ -41,6 +41,7 @@ pub enum ArrowError {
     /// Error during import or export to/from the C Data Interface
     CDataInterface(String),
     DictionaryKeyOverflowError,
+    DecimalError(String),
 }
 
 impl ArrowError {
@@ -124,6 +125,9 @@ impl Display for ArrowError {
             }
             ArrowError::DictionaryKeyOverflowError => {
                 write!(f, "Dictionary key bigger than the key type")
+            }
+            ArrowError::DecimalError(desc) => {
+                write!(f, "Decimal error: {}", desc)
             }
         }
     }
