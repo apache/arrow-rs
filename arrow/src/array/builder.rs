@@ -1515,7 +1515,7 @@ impl DecimalBuilder {
         if value > MAX_DECIMAL_FOR_EACH_PRECISION[self.precision - 1]
             || value < MIN_DECIMAL_FOR_EACH_PRECISION[self.precision - 1]
         {
-            return Err(ArrowError::DecimalError(format!(
+            return Err(ArrowError::InvalidArgumentError(format!(
                 "The value of {} i128 is not compatible with Decimal({},{})",
                 value, self.precision, self.scale
             )));
