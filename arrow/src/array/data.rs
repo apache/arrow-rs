@@ -1114,7 +1114,9 @@ impl ArrayDataBuilder {
 mod tests {
     use super::*;
 
-    use crate::array::{Array, Int32Array, StringArray};
+    use crate::array::{
+        Array, BooleanBuilder, Int32Array, Int32Builder, StringArray, StructBuilder,
+    };
     use crate::buffer::Buffer;
     use crate::datatypes::Field;
     use crate::util::bit_util;
@@ -1639,5 +1641,102 @@ mod tests {
     /// returns a buffer initialized with some constant value for tests
     fn make_f32_buffer(n: usize) -> Buffer {
         Buffer::from_slice_ref(&vec![42f32; n])
+    }
+
+    #[test]
+    fn test_try_new_sliced_struct() {
+        let mut builder = StructBuilder::new(
+            vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Boolean, true),
+            ],
+            vec![
+                Box::new(Int32Builder::new(5)),
+                Box::new(BooleanBuilder::new(5)),
+            ],
+        );
+
+        // struct[0] = { a: 10, b: true }
+        builder
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_option(Some(10))
+            .unwrap();
+        builder
+            .field_builder::<BooleanBuilder>(1)
+            .unwrap()
+            .append_option(Some(true))
+            .unwrap();
+        builder.append(true).unwrap();
+
+        // struct[1] = null
+        builder
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_option(None)
+            .unwrap();
+        builder
+            .field_builder::<BooleanBuilder>(1)
+            .unwrap()
+            .append_option(None)
+            .unwrap();
+        builder.append(false).unwrap();
+
+        // struct[2] = { a: null, b: false }
+        builder
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_option(None)
+            .unwrap();
+        builder
+            .field_builder::<BooleanBuilder>(1)
+            .unwrap()
+            .append_option(Some(false))
+            .unwrap();
+        builder.append(true).unwrap();
+
+        // struct[3] = { a: 21, b: null }
+        builder
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_option(Some(21))
+            .unwrap();
+        builder
+            .field_builder::<BooleanBuilder>(1)
+            .unwrap()
+            .append_option(None)
+            .unwrap();
+        builder.append(true).unwrap();
+
+        // struct[4] = { a: 18, b: false }
+        builder
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_option(Some(18))
+            .unwrap();
+        builder
+            .field_builder::<BooleanBuilder>(1)
+            .unwrap()
+            .append_option(Some(false))
+            .unwrap();
+        builder.append(true).unwrap();
+
+        let struct_array = builder.finish();
+        let struct_array_slice = struct_array.slice(1, 3);
+        let struct_array_data = struct_array_slice.data();
+
+        let cloned_data = ArrayData::try_new(
+            struct_array_slice.data_type().clone(),
+            struct_array_slice.len(),
+            None, // force new to compute the number of null bits
+            struct_array_data.null_buffer().cloned(),
+            struct_array_slice.offset(),
+            struct_array_data.buffers().to_vec(),
+            struct_array_data.child_data().to_vec(),
+        )
+        .unwrap();
+        let cloned = crate::array::make_array(cloned_data);
+
+        assert_eq!(&struct_array_slice, &cloned);
     }
 }
