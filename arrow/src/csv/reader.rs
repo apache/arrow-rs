@@ -58,6 +58,7 @@ use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
 
 use csv_crate::{ByteRecord, StringRecord};
+use std::ops::Neg;
 
 lazy_static! {
     static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d*\.\d+)$").unwrap();
@@ -787,7 +788,7 @@ fn parse_decimal(s: &str) -> Result<i128> {
                     // do nothing
                 }
                 b'0'..=b'9' => {
-                    result = result + i128::from(bytes[offset - 1] - b'0') * base;
+                    result += i128::from(bytes[offset - 1] - b'0') * base;
                     base *= 10;
                 }
                 _ => {
@@ -800,7 +801,7 @@ fn parse_decimal(s: &str) -> Result<i128> {
             offset -= 1;
         }
         if negitive {
-            Ok(result * -1)
+            Ok(result.neg())
         } else {
             Ok(result)
         }
@@ -1143,8 +1144,8 @@ mod tests {
     fn test_csv_reader_with_decimal() {
         let schema = Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
-            Field::new("lat", DataType::Decimal(26,6), false),
-            Field::new("lng", DataType::Decimal(26,6), false),
+            Field::new("lat", DataType::Decimal(26, 6), false),
+            Field::new("lng", DataType::Decimal(26, 6), false),
         ]);
 
         let file = File::open("test/data/uk_cities.csv").unwrap();
