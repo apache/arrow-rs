@@ -267,6 +267,11 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install ${{ matrix.rust }}
+          rustup default ${{ matrix.rust }}
+          rustup component add rustfmt clippy
       - name: Cache Cargo
         uses: actions/cache@v2
         with:
@@ -287,6 +292,8 @@ jobs:
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
 
+          rustup toolchain install stable
+          rustup default stable
           cargo install --version 0.18.2 cargo-tarpaulin
           cargo tarpaulin --all --out Xml
       - name: Report coverage

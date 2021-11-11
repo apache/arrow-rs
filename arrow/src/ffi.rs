@@ -132,9 +132,9 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
     let schema = &mut *schema;
 
     // take ownership back to release it.
-    CString::from_raw(schema.format as *mut c_char);
+    drop(CString::from_raw(schema.format as *mut c_char));
     if !schema.name.is_null() {
-        CString::from_raw(schema.name as *mut c_char);
+        drop(CString::from_raw(schema.name as *mut c_char));
     }
     if !schema.private_data.is_null() {
         let private_data = Box::from_raw(schema.private_data as *mut SchemaPrivateData);

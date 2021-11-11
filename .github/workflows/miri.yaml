@@ -34,17 +34,6 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v2
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache2-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v2
-        with:
-          path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-miri-cache-${{ matrix.rust }}
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
@@ -55,9 +44,4 @@ jobs:
           RUST_BACKTRACE: full
           RUST_LOG: "trace"
         run: |
-          export MIRIFLAGS="-Zmiri-disable-isolation"
-          cargo miri setup
-          cargo clean
-          # Currently only the arrow crate is tested with miri
-          # IO related tests and some unsupported tests are skipped
-          cargo miri test -p arrow -- --skip csv --skip ipc --skip json
+          bash .github/workflows/miri.sh

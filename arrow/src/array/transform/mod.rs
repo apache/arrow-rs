@@ -182,8 +182,6 @@ fn build_extend_dictionary(
     max: usize,
 ) -> Option<Extend> {
     use crate::datatypes::*;
-    use std::convert::TryInto;
-
     match array.data_type() {
         DataType::Dictionary(child_data_type, _) => match child_data_type.as_ref() {
             DataType::UInt8 => {

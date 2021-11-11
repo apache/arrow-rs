@@ -136,7 +136,7 @@ impl TreeBuilder {
                 .column_descr_ptr();
             let col_reader = row_group_reader.get_column_reader(orig_index).unwrap();
             let column = TripletIter::new(col_descr, col_reader, self.batch_size);
-            Reader::PrimitiveReader(field, column)
+            Reader::PrimitiveReader(field, Box::new(column))
         } else {
             match field.get_basic_info().converted_type() {
                 // List types
@@ -319,7 +319,7 @@ impl TreeBuilder {
 /// Reader tree for record assembly
 pub enum Reader {
     // Primitive reader with type information and triplet iterator
-    PrimitiveReader(TypePtr, TripletIter),
+    PrimitiveReader(TypePtr, Box<TripletIter>),
     // Optional reader with definition level of a parent and a reader
     OptionReader(i16, Box<Reader>),
     // Group (struct) reader with type information, definition level and list of child

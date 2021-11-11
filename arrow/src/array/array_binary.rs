@@ -891,10 +891,18 @@ mod tests {
             assert!(binary_array.is_valid(i));
             assert!(!binary_array.is_null(i));
         }
+    }
+
+    #[test]
+    fn test_binary_array_with_offsets() {
+        let values: [u8; 12] = [
+            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
+        ];
+        let offsets: [i32; 4] = [0, 5, 5, 12];
 
         // Test binary array with offset
         let array_data = ArrayData::builder(DataType::Binary)
-            .len(4)
+            .len(2)
             .offset(1)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
@@ -947,10 +955,18 @@ mod tests {
             assert!(binary_array.is_valid(i));
             assert!(!binary_array.is_null(i));
         }
+    }
+
+    #[test]
+    fn test_large_binary_array_with_offsets() {
+        let values: [u8; 12] = [
+            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
+        ];
+        let offsets: [i64; 4] = [0, 5, 5, 12];
 
         // Test binary array with offset
         let array_data = ArrayData::builder(DataType::LargeBinary)
-            .len(4)
+            .len(2)
             .offset(1)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
@@ -1138,7 +1154,7 @@ mod tests {
             .build()
             .unwrap();
         let list_array = ListArray::from(array_data);
-        BinaryArray::from(list_array);
+        drop(BinaryArray::from(list_array));
     }
 
     #[test]
@@ -1196,28 +1212,27 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "FixedSizeBinaryArray can only be created from list array of u8 values \
-                    (i.e. FixedSizeList<PrimitiveArray<u8>>)."
+        expected = "FixedSizeBinaryArray can only be created from FixedSizeList<u8> arrays"
     )]
     fn test_fixed_size_binary_array_from_incorrect_list_array() {
         let values: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         let values_data = ArrayData::builder(DataType::UInt32)
             .len(12)
             .add_buffer(Buffer::from_slice_ref(&values))
-            .add_child_data(ArrayData::builder(DataType::Boolean).build().unwrap())
             .build()
             .unwrap();
 
-        let array_data = ArrayData::builder(DataType::FixedSizeList(
-            Box::new(Field::new("item", DataType::Binary, false)),
-            4,
-        ))
-        .len(3)
-        .add_child_data(values_data)
-        .build()
-        .unwrap();
+        let array_data = unsafe {
+            ArrayData::builder(DataType::FixedSizeList(
+                Box::new(Field::new("item", DataType::Binary, false)),
+                4,
+            ))
+            .len(3)
+            .add_child_data(values_data)
+            .build_unchecked()
+        };
         let list_array = FixedSizeListArray::from(array_data);
-        FixedSizeBinaryArray::from(list_array);
+        drop(FixedSizeBinaryArray::from(list_array));
     }
 
     #[test]
@@ -1272,8 +1287,41 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_append_error_value() {
+        let mut decimal_builder = DecimalBuilder::new(10, 5, 3);
+        let mut result = decimal_builder.append_value(123456);
+        let mut error = result.unwrap_err();
+        assert_eq!(
+            "Invalid argument error: The value of 123456 i128 is not compatible with Decimal(5,3)",
+            error.to_string()
+        );
+        decimal_builder.append_value(12345).unwrap();
+        let arr = decimal_builder.finish();
+        assert_eq!("12.345", arr.value_as_string(0));
+
+        decimal_builder = DecimalBuilder::new(10, 2, 1);
+        result = decimal_builder.append_value(100);
+        error = result.unwrap_err();
+        assert_eq!(
+            "Invalid argument error: The value of 100 i128 is not compatible with Decimal(2,1)",
+            error.to_string()
+        );
+        decimal_builder.append_value(99).unwrap();
+        result = decimal_builder.append_value(-100);
+        error = result.unwrap_err();
+        assert_eq!(
+            "Invalid argument error: The value of -100 i128 is not compatible with Decimal(2,1)",
+            error.to_string()
+        );
+        decimal_builder.append_value(-99).unwrap();
+        let arr = decimal_builder.finish();
+        assert_eq!("9.9", arr.value_as_string(0));
+        assert_eq!("-9.9", arr.value_as_string(1));
+    }
+
+    #[test]
     fn test_decimal_array_value_as_string() {
-        let mut decimal_builder = DecimalBuilder::new(7, 5, 3);
+        let mut decimal_builder = DecimalBuilder::new(7, 6, 3);
         for value in [123450, -123450, 100, -100, 10, -10, 0] {
             decimal_builder.append_value(value).unwrap();
         }
