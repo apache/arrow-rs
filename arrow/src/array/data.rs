@@ -790,12 +790,11 @@ impl ArrayData {
                 for (i, field) in fields.iter().enumerate() {
                     let field_data = self.get_valid_child_data(i, field.data_type())?;
 
-                    // C++ does this check, but it is not clear why
-                    // field_data checks only len, but self checks len+offset
-                    if field_data.len < (self.len + self.offset) {
+                    // Ensure child field has sufficient size
+                    if field_data.len < self.len {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "{} child array #{} for field {} has length smaller than expected for struct array ({} < {})",
-                            self.data_type, i, field.name(), field_data.len, self.len + self.offset
+                            self.data_type, i, field.name(), field_data.len, self.len
                         )));
                     }
                 }
