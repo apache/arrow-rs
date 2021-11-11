@@ -50,7 +50,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use crate::array::{
-    ArrayRef, BooleanArray, DictionaryArray, PrimitiveArray, StringArray,
+    ArrayRef, BooleanArray, DecimalBuilder, DictionaryArray, PrimitiveArray, StringArray,
 };
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::datatypes::*;
@@ -99,7 +99,7 @@ fn infer_field_schema(string: &str) -> DataType {
 ///
 /// If `max_read_records` is not set, the whole file is read to infer its schema.
 ///
-/// Return infered schema and number of records used for inference. This function does not change
+/// Return inferred schema and number of records used for inference. This function does not change
 /// reader cursor offset.
 pub fn infer_file_schema<R: Read + Seek>(
     reader: &mut R,
@@ -513,6 +513,9 @@ fn parse(
             let field = &fields[i];
             match field.data_type() {
                 DataType::Boolean => build_boolean_array(line_number, rows, i),
+                DataType::Decimal(p, v) => {
+                    build_decimal_array(line_number, rows, i, *p, *v)
+                }
                 DataType::Int8 => build_primitive_array::<Int8Type>(line_number, rows, i),
                 DataType::Int16 => {
                     build_primitive_array::<Int16Type>(line_number, rows, i)
@@ -725,6 +728,87 @@ fn parse_bool(string: &str) -> Option<bool> {
         Some(true)
     } else {
         None
+    }
+}
+
+// parse the column string to an Arrow Array
+fn build_decimal_array(
+    line_number: usize,
+    rows: &[StringRecord],
+    col_idx: usize,
+    precision: usize,
+    scale: usize,
+) -> Result<ArrayRef> {
+    let mut decimal_builder = DecimalBuilder::new(line_number, precision, scale);
+    for row in rows {
+        let col_s = row.get(col_idx);
+        match col_s {
+            None => {
+                // No data for this row
+                decimal_builder.append_null()?;
+            }
+            Some(s) => {
+                if s.is_empty() {
+                    // append null
+                    decimal_builder.append_null()?;
+                } else {
+                    let decimal_value: Result<i128> = parse_decimal(s);
+                    match decimal_value {
+                        Ok(v) => {
+                            decimal_builder.append_value(v)?;
+                        }
+                        Err(e) => {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Arc::new(decimal_builder.finish()))
+}
+
+// parse the string format decimal value to i128 format.
+// like "125.12" to 12512_i128.
+fn parse_decimal(s: &str) -> Result<i128> {
+    if DECIMAL_RE.is_match(s) {
+        let mut offset = s.len();
+        // each byte is digit、'-' or '.'
+        let bytes = s.as_bytes();
+        let mut negitive = false;
+        let mut result: i128 = 0;
+        let mut base = 1;
+        while offset > 0 {
+            match bytes[offset - 1] {
+                b'-' => {
+                    negitive = true;
+                }
+                b'.' => {
+                    // do nothing
+                }
+                b'0'..=b'9' => {
+                    result = result + i128::from(bytes[offset - 1] - b'0') * base;
+                    base *= 10;
+                }
+                _ => {
+                    return Err(ArrowError::ParseError(format!(
+                        "can't match byte {}",
+                        bytes[offset - 1]
+                    )));
+                }
+            }
+            offset -= 1;
+        }
+        if negitive {
+            Ok(result * -1)
+        } else {
+            Ok(result)
+        }
+    } else {
+        Err(ArrowError::ParseError(format!(
+            "can't parse the string value {} to decimal",
+            s
+        )))
     }
 }
 
@@ -1056,6 +1140,39 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_reader_with_decimal() {
+        let schema = Schema::new(vec![
+            Field::new("city", DataType::Utf8, false),
+            Field::new("lat", DataType::Decimal(26,6), false),
+            Field::new("lng", DataType::Decimal(26,6), false),
+        ]);
+
+        let file = File::open("test/data/uk_cities.csv").unwrap();
+
+        let mut csv = Reader::new(
+            file,
+            Arc::new(schema.clone()),
+            false,
+            None,
+            1024,
+            None,
+            None,
+        );
+        let batch = csv.next().unwrap().unwrap();
+        // access data from a primitive array
+        let lat = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<DecimalArray>()
+            .unwrap();
+
+        assert_eq!("57.653484", lat.value_as_string(0));
+        assert_eq!("53.002666", lat.value_as_string(1));
+        assert_eq!("52.412811", lat.value_as_string(2));
+        assert_eq!("51.481583", lat.value_as_string(3))
+    }
+
+    #[test]
     fn test_csv_from_buf_reader() {
         let schema = Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
@@ -1346,6 +1463,8 @@ mod tests {
         assert_eq!(infer_field_schema("false"), DataType::Boolean);
         assert_eq!(infer_field_schema("2020-11-08"), DataType::Date32);
         assert_eq!(infer_field_schema("2020-11-08T14:20:01"), DataType::Date64);
+        assert_eq!(infer_field_schema("-5.13"), DataType::Float64);
+        assert_eq!(infer_field_schema("0.1300"), DataType::Float64);
     }
 
     #[test]
@@ -1370,6 +1489,22 @@ mod tests {
             parse_item::<Date64Type>("1900-02-28T12:34:56").unwrap(),
             -2203932304000
         );
+    }
+
+    #[test]
+    fn test_parse_decimal() {
+        let tests = [
+            ("123.00", 12300i128),
+            ("123.123", 123123i128),
+            ("0.0123", 123i128),
+            ("0.12300", 12300i128),
+            ("-5.123", -5123i128),
+            ("-45.432432", -45432432i128),
+        ];
+        for (s, i) in tests {
+            let result = parse_decimal(s);
+            assert_eq!(i, result.unwrap());
+        }
     }
 
     /// Interprets a naive_datetime (with no explicit timezone offset)
