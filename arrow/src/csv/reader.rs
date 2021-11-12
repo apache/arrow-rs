@@ -1150,15 +1150,7 @@ mod tests {
 
         let file = File::open("test/data/uk_cities.csv").unwrap();
 
-        let mut csv = Reader::new(
-            file,
-            Arc::new(schema.clone()),
-            false,
-            None,
-            1024,
-            None,
-            None,
-        );
+        let mut csv = Reader::new(file, Arc::new(schema), false, None, 1024, None, None);
         let batch = csv.next().unwrap().unwrap();
         // access data from a primitive array
         let lat = batch
