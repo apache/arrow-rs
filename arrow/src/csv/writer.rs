@@ -314,23 +314,25 @@ impl<W: Write> Writer<W> {
                 .value_as_datetime(row_index)
                 .unwrap(),
         };
-        match time_zone {
-            None => Ok(format!("{}Z", datetime.format(&self.timestamp_format))),
-            Some(tzs) => match using_chrono_tz_and_utc_naive_date_time(tzs, datetime) {
-                Some(tz) => {
-                    let utc_time = DateTime::<Utc>::from_utc(datetime, Utc);
-                    Ok(format!(
-                        "{}",
-                        utc_time
-                            .with_timezone(&tz)
-                            .format(&self.timestamp_tz_format)
-                    ))
-                }
-                err => Err(ArrowError::ComputeError(format!(
-                    "{}: {:?}",
-                    "Unable to parse timezone", err
-                ))),
-            },
+        let tzs = match time_zone {
+            None => "UTC".to_string(),
+            Some(tzs) => tzs.to_string(),
+        };
+
+        match using_chrono_tz_and_utc_naive_date_time(&tzs, datetime) {
+            Some(tz) => {
+                let utc_time = DateTime::<Utc>::from_utc(datetime, Utc);
+                Ok(format!(
+                    "{}",
+                    utc_time
+                        .with_timezone(&tz)
+                        .format(&self.timestamp_tz_format)
+                ))
+            }
+            err => Err(ArrowError::ComputeError(format!(
+                "{}: {:?}",
+                "Unable to parse timezone", err
+            ))),
         }
     }
 
@@ -499,13 +501,13 @@ mod tests {
 
     use crate::csv::Reader;
     use crate::datatypes::{Field, Schema};
+    #[cfg(feature = "chrono-tz")]
     use crate::util::string_writer::StringWriter;
     use crate::util::test_util::get_temp_file;
     use std::fs::File;
     use std::io::{Cursor, Read};
     use std::sync::Arc;
 
-    #[cfg(not(feature = "chrono-tz"))]
     #[test]
     fn test_write_csv() {
         let schema = Schema::new(vec![
@@ -568,7 +570,16 @@ mod tests {
         let mut buffer: Vec<u8> = vec![];
         file.read_to_end(&mut buffer).unwrap();
 
-        assert_eq!(
+        let expected = if cfg!(feature = "chrono-tz") {
+            r#"c1,c2,c3,c4,c5,c6,c7
+Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
+consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000+00:00,06:51:20,cupcakes
+sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000+00:00,23:46:03,foo
+Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
+consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000+00:00,06:51:20,cupcakes
+sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000+00:00,23:46:03,foo
+"#
+        } else {
             r#"c1,c2,c3,c4,c5,c6,c7
 Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
@@ -577,86 +588,8 @@ Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
 consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,cupcakes
 sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
 "#
-            .to_string(),
-            String::from_utf8(buffer).unwrap()
-        );
-    }
-
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_write_csv() {
-        let schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, false),
-            Field::new("c2", DataType::Float64, true),
-            Field::new("c3", DataType::UInt32, false),
-            Field::new("c4", DataType::Boolean, true),
-            Field::new("c5", DataType::Timestamp(TimeUnit::Millisecond, None), true),
-            Field::new("c6", DataType::Time32(TimeUnit::Second), false),
-            Field::new(
-                "c7",
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                false,
-            ),
-        ]);
-
-        let c1 = StringArray::from(vec![
-            "Lorem ipsum dolor sit amet",
-            "consectetur adipiscing elit",
-            "sed do eiusmod tempor",
-        ]);
-        let c2 = PrimitiveArray::<Float64Type>::from(vec![
-            Some(123.564532),
-            None,
-            Some(-556132.25),
-        ]);
-        let c3 = PrimitiveArray::<UInt32Type>::from(vec![3, 2, 1]);
-        let c4 = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let c5 = TimestampMillisecondArray::from_opt_vec(
-            vec![None, Some(1555584887378), Some(1555555555555)],
-            None,
-        );
-        let c6 = Time32SecondArray::from(vec![1234, 24680, 85563]);
-        let c7: DictionaryArray<Int32Type> =
-            vec!["cupcakes", "cupcakes", "foo"].into_iter().collect();
-
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![
-                Arc::new(c1),
-                Arc::new(c2),
-                Arc::new(c3),
-                Arc::new(c4),
-                Arc::new(c5),
-                Arc::new(c6),
-                Arc::new(c7),
-            ],
-        )
-        .unwrap();
-
-        let file = get_temp_file("columns.csv", &[]);
-
-        let mut writer = Writer::new(file);
-        let batches = vec![&batch, &batch];
-        for batch in batches {
-            writer.write(batch).unwrap();
-        }
-        // check that file was written successfully
-        let mut file = File::open("target/debug/testdata/columns.csv").unwrap();
-        let mut buffer: Vec<u8> = vec![];
-        file.read_to_end(&mut buffer).unwrap();
-
-        assert_eq!(
-            r#"c1,c2,c3,c4,c5,c6,c7
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000Z,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000Z,23:46:03,foo
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,cupcakes
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000Z,06:51:20,cupcakes
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000Z,23:46:03,foo
-"#
-            .to_string(),
-            String::from_utf8(buffer).unwrap()
-        );
+        };
+        assert_eq!(expected.to_string(), String::from_utf8(buffer).unwrap());
     }
 
     #[test]
@@ -719,74 +652,6 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000Z,23:46:03,foo
         );
     }
 
-    #[cfg(not(feature = "chrono-tz"))]
-    #[test]
-    fn test_export_csv_string() {
-        let schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, false),
-            Field::new("c2", DataType::Float64, true),
-            Field::new("c3", DataType::UInt32, false),
-            Field::new("c4", DataType::Boolean, true),
-            Field::new("c5", DataType::Timestamp(TimeUnit::Millisecond, None), true),
-            Field::new("c6", DataType::Time32(TimeUnit::Second), false),
-            Field::new("c7", DataType::Decimal(6, 2), false),
-        ]);
-
-        let c1 = StringArray::from(vec![
-            "Lorem ipsum dolor sit amet",
-            "consectetur adipiscing elit",
-            "sed do eiusmod tempor",
-        ]);
-        let c2 = PrimitiveArray::<Float64Type>::from(vec![
-            Some(123.564532),
-            None,
-            Some(-556132.25),
-        ]);
-        let c3 = PrimitiveArray::<UInt32Type>::from(vec![3, 2, 1]);
-        let c4 = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let c5 = TimestampMillisecondArray::from_opt_vec(
-            vec![None, Some(1555584887378), Some(1555555555555)],
-            None,
-        );
-        let c6 = Time32SecondArray::from(vec![1234, 24680, 85563]);
-        let mut c7_builder = DecimalBuilder::new(5, 6, 2);
-        c7_builder.append_value(12345_i128).unwrap();
-        c7_builder.append_value(-12345_i128).unwrap();
-        c7_builder.append_null().unwrap();
-        let c7 = c7_builder.finish();
-
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![
-                Arc::new(c1),
-                Arc::new(c2),
-                Arc::new(c3),
-                Arc::new(c4),
-                Arc::new(c5),
-                Arc::new(c6),
-                Arc::new(c7),
-            ],
-        )
-        .unwrap();
-
-        let sw = StringWriter::new();
-        let mut writer = Writer::new(sw);
-        let batches = vec![&batch, &batch];
-        for batch in batches {
-            writer.write(batch).unwrap();
-        }
-
-        let left = "c1,c2,c3,c4,c5,c6,c7
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,123.45
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,-123.45
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,123.45
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000,06:51:20,-123.45
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,\n";
-        let right = writer.writer.into_inner().map(|s| s.to_string());
-        assert_eq!(Some(left.to_string()), right.ok());
-    }
-
     #[cfg(feature = "chrono-tz")]
     #[test]
     fn test_export_csv_timestamps() {
@@ -827,89 +692,8 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,\n";
         }
 
         let left = "c1,c2
-2019-04-18T20:54:47.378000000+10:00,2019-04-18T10:54:47.378000000Z
-2021-10-30T17:59:07.000000000+11:00,2021-10-30T06:59:07.000000000Z\n";
-        let right = writer.writer.into_inner().map(|s| s.to_string());
-        assert_eq!(Some(left.to_string()), right.ok());
-    }
-
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_export_csv_string() {
-        let schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, false),
-            Field::new("c2", DataType::Float64, true),
-            Field::new("c3", DataType::UInt32, false),
-            Field::new("c4", DataType::Boolean, true),
-            Field::new("c5", DataType::Timestamp(TimeUnit::Millisecond, None), true),
-            Field::new("c6", DataType::Time32(TimeUnit::Second), false),
-            Field::new("c7", DataType::Decimal(6, 2), false),
-            Field::new(
-                "c8",
-                DataType::Timestamp(
-                    TimeUnit::Millisecond,
-                    Some("Australia/Sydney".to_string()),
-                ),
-                true,
-            ),
-        ]);
-
-        let c1 = StringArray::from(vec![
-            "Lorem ipsum dolor sit amet",
-            "consectetur adipiscing elit",
-            "sed do eiusmod tempor",
-        ]);
-        let c2 = PrimitiveArray::<Float64Type>::from(vec![
-            Some(123.564532),
-            None,
-            Some(-556132.25),
-        ]);
-        let c3 = PrimitiveArray::<UInt32Type>::from(vec![3, 2, 1]);
-        let c4 = BooleanArray::from(vec![Some(true), Some(false), None]);
-        let c5 = TimestampMillisecondArray::from_opt_vec(
-            vec![None, Some(1555584887378), Some(1555555555555)],
-            None,
-        );
-        let c6 = Time32SecondArray::from(vec![1234, 24680, 85563]);
-        let mut c7_builder = DecimalBuilder::new(5, 6, 2);
-        c7_builder.append_value(12345_i128).unwrap();
-        c7_builder.append_value(-12345_i128).unwrap();
-        c7_builder.append_null().unwrap();
-        let c7 = c7_builder.finish();
-        let c8 = TimestampMillisecondArray::from_opt_vec(
-            vec![None, Some(1555584887378), Some(1635577147000)],
-            Some("Australia/Sydney".to_string()),
-        );
-
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![
-                Arc::new(c1),
-                Arc::new(c2),
-                Arc::new(c3),
-                Arc::new(c4),
-                Arc::new(c5),
-                Arc::new(c6),
-                Arc::new(c7),
-                Arc::new(c8),
-            ],
-        )
-        .unwrap();
-
-        let sw = StringWriter::new();
-        let mut writer = Writer::new(sw);
-        let batches = vec![&batch, &batch];
-        for batch in batches {
-            writer.write(batch).unwrap();
-        }
-
-        let left = "c1,c2,c3,c4,c5,c6,c7,c8
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,123.45,
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000Z,06:51:20,-123.45,2019-04-18T20:54:47.378000000+10:00
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000Z,23:46:03,,2021-10-30T17:59:07.000000000+11:00
-Lorem ipsum dolor sit amet,123.564532,3,true,,00:20:34,123.45,
-consectetur adipiscing elit,,2,false,2019-04-18T10:54:47.378000000Z,06:51:20,-123.45,2019-04-18T20:54:47.378000000+10:00
-sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000Z,23:46:03,,2021-10-30T17:59:07.000000000+11:00\n";
+2019-04-18T20:54:47.378000000+10:00,2019-04-18T10:54:47.378000000+00:00
+2021-10-30T17:59:07.000000000+11:00,2021-10-30T06:59:07.000000000+00:00\n";
         let right = writer.writer.into_inner().map(|s| s.to_string());
         assert_eq!(Some(left.to_string()), right.ok());
     }
@@ -976,16 +760,14 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000Z,23:46:03,,202
             Field::new("c3", DataType::Timestamp(TimeUnit::Nanosecond, None), false),
         ]);
 
+        let nanoseconds = vec![
+            1599566300000000000,
+            1599566200000000000,
+            1599566100000000000,
+        ];
         let c1 = Date32Array::from(vec![3, 2, 1]);
         let c2 = Date64Array::from(vec![3, 2, 1]);
-        let c3 = TimestampNanosecondArray::from_vec(
-            vec![
-                1599566300000000000,
-                1599566200000000000,
-                1599566100000000000,
-            ],
-            None,
-        );
+        let c3 = TimestampNanosecondArray::from_vec(nanoseconds.clone(), None);
 
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -1029,11 +811,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000Z,23:46:03,,202
         let expected = vec![Some(3), Some(2), Some(1)];
         assert_eq!(actual, expected);
         let actual = c3.into_iter().collect::<Vec<_>>();
-        let expected = vec![
-            Some(1599566300000000000),
-            Some(1599566200000000000),
-            Some(1599566100000000000),
-        ];
+        let expected = nanoseconds.into_iter().map(|x| Some(x)).collect::<Vec<_>>();
         assert_eq!(actual, expected);
     }
 }

@@ -95,6 +95,13 @@ pub fn using_chrono_tz(tz: &str) -> Option<FixedOffset> {
         .ok()
 }
 
+#[cfg(not(feature = "chrono-tz"))]
+pub fn using_chrono_tz_and_utc_naive_date_time(
+    _tz: &str,
+    _utc: chrono::NaiveDateTime,
+) -> Option<FixedOffset> {
+    Some(FixedOffset::east(0))
+}
 /// Parse the given string into a string representing fixed-offset that is correct as of the given
 /// UTC NaiveDateTime.
 /// Note that the offset is function of time and can vary depending on whether daylight savings is
