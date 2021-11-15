@@ -64,7 +64,7 @@ use std::ops::Neg;
 lazy_static! {
     static ref PARSE_DECIMAL_RE: Regex =
         Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
-    static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d*\.\d+)$").unwrap();
+    static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d*\.\d+|\d+\.\d*)$").unwrap();
     static ref INTEGER_RE: Regex = Regex::new(r"^-?(\d+)$").unwrap();
     static ref BOOLEAN_RE: Regex = RegexBuilder::new(r"^(true)$|^(false)$")
         .case_insensitive(true)
@@ -1536,8 +1536,7 @@ mod tests {
         assert_eq!(infer_field_schema("10"), DataType::Int64);
         assert_eq!(infer_field_schema("10.2"), DataType::Float64);
         assert_eq!(infer_field_schema(".2"), DataType::Float64);
-        // Should be parsed as Float or Int. See https://github.com/apache/arrow-rs/issues/929
-        assert_eq!(infer_field_schema("2."), DataType::Utf8);
+        assert_eq!(infer_field_schema("2."), DataType::Float64);
         assert_eq!(infer_field_schema("true"), DataType::Boolean);
         assert_eq!(infer_field_schema("false"), DataType::Boolean);
         assert_eq!(infer_field_schema("2020-11-08"), DataType::Date32);
@@ -1840,6 +1839,8 @@ mod tests {
         assert_eq!(Some(-12.34), parse_item::<Float64Type>("-12.34"));
         assert_eq!(Some(12.0), parse_item::<Float64Type>("12"));
         assert_eq!(Some(0.0), parse_item::<Float64Type>("0"));
+        assert_eq!(Some(2.0), parse_item::<Float64Type>("2."));
+        assert_eq!(Some(0.2), parse_item::<Float64Type>(".2"));
         assert!(parse_item::<Float64Type>("nan").unwrap().is_nan());
         assert!(parse_item::<Float64Type>("NaN").unwrap().is_nan());
         assert!(parse_item::<Float64Type>("inf").unwrap().is_infinite());
