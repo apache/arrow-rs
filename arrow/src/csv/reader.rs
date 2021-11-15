@@ -51,6 +51,7 @@ use std::sync::Arc;
 
 use crate::array::{
     ArrayRef, BooleanArray, DecimalBuilder, DictionaryArray, PrimitiveArray, StringArray,
+    MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::datatypes::*;
@@ -61,6 +62,8 @@ use csv_crate::{ByteRecord, StringRecord};
 use std::ops::Neg;
 
 lazy_static! {
+    static ref PARSE_DECIMAL_RE: Regex =
+        Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
     static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d*\.\d+)$").unwrap();
     static ref INTEGER_RE: Regex = Regex::new(r"^-?(\d+)$").unwrap();
     static ref BOOLEAN_RE: Regex = RegexBuilder::new(r"^(true)$|^(false)$")
@@ -514,8 +517,8 @@ fn parse(
             let field = &fields[i];
             match field.data_type() {
                 DataType::Boolean => build_boolean_array(line_number, rows, i),
-                DataType::Decimal(p, v) => {
-                    build_decimal_array(line_number, rows, i, *p, *v)
+                DataType::Decimal(precision, scale) => {
+                    build_decimal_array(line_number, rows, i, *precision, *scale)
                 }
                 DataType::Int8 => build_primitive_array::<Int8Type>(line_number, rows, i),
                 DataType::Int16 => {
@@ -734,13 +737,13 @@ fn parse_bool(string: &str) -> Option<bool> {
 
 // parse the column string to an Arrow Array
 fn build_decimal_array(
-    line_number: usize,
+    _line_number: usize,
     rows: &[StringRecord],
     col_idx: usize,
     precision: usize,
     scale: usize,
 ) -> Result<ArrayRef> {
-    let mut decimal_builder = DecimalBuilder::new(line_number, precision, scale);
+    let mut decimal_builder = DecimalBuilder::new(rows.len(), precision, scale);
     for row in rows {
         let col_s = row.get(col_idx);
         match col_s {
@@ -753,7 +756,8 @@ fn build_decimal_array(
                     // append null
                     decimal_builder.append_null()?;
                 } else {
-                    let decimal_value: Result<i128> = parse_decimal(s);
+                    let decimal_value: Result<i128> =
+                        parse_decimal_with_parameter(s, precision, scale);
                     match decimal_value {
                         Ok(v) => {
                             decimal_builder.append_value(v)?;
@@ -769,20 +773,42 @@ fn build_decimal_array(
     Ok(Arc::new(decimal_builder.finish()))
 }
 
-// parse the string format decimal value to i128 format.
-// like "125.12" to 12512_i128.
-fn parse_decimal(s: &str) -> Result<i128> {
-    if DECIMAL_RE.is_match(s) {
+// Parse the string format decimal value to i128 format and checking the precision and scale.
+// The result i128 value can't be out of bounds.
+fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Result<i128> {
+    if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
+        let len = s.len();
         // each byte is digit、'-' or '.'
-        let bytes = s.as_bytes();
-        let mut negitive = false;
-        let mut result: i128 = 0;
         let mut base = 1;
+
+        // handle the value after the '.' and meet the scale
+        let delimiter_position = s.find('.');
+        match delimiter_position {
+            None => {
+                // there is no '.'
+                base = 10_i128.pow(scale as u32);
+            }
+            Some(mid) => {
+                // there is the '.'
+                if len - mid >= scale + 1 {
+                    // If the string value is "123.12345" and the scale is 2, we should just remain '.12' and drop the '345' value.
+                    offset -= len - mid - 1 - scale;
+                } else {
+                    // If the string value is "123.12" and the scale is 4, we should append '00' to the tail.
+                    base = 10_i128.pow((scale + 1 + mid - len) as u32);
+                }
+            }
+        };
+
+        let bytes = s.as_bytes();
+        let mut negative = false;
+        let mut result: i128 = 0;
+
         while offset > 0 {
             match bytes[offset - 1] {
                 b'-' => {
-                    negitive = true;
+                    negative = true;
                 }
                 b'.' => {
                     // do nothing
@@ -800,7 +826,58 @@ fn parse_decimal(s: &str) -> Result<i128> {
             }
             offset -= 1;
         }
-        if negitive {
+        if negative {
+            result = result.neg();
+        }
+        if result > MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1]
+            || result < MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1]
+        {
+            return Err(ArrowError::ParseError(format!(
+                "parse decimal overflow, the precision {}, the scale {}, the value {}",
+                precision, scale, s
+            )));
+        }
+        Ok(result)
+    } else {
+        Err(ArrowError::ParseError(format!(
+            "can't parse the string value {} to decimal",
+            s
+        )))
+    }
+}
+
+// Parse the string format decimal value to i128 format without checking the precision and scale.
+// Like "125.12" to 12512_i128.
+fn parse_decimal(s: &str) -> Result<i128> {
+    if PARSE_DECIMAL_RE.is_match(s) {
+        let mut offset = s.len();
+        // each byte is digit、'-' or '.'
+        let bytes = s.as_bytes();
+        let mut negative = false;
+        let mut result: i128 = 0;
+        let mut base = 1;
+        while offset > 0 {
+            match bytes[offset - 1] {
+                b'-' => {
+                    negative = true;
+                }
+                b'.' => {
+                    // do nothing
+                }
+                b'0'..=b'9' => {
+                    result += i128::from(bytes[offset - 1] - b'0') * base;
+                    base *= 10;
+                }
+                _ => {
+                    return Err(ArrowError::ParseError(format!(
+                        "can't match byte {}",
+                        bytes[offset - 1]
+                    )));
+                }
+            }
+            offset -= 1;
+        }
+        if negative {
             Ok(result.neg())
         } else {
             Ok(result)
@@ -1148,7 +1225,7 @@ mod tests {
             Field::new("lng", DataType::Decimal(26, 6), false),
         ]);
 
-        let file = File::open("test/data/uk_cities.csv").unwrap();
+        let file = File::open("test/data/decimal_test.csv").unwrap();
 
         let mut csv = Reader::new(file, Arc::new(schema), false, None, 1024, None, None);
         let batch = csv.next().unwrap().unwrap();
@@ -1162,7 +1239,13 @@ mod tests {
         assert_eq!("57.653484", lat.value_as_string(0));
         assert_eq!("53.002666", lat.value_as_string(1));
         assert_eq!("52.412811", lat.value_as_string(2));
-        assert_eq!("51.481583", lat.value_as_string(3))
+        assert_eq!("51.481583", lat.value_as_string(3));
+        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("50.760000", lat.value_as_string(5));
+        assert_eq!("0.123000", lat.value_as_string(6));
+        assert_eq!("123.000000", lat.value_as_string(7));
+        assert_eq!("123.000000", lat.value_as_string(8));
+        assert_eq!("-50.760000", lat.value_as_string(9));
     }
 
     #[test]
@@ -1500,6 +1583,54 @@ mod tests {
         for (s, i) in tests {
             let result = parse_decimal(s);
             assert_eq!(i, result.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_parse_decimal_with_parameter() {
+        let tests = [
+            ("123.123", 123123i128),
+            ("123.1234", 123123i128),
+            ("123.1", 123100i128),
+            ("123", 123000i128),
+            ("-123.123", -123123i128),
+            ("-123.1234", -123123i128),
+            ("-123.1", -123100i128),
+            ("-123", -123000i128),
+            ("0.0000123", 0i128),
+            ("12.", 12000i128),
+            ("-12.", -12000i128),
+            ("00.1", 100i128),
+            ("-00.1", -100i128),
+            ("12345678912345678.1234", 12345678912345678123i128),
+            ("-12345678912345678.1234", -12345678912345678123i128),
+            ("99999999999999999.999", 99999999999999999999i128),
+            ("-99999999999999999.999", -99999999999999999999i128),
+            (".123", 123i128),
+            ("-.123", -123i128),
+            ("123.", 123000i128),
+            ("-123.", -123000i128),
+        ];
+        for (s, i) in tests {
+            let result = parse_decimal_with_parameter(s, 20, 3);
+            assert_eq!(i, result.unwrap())
+        }
+        let can_not_parse_tests = ["123,123", "."];
+        for s in can_not_parse_tests {
+            let result = parse_decimal_with_parameter(s, 20, 3);
+            assert_eq!(
+                format!(
+                    "Parser error: can't parse the string value {} to decimal",
+                    s
+                ),
+                result.unwrap_err().to_string()
+            );
+        }
+        let overflow_parse_tests = ["12345678", "12345678.9", "99999999.99"];
+        for s in overflow_parse_tests {
+            let result = parse_decimal_with_parameter(s, 10, 3);
+            assert_eq!(format!(
+                "Parser error: parse decimal overflow, the precision {}, the scale {}, the value {}", 10,3, s),result.unwrap_err().to_string());
         }
     }
 
