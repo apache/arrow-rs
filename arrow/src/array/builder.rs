@@ -1118,7 +1118,7 @@ pub struct FixedSizeBinaryBuilder {
     builder: FixedSizeListBuilder<UInt8Builder>,
 }
 
-const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
+pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     9,
     99,
     999,
@@ -1158,7 +1158,7 @@ const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     9999999999999999999999999999999999999,
     170141183460469231731687303715884105727,
 ];
-const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
+pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     -9,
     -99,
     -999,
