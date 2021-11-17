@@ -779,7 +779,6 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
     if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
         let len = s.len();
-        // each byte is digit、'-' or '.'
         let mut base = 1;
 
         // handle the value after the '.' and meet the scale
@@ -801,31 +800,23 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
             }
         };
 
+        // each byte is digit、'-' or '.'
         let bytes = s.as_bytes();
         let mut negative = false;
         let mut result: i128 = 0;
 
-        while offset > 0 {
-            match bytes[offset - 1] {
-                b'-' => {
-                    negative = true;
-                }
-                b'.' => {
-                    // do nothing
-                }
-                b'0'..=b'9' => {
-                    result += i128::from(bytes[offset - 1] - b'0') * base;
-                    base *= 10;
-                }
-                _ => {
-                    return Err(ArrowError::ParseError(format!(
-                        "can't match byte {}",
-                        bytes[offset - 1]
-                    )));
-                }
+        bytes[0..offset].iter().rev().for_each(|&byte| match byte {
+            b'-' => {
+                negative = true;
             }
-            offset -= 1;
-        }
+            b'0'..=b'9' => {
+                result += i128::from(byte - b'0') * base;
+                base *= 10;
+            }
+            // because of the PARSE_DECIMAL_RE, bytes just contains digit、'-' and '.'.
+            _ => {}
+        });
+
         if negative {
             result = result.neg();
         }
@@ -1614,7 +1605,7 @@ mod tests {
             let result = parse_decimal_with_parameter(s, 20, 3);
             assert_eq!(i, result.unwrap())
         }
-        let can_not_parse_tests = ["123,123", "."];
+        let can_not_parse_tests = ["123,123", ".", "123.123.123"];
         for s in can_not_parse_tests {
             let result = parse_decimal_with_parameter(s, 20, 3);
             assert_eq!(
