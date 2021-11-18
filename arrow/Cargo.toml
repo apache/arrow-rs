@@ -50,7 +50,7 @@ chrono = "0.4"
 chrono-tz = {version = "0.4", optional = true}
 flatbuffers = { version = "=2.0.0", optional = true }
 hex = "0.4"
-comfy-table = { version = "4.0", optional = true, default-features = false }
+comfy-table = { version = "5.0", optional = true, default-features = false }
 pyo3 = { version = "0.14", optional = true }
 lexical-core = "^0.8"
 multiversion = "0.6.1"
