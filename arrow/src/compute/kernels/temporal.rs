@@ -47,25 +47,24 @@ macro_rules! extract_component_from_array {
                 "Expected format [+-]XX:XX".to_string()
             )
         } else {
+            let tz_parse_result = parse(&mut $parsed, $tz, StrftimeItems::new("%z"));
+            let fixed_offset_from_parsed = match tz_parse_result {
+                Ok(_) => match $parsed.to_fixed_offset() {
+                    Ok(fo) => Some(fo),
+                    err => return_compute_error_with!("Invalid timezone", err),
+                },
+                _ => None,
+            };
+
             for i in 0..$array.len() {
                 if $array.is_null(i) {
                     $builder.append_null()?;
                 } else {
                     match $array.value_as_datetime(i) {
                         Some(utc) => {
-                            let fixed_offset = match parse(
-                                &mut $parsed,
-                                $tz,
-                                StrftimeItems::new("%z"),
-                            ) {
-                                Ok(_) => match $parsed.to_fixed_offset() {
-                                    Ok(fo) => fo,
-                                    err => return_compute_error_with!(
-                                        "Invalid timezone",
-                                        err
-                                    ),
-                                },
-                                _ => match using_chrono_tz_and_utc_naive_date_time(
+                            let fixed_offset = match fixed_offset_from_parsed {
+                                Some(fo) => fo,
+                                None => match using_chrono_tz_and_utc_naive_date_time(
                                     $tz, utc,
                                 ) {
                                     Some(fo) => fo,
