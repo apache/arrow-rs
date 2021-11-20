@@ -349,7 +349,7 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
             s.push('}');
 
             Ok(s)
-        },
+        }
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Pretty printing not implemented for {:?} type",
             column.data_type()
