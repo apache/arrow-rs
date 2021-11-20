@@ -278,7 +278,7 @@ mod tests {
         builder.values().append_slice(&[1, 2, 3]).unwrap();
         builder.append(true).unwrap();
         builder.values().append_slice(&[4, 5, 6]).unwrap();
-        builder.append(true).unwrap();
+        builder.append(false).unwrap();
         builder.values().append_slice(&[7, 8, 9]).unwrap();
         builder.append(true).unwrap();
 
@@ -291,7 +291,7 @@ mod tests {
             "| d1        |",
             "+-----------+",
             "| [1, 2, 3] |",
-            "| [4, 5, 6] |",
+            "|           |",
             "| [7, 8, 9] |",
             "+-----------+",
         ];
