@@ -95,6 +95,28 @@ pub fn using_chrono_tz(tz: &str) -> Option<FixedOffset> {
         .ok()
 }
 
+#[cfg(not(feature = "chrono-tz"))]
+pub fn using_chrono_tz_and_utc_naive_date_time(
+    _tz: &str,
+    _utc: chrono::NaiveDateTime,
+) -> Option<FixedOffset> {
+    Some(FixedOffset::east(0))
+}
+/// Parse the given string into a string representing fixed-offset that is correct as of the given
+/// UTC NaiveDateTime.
+/// Note that the offset is function of time and can vary depending on whether daylight savings is
+/// in effect or not. e.g. Australia/Sydney is +10:00 or +11:00 depending on DST.
+#[cfg(feature = "chrono-tz")]
+pub fn using_chrono_tz_and_utc_naive_date_time(
+    tz: &str,
+    utc: chrono::NaiveDateTime,
+) -> Option<FixedOffset> {
+    use chrono::{Offset, TimeZone};
+    tz.parse::<chrono_tz::Tz>()
+        .map(|tz| tz.offset_from_utc_datetime(&utc).fix())
+        .ok()
+}
+
 /// Extracts the hours of a given temporal array as an array of integers
 pub fn hour<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
@@ -202,6 +224,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "chrono-tz")]
+    use chrono::NaiveDate;
 
     #[test]
     fn test_temporal_array_date64_hour() {
@@ -434,5 +458,79 @@ mod tests {
             Some("Asia/Kolkatta".to_string()),
         ));
         assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
+    }
+
+    #[cfg(feature = "chrono-tz")]
+    #[test]
+    fn test_using_chrono_tz() {
+        let sydney_offset = FixedOffset::east(10 * 60 * 60);
+        assert_eq!(
+            using_chrono_tz(&"Australia/Sydney".to_string()),
+            Some(sydney_offset)
+        );
+
+        let nyc_offset = FixedOffset::west(5 * 60 * 60);
+        assert_eq!(
+            using_chrono_tz(&"America/New_York".to_string()),
+            Some(nyc_offset)
+        );
+    }
+
+    #[cfg(feature = "chrono-tz")]
+    #[test]
+    fn test_using_chrono_tz_and_utc_naive_date_time() {
+        let sydney_tz = "Australia/Sydney".to_string();
+        let sydney_offset_without_dst = FixedOffset::east(10 * 60 * 60);
+        let sydney_offset_with_dst = FixedOffset::east(11 * 60 * 60);
+        // Daylight savings ends
+        // When local daylight time was about to reach
+        // Sunday, 4 April 2021, 3:00:00 am clocks were turned backward 1 hour to
+        // Sunday, 4 April 2021, 2:00:00 am local standard time instead.
+
+        // Daylight savings starts
+        // When local standard time was about to reach
+        // Sunday, 3 October 2021, 2:00:00 am clocks were turned forward 1 hour to
+        // Sunday, 3 October 2021, 3:00:00 am local daylight time instead.
+
+        // Sydney 2021-04-04T02:30:00+11:00 is 2021-04-03T15:30:00Z
+        let utc_just_before_sydney_dst_ends =
+            NaiveDate::from_ymd(2021, 4, 3).and_hms_nano(15, 30, 0, 0);
+        assert_eq!(
+            using_chrono_tz_and_utc_naive_date_time(
+                &sydney_tz,
+                utc_just_before_sydney_dst_ends
+            ),
+            Some(sydney_offset_with_dst)
+        );
+        // Sydney 2021-04-04T02:30:00+10:00 is 2021-04-03T16:30:00Z
+        let utc_just_after_sydney_dst_ends =
+            NaiveDate::from_ymd(2021, 4, 3).and_hms_nano(16, 30, 0, 0);
+        assert_eq!(
+            using_chrono_tz_and_utc_naive_date_time(
+                &sydney_tz,
+                utc_just_after_sydney_dst_ends
+            ),
+            Some(sydney_offset_without_dst)
+        );
+        // Sydney 2021-10-03T01:30:00+10:00 is 2021-10-02T15:30:00Z
+        let utc_just_before_sydney_dst_starts =
+            NaiveDate::from_ymd(2021, 10, 2).and_hms_nano(15, 30, 0, 0);
+        assert_eq!(
+            using_chrono_tz_and_utc_naive_date_time(
+                &sydney_tz,
+                utc_just_before_sydney_dst_starts
+            ),
+            Some(sydney_offset_without_dst)
+        );
+        // Sydney 2021-04-04T03:30:00+11:00 is 2021-10-02T16:30:00Z
+        let utc_just_after_sydney_dst_starts =
+            NaiveDate::from_ymd(2022, 10, 2).and_hms_nano(16, 30, 0, 0);
+        assert_eq!(
+            using_chrono_tz_and_utc_naive_date_time(
+                &sydney_tz,
+                utc_just_after_sydney_dst_starts
+            ),
+            Some(sydney_offset_with_dst)
+        );
     }
 }
