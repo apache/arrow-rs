@@ -47,23 +47,44 @@ macro_rules! extract_component_from_array {
                 "Expected format [+-]XX:XX".to_string()
             )
         } else {
-            let fixed_offset = match parse(&mut $parsed, $tz, StrftimeItems::new("%z")) {
+            let tz_parse_result = parse(&mut $parsed, $tz, StrftimeItems::new("%z"));
+            let fixed_offset_from_parsed = match tz_parse_result {
                 Ok(_) => match $parsed.to_fixed_offset() {
-                    Ok(fo) => fo,
+                    Ok(fo) => Some(fo),
                     err => return_compute_error_with!("Invalid timezone", err),
                 },
-                _ => match using_chrono_tz($tz) {
-                    Some(fo) => fo,
-                    err => return_compute_error_with!("Unable to parse timezone", err),
-                },
+                _ => None,
             };
+
             for i in 0..$array.len() {
                 if $array.is_null(i) {
                     $builder.append_null()?;
                 } else {
-                    match $array.$using(i, fixed_offset) {
-                        Some(dt) => $builder.append_value(dt.$extract_fn() as i32)?,
-                        None => $builder.append_null()?,
+                    match $array.value_as_datetime(i) {
+                        Some(utc) => {
+                            let fixed_offset = match fixed_offset_from_parsed {
+                                Some(fo) => fo,
+                                None => match using_chrono_tz_and_utc_naive_date_time(
+                                    $tz, utc,
+                                ) {
+                                    Some(fo) => fo,
+                                    err => return_compute_error_with!(
+                                        "Unable to parse timezone",
+                                        err
+                                    ),
+                                },
+                            };
+                            match $array.$using(i, fixed_offset) {
+                                Some(dt) => {
+                                    $builder.append_value(dt.$extract_fn() as i32)?
+                                }
+                                None => $builder.append_null()?,
+                            }
+                        }
+                        err => return_compute_error_with!(
+                            "Unable to read value as datetime",
+                            err
+                        ),
                     }
                 }
             }
@@ -77,31 +98,14 @@ macro_rules! return_compute_error_with {
     };
 }
 
-/// Parse the given string into a string representing fixed-offset
-#[cfg(not(feature = "chrono-tz"))]
-pub fn using_chrono_tz(_: &str) -> Option<FixedOffset> {
-    None
-}
-
-/// Parse the given string into a string representing fixed-offset
-#[cfg(feature = "chrono-tz")]
-pub fn using_chrono_tz(tz: &str) -> Option<FixedOffset> {
-    use chrono::{Offset, TimeZone};
-    tz.parse::<chrono_tz::Tz>()
-        .map(|tz| {
-            tz.offset_from_utc_datetime(&chrono::NaiveDateTime::from_timestamp(0, 0))
-                .fix()
-        })
-        .ok()
-}
-
 #[cfg(not(feature = "chrono-tz"))]
 pub fn using_chrono_tz_and_utc_naive_date_time(
     _tz: &str,
     _utc: chrono::NaiveDateTime,
 ) -> Option<FixedOffset> {
-    Some(FixedOffset::east(0))
+    None
 }
+
 /// Parse the given string into a string representing fixed-offset that is correct as of the given
 /// UTC NaiveDateTime.
 /// Note that the offset is function of time and can vary depending on whether daylight savings is
@@ -448,6 +452,22 @@ mod tests {
         assert_eq!(15, b.value(0));
     }
 
+    #[cfg(feature = "chrono-tz")]
+    #[test]
+    fn test_temporal_array_timestamp_hour_with_dst_timezone_using_chrono_tz() {
+        //
+        // 1635577147 converts to 2021-10-30 17:59:07 in time zone Australia/Sydney (AEDT)
+        // The offset (difference to UTC) is +11:00. Note that daylight savings is in effect on 2021-10-30.
+        // When daylight savings is not in effect, Australia/Sydney has an offset difference of +10:00.
+
+        let a = TimestampMillisecondArray::from_opt_vec(
+            vec![Some(1635577147000)],
+            Some("Australia/Sydney".to_string()),
+        );
+        let b = hour(&a).unwrap();
+        assert_eq!(17, b.value(0));
+    }
+
     #[cfg(not(feature = "chrono-tz"))]
     #[test]
     fn test_temporal_array_timestamp_hour_with_timezone_using_chrono_tz() {
@@ -458,22 +478,6 @@ mod tests {
             Some("Asia/Kolkatta".to_string()),
         ));
         assert!(matches!(hour(&a), Err(ArrowError::ComputeError(_))))
-    }
-
-    #[cfg(feature = "chrono-tz")]
-    #[test]
-    fn test_using_chrono_tz() {
-        let sydney_offset = FixedOffset::east(10 * 60 * 60);
-        assert_eq!(
-            using_chrono_tz(&"Australia/Sydney".to_string()),
-            Some(sydney_offset)
-        );
-
-        let nyc_offset = FixedOffset::west(5 * 60 * 60);
-        assert_eq!(
-            using_chrono_tz(&"America/New_York".to_string()),
-            Some(nyc_offset)
-        );
     }
 
     #[cfg(feature = "chrono-tz")]
