@@ -53,7 +53,6 @@ impl Schema {
     /// # Example
     ///
     /// ```
-    /// # extern crate arrow;
     /// # use arrow::datatypes::{Field, DataType, Schema};
     /// let field_a = Field::new("a", DataType::Int64, false);
     /// let field_b = Field::new("b", DataType::Boolean, false);
@@ -70,7 +69,6 @@ impl Schema {
     /// # Example
     ///
     /// ```
-    /// # extern crate arrow;
     /// # use arrow::datatypes::{Field, DataType, Schema};
     /// # use std::collections::HashMap;
     /// let field_a = Field::new("a", DataType::Int64, false);
