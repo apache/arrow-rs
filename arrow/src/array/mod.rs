@@ -47,8 +47,6 @@
 //!
 //! # Example
 //! ```
-//! extern crate arrow;
-//!
 //! use arrow::array::Int16Array;
 //!
 //! // Create a new builder with a capacity of 100
