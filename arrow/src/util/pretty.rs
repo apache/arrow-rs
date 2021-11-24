@@ -19,6 +19,7 @@
 //! available unless `feature = "prettyprint"` is enabled.
 
 use crate::{array::ArrayRef, record_batch::RecordBatch};
+use std::fmt::Write;
 
 use comfy_table::{Cell, Table};
 
@@ -39,6 +40,12 @@ pub fn pretty_format_columns(col_name: &str, results: &[ArrayRef]) -> Result<Str
 ///! Prints a visual representation of record batches to stdout
 pub fn print_batches(results: &[RecordBatch]) -> Result<()> {
     println!("{}", create_table(results)?);
+    Ok(())
+}
+
+pub fn write_batches<W: Write>(buf: &mut W, results: &[RecordBatch]) -> Result<()> {
+    write!(buf, "{}", create_table(results)?)
+        .expect("Unable to write to provided buffer");
     Ok(())
 }
 
@@ -562,6 +569,52 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
         assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_write_batches() -> Result<()> {
+        // define a schema.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        // define data.
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(array::StringArray::from(vec![
+                    Some("a"),
+                    Some("b"),
+                    None,
+                    Some("d"),
+                ])),
+                Arc::new(array::Int32Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(10),
+                    Some(100),
+                ])),
+            ],
+        )?;
+
+        let mut buf = String::new();
+        write_batches(&mut buf, &[batch])?;
+
+        let s = vec![
+            "+---+-----+",
+            "| a | b   |",
+            "+---+-----+",
+            "| a | 1   |",
+            "| b |     |",
+            "|   | 10  |",
+            "| d | 100 |",
+            "+---+-----+",
+        ];
+        let expected = String::from(s.join("\n"));
+        assert_eq!(expected, buf);
 
         Ok(())
     }
