@@ -391,6 +391,8 @@ pub use self::builder::StringBuilder;
 pub use self::builder::StringDictionaryBuilder;
 pub use self::builder::StructBuilder;
 pub use self::builder::UnionBuilder;
+pub use self::builder::MAX_DECIMAL_FOR_EACH_PRECISION;
+pub use self::builder::MIN_DECIMAL_FOR_EACH_PRECISION;
 
 pub type Int8Builder = PrimitiveBuilder<Int8Type>;
 pub type Int16Builder = PrimitiveBuilder<Int16Type>;
