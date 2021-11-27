@@ -27,9 +27,9 @@ use crate::buffer::{bitwise_bin_op_helper, buffer_unary_not, Buffer, MutableBuff
 use crate::compute::binary_boolean_kernel;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
-    ArrowNativeType, ArrowNumericType, ArrowPrimitiveType, DataType, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNumericType, ArrowPrimitiveType, DataType, Dictionary,
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
@@ -2137,8 +2137,8 @@ mod tests {
     fn test_dict_lt_scalar() {
         let a: DictionaryArray<Int8Type> =
             vec!["hi","hello", "world"].into_iter().collect();
-        let a_eq = lt_dict_scalar(&a, "hello").unwrap();
-        assert_eq!(a_eq, BooleanArray::from(vec![false, false, true]));
+        let a_eq = lt_dict_scalar(&a, "hi").unwrap();
+        assert_eq!(a_eq, BooleanArray::from(vec![false, true, false]));
     }
 
     macro_rules! test_utf8_scalar {
