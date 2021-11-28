@@ -252,6 +252,7 @@ pub enum Encoding {
     RLE_DICTIONARY,
 
     /// Encoding for floating-point data.
+    ///
     /// K byte-streams are created where K is the size in bytes of the data type.
     /// The individual bytes of an FP value are scattered to the corresponding stream and
     /// the streams are concatenated.
