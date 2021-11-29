@@ -192,6 +192,14 @@ pub type UInt64Array = PrimitiveArray<UInt64Type>;
 ///
 /// # Example: Using `collect`
 /// ```
+/// # use arrow::array::Float16Array;
+/// use half::f16;
+/// let arr : Float16Array = [Some(f16::from_f64(1.0)), Some(f16::from_f64(2.0))].into_iter().collect();
+/// ```
+pub type Float16Array = PrimitiveArray<Float16Type>;
+///
+/// # Example: Using `collect`
+/// ```
 /// # use arrow::array::Float32Array;
 /// let arr : Float32Array = [Some(1.0), Some(2.0)].into_iter().collect();
 /// ```

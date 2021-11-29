@@ -18,10 +18,6 @@
 //! Contains `ArrayData`, a generic representation of Arrow array data which encapsulates
 //! common attributes and operations for Arrow array.
 
-use std::convert::TryInto;
-use std::mem;
-use std::sync::Arc;
-
 use crate::datatypes::{DataType, IntervalUnit};
 use crate::error::{ArrowError, Result};
 use crate::{bitmap::Bitmap, datatypes::ArrowNativeType};
@@ -29,6 +25,10 @@ use crate::{
     buffer::{Buffer, MutableBuffer},
     util::bit_util,
 };
+use half::f16;
+use std::convert::TryInto;
+use std::mem;
+use std::sync::Arc;
 
 use super::equal::equal;
 
@@ -87,6 +87,10 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         ],
         DataType::Int64 => [
             MutableBuffer::new(capacity * mem::size_of::<i64>()),
+            empty_buffer,
+        ],
+        DataType::Float16 => [
+            MutableBuffer::new(capacity * mem::size_of::<f16>()),
             empty_buffer,
         ],
         DataType::Float32 => [
@@ -178,7 +182,6 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             ],
             _ => unreachable!(),
         },
-        DataType::Float16 => unreachable!(),
         DataType::FixedSizeList(_, _) | DataType::Struct(_) => {
             [empty_buffer, MutableBuffer::new(0)]
         }
@@ -319,7 +322,7 @@ impl ArrayData {
         buffers: Vec<Buffer>,
         child_data: Vec<ArrayData>,
     ) -> Result<Self> {
-        // Safetly justification: `validate` is (will be) called below
+        // Safety justification: `validate` is (will be) called below
         let new_self = unsafe {
             Self::new_unchecked(
                 data_type,
@@ -519,6 +522,7 @@ impl ArrayData {
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
+            | DataType::Float16
             | DataType::Float32
             | DataType::Float64
             | DataType::Date32
@@ -554,7 +558,6 @@ impl ArrayData {
             DataType::Dictionary(_, data_type) => {
                 vec![Self::new_empty(data_type)]
             }
-            DataType::Float16 => unreachable!(),
         };
 
         // Data was constructed correctly above

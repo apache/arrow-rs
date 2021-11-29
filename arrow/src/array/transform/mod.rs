@@ -15,19 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::{
+    data::{into_buffers, new_buffers},
+    ArrayData, ArrayDataBuilder,
+};
+use crate::array::StringOffsetSizeTrait;
 use crate::{
     buffer::MutableBuffer,
     datatypes::DataType,
     error::{ArrowError, Result},
     util::bit_util,
 };
+use half::f16;
 use std::mem;
-
-use super::{
-    data::{into_buffers, new_buffers},
-    ArrayData, ArrayDataBuilder,
-};
-use crate::array::StringOffsetSizeTrait;
 
 mod boolean;
 mod fixed_binary;
@@ -266,7 +266,7 @@ fn build_extend(array: &ArrayData) -> Extend {
         DataType::Dictionary(_, _) => unreachable!("should use build_extend_dictionary"),
         DataType::Struct(_) => structure::build_extend(array),
         DataType::FixedSizeBinary(_) => fixed_binary::build_extend(array),
-        DataType::Float16 => unreachable!(),
+        DataType::Float16 => primitive::build_extend::<f16>(array),
         /*
         DataType::FixedSizeList(_, _) => {}
         DataType::Union(_) => {}
@@ -315,7 +315,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         },
         DataType::Struct(_) => structure::extend_nulls,
         DataType::FixedSizeBinary(_) => fixed_binary::extend_nulls,
-        DataType::Float16 => unreachable!(),
+        DataType::Float16 => primitive::extend_nulls::<f16>,
         /*
         DataType::FixedSizeList(_, _) => {}
         DataType::Union(_) => {}
@@ -429,6 +429,7 @@ impl<'a> MutableArrayData<'a> {
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
+            | DataType::Float16
             | DataType::Float32
             | DataType::Float64
             | DataType::Date32
@@ -467,7 +468,6 @@ impl<'a> MutableArrayData<'a> {
             }
             // the dictionary type just appends keys and clones the values.
             DataType::Dictionary(_, _) => vec![],
-            DataType::Float16 => unreachable!(),
             DataType::Struct(fields) => match capacities {
                 Capacities::Struct(capacity, Some(ref child_capacities)) => {
                     array_capacity = capacity;
