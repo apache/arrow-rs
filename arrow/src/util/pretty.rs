@@ -290,7 +290,7 @@ mod tests {
         let array = Arc::new(builder.finish());
 
         let batch = RecordBatch::try_new(schema, vec![array])?;
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
         let expected = vec![
             "+-----------+",
             "| d1        |",
