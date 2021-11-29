@@ -42,12 +42,12 @@ fn into_primitive_array_data<I: ArrowPrimitiveType, O: ArrowPrimitiveType>(
     }
 }
 
-/// Applies an unary and infalible function to a primitive array.
+/// Applies an unary and infallible function to a primitive array.
 /// This is the fastest way to perform an operation on a primitive array when
 /// the benefits of a vectorized operation outweights the cost of branching nulls and non-nulls.
 /// # Implementation
 /// This will apply the function for all values, including those on null slots.
-/// This implies that the operation must be infalible for any value of the corresponding type
+/// This implies that the operation must be infallible for any value of the corresponding type
 /// or this function may panic.
 /// # Example
 /// ```rust

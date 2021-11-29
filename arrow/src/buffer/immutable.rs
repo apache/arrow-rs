@@ -119,7 +119,7 @@ impl Buffer {
     }
 
     /// Returns the capacity of this buffer.
-    /// For exernally owned buffers, this returns zero
+    /// For externally owned buffers, this returns zero
     pub fn capacity(&self) -> usize {
         self.data.capacity()
     }
