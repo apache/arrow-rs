@@ -19,7 +19,7 @@
 //! available unless `feature = "prettyprint"` is enabled.
 
 use crate::{array::ArrayRef, record_batch::RecordBatch};
-use std::fmt::{Display, Write};
+use std::fmt::Display;
 
 use comfy_table::{Cell, Table};
 
@@ -119,6 +119,7 @@ mod tests {
 
     use super::*;
     use crate::array::{DecimalBuilder, Int32Array};
+    use std::fmt::Write;
     use std::sync::Arc;
 
     #[test]
