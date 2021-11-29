@@ -1506,9 +1506,9 @@ where
     // Note take requires first casting the indices to u32
     let keys_array: ArrayRef =
         Arc::new(PrimitiveArray::<K>::from(dict_array.keys().data().clone()));
-    let indicies = cast_with_options(&keys_array, &DataType::UInt32, cast_options)?;
-    let u32_indicies =
-        indicies
+    let indices = cast_with_options(&keys_array, &DataType::UInt32, cast_options)?;
+    let u32_indices =
+        indices
             .as_any()
             .downcast_ref::<UInt32Array>()
             .ok_or_else(|| {
@@ -1517,7 +1517,7 @@ where
                 )
             })?;
 
-    take(cast_dict_values.as_ref(), u32_indicies, None)
+    take(cast_dict_values.as_ref(), u32_indices, None)
 }
 
 /// Attempts to encode an array into an `ArrayDictionary` with index

@@ -34,7 +34,7 @@ enum State {
     Bits(u64),
     // it is iterating over chunks (steps of size of 64 slots)
     Chunks,
-    // it is iterating over the remainding bits (steps of size of 1 slot)
+    // it is iterating over the remaining bits (steps of size of 1 slot)
     Remainder,
     // nothing more to iterate.
     Finish,
@@ -290,9 +290,9 @@ pub fn filter_record_batch(
         return filter_record_batch(record_batch, &predicate);
     }
 
-    let num_colums = record_batch.columns().len();
+    let num_columns = record_batch.columns().len();
 
-    let filtered_arrays = match num_colums {
+    let filtered_arrays = match num_columns {
         1 => {
             vec![filter(record_batch.columns()[0].as_ref(), predicate)?]
         }
@@ -473,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_primative_array_with_null() {
+    fn test_filter_primitive_array_with_null() {
         let a = Int32Array::from(vec![Some(5), None]);
         let b = BooleanArray::from(vec![false, true]);
         let c = filter(&a, &b).unwrap();
