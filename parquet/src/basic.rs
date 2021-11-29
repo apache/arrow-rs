@@ -258,7 +258,7 @@ pub enum Encoding {
     /// the streams are concatenated.
     /// This itself does not reduce the size of the data but can lead to better compression
     /// afterwards.
-    BYTE_STREAM_SPLIT
+    BYTE_STREAM_SPLIT,
 }
 
 // ----------------------------------------------------------------------
