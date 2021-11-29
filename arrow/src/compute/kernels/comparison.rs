@@ -24,8 +24,8 @@
 
 use crate::array::*;
 use crate::buffer::{bitwise_bin_op_helper, buffer_unary_not, Buffer, MutableBuffer};
-use crate::compute::binary_boolean_kernel;
 use crate::compute::util::combine_option_bitmap;
+use crate::compute::{binary_boolean_kernel, cast};
 use crate::datatypes::{
     ArrowNativeType, ArrowNumericType, ArrowPrimitiveType, DataType, Dictionary,
     Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
@@ -201,6 +201,43 @@ macro_rules! compare_op_scalar_primitive {
     }};
 }
 
+macro_rules! compare_dict_op {
+    ($left:expr, $right:expr, $op:expr) => {{
+        let null_bit_buffer = $left
+            .data()
+            .null_buffer()
+            .map(|b| b.bit_slice($left.offset(), $left.len()));
+
+        let values = $left.values();
+        let comparison_result = (0..values.len()).map(|i| unsafe {
+            let val = values.value_unchecked(i);
+            $op(val, $right)
+        });
+
+        // Safety:
+        // `i < $left.len()`
+        let comparison = (0..$left.len()).map(|i| unsafe {
+            let key = $left.keys().value_unchecked(i).to_usize().unwrap();
+            $op(values.value_unchecked(key), $right)
+        });
+        // same as $left.len()
+        let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                DataType::Boolean,
+                $left.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![Buffer::from(buffer)],
+                vec![],
+            )
+        };
+        Ok(BooleanArray::from(data))
+    }};
+}
+
 macro_rules! compare_dict_op_scalar {
     ($left:expr, $right:expr, $op:expr) => {{
         let null_bit_buffer = $left
@@ -208,11 +245,8 @@ macro_rules! compare_dict_op_scalar {
             .null_buffer()
             .map(|b| b.bit_slice($left.offset(), $left.len()));
 
-        let values = $left
-            .values()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
+        let values = $left.values();
+        let comparison results =
 
         // Safety:
         // `i < $left.len()`
@@ -730,6 +764,13 @@ pub fn eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     compare_op_scalar!(left, right, |a, b| a == b)
 }
 
+/// Perform `left == right` operation on [`DictionaryArray`] and a scalar.
+pub fn eq_dict<OffsetSize: ArrowPrimitiveType>(
+    left: &DictionaryArray<OffsetSize>,
+    right: &str,
+) -> Result<BooleanArray> {
+    compare_dict_op!(left, right, |a, b| a == b)
+}
 /// Perform `left == right` operation on [`DictionaryArray`] and a scalar.
 pub fn eq_dict_scalar<OffsetSize: ArrowPrimitiveType>(
     left: &DictionaryArray<OffsetSize>,
