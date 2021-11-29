@@ -118,7 +118,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::array::{DecimalBuilder, Int32Array};
+    use crate::array::{DecimalBuilder, FixedSizeListBuilder, Int32Array};
     use std::fmt::Write;
     use std::sync::Arc;
 
@@ -259,6 +259,46 @@ mod tests {
             "|       |",
             "| three |",
             "+-------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_fixed_size_list() -> Result<()> {
+        // define a schema.
+        let field_type = DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::Int32, true)),
+            3,
+        );
+        let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
+
+        let keys_builder = Int32Array::builder(3);
+        let mut builder = FixedSizeListBuilder::new(keys_builder, 3);
+
+        builder.values().append_slice(&[1, 2, 3]).unwrap();
+        builder.append(true).unwrap();
+        builder.values().append_slice(&[4, 5, 6]).unwrap();
+        builder.append(false).unwrap();
+        builder.values().append_slice(&[7, 8, 9]).unwrap();
+        builder.append(true).unwrap();
+
+        let array = Arc::new(builder.finish());
+
+        let batch = RecordBatch::try_new(schema, vec![array])?;
+        let table = pretty_format_batches(&[batch])?;
+        let expected = vec![
+            "+-----------+",
+            "| d1        |",
+            "+-----------+",
+            "| [1, 2, 3] |",
+            "|           |",
+            "| [7, 8, 9] |",
+            "+-----------+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();

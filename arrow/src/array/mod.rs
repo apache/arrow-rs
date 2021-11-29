@@ -47,8 +47,6 @@
 //!
 //! # Example
 //! ```
-//! extern crate arrow;
-//!
 //! use arrow::array::Int16Array;
 //!
 //! // Create a new builder with a capacity of 100
@@ -191,6 +189,14 @@ pub type UInt32Array = PrimitiveArray<UInt32Type>;
 /// let arr : UInt64Array = [Some(1), Some(2)].into_iter().collect();
 /// ```
 pub type UInt64Array = PrimitiveArray<UInt64Type>;
+///
+/// # Example: Using `collect`
+/// ```
+/// # use arrow::array::Float16Array;
+/// use half::f16;
+/// let arr : Float16Array = [Some(f16::from_f64(1.0)), Some(f16::from_f64(2.0))].into_iter().collect();
+/// ```
+pub type Float16Array = PrimitiveArray<Float16Type>;
 ///
 /// # Example: Using `collect`
 /// ```
