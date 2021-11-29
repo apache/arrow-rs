@@ -30,9 +30,7 @@ edition = "2021"
 rust-version = "1.56"
 
 [dependencies]
-# update note: pin `parquet-format` to specific version until it does not break at minor
-# version, see ARROW-11187.
-parquet-format = "~2.6.1"
+parquet-format = "4.0.0"
 byteorder = "1"
 thrift = "0.13"
 snap = { version = "1.0", optional = true }

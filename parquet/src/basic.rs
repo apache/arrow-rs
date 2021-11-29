@@ -250,6 +250,15 @@ pub enum Encoding {
     ///
     /// The ids are encoded using the RLE encoding.
     RLE_DICTIONARY,
+
+    /// Encoding for floating-point data.
+    ///
+    /// K byte-streams are created where K is the size in bytes of the data type.
+    /// The individual bytes of an FP value are scattered to the corresponding stream and
+    /// the streams are concatenated.
+    /// This itself does not reduce the size of the data but can lead to better compression
+    /// afterwards.
+    BYTE_STREAM_SPLIT,
 }
 
 // ----------------------------------------------------------------------
@@ -701,6 +710,7 @@ impl convert::From<parquet::Encoding> for Encoding {
             parquet::Encoding::DeltaLengthByteArray => Encoding::DELTA_LENGTH_BYTE_ARRAY,
             parquet::Encoding::DeltaByteArray => Encoding::DELTA_BYTE_ARRAY,
             parquet::Encoding::RleDictionary => Encoding::RLE_DICTIONARY,
+            parquet::Encoding::ByteStreamSplit => Encoding::BYTE_STREAM_SPLIT,
         }
     }
 }
@@ -716,6 +726,7 @@ impl convert::From<Encoding> for parquet::Encoding {
             Encoding::DELTA_LENGTH_BYTE_ARRAY => parquet::Encoding::DeltaLengthByteArray,
             Encoding::DELTA_BYTE_ARRAY => parquet::Encoding::DeltaByteArray,
             Encoding::RLE_DICTIONARY => parquet::Encoding::RleDictionary,
+            Encoding::BYTE_STREAM_SPLIT => parquet::Encoding::ByteStreamSplit,
         }
     }
 }
