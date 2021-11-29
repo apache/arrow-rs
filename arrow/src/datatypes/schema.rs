@@ -283,7 +283,7 @@ impl Schema {
         }
     }
 
-    /// Check to see if `self` is a superset of `other` schema. Here are the comparision rules:
+    /// Check to see if `self` is a superset of `other` schema. Here are the comparison rules:
     ///
     /// * `self` and `other` should contain the same number of fields
     /// * for every field `f` in `other`, the field in `self` with corresponding index should be a

@@ -1,14 +1,3 @@
-use std::ptr::NonNull;
-
-use crate::{
-    alloc,
-    bytes::{Bytes, Deallocation},
-    datatypes::{ArrowNativeType, ToByteSlice},
-    util::bit_util,
-};
-
-use super::Buffer;
-
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -25,6 +14,15 @@ use super::Buffer;
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+use super::Buffer;
+use crate::{
+    alloc,
+    bytes::{Bytes, Deallocation},
+    datatypes::{ArrowNativeType, ToByteSlice},
+    util::bit_util,
+};
+use std::ptr::NonNull;
 
 /// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.
 /// [`Buffer`]s created from [`MutableBuffer`] (via `into`) are guaranteed to have its pointer aligned

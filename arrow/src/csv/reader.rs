@@ -425,7 +425,7 @@ impl<R: Read> Reader<R> {
 
         // First we will skip `start` rows
         // note that this skips by iteration. This is because in general it is not possible
-        // to seek in CSV. However, skiping still saves the burden of creating arrow arrays,
+        // to seek in CSV. However, skipping still saves the burden of creating arrow arrays,
         // which is a slow operation that scales with the number of columns
 
         let mut record = ByteRecord::new();
@@ -964,9 +964,9 @@ pub struct ReaderBuilder {
     has_header: bool,
     /// An optional column delimiter. Defaults to `b','`
     delimiter: Option<u8>,
-    /// An optional escape charactor. Defaults None
+    /// An optional escape character. Defaults None
     escape: Option<u8>,
-    /// An optional quote charactor. Defaults b'\"'
+    /// An optional quote character. Defaults b'\"'
     quote: Option<u8>,
     /// An optional record terminator. Defaults CRLF
     terminator: Option<u8>,
