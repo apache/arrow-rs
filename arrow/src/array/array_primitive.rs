@@ -498,12 +498,7 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
 /// Constructs a `PrimitiveArray` from an array data reference.
 impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
     fn from(data: ArrayData) -> Self {
-        assert_eq!(
-            data.buffers().len(),
-            1,
-            "PrimitiveArray data should contain a single buffer only (values buffer)"
-        );
-
+        // safety: ArrayData was checked for validity on construction
         let ptr = data.buffers()[0].as_ptr();
         Self {
             data,
@@ -947,19 +942,15 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "PrimitiveArray data should contain a single buffer only \
-                               (values buffer)")]
+    #[should_panic(expected = "Expected 1 buffers in array of type Int32, got 2")]
     fn test_primitive_array_invalid_buffer_len() {
         let buffer = Buffer::from_slice_ref(&[0i32, 1, 2, 3, 4]);
-        let data = unsafe {
-            ArrayData::builder(DataType::Int32)
-                .add_buffer(buffer.clone())
-                .add_buffer(buffer)
-                .len(5)
-                .build_unchecked()
-        };
-
-        drop(Int32Array::from(data));
+        ArrayData::builder(DataType::Int32)
+            .add_buffer(buffer.clone())
+            .add_buffer(buffer)
+            .len(5)
+            .build()
+            .unwrap();
     }
 
     #[test]
