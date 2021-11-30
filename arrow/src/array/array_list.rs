@@ -750,7 +750,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "FixedSizeListArray child array length should be a multiple of 3"
+        expected = "Values length 8 is less than the length (3) multiplied by the value size (3) for FixedSizeList"
     )]
     fn test_fixed_size_list_array_unequal_children() {
         // Construct a value array
@@ -765,13 +765,12 @@ mod tests {
             Box::new(Field::new("item", DataType::Int32, false)),
             3,
         );
-        let list_data = unsafe {
-            ArrayData::builder(list_data_type)
-                .len(3)
-                .add_child_data(value_data)
-                .build_unchecked()
-        };
-        drop(FixedSizeListArray::from(list_data));
+
+        ArrayData::builder(list_data_type)
+            .len(3)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
     }
 
     #[test]
@@ -1037,42 +1036,35 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "ListArray data should contain a single buffer only (value offsets)"
-    )]
+    #[should_panic(expected = "Expected 1 buffers in array of type")]
     fn test_list_array_invalid_buffer_len() {
-        let value_data = unsafe {
-            ArrayData::builder(DataType::Int32)
-                .len(8)
-                .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
-                .build_unchecked()
-        };
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
         let list_data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
-        let list_data = unsafe {
-            ArrayData::builder(list_data_type)
-                .len(3)
-                .add_child_data(value_data)
-                .build_unchecked()
-        };
-        drop(ListArray::from(list_data));
+
+        ArrayData::builder(list_data_type)
+            .len(3)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
     }
 
     #[test]
-    #[should_panic(
-        expected = "ListArray should contain a single child array (values array)"
-    )]
+    #[should_panic(expected = "should contain 1 child data array(s), had 0")]
     fn test_list_array_invalid_child_array_len() {
         let value_offsets = Buffer::from_slice_ref(&[0, 2, 5, 7]);
         let list_data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
-        let list_data = unsafe {
-            ArrayData::builder(list_data_type)
-                .len(3)
-                .add_buffer(value_offsets)
-                .build_unchecked()
-        };
-        drop(ListArray::from(list_data));
+        ArrayData::builder(list_data_type)
+            .len(3)
+            .add_buffer(value_offsets)
+            .build()
+            .unwrap();
     }
 
     #[test]
@@ -1126,13 +1118,12 @@ mod tests {
 
         let list_data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
-        let list_data = unsafe {
-            ArrayData::builder(list_data_type)
-                .add_buffer(buf2)
-                .add_child_data(value_data)
-                .build_unchecked()
-        };
-        drop(ListArray::from(list_data));
+
+        ArrayData::builder(list_data_type)
+            .add_buffer(buf2)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
     }
 
     #[test]

@@ -329,14 +329,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "BooleanArray data should contain a single buffer only \
-                               (values buffer)")]
+    #[should_panic(expected = "Expected 1 buffers in array of type Boolean, got 0")]
     fn test_boolean_array_invalid_buffer_len() {
-        let data = unsafe {
-            ArrayData::builder(DataType::Boolean)
-                .len(5)
-                .build_unchecked()
-        };
-        drop(BooleanArray::from(data));
+        ArrayData::builder(DataType::Boolean)
+            .len(5)
+            .build()
+            .unwrap();
     }
 }

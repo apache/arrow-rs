@@ -1211,9 +1211,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "FixedSizeBinaryArray can only be created from FixedSizeList<u8> arrays"
-    )]
+    #[should_panic(expected = "Expected Binary but child data had UInt32")]
     fn test_fixed_size_binary_array_from_incorrect_list_array() {
         let values: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         let values_data = ArrayData::builder(DataType::UInt32)
@@ -1222,15 +1220,15 @@ mod tests {
             .build()
             .unwrap();
 
-        let array_data = unsafe {
-            ArrayData::builder(DataType::FixedSizeList(
-                Box::new(Field::new("item", DataType::Binary, false)),
-                4,
-            ))
-            .len(3)
-            .add_child_data(values_data)
-            .build_unchecked()
-        };
+        let array_data = ArrayData::builder(DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::Binary, false)),
+            4,
+        ))
+        .len(3)
+        .add_child_data(values_data)
+        .build()
+        .unwrap();
+
         let list_array = FixedSizeListArray::from(array_data);
         drop(FixedSizeBinaryArray::from(list_array));
     }

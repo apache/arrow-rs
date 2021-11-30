@@ -2194,7 +2194,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "child #0 invalid: Invalid argument error: Value at position 1 out of bounds: -1 (should be in [0, 1])"
+        expected = "Value at position 1 out of bounds: -1 (should be in [0, 1])"
     )]
     /// test that children are validated recursively (aka bugs in child data of struct also are flagged)
     fn test_validate_recursive() {

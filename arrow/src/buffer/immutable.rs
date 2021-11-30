@@ -176,7 +176,8 @@ impl Buffer {
         //      * The pointer is non-null by construction
         //      * alignment asserted below.
         let (prefix, offsets, suffix) = self.as_slice().align_to::<T>();
-        assert!(prefix.is_empty() && suffix.is_empty());
+        assert!(prefix.is_empty() && suffix.is_empty(),
+                "Buffer memory is not aligned, prefix and suffix should be empty but were not");
         offsets
     }
 
