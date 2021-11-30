@@ -670,6 +670,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_read_maps() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/nested_maps.snappy.parquet", testdata);
