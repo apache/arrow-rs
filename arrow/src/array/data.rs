@@ -1119,7 +1119,8 @@ impl ArrayData {
         assert!(buffer.len() / std::mem::size_of::<T>() >= required_len);
 
         // Justification: buffer size was validated above
-        let indexes: &[T] = unsafe { &(buffer.typed_data::<T>()[self.offset..self.offset+self.len]) };
+        let indexes: &[T] =
+            unsafe { &(buffer.typed_data::<T>()[self.offset..self.offset + self.len]) };
 
         indexes.iter().enumerate().try_for_each(|(i, &dict_index)| {
             // Do not check the value is null (value can be arbitrary)
