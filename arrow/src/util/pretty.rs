@@ -19,6 +19,7 @@
 //! available unless `feature = "prettyprint"` is enabled.
 
 use crate::{array::ArrayRef, record_batch::RecordBatch};
+use std::fmt::Display;
 
 use comfy_table::{Cell, Table};
 
@@ -27,13 +28,16 @@ use crate::error::Result;
 use super::display::array_value_to_string;
 
 ///! Create a visual representation of record batches
-pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<String> {
-    Ok(create_table(results)?.to_string())
+pub fn pretty_format_batches(results: &[RecordBatch]) -> Result<impl Display> {
+    create_table(results)
 }
 
 ///! Create a visual representation of columns
-pub fn pretty_format_columns(col_name: &str, results: &[ArrayRef]) -> Result<String> {
-    Ok(create_column(col_name, results)?.to_string())
+pub fn pretty_format_columns(
+    col_name: &str,
+    results: &[ArrayRef],
+) -> Result<impl Display> {
+    create_column(col_name, results)
 }
 
 ///! Prints a visual representation of record batches to stdout
@@ -115,6 +119,7 @@ mod tests {
 
     use super::*;
     use crate::array::{DecimalBuilder, FixedSizeListBuilder, Int32Array};
+    use std::fmt::Write;
     use std::sync::Arc;
 
     #[test]
@@ -144,7 +149,7 @@ mod tests {
             ],
         )?;
 
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
 
         let expected = vec![
             "+---+-----+",
@@ -176,7 +181,7 @@ mod tests {
             Arc::new(array::StringArray::from(vec![Some("e"), None, Some("g")])),
         ];
 
-        let table = pretty_format_columns("a", &columns)?;
+        let table = pretty_format_columns("a", &columns)?.to_string();
 
         let expected = vec![
             "+---+", "| a |", "+---+", "| a |", "| b |", "|   |", "| d |", "| e |",
@@ -208,7 +213,7 @@ mod tests {
         // define data (null)
         let batch = RecordBatch::try_new(schema, arrays).unwrap();
 
-        let table = pretty_format_batches(&[batch]).unwrap();
+        let table = pretty_format_batches(&[batch]).unwrap().to_string();
 
         let expected = vec![
             "+---+---+---+",
@@ -244,7 +249,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![array])?;
 
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
 
         let expected = vec![
             "+-------+",
@@ -285,7 +290,7 @@ mod tests {
         let array = Arc::new(builder.finish());
 
         let batch = RecordBatch::try_new(schema, vec![array])?;
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
         let expected = vec![
             "+-----------+",
             "| d1        |",
@@ -320,7 +325,9 @@ mod tests {
             )]));
             let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
 
-            let table = pretty_format_batches(&[batch]).expect("formatting batches");
+            let table = pretty_format_batches(&[batch])
+                .expect("formatting batches")
+                .to_string();
 
             let expected = $EXPECTED_RESULT;
             let actual: Vec<&str> = table.lines().collect();
@@ -494,7 +501,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![dm])?;
 
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
 
         let expected = vec![
             "+-------+",
@@ -535,7 +542,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema, vec![dm])?;
 
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
         let expected = vec![
             "+------+", "| f    |", "+------+", "| 101  |", "|      |", "| 200  |",
             "| 3040 |", "+------+",
@@ -589,7 +596,7 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1), Arc::new(c2)])
                 .unwrap();
 
-        let table = pretty_format_batches(&[batch])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
         let expected = vec![
             r#"+-------------------------------------+----+"#,
             r#"| c1                                  | c2 |"#,
@@ -602,6 +609,52 @@ mod tests {
 
         let actual: Vec<&str> = table.lines().collect();
         assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_writing_formatted_batches() -> Result<()> {
+        // define a schema.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        // define data.
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(array::StringArray::from(vec![
+                    Some("a"),
+                    Some("b"),
+                    None,
+                    Some("d"),
+                ])),
+                Arc::new(array::Int32Array::from(vec![
+                    Some(1),
+                    None,
+                    Some(10),
+                    Some(100),
+                ])),
+            ],
+        )?;
+
+        let mut buf = String::new();
+        write!(&mut buf, "{}", pretty_format_batches(&[batch])?.to_string()).unwrap();
+
+        let s = vec![
+            "+---+-----+",
+            "| a | b   |",
+            "+---+-----+",
+            "| a | 1   |",
+            "| b |     |",
+            "|   | 10  |",
+            "| d | 100 |",
+            "+---+-----+",
+        ];
+        let expected = String::from(s.join("\n"));
+        assert_eq!(expected, buf);
 
         Ok(())
     }
