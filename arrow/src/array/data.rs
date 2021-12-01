@@ -2098,6 +2098,32 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_dictionary_index_negative_but_not_referenced() {
+        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+
+        // -1 is not a valid index at all, but the array is length 1
+        // so the -1 should not be looked at
+        let keys: Int32Array = [Some(1), Some(-1)].into_iter().collect();
+
+        let data_type = DataType::Dictionary(
+            Box::new(keys.data_type().clone()),
+            Box::new(values.data_type().clone()),
+        );
+
+        // Expect this not to panic
+        ArrayData::try_new(
+            data_type,
+            1,
+            None,
+            None,
+            0,
+            vec![keys.data().buffers[0].clone()],
+            vec![values.data().clone()],
+        )
+        .unwrap();
+    }
+
+    #[test]
     #[should_panic(
         expected = "Value at position 0 out of bounds: 18446744073709551615 (can not convert to i64)"
     )]
