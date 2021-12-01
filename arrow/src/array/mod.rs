@@ -318,7 +318,37 @@ pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 /// assert_eq!(array.values(), &values);
 /// ```
 pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
-
+///
+/// A primitive array where each element is of type `TimestampSecondType.`
+/// See also [`Timestamp.`](crate::datatypes::Timestamp)
+///
+/// # Example: UTC timestamps post epoch
+/// ```
+/// # use arrow::array::TimestampSecondArray;
+/// // Corresponds to single element array with entry 1970-05-09T14:25:11+0:00
+/// let arr = TimestampSecondArray::from_vec(vec![11111111], None);
+/// // OR
+/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(11111111)], None);
+/// ```
+///
+/// # Example: UTC timestamps pre epoch
+/// ```
+/// # use arrow::array::TimestampSecondArray;
+/// // Corresponds to single element array with entry 1969-08-25T09:34:49+0:00
+/// let arr = TimestampSecondArray::from_vec(vec![-11111111], None);
+/// // OR
+/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(-11111111)], None);
+/// ```
+///
+/// # Example: With timezone specified
+/// ```
+/// # use arrow::array::TimestampSecondArray;
+/// // Corresponds to single element array with entry 1970-05-10T00:25:11+10:00
+/// let arr = TimestampSecondArray::from_vec(vec![11111111], Some("+10:00".to_string()));
+/// // OR
+/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(11111111)], Some("+10:00".to_string()));
+/// ```
+///
 pub type TimestampSecondArray = PrimitiveArray<TimestampSecondType>;
 pub type TimestampMillisecondArray = PrimitiveArray<TimestampMillisecondType>;
 pub type TimestampMicrosecondArray = PrimitiveArray<TimestampMicrosecondType>;
