@@ -2212,7 +2212,7 @@ mod tests {
         let dict_data = unsafe {
             ArrayData::new_unchecked(
                 dict_data_type,
-                1,
+                2,
                 None,
                 None,
                 0,
