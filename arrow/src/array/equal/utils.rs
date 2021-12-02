@@ -128,7 +128,7 @@ pub(super) fn child_logical_null_buffer(
                 let mask = parent_bitmap.is_set(index);
                 (start..end).for_each(|child_index| {
                     if mask && self_null_bitmap.is_set(child_index) {
-                        bit_util::set_bit(&mut null_slice, child_index);
+                        bit_util::set_bit(null_slice, child_index);
                     }
                 });
             });
@@ -156,7 +156,7 @@ pub(super) fn child_logical_null_buffer(
                 if parent_bitmap.is_set(index + array_offset)
                     && self_null_bitmap.is_set(index + array_offset)
                 {
-                    bit_util::set_bit(&mut null_slice, index);
+                    bit_util::set_bit(null_slice, index);
                 }
             });
             Some(buffer.into())
@@ -194,7 +194,7 @@ fn logical_list_bitmap<OffsetSize: OffsetSizeTrait>(
             let mask = parent_bitmap.is_set(index);
             (start..end).for_each(|child_index| {
                 if mask && child_bitmap.is_set(child_index) {
-                    bit_util::set_bit(&mut null_slice, child_index - offset_start);
+                    bit_util::set_bit(null_slice, child_index - offset_start);
                 }
             });
         });

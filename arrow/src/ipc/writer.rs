@@ -775,11 +775,11 @@ fn write_array_data(
             Some(buffer) => buffer.clone(),
         };
 
-        offset = write_buffer(&null_buffer, &mut buffers, &mut arrow_data, offset);
+        offset = write_buffer(&null_buffer, buffers, arrow_data, offset);
     }
 
     array_data.buffers().iter().for_each(|buffer| {
-        offset = write_buffer(buffer, &mut buffers, &mut arrow_data, offset);
+        offset = write_buffer(buffer, buffers, arrow_data, offset);
     });
 
     if !matches!(array_data.data_type(), DataType::Dictionary(_, _)) {
@@ -788,9 +788,9 @@ fn write_array_data(
             // write the nested data (e.g list data)
             offset = write_array_data(
                 data_ref,
-                &mut buffers,
-                &mut arrow_data,
-                &mut nodes,
+                buffers,
+                arrow_data,
+                nodes,
                 offset,
                 data_ref.len(),
                 data_ref.null_count(),

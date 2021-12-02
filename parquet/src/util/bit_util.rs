@@ -384,7 +384,7 @@ impl BitWriter {
             return false;
         }
         let mut ptr = result.unwrap();
-        memcpy_value(&val, num_bytes, &mut ptr);
+        memcpy_value(&val, num_bytes, ptr);
         true
     }
 
