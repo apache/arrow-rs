@@ -121,7 +121,7 @@ pub(super) fn child_logical_null_buffer(
             let array_offset = parent_data.offset();
             let bitmap_len = bit_util::ceil(parent_len * len, 8);
             let mut buffer = MutableBuffer::from_len_zeroed(bitmap_len);
-            let mut null_slice = buffer.as_slice_mut();
+            let null_slice = buffer.as_slice_mut();
             (array_offset..parent_len + array_offset).for_each(|index| {
                 let start = index * len;
                 let end = start + len;
@@ -151,7 +151,7 @@ pub(super) fn child_logical_null_buffer(
             // slow path
             let array_offset = parent_data.offset();
             let mut buffer = MutableBuffer::new_null(parent_len);
-            let mut null_slice = buffer.as_slice_mut();
+            let null_slice = buffer.as_slice_mut();
             (0..parent_len).for_each(|index| {
                 if parent_bitmap.is_set(index + array_offset)
                     && self_null_bitmap.is_set(index + array_offset)
@@ -182,7 +182,7 @@ fn logical_list_bitmap<OffsetSize: OffsetSizeTrait>(
     let offset_start = offsets.first().unwrap().to_usize().unwrap();
     let offset_len = offsets.get(parent_data.len()).unwrap().to_usize().unwrap();
     let mut buffer = MutableBuffer::new_null(offset_len - offset_start);
-    let mut null_slice = buffer.as_slice_mut();
+    let null_slice = buffer.as_slice_mut();
 
     offsets
         .windows(2)

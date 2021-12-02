@@ -106,7 +106,7 @@ impl TreeBuilder {
     fn reader_tree(
         &self,
         field: TypePtr,
-        mut path: &mut Vec<String>,
+        path: &mut Vec<String>,
         mut curr_def_level: i16,
         mut curr_rep_level: i16,
         paths: &HashMap<ColumnPath, usize>,

@@ -143,9 +143,9 @@ fn get_col_writer(
 
 #[allow(clippy::borrowed_box)]
 fn write_leaves(
-    mut row_group_writer: &mut Box<dyn RowGroupWriter>,
+    row_group_writer: &mut Box<dyn RowGroupWriter>,
     array: &arrow_array::ArrayRef,
-    mut levels: &mut Vec<LevelInfo>,
+    levels: &mut Vec<LevelInfo>,
 ) -> Result<()> {
     match array.data_type() {
         ArrowDataType::Null

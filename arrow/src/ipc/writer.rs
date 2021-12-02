@@ -752,9 +752,9 @@ fn write_continuation<W: Write>(
 /// Write array data to a vector of bytes
 fn write_array_data(
     array_data: &ArrayData,
-    mut buffers: &mut Vec<ipc::Buffer>,
-    mut arrow_data: &mut Vec<u8>,
-    mut nodes: &mut Vec<ipc::FieldNode>,
+    buffers: &mut Vec<ipc::Buffer>,
+    arrow_data: &mut Vec<u8>,
+    nodes: &mut Vec<ipc::FieldNode>,
     offset: i64,
     num_rows: usize,
     null_count: usize,
