@@ -769,7 +769,7 @@ mod test {
         };
 
         let fields = extract_fields(snippet);
-        let processed: Vec<_> = fields.iter().map(|field| Field::from(field)).collect();
+        let processed: Vec<_> = fields.iter().map(Field::from).collect();
 
         let column_writers: Vec<_> = processed
             .iter()
@@ -800,7 +800,7 @@ mod test {
         };
 
         let fields = extract_fields(snippet);
-        let processed: Vec<_> = fields.iter().map(|field| Field::from(field)).collect();
+        let processed: Vec<_> = fields.iter().map(Field::from).collect();
         assert_eq!(processed.len(), 3);
 
         assert_eq!(
@@ -840,8 +840,7 @@ mod test {
         };
 
         let fields = extract_fields(snippet);
-        let converted_fields: Vec<_> =
-            fields.iter().map(|field| Type::from(field)).collect();
+        let converted_fields: Vec<_> = fields.iter().map(Type::from).collect();
         let inner_types: Vec<_> = converted_fields
             .iter()
             .map(|field| field.inner_type())
@@ -878,8 +877,7 @@ mod test {
         };
 
         let fields = extract_fields(snippet);
-        let converted_fields: Vec<_> =
-            fields.iter().map(|field| Type::from(field)).collect();
+        let converted_fields: Vec<_> = fields.iter().map(Type::from).collect();
         let physical_types: Vec<_> = converted_fields
             .iter()
             .map(|ty| ty.physical_type())
@@ -911,8 +909,7 @@ mod test {
         };
 
         let fields = extract_fields(snippet);
-        let converted_fields: Vec<_> =
-            fields.iter().map(|field| Type::from(field)).collect();
+        let converted_fields: Vec<_> = fields.iter().map(Type::from).collect();
 
         assert_eq!(
             converted_fields,
@@ -938,7 +935,7 @@ mod test {
         };
 
         let fields = extract_fields(snippet);
-        let types: Vec<_> = fields.iter().map(|field| Type::from(field)).collect();
+        let types: Vec<_> = fields.iter().map(Type::from).collect();
 
         assert_eq!(
             types,

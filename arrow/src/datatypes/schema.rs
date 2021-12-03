@@ -227,10 +227,7 @@ impl Schema {
         match *json {
             Value::Object(ref schema) => {
                 let fields = if let Some(Value::Array(fields)) = schema.get("fields") {
-                    fields
-                        .iter()
-                        .map(|f| Field::from(f))
-                        .collect::<Result<_>>()?
+                    fields.iter().map(Field::from).collect::<Result<_>>()?
                 } else {
                     return Err(ArrowError::ParseError(
                         "Schema fields should be an array".to_string(),
