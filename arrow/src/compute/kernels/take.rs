@@ -296,20 +296,12 @@ where
 }
 
 /// Options that define how `take` should behave
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct TakeOptions {
     /// Perform bounds check before taking indices from values.
     /// If enabled, an `ArrowError` is returned if the indices are out of bounds.
     /// If not enabled, and indices exceed bounds, the kernel will panic.
     pub check_bounds: bool,
-}
-
-impl Default for TakeOptions {
-    fn default() -> Self {
-        Self {
-            check_bounds: false,
-        }
-    }
 }
 
 #[inline(always)]
