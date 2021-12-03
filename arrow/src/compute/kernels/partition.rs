@@ -44,7 +44,6 @@ struct LexicographicalPartitionIterator<'a> {
     num_rows: usize,
     previous_partition_point: usize,
     partition_point: usize,
-    value_indices: Vec<usize>,
 }
 
 impl<'a> LexicographicalPartitionIterator<'a> {
@@ -62,13 +61,11 @@ impl<'a> LexicographicalPartitionIterator<'a> {
         };
 
         let comparator = LexicographicalComparator::try_new(columns)?;
-        let value_indices = (0..num_rows).collect::<Vec<usize>>();
         Ok(LexicographicalPartitionIterator {
             comparator,
             num_rows,
             previous_partition_point: 0,
             partition_point: 0,
-            value_indices,
         })
     }
 }
@@ -77,24 +74,47 @@ impl<'a> LexicographicalPartitionIterator<'a> {
 /// see <https://en.wikipedia.org/wiki/Exponential_search>
 #[inline]
 fn exponential_search(
-    indices: &[usize],
+    start: usize,
+    end: usize,
     target: &usize,
     comparator: &LexicographicalComparator<'_>,
 ) -> usize {
     let mut bound = 1;
-    while bound < indices.len()
-        && comparator.compare(&indices[bound], target) != Ordering::Greater
+    while bound + start < end
+        && comparator.compare(&(bound + start), target) != Ordering::Greater
     {
         bound *= 2;
     }
+
     // invariant after while loop:
     // indices[bound / 2] <= target < indices[min(indices.len(), bound + 1)]
     // where <= and < are defined by the comparator;
     // note here we have right = min(indices.len(), bound + 1) because indices[bound] might
     // actually be considered and must be included.
-    (bound / 2)
-        + indices[(bound / 2)..indices.len().min(bound + 1)]
-            .partition_point(|idx| comparator.compare(idx, target) != Ordering::Greater)
+    partition_point(start + bound / 2, end.min(start + bound + 1), |idx| {
+        comparator.compare(&idx, target) != Ordering::Greater
+    })
+}
+
+#[inline]
+fn partition_point<P: Fn(usize) -> bool>(start: usize, end: usize, pred: P) -> usize {
+    let mut left = start;
+    let mut right = end;
+    let mut size = right - left;
+    while left < right {
+        let mid = left + size / 2;
+
+        let less = pred(mid);
+
+        if less {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+
+        size = right - left;
+    }
+    left
 }
 
 impl<'a> Iterator for LexicographicalPartitionIterator<'a> {
@@ -111,8 +131,9 @@ impl<'a> Iterator for LexicographicalPartitionIterator<'a> {
             // be careful that idx is of type &usize which points to the actual value within value_indices, which itself
             // contains usize (0..row_count), providing access to lexicographical_comparator as pointers into the
             // original columnar data.
-            self.partition_point += exponential_search(
-                &self.value_indices[self.partition_point..],
+            self.partition_point = exponential_search(
+                self.partition_point,
+                self.num_rows,
                 &self.partition_point,
                 &self.comparator,
             );
@@ -133,6 +154,56 @@ mod tests {
     use crate::compute::SortOptions;
     use crate::datatypes::DataType;
     use std::sync::Arc;
+
+    #[test]
+    fn test_partition_point() {
+        let input = &[1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 4];
+        {
+            let median = input[input.len() / 2];
+            assert_eq!(
+                9,
+                partition_point(
+                    0,
+                    input.len(),
+                    &(|i: usize| input[i].cmp(&median) != Ordering::Greater)
+                )
+            );
+        }
+        {
+            let search = input[9];
+            assert_eq!(
+                12,
+                partition_point(
+                    9,
+                    input.len(),
+                    &(|i: usize| input[i].cmp(&search) != Ordering::Greater)
+                )
+            );
+        }
+        {
+            let search = input[0];
+            assert_eq!(
+                3,
+                partition_point(
+                    0,
+                    9,
+                    &(|i: usize| input[i].cmp(&search) != Ordering::Greater)
+                )
+            );
+        }
+        let input = &[1, 2, 2, 2, 2, 2, 2, 2, 9];
+        {
+            let search = input[5];
+            assert_eq!(
+                8,
+                partition_point(
+                    5,
+                    9,
+                    &(|i: usize| input[i].cmp(&search) != Ordering::Greater)
+                )
+            );
+        }
+    }
 
     #[test]
     fn test_lexicographical_partition_ranges_empty() {
