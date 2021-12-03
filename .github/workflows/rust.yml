@@ -239,6 +239,46 @@ jobs:
           export CARGO_TARGET_DIR="/github/home/target"
           cargo clippy --features test_common --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
 
+  check_benches:
+    name: Check Benchmarks (but don't run them)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64]
+        rust: [stable]
+    container:
+      image: ${{ matrix.arch }}/rust
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Cache Cargo
+        uses: actions/cache@v2
+        with:
+          path: /github/home/.cargo
+          # this key equals the ones on `linux-build-lib` for re-use
+          key: cargo-cache2-
+      - name: Cache Rust dependencies
+        uses: actions/cache@v2
+        with:
+          path: /github/home/target
+          # this key equals the ones on `linux-build-lib` for re-use
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install ${{ matrix.rust }}
+          rustup default ${{ matrix.rust }}
+          rustup component add rustfmt clippy
+      - name: Check benchmarks
+        run: |
+          export CARGO_HOME="/github/home/.cargo"
+          export CARGO_TARGET_DIR="/github/home/target"
+          cargo check --benches --workspace
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
