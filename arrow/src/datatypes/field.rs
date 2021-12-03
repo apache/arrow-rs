@@ -286,7 +286,7 @@ impl Field {
                     DataType::Struct(mut fields) => match map.get("children") {
                         Some(Value::Array(values)) => {
                             let struct_fields: Result<Vec<Field>> =
-                                values.iter().map(|v| Field::from(v)).collect();
+                                values.iter().map(Field::from).collect();
                             fields.append(&mut struct_fields?);
                             DataType::Struct(fields)
                         }

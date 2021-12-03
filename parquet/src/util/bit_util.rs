@@ -383,8 +383,8 @@ impl BitWriter {
             // TODO: should we return `Result` for this func?
             return false;
         }
-        let mut ptr = result.unwrap();
-        memcpy_value(&val, num_bytes, &mut ptr);
+        let ptr = result.unwrap();
+        memcpy_value(&val, num_bytes, ptr);
         true
     }
 
