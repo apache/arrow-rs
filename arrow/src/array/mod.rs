@@ -316,10 +316,58 @@ pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 /// assert_eq!(array.values(), &values);
 /// ```
 pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
-
+///
+/// A primitive array where each element is of type `TimestampSecondType.`
+/// See also [`Timestamp.`](crate::datatypes::Timestamp)
+///
+/// # Example: UTC timestamps post epoch
+/// ```
+/// # use arrow::array::TimestampSecondArray;
+/// use chrono::FixedOffset;
+/// // Corresponds to single element array with entry 1970-05-09T14:25:11+0:00
+/// let arr = TimestampSecondArray::from_vec(vec![11111111], None);
+/// // OR
+/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(11111111)], None);
+/// let utc_offset = FixedOffset::east(0);
+///
+/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_offset).map(|v| v.to_string()).unwrap(), "1970-05-09 14:25:11")
+/// ```
+///
+/// # Example: UTC timestamps pre epoch
+/// ```
+/// # use arrow::array::TimestampSecondArray;
+/// use chrono::FixedOffset;
+/// // Corresponds to single element array with entry 1969-08-25T09:34:49+0:00
+/// let arr = TimestampSecondArray::from_vec(vec![-11111111], None);
+/// // OR
+/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(-11111111)], None);
+/// let utc_offset = FixedOffset::east(0);
+///
+/// assert_eq!(arr.value_as_datetime_with_tz(0, utc_offset).map(|v| v.to_string()).unwrap(), "1969-08-25 09:34:49")
+/// ```
+///
+/// # Example: With timezone specified
+/// ```
+/// # use arrow::array::TimestampSecondArray;
+/// use chrono::FixedOffset;
+/// // Corresponds to single element array with entry 1970-05-10T00:25:11+10:00
+/// let arr = TimestampSecondArray::from_vec(vec![11111111], Some("+10:00".to_string()));
+/// // OR
+/// let arr = TimestampSecondArray::from_opt_vec(vec![Some(11111111)], Some("+10:00".to_string()));
+/// let sydney_offset = FixedOffset::east(10 * 60 * 60);
+///
+/// assert_eq!(arr.value_as_datetime_with_tz(0, sydney_offset).map(|v| v.to_string()).unwrap(), "1970-05-10 00:25:11")
+/// ```
+///
 pub type TimestampSecondArray = PrimitiveArray<TimestampSecondType>;
+/// A primitive array where each element is of type `TimestampMillisecondType.`
+/// See examples for [`TimestampSecondArray.`](crate::array::TimestampSecondArray)
 pub type TimestampMillisecondArray = PrimitiveArray<TimestampMillisecondType>;
+/// A primitive array where each element is of type `TimestampMicrosecondType.`
+/// See examples for [`TimestampSecondArray.`](crate::array::TimestampSecondArray)
 pub type TimestampMicrosecondArray = PrimitiveArray<TimestampMicrosecondType>;
+/// A primitive array where each element is of type `TimestampNanosecondType.`
+/// See examples for [`TimestampSecondArray.`](crate::array::TimestampSecondArray)
 pub type TimestampNanosecondArray = PrimitiveArray<TimestampNanosecondType>;
 pub type Date32Array = PrimitiveArray<Date32Type>;
 pub type Date64Array = PrimitiveArray<Date64Type>;
