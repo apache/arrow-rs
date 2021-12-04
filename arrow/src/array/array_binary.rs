@@ -1375,4 +1375,34 @@ mod tests {
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len())
     }
+
+    #[test]
+    fn test_binary_array_all_null() {
+        let data = vec![None];
+        let array = BinaryArray::from(data);
+        array
+            .data()
+            .validate_full()
+            .expect("All null array has valid array data");
+    }
+
+    #[test]
+    fn test_large_binary_array_all_null() {
+        let data = vec![None];
+        let array = LargeBinaryArray::from(data);
+        array
+            .data()
+            .validate_full()
+            .expect("All null array has valid array data");
+    }
+
+    #[test]
+    fn fixed_size_binary_array_all_null() {
+        let data = vec![None] as Vec<Option<String>>;
+        let array = FixedSizeBinaryArray::try_from_sparse_iter(data.into_iter()).unwrap();
+        array
+            .data()
+            .validate_full()
+            .expect("All null array has valid array data");
+    }
 }
