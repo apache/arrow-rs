@@ -25,7 +25,7 @@ authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
 keywords = [ "arrow" ]
 edition = "2021"
-rust-version = "1.56"
+rust-version = "1.57"
 
 [lib]
 name = "arrow_pyarrow_integration_testing"

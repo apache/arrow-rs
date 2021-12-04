@@ -27,7 +27,7 @@ keywords = [ "arrow", "parquet", "hadoop" ]
 readme = "README.md"
 build = "build.rs"
 edition = "2021"
-rust-version = "1.56"
+rust-version = "1.57"
 
 [dependencies]
 parquet-format = "4.0.0"

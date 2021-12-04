@@ -20,7 +20,7 @@ name = "no-default-features"
 description = "Models a user application of arrow that specifies no-default-features=true"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.56"
+rust-version = "1.57"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
