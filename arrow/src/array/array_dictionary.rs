@@ -412,4 +412,14 @@ mod tests {
         assert_eq!(1, keys.value(2));
         assert_eq!(0, keys.value(5));
     }
+
+    #[test]
+    fn test_dictionary_all_nulls() {
+        let test = vec![None, None, None];
+        let array: DictionaryArray<Int32Type> = test.into_iter().collect();
+        array
+            .data()
+            .validate_full()
+            .expect("All null array has valid array data");
+    }
 }
