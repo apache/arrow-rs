@@ -50,16 +50,21 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use crate::array::{
-    ArrayRef, BooleanArray, DictionaryArray, PrimitiveArray, StringArray,
+    ArrayRef, BooleanArray, DecimalBuilder, DictionaryArray, PrimitiveArray, StringArray,
+    MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
+use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
 
 use csv_crate::{ByteRecord, StringRecord};
+use std::ops::Neg;
 
 lazy_static! {
-    static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d+\.\d+)$").unwrap();
+    static ref PARSE_DECIMAL_RE: Regex =
+        Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
+    static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d*\.\d+|\d+\.\d*)$").unwrap();
     static ref INTEGER_RE: Regex = Regex::new(r"^-?(\d+)$").unwrap();
     static ref BOOLEAN_RE: Regex = RegexBuilder::new(r"^(true)$|^(false)$")
         .case_insensitive(true)
@@ -98,7 +103,7 @@ fn infer_field_schema(string: &str) -> DataType {
 ///
 /// If `max_read_records` is not set, the whole file is read to infer its schema.
 ///
-/// Return infered schema and number of records used for inference. This function does not change
+/// Return inferred schema and number of records used for inference. This function does not change
 /// reader cursor offset.
 pub fn infer_file_schema<R: Read + Seek>(
     reader: &mut R,
@@ -270,7 +275,7 @@ pub fn infer_schema_from_files(
     has_header: bool,
 ) -> Result<Schema> {
     let mut schemas = vec![];
-    let mut records_to_read = max_read_records.unwrap_or(std::usize::MAX);
+    let mut records_to_read = max_read_records.unwrap_or(usize::MAX);
 
     for fname in files.iter() {
         let (schema, records_read) = infer_file_schema(
@@ -420,7 +425,7 @@ impl<R: Read> Reader<R> {
 
         // First we will skip `start` rows
         // note that this skips by iteration. This is because in general it is not possible
-        // to seek in CSV. However, skiping still saves the burden of creating arrow arrays,
+        // to seek in CSV. However, skipping still saves the burden of creating arrow arrays,
         // which is a slow operation that scales with the number of columns
 
         let mut record = ByteRecord::new();
@@ -512,6 +517,9 @@ fn parse(
             let field = &fields[i];
             match field.data_type() {
                 DataType::Boolean => build_boolean_array(line_number, rows, i),
+                DataType::Decimal(precision, scale) => {
+                    build_decimal_array(line_number, rows, i, *precision, *scale)
+                }
                 DataType::Int8 => build_primitive_array::<Int8Type>(line_number, rows, i),
                 DataType::Int16 => {
                     build_primitive_array::<Int16Type>(line_number, rows, i)
@@ -694,8 +702,7 @@ impl Parser for TimestampNanosecondType {
     fn parse(string: &str) -> Option<i64> {
         match Self::DATA_TYPE {
             DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-                let date_time = string.parse::<chrono::NaiveDateTime>().ok()?;
-                Self::Native::from_i64(date_time.timestamp_nanos())
+                string_to_timestamp_nanos(string).ok()
             }
             _ => None,
         }
@@ -706,8 +713,8 @@ impl Parser for TimestampMicrosecondType {
     fn parse(string: &str) -> Option<i64> {
         match Self::DATA_TYPE {
             DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                let date_time = string.parse::<chrono::NaiveDateTime>().ok()?;
-                Self::Native::from_i64(date_time.timestamp_nanos() / 1000)
+                let nanos = string_to_timestamp_nanos(string).ok();
+                nanos.map(|x| x / 1000)
             }
             _ => None,
         }
@@ -725,6 +732,152 @@ fn parse_bool(string: &str) -> Option<bool> {
         Some(true)
     } else {
         None
+    }
+}
+
+// parse the column string to an Arrow Array
+fn build_decimal_array(
+    _line_number: usize,
+    rows: &[StringRecord],
+    col_idx: usize,
+    precision: usize,
+    scale: usize,
+) -> Result<ArrayRef> {
+    let mut decimal_builder = DecimalBuilder::new(rows.len(), precision, scale);
+    for row in rows {
+        let col_s = row.get(col_idx);
+        match col_s {
+            None => {
+                // No data for this row
+                decimal_builder.append_null()?;
+            }
+            Some(s) => {
+                if s.is_empty() {
+                    // append null
+                    decimal_builder.append_null()?;
+                } else {
+                    let decimal_value: Result<i128> =
+                        parse_decimal_with_parameter(s, precision, scale);
+                    match decimal_value {
+                        Ok(v) => {
+                            decimal_builder.append_value(v)?;
+                        }
+                        Err(e) => {
+                            return Err(e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(Arc::new(decimal_builder.finish()))
+}
+
+// Parse the string format decimal value to i128 format and checking the precision and scale.
+// The result i128 value can't be out of bounds.
+fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Result<i128> {
+    if PARSE_DECIMAL_RE.is_match(s) {
+        let mut offset = s.len();
+        let len = s.len();
+        let mut base = 1;
+
+        // handle the value after the '.' and meet the scale
+        let delimiter_position = s.find('.');
+        match delimiter_position {
+            None => {
+                // there is no '.'
+                base = 10_i128.pow(scale as u32);
+            }
+            Some(mid) => {
+                // there is the '.'
+                if len - mid >= scale + 1 {
+                    // If the string value is "123.12345" and the scale is 2, we should just remain '.12' and drop the '345' value.
+                    offset -= len - mid - 1 - scale;
+                } else {
+                    // If the string value is "123.12" and the scale is 4, we should append '00' to the tail.
+                    base = 10_i128.pow((scale + 1 + mid - len) as u32);
+                }
+            }
+        };
+
+        // each byte is digit、'-' or '.'
+        let bytes = s.as_bytes();
+        let mut negative = false;
+        let mut result: i128 = 0;
+
+        bytes[0..offset].iter().rev().for_each(|&byte| match byte {
+            b'-' => {
+                negative = true;
+            }
+            b'0'..=b'9' => {
+                result += i128::from(byte - b'0') * base;
+                base *= 10;
+            }
+            // because of the PARSE_DECIMAL_RE, bytes just contains digit、'-' and '.'.
+            _ => {}
+        });
+
+        if negative {
+            result = result.neg();
+        }
+        if result > MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1]
+            || result < MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1]
+        {
+            return Err(ArrowError::ParseError(format!(
+                "parse decimal overflow, the precision {}, the scale {}, the value {}",
+                precision, scale, s
+            )));
+        }
+        Ok(result)
+    } else {
+        Err(ArrowError::ParseError(format!(
+            "can't parse the string value {} to decimal",
+            s
+        )))
+    }
+}
+
+// Parse the string format decimal value to i128 format without checking the precision and scale.
+// Like "125.12" to 12512_i128.
+fn parse_decimal(s: &str) -> Result<i128> {
+    if PARSE_DECIMAL_RE.is_match(s) {
+        let mut offset = s.len();
+        // each byte is digit、'-' or '.'
+        let bytes = s.as_bytes();
+        let mut negative = false;
+        let mut result: i128 = 0;
+        let mut base = 1;
+        while offset > 0 {
+            match bytes[offset - 1] {
+                b'-' => {
+                    negative = true;
+                }
+                b'.' => {
+                    // do nothing
+                }
+                b'0'..=b'9' => {
+                    result += i128::from(bytes[offset - 1] - b'0') * base;
+                    base *= 10;
+                }
+                _ => {
+                    return Err(ArrowError::ParseError(format!(
+                        "can't match byte {}",
+                        bytes[offset - 1]
+                    )));
+                }
+            }
+            offset -= 1;
+        }
+        if negative {
+            Ok(result.neg())
+        } else {
+            Ok(result)
+        }
+    } else {
+        Err(ArrowError::ParseError(format!(
+            "can't parse the string value {} to decimal",
+            s
+        )))
     }
 }
 
@@ -811,9 +964,9 @@ pub struct ReaderBuilder {
     has_header: bool,
     /// An optional column delimiter. Defaults to `b','`
     delimiter: Option<u8>,
-    /// An optional escape charactor. Defaults None
+    /// An optional escape character. Defaults None
     escape: Option<u8>,
-    /// An optional quote charactor. Defaults b'\"'
+    /// An optional quote character. Defaults b'\"'
     quote: Option<u8>,
     /// An optional record terminator. Defaults CRLF
     terminator: Option<u8>,
@@ -979,6 +1132,7 @@ mod tests {
     use crate::array::*;
     use crate::compute::cast;
     use crate::datatypes::Field;
+    use chrono::{prelude::*, LocalResult};
 
     #[test]
     fn test_csv() {
@@ -1052,6 +1206,37 @@ mod tests {
         assert_eq!(3, batch.num_columns());
 
         assert_eq!(&metadata, batch.schema().metadata());
+    }
+
+    #[test]
+    fn test_csv_reader_with_decimal() {
+        let schema = Schema::new(vec![
+            Field::new("city", DataType::Utf8, false),
+            Field::new("lat", DataType::Decimal(26, 6), false),
+            Field::new("lng", DataType::Decimal(26, 6), false),
+        ]);
+
+        let file = File::open("test/data/decimal_test.csv").unwrap();
+
+        let mut csv = Reader::new(file, Arc::new(schema), false, None, 1024, None, None);
+        let batch = csv.next().unwrap().unwrap();
+        // access data from a primitive array
+        let lat = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<DecimalArray>()
+            .unwrap();
+
+        assert_eq!("57.653484", lat.value_as_string(0));
+        assert_eq!("53.002666", lat.value_as_string(1));
+        assert_eq!("52.412811", lat.value_as_string(2));
+        assert_eq!("51.481583", lat.value_as_string(3));
+        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("50.760000", lat.value_as_string(5));
+        assert_eq!("0.123000", lat.value_as_string(6));
+        assert_eq!("123.000000", lat.value_as_string(7));
+        assert_eq!("123.000000", lat.value_as_string(8));
+        assert_eq!("-50.760000", lat.value_as_string(9));
     }
 
     #[test]
@@ -1341,10 +1526,14 @@ mod tests {
         assert_eq!(infer_field_schema("\"123\""), DataType::Utf8);
         assert_eq!(infer_field_schema("10"), DataType::Int64);
         assert_eq!(infer_field_schema("10.2"), DataType::Float64);
+        assert_eq!(infer_field_schema(".2"), DataType::Float64);
+        assert_eq!(infer_field_schema("2."), DataType::Float64);
         assert_eq!(infer_field_schema("true"), DataType::Boolean);
         assert_eq!(infer_field_schema("false"), DataType::Boolean);
         assert_eq!(infer_field_schema("2020-11-08"), DataType::Date32);
         assert_eq!(infer_field_schema("2020-11-08T14:20:01"), DataType::Date64);
+        assert_eq!(infer_field_schema("-5.13"), DataType::Float64);
+        assert_eq!(infer_field_schema("0.1300"), DataType::Float64);
     }
 
     #[test]
@@ -1368,6 +1557,162 @@ mod tests {
         assert_eq!(
             parse_item::<Date64Type>("1900-02-28T12:34:56").unwrap(),
             -2203932304000
+        );
+    }
+
+    #[test]
+    fn test_parse_decimal() {
+        let tests = [
+            ("123.00", 12300i128),
+            ("123.123", 123123i128),
+            ("0.0123", 123i128),
+            ("0.12300", 12300i128),
+            ("-5.123", -5123i128),
+            ("-45.432432", -45432432i128),
+        ];
+        for (s, i) in tests {
+            let result = parse_decimal(s);
+            assert_eq!(i, result.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_parse_decimal_with_parameter() {
+        let tests = [
+            ("123.123", 123123i128),
+            ("123.1234", 123123i128),
+            ("123.1", 123100i128),
+            ("123", 123000i128),
+            ("-123.123", -123123i128),
+            ("-123.1234", -123123i128),
+            ("-123.1", -123100i128),
+            ("-123", -123000i128),
+            ("0.0000123", 0i128),
+            ("12.", 12000i128),
+            ("-12.", -12000i128),
+            ("00.1", 100i128),
+            ("-00.1", -100i128),
+            ("12345678912345678.1234", 12345678912345678123i128),
+            ("-12345678912345678.1234", -12345678912345678123i128),
+            ("99999999999999999.999", 99999999999999999999i128),
+            ("-99999999999999999.999", -99999999999999999999i128),
+            (".123", 123i128),
+            ("-.123", -123i128),
+            ("123.", 123000i128),
+            ("-123.", -123000i128),
+        ];
+        for (s, i) in tests {
+            let result = parse_decimal_with_parameter(s, 20, 3);
+            assert_eq!(i, result.unwrap())
+        }
+        let can_not_parse_tests = ["123,123", ".", "123.123.123"];
+        for s in can_not_parse_tests {
+            let result = parse_decimal_with_parameter(s, 20, 3);
+            assert_eq!(
+                format!(
+                    "Parser error: can't parse the string value {} to decimal",
+                    s
+                ),
+                result.unwrap_err().to_string()
+            );
+        }
+        let overflow_parse_tests = ["12345678", "12345678.9", "99999999.99"];
+        for s in overflow_parse_tests {
+            let result = parse_decimal_with_parameter(s, 10, 3);
+            assert_eq!(format!(
+                "Parser error: parse decimal overflow, the precision {}, the scale {}, the value {}", 10,3, s),result.unwrap_err().to_string());
+        }
+    }
+
+    /// Interprets a naive_datetime (with no explicit timezone offset)
+    /// using the local timezone and returns the timestamp in UTC (0
+    /// offset)
+    fn naive_datetime_to_timestamp(naive_datetime: &NaiveDateTime) -> i64 {
+        // Note: Use chrono APIs that are different than
+        // naive_datetime_to_timestamp to compute the utc offset to
+        // try and double check the logic
+        let utc_offset_secs = match Local.offset_from_local_datetime(naive_datetime) {
+            LocalResult::Single(local_offset) => {
+                local_offset.fix().local_minus_utc() as i64
+            }
+            _ => panic!(
+                "Unexpected failure converting {} to local datetime",
+                naive_datetime
+            ),
+        };
+        let utc_offset_nanos = utc_offset_secs * 1_000_000_000;
+        naive_datetime.timestamp_nanos() - utc_offset_nanos
+    }
+
+    #[test]
+    fn test_parse_timestamp_microseconds() {
+        assert_eq!(
+            parse_item::<TimestampMicrosecondType>("1970-01-01T00:00:00Z").unwrap(),
+            0
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(2018, 11, 13),
+            NaiveTime::from_hms_nano(17, 11, 10, 0),
+        );
+        assert_eq!(
+            parse_item::<TimestampMicrosecondType>("2018-11-13T17:11:10").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime) / 1000
+        );
+        assert_eq!(
+            parse_item::<TimestampMicrosecondType>("2018-11-13 17:11:10").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime) / 1000
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(2018, 11, 13),
+            NaiveTime::from_hms_nano(17, 11, 10, 11000000),
+        );
+        assert_eq!(
+            parse_item::<TimestampMicrosecondType>("2018-11-13T17:11:10.011").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime) / 1000
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(1900, 2, 28),
+            NaiveTime::from_hms_nano(12, 34, 56, 0),
+        );
+        assert_eq!(
+            parse_item::<TimestampMicrosecondType>("1900-02-28T12:34:56").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime) / 1000
+        );
+    }
+
+    #[test]
+    fn test_parse_timestamp_nanoseconds() {
+        assert_eq!(
+            parse_item::<TimestampNanosecondType>("1970-01-01T00:00:00Z").unwrap(),
+            0
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(2018, 11, 13),
+            NaiveTime::from_hms_nano(17, 11, 10, 0),
+        );
+        assert_eq!(
+            parse_item::<TimestampNanosecondType>("2018-11-13T17:11:10").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime)
+        );
+        assert_eq!(
+            parse_item::<TimestampNanosecondType>("2018-11-13 17:11:10").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime)
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(2018, 11, 13),
+            NaiveTime::from_hms_nano(17, 11, 10, 11000000),
+        );
+        assert_eq!(
+            parse_item::<TimestampNanosecondType>("2018-11-13T17:11:10.011").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime)
+        );
+        let naive_datetime = NaiveDateTime::new(
+            NaiveDate::from_ymd(1900, 2, 28),
+            NaiveTime::from_hms_nano(12, 34, 56, 0),
+        );
+        assert_eq!(
+            parse_item::<TimestampNanosecondType>("1900-02-28T12:34:56").unwrap(),
+            naive_datetime_to_timestamp(&naive_datetime)
         );
     }
 
@@ -1485,6 +1830,8 @@ mod tests {
         assert_eq!(Some(-12.34), parse_item::<Float64Type>("-12.34"));
         assert_eq!(Some(12.0), parse_item::<Float64Type>("12"));
         assert_eq!(Some(0.0), parse_item::<Float64Type>("0"));
+        assert_eq!(Some(2.0), parse_item::<Float64Type>("2."));
+        assert_eq!(Some(0.2), parse_item::<Float64Type>(".2"));
         assert!(parse_item::<Float64Type>("nan").unwrap().is_nan());
         assert!(parse_item::<Float64Type>("NaN").unwrap().is_nan());
         assert!(parse_item::<Float64Type>("inf").unwrap().is_infinite());

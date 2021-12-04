@@ -54,7 +54,7 @@ use chrono::{prelude::*, LocalResult};
 ///
 /// Numerical values of timestamps are stored compared to offset UTC.
 ///
-/// This function intertprets strings without an explicit time zone as
+/// This function interprets strings without an explicit time zone as
 /// timestamps with offsets of the local time on the machine
 ///
 /// For example, `1997-01-31 09:26:56.123Z` is interpreted as UTC, as
@@ -95,7 +95,7 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64> {
 
     // without a timezone specifier as a local time, using T as a separator
     // Example: 2020-09-08T13:42:29.190855
-    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S.%f") {
+    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
         return naive_datetime_to_timestamp(s, ts);
     }
 
@@ -108,7 +108,7 @@ pub fn string_to_timestamp_nanos(s: &str) -> Result<i64> {
 
     // without a timezone specifier as a local time, using ' ' as a separator
     // Example: 2020-09-08 13:42:29.190855
-    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S.%f") {
+    if let Ok(ts) = NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S%.f") {
         return naive_datetime_to_timestamp(s, ts);
     }
 
@@ -202,7 +202,7 @@ mod tests {
         Ok(())
     }
 
-    /// Interprets a naive_datetime (with no explicit timzone offset)
+    /// Interprets a naive_datetime (with no explicit timezone offset)
     /// using the local timezone and returns the timestamp in UTC (0
     /// offset)
     fn naive_datetime_to_timestamp(naive_datetime: &NaiveDateTime) -> i64 {
@@ -224,10 +224,10 @@ mod tests {
     fn string_to_timestamp_no_timezone() -> Result<()> {
         // This test is designed to succeed in regardless of the local
         // timezone the test machine is running. Thus it is still
-        // somewhat suceptable to bugs in the use of chrono
+        // somewhat susceptible to bugs in the use of chrono
         let naive_datetime = NaiveDateTime::new(
             NaiveDate::from_ymd(2020, 9, 8),
-            NaiveTime::from_hms_nano(13, 42, 29, 190855),
+            NaiveTime::from_hms_nano(13, 42, 29, 190855000),
         );
 
         // Ensure both T and ' ' variants work

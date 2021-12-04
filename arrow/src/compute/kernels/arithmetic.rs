@@ -78,18 +78,20 @@ where
         },
     );
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        array.len(),
-        None,
-        array
-            .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice(array.offset(), array.len())),
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            array.len(),
+            None,
+            array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(array.offset(), array.len())),
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -130,18 +132,20 @@ where
         },
     );
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        array.len(),
-        None,
-        array
-            .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice(array.offset(), array.len())),
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            array.len(),
+            None,
+            array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(array.offset(), array.len())),
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -182,15 +186,17 @@ where
     //      `values` is an iterator with a known size.
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![buffer],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -250,15 +256,17 @@ where
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     }?;
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![buffer],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -318,15 +326,17 @@ where
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     }?;
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![buffer],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![buffer],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -413,15 +423,17 @@ where
             *scalar_result = scalar_op(*scalar_left, *scalar_right);
         });
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -725,15 +737,17 @@ where
         }
     }
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -845,15 +859,17 @@ where
         }
     }
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        left.len(),
-        None,
-        null_bit_buffer,
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -891,18 +907,20 @@ where
 
     simd_checked_modulus_scalar_remainder::<T>(array_chunks, modulo, result_chunks)?;
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        array.len(),
-        None,
-        array
-            .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice(array.offset(), array.len())),
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            array.len(),
+            None,
+            array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(array.offset(), array.len())),
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 
@@ -940,18 +958,20 @@ where
 
     simd_checked_divide_scalar_remainder::<T>(array_chunks, divisor, result_chunks)?;
 
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        array.len(),
-        None,
-        array
-            .data_ref()
-            .null_buffer()
-            .map(|b| b.bit_slice(array.offset(), array.len())),
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            array.len(),
+            None,
+            array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(array.offset(), array.len())),
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 

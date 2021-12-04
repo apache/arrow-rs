@@ -159,21 +159,23 @@ where
     let bool_buffer: Buffer = value_buffer.into();
     let bool_valid_buffer: Buffer = valid_buffer.into();
 
-    let array_data = ArrayData::new(
-        DataType::Boolean,
-        len,
-        None,
-        Some(bool_valid_buffer),
-        left_offset,
-        vec![bool_buffer],
-        vec![],
-    );
+    let array_data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            len,
+            None,
+            Some(bool_valid_buffer),
+            left_offset,
+            vec![bool_buffer],
+            vec![],
+        )
+    };
 
     Ok(BooleanArray::from(array_data))
 }
 
 /// Helper function to implement binary kernels
-fn binary_boolean_kernel<F>(
+pub(crate) fn binary_boolean_kernel<F>(
     left: &BooleanArray,
     right: &BooleanArray,
     op: F,
@@ -200,15 +202,17 @@ where
 
     let values = op(left_buffer, left_offset, right_buffer, right_offset, len);
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        len,
-        None,
-        null_bit_buffer,
-        0,
-        vec![values],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            len,
+            None,
+            null_bit_buffer,
+            0,
+            vec![values],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -380,15 +384,17 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray> {
 
     let values = buffer_unary_not(&data.buffers()[0], left_offset, len);
 
-    let data = ArrayData::new(
-        DataType::Boolean,
-        len,
-        None,
-        null_bit_buffer,
-        0,
-        vec![values],
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            len,
+            None,
+            null_bit_buffer,
+            0,
+            vec![values],
+            vec![],
+        )
+    };
     Ok(BooleanArray::from(data))
 }
 
@@ -418,8 +424,17 @@ pub fn is_null(input: &dyn Array) -> Result<BooleanArray> {
         Some(buffer) => buffer_unary_not(buffer, input.offset(), len),
     };
 
-    let data =
-        ArrayData::new(DataType::Boolean, len, None, None, 0, vec![output], vec![]);
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            len,
+            None,
+            None,
+            0,
+            vec![output],
+            vec![],
+        )
+    };
 
     Ok(BooleanArray::from(data))
 }
@@ -452,8 +467,17 @@ pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray> {
         Some(buffer) => buffer.bit_slice(input.offset(), len),
     };
 
-    let data =
-        ArrayData::new(DataType::Boolean, len, None, None, 0, vec![output], vec![]);
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            len,
+            None,
+            None,
+            0,
+            vec![output],
+            vec![],
+        )
+    };
 
     Ok(BooleanArray::from(data))
 }
@@ -537,15 +561,17 @@ where
 
     // Construct new array with same values but modified null bitmap
     // TODO: shift data buffer as needed
-    let data = ArrayData::new(
-        T::DATA_TYPE,
-        left.len(),
-        None, // force new to compute the number of null bits
-        modified_null_buffer,
-        0, // No need for offset since left data has been shifted
-        data_buffers,
-        left_data.child_data().to_vec(),
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            left.len(),
+            None, // force new to compute the number of null bits
+            modified_null_buffer,
+            0, // No need for offset since left data has been shifted
+            data_buffers,
+            left_data.child_data().to_vec(),
+        )
+    };
     Ok(PrimitiveArray::<T>::from(data))
 }
 

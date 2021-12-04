@@ -143,9 +143,9 @@ fn get_col_writer(
 
 #[allow(clippy::borrowed_box)]
 fn write_leaves(
-    mut row_group_writer: &mut Box<dyn RowGroupWriter>,
+    row_group_writer: &mut Box<dyn RowGroupWriter>,
     array: &arrow_array::ArrayRef,
-    mut levels: &mut Vec<LevelInfo>,
+    levels: &mut Vec<LevelInfo>,
 ) -> Result<()> {
     match array.data_type() {
         ArrowDataType::Null
@@ -173,7 +173,7 @@ fn write_leaves(
         | ArrowDataType::LargeUtf8
         | ArrowDataType::Decimal(_, _)
         | ArrowDataType::FixedSizeBinary(_) => {
-            let mut col_writer = get_col_writer(&mut row_group_writer)?;
+            let mut col_writer = get_col_writer(row_group_writer)?;
             write_leaf(
                 &mut col_writer,
                 array,
@@ -186,7 +186,7 @@ fn write_leaves(
             // write the child list
             let data = array.data();
             let child_array = arrow_array::make_array(data.child_data()[0].clone());
-            write_leaves(&mut row_group_writer, &child_array, &mut levels)?;
+            write_leaves(row_group_writer, &child_array, levels)?;
             Ok(())
         }
         ArrowDataType::Struct(_) => {
@@ -195,7 +195,7 @@ fn write_leaves(
                 .downcast_ref::<arrow_array::StructArray>()
                 .expect("Unable to get struct array");
             for field in struct_array.columns() {
-                write_leaves(&mut row_group_writer, field, &mut levels)?;
+                write_leaves(row_group_writer, field, levels)?;
             }
             Ok(())
         }
@@ -204,15 +204,15 @@ fn write_leaves(
                 .as_any()
                 .downcast_ref::<arrow_array::MapArray>()
                 .expect("Unable to get map array");
-            write_leaves(&mut row_group_writer, &map_array.keys(), &mut levels)?;
-            write_leaves(&mut row_group_writer, &map_array.values(), &mut levels)?;
+            write_leaves(row_group_writer, &map_array.keys(), levels)?;
+            write_leaves(row_group_writer, &map_array.values(), levels)?;
             Ok(())
         }
         ArrowDataType::Dictionary(_, value_type) => {
             // cast dictionary to a primitive
             let array = arrow::compute::cast(array, value_type)?;
 
-            let mut col_writer = get_col_writer(&mut row_group_writer)?;
+            let mut col_writer = get_col_writer(row_group_writer)?;
             write_leaf(
                 &mut col_writer,
                 &array,
@@ -469,15 +469,25 @@ fn write_leaf(
 macro_rules! def_get_binary_array_fn {
     ($name:ident, $ty:ty) => {
         fn $name(array: &$ty) -> Vec<ByteArray> {
-            let mut values = Vec::with_capacity(array.len() - array.null_count());
-            for i in 0..array.len() {
-                if array.is_valid(i) {
-                    let bytes: Vec<u8> = array.value(i).into();
-                    let bytes = ByteArray::from(bytes);
-                    values.push(bytes);
-                }
-            }
-            values
+            let mut byte_array = ByteArray::new();
+            let ptr = crate::memory::ByteBufferPtr::new(
+                unsafe { array.value_data().typed_data::<u8>() }.to_vec(),
+            );
+            byte_array.set_data(ptr);
+            array
+                .value_offsets()
+                .windows(2)
+                .enumerate()
+                .filter_map(|(i, offsets)| {
+                    if array.is_valid(i) {
+                        let start = offsets[0] as usize;
+                        let len = offsets[1] as usize - start;
+                        Some(byte_array.slice(start, len))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
         }
     };
 }
@@ -708,7 +718,8 @@ mod tests {
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.data().clone())
         .null_bit_buffer(Buffer::from(vec![0b00011011]))
-        .build();
+        .build()
+        .unwrap();
         let a = ListArray::from(a_list_data);
 
         // build a record batch
@@ -747,7 +758,8 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.data().clone())
-        .build();
+        .build()
+        .unwrap();
         let a = ListArray::from(a_list_data);
 
         // build a record batch
@@ -868,7 +880,8 @@ mod tests {
             .len(5)
             .add_buffer(g_value_offsets.clone())
             .add_child_data(g_value.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let g = ListArray::from(g_list_data);
         // The difference between g and h is that h has a null bitmap
         let h_list_data = ArrayData::builder(struct_field_h.data_type().clone())
@@ -876,7 +889,8 @@ mod tests {
             .add_buffer(g_value_offsets)
             .add_child_data(g_value.data().clone())
             .null_bit_buffer(Buffer::from(vec![0b00011011]))
-            .build();
+            .build()
+            .unwrap();
         let h = ListArray::from(h_list_data);
 
         let e = StructArray::from(vec![
@@ -996,13 +1010,15 @@ mod tests {
             .len(6)
             .null_bit_buffer(Buffer::from(vec![0b00100111]))
             .add_child_data(c.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
             .null_bit_buffer(Buffer::from(vec![0b00101111]))
             .add_child_data(b.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let a = StructArray::from(a_data);
 
         assert_eq!(a.null_count(), 1);
@@ -1031,12 +1047,14 @@ mod tests {
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
             .add_child_data(c.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
             .add_child_data(b.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let a = StructArray::from(a_data);
 
         assert_eq!(a.null_count(), 0);
@@ -1066,13 +1084,15 @@ mod tests {
             .len(6)
             .null_bit_buffer(Buffer::from(vec![0b00100111]))
             .add_child_data(c.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let b = StructArray::from(b_data);
         // a intentionally has no null buffer, to test that this is handled correctly
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
             .add_child_data(b.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let a = StructArray::from(a_data);
 
         assert_eq!(a.null_count(), 0);
@@ -1534,7 +1554,8 @@ mod tests {
         .add_buffer(a_value_offsets)
         .null_bit_buffer(Buffer::from(vec![0b00011011]))
         .add_child_data(a_values.data().clone())
-        .build();
+        .build()
+        .unwrap();
 
         assert_eq!(a_list_data.null_count(), 1);
 
@@ -1558,7 +1579,8 @@ mod tests {
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.data().clone())
         .null_bit_buffer(Buffer::from(vec![0b00011011]))
-        .build();
+        .build()
+        .unwrap();
 
         // I think this setup is incorrect because this should pass
         assert_eq!(a_list_data.null_count(), 1);

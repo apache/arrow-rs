@@ -16,19 +16,16 @@
 # under the License.
 
 [package]
-name = "parquet_derive_test"
-version = "7.0.0-SNAPSHOT"
-license = "Apache-2.0"
-description = "Integration test package for parquet-derive"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-keywords = [ "parquet" ]
+name = "defeault-features"
+description = "Models a user application of parquet_derive that uses no additional features of arrow"
+version = "0.1.0"
 edition = "2021"
-publish = false
 rust-version = "1.57"
 
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
 [dependencies]
-parquet = { path = "../parquet", version = "7.0.0-SNAPSHOT" }
-parquet_derive = { path = "../parquet_derive", version = "7.0.0-SNAPSHOT" }
-chrono = "0.4.19"
+parquet_derive = { path = "../../../../parquet_derive", version = "7.0.0-SNAPSHOT" }
+
+# Keep this out of the default workspace
+[workspace]

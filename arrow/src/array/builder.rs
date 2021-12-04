@@ -329,7 +329,7 @@ impl BooleanBufferBuilder {
     }
 
     #[inline]
-    pub fn get_bit(&mut self, index: usize) -> bool {
+    pub fn get_bit(&self, index: usize) -> bool {
         bit_util::get_bit(self.buffer.as_slice(), index)
     }
 
@@ -601,8 +601,8 @@ impl BooleanBuilder {
         if null_count > 0 {
             builder = builder.null_bit_buffer(null_bit_buffer);
         }
-        let data = builder.build();
-        BooleanArray::from(data)
+        let array_data = unsafe { builder.build_unchecked() };
+        BooleanArray::from(array_data)
     }
 }
 
@@ -800,8 +800,8 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         if null_count > 0 {
             builder = builder.null_bit_buffer(null_bit_buffer.unwrap());
         }
-        let data = builder.build();
-        PrimitiveArray::<T>::from(data)
+        let array_data = unsafe { builder.build_unchecked() };
+        PrimitiveArray::<T>::from(array_data)
     }
 
     /// Builds the `DictionaryArray` and reset this builder.
@@ -824,7 +824,8 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             builder = builder.null_bit_buffer(null_bit_buffer.unwrap());
         }
         builder = builder.add_child_data(values.data().clone());
-        DictionaryArray::<T>::from(builder.build())
+        let array_data = unsafe { builder.build_unchecked() };
+        DictionaryArray::<T>::from(array_data)
     }
 
     fn materialize_bitmap_builder(&mut self) {
@@ -952,14 +953,15 @@ where
         } else {
             DataType::List(field)
         };
-        let data = ArrayData::builder(data_type)
+        let array_data = ArrayData::builder(data_type)
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(values_data.clone())
-            .null_bit_buffer(null_bit_buffer)
-            .build();
+            .null_bit_buffer(null_bit_buffer);
 
-        GenericListArray::<OffsetSize>::from(data)
+        let array_data = unsafe { array_data.build_unchecked() };
+
+        GenericListArray::<OffsetSize>::from(array_data)
     }
 }
 
@@ -1080,16 +1082,17 @@ where
         }
 
         let null_bit_buffer = self.bitmap_builder.finish();
-        let data = ArrayData::builder(DataType::FixedSizeList(
+        let array_data = ArrayData::builder(DataType::FixedSizeList(
             Box::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
         .add_child_data(values_data.clone())
-        .null_bit_buffer(null_bit_buffer)
-        .build();
+        .null_bit_buffer(null_bit_buffer);
 
-        FixedSizeListArray::from(data)
+        let array_data = unsafe { array_data.build_unchecked() };
+
+        FixedSizeListArray::from(array_data)
     }
 }
 
@@ -1114,6 +1117,87 @@ pub type LargeStringBuilder = GenericStringBuilder<i64>;
 pub struct FixedSizeBinaryBuilder {
     builder: FixedSizeListBuilder<UInt8Builder>,
 }
+
+pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
+    9,
+    99,
+    999,
+    9999,
+    99999,
+    999999,
+    9999999,
+    99999999,
+    999999999,
+    9999999999,
+    99999999999,
+    999999999999,
+    9999999999999,
+    99999999999999,
+    999999999999999,
+    9999999999999999,
+    99999999999999999,
+    999999999999999999,
+    9999999999999999999,
+    99999999999999999999,
+    999999999999999999999,
+    9999999999999999999999,
+    99999999999999999999999,
+    999999999999999999999999,
+    9999999999999999999999999,
+    99999999999999999999999999,
+    999999999999999999999999999,
+    9999999999999999999999999999,
+    99999999999999999999999999999,
+    999999999999999999999999999999,
+    9999999999999999999999999999999,
+    99999999999999999999999999999999,
+    999999999999999999999999999999999,
+    9999999999999999999999999999999999,
+    99999999999999999999999999999999999,
+    999999999999999999999999999999999999,
+    9999999999999999999999999999999999999,
+    170141183460469231731687303715884105727,
+];
+pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
+    -9,
+    -99,
+    -999,
+    -9999,
+    -99999,
+    -999999,
+    -9999999,
+    -99999999,
+    -999999999,
+    -9999999999,
+    -99999999999,
+    -999999999999,
+    -9999999999999,
+    -99999999999999,
+    -999999999999999,
+    -9999999999999999,
+    -99999999999999999,
+    -999999999999999999,
+    -9999999999999999999,
+    -99999999999999999999,
+    -999999999999999999999,
+    -9999999999999999999999,
+    -99999999999999999999999,
+    -999999999999999999999999,
+    -9999999999999999999999999,
+    -99999999999999999999999999,
+    -999999999999999999999999999,
+    -9999999999999999999999999999,
+    -99999999999999999999999999999,
+    -999999999999999999999999999999,
+    -9999999999999999999999999999999,
+    -99999999999999999999999999999999,
+    -999999999999999999999999999999999,
+    -9999999999999999999999999999999999,
+    -99999999999999999999999999999999999,
+    -999999999999999999999999999999999999,
+    -9999999999999999999999999999999999999,
+    -170141183460469231731687303715884105728,
+];
 
 ///
 /// Array Builder for [`DecimalArray`]
@@ -1428,6 +1512,14 @@ impl DecimalBuilder {
     /// distinct array element.
     #[inline]
     pub fn append_value(&mut self, value: i128) -> Result<()> {
+        if value > MAX_DECIMAL_FOR_EACH_PRECISION[self.precision - 1]
+            || value < MIN_DECIMAL_FOR_EACH_PRECISION[self.precision - 1]
+        {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "The value of {} i128 is not compatible with Decimal({},{})",
+                value, self.precision, self.scale
+            )));
+        }
         let value_as_bytes = Self::from_i128_to_fixed_size_bytes(
             value,
             self.builder.value_length() as usize,
@@ -1680,7 +1772,8 @@ impl StructBuilder {
 
         self.len = 0;
 
-        StructArray::from(builder.build())
+        let array_data = unsafe { builder.build_unchecked() };
+        StructArray::from(array_data)
     }
 }
 
@@ -1804,14 +1897,15 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             struct_array.data_type().clone(),
             false, // always non-nullable
         ));
-        let data = ArrayData::builder(DataType::Map(map_field, false)) // TODO: support sorted keys
+        let array_data = ArrayData::builder(DataType::Map(map_field, false)) // TODO: support sorted keys
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(struct_array.data().clone())
-            .null_bit_buffer(null_bit_buffer)
-            .build();
+            .null_bit_buffer(null_bit_buffer);
 
-        MapArray::from(data)
+        let array_data = unsafe { array_data.build_unchecked() };
+
+        MapArray::from(array_data)
     }
 }
 
@@ -2135,9 +2229,13 @@ impl UnionBuilder {
                 .add_buffer(buffer)
                 .len(slots);
             //                .build();
-            let arr_data_ref = match bitmap_builder {
-                Some(mut bb) => arr_data_builder.null_bit_buffer(bb.finish()).build(),
-                None => arr_data_builder.build(),
+            let arr_data_ref = unsafe {
+                match bitmap_builder {
+                    Some(mut bb) => arr_data_builder
+                        .null_bit_buffer(bb.finish())
+                        .build_unchecked(),
+                    None => arr_data_builder.build_unchecked(),
+                }
             };
             let array_ref = make_array(arr_data_ref);
             children.push((type_id, (Field::new(&name, data_type, false), array_ref)))
@@ -2709,6 +2807,17 @@ mod tests {
         let mut buffer = BooleanBufferBuilder::new(16);
         buffer.append_n(8, true);
         buffer.append_n(8, false);
+        assert!(buffer.get_bit(0));
+    }
+
+    #[test]
+    fn test_bool_buffer_builder_get_first_bit_not_requires_mutability() {
+        let buffer = {
+            let mut buffer = BooleanBufferBuilder::new(16);
+            buffer.append_n(8, true);
+            buffer
+        };
+
         assert!(buffer.get_bit(0));
     }
 
@@ -3446,13 +3555,15 @@ mod tests {
             .null_bit_buffer(Buffer::from(&[9_u8]))
             .add_buffer(Buffer::from_slice_ref(&[0, 3, 3, 3, 7]))
             .add_buffer(Buffer::from_slice_ref(b"joemark"))
-            .build();
+            .build()
+            .unwrap();
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
             .len(4)
             .null_bit_buffer(Buffer::from_slice_ref(&[11_u8]))
             .add_buffer(Buffer::from_slice_ref(&[1, 2, 0, 4]))
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(expected_string_data, *arr.column(0).data());
         assert_eq!(expected_int_data, *arr.column(1).data());
@@ -3558,13 +3669,15 @@ mod tests {
             .null_bit_buffer(Buffer::from(&[9_u8]))
             .add_buffer(Buffer::from_slice_ref(&[0, 3, 3, 3, 7]))
             .add_buffer(Buffer::from_slice_ref(b"joemark"))
-            .build();
+            .build()
+            .unwrap();
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
             .len(4)
             .null_bit_buffer(Buffer::from_slice_ref(&[11_u8]))
             .add_buffer(Buffer::from_slice_ref(&[1, 2, 0, 4]))
-            .build();
+            .build()
+            .unwrap();
 
         assert_eq!(&expected_string_data, arr.keys().data());
         assert_eq!(&expected_int_data, arr.values().data());

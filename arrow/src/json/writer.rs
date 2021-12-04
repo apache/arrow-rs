@@ -1028,7 +1028,8 @@ mod tests {
             .add_buffer(a_value_offsets)
             .add_child_data(a_values.data().clone())
             .null_bit_buffer(Buffer::from(vec![0b00011111]))
-            .build();
+            .build()
+            .unwrap();
         let a = ListArray::from(a_list_data);
 
         let b = Int32Array::from(vec![1, 2, 3, 4, 5]);
@@ -1079,14 +1080,16 @@ mod tests {
             .add_buffer(a_value_offsets)
             .null_bit_buffer(Buffer::from(vec![0b00000111]))
             .add_child_data(a_values.data().clone())
-            .build();
+            .build()
+            .unwrap();
 
         let c1_value_offsets = Buffer::from(&[0, 2, 2, 3].to_byte_slice());
         let c1_list_data = ArrayData::builder(field_c1.data_type().clone())
             .len(3)
             .add_buffer(c1_value_offsets)
             .add_child_data(a_list_data)
-            .build();
+            .build()
+            .unwrap();
 
         let c1 = ListArray::from(c1_list_data);
         let c2 = StringArray::from(vec![Some("foo"), Some("bar"), None]);
@@ -1160,7 +1163,8 @@ mod tests {
             .add_buffer(c1_value_offsets)
             .add_child_data(struct_values.data().clone())
             .null_bit_buffer(Buffer::from(vec![0b00000101]))
-            .build();
+            .build()
+            .unwrap();
         let c1 = ListArray::from(c1_list_data);
 
         let c2 = Int32Array::from(vec![1, 2, 3]);
@@ -1257,6 +1261,58 @@ mod tests {
         assert_eq!(
             String::from_utf8(writer.into_inner()).unwrap(),
             r#"[{"an":"object"},{"another":"object"}]"#
+        );
+    }
+
+    #[test]
+    fn json_list_roundtrip() {
+        let json_content = r#"
+        {"list": [{"ints": 1}]}
+        {"list": [{}]}
+        {"list": []}
+        {"list": null}
+        {"list": [{"ints": null}]}
+        {"list": [null]}
+        "#;
+        let ints_struct =
+            DataType::Struct(vec![Field::new("ints", DataType::Int32, true)]);
+        let list_type = DataType::List(Box::new(Field::new("item", ints_struct, true)));
+        let list_field = Field::new("list", list_type, true);
+        let schema = Arc::new(Schema::new(vec![list_field]));
+        let builder = ReaderBuilder::new().with_schema(schema).with_batch_size(64);
+        let mut reader = builder.build(std::io::Cursor::new(json_content)).unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+
+        let list_row = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        let values = list_row.values();
+        assert_eq!(values.len(), 4);
+        assert_eq!(values.null_count(), 1);
+
+        // write the batch to JSON, and compare output with input
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[batch]).unwrap();
+        }
+
+        // NOTE: The last value should technically be {"list": [null]} but it appears
+        // that implementations differ on the treatment of a null struct.
+        // It would be more accurate to return a null struct, so this can be done
+        // as a follow up.
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            r#"{"list":[{"ints":1}]}
+{"list":[{}]}
+{"list":[]}
+{}
+{"list":[{}]}
+{"list":[{}]}
+"#
         );
     }
 }

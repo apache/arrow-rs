@@ -189,7 +189,8 @@ fn create_array(
             let data = ArrayData::builder(data_type.clone())
                 .len(length)
                 .offset(0)
-                .build();
+                .build()
+                .unwrap();
             node_index += 1;
             // no buffer increases
             make_array(data)
@@ -230,7 +231,7 @@ fn create_primitive_array(
             if null_count > 0 {
                 builder = builder.null_bit_buffer(buffers[0].clone())
             }
-            builder.build()
+            builder.build().unwrap()
         }
         FixedSizeBinary(_) => {
             // read 3 buffers
@@ -241,7 +242,7 @@ fn create_primitive_array(
             if null_count > 0 {
                 builder = builder.null_bit_buffer(buffers[0].clone())
             }
-            builder.build()
+            unsafe { builder.build_unchecked() }
         }
         Int8
         | Int16
@@ -261,7 +262,8 @@ fn create_primitive_array(
                 if null_count > 0 {
                     builder = builder.null_bit_buffer(buffers[0].clone())
                 }
-                let values = Arc::new(Int64Array::from(builder.build())) as ArrayRef;
+                let data = unsafe { builder.build_unchecked() };
+                let values = Arc::new(Int64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.data().clone()
@@ -273,7 +275,7 @@ fn create_primitive_array(
                 if null_count > 0 {
                     builder = builder.null_bit_buffer(buffers[0].clone())
                 }
-                builder.build()
+                unsafe { builder.build_unchecked() }
             }
         }
         Float32 => {
@@ -286,7 +288,8 @@ fn create_primitive_array(
                 if null_count > 0 {
                     builder = builder.null_bit_buffer(buffers[0].clone())
                 }
-                let values = Arc::new(Float64Array::from(builder.build())) as ArrayRef;
+                let data = unsafe { builder.build_unchecked() };
+                let values = Arc::new(Float64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.data().clone()
@@ -298,7 +301,7 @@ fn create_primitive_array(
                 if null_count > 0 {
                     builder = builder.null_bit_buffer(buffers[0].clone())
                 }
-                builder.build()
+                unsafe { builder.build_unchecked() }
             }
         }
         Boolean
@@ -318,7 +321,7 @@ fn create_primitive_array(
             if null_count > 0 {
                 builder = builder.null_bit_buffer(buffers[0].clone())
             }
-            builder.build()
+            unsafe { builder.build_unchecked() }
         }
         Decimal(_, _) => {
             // read 3 buffers
@@ -329,7 +332,7 @@ fn create_primitive_array(
             if null_count > 0 {
                 builder = builder.null_bit_buffer(buffers[0].clone())
             }
-            builder.build()
+            unsafe { builder.build_unchecked() }
         }
         t => panic!("Data type {:?} either unsupported or not primitive", t),
     };
@@ -345,7 +348,7 @@ fn create_list_array(
     buffers: &[Buffer],
     child_array: ArrayRef,
 ) -> ArrayRef {
-    if let DataType::List(_) = *data_type {
+    if let DataType::List(_) | DataType::LargeList(_) = *data_type {
         let null_count = field_node.null_count() as usize;
         let mut builder = ArrayData::builder(data_type.clone())
             .len(field_node.length() as usize)
@@ -355,18 +358,7 @@ fn create_list_array(
         if null_count > 0 {
             builder = builder.null_bit_buffer(buffers[0].clone())
         }
-        make_array(builder.build())
-    } else if let DataType::LargeList(_) = *data_type {
-        let null_count = field_node.null_count() as usize;
-        let mut builder = ArrayData::builder(data_type.clone())
-            .len(field_node.length() as usize)
-            .buffers(buffers[1..2].to_vec())
-            .offset(0)
-            .child_data(vec![child_array.data().clone()]);
-        if null_count > 0 {
-            builder = builder.null_bit_buffer(buffers[0].clone())
-        }
-        make_array(builder.build())
+        make_array(unsafe { builder.build_unchecked() })
     } else if let DataType::FixedSizeList(_, _) = *data_type {
         let null_count = field_node.null_count() as usize;
         let mut builder = ArrayData::builder(data_type.clone())
@@ -377,7 +369,7 @@ fn create_list_array(
         if null_count > 0 {
             builder = builder.null_bit_buffer(buffers[0].clone())
         }
-        make_array(builder.build())
+        make_array(unsafe { builder.build_unchecked() })
     } else if let DataType::Map(_, _) = *data_type {
         let null_count = field_node.null_count() as usize;
         let mut builder = ArrayData::builder(data_type.clone())
@@ -388,7 +380,7 @@ fn create_list_array(
         if null_count > 0 {
             builder = builder.null_bit_buffer(buffers[0].clone())
         }
-        make_array(builder.build())
+        make_array(unsafe { builder.build_unchecked() })
     } else {
         panic!("Cannot create list or map array from {:?}", data_type)
     }
@@ -412,7 +404,7 @@ fn create_dictionary_array(
         if null_count > 0 {
             builder = builder.null_bit_buffer(buffers[0].clone())
         }
-        make_array(builder.build())
+        make_array(unsafe { builder.build_unchecked() })
     } else {
         unreachable!("Cannot create dictionary array from {:?}", data_type)
     }
@@ -504,7 +496,7 @@ pub fn read_dictionary(
     // in the reader. Note that a dictionary batch may be shared between many fields.
     // We don't currently record the isOrdered field. This could be general
     // attributes of arrays.
-    for (i, field) in schema.fields().iter().enumerate() {
+    for (i, field) in schema.all_fields().iter().enumerate() {
         if field.dict_id() == Some(id) {
             // Add (possibly multiple) array refs to the dictionaries array.
             dictionaries_by_field[i] = Some(dictionary_values.clone());
@@ -591,7 +583,7 @@ impl<R: Read + Seek> FileReader<R> {
         let schema = ipc::convert::fb_to_schema(ipc_schema);
 
         // Create an array of optional dictionary value arrays, one per field.
-        let mut dictionaries_by_field = vec![None; schema.fields().len()];
+        let mut dictionaries_by_field = vec![None; schema.all_fields().len()];
         for block in footer.dictionaries().unwrap() {
             // read length from end of offset
             let mut message_size: [u8; 4] = [0; 4];
@@ -932,7 +924,7 @@ mod tests {
 
     use flate2::read::GzDecoder;
 
-    use crate::util::integration_util::*;
+    use crate::{datatypes, util::integration_util::*};
 
     #[test]
     fn read_generated_files_014() {
@@ -978,13 +970,28 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(
+        expected = "Last offset 687865856 of Utf8 is larger than values length 41"
+    )]
+    fn read_dictionary_be_not_implemented() {
+        // The offsets are not translated for big-endian files
+        // https://github.com/apache/arrow-rs/issues/859
+        let testdata = crate::util::test_util::arrow_test_data();
+        let file = File::open(format!(
+                "{}/arrow-ipc-stream/integration/1.0.0-bigendian/generated_dictionary.arrow_file",
+                testdata
+            ))
+            .unwrap();
+        FileReader::try_new(file).unwrap();
+    }
+
+    #[test]
     fn read_generated_be_files_should_work() {
         // complementary to the previous test
         let testdata = crate::util::test_util::arrow_test_data();
         let paths = vec![
             "generated_interval",
             "generated_datetime",
-            "generated_dictionary",
             "generated_map",
             "generated_nested",
             "generated_null_trivial",
@@ -1156,6 +1163,38 @@ mod tests {
                     != 0.0
             );
         })
+    }
+
+    #[test]
+    fn test_roundtrip_nested_dict() {
+        let inner: DictionaryArray<datatypes::Int32Type> =
+            vec!["a", "b", "a"].into_iter().collect();
+
+        let array = Arc::new(inner) as ArrayRef;
+
+        let dctfield = Field::new("dict", array.data_type().clone(), false);
+
+        let s = StructArray::from(vec![(dctfield, array)]);
+        let struct_array = Arc::new(s) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "struct",
+            struct_array.data_type().clone(),
+            false,
+        )]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![struct_array]).unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ipc::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+        writer.write(&batch).unwrap();
+        writer.finish().unwrap();
+        drop(writer);
+
+        let reader = ipc::reader::FileReader::try_new(std::io::Cursor::new(buf)).unwrap();
+        let batch2: std::result::Result<Vec<_>, _> = reader.collect();
+
+        assert_eq!(batch, batch2.unwrap()[0]);
     }
 
     /// Read gzipped JSON file

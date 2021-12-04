@@ -16,6 +16,7 @@
 // under the License.
 
 use super::{ArrowPrimitiveType, DataType, IntervalUnit, TimeUnit};
+use half::f16;
 
 // BooleanType is special: its bit-width is not the size of the primitive type, and its `index`
 // operation assumes bit-packing.
@@ -46,6 +47,7 @@ make_type!(UInt8Type, u8, DataType::UInt8);
 make_type!(UInt16Type, u16, DataType::UInt16);
 make_type!(UInt32Type, u32, DataType::UInt32);
 make_type!(UInt64Type, u64, DataType::UInt64);
+make_type!(Float16Type, f16, DataType::Float16);
 make_type!(Float32Type, f32, DataType::Float32);
 make_type!(Float64Type, f64, DataType::Float64);
 make_type!(

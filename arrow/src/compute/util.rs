@@ -184,16 +184,20 @@ pub(super) mod tests {
         offset: usize,
         null_bit_buffer: Option<Buffer>,
     ) -> Arc<ArrayData> {
-        // empty vec for buffers and children is not really correct, but for these tests we only care about the null bitmap
-        Arc::new(ArrayData::new(
-            DataType::UInt8,
-            len,
-            None,
-            null_bit_buffer,
-            offset,
-            vec![],
-            vec![],
-        ))
+        let buffer = Buffer::from(&vec![11; len]);
+
+        Arc::new(
+            ArrayData::try_new(
+                DataType::UInt8,
+                len,
+                None,
+                null_bit_buffer,
+                offset,
+                vec![buffer],
+                vec![],
+            )
+            .unwrap(),
+        )
     }
 
     #[test]
@@ -297,7 +301,7 @@ pub(super) mod tests {
                 values.append(&mut array);
             } else {
                 list_null_count += 1;
-                bit_util::unset_bit(&mut list_bitmap.as_slice_mut(), idx);
+                bit_util::unset_bit(list_bitmap.as_slice_mut(), idx);
             }
             offset.push(values.len() as i64);
         }
@@ -333,7 +337,8 @@ pub(super) mod tests {
             .null_bit_buffer(list_bitmap.into())
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
 
         GenericListArray::<S>::from(list_data)
     }
@@ -381,7 +386,7 @@ pub(super) mod tests {
                 values.extend(items.into_iter());
             } else {
                 list_null_count += 1;
-                bit_util::unset_bit(&mut list_bitmap.as_slice_mut(), idx);
+                bit_util::unset_bit(list_bitmap.as_slice_mut(), idx);
                 values.extend(vec![None; length as usize].into_iter());
             }
         }
@@ -397,7 +402,8 @@ pub(super) mod tests {
             .len(list_len)
             .null_bit_buffer(list_bitmap.into())
             .add_child_data(child_data)
-            .build();
+            .build()
+            .unwrap();
 
         FixedSizeListArray::from(list_data)
     }

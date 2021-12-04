@@ -203,13 +203,15 @@ mod tests {
         let keys_data = ArrayData::builder(DataType::Int32)
             .len(8)
             .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
-            .build();
+            .build()
+            .unwrap();
         let values_data = ArrayData::builder(DataType::UInt32)
             .len(8)
             .add_buffer(Buffer::from(
                 &[0u32, 10, 20, 30, 40, 50, 60, 70].to_byte_slice(),
             ))
-            .build();
+            .build()
+            .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
@@ -235,7 +237,8 @@ mod tests {
             .len(3)
             .add_buffer(entry_offsets)
             .add_child_data(entry_struct.data().clone())
-            .build();
+            .build()
+            .unwrap();
         MapArray::from(map_data)
     }
 
@@ -245,14 +248,16 @@ mod tests {
         let key_data = ArrayData::builder(DataType::Int32)
             .len(8)
             .add_buffer(Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7].to_byte_slice()))
-            .build();
+            .build()
+            .unwrap();
         let value_data = ArrayData::builder(DataType::UInt32)
             .len(8)
             .add_buffer(Buffer::from(
                 &[0u32, 10, 20, 0, 40, 0, 60, 70].to_byte_slice(),
             ))
             .null_bit_buffer(Buffer::from(&[0b11010110]))
-            .build();
+            .build()
+            .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
@@ -278,7 +283,8 @@ mod tests {
             .len(3)
             .add_buffer(entry_offsets)
             .add_child_data(entry_struct.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let map_array = MapArray::from(map_data);
 
         let values = map_array.values();
@@ -314,17 +320,18 @@ mod tests {
 
         // Now test with a non-zero offset
         let map_data = ArrayData::builder(map_array.data_type().clone())
-            .len(3)
+            .len(2)
             .offset(1)
             .add_buffer(map_array.data().buffers()[0].clone())
             .add_child_data(map_array.data().child_data()[0].clone())
-            .build();
+            .build()
+            .unwrap();
         let map_array = MapArray::from(map_data);
 
         let values = map_array.values();
         assert_eq!(&value_data, values.data());
         assert_eq!(DataType::UInt32, map_array.value_type());
-        assert_eq!(3, map_array.len());
+        assert_eq!(2, map_array.len());
         assert_eq!(0, map_array.null_count());
         assert_eq!(6, map_array.value_offsets()[1]);
         assert_eq!(2, map_array.value_length(1));
@@ -375,11 +382,13 @@ mod tests {
         let keys_data = ArrayData::builder(DataType::Int32)
             .len(5)
             .add_buffer(Buffer::from(&[3, 4, 5, 6, 7].to_byte_slice()))
-            .build();
+            .build()
+            .unwrap();
         let values_data = ArrayData::builder(DataType::UInt32)
             .len(5)
             .add_buffer(Buffer::from(&[30u32, 40, 50, 60, 70].to_byte_slice()))
-            .build();
+            .build()
+            .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[3, 4, 5], [6, 7]]
@@ -405,7 +414,8 @@ mod tests {
             .len(2)
             .add_buffer(entry_offsets)
             .add_child_data(entry_struct.data().clone())
-            .build();
+            .build()
+            .unwrap();
         let expected_map_array = MapArray::from(expected_map_data);
 
         assert_eq!(&expected_map_array, sliced_map_array)

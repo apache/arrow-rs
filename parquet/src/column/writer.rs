@@ -951,22 +951,26 @@ impl<T: DataType> ColumnWriterImpl<T> {
 
     #[allow(clippy::eq_op)]
     fn update_page_min_max(&mut self, val: &T::T) {
-        // simple "isNaN" check that works for all types
-        if val == val {
-            if self
-                .min_page_value
-                .as_ref()
-                .map_or(true, |min| self.compare_greater(min, val))
-            {
-                self.min_page_value = Some(val.clone());
+        if let Type::FLOAT | Type::DOUBLE = T::get_physical_type() {
+            // Skip NaN values
+            if val != val {
+                return;
             }
-            if self
-                .max_page_value
-                .as_ref()
-                .map_or(true, |max| self.compare_greater(val, max))
-            {
-                self.max_page_value = Some(val.clone());
-            }
+        }
+
+        if self
+            .min_page_value
+            .as_ref()
+            .map_or(true, |min| self.compare_greater(min, val))
+        {
+            self.min_page_value = Some(val.clone());
+        }
+        if self
+            .max_page_value
+            .as_ref()
+            .map_or(true, |max| self.compare_greater(val, max))
+        {
+            self.max_page_value = Some(val.clone());
         }
     }
 

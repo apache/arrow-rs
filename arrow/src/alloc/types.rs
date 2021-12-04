@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::datatypes::DataType;
+use half::f16;
 
 /// A type that Rust's custom allocator knows how to allocate and deallocate.
 /// This is implemented for all Arrow's physical types whose in-memory representation
@@ -67,5 +68,6 @@ create_native!(
     i64,
     DataType::Int64 | DataType::Date64 | DataType::Time64(_) | DataType::Timestamp(_, _)
 );
+create_native!(f16, DataType::Float16);
 create_native!(f32, DataType::Float32);
 create_native!(f64, DataType::Float64);

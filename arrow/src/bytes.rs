@@ -28,7 +28,7 @@ use crate::{alloc, ffi};
 
 /// Mode of deallocating memory regions
 pub enum Deallocation {
-    /// Native deallocation, using Rust deallocator with Arrow-specific memory aligment
+    /// Native deallocation, using Rust deallocator with Arrow-specific memory alignment
     Native(usize),
     /// Foreign interface, via a callback
     Foreign(Arc<ffi::FFI_ArrowArray>),
@@ -49,17 +49,17 @@ impl Debug for Deallocation {
 
 /// A continuous, fixed-size, immutable memory region that knows how to de-allocate itself.
 /// This structs' API is inspired by the `bytes::Bytes`, but it is not limited to using rust's
-/// global allocator nor u8 aligmnent.
+/// global allocator nor u8 alignment.
 ///
 /// In the most common case, this buffer is allocated using [`allocate_aligned`](memory::allocate_aligned)
 /// and deallocated accordingly [`free_aligned`](memory::free_aligned).
 /// When the region is allocated by an foreign allocator, [Deallocation::Foreign], this calls the
 /// foreign deallocator to deallocate the region when it is no longer needed.
 pub struct Bytes {
-    /// The raw pointer to be begining of the region
+    /// The raw pointer to be beginning of the region
     ptr: NonNull<u8>,
 
-    /// The number of bytes visible to this region. This is always smaller than its capacity (when avaliable).
+    /// The number of bytes visible to this region. This is always smaller than its capacity (when available).
     len: usize,
 
     /// how to deallocate this region

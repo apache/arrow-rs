@@ -124,7 +124,7 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
             } else {
                 return Err(format!(
                     "the data dir `{}` defined by env {} not found",
-                    pb.display().to_string(),
+                    pb.display(),
                     udf_env
                 )
                 .into());

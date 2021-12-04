@@ -383,8 +383,8 @@ impl BitWriter {
             // TODO: should we return `Result` for this func?
             return false;
         }
-        let mut ptr = result.unwrap();
-        memcpy_value(&val, num_bytes, &mut ptr);
+        let ptr = result.unwrap();
+        memcpy_value(&val, num_bytes, ptr);
         true
     }
 
@@ -554,7 +554,6 @@ impl BitReader {
         unsafe {
             let in_buf = &self.buffer.data()[self.byte_offset..];
             let mut in_ptr = in_buf as *const [u8] as *const u8 as *const u32;
-            // FIXME assert!(memory::is_ptr_aligned(in_ptr));
             if size_of::<T>() == 4 {
                 while values_to_read - i >= 32 {
                     let out_ptr = &mut batch[i..] as *mut [T] as *mut T as *mut u32;

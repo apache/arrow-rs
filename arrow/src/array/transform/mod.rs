@@ -15,19 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::{
+    data::{into_buffers, new_buffers},
+    ArrayData, ArrayDataBuilder,
+};
+use crate::array::StringOffsetSizeTrait;
 use crate::{
     buffer::MutableBuffer,
     datatypes::DataType,
     error::{ArrowError, Result},
     util::bit_util,
 };
+use half::f16;
 use std::mem;
-
-use super::{
-    data::{into_buffers, new_buffers},
-    ArrayData, ArrayDataBuilder,
-};
-use crate::array::StringOffsetSizeTrait;
 
 mod boolean;
 mod fixed_binary;
@@ -182,8 +182,6 @@ fn build_extend_dictionary(
     max: usize,
 ) -> Option<Extend> {
     use crate::datatypes::*;
-    use std::convert::TryInto;
-
     match array.data_type() {
         DataType::Dictionary(child_data_type, _) => match child_data_type.as_ref() {
             DataType::UInt8 => {
@@ -271,7 +269,7 @@ fn build_extend(array: &ArrayData) -> Extend {
         DataType::Dictionary(_, _) => unreachable!("should use build_extend_dictionary"),
         DataType::Struct(_) => structure::build_extend(array),
         DataType::FixedSizeBinary(_) => fixed_binary::build_extend(array),
-        DataType::Float16 => unreachable!(),
+        DataType::Float16 => primitive::build_extend::<f16>(array),
         /*
         DataType::FixedSizeList(_, _) => {}
         DataType::Union(_) => {}
@@ -321,7 +319,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         },
         DataType::Struct(_) => structure::extend_nulls,
         DataType::FixedSizeBinary(_) => fixed_binary::extend_nulls,
-        DataType::Float16 => unreachable!(),
+        DataType::Float16 => primitive::extend_nulls::<f16>,
         /*
         DataType::FixedSizeList(_, _) => {}
         DataType::Union(_) => {}
@@ -435,6 +433,7 @@ impl<'a> MutableArrayData<'a> {
             | DataType::Int16
             | DataType::Int32
             | DataType::Int64
+            | DataType::Float16
             | DataType::Float32
             | DataType::Float64
             | DataType::Date32
@@ -473,7 +472,6 @@ impl<'a> MutableArrayData<'a> {
             }
             // the dictionary type just appends keys and clones the values.
             DataType::Dictionary(_, _) => vec![],
-            DataType::Float16 => unreachable!(),
             DataType::Struct(fields) => match capacities {
                 Capacities::Struct(capacity, Some(ref child_capacities)) => {
                     array_capacity = capacity;
@@ -642,7 +640,7 @@ impl<'a> MutableArrayData<'a> {
 
     /// Creates a [ArrayData] from the pushed regions up to this point, consuming `self`.
     pub fn freeze(self) -> ArrayData {
-        self.data.freeze(self.dictionary).build()
+        unsafe { self.data.freeze(self.dictionary).build_unchecked() }
     }
 
     /// Creates a [ArrayDataBuilder] from the pushed regions up to this point, consuming `self`.
@@ -1154,7 +1152,7 @@ mod tests {
         ]);
         let list_value_offsets =
             Buffer::from_slice_ref(&[0i32, 3, 5, 11, 13, 13, 15, 15, 17]);
-        let expected_list_data = ArrayData::new(
+        let expected_list_data = ArrayData::try_new(
             DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
             8,
             None,
@@ -1162,7 +1160,8 @@ mod tests {
             0,
             vec![list_value_offsets],
             vec![expected_int_array.data().clone()],
-        );
+        )
+        .unwrap();
         assert_eq!(finished, expected_list_data);
 
         Ok(())
@@ -1235,7 +1234,7 @@ mod tests {
         ]);
         let list_value_offsets =
             Buffer::from_slice_ref(&[0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
-        let expected_list_data = ArrayData::new(
+        let expected_list_data = ArrayData::try_new(
             DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
             12,
             None,
@@ -1243,7 +1242,8 @@ mod tests {
             0,
             vec![list_value_offsets],
             vec![expected_int_array.data().clone()],
-        );
+        )
+        .unwrap();
         assert_eq!(result, expected_list_data);
 
         Ok(())
@@ -1306,7 +1306,7 @@ mod tests {
             // extend b[0..0]
         ]);
         let list_value_offsets = Buffer::from_slice_ref(&[0, 3, 5, 6, 9, 10, 13]);
-        let expected_list_data = ArrayData::new(
+        let expected_list_data = ArrayData::try_new(
             DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
             6,
             None,
@@ -1314,7 +1314,8 @@ mod tests {
             0,
             vec![list_value_offsets],
             vec![expected_string_array.data().clone()],
-        );
+        )
+        .unwrap();
         assert_eq!(result, expected_list_data);
         Ok(())
     }

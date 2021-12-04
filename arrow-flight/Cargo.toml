@@ -18,30 +18,31 @@
 [package]
 name = "arrow-flight"
 description = "Apache Arrow Flight"
-version = "6.0.0-SNAPSHOT"
-edition = "2018"
+version = "7.0.0-SNAPSHOT"
+edition = "2021"
+rust-version = "1.57"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 license = "Apache-2.0"
 
 [dependencies]
-arrow = { path = "../arrow", version = "6.0.0-SNAPSHOT" }
+arrow = { path = "../arrow", version = "7.0.0-SNAPSHOT" }
 base64 = "0.13"
-tonic = "0.5"
+tonic = "0.6"
 bytes = "1"
-prost = "0.8"
-prost-derive = "0.8"
+prost = "0.9"
+prost-derive = "0.9"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
 
 [dev-dependencies]
 futures = { version = "0.3", default-features = false, features = ["alloc"]}
 
 [build-dependencies]
-tonic-build = "0.5"
+tonic-build = "0.6"
 # Pin specific version of the tonic-build dependencies to avoid auto-generated
 # (and checked in) arrow.flight.protocol.rs from changing
-proc-macro2 = "=1.0.27"
+proc-macro2 = "=1.0.30"
 
 #[lib]
 #name = "flight"

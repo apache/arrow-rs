@@ -621,10 +621,12 @@ impl<C: ArrayConverter> ArrayReader for ArrowArrayReader<'static, C> {
                 mutable.extend_nulls(nulls_to_add);
             }
 
-            value_array_data = mutable
-                .into_builder()
-                .null_bit_buffer(null_bitmap_array.values().clone())
-                .build();
+            value_array_data = unsafe {
+                mutable
+                    .into_builder()
+                    .null_bit_buffer(null_bitmap_array.values().clone())
+                    .build_unchecked()
+            };
         }
         let mut array = arrow::array::make_array(value_array_data);
         if array.data_type() != &self.data_type {
@@ -1144,8 +1146,8 @@ impl<T: ArrowPrimitiveType> ArrayConverter for PrimitiveArrayConverter<T> {
         let value_count = values_buffer.len() / value_size;
         let array_data = arrow::array::ArrayData::builder(T::DATA_TYPE)
             .len(value_count)
-            .add_buffer(values_buffer.into())
-            .build();
+            .add_buffer(values_buffer.into());
+        let array_data = unsafe { array_data.build_unchecked() };
         Ok(array_data)
     }
 }
@@ -1192,8 +1194,8 @@ impl ArrayConverter for StringArrayConverter {
         let array_data = arrow::array::ArrayData::builder(ArrowType::Utf8)
             .len(data_len)
             .add_buffer(offsets_buffer.into())
-            .add_buffer(values_buffer.into())
-            .build();
+            .add_buffer(values_buffer.into());
+        let array_data = unsafe { array_data.build_unchecked() };
         Ok(array_data)
     }
 }

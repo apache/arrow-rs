@@ -608,7 +608,8 @@ mod tests {
         .add_child_data(a2_child.data().clone())
         .len(2)
         .add_buffer(Buffer::from(vec![0i32, 3, 4].to_byte_slice()))
-        .build();
+        .build()
+        .unwrap();
         let a2: ArrayRef = Arc::new(ListArray::from(a2));
         let a = ArrayDataBuilder::new(DataType::Struct(vec![
             Field::new("aa1", DataType::Int32, false),
@@ -617,7 +618,8 @@ mod tests {
         .add_child_data(a1.data().clone())
         .add_child_data(a2.data().clone())
         .len(2)
-        .build();
+        .build()
+        .unwrap();
         let a: ArrayRef = Arc::new(StructArray::from(a));
 
         // creating the batch with field name validation should fail

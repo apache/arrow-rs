@@ -132,9 +132,9 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
     let schema = &mut *schema;
 
     // take ownership back to release it.
-    CString::from_raw(schema.format as *mut c_char);
+    drop(CString::from_raw(schema.format as *mut c_char));
     if !schema.name.is_null() {
-        CString::from_raw(schema.name as *mut c_char);
+        drop(CString::from_raw(schema.name as *mut c_char));
     }
     if !schema.private_data.is_null() {
         let private_data = Box::from_raw(schema.private_data as *mut SchemaPrivateData);
@@ -514,15 +514,18 @@ pub trait ArrowArrayRef {
             .map(|d| d.unwrap())
             .collect();
 
-        Ok(ArrayData::new(
-            data_type,
-            len,
-            Some(null_count),
-            null_bit_buffer,
-            offset,
-            buffers,
-            child_data,
-        ))
+        // Should FFI be checking validity?
+        Ok(unsafe {
+            ArrayData::new_unchecked(
+                data_type,
+                len,
+                Some(null_count),
+                null_bit_buffer,
+                offset,
+                buffers,
+                child_data,
+            )
+        })
     }
 
     /// returns all buffers, as organized by Rust (i.e. null buffer is skipped)
@@ -862,7 +865,8 @@ mod tests {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
             .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
-            .build();
+            .build()
+            .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
@@ -883,7 +887,8 @@ mod tests {
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
 
         // create an array natively
         let array = GenericListArray::<Offset>::from(list_data.clone());

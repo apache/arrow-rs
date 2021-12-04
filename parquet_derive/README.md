@@ -27,14 +27,17 @@ supported.
 Derive also has some support for the chrono time library. You must must enable the `chrono` feature to get this support.
 
 ## Usage
+
 Add this to your Cargo.toml:
+
 ```toml
 [dependencies]
-parquet = "6.0.0-SNAPSHOT"
-parquet_derive = "6.0.0-SNAPSHOT"
+parquet = "7.0.0-SNAPSHOT"
+parquet_derive = "7.0.0-SNAPSHOT"
 ```
 
 and this to your crate root:
+
 ```rust
 extern crate parquet;
 #[macro_use] extern crate parquet_derive;
@@ -75,24 +78,29 @@ writer.close().unwrap();
 ```
 
 ## Features
-- [X] Support writing `String`, `&str`, `bool`, `i32`, `f32`, `f64`, `Vec<u8>`
+
+- [x] Support writing `String`, `&str`, `bool`, `i32`, `f32`, `f64`, `Vec<u8>`
 - [ ] Support writing dictionaries
-- [X] Support writing logical types like timestamp
-- [X] Derive definition_levels for `Option`
+- [x] Support writing logical types like timestamp
+- [x] Derive definition_levels for `Option`
 - [ ] Derive definition levels for nested structures
 - [ ] Derive writing tuple struct
 - [ ] Derive writing `tuple` container types
 
 ## Requirements
+
 - Same as `parquet-rs`
 
 ## Test
+
 Testing a `*_derive` crate requires an intermediate crate. Go to `parquet_derive_test` and run `cargo test` for
 unit tests.
 
 ## Docs
+
 To build documentation, run `cargo doc --no-deps`.
 To compile and view in the browser, run `cargo doc --no-deps --open`.
 
 ## License
+
 Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0.

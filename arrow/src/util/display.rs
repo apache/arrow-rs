@@ -233,6 +233,22 @@ macro_rules! make_string_from_list {
     }};
 }
 
+macro_rules! make_string_from_fixed_size_list {
+    ($column: ident, $row: ident) => {{
+        let list = $column
+            .as_any()
+            .downcast_ref::<array::FixedSizeListArray>()
+            .ok_or(ArrowError::InvalidArgumentError(format!(
+                "Repl error: could not convert list column to list array."
+            )))?
+            .value($row);
+        let string_values = (0..list.len())
+            .map(|i| array_value_to_string(&list.clone(), i))
+            .collect::<Result<Vec<String>>>()?;
+        Ok(format!("[{}]", string_values.join(", ")))
+    }};
+}
+
 #[inline(always)]
 pub fn make_string_from_decimal(column: &Arc<dyn Array>, row: usize) -> Result<String> {
     let array = column
@@ -350,6 +366,7 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
                 column.data_type()
             ))),
         },
+        DataType::FixedSizeList(_, _) => make_string_from_fixed_size_list!(column, row),
         DataType::Struct(_) => {
             let st = column
                 .as_any()

@@ -77,7 +77,7 @@ impl<'a> Tokenizer<'a> {
     pub fn from_str(string: &'a str) -> Self {
         let vec = string
             .split_whitespace()
-            .flat_map(|t| Self::split_token(t))
+            .flat_map(Self::split_token)
             .collect();
         Tokenizer {
             tokens: vec,
@@ -371,19 +371,14 @@ impl<'a> Parser<'a> {
                                     "Failed to parse scale for DECIMAL type",
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
-                                logical = Some(LogicalType::DECIMAL(DecimalType {
-                                    scale,
-                                    precision,
-                                }));
-                                converted = ConvertedType::from(logical.clone());
                             } else {
-                                scale = 0;
-                                logical = Some(LogicalType::DECIMAL(DecimalType {
-                                    scale,
-                                    precision,
-                                }));
-                                converted = ConvertedType::from(logical.clone());
+                                scale = 0
                             }
+                            logical = Some(LogicalType::DECIMAL(DecimalType {
+                                scale,
+                                precision,
+                            }));
+                            converted = ConvertedType::from(logical.clone());
                         }
                     }
                     LogicalType::TIME(_) => {

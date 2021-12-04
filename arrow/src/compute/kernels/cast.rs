@@ -68,6 +68,44 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     }
 
     match (from_type, to_type) {
+        (
+            Null,
+            Boolean
+            | Int8
+            | UInt8
+            | Int16
+            | UInt16
+            | Int32
+            | UInt32
+            | Float32
+            | Date32
+            | Time32(_)
+            | Int64
+            | UInt64
+            | Float64
+            | Date64
+            | List(_)
+            | Dictionary(_, _),
+        )
+        | (
+            Boolean
+            | Int8
+            | UInt8
+            | Int16
+            | UInt16
+            | Int32
+            | UInt32
+            | Float32
+            | Date32
+            | Time32(_)
+            | Int64
+            | UInt64
+            | Float64
+            | Date64
+            | List(_)
+            | Dictionary(_, _),
+            Null,
+        ) => true,
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
         (LargeList(list_from), LargeList(list_to)) => {
@@ -93,133 +131,71 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 
         (Utf8, LargeUtf8) => true,
         (LargeUtf8, Utf8) => true,
-        (Utf8, Date32) => true,
-        (Utf8, Date64) => true,
-        (Utf8, Timestamp(TimeUnit::Nanosecond, None)) => true,
+        (Utf8, Date32 | Date64 | Timestamp(TimeUnit::Nanosecond, None)) => true,
         (Utf8, _) => DataType::is_numeric(to_type),
-        (LargeUtf8, Date32) => true,
-        (LargeUtf8, Date64) => true,
-        (LargeUtf8, Timestamp(TimeUnit::Nanosecond, None)) => true,
+        (LargeUtf8, Date32 | Date64 | Timestamp(TimeUnit::Nanosecond, None)) => true,
         (LargeUtf8, _) => DataType::is_numeric(to_type),
         (Timestamp(_, _), Utf8) | (Timestamp(_, _), LargeUtf8) => true,
-        (_, Utf8) | (_, LargeUtf8) => {
-            DataType::is_numeric(from_type) || from_type == &Binary
-        }
+        (_, Utf8 | LargeUtf8) => DataType::is_numeric(from_type) || from_type == &Binary,
 
         // start numeric casts
-        (UInt8, UInt16) => true,
-        (UInt8, UInt32) => true,
-        (UInt8, UInt64) => true,
-        (UInt8, Int8) => true,
-        (UInt8, Int16) => true,
-        (UInt8, Int32) => true,
-        (UInt8, Int64) => true,
-        (UInt8, Float32) => true,
-        (UInt8, Float64) => true,
+        (
+            UInt8,
+            UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (UInt16, UInt8) => true,
-        (UInt16, UInt32) => true,
-        (UInt16, UInt64) => true,
-        (UInt16, Int8) => true,
-        (UInt16, Int16) => true,
-        (UInt16, Int32) => true,
-        (UInt16, Int64) => true,
-        (UInt16, Float32) => true,
-        (UInt16, Float64) => true,
+        (
+            UInt16,
+            UInt8 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (UInt32, UInt8) => true,
-        (UInt32, UInt16) => true,
-        (UInt32, UInt64) => true,
-        (UInt32, Int8) => true,
-        (UInt32, Int16) => true,
-        (UInt32, Int32) => true,
-        (UInt32, Int64) => true,
-        (UInt32, Float32) => true,
-        (UInt32, Float64) => true,
+        (
+            UInt32,
+            UInt8 | UInt16 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (UInt64, UInt8) => true,
-        (UInt64, UInt16) => true,
-        (UInt64, UInt32) => true,
-        (UInt64, Int8) => true,
-        (UInt64, Int16) => true,
-        (UInt64, Int32) => true,
-        (UInt64, Int64) => true,
-        (UInt64, Float32) => true,
-        (UInt64, Float64) => true,
+        (
+            UInt64,
+            UInt8 | UInt16 | UInt32 | Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (Int8, UInt8) => true,
-        (Int8, UInt16) => true,
-        (Int8, UInt32) => true,
-        (Int8, UInt64) => true,
-        (Int8, Int16) => true,
-        (Int8, Int32) => true,
-        (Int8, Int64) => true,
-        (Int8, Float32) => true,
-        (Int8, Float64) => true,
+        (
+            Int8,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int16 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (Int16, UInt8) => true,
-        (Int16, UInt16) => true,
-        (Int16, UInt32) => true,
-        (Int16, UInt64) => true,
-        (Int16, Int8) => true,
-        (Int16, Int32) => true,
-        (Int16, Int64) => true,
-        (Int16, Float32) => true,
-        (Int16, Float64) => true,
+        (
+            Int16,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int32 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (Int32, UInt8) => true,
-        (Int32, UInt16) => true,
-        (Int32, UInt32) => true,
-        (Int32, UInt64) => true,
-        (Int32, Int8) => true,
-        (Int32, Int16) => true,
-        (Int32, Int64) => true,
-        (Int32, Float32) => true,
-        (Int32, Float64) => true,
+        (
+            Int32,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int64 | Float32 | Float64,
+        ) => true,
 
-        (Int64, UInt8) => true,
-        (Int64, UInt16) => true,
-        (Int64, UInt32) => true,
-        (Int64, UInt64) => true,
-        (Int64, Int8) => true,
-        (Int64, Int16) => true,
-        (Int64, Int32) => true,
-        (Int64, Float32) => true,
-        (Int64, Float64) => true,
+        (
+            Int64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Float32 | Float64,
+        ) => true,
 
-        (Float32, UInt8) => true,
-        (Float32, UInt16) => true,
-        (Float32, UInt32) => true,
-        (Float32, UInt64) => true,
-        (Float32, Int8) => true,
-        (Float32, Int16) => true,
-        (Float32, Int32) => true,
-        (Float32, Int64) => true,
-        (Float32, Float64) => true,
+        (
+            Float32,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float64,
+        ) => true,
 
-        (Float64, UInt8) => true,
-        (Float64, UInt16) => true,
-        (Float64, UInt32) => true,
-        (Float64, UInt64) => true,
-        (Float64, Int8) => true,
-        (Float64, Int16) => true,
-        (Float64, Int32) => true,
-        (Float64, Int64) => true,
-        (Float64, Float32) => true,
+        (
+            Float64,
+            UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32,
+        ) => true,
         // end numeric casts
 
         // temporal casts
-        (Int32, Date32) => true,
-        (Int32, Date64) => true,
-        (Int32, Time32(_)) => true,
-        (Date32, Int32) => true,
-        (Date32, Int64) => true,
+        (Int32, Date32 | Date64 | Time32(_)) => true,
+        (Date32, Int32 | Int64) => true,
         (Time32(_), Int32) => true,
-        (Int64, Date64) => true,
-        (Int64, Date32) => true,
-        (Int64, Time64(_)) => true,
-        (Date64, Int64) => true,
-        (Date64, Int32) => true,
+        (Int64, Date64 | Date32 | Time64(_)) => true,
+        (Date64, Int64 | Int32) => true,
         (Time64(_), Int64) => true,
         (Date32, Date64) => true,
         (Date64, Date32) => true,
@@ -233,12 +209,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Timestamp(_, _), Int64) => true,
         (Int64, Timestamp(_, _)) => true,
-        (Timestamp(_, _), Timestamp(_, _)) => true,
-        (Timestamp(_, _), Date32) => true,
-        (Timestamp(_, _), Date64) => true,
+        (Timestamp(_, _), Timestamp(_, _) | Date32 | Date64) => true,
         // date64 to timestamp might not make sense,
         (Int64, Duration(_)) => true,
-        (Null, Int32) => true,
         (_, _) => false,
     }
 }
@@ -301,6 +274,44 @@ pub fn cast_with_options(
         return Ok(array.clone());
     }
     match (from_type, to_type) {
+        (
+            Null,
+            Boolean
+            | Int8
+            | UInt8
+            | Int16
+            | UInt16
+            | Int32
+            | UInt32
+            | Float32
+            | Date32
+            | Time32(_)
+            | Int64
+            | UInt64
+            | Float64
+            | Date64
+            | List(_)
+            | Dictionary(_, _),
+        )
+        | (
+            Boolean
+            | Int8
+            | UInt8
+            | Int16
+            | UInt16
+            | Int32
+            | UInt32
+            | Float32
+            | Date32
+            | Time32(_)
+            | Int64
+            | UInt64
+            | Float64
+            | Date64
+            | List(_)
+            | Dictionary(_, _),
+            Null,
+        ) => Ok(new_null_array(to_type, array.len())),
         (Struct(_), _) => Err(ArrowError::CastError(
             "Cannot cast from struct to other types".to_string(),
         )),
@@ -946,10 +957,6 @@ pub fn cast_with_options(
                 }
             }
         }
-
-        // null to primitive/flat types
-        (Null, Int32) => Ok(Arc::new(Int32Array::from(vec![None; array.len()]))),
-
         (_, _) => Err(ArrowError::CastError(format!(
             "Casting from {:?} to {:?} not supported",
             from_type, to_type,
@@ -989,15 +996,17 @@ fn cast_array_data<TO>(array: &ArrayRef, to_type: DataType) -> Result<ArrayRef>
 where
     TO: ArrowNumericType,
 {
-    let data = ArrayData::new(
-        to_type,
-        array.len(),
-        Some(array.null_count()),
-        array.data().null_bitmap().clone().map(|bitmap| bitmap.bits),
-        array.data().offset(),
-        array.data().buffers().to_vec(),
-        vec![],
-    );
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            to_type,
+            array.len(),
+            Some(array.null_count()),
+            array.data().null_bitmap().clone().map(|bitmap| bitmap.bits),
+            array.data().offset(),
+            array.data().buffers().to_vec(),
+            vec![],
+        )
+    };
     Ok(Arc::new(PrimitiveArray::<TO>::from(data)) as ArrayRef)
 }
 
@@ -1432,19 +1441,21 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
             }
 
             // keys are data, child_data is values (dictionary)
-            let data = ArrayData::new(
-                to_type.clone(),
-                cast_keys.len(),
-                Some(cast_keys.null_count()),
-                cast_keys
-                    .data()
-                    .null_bitmap()
-                    .clone()
-                    .map(|bitmap| bitmap.bits),
-                cast_keys.data().offset(),
-                cast_keys.data().buffers().to_vec(),
-                vec![cast_values.data().clone()],
-            );
+            let data = unsafe {
+                ArrayData::new_unchecked(
+                    to_type.clone(),
+                    cast_keys.len(),
+                    Some(cast_keys.null_count()),
+                    cast_keys
+                        .data()
+                        .null_bitmap()
+                        .clone()
+                        .map(|bitmap| bitmap.bits),
+                    cast_keys.data().offset(),
+                    cast_keys.data().buffers().to_vec(),
+                    vec![cast_values.data().clone()],
+                )
+            };
 
             // create the appropriate array type
             let new_array: ArrayRef = match **to_index_type {
@@ -1495,9 +1506,9 @@ where
     // Note take requires first casting the indices to u32
     let keys_array: ArrayRef =
         Arc::new(PrimitiveArray::<K>::from(dict_array.keys().data().clone()));
-    let indicies = cast_with_options(&keys_array, &DataType::UInt32, cast_options)?;
-    let u32_indicies =
-        indicies
+    let indices = cast_with_options(&keys_array, &DataType::UInt32, cast_options)?;
+    let u32_indices =
+        indices
             .as_any()
             .downcast_ref::<UInt32Array>()
             .ok_or_else(|| {
@@ -1506,7 +1517,7 @@ where
                 )
             })?;
 
-    take(cast_dict_values.as_ref(), u32_indicies, None)
+    take(cast_dict_values.as_ref(), u32_indices, None)
 }
 
 /// Attempts to encode an array into an `ArrayDictionary` with index
@@ -1648,19 +1659,21 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
         )
     };
 
-    let list_data = ArrayData::new(
-        to_type.clone(),
-        array.len(),
-        Some(cast_array.null_count()),
-        cast_array
-            .data()
-            .null_bitmap()
-            .clone()
-            .map(|bitmap| bitmap.bits),
-        0,
-        vec![offsets.into()],
-        vec![cast_array.data().clone()],
-    );
+    let list_data = unsafe {
+        ArrayData::new_unchecked(
+            to_type.clone(),
+            array.len(),
+            Some(cast_array.null_count()),
+            cast_array
+                .data()
+                .null_bitmap()
+                .clone()
+                .map(|bitmap| bitmap.bits),
+            0,
+            vec![offsets.into()],
+            vec![cast_array.data().clone()],
+        )
+    };
     let list_array =
         Arc::new(GenericListArray::<OffsetSize>::from(list_data)) as ArrayRef;
 
@@ -1677,20 +1690,18 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
     let data = array.data_ref();
     let underlying_array = make_array(data.child_data()[0].clone());
     let cast_array = cast_with_options(&underlying_array, to.data_type(), cast_options)?;
-    let array_data = ArrayData::new(
-        to_type.clone(),
-        array.len(),
-        Some(cast_array.null_count()),
-        cast_array
-            .data()
-            .null_bitmap()
-            .clone()
-            .map(|bitmap| bitmap.bits),
-        array.offset(),
-        // reuse offset buffer
-        data.buffers().to_vec(),
-        vec![cast_array.data().clone()],
-    );
+    let array_data = unsafe {
+        ArrayData::new_unchecked(
+            to_type.clone(),
+            array.len(),
+            Some(data.null_count()),
+            data.null_bitmap().clone().map(|bitmap| bitmap.bits),
+            array.offset(),
+            // reuse offset buffer
+            data.buffers().to_vec(),
+            vec![cast_array.data().clone()],
+        )
+    };
     let list = GenericListArray::<OffsetSize>::from(array_data);
     Ok(Arc::new(list) as ArrayRef)
 }
@@ -1739,8 +1750,11 @@ where
     if let Some(buf) = list_data.null_buffer() {
         builder = builder.null_bit_buffer(buf.clone())
     }
-    let data = builder.build();
-    Ok(Arc::new(GenericStringArray::<OffsetSizeTo>::from(data)))
+    let array_data = unsafe { builder.build_unchecked() };
+
+    Ok(Arc::new(GenericStringArray::<OffsetSizeTo>::from(
+        array_data,
+    )))
 }
 
 /// Cast the container type of List/Largelist array but not the inner types.
@@ -1815,8 +1829,8 @@ where
     if let Some(buf) = data.null_buffer() {
         builder = builder.null_bit_buffer(buf.clone())
     }
-    let data = builder.build();
-    Ok(make_array(data))
+    let array_data = unsafe { builder.build_unchecked() };
+    Ok(make_array(array_data))
 }
 
 #[cfg(test)]
@@ -2025,7 +2039,6 @@ mod tests {
 
     #[test]
     fn test_cast_list_i32_to_list_u16() {
-        // Construct a value array
         let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 100000000])
             .data()
             .clone();
@@ -2033,13 +2046,15 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref(&[0, 3, 6, 8]);
 
         // Construct a list array from the above two
+        // [[0,0,0], [-1, -2, -1], [2, 100000000]]
         let list_data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
         let list_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
 
         let cast_array = cast(
@@ -2047,9 +2062,13 @@ mod tests {
             &DataType::List(Box::new(Field::new("item", DataType::UInt16, true))),
         )
         .unwrap();
+
+        // For the ListArray itself, there are no null values (as there were no nulls when they went in)
+        //
         // 3 negative values should get lost when casting to unsigned,
         // 1 value should overflow
-        assert_eq!(4, cast_array.null_count());
+        assert_eq!(0, cast_array.null_count());
+
         // offsets should be the same
         assert_eq!(
             list_array.data().buffers().to_vec(),
@@ -2061,23 +2080,22 @@ mod tests {
             .downcast_ref::<ListArray>()
             .unwrap();
         assert_eq!(DataType::UInt16, array.value_type());
-        assert_eq!(4, array.values().null_count());
         assert_eq!(3, array.value_length(0));
         assert_eq!(3, array.value_length(1));
         assert_eq!(2, array.value_length(2));
-        let values = array.values();
-        let u16arr = values.as_any().downcast_ref::<UInt16Array>().unwrap();
-        assert_eq!(8, u16arr.len());
-        assert_eq!(4, u16arr.null_count());
 
-        assert_eq!(0, u16arr.value(0));
-        assert_eq!(0, u16arr.value(1));
-        assert_eq!(0, u16arr.value(2));
-        assert!(!u16arr.is_valid(3));
-        assert!(!u16arr.is_valid(4));
-        assert!(!u16arr.is_valid(5));
-        assert_eq!(2, u16arr.value(6));
-        assert!(!u16arr.is_valid(7));
+        // expect 4 nulls: negative numbers and overflow
+        let values = array.values();
+        assert_eq!(4, values.null_count());
+        let u16arr = values.as_any().downcast_ref::<UInt16Array>().unwrap();
+
+        // expect 4 nulls: negative numbers and overflow
+        let expected: UInt16Array =
+            vec![Some(0), Some(0), Some(0), None, None, None, Some(2), None]
+                .into_iter()
+                .collect();
+
+        assert_eq!(u16arr, &expected);
     }
 
     #[test]
@@ -2099,7 +2117,8 @@ mod tests {
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
         let list_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
 
         cast(
@@ -2329,35 +2348,41 @@ mod tests {
         let f64_array: ArrayRef = Arc::new(Float64Array::from(f64_values));
 
         let f64_expected = vec![
-            "-9223372036854776000.0",
-            "-2147483648.0",
-            "-32768.0",
-            "-128.0",
-            "0.0",
-            "255.0",
-            "65535.0",
-            "4294967295.0",
-            "18446744073709552000.0",
+            -9223372036854776000.0,
+            -2147483648.0,
+            -32768.0,
+            -128.0,
+            0.0,
+            255.0,
+            65535.0,
+            4294967295.0,
+            18446744073709552000.0,
         ];
         assert_eq!(
             f64_expected,
             get_cast_values::<Float64Type>(&f64_array, &DataType::Float64)
+                .iter()
+                .map(|i| i.parse::<f64>().unwrap())
+                .collect::<Vec<f64>>()
         );
 
         let f32_expected = vec![
-            "-9223372000000000000.0",
-            "-2147483600.0",
-            "-32768.0",
-            "-128.0",
-            "0.0",
-            "255.0",
-            "65535.0",
-            "4294967300.0",
-            "18446744000000000000.0",
+            -9223372000000000000.0,
+            -2147483600.0,
+            -32768.0,
+            -128.0,
+            0.0,
+            255.0,
+            65535.0,
+            4294967300.0,
+            18446744000000000000.0,
         ];
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&f64_array, &DataType::Float32)
+                .iter()
+                .map(|i| i.parse::<f32>().unwrap())
+                .collect::<Vec<f32>>()
         );
 
         let i64_expected = vec![
@@ -2604,28 +2629,24 @@ mod tests {
         ];
         let u64_array: ArrayRef = Arc::new(UInt64Array::from(u64_values));
 
-        let f64_expected = vec![
-            "0.0",
-            "255.0",
-            "65535.0",
-            "4294967295.0",
-            "18446744073709552000.0",
-        ];
+        let f64_expected =
+            vec![0.0, 255.0, 65535.0, 4294967295.0, 18446744073709552000.0];
         assert_eq!(
             f64_expected,
             get_cast_values::<Float64Type>(&u64_array, &DataType::Float64)
+                .iter()
+                .map(|i| i.parse::<f64>().unwrap())
+                .collect::<Vec<f64>>()
         );
 
-        let f32_expected = vec![
-            "0.0",
-            "255.0",
-            "65535.0",
-            "4294967300.0",
-            "18446744000000000000.0",
-        ];
+        let f32_expected =
+            vec![0.0, 255.0, 65535.0, 4294967300.0, 18446744000000000000.0];
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&u64_array, &DataType::Float32)
+                .iter()
+                .map(|i| i.parse::<f32>().unwrap())
+                .collect::<Vec<f32>>()
         );
 
         let i64_expected = vec!["0", "255", "65535", "4294967295", "null"];
@@ -2897,35 +2918,41 @@ mod tests {
         let i64_array: ArrayRef = Arc::new(Int64Array::from(i64_values));
 
         let f64_expected = vec![
-            "-9223372036854776000.0",
-            "-2147483648.0",
-            "-32768.0",
-            "-128.0",
-            "0.0",
-            "127.0",
-            "32767.0",
-            "2147483647.0",
-            "9223372036854776000.0",
+            -9223372036854776000.0,
+            -2147483648.0,
+            -32768.0,
+            -128.0,
+            0.0,
+            127.0,
+            32767.0,
+            2147483647.0,
+            9223372036854776000.0,
         ];
         assert_eq!(
             f64_expected,
             get_cast_values::<Float64Type>(&i64_array, &DataType::Float64)
+                .iter()
+                .map(|i| i.parse::<f64>().unwrap())
+                .collect::<Vec<f64>>()
         );
 
         let f32_expected = vec![
-            "-9223372000000000000.0",
-            "-2147483600.0",
-            "-32768.0",
-            "-128.0",
-            "0.0",
-            "127.0",
-            "32767.0",
-            "2147483600.0",
-            "9223372000000000000.0",
+            -9223372000000000000.0,
+            -2147483600.0,
+            -32768.0,
+            -128.0,
+            0.0,
+            127.0,
+            32767.0,
+            2147483600.0,
+            9223372000000000000.0,
         ];
         assert_eq!(
             f32_expected,
             get_cast_values::<Float32Type>(&i64_array, &DataType::Float32)
+                .iter()
+                .map(|i| i.parse::<f32>().unwrap())
+                .collect::<Vec<f32>>()
         );
 
         let i64_expected = vec![
@@ -3499,17 +3526,39 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_null_array_to_int32() {
-        let array = Arc::new(NullArray::new(6)) as ArrayRef;
+    fn test_cast_null_array_from_and_to_others() {
+        macro_rules! typed_test {
+            ($ARR_TYPE:ident, $DATATYPE:ident, $TYPE:tt) => {{
+                {
+                    let array = Arc::new(NullArray::new(6)) as ArrayRef;
+                    let expected = $ARR_TYPE::from(vec![None; 6]);
+                    let cast_type = DataType::$DATATYPE;
+                    let cast_array = cast(&array, &cast_type).expect("cast failed");
+                    let cast_array = as_primitive_array::<$TYPE>(&cast_array);
+                    assert_eq!(cast_array.data_type(), &cast_type);
+                    assert_eq!(cast_array, &expected);
+                }
+                {
+                    let array = Arc::new($ARR_TYPE::from(vec![None; 4])) as ArrayRef;
+                    let expected = NullArray::new(4);
+                    let cast_array = cast(&array, &DataType::Null).expect("cast failed");
+                    let cast_array = as_null_array(&cast_array);
+                    assert_eq!(cast_array.data_type(), &DataType::Null);
+                    assert_eq!(cast_array, &expected);
+                }
+            }};
+        }
 
-        let expected = Int32Array::from(vec![None; 6]);
+        typed_test!(Int16Array, Int16, Int16Type);
+        typed_test!(Int32Array, Int32, Int32Type);
+        typed_test!(Int64Array, Int64, Int64Type);
 
-        // Cast to a dictionary (same value type, Utf8)
-        let cast_type = DataType::Int32;
-        let cast_array = cast(&array, &cast_type).expect("cast failed");
-        let cast_array = as_primitive_array::<Int32Type>(&cast_array);
-        assert_eq!(cast_array.data_type(), &cast_type);
-        assert_eq!(cast_array, &expected);
+        typed_test!(UInt16Array, UInt16, UInt16Type);
+        typed_test!(UInt32Array, UInt32, UInt32Type);
+        typed_test!(UInt64Array, UInt64, UInt64Type);
+
+        typed_test!(Float32Array, Float32, Float32Type);
+        typed_test!(Float64Array, Float64, Float64Type);
     }
 
     /// Print the `DictionaryArray` `array` as a vector of strings
@@ -3749,7 +3798,8 @@ mod tests {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
             .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
-            .build();
+            .build()
+            .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
@@ -3762,7 +3812,8 @@ mod tests {
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
         ListArray::from(list_data)
     }
 
@@ -3771,7 +3822,8 @@ mod tests {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
             .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
-            .build();
+            .build()
+            .unwrap();
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
@@ -3784,7 +3836,8 @@ mod tests {
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
         LargeListArray::from(list_data)
     }
 
@@ -3793,7 +3846,8 @@ mod tests {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(10)
             .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
-            .build();
+            .build()
+            .unwrap();
 
         // Construct a fixed size list array from the above two
         let list_data_type = DataType::FixedSizeList(
@@ -3803,7 +3857,8 @@ mod tests {
         let list_data = ArrayData::builder(list_data_type)
             .len(5)
             .add_child_data(value_data)
-            .build();
+            .build()
+            .unwrap();
         FixedSizeListArray::from(list_data)
     }
 
@@ -3813,7 +3868,8 @@ mod tests {
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(3)
             .add_buffer(Buffer::from(&values[..]))
-            .build();
+            .build()
+            .unwrap();
         FixedSizeBinaryArray::from(array_data)
     }
 

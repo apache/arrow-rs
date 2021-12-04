@@ -15,7 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-edition = "2018"
+edition = "2021"
+rust-version = "1.57"
 max_width = 90
 
 # ignore generated files

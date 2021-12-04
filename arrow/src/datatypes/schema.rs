@@ -53,7 +53,6 @@ impl Schema {
     /// # Example
     ///
     /// ```
-    /// # extern crate arrow;
     /// # use arrow::datatypes::{Field, DataType, Schema};
     /// let field_a = Field::new("a", DataType::Int64, false);
     /// let field_b = Field::new("b", DataType::Boolean, false);
@@ -70,7 +69,6 @@ impl Schema {
     /// # Example
     ///
     /// ```
-    /// # extern crate arrow;
     /// # use arrow::datatypes::{Field, DataType, Schema};
     /// # use std::collections::HashMap;
     /// let field_a = Field::new("a", DataType::Int64, false);
@@ -159,6 +157,12 @@ impl Schema {
         &self.fields
     }
 
+    /// Returns a vector with references to all fields (including nested fields)
+    #[inline]
+    pub(crate) fn all_fields(&self) -> Vec<&Field> {
+        self.fields.iter().map(|f| f.fields()).flatten().collect()
+    }
+
     /// Returns an immutable reference of a specific `Field` instance selected using an
     /// offset within the internal `fields` vector.
     pub fn field(&self, i: usize) -> &Field {
@@ -175,7 +179,8 @@ impl Schema {
     pub fn fields_with_dict_id(&self, dict_id: i64) -> Vec<&Field> {
         self.fields
             .iter()
-            .filter(|f| f.dict_id() == Some(dict_id))
+            .map(|f| f.fields_with_dict_id(dict_id))
+            .flatten()
             .collect()
     }
 
@@ -222,10 +227,7 @@ impl Schema {
         match *json {
             Value::Object(ref schema) => {
                 let fields = if let Some(Value::Array(fields)) = schema.get("fields") {
-                    fields
-                        .iter()
-                        .map(|f| Field::from(f))
-                        .collect::<Result<_>>()?
+                    fields.iter().map(Field::from).collect::<Result<_>>()?
                 } else {
                     return Err(ArrowError::ParseError(
                         "Schema fields should be an array".to_string(),
@@ -281,7 +283,7 @@ impl Schema {
         }
     }
 
-    /// Check to see if `self` is a superset of `other` schema. Here are the comparision rules:
+    /// Check to see if `self` is a superset of `other` schema. Here are the comparison rules:
     ///
     /// * `self` and `other` should contain the same number of fields
     /// * for every field `f` in `other`, the field in `self` with corresponding index should be a

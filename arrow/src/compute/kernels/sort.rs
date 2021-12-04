@@ -493,15 +493,17 @@ fn sort_boolean(
         }
     }
 
-    let result_data = ArrayData::new(
-        DataType::UInt32,
-        len,
-        Some(0),
-        None,
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let result_data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::UInt32,
+            len,
+            Some(0),
+            None,
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
 
     UInt32Array::from(result_data)
 }
@@ -579,15 +581,17 @@ where
         }
     }
 
-    let result_data = ArrayData::new(
-        DataType::UInt32,
-        len,
-        Some(0),
-        None,
-        0,
-        vec![result.into()],
-        vec![],
-    );
+    let result_data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::UInt32,
+            len,
+            Some(0),
+            None,
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
 
     UInt32Array::from(result_data)
 }
@@ -1033,13 +1037,11 @@ fn sort_valids<T, U>(
 ) where
     T: ?Sized + Copy,
 {
-    let nulls_len = nulls.len();
+    let valids_len = valids.len();
     if !descending {
-        sort_unstable_by(valids, len.saturating_sub(nulls_len), |a, b| cmp(a.1, b.1));
+        sort_unstable_by(valids, len.min(valids_len), |a, b| cmp(a.1, b.1));
     } else {
-        sort_unstable_by(valids, len.saturating_sub(nulls_len), |a, b| {
-            cmp(a.1, b.1).reverse()
-        });
+        sort_unstable_by(valids, len.min(valids_len), |a, b| cmp(a.1, b.1).reverse());
         // reverse to keep a stable ordering
         nulls.reverse();
     }
@@ -1051,13 +1053,13 @@ fn sort_valids_array<T>(
     nulls: &mut [T],
     len: usize,
 ) {
-    let nulls_len = nulls.len();
+    let valids_len = valids.len();
     if !descending {
-        sort_unstable_by(valids, len.saturating_sub(nulls_len), |a, b| {
+        sort_unstable_by(valids, len.min(valids_len), |a, b| {
             cmp_array(a.1.as_ref(), b.1.as_ref())
         });
     } else {
-        sort_unstable_by(valids, len.saturating_sub(nulls_len), |a, b| {
+        sort_unstable_by(valids, len.min(valids_len), |a, b| {
             cmp_array(a.1.as_ref(), b.1.as_ref()).reverse()
         });
         // reverse to keep a stable ordering
@@ -1553,6 +1555,19 @@ mod tests {
             }),
             Some(2),
             vec![0, 1],
+        );
+    }
+
+    #[test]
+    fn test_sort_to_indices_primitive_more_nulls_than_limit() {
+        test_sort_to_indices_primitive_arrays::<Int32Type>(
+            vec![None, None, Some(3), None, Some(1), None, Some(2)],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            Some(2),
+            vec![4, 6],
         );
     }
 
