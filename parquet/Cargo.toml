@@ -38,7 +38,7 @@ brotli = { version = "3.3", optional = true }
 flate2 = { version = "1.0", optional = true }
 lz4 = { version = "1.23", optional = true }
 zstd = { version = "0.9", optional = true }
-chrono = "0.4"
+chrono = { version = "0.4", default-features = false }
 num-bigint = "0.4"
 arrow = { path = "../arrow", version = "7.0.0-SNAPSHOT", optional = true, default-features = false, features = ["ipc"] }
 base64 = { version = "0.13", optional = true }
