@@ -296,14 +296,22 @@ fn array_from_json(
                             let days = v.get("days").unwrap();
                             let nanoseconds = v.get("nanoseconds").unwrap();
                             match (months, days, nanoseconds) {
-                                (Value::Number(months), Value::Number(days), Value::Number(nanoseconds)) => {
+                                (
+                                    Value::Number(months),
+                                    Value::Number(days),
+                                    Value::Number(nanoseconds),
+                                ) => {
                                     let months = months.as_i64().unwrap() as u32;
                                     let days = days.as_i64().unwrap() as i32;
                                     let nanoseconds = nanoseconds.as_i64().unwrap();
-                                    let months_days_ns: i128 = (months as i128) << 96 | (days as i128) << 64 | (nanoseconds as i128);
+                                    let months_days_ns: i128 = (months as i128) << 96
+                                        | (days as i128) << 64
+                                        | (nanoseconds as i128);
                                     months_days_ns
                                 }
-                                (_, _, _) => panic!("Unable to parse {:?} as MonthDayNano", v),
+                                (_, _, _) => {
+                                    panic!("Unable to parse {:?} as MonthDayNano", v)
+                                }
                             }
                         }
                         _ => panic!("Unable to parse {:?} as MonthDayNano", value),
