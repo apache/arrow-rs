@@ -58,6 +58,7 @@ pub async fn scenario_setup(port: &str) -> Result {
 pub struct AuthBasicProtoScenarioImpl {
     username: Arc<str>,
     password: Arc<str>,
+    #[allow(dead_code)]
     peer_identity: Arc<Mutex<Option<String>>>,
 }
 

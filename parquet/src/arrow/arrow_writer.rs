@@ -143,9 +143,9 @@ fn get_col_writer(
 
 #[allow(clippy::borrowed_box)]
 fn write_leaves(
-    mut row_group_writer: &mut Box<dyn RowGroupWriter>,
+    row_group_writer: &mut Box<dyn RowGroupWriter>,
     array: &arrow_array::ArrayRef,
-    mut levels: &mut Vec<LevelInfo>,
+    levels: &mut Vec<LevelInfo>,
 ) -> Result<()> {
     match array.data_type() {
         ArrowDataType::Null
@@ -173,7 +173,7 @@ fn write_leaves(
         | ArrowDataType::LargeUtf8
         | ArrowDataType::Decimal(_, _)
         | ArrowDataType::FixedSizeBinary(_) => {
-            let mut col_writer = get_col_writer(&mut row_group_writer)?;
+            let mut col_writer = get_col_writer(row_group_writer)?;
             write_leaf(
                 &mut col_writer,
                 array,
@@ -186,7 +186,7 @@ fn write_leaves(
             // write the child list
             let data = array.data();
             let child_array = arrow_array::make_array(data.child_data()[0].clone());
-            write_leaves(&mut row_group_writer, &child_array, &mut levels)?;
+            write_leaves(row_group_writer, &child_array, levels)?;
             Ok(())
         }
         ArrowDataType::Struct(_) => {
@@ -195,7 +195,7 @@ fn write_leaves(
                 .downcast_ref::<arrow_array::StructArray>()
                 .expect("Unable to get struct array");
             for field in struct_array.columns() {
-                write_leaves(&mut row_group_writer, field, &mut levels)?;
+                write_leaves(row_group_writer, field, levels)?;
             }
             Ok(())
         }
@@ -204,15 +204,15 @@ fn write_leaves(
                 .as_any()
                 .downcast_ref::<arrow_array::MapArray>()
                 .expect("Unable to get map array");
-            write_leaves(&mut row_group_writer, &map_array.keys(), &mut levels)?;
-            write_leaves(&mut row_group_writer, &map_array.values(), &mut levels)?;
+            write_leaves(row_group_writer, &map_array.keys(), levels)?;
+            write_leaves(row_group_writer, &map_array.values(), levels)?;
             Ok(())
         }
         ArrowDataType::Dictionary(_, value_type) => {
             // cast dictionary to a primitive
             let array = arrow::compute::cast(array, value_type)?;
 
-            let mut col_writer = get_col_writer(&mut row_group_writer)?;
+            let mut col_writer = get_col_writer(row_group_writer)?;
             write_leaf(
                 &mut col_writer,
                 &array,
