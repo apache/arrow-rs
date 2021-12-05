@@ -16,16 +16,10 @@
 // under the License.
 
 diff --git a/dev/archery/archery/integration/datagen.py b/dev/archery/archery/integration/datagen.py
-index 6a077a893..277722c25 100644
+index 6a077a893..104c49c52 100644
 --- a/dev/archery/archery/integration/datagen.py
 +++ b/dev/archery/archery/integration/datagen.py
-@@ -1574,13 +1574,11 @@ def get_generated_json_files(tempdir=None):
-
-         generate_interval_case()
-         .skip_category('C#')
--        .skip_category('JS')  # TODO(ARROW-5239): Intervals + JS
--        .skip_category('Rust'),
-+        .skip_category('JS'),  # TODO(ARROW-5239): Intervals + JS
+@@ -1579,8 +1579,7 @@ def get_generated_json_files(tempdir=None):
 
          generate_month_day_nano_interval_case()
          .skip_category('C#')
@@ -35,3 +29,4 @@ index 6a077a893..277722c25 100644
 
 
          generate_map_case()
+
