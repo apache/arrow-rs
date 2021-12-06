@@ -2045,10 +2045,10 @@ mod tests {
         expected = "Value at position 1 out of bounds: 3 (should be in [0, 1])"
     )]
     fn test_validate_dictionary_index_too_large() {
-        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+        let values: StringArray = [Some("foo"), Some("bar")].iter().collect();
 
         // 3 is not a valid index into the values (only 0 and 1)
-        let keys: Int32Array = [Some(1), Some(3)].into_iter().collect();
+        let keys: Int32Array = [Some(1), Some(3)].iter().collect();
 
         let data_type = DataType::Dictionary(
             Box::new(keys.data_type().clone()),
@@ -2072,10 +2072,10 @@ mod tests {
         expected = "Value at position 1 out of bounds: -1 (should be in [0, 1]"
     )]
     fn test_validate_dictionary_index_negative() {
-        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+        let values: StringArray = [Some("foo"), Some("bar")].iter().collect();
 
         // -1 is not a valid index at all!
-        let keys: Int32Array = [Some(1), Some(-1)].into_iter().collect();
+        let keys: Int32Array = [Some(1), Some(-1)].iter().collect();
 
         let data_type = DataType::Dictionary(
             Box::new(keys.data_type().clone()),
@@ -2096,11 +2096,11 @@ mod tests {
 
     #[test]
     fn test_validate_dictionary_index_negative_but_not_referenced() {
-        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+        let values: StringArray = [Some("foo"), Some("bar")].iter().collect();
 
         // -1 is not a valid index at all, but the array is length 1
         // so the -1 should not be looked at
-        let keys: Int32Array = [Some(1), Some(-1)].into_iter().collect();
+        let keys: Int32Array = [Some(1), Some(-1)].iter().collect();
 
         let data_type = DataType::Dictionary(
             Box::new(keys.data_type().clone()),
@@ -2125,10 +2125,10 @@ mod tests {
         expected = "Value at position 0 out of bounds: 18446744073709551615 (can not convert to i64)"
     )]
     fn test_validate_dictionary_index_giant_negative() {
-        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+        let values: StringArray = [Some("foo"), Some("bar")].iter().collect();
 
         // -1 is not a valid index at all!
-        let keys: UInt64Array = [Some(u64::MAX), Some(1)].into_iter().collect();
+        let keys: UInt64Array = [Some(u64::MAX), Some(1)].iter().collect();
 
         let data_type = DataType::Dictionary(
             Box::new(keys.data_type().clone()),
@@ -2149,8 +2149,7 @@ mod tests {
 
     /// Test that the list of type `data_type` generates correct offset out of bounds errors
     fn check_list_offsets<T: ArrowNativeType>(data_type: DataType) {
-        let values: Int32Array =
-            [Some(1), Some(2), Some(3), Some(4)].into_iter().collect();
+        let values: Int32Array = [Some(1), Some(2), Some(3), Some(4)].iter().collect();
 
         // 5 is an invalid offset into a list of only three values
         let offsets: Vec<T> = [0, 2, 5, 4]
@@ -2195,8 +2194,7 @@ mod tests {
         expected = "Offset invariant failure: Could not convert end_offset -1 to usize in slot 2"
     )]
     fn test_validate_list_negative_offsets() {
-        let values: Int32Array =
-            [Some(1), Some(2), Some(3), Some(4)].into_iter().collect();
+        let values: Int32Array = [Some(1), Some(2), Some(3), Some(4)].iter().collect();
         let field_type = Field::new("f", values.data_type().clone(), true);
         let data_type = DataType::List(Box::new(field_type));
 
@@ -2223,9 +2221,9 @@ mod tests {
     /// test that children are validated recursively (aka bugs in child data of struct also are flagged)
     fn test_validate_recursive() {
         // Form invalid dictionary array
-        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+        let values: StringArray = [Some("foo"), Some("bar")].iter().collect();
         // -1 is not a valid index
-        let keys: Int32Array = [Some(1), Some(-1), Some(1)].into_iter().collect();
+        let keys: Int32Array = [Some(1), Some(-1), Some(1)].iter().collect();
 
         let dict_data_type = DataType::Dictionary(
             Box::new(keys.data_type().clone()),
