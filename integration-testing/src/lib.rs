@@ -305,12 +305,13 @@ fn array_from_json(
                                     Value::Number(days),
                                     Value::Number(nanoseconds),
                                 ) => {
-                                    let months = months.as_i64().unwrap();
-                                    let days = days.as_i64().unwrap();
+                                    let months = months.as_i64().unwrap() as i32;
+                                    let days = days.as_i64().unwrap() as i32;
                                     let nanoseconds = nanoseconds.as_i64().unwrap();
-                                    let months_days_ns: i128 = (months as i128) << 96
-                                        | (days as i128) << 64
-                                        | (nanoseconds as i128);
+                                    let months_days_ns: i128 = (nanoseconds as i128)
+                                        << 64
+                                        | (days as i128) << 32
+                                        | (months as i128);
                                     println!("months_days_ns={:?}", months_days_ns);
                                     months_days_ns
                                 }
