@@ -295,6 +295,10 @@ fn array_from_json(
                             let months = v.get("months").unwrap();
                             let days = v.get("days").unwrap();
                             let nanoseconds = v.get("nanoseconds").unwrap();
+                            println!(
+                                "months={:?} days={:?} nanos={:?}",
+                                months, days, nanoseconds
+                            );
                             match (months, days, nanoseconds) {
                                 (
                                     Value::Number(months),
@@ -307,6 +311,7 @@ fn array_from_json(
                                     let months_days_ns: i128 = (months as i128) << 96
                                         | (days as i128) << 64
                                         | (nanoseconds as i128);
+                                    println!("months_days_ns={:?}", months_days_ns);
                                     months_days_ns
                                 }
                                 (_, _, _) => {
