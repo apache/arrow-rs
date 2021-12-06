@@ -308,10 +308,11 @@ fn array_from_json(
                                     let months = months.as_i64().unwrap() as i32;
                                     let days = days.as_i64().unwrap() as i32;
                                     let nanoseconds = nanoseconds.as_i64().unwrap();
-                                    let months_days_ns: i128 = (nanoseconds as i128)
+                                    let months_days_ns: i128 = ((nanoseconds as i128)
+                                        & 0xFFFFFFFFFFFFFFFF)
                                         << 64
-                                        | (days as i128) << 32
-                                        | (months as i128);
+                                        | ((days as i128) & 0xFFFFFFFF) << 32
+                                        | ((months as i128) & 0xFFFFFFFF);
                                     println!("months_days_ns={:?}", months_days_ns);
                                     months_days_ns
                                 }
