@@ -554,13 +554,22 @@ mod tests {
     }
 
     #[test]
-    fn test_string_array_from_string_vec() {
-        let data = vec!["Foo".to_owned(), "Bar".to_owned(), "Baz".to_owned()];
+    fn test_string_array_all_null() {
+        let data = vec![None];
         let array = StringArray::from(data);
+        array
+            .data()
+            .validate_full()
+            .expect("All null array has valid array data");
+    }
 
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.value(0), "Foo");
-        assert_eq!(array.value(1), "Bar");
-        assert_eq!(array.value(2), "Baz");
+    #[test]
+    fn test_large_string_array_all_null() {
+        let data = vec![None];
+        let array = LargeStringArray::from(data);
+        array
+            .data()
+            .validate_full()
+            .expect("All null array has valid array data");
     }
 }
