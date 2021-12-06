@@ -781,6 +781,26 @@ pub fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> 
     Ok(BooleanArray::from(data))
 }
 
+/// Perform `left < right` operation on [`BooleanArray`] and a scalar
+pub fn lt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a: bool, b: bool| !a & b)
+}
+
+/// Perform `left <= right` operation on [`BooleanArray`] and a scalar
+pub fn lt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a, b| a <= b)
+}
+
+/// Perform `left > right` operation on [`BooleanArray`] and a scalar
+pub fn gt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a: bool, b: bool| a & !b)
+}
+
+/// Perform `left >= right` operation on [`BooleanArray`] and a scalar
+pub fn gt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a, b| a >= b)
+}
+
 /// Perform `left != right` operation on [`BooleanArray`] and a scalar
 pub fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
     eq_bool_scalar(left, !right)
@@ -897,10 +917,7 @@ where
     let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
     // this is currently the case for all our datatypes and allows us to always append full bytes
-    assert!(
-        lanes % 8 == 0,
-        "Number of vector lanes must be multiple of 8"
-    );
+    assert_eq!(lanes % 8, 0, "Number of vector lanes must be multiple of 8");
     let mut left_chunks = left.values().chunks_exact(lanes);
     let mut right_chunks = right.values().chunks_exact(lanes);
 
@@ -1685,6 +1702,62 @@ mod tests {
         let res2: Vec<Option<bool>> = neq_bool_scalar(&a, true).unwrap().iter().collect();
 
         assert_eq!(res2, vec![Some(false), Some(true), None]);
+    }
+
+    #[test]
+    fn test_boolean_array_lt_scalar() {
+        let a: BooleanArray = vec![Some(true), Some(false), None].into();
+
+        let res1: Vec<Option<bool>> = lt_bool_scalar(&a, false).unwrap().iter().collect();
+
+        assert_eq!(res1, vec![Some(false), Some(false), None]);
+
+        let res2: Vec<Option<bool>> = lt_bool_scalar(&a, true).unwrap().iter().collect();
+
+        assert_eq!(res2, vec![Some(false), Some(true), None]);
+    }
+
+    #[test]
+    fn test_boolean_array_lt_eq_scalar() {
+        let a: BooleanArray = vec![Some(true), Some(false), None].into();
+
+        let res1: Vec<Option<bool>> =
+            lt_eq_bool_scalar(&a, false).unwrap().iter().collect();
+
+        assert_eq!(res1, vec![Some(false), Some(true), None]);
+
+        let res2: Vec<Option<bool>> =
+            lt_eq_bool_scalar(&a, true).unwrap().iter().collect();
+
+        assert_eq!(res2, vec![Some(true), Some(true), None]);
+    }
+
+    #[test]
+    fn test_boolean_array_gt_scalar() {
+        let a: BooleanArray = vec![Some(true), Some(false), None].into();
+
+        let res1: Vec<Option<bool>> = gt_bool_scalar(&a, false).unwrap().iter().collect();
+
+        assert_eq!(res1, vec![Some(true), Some(false), None]);
+
+        let res2: Vec<Option<bool>> = gt_bool_scalar(&a, true).unwrap().iter().collect();
+
+        assert_eq!(res2, vec![Some(false), Some(false), None]);
+    }
+
+    #[test]
+    fn test_boolean_array_gt_eq_scalar() {
+        let a: BooleanArray = vec![Some(true), Some(false), None].into();
+
+        let res1: Vec<Option<bool>> =
+            gt_eq_bool_scalar(&a, false).unwrap().iter().collect();
+
+        assert_eq!(res1, vec![Some(true), Some(true), None]);
+
+        let res2: Vec<Option<bool>> =
+            gt_eq_bool_scalar(&a, true).unwrap().iter().collect();
+
+        assert_eq!(res2, vec![Some(true), Some(false), None]);
     }
 
     #[test]
