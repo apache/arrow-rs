@@ -295,10 +295,6 @@ fn array_from_json(
                             let months = v.get("months").unwrap();
                             let days = v.get("days").unwrap();
                             let nanoseconds = v.get("nanoseconds").unwrap();
-                            println!(
-                                "months={:?} days={:?} nanos={:?}",
-                                months, days, nanoseconds
-                            );
                             match (months, days, nanoseconds) {
                                 (
                                     Value::Number(months),
@@ -313,7 +309,6 @@ fn array_from_json(
                                         << 64
                                         | ((days as i128) & 0xFFFFFFFF) << 32
                                         | ((months as i128) & 0xFFFFFFFF);
-                                    println!("months_days_ns={:?}", months_days_ns);
                                     months_days_ns
                                 }
                                 (_, _, _) => {
@@ -326,10 +321,8 @@ fn array_from_json(
                     _ => b.append_null(),
                 }?;
             }
-            let array = Arc::new(b.finish()) as ArrayRef;
-            arrow::compute::cast(&array, field.data_type())
+            Ok(Arc::new(b.finish()))
         }
-
         DataType::Float32 => {
             let mut b = Float32Builder::new(json_col.count);
             for (is_valid, value) in json_col
