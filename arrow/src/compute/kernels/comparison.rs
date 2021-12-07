@@ -24,12 +24,11 @@
 
 use crate::array::*;
 use crate::buffer::{bitwise_bin_op_helper, buffer_unary_not, Buffer, MutableBuffer};
+use crate::compute::binary_boolean_kernel;
 use crate::compute::util::combine_option_bitmap;
-use crate::compute::{binary_boolean_kernel, cast};
 use crate::datatypes::{
-    ArrowNativeType, ArrowNumericType, ArrowPrimitiveType, DataType, Dictionary,
-    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
-    UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNumericType, DataType, Float32Type, Float64Type, Int16Type,
+    Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
@@ -201,61 +200,35 @@ macro_rules! compare_op_scalar_primitive {
     }};
 }
 
-macro_rules! compare_dict_op {
-    ($left:expr, $right:expr, $op:expr) => {{
-        let null_bit_buffer = $left
-            .data()
-            .null_buffer()
-            .map(|b| b.bit_slice($left.offset(), $left.len()));
-
-        let values = $left.values();
-        let comparison_result = (0..values.len()).map(|i| unsafe {
-            let val = values.value_unchecked(i);
-            $op(val, $right)
-        });
-
-        // Safety:
-        // `i < $left.len()`
-        let comparison = (0..$left.len()).map(|i| unsafe {
-            let key = $left.keys().value_unchecked(i).to_usize().unwrap();
-            $op(values.value_unchecked(key), $right)
-        });
-        // same as $left.len()
-        let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                $left.len(),
-                None,
-                null_bit_buffer,
-                0,
-                vec![Buffer::from(buffer)],
-                vec![],
-            )
-        };
-        Ok(BooleanArray::from(data))
-    }};
-}
-
 macro_rules! compare_dict_op_scalar {
-    ($left:expr, $right:expr, $op:expr) => {{
+    ($left:expr, $T:ident, $right:expr, $op:expr) => {{
         let null_bit_buffer = $left
             .data()
             .null_buffer()
             .map(|b| b.bit_slice($left.offset(), $left.len()));
 
         let values = $left.values();
-        let comparison results =
+        let array = values
+            .as_any()
+            .downcast_ref::<PrimitiveArray<$T>>()
+            .unwrap();
 
         // Safety:
         // `i < $left.len()`
-        let comparison = (0..$left.len()).map(|i| unsafe {
-            let key = $left.keys().value_unchecked(i).to_usize().unwrap();
-            $op(values.value_unchecked(key), $right)
-        });
+        let comparison: Vec<bool> = (0..array.len())
+            .map(|i| unsafe {
+                let key = array.value_unchecked(i).to_usize().unwrap();
+                $op(array.value_unchecked(key), $right)
+            })
+            .collect();
+        let result: Vec<bool> = $left
+            .keys()
+            .iter()
+            .map(|index| comparison[index.unwrap().to_usize().unwrap()])
+            .collect();
         // same as $left.len()
-        let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
+        let buffer =
+            unsafe { MutableBuffer::from_trusted_len_iter_bool(result.into_iter()) };
 
         let data = unsafe {
             ArrayData::new_unchecked(
@@ -765,19 +738,12 @@ pub fn eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
 }
 
 /// Perform `left == right` operation on [`DictionaryArray`] and a scalar.
-pub fn eq_dict<OffsetSize: ArrowPrimitiveType>(
-    left: &DictionaryArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray> {
-    compare_dict_op!(left, right, |a, b| a == b)
-}
-/// Perform `left == right` operation on [`DictionaryArray`] and a scalar.
-pub fn eq_dict_scalar<OffsetSize: ArrowPrimitiveType>(
-    left: &DictionaryArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray> {
-    compare_dict_op_scalar!(left, right, |a, b| a == b)
-}
+// pub fn eq_dict<OffsetSize: ArrowPrimitiveType>(
+//     left: &DictionaryArray<OffsetSize>,
+//     right: &str,
+// ) -> Result<BooleanArray> {
+//     compare_dict_op!(left, right, |a, b| a == b)
+// }
 
 #[inline]
 fn binary_boolean_op<F>(
@@ -888,14 +854,6 @@ pub fn neq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     compare_op_scalar!(left, right, |a, b| a != b)
 }
 
-/// Perform `left != right` operation on [`StringArray`] / [`LargeStringArray`] and a scalar.
-pub fn neq_dict_scalar<OffsetSize: ArrowPrimitiveType>(
-    left: &DictionaryArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray> {
-    compare_dict_op_scalar!(left, right, |a, b| a != b)
-}
-
 /// Perform `left < right` operation on [`StringArray`] / [`LargeStringArray`].
 pub fn lt_utf8<OffsetSize: StringOffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
@@ -910,14 +868,6 @@ pub fn lt_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     right: &str,
 ) -> Result<BooleanArray> {
     compare_op_scalar!(left, right, |a, b| a < b)
-}
-
-/// Perform `left < right` operation on [`DictionaryArray`] and a scalar.
-pub fn lt_dict_scalar<OffsetSize: ArrowPrimitiveType>(
-    left: &DictionaryArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray> {
-    compare_dict_op_scalar!(left, right, |a, b| a < b)
 }
 
 /// Perform `left <= right` operation on [`StringArray`] / [`LargeStringArray`].
@@ -936,14 +886,6 @@ pub fn lt_eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     compare_op_scalar!(left, right, |a, b| a <= b)
 }
 
-/// Perform `left <= right` operation on [`DictionaryArray`] and a scalar.
-pub fn lt_eq_dict_scalar<OffsetSize: ArrowPrimitiveType>(
-    left: &DictionaryArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray> {
-    compare_dict_op_scalar!(left, right, |a, b| a <= b)
-}
-
 /// Perform `left > right` operation on [`StringArray`] / [`LargeStringArray`].
 pub fn gt_utf8<OffsetSize: StringOffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
@@ -960,14 +902,6 @@ pub fn gt_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     compare_op_scalar!(left, right, |a, b| a > b)
 }
 
-/// Perform `left > right` operation on [`DictionaryArray`] and a scalar.
-pub fn gt_dict_scalar<OffsetSize: ArrowPrimitiveType>(
-    left: &DictionaryArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray> {
-    compare_dict_op_scalar!(left, right, |a, b| a > b)
-}
-
 /// Perform `left >= right` operation on [`StringArray`] / [`LargeStringArray`].
 pub fn gt_eq_utf8<OffsetSize: StringOffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
@@ -982,14 +916,6 @@ pub fn gt_eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     right: &str,
 ) -> Result<BooleanArray> {
     compare_op_scalar!(left, right, |a, b| a >= b)
-}
-
-/// Perform `left >= right` operation on [`DictionaryArray`] and a scalar.
-pub fn gt_eq_dict_scalar<OffsetSize: ArrowPrimitiveType>(
-    left: &DictionaryArray<OffsetSize>,
-    right: &str,
-) -> Result<BooleanArray> {
-    compare_dict_op_scalar!(left, right, |a, b| a >= b)
 }
 
 /// Helper function to perform boolean lambda function on values from two arrays using
@@ -1326,6 +1252,18 @@ where
     return compare_op_scalar!(left, right, |a, b| a == b);
 }
 
+/// Perform `left == right` operation on a [`PrimitiveArray`] and a scalar value.
+pub fn eq_dict_scalar<T>(
+    // pub fn eq_dict_scalar<T, OffsetSize: ArrowPrimitiveType>(
+    left: &DictionaryArray<T>,
+    right: T::Native,
+) -> Result<BooleanArray>
+where
+    T: ArrowNumericType,
+{
+    #[cfg(not(feature = "simd"))]
+    return compare_dict_op_scalar!(left, T, right, |a, b| a == b);
+}
 /// Perform `left != right` operation on two [`PrimitiveArray`]s.
 pub fn neq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
@@ -2160,27 +2098,26 @@ mod tests {
 
     #[test]
     fn test_dict_eq_scalar() {
-        let a: DictionaryArray<Int8Type> =
-            vec!["hi","hello", "world"].into_iter().collect();
-        let a_eq = eq_dict_scalar(&a, "hello").unwrap();
+        let a: DictionaryArray<Int8Type> = vec![1, 2, 3].into_iter().collect();
+        let a_eq = eq_dict_scalar(&a, 2).unwrap();
         assert_eq!(a_eq, BooleanArray::from(vec![false, true, false]));
     }
 
-    #[test]
-    fn test_dict_neq_scalar() {
-        let a: DictionaryArray<Int8Type> =
-            vec!["hi","hello", "world"].into_iter().collect();
-        let a_eq = neq_dict_scalar(&a, "hello").unwrap();
-        assert_eq!(a_eq, BooleanArray::from(vec![true, false, true]));
-    }
+    // #[test]
+    // fn test_dict_neq_scalar() {
+    //     let a: DictionaryArray<Int8Type> =
+    //         vec!["hi","hello", "world"].into_iter().collect();
+    //     let a_eq = neq_dict_scalar(&a, "hello").unwrap();
+    //     assert_eq!(a_eq, BooleanArray::from(vec![true, false, true]));
+    // }
 
-    #[test]
-    fn test_dict_lt_scalar() {
-        let a: DictionaryArray<Int8Type> =
-            vec!["hi","hello", "world"].into_iter().collect();
-        let a_eq = lt_dict_scalar(&a, "hi").unwrap();
-        assert_eq!(a_eq, BooleanArray::from(vec![false, true, false]));
-    }
+    // #[test]
+    // fn test_dict_lt_scalar() {
+    //     let a: DictionaryArray<Int8Type> =
+    //         vec!["hi","hello", "world"].into_iter().collect();
+    //     let a_eq = lt_dict_scalar(&a, "hi").unwrap();
+    //     assert_eq!(a_eq, BooleanArray::from(vec![false, true, false]));
+    // }
 
     macro_rules! test_utf8_scalar {
         ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
