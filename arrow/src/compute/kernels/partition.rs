@@ -87,15 +87,19 @@ fn exponential_search(
     }
 
     // invariant after while loop:
-    // indices[bound / 2] <= target < indices[min(indices.len(), bound + 1)]
+    // (start + bound / 2) <= target < min(end, start + bound + 1)
     // where <= and < are defined by the comparator;
-    // note here we have right = min(indices.len(), bound + 1) because indices[bound] might
+    // note here we have right = min(end, start + bound + 1) because (start + bound) might
     // actually be considered and must be included.
     partition_point(start + bound / 2, end.min(start + bound + 1), |idx| {
         comparator.compare(&idx, target) != Ordering::Greater
     })
 }
 
+/// Returns the index of the partition point according to the given predicate
+/// (the index of the first element of the second partition).
+///
+/// See [`std::slice::partition_point`]
 #[inline]
 fn partition_point<P: Fn(usize) -> bool>(start: usize, end: usize, pred: P) -> usize {
     let mut left = start;
@@ -123,10 +127,9 @@ impl<'a> Iterator for LexicographicalPartitionIterator<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         if self.partition_point < self.num_rows {
             // invariant:
-            // value_indices[0..previous_partition_point] all are values <= value_indices[previous_partition_point]
-            // so in order to save time we can do binary search on the value_indices[previous_partition_point..]
-            // and find when any value is greater than value_indices[previous_partition_point]; because we are using
-            // new indices, the new offset is _added_ to the previous_partition_point.
+            // in the range [0..previous_partition_point] all values are <= the value at [previous_partition_point]
+            // so in order to save time we can do binary search on the range [previous_partition_point..num_rows]
+            // and find the index where any value is greater than the value at [previous_partition_point]
             //
             // be careful that idx is of type &usize which points to the actual value within value_indices, which itself
             // contains usize (0..row_count), providing access to lexicographical_comparator as pointers into the
