@@ -218,14 +218,8 @@ macro_rules! compare_dict_op_scalar {
         // Safety:
         // `i < $left.len()`
         let comparison: Vec<bool> = (0..array.len())
-            .map(|i| unsafe {
-                let key = array.value_unchecked(i).to_usize().unwrap();
-                println!("Left: {:?} Right: {:?}", array.value_unchecked(i), $right);
-                println!("{:?}", $op(array.value_unchecked(key), $right));
-                $op(array.value_unchecked(key), $right)
-            })
+            .map(|i| unsafe { $op(array.value_unchecked(i), $right) })
             .collect();
-        println!("{:?}", comparison);
 
         let result: Vec<bool> = (0..$left.keys().len())
             .map(|key| {
