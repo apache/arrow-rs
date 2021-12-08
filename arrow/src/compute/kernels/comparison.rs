@@ -27,8 +27,9 @@ use crate::buffer::{bitwise_bin_op_helper, buffer_unary_not, Buffer, MutableBuff
 use crate::compute::binary_boolean_kernel;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
-    ArrowNativeType, ArrowNumericType, DataType, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNumericType, ArrowPrimitiveType, DataType, Float32Type,
+    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
@@ -208,6 +209,7 @@ macro_rules! compare_dict_op_scalar {
             .map(|b| b.bit_slice($left.offset(), $left.len()));
 
         let values = $left.values();
+
         let array = values
             .as_any()
             .downcast_ref::<PrimitiveArray<$T>>()
@@ -218,14 +220,22 @@ macro_rules! compare_dict_op_scalar {
         let comparison: Vec<bool> = (0..array.len())
             .map(|i| unsafe {
                 let key = array.value_unchecked(i).to_usize().unwrap();
+                println!("Left: {:?} Right: {:?}", array.value_unchecked(i), $right);
+                println!("{:?}", $op(array.value_unchecked(key), $right));
                 $op(array.value_unchecked(key), $right)
             })
             .collect();
-        let result: Vec<bool> = $left
-            .keys()
-            .iter()
-            .map(|index| comparison[index.unwrap().to_usize().unwrap()])
+        println!("{:?}", comparison);
+
+        let result: Vec<bool> = (0..$left.keys().len())
+            .map(|key| {
+                let index = $left.keys().value(key);
+                comparison[index
+                    .to_usize()
+                    .expect(format!("Failed at idx {:?}", index).as_str())]
+            })
             .collect();
+
         // same as $left.len()
         let buffer =
             unsafe { MutableBuffer::from_trusted_len_iter_bool(result.into_iter()) };
@@ -244,6 +254,7 @@ macro_rules! compare_dict_op_scalar {
         Ok(BooleanArray::from(data))
     }};
 }
+
 /// Evaluate `op(left, right)` for [`PrimitiveArray`]s using a specified
 /// comparison function.
 pub fn no_simd_compare_op<T, F>(
@@ -1254,7 +1265,6 @@ where
 
 /// Perform `left == right` operation on a [`PrimitiveArray`] and a scalar value.
 pub fn eq_dict_scalar<T>(
-    // pub fn eq_dict_scalar<T, OffsetSize: ArrowPrimitiveType>(
     left: &DictionaryArray<T>,
     right: T::Native,
 ) -> Result<BooleanArray>
@@ -1262,8 +1272,20 @@ where
     T: ArrowNumericType,
 {
     #[cfg(not(feature = "simd"))]
+    println!("{}", std::any::type_name::<T>());
     return compare_dict_op_scalar!(left, T, right, |a, b| a == b);
 }
+
+// pub fn eq_dict_utf8_scalar<OffsetSize>(
+//     left: &DictionaryArray<OffsetSize>,
+//     right: &str,
+// ) -> Result<BooleanArray>
+// where
+//     OffsetSize: StringOffsetSizeTrait + ArrowPrimitiveType,
+// {
+//     #[cfg(not(feature = "simd"))]
+//     return compare_dict_op_scalar!(left, OffsetSize, right, |a, b| a == b);
+// }
 /// Perform `left != right` operation on two [`PrimitiveArray`]s.
 pub fn neq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
@@ -2098,11 +2120,26 @@ mod tests {
 
     #[test]
     fn test_dict_eq_scalar() {
-        let a: DictionaryArray<Int8Type> = vec![1, 2, 3].into_iter().collect();
-        let a_eq = eq_dict_scalar(&a, 2).unwrap();
-        assert_eq!(a_eq, BooleanArray::from(vec![false, true, false]));
+        let key_builder = PrimitiveBuilder::<UInt8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<UInt8Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(123).unwrap();
+        builder.append_null().unwrap();
+        builder.append(223).unwrap();
+        let array = builder.finish();
+        let a_eq = eq_dict_scalar(&array, 123).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(true), None, Some(false)])
+        );
     }
 
+    // #[test]
+    // fn test_dict_eq_utf8_scalar() {
+    //     let a: DictionaryArray<Int8Type> = vec!["a", "b", "c"].into_iter().collect();
+    //     let a_eq = eq_dict_utf8_scalar(&a, "b").unwrap();
+    //     assert_eq!(a_eq, BooleanArray::from(vec![false, true, false]));
+    // }
     // #[test]
     // fn test_dict_neq_scalar() {
     //     let a: DictionaryArray<Int8Type> =
