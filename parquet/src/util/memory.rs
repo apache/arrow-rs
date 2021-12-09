@@ -328,6 +328,12 @@ impl<T> BufferPtr<T> {
         self.start
     }
 
+    /// Returns the end position of this buffer
+    #[inline]
+    pub fn end(&self) -> usize {
+        self.start + self.len
+    }
+
     /// Returns length of this buffer
     #[inline]
     pub fn len(&self) -> usize {

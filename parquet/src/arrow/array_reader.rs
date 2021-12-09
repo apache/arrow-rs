@@ -200,7 +200,6 @@ pub struct PrimitiveArrayReader<T: DataType> {
     rep_levels_buffer: Option<Buffer>,
     column_desc: ColumnDescPtr,
     record_reader: RecordReader<T>,
-    _type_marker: PhantomData<T>,
 }
 
 impl<T: DataType> PrimitiveArrayReader<T> {
@@ -230,7 +229,6 @@ impl<T: DataType> PrimitiveArrayReader<T> {
             rep_levels_buffer: None,
             column_desc,
             record_reader,
-            _type_marker: PhantomData,
         })
     }
 }
