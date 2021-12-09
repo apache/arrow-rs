@@ -38,8 +38,6 @@ jobs:
         with:
           path: rust
           fetch-depth: 0
-      - name: Test more cases
-        run: git apply rust/integration-testing/unskip.patch
       - name: Setup Python
         uses: actions/setup-python@v2
         with:
