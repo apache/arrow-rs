@@ -89,7 +89,7 @@
 //!
 //! ## Compute
 //!
-//! This crate offers many operations (called kernels) to operate on `Array`s, that you can find at [compute::kernels].
+//! This crate offers many operations (called kernels) to operate on [`Array`](array::Array)s, that you can find at [`Kernel`](compute::kernels).
 //! It has both vertical and horizontal operations, and some of them have an SIMD implementation.
 //!
 //! ## Status
@@ -118,9 +118,9 @@
 //!
 //! Finally, this crate implements some readers and writers to different formats:
 //!
-//! * json: [reader](json::reader::Reader)
-//! * csv: [reader](csv::reader::Reader) and [writer](csv::writer::Writer)
-//! * ipc: [reader](ipc::reader::StreamReader) and [writer](ipc::writer::FileWriter)
+//! * JSON: [`Reader`](json::reader::Reader)
+//! * CSV: [`Reader`](csv::reader::Reader) and [`Writer`](csv::writer::Writer)
+//! * IPC: [`Reader`](ipc::reader::StreamReader) and [`Writer`](ipc::writer::FileWriter)
 //!
 //! The parquet implementation is on a [separate crate](https://crates.io/crates/parquet)
 
