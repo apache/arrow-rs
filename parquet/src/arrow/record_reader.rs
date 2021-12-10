@@ -383,14 +383,12 @@ impl<T: DataType> RecordReader<T> {
                 let mut end_of_last_record = self.num_values;
 
                 for current in self.num_values..self.values_written {
-                    if buf[current] == 0 {
-                        if current != end_of_last_record {
-                            records_read += 1;
-                            end_of_last_record = current;
+                    if buf[current] == 0 && current != end_of_last_record {
+                        records_read += 1;
+                        end_of_last_record = current;
 
-                            if records_read == records_to_read {
-                                break;
-                            }
+                        if records_read == records_to_read {
+                            break;
                         }
                     }
                 }
