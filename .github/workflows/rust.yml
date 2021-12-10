@@ -46,14 +46,14 @@ jobs:
           # these represent dependencies downloaded by cargo
           # and thus do not depend on the OS, arch nor rust version.
           path: /github/home/.cargo
-          key: cargo-cache2-
+          key: cargo-cache3-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
           # these represent compiled steps of both dependencies and arrow
           # and thus are specific for a particular OS, arch and rust version.
           path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}-
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}-
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
@@ -91,13 +91,13 @@ jobs:
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache2-
+          key: cargo-cache3-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
@@ -147,14 +147,12 @@ jobs:
         uses: actions/cache@v2
         with:
           path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache2-
+          key: cargo-nightly-cache3-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
           path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
@@ -223,13 +221,13 @@ jobs:
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache2-
+          key: cargo-cache3-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
@@ -272,13 +270,13 @@ jobs:
         with:
           path: /home/runner/.cargo
           # this key is not equal because the user is different than on a container (runner vs github)
-          key: cargo-coverage-cache-
+          key: cargo-coverage-cache3-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
           path: /home/runner/target
           # this key is not equal because coverage uses different compilation flags.
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-coverage-cache-${{ matrix.rust }}-
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-coverage-cache3-${{ matrix.rust }}-
       - name: Run coverage
         run: |
           export CARGO_HOME="/home/runner/.cargo"
@@ -317,13 +315,12 @@ jobs:
         uses: actions/cache@v2
         with:
           path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache2-
+          key: cargo-wasm32-cache3-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
           path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-wasm32-cache-${{ matrix.rust }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-wasm32-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
@@ -359,13 +356,13 @@ jobs:
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache2-
+          key: cargo-cache3-
       - name: Cache Rust dependencies
         uses: actions/cache@v2
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
