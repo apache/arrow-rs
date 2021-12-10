@@ -208,27 +208,39 @@ macro_rules! compare_dict_op_scalar {
             .null_buffer()
             .map(|b| b.bit_slice($left.offset(), $left.len()));
 
-        let values = $left.values();
-
-        let array = values
+        let values = $left
+            .values()
             .as_any()
             .downcast_ref::<PrimitiveArray<$T>>()
             .unwrap();
 
         // Safety:
         // `i < $left.len()`
-        let comparison: Vec<bool> = (0..array.len())
-            .map(|i| unsafe { $op(array.value_unchecked(i), $right) })
-            .collect();
+        // let comparison: Vec<bool> = (0..array.len())
+        //     .map(|i| unsafe { $op(array.value_unchecked(i), $right) })
+        //     .collect();
+
+        let dict_comparison = eq_scalar(values, $right).unwrap();
 
         let result: Vec<bool> = (0..$left.keys().len())
             .map(|key| {
                 let index = $left.keys().value(key);
-                comparison[index
-                    .to_usize()
-                    .expect(format!("Failed at idx {:?}", index).as_str())]
+                dict_comparison.value(
+                    index
+                        .to_usize()
+                        .expect(format!("Failed at idx {:?}", index).as_str()),
+                )
             })
             .collect();
+
+        // let result: Vec<bool> = (0..$left.keys().len())
+        //     .map(|key| {
+        //         let index = $left.keys().value(key);
+        //         comparison[index
+        //             .to_usize()
+        //             .expect(format!("Failed at idx {:?}", index).as_str())]
+        //     })
+        //     .collect();
 
         // same as $left.len()
         let buffer =
@@ -742,14 +754,6 @@ pub fn eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     compare_op_scalar!(left, right, |a, b| a == b)
 }
 
-/// Perform `left == right` operation on [`DictionaryArray`] and a scalar.
-// pub fn eq_dict<OffsetSize: ArrowPrimitiveType>(
-//     left: &DictionaryArray<OffsetSize>,
-//     right: &str,
-// ) -> Result<BooleanArray> {
-//     compare_dict_op!(left, right, |a, b| a == b)
-// }
-
 #[inline]
 fn binary_boolean_op<F>(
     left: &BooleanArray,
@@ -1257,30 +1261,40 @@ where
     return compare_op_scalar!(left, right, |a, b| a == b);
 }
 
-/// Perform `left == right` operation on a [`PrimitiveArray`] and a scalar value.
-pub fn eq_dict_scalar<T>(
-    left: &DictionaryArray<T>,
+/// Perform `left == right` operation on a [`PrimitiveArray`] and a numeric scalar value.
+pub fn eq_dict_scalar<T, K>(
+    left: &DictionaryArray<K>,
     right: T::Native,
 ) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
+    K: ArrowNumericType,
 {
     #[cfg(not(feature = "simd"))]
     println!("{}", std::any::type_name::<T>());
-    return compare_dict_op_scalar!(left, T, right, |a, b| a == b);
+    let dict_comparison = match left.values().data_type() {
+        DataType::Int8 => eq_scalar(as_primitive_array::<T>(left.values()), right),
+        _ => Err(ArrowError::ComputeError(
+            "Dictionary did not store values of type T".to_string(),
+        )),
+    }?;
+
+    assert_eq!(dict_comparison.len(), left.values().len());
+
+    let result: BooleanArray = left
+        .keys()
+        .iter()
+        .map(|key| {
+            key.map(|key| unsafe {
+                let key = key.to_usize().expect("Dictionary index not usize");
+                dict_comparison.value_unchecked(key)
+            })
+        })
+        .collect();
+
+    Ok(result)
 }
 
-// pub fn eq_dict_utf8_scalar<OffsetSize>(
-//     left: &DictionaryArray<OffsetSize>,
-//     right: &str,
-// ) -> Result<BooleanArray>
-// where
-//     OffsetSize: StringOffsetSizeTrait + ArrowPrimitiveType,
-// {
-//     #[cfg(not(feature = "simd"))]
-//     return compare_dict_op_scalar!(left, OffsetSize, right, |a, b| a == b);
-// }
-/// Perform `left != right` operation on two [`PrimitiveArray`]s.
 pub fn neq<T>(left: &PrimitiveArray<T>, right: &PrimitiveArray<T>) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
