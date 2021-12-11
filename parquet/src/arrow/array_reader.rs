@@ -1154,10 +1154,8 @@ impl ArrayReader for StructArrayReader {
         let mut def_level_data_buffer = MutableBuffer::new(buffer_size);
         def_level_data_buffer.resize(buffer_size, 0);
 
-    // Safety: the buffer is always treated as `u16` in the code below
-        let def_level_data = unsafe {
-            def_level_data_buffer.typed_data_mut()
-        };
+        // Safety: the buffer is always treated as `u16` in the code below
+        let def_level_data = unsafe { def_level_data_buffer.typed_data_mut() };
 
         def_level_data
             .iter_mut()
