@@ -168,7 +168,10 @@ where
         MutableBuffer::new(ceil(len_in_bits, 8)).with_bitset(len_in_bits / 64 * 8, false);
 
     let left_chunks = left.bit_chunks(offset_in_bits, len_in_bits);
-    let result_chunks = result.typed_data_mut::<u64>().iter_mut();
+
+    // Safety: buffer is always treated as type `u64` in the code
+    // below.
+    let result_chunks = unsafe { result.typed_data_mut::<u64>().iter_mut() };
 
     result_chunks
         .zip(left_chunks.iter())
