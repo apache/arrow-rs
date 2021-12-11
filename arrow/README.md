@@ -21,7 +21,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/arrow.svg)](https://crates.io/crates/arrow)
 
-This crate contains the official Native Rust implementation of [Apache Arrow][arrow] in memory format. Please see the API documents for additional details.
+This crate contains the official Native Rust implementation of [Apache Arrow][arrow] in memory format, governed by the Apache Software Foundation.
 
 ## Rust Version Compatibility
 
