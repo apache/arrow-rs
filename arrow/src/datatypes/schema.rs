@@ -87,6 +87,18 @@ impl Schema {
         Self { fields, metadata }
     }
 
+
+    /// Returns a new schema with only the specified columns in the new schema
+    /// This carries metadata from the parent schema over as well
+    pub fn project(&self, indices: impl IntoIterator<Item=usize>) -> Result<Schema> {
+        let mut new_fields = vec![];
+        for i in indices {
+            let f = self.fields[i].clone();
+            new_fields.push(f);
+        }
+        Ok(Self::new_with_metadata(new_fields, self.metadata.clone()))
+    }
+
     /// Merge schema into self if it is compatible. Struct fields will be merged recursively.
     ///
     /// Example:
@@ -115,7 +127,7 @@ impl Schema {
     ///     ]),
     /// );
     /// ```
-    pub fn try_merge(schemas: impl IntoIterator<Item = Self>) -> Result<Self> {
+    pub fn try_merge(schemas: impl IntoIterator<Item=Self>) -> Result<Self> {
         schemas
             .into_iter()
             .try_fold(Self::empty(), |mut merged, schema| {
@@ -368,5 +380,24 @@ mod tests {
         let de_schema = serde_json::from_str(&json).unwrap();
 
         assert_eq!(schema, de_schema);
+    }
+
+    #[test]
+    fn test_project() {
+        let mut metadata = HashMap::new();
+        metadata.insert("meta".to_string(), "data".to_string());
+
+        let schema = Schema::new_with_metadata(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ], metadata);
+
+        let projected: Schema = schema.project(vec![0, 2]).unwrap();
+
+        assert_eq!(projected.fields().len(), 2);
+        assert_eq!(projected.fields()[0].name(), "name");
+        assert_eq!(projected.fields()[1].name(), "priority");
+        assert_eq!(projected.metadata.get("meta").unwrap(), "data")
     }
 }

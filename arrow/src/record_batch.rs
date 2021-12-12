@@ -175,6 +175,12 @@ impl RecordBatch {
         self.schema.clone()
     }
 
+
+    /// Projects the schema onto the specified columns
+    pub fn project(&self, indices: impl IntoIterator<Item=usize>) -> Result<Schema> {
+        self.schema.project(indices)
+    }
+
     /// Returns the number of columns in the record batch.
     ///
     /// # Example
