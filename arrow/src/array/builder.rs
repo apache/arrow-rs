@@ -398,7 +398,13 @@ impl BooleanBufferBuilder {
         }
     }
 
-    /// Append a slice of packed bits
+    /// Append `count` bits from `to_set`
+    ///
+    /// `to_set` is a slice of bits packed LSB-first into `[u8]`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `to_set` does not contain `ceil(count / 8)` bytes
     #[inline]
     pub fn append_packed(&mut self, count: usize, to_set: &[u8]) {
         assert_eq!((count + 7) >> 3, to_set.len());
