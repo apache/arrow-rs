@@ -158,7 +158,7 @@ pub(crate) mod private {
             let mut end_of_last_record = start;
 
             for current in range {
-                if buf[current] == 0 && current != end_of_last_record {
+                if buf[current] == 0 && current != start {
                     records_read += 1;
                     end_of_last_record = current;
 
