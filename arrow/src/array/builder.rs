@@ -398,6 +398,54 @@ impl BooleanBufferBuilder {
         }
     }
 
+    /// Append a slice of packed bits
+    #[inline]
+    pub fn append_packed(&mut self, count: usize, to_set: &[u8]) {
+        assert_eq!((count + 7) >> 3, to_set.len());
+
+        let new_len = self.len + count;
+        let new_buf_len = (new_len + 7) >> 3;
+        self.buffer.reserve(new_buf_len - self.buffer.len());
+
+        let whole_bytes = count >> 3;
+        let overrun = count & 7;
+
+        let skew = self.len & 7;
+        if skew == 0 {
+            self.buffer.extend_from_slice(&to_set[..whole_bytes]);
+            if overrun > 0 {
+                let masked = to_set[whole_bytes] & ((1 << overrun) - 1);
+                self.buffer.push(masked)
+            }
+
+            self.len = new_len;
+            debug_assert_eq!(self.buffer.len(), new_buf_len);
+            return;
+        }
+
+        for to_set_byte in &to_set[..whole_bytes] {
+            let low = *to_set_byte << skew;
+            let high = *to_set_byte >> (8 - skew);
+
+            *self.buffer.last_mut().unwrap() |= low;
+            self.buffer.push(high);
+        }
+
+        if overrun > 0 {
+            let masked = to_set[whole_bytes] & ((1 << overrun) - 1);
+            let low = masked << skew;
+            *self.buffer.last_mut().unwrap() |= low;
+
+            if overrun > 8 - skew {
+                let high = masked >> (8 - skew);
+                self.buffer.push(high)
+            }
+        }
+
+        self.len = new_len;
+        debug_assert_eq!(self.buffer.len(), new_buf_len);
+    }
+
     #[inline]
     pub fn finish(&mut self) -> Buffer {
         let buf = std::mem::replace(&mut self.buffer, MutableBuffer::new(0));
@@ -2832,6 +2880,62 @@ mod tests {
         buffer.append_n(8, true);
         buffer.append_n(4, false);
         assert!(buffer.get_bit(11));
+    }
+
+    #[test]
+    fn test_bit_append_packed() {
+        let mut buffer = BooleanBufferBuilder::new(0);
+
+        buffer.append_packed(8, &[0b11111111]);
+        assert_eq!(buffer.buffer.as_slice(), &[0b11111111]);
+        assert_eq!(buffer.len(), 8);
+
+        buffer.append_packed(3, &[0b01010010]);
+        assert_eq!(buffer.buffer.as_slice(), &[0b11111111, 0b00000010]);
+        assert_eq!(buffer.len(), 11);
+
+        buffer.append_packed(5, &[0b00010100]);
+        assert_eq!(buffer.buffer.as_slice(), &[0b11111111, 0b10100010]);
+        assert_eq!(buffer.len(), 16);
+
+        buffer.append_packed(2, &[0b11110010]);
+        assert_eq!(
+            buffer.buffer.as_slice(),
+            &[0b11111111, 0b10100010, 0b00000010]
+        );
+        assert_eq!(buffer.len(), 18);
+
+        buffer.append_packed(15, &[0b11011010, 0b01010101]);
+        assert_eq!(
+            buffer.buffer.as_slice(),
+            &[0b11111111, 0b10100010, 0b01101010, 0b01010111, 0b00000001]
+        );
+        assert_eq!(buffer.len(), 33);
+    }
+
+    #[test]
+    fn test_bool_buffer_fuzz() {
+        use rand::prelude::*;
+
+        let mut buffer = BooleanBufferBuilder::new(0);
+        let mut all_bools = vec![];
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..100 {
+            let mask_length = (rng.next_u32() % 50) as usize;
+            let bools: Vec<_> = std::iter::repeat(true).take(mask_length).collect();
+
+            let mut compacted = BooleanBufferBuilder::new(mask_length);
+            compacted.append_slice(&bools);
+
+            buffer.append_packed(mask_length, compacted.buffer.as_slice());
+            all_bools.extend_from_slice(&bools);
+        }
+
+        let mut compacted = BooleanBufferBuilder::new(all_bools.len());
+        compacted.append_slice(&all_bools);
+
+        assert_eq!(buffer.finish(), compacted.finish())
     }
 
     #[test]
