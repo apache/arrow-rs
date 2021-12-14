@@ -183,6 +183,7 @@ pub(crate) mod private {
                 unsafe { self.buffer.as_slice().align_to::<i16>() };
             assert!(prefix.is_empty() && suffix.is_empty());
 
+            null_mask.reserve(range.end - range.start);
             for i in &buf[range] {
                 null_mask.append(*i == max_level)
             }
