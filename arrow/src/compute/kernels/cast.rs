@@ -68,7 +68,12 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     }
 
     match (from_type, to_type) {
-        (
+        // TODO now just support signed numeric to decimal, support decimal to numeric later
+        // support one decimal data type to another decimal data type
+        // or UTF-8 to decimal
+        // numeric to decimal
+        (Int8 | Int16 | Int32 | Int64 | Float32 | Float64 | Decimal(_, _), Decimal(_, _))
+        | (
             Null,
             Boolean
             | Int8
