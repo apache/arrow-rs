@@ -252,6 +252,7 @@ mod tests {
             options: Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
         }];
         {
@@ -271,6 +272,7 @@ mod tests {
             options: Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
         }];
 
@@ -289,6 +291,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: false,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
             SortColumn {
@@ -296,6 +299,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: false,
                     nulls_first: false,
+                    assume_sorted_dictionaries: false,
                 }),
             },
         ];
@@ -314,6 +318,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: false,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
             SortColumn {
@@ -322,6 +327,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: true,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
         ];
@@ -344,6 +350,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: false,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
             SortColumn {
@@ -355,6 +362,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: true,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
         ];
@@ -381,6 +389,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: false,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
             SortColumn {
@@ -393,6 +402,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: true,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
         ];

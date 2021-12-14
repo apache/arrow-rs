@@ -347,6 +347,42 @@ pub fn sort_to_indices(
                 )))
             }
         },
+        DataType::Dictionary(key_type, _value_type)
+            if options.assume_sorted_dictionaries =>
+        {
+            match key_type.as_ref() {
+                DataType::Int8 => {
+                    sort_dictionary_keys::<Int8Type>(values, v, n, &options, limit)
+                }
+                DataType::Int16 => {
+                    sort_dictionary_keys::<Int16Type>(values, v, n, &options, limit)
+                }
+                DataType::Int32 => {
+                    sort_dictionary_keys::<Int32Type>(values, v, n, &options, limit)
+                }
+                DataType::Int64 => {
+                    sort_dictionary_keys::<Int64Type>(values, v, n, &options, limit)
+                }
+                DataType::UInt8 => {
+                    sort_dictionary_keys::<UInt8Type>(values, v, n, &options, limit)
+                }
+                DataType::UInt16 => {
+                    sort_dictionary_keys::<UInt16Type>(values, v, n, &options, limit)
+                }
+                DataType::UInt32 => {
+                    sort_dictionary_keys::<UInt32Type>(values, v, n, &options, limit)
+                }
+                DataType::UInt64 => {
+                    sort_dictionary_keys::<UInt64Type>(values, v, n, &options, limit)
+                }
+                t => {
+                    return Err(ArrowError::ComputeError(format!(
+                        "Sort not supported for dictionary key type {:?}",
+                        t
+                    )))
+                }
+            }
+        }
         DataType::Dictionary(key_type, value_type)
             if *value_type.as_ref() == DataType::Utf8 =>
         {
@@ -403,6 +439,10 @@ pub struct SortOptions {
     pub descending: bool,
     /// Whether to sort nulls first
     pub nulls_first: bool,
+    /// Whether dictionary arrays can be sorted by their keys instead of values.
+    /// Improveves sorting performance if the dictionary values are sorted
+    /// or when the sorting is done for partitioning only.
+    pub assume_sorted_dictionaries: bool,
 }
 
 impl Default for SortOptions {
@@ -411,6 +451,7 @@ impl Default for SortOptions {
             descending: false,
             // default to nulls first to match spark's behavior
             nulls_first: true,
+            assume_sorted_dictionaries: false,
         }
     }
 }
@@ -526,12 +567,35 @@ where
             .map(|index| (index, values.value(index as usize)))
             .collect::<Vec<(u32, T::Native)>>()
     };
-    sort_primitive_inner(values, null_indices, cmp, options, limit, valids)
+    sort_primitive_inner(null_indices, cmp, options, limit, valids)
+}
+
+/// Sort a dictionary array by its keys
+fn sort_dictionary_keys<T>(
+    array: &ArrayRef,
+    value_indices: Vec<u32>,
+    null_indices: Vec<u32>,
+    options: &SortOptions,
+    limit: Option<usize>,
+) -> UInt32Array
+where
+    T: ArrowDictionaryKeyType,
+    T::Native: std::cmp::Ord,
+{
+    // create tuples that are used for sorting
+    let valids = {
+        let dict_array = as_dictionary_array::<T>(&array);
+        let keys = dict_array.keys();
+        value_indices
+            .into_iter()
+            .map(|index| (index, keys.value(index as usize)))
+            .collect::<Vec<(u32, T::Native)>>()
+    };
+    sort_primitive_inner(null_indices, cmp, options, limit, valids)
 }
 
 // sort is instantiated a lot so we only compile this inner version for each native type
 fn sort_primitive_inner<T, F>(
-    values: &ArrayRef,
     null_indices: Vec<u32>,
     cmp: F,
     options: &SortOptions,
@@ -547,7 +611,7 @@ where
 
     let valids_len = valids.len();
     let nulls_len = nulls.len();
-    let mut len = values.len();
+    let mut len = valids_len + nulls_len;
 
     if let Some(limit) = limit {
         len = limit.min(len);
@@ -877,6 +941,7 @@ pub struct SortColumn {
 ///         options: Some(SortOptions {
 ///             descending: true,
 ///             nulls_first: false,
+///             assume_sorted_dictionaries: false
 ///         }),
 ///     },
 /// ], None).unwrap();
@@ -1389,6 +1454,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![2, 1, 4, 3, 5, 0], // [2, 4, 1, 3, 5, 0]
@@ -1399,6 +1465,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![2, 1, 4, 3, 5, 0],
@@ -1409,6 +1476,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![2, 1, 4, 3, 5, 0],
@@ -1419,6 +1487,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![2, 1, 4, 3, 5, 0],
@@ -1436,6 +1505,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![2, 1, 4, 3, 5, 0],
@@ -1446,6 +1516,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![2, 1, 4, 3, 5, 0],
@@ -1457,6 +1528,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![5, 0, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
@@ -1467,6 +1539,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![5, 0, 2, 1, 4, 3], // [5, 0, 2, 4, 1, 3]
@@ -1477,6 +1550,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![5, 0, 2, 1, 4, 3],
@@ -1487,6 +1561,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![5, 0, 2, 1, 4, 3],
@@ -1497,6 +1572,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![5, 0, 2, 1, 4, 3],
@@ -1507,6 +1583,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![5, 0, 2, 1, 4, 3],
@@ -1518,6 +1595,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![3, 0, 1],
@@ -1528,6 +1606,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![1, 2, 3],
@@ -1539,6 +1618,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![1, 2],
@@ -1549,6 +1629,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![0, 1],
@@ -1562,6 +1643,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![4, 6],
@@ -1584,6 +1666,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![2, 3, 1, 4, 5, 0],
@@ -1595,6 +1678,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![5, 0, 2, 3, 1, 4],
@@ -1606,6 +1690,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![5, 0, 2],
@@ -1617,6 +1702,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![3, 0, 1],
@@ -1627,6 +1713,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![1, 2, 3],
@@ -1638,6 +1725,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![1, 2],
@@ -1648,6 +1736,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![0, 1],
@@ -1688,6 +1777,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![Some(2), Some(0), Some(0), Some(-1), None, None],
@@ -1697,6 +1787,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![Some(2), Some(0), Some(0), Some(-1), None, None],
@@ -1706,6 +1797,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![Some(2), Some(0), Some(0), Some(-1), None, None],
@@ -1715,6 +1807,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![Some(2), Some(0), Some(0), Some(-1), None, None],
@@ -1726,6 +1819,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(2), Some(0), Some(0), Some(-1)],
@@ -1735,6 +1829,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(2), Some(0), Some(0), Some(-1)],
@@ -1744,6 +1839,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(2), Some(0), Some(0), Some(-1)],
@@ -1753,6 +1849,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(2), Some(0), Some(0), Some(-1)],
@@ -1763,6 +1860,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![None, None, Some(2)],
@@ -1773,6 +1871,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(2.0), Some(0.0), Some(0.0), Some(-1.0)],
@@ -1782,6 +1881,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(f64::NAN), Some(2.0), Some(0.0), Some(-1.0)],
@@ -1791,6 +1891,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![Some(f64::NAN), Some(f64::NAN), Some(f64::NAN), Some(1.0)],
@@ -1802,6 +1903,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(-1), Some(0), Some(0), Some(2)],
@@ -1811,6 +1913,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(-1), Some(0), Some(0), Some(2)],
@@ -1820,6 +1923,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(-1), Some(0), Some(0), Some(2)],
@@ -1829,6 +1933,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(-1), Some(0), Some(0), Some(2)],
@@ -1838,6 +1943,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(-1.0), Some(0.0), Some(0.0), Some(2.0)],
@@ -1847,6 +1953,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![None, None, Some(-1.0), Some(0.0), Some(2.0), Some(f64::NAN)],
@@ -1856,6 +1963,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![Some(1.0), Some(f64::NAN), Some(f64::NAN), Some(f64::NAN)],
@@ -1867,6 +1975,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![Some(1.0), Some(f64::NAN)],
@@ -1878,6 +1987,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![Some(1.0), Some(2.0), Some(3.0)],
@@ -1889,6 +1999,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![Some(1.0), Some(2.0), None],
@@ -1899,6 +2010,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![None, None, Some(1.0)],
@@ -1910,6 +2022,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![None, None],
@@ -1920,6 +2033,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![Some(2.0), None],
@@ -1954,6 +2068,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![2, 4, 1, 5, 3, 0],
@@ -1971,6 +2086,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![0, 3, 5, 1, 4, 2],
@@ -1988,6 +2104,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![3, 0, 2, 4, 1, 5],
@@ -2005,6 +2122,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![3, 0, 2],
@@ -2016,6 +2134,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![3, 0, 1],
@@ -2026,6 +2145,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![1, 2, 3],
@@ -2037,6 +2157,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![1, 2],
@@ -2047,6 +2168,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![0, 1],
@@ -2088,6 +2210,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2112,6 +2235,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2136,6 +2260,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2160,6 +2285,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![None, None, Some("sad")],
@@ -2171,6 +2297,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![Some("abc"), Some("def"), None],
@@ -2181,6 +2308,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![None, None, Some("abc")],
@@ -2192,6 +2320,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![None, None],
@@ -2202,6 +2331,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![Some("def"), None],
@@ -2243,6 +2373,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2267,6 +2398,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2291,6 +2423,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2315,6 +2448,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![None, None, Some("sad")],
@@ -2326,6 +2460,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![Some("abc"), Some("def"), None],
@@ -2336,6 +2471,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![None, None, Some("abc")],
@@ -2347,6 +2483,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![None, None],
@@ -2357,9 +2494,113 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![Some("def"), None],
+        );
+    }
+
+    #[test]
+    fn test_sort_dicts_by_key() {
+        test_sort_string_dict_arrays::<Int8Type>(
+            vec![None, Some("B"), Some("A"), None, Some("C"), Some("A")],
+            Some(SortOptions {
+                assume_sorted_dictionaries: true,
+                ..Default::default()
+            }),
+            None,
+            vec![None, None, Some("B"), Some("A"), Some("A"), Some("C")],
+        );
+
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![None, Some("B"), Some("A"), None, Some("C"), Some("A")],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+                assume_sorted_dictionaries: true,
+            }),
+            None,
+            vec![Some("C"), Some("A"), Some("A"), Some("B"), None, None],
+        );
+
+        test_sort_string_dict_arrays::<Int32Type>(
+            vec![None, Some("B"), Some("A"), None, Some("C"), Some("A")],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+                assume_sorted_dictionaries: true,
+            }),
+            None,
+            vec![None, None, Some("B"), Some("A"), Some("A"), Some("C")],
+        );
+
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![None, Some("B"), Some("A"), None, Some("C"), Some("A")],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+                assume_sorted_dictionaries: true,
+            }),
+            None,
+            vec![None, None, Some("C"), Some("A"), Some("A"), Some("B")],
+        );
+
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![None, Some("B"), Some("A"), None, Some("C"), Some("A")],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+                assume_sorted_dictionaries: true,
+            }),
+            Some(3),
+            vec![None, None, Some("C")],
+        );
+
+        // valid values less than limit with extra nulls
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![Some("B"), None, None, Some("A")],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+                assume_sorted_dictionaries: true,
+            }),
+            Some(3),
+            vec![Some("B"), Some("A"), None],
+        );
+
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![Some("B"), None, None, Some("A")],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+                assume_sorted_dictionaries: true,
+            }),
+            Some(3),
+            vec![None, None, Some("B")],
+        );
+
+        // more nulls than limit
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![Some("A"), None, None, None],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+                assume_sorted_dictionaries: true,
+            }),
+            Some(2),
+            vec![None, None],
+        );
+
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![Some("A"), None, None, None],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+                assume_sorted_dictionaries: true,
+            }),
+            Some(2),
+            vec![Some("A"), None],
         );
     }
 
@@ -2375,6 +2616,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2397,6 +2639,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2420,6 +2663,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2443,6 +2687,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2466,6 +2711,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2489,6 +2735,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![Some(vec![Some(1), Some(0)]), Some(vec![Some(1), Some(1)])],
@@ -2501,6 +2748,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![Some(vec![Some(1)]), Some(vec![Some(2)]), None],
@@ -2512,6 +2760,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(3),
             vec![None, None, Some(vec![Some(1)])],
@@ -2524,6 +2773,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![None, None],
@@ -2535,6 +2785,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             Some(2),
             vec![Some(vec![Some(1)]), None],
@@ -2555,6 +2806,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2580,6 +2832,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2605,6 +2858,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2631,6 +2885,7 @@ mod tests {
             Some(SortOptions {
                 descending: true,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2657,6 +2912,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2683,6 +2939,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(4),
             vec![None, None, Some(vec![0, 0, 0]), Some(vec![0, 0, 1])],
@@ -2702,6 +2959,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: false,
+                assume_sorted_dictionaries: false,
             }),
             None,
             vec![
@@ -2728,6 +2986,7 @@ mod tests {
             Some(SortOptions {
                 descending: false,
                 nulls_first: true,
+                assume_sorted_dictionaries: false,
             }),
             Some(4),
             vec![
@@ -2851,6 +3110,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: true,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
             SortColumn {
@@ -2863,6 +3123,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: true,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
         ];
@@ -2894,6 +3155,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: true,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
             SortColumn {
@@ -2906,6 +3168,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: true,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
         ];
@@ -2937,6 +3200,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: true,
                     nulls_first: false,
+                    assume_sorted_dictionaries: false,
                 }),
             },
             SortColumn {
@@ -2949,6 +3213,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: true,
                     nulls_first: false,
+                    assume_sorted_dictionaries: false,
                 }),
             },
         ];
@@ -2981,6 +3246,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: false,
                     nulls_first: false,
+                    assume_sorted_dictionaries: false,
                 }),
             },
             SortColumn {
@@ -2994,6 +3260,7 @@ mod tests {
                 options: Some(SortOptions {
                     descending: true,
                     nulls_first: true,
+                    assume_sorted_dictionaries: false,
                 }),
             },
         ];
