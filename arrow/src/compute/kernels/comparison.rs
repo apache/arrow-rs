@@ -921,23 +921,22 @@ where
     let mut left_chunks = left.values().chunks_exact(lanes);
     let mut right_chunks = right.values().chunks_exact(lanes);
 
+    // safety: result is newly created above, always written as a T below
+    let result_chunks = unsafe { result.typed_data_mut() };
     let result_remainder = left_chunks
         .borrow_mut()
         .zip(right_chunks.borrow_mut())
-        .fold(
-            result.typed_data_mut(),
-            |result_slice, (left_slice, right_slice)| {
-                let simd_left = T::load(left_slice);
-                let simd_right = T::load(right_slice);
-                let simd_result = simd_op(simd_left, simd_right);
+        .fold(result_chunks, |result_slice, (left_slice, right_slice)| {
+            let simd_left = T::load(left_slice);
+            let simd_right = T::load(right_slice);
+            let simd_result = simd_op(simd_left, simd_right);
 
-                let bitmask = T::mask_to_u64(&simd_result);
-                let bytes = bitmask.to_le_bytes();
-                result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
+            let bitmask = T::mask_to_u64(&simd_result);
+            let bytes = bitmask.to_le_bytes();
+            result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
 
-                &mut result_slice[lanes / 8..]
-            },
-        );
+            &mut result_slice[lanes / 8..]
+        });
 
     let left_remainder = left_chunks.remainder();
     let right_remainder = right_chunks.remainder();
@@ -1005,19 +1004,21 @@ where
     let mut left_chunks = left.values().chunks_exact(lanes);
     let simd_right = T::init(right);
 
-    let result_remainder = left_chunks.borrow_mut().fold(
-        result.typed_data_mut(),
-        |result_slice, left_slice| {
-            let simd_left = T::load(left_slice);
-            let simd_result = simd_op(simd_left, simd_right);
+    // safety: result is newly created above, always written as a T below
+    let result_chunks = unsafe { result.typed_data_mut() };
+    let result_remainder =
+        left_chunks
+            .borrow_mut()
+            .fold(result_chunks, |result_slice, left_slice| {
+                let simd_left = T::load(left_slice);
+                let simd_result = simd_op(simd_left, simd_right);
 
-            let bitmask = T::mask_to_u64(&simd_result);
-            let bytes = bitmask.to_le_bytes();
-            result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
+                let bitmask = T::mask_to_u64(&simd_result);
+                let bytes = bitmask.to_le_bytes();
+                result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
 
-            &mut result_slice[lanes / 8..]
-        },
-    );
+                &mut result_slice[lanes / 8..]
+            });
 
     let left_remainder = left_chunks.remainder();
 
