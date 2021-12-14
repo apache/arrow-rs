@@ -70,18 +70,27 @@ impl<'a> LexicographicalPartitionIterator<'a> {
     }
 }
 
-/// Exponential search is to remedy for the case when array size and cardinality are both large
+/// Returns the next partition point of the range `start..end` according to the given comparator.
+/// The return value is the index of the first element of the second partition,
+/// and is guaranteed to be between `start..=end` (inclusive).
+///
+/// The values corresponding to those indices are assumed to be partitioned according to the given comparator.
+///
+/// Exponential search is to remedy for the case when array size and cardinality are both large.
+/// In these cases the partition point would be near the beginning of the range and
+/// plain binary search would be doing some unnecessary iterations on each call.
+///
 /// see <https://en.wikipedia.org/wiki/Exponential_search>
 #[inline]
-fn exponential_search(
+fn exponential_search_next_partition_point(
     start: usize,
     end: usize,
-    target: &usize,
     comparator: &LexicographicalComparator<'_>,
 ) -> usize {
+    let target = start;
     let mut bound = 1;
     while bound + start < end
-        && comparator.compare(&(bound + start), target) != Ordering::Greater
+        && comparator.compare(&(bound + start), &target) != Ordering::Greater
     {
         bound *= 2;
     }
@@ -92,12 +101,17 @@ fn exponential_search(
     // note here we have right = min(end, start + bound + 1) because (start + bound) might
     // actually be considered and must be included.
     partition_point(start + bound / 2, end.min(start + bound + 1), |idx| {
-        comparator.compare(&idx, target) != Ordering::Greater
+        comparator.compare(&idx, &target) != Ordering::Greater
     })
 }
 
-/// Returns the index of the partition point according to the given predicate
-/// (the index of the first element of the second partition).
+/// Returns the partition point of the range `start..end` according to the given predicate.
+/// The return value is the index of the first element of the second partition,
+/// and is guaranteed to be between `start..=end` (inclusive).
+///
+/// The algorithm is similar to a binary search.
+///
+/// The values corresponding to those indices are assumed to be partitioned according to the given predicate.
 ///
 /// See [`std::slice::partition_point`]
 #[inline]
@@ -130,14 +144,9 @@ impl<'a> Iterator for LexicographicalPartitionIterator<'a> {
             // in the range [0..previous_partition_point] all values are <= the value at [previous_partition_point]
             // so in order to save time we can do binary search on the range [previous_partition_point..num_rows]
             // and find the index where any value is greater than the value at [previous_partition_point]
-            //
-            // be careful that idx is of type &usize which points to the actual value within value_indices, which itself
-            // contains usize (0..row_count), providing access to lexicographical_comparator as pointers into the
-            // original columnar data.
-            self.partition_point = exponential_search(
+            self.partition_point = exponential_search_next_partition_point(
                 self.partition_point,
                 self.num_rows,
-                &self.partition_point,
                 &self.comparator,
             );
             let start = self.previous_partition_point;
