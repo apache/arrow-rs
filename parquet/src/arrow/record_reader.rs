@@ -106,6 +106,8 @@ pub(crate) mod private {
         type Writer = [T];
 
         fn split(&mut self, len: usize) -> Self::Output {
+            assert!(len <= self.len);
+
             let num_bytes = len * std::mem::size_of::<T>();
             let remaining_bytes = self.buffer.len() - num_bytes;
             // TODO: Optimize to reduce the copy
@@ -119,6 +121,7 @@ pub(crate) mod private {
                 .copy_from_slice(&self.buffer.as_slice()[num_bytes..]);
 
             self.buffer.resize(num_bytes, 0);
+            self.len -= len;
 
             replace(&mut self.buffer, remaining).into()
         }
