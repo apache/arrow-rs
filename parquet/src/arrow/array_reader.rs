@@ -102,7 +102,8 @@ pub trait ArrayReader {
 
 /// Uses `record_reader` to read up to `batch_size` records from `pages`
 ///
-/// Returns the number of records read
+/// Returns the number of records read, which can be less than batch_size if 
+/// pages is exhausted. 
 fn read_records<T: DataType>(
     record_reader: &mut RecordReader<T>,
     pages: &mut dyn PageIterator,
