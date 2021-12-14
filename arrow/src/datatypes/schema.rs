@@ -87,15 +87,21 @@ impl Schema {
         Self { fields, metadata }
     }
 
-
     /// Returns a new schema with only the specified columns in the new schema
     /// This carries metadata from the parent schema over as well
-    pub fn project(&self, indices: impl IntoIterator<Item=usize>) -> Result<Schema> {
-        let mut new_fields = vec![];
-        for i in indices {
-            let f = self.fields[i].clone();
-            new_fields.push(f);
-        }
+    pub fn project(&self, indices: impl IntoIterator<Item = usize>) -> Result<Schema> {
+        let new_fields = indices
+            .into_iter()
+            .map(|i: usize| {
+                self.fields.get(i).cloned().ok_or_else(|| {
+                    ArrowError::SchemaError(format!(
+                        "project index {} out of bounds, max field {}",
+                        i,
+                        self.fields().len()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self::new_with_metadata(new_fields, self.metadata.clone()))
     }
 
@@ -127,7 +133,7 @@ impl Schema {
     ///     ]),
     /// );
     /// ```
-    pub fn try_merge(schemas: impl IntoIterator<Item=Self>) -> Result<Self> {
+    pub fn try_merge(schemas: impl IntoIterator<Item = Self>) -> Result<Self> {
         schemas
             .into_iter()
             .try_fold(Self::empty(), |mut merged, schema| {
@@ -383,15 +389,18 @@ mod tests {
     }
 
     #[test]
-    fn test_project() {
+    fn test_projection() {
         let mut metadata = HashMap::new();
         metadata.insert("meta".to_string(), "data".to_string());
 
-        let schema = Schema::new_with_metadata(vec![
-            Field::new("name", DataType::Utf8, false),
-            Field::new("address", DataType::Utf8, false),
-            Field::new("priority", DataType::UInt8, false),
-        ], metadata);
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("address", DataType::Utf8, false),
+                Field::new("priority", DataType::UInt8, false),
+            ],
+            metadata,
+        );
 
         let projected: Schema = schema.project(vec![0, 2]).unwrap();
 
@@ -399,5 +408,27 @@ mod tests {
         assert_eq!(projected.fields()[0].name(), "name");
         assert_eq!(projected.fields()[1].name(), "priority");
         assert_eq!(projected.metadata.get("meta").unwrap(), "data")
+    }
+
+    #[test]
+    fn test_oob_projection() {
+        let mut metadata = HashMap::new();
+        metadata.insert("meta".to_string(), "data".to_string());
+
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("address", DataType::Utf8, false),
+                Field::new("priority", DataType::UInt8, false),
+            ],
+            metadata,
+        );
+
+        let projected: Result<Schema> = schema.project(vec![0, 3]);
+
+        assert!(projected.is_err());
+        if let Err(e) = projected {
+            assert_eq!(e.to_string(), "Schema error: project index 3 out of bounds, max field 3".to_string())
+        }
     }
 }

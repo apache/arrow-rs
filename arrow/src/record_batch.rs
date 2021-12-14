@@ -175,10 +175,26 @@ impl RecordBatch {
         self.schema.clone()
     }
 
-
     /// Projects the schema onto the specified columns
-    pub fn project(&self, indices: impl IntoIterator<Item=usize>) -> Result<Schema> {
-        self.schema.project(indices)
+    pub fn project(
+        &self,
+        indices: impl IntoIterator<Item = usize> + Clone,
+    ) -> Result<RecordBatch> {
+        let projected_schema = self.schema.project(indices.clone())?;
+        let batch_fields = indices
+            .into_iter()
+            .map(|f: usize| {
+                self.columns.get(f).cloned().ok_or_else(|| {
+                    ArrowError::SchemaError(format!(
+                        "project index {} out of bounds, max field {}",
+                        f,
+                        self.columns.len()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        RecordBatch::try_new(SchemaRef::new(projected_schema), batch_fields)
     }
 
     /// Returns the number of columns in the record batch.
