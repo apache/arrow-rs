@@ -528,7 +528,7 @@ where
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            T::DATA_TYPE,
+            values.data_type().clone(),
             indices.len(),
             None,
             nulls,
