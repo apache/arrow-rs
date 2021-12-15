@@ -41,10 +41,8 @@ mod definition_levels;
 const MIN_BATCH_SIZE: usize = 1024;
 
 /// A `RecordReader` is a stateful column reader that delimits semantic records.
-pub type RecordReader<T> = GenericRecordReader<
-    buffer::TypedBuffer<<T as DataType>::T>,
-    ColumnValueDecoderImpl<T>,
->;
+pub type RecordReader<T> =
+    GenericRecordReader<TypedBuffer<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
 
 #[doc(hidden)]
 pub struct GenericRecordReader<V, CV> {
@@ -67,15 +65,17 @@ pub struct GenericRecordReader<V, CV> {
 
 impl<V, CV> GenericRecordReader<V, CV>
 where
-    V: RecordBuffer,
+    V: RecordBuffer + Default,
     CV: ColumnValueDecoder<Writer = V::Writer>,
 {
     pub fn new(desc: ColumnDescPtr) -> Self {
-        let def_levels = (desc.max_def_level() > 0).then(|| RecordBuffer::create(&desc));
-        let rep_levels = (desc.max_rep_level() > 0).then(|| RecordBuffer::create(&desc));
+        let def_levels =
+            (desc.max_def_level() > 0).then(|| DefinitionLevelBuffer::new(&desc));
+
+        let rep_levels = (desc.max_rep_level() > 0).then(TypedBuffer::new);
 
         Self {
-            records: V::create(&desc),
+            records: Default::default(),
             def_levels,
             rep_levels,
             column_reader: None,

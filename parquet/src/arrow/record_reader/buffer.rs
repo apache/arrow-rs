@@ -3,15 +3,10 @@ use std::ops::Range;
 
 use arrow::buffer::{Buffer, MutableBuffer};
 
-use crate::schema::types::ColumnDescPtr;
-
 pub trait RecordBuffer: Sized {
     type Output: Sized;
 
     type Writer: ?Sized;
-
-    /// Create buffer
-    fn create(desc: &ColumnDescPtr) -> Self;
 
     /// Split out `len` items
     fn split(&mut self, len: usize) -> Self::Output;
@@ -33,7 +28,21 @@ pub struct TypedBuffer<T> {
     _phantom: PhantomData<*mut T>,
 }
 
+impl<T> Default for TypedBuffer<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> TypedBuffer<T> {
+    pub fn new() -> Self {
+        Self {
+            buffer: MutableBuffer::new(0),
+            len: 0,
+            _phantom: Default::default(),
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
@@ -62,14 +71,6 @@ impl<T> RecordBuffer for TypedBuffer<T> {
     type Output = Buffer;
 
     type Writer = [T];
-
-    fn create(_desc: &ColumnDescPtr) -> Self {
-        Self {
-            buffer: MutableBuffer::new(0),
-            len: 0,
-            _phantom: Default::default(),
-        }
-    }
 
     fn split(&mut self, len: usize) -> Self::Output {
         assert!(len <= self.len);

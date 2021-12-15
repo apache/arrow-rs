@@ -3,9 +3,9 @@ use std::ops::Range;
 
 use crate::basic::Encoding;
 use crate::data_type::DataType;
-use crate::decoding::{Decoder, DictDecoder, get_decoder, PlainDecoder};
+use crate::decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder};
 use crate::encodings::rle::RleDecoder;
-use crate::errors::{Result, ParquetError};
+use crate::errors::{ParquetError, Result};
 use crate::memory::ByteBufferPtr;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::BitReader;

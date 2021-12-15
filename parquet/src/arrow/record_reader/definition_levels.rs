@@ -20,14 +20,6 @@ impl RecordBuffer for DefinitionLevelBuffer {
     type Output = Buffer;
     type Writer = [i16];
 
-    fn create(desc: &ColumnDescPtr) -> Self {
-        Self {
-            buffer: RecordBuffer::create(desc),
-            builder: BooleanBufferBuilder::new(0),
-            max_level: desc.max_def_level(),
-        }
-    }
-
     fn split(&mut self, len: usize) -> Self::Output {
         self.buffer.split(len)
     }
@@ -50,6 +42,14 @@ impl RecordBuffer for DefinitionLevelBuffer {
 }
 
 impl DefinitionLevelBuffer {
+    pub fn new(desc: &ColumnDescPtr) -> Self {
+        Self {
+            buffer: TypedBuffer::new(),
+            builder: BooleanBufferBuilder::new(0),
+            max_level: desc.max_def_level(),
+        }
+    }
+
     /// Split `len` levels out of `self`
     pub fn split_bitmask(&mut self, len: usize) -> Bitmap {
         let old_len = self.builder.len();
