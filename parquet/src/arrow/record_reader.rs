@@ -16,205 +16,45 @@
 // under the License.
 
 use std::cmp::{max, min};
-use std::marker::PhantomData;
-use std::mem::replace;
-use std::ops::Range;
 
-use crate::arrow::record_reader::private::{
-    DefinitionLevels, RecordBuffer, RepetitionLevels,
+use arrow::bitmap::Bitmap;
+use arrow::buffer::Buffer;
+
+use crate::arrow::record_reader::{
+    buffer::{RecordBuffer, TypedBuffer},
+    definition_levels::{DefinitionLevelBuffer, DefinitionLevelDecoder},
 };
 use crate::column::{
     page::PageReader,
     reader::{
-        private::{
-            ColumnLevelDecoder, ColumnLevelDecoderImpl, ColumnValueDecoder,
-            ColumnValueDecoderImpl,
-        },
+        private::{ColumnLevelDecoderImpl, ColumnValueDecoder, ColumnValueDecoderImpl},
         GenericColumnReader,
     },
 };
 use crate::data_type::DataType;
 use crate::errors::Result;
 use crate::schema::types::ColumnDescPtr;
-use arrow::array::BooleanBufferBuilder;
-use arrow::bitmap::Bitmap;
-use arrow::buffer::{Buffer, MutableBuffer};
 
-pub(crate) mod private {
-    use super::*;
-
-    pub trait RecordBuffer: Sized + Default {
-        type Output: Sized;
-
-        type Writer: ?Sized;
-
-        /// Split out `len` items
-        fn split(&mut self, len: usize) -> Self::Output;
-
-        /// Get a writer with `batch_size` capacity
-        fn writer(&mut self, batch_size: usize) -> &mut Self::Writer;
-
-        /// Record a write of `len` items
-        fn commit(&mut self, len: usize);
-    }
-
-    pub trait RepetitionLevels: RecordBuffer {
-        /// Inspects the buffered repetition levels in `range` and returns the number of
-        /// "complete" records along with the corresponding number of values
-        ///
-        /// A "complete" record is one where the buffer contains a subsequent repetition level of 0
-        fn count_records(
-            &self,
-            range: Range<usize>,
-            max_records: usize,
-        ) -> (usize, usize);
-    }
-
-    pub trait DefinitionLevels: RecordBuffer {
-        /// Update the provided validity mask based on contained levels
-        fn update_valid_mask(
-            &self,
-            valid: &mut BooleanBufferBuilder,
-            range: Range<usize>,
-            max_level: i16,
-        );
-    }
-
-    pub struct TypedBuffer<T> {
-        buffer: MutableBuffer,
-
-        /// Length in elements of size T
-        len: usize,
-
-        /// Placeholder to allow `T` as an invariant generic parameter
-        _phantom: PhantomData<*mut T>,
-    }
-
-    impl<T> Default for TypedBuffer<T> {
-        fn default() -> Self {
-            Self {
-                buffer: MutableBuffer::new(0),
-                len: 0,
-                _phantom: Default::default(),
-            }
-        }
-    }
-
-    impl<T> RecordBuffer for TypedBuffer<T> {
-        type Output = Buffer;
-
-        type Writer = [T];
-
-        fn split(&mut self, len: usize) -> Self::Output {
-            assert!(len <= self.len);
-
-            let num_bytes = len * std::mem::size_of::<T>();
-            let remaining_bytes = self.buffer.len() - num_bytes;
-            // TODO: Optimize to reduce the copy
-            // create an empty buffer, as it will be resized below
-            let mut remaining = MutableBuffer::new(0);
-            remaining.resize(remaining_bytes, 0);
-
-            let new_records = remaining.as_slice_mut();
-
-            new_records[0..remaining_bytes]
-                .copy_from_slice(&self.buffer.as_slice()[num_bytes..]);
-
-            self.buffer.resize(num_bytes, 0);
-            self.len -= len;
-
-            replace(&mut self.buffer, remaining).into()
-        }
-
-        fn writer(&mut self, batch_size: usize) -> &mut Self::Writer {
-            self.buffer
-                .resize((self.len + batch_size) * std::mem::size_of::<T>(), 0);
-
-            let (prefix, values, suffix) =
-                unsafe { self.buffer.as_slice_mut().align_to_mut::<T>() };
-            assert!(prefix.is_empty() && suffix.is_empty());
-
-            &mut values[self.len..self.len + batch_size]
-        }
-
-        fn commit(&mut self, len: usize) {
-            self.len = len;
-
-            let new_bytes = self.len * std::mem::size_of::<T>();
-            assert!(new_bytes <= self.buffer.len());
-            self.buffer.resize(new_bytes, 0);
-        }
-    }
-
-    impl RepetitionLevels for TypedBuffer<i16> {
-        fn count_records(
-            &self,
-            range: Range<usize>,
-            max_records: usize,
-        ) -> (usize, usize) {
-            let (prefix, buf, suffix) =
-                unsafe { self.buffer.as_slice().align_to::<i16>() };
-            assert!(prefix.is_empty() && suffix.is_empty());
-
-            let start = range.start;
-            let mut records_read = 0;
-            let mut end_of_last_record = start;
-
-            for current in range {
-                if buf[current] == 0 && current != start {
-                    records_read += 1;
-                    end_of_last_record = current;
-
-                    if records_read == max_records {
-                        break;
-                    }
-                }
-            }
-
-            (records_read, end_of_last_record - start)
-        }
-    }
-
-    impl DefinitionLevels for TypedBuffer<i16> {
-        fn update_valid_mask(
-            &self,
-            null_mask: &mut BooleanBufferBuilder,
-            range: Range<usize>,
-            max_level: i16,
-        ) {
-            let (prefix, buf, suffix) =
-                unsafe { self.buffer.as_slice().align_to::<i16>() };
-            assert!(prefix.is_empty() && suffix.is_empty());
-
-            null_mask.reserve(range.end - range.start);
-            for i in &buf[range] {
-                null_mask.append(*i == max_level)
-            }
-        }
-    }
-}
+pub(crate) mod buffer;
+mod definition_levels;
 
 const MIN_BATCH_SIZE: usize = 1024;
 
 /// A `RecordReader` is a stateful column reader that delimits semantic records.
 pub type RecordReader<T> = GenericRecordReader<
-    private::TypedBuffer<i16>,
-    private::TypedBuffer<i16>,
-    private::TypedBuffer<<T as DataType>::T>,
-    ColumnLevelDecoderImpl,
-    ColumnLevelDecoderImpl,
+    buffer::TypedBuffer<<T as DataType>::T>,
     ColumnValueDecoderImpl<T>,
 >;
 
 #[doc(hidden)]
-pub struct GenericRecordReader<R, D, V, CR, CD, CV> {
+pub struct GenericRecordReader<V, CV> {
     column_desc: ColumnDescPtr,
 
     records: V,
-    def_levels: Option<D>,
-    rep_levels: Option<R>,
-    null_bitmap: Option<BooleanBufferBuilder>,
-    column_reader: Option<GenericColumnReader<CR, CD, CV>>,
+    def_levels: Option<DefinitionLevelBuffer>,
+    rep_levels: Option<TypedBuffer<i16>>,
+    column_reader:
+        Option<GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelDecoder, CV>>,
 
     /// Number of records accumulated in records
     num_records: usize,
@@ -225,31 +65,21 @@ pub struct GenericRecordReader<R, D, V, CR, CD, CV> {
     values_written: usize,
 }
 
-impl<R, D, V, CR, CD, CV> GenericRecordReader<R, D, V, CR, CD, CV>
+impl<V, CV> GenericRecordReader<V, CV>
 where
-    R: RepetitionLevels,
-    D: DefinitionLevels,
     V: RecordBuffer,
-    CR: ColumnLevelDecoder<Writer = R::Writer>,
-    CD: ColumnLevelDecoder<Writer = D::Writer>,
     CV: ColumnValueDecoder<Writer = V::Writer>,
 {
-    pub fn new(column_schema: ColumnDescPtr) -> Self {
-        let (def_levels, null_map) = if column_schema.max_def_level() > 0 {
-            (Some(Default::default()), Some(BooleanBufferBuilder::new(0)))
-        } else {
-            (None, None)
-        };
-
-        let rep_levels = (column_schema.max_rep_level() > 0).then(Default::default);
+    pub fn new(desc: ColumnDescPtr) -> Self {
+        let def_levels = (desc.max_def_level() > 0).then(|| RecordBuffer::create(&desc));
+        let rep_levels = (desc.max_rep_level() > 0).then(|| RecordBuffer::create(&desc));
 
         Self {
-            records: Default::default(),
+            records: V::create(&desc),
             def_levels,
             rep_levels,
-            null_bitmap: null_map,
             column_reader: None,
-            column_desc: column_schema,
+            column_desc: desc,
             num_records: 0,
             num_values: 0,
             values_written: 0,
@@ -334,7 +164,7 @@ where
     /// The implementation has side effects. It will create a new buffer to hold those
     /// definition level values that have already been read into memory but not counted
     /// as record values, e.g. those from `self.num_values` to `self.values_written`.
-    pub fn consume_def_levels(&mut self) -> Result<Option<D::Output>> {
+    pub fn consume_def_levels(&mut self) -> Result<Option<Buffer>> {
         Ok(match self.def_levels.as_mut() {
             Some(x) => Some(x.split(self.num_values)),
             None => None,
@@ -343,7 +173,7 @@ where
 
     /// Return repetition level data.
     /// The side effect is similar to `consume_def_levels`.
-    pub fn consume_rep_levels(&mut self) -> Result<Option<R::Output>> {
+    pub fn consume_rep_levels(&mut self) -> Result<Option<Buffer>> {
         Ok(match self.rep_levels.as_mut() {
             Some(x) => Some(x.split(self.num_values)),
             None => None,
@@ -359,32 +189,7 @@ where
     /// Returns currently stored null bitmap data.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_bitmap_buffer(&mut self) -> Result<Option<Buffer>> {
-        // TODO: Optimize to reduce the copy
-        if self.column_desc.max_def_level() > 0 {
-            assert!(self.null_bitmap.is_some());
-            let num_left_values = self.values_written - self.num_values;
-            let new_bitmap_builder = Some(BooleanBufferBuilder::new(max(
-                MIN_BATCH_SIZE,
-                num_left_values,
-            )));
-
-            let old_bitmap = replace(&mut self.null_bitmap, new_bitmap_builder)
-                .map(|mut builder| builder.finish())
-                .unwrap();
-
-            let old_bitmap = Bitmap::from(old_bitmap);
-
-            for i in self.num_values..self.values_written {
-                self.null_bitmap
-                    .as_mut()
-                    .unwrap()
-                    .append(old_bitmap.is_set(i));
-            }
-
-            Ok(Some(old_bitmap.into_buffer()))
-        } else {
-            Ok(None)
-        }
+        Ok(self.consume_bitmap()?.map(|b| b.into_buffer()))
     }
 
     /// Reset state of record reader.
@@ -398,14 +203,14 @@ where
 
     /// Returns bitmap data.
     pub fn consume_bitmap(&mut self) -> Result<Option<Bitmap>> {
-        self.consume_bitmap_buffer()
-            .map(|buffer| buffer.map(Bitmap::from))
+        Ok(self
+            .def_levels
+            .as_mut()
+            .map(|levels| levels.split_bitmask(self.num_values)))
     }
 
     /// Try to read one batch of data.
     fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
-        let values_written = self.values_written;
-
         let rep_levels = self
             .rep_levels
             .as_mut()
@@ -423,19 +228,6 @@ where
             .as_mut()
             .unwrap()
             .read_batch(batch_size, def_levels, rep_levels, values)?;
-
-        if let Some(null_bitmap) = self.null_bitmap.as_mut() {
-            let def_levels = self
-                .def_levels
-                .as_mut()
-                .expect("definition levels should exist");
-
-            def_levels.update_valid_mask(
-                null_bitmap,
-                values_written..values_written + levels_read,
-                self.column_desc.max_def_level(),
-            )
-        }
 
         let values_read = max(levels_read, values_read);
         self.set_values_written(self.values_written + values_read)?;
@@ -479,7 +271,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::RecordReader;
+    use std::sync::Arc;
+
+    use arrow::array::{BooleanBufferBuilder, Int16BufferBuilder, Int32BufferBuilder};
+    use arrow::bitmap::Bitmap;
+
     use crate::basic::Encoding;
     use crate::column::page::Page;
     use crate::column::page::PageReader;
@@ -488,9 +284,8 @@ mod tests {
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
     use crate::util::test_common::page_util::{DataPageBuilder, DataPageBuilderImpl};
-    use arrow::array::{BooleanBufferBuilder, Int16BufferBuilder, Int32BufferBuilder};
-    use arrow::bitmap::Bitmap;
-    use std::sync::Arc;
+
+    use super::RecordReader;
 
     struct TestPageReader {
         pages: Box<dyn Iterator<Item = Page>>,
