@@ -241,7 +241,23 @@ where
     fn count_records(&self, records_to_read: usize) -> (usize, usize) {
         match self.rep_levels.as_ref() {
             Some(buf) => {
-                buf.count_records(self.num_values..self.values_written, records_to_read)
+                let buf = buf.as_slice();
+
+                let mut records_read = 0;
+                let mut end_of_last_record = self.num_values;
+
+                for current in self.num_values..self.values_written {
+                    if buf[current] == 0 && current != self.num_values {
+                        records_read += 1;
+                        end_of_last_record = current;
+
+                        if records_read == records_to_read {
+                            break;
+                        }
+                    }
+                }
+
+                (records_read, end_of_last_record - self.num_values)
             }
             None => {
                 let records_read =

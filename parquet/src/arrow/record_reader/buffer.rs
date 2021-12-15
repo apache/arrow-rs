@@ -1,5 +1,4 @@
 use std::marker::PhantomData;
-use std::ops::Range;
 
 use arrow::buffer::{Buffer, MutableBuffer};
 
@@ -107,36 +106,5 @@ impl<T> RecordBuffer for TypedBuffer<T> {
         let new_bytes = self.len * std::mem::size_of::<T>();
         assert!(new_bytes <= self.buffer.len());
         self.buffer.resize(new_bytes, 0);
-    }
-}
-
-impl TypedBuffer<i16> {
-    /// Inspects the buffered repetition levels in `range` and returns the number of
-    /// "complete" records along with the corresponding number of values
-    ///
-    /// A "complete" record is one where the buffer contains a subsequent repetition level of 0
-    pub fn count_records(
-        &self,
-        range: Range<usize>,
-        max_records: usize,
-    ) -> (usize, usize) {
-        let buf = self.as_slice();
-
-        let start = range.start;
-        let mut records_read = 0;
-        let mut end_of_last_record = start;
-
-        for current in range {
-            if buf[current] == 0 && current != start {
-                records_read += 1;
-                end_of_last_record = current;
-
-                if records_read == max_records {
-                    break;
-                }
-            }
-        }
-
-        (records_read, end_of_last_record - start)
     }
 }
