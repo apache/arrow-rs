@@ -273,15 +273,20 @@ impl MutableBuffer {
     }
 
     /// View this buffer asa slice of a specific type.
+    ///
     /// # Safety
-    /// This function must only be used when this buffer was extended with items of type `T`.
-    /// Failure to do so results in undefined behavior.
-    pub fn typed_data_mut<T: ArrowNativeType>(&mut self) -> &mut [T] {
-        unsafe {
-            let (prefix, offsets, suffix) = self.as_slice_mut().align_to_mut::<T>();
-            assert!(prefix.is_empty() && suffix.is_empty());
-            offsets
-        }
+    ///
+    /// This function must only be used with buffers which are treated
+    /// as type `T` (e.g.  extended with items of type `T`).
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the underlying buffer is not aligned
+    /// correctly for type `T`.
+    pub unsafe fn typed_data_mut<T: ArrowNativeType>(&mut self) -> &mut [T] {
+        let (prefix, offsets, suffix) = self.as_slice_mut().align_to_mut::<T>();
+        assert!(prefix.is_empty() && suffix.is_empty());
+        offsets
     }
 
     /// Extends this buffer from a slice of items that can be represented in bytes, increasing its capacity if needed.
