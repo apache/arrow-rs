@@ -27,7 +27,7 @@ use crate::arrow::record_reader::{
 use crate::column::{
     page::PageReader,
     reader::{
-        private::{ColumnLevelDecoderImpl, ColumnValueDecoder, ColumnValueDecoderImpl},
+        decoder::{ColumnLevelDecoderImpl, ColumnValueDecoder, ColumnValueDecoderImpl},
         GenericColumnReader,
     },
 };

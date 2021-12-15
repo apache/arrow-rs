@@ -2,7 +2,7 @@ use arrow::array::BooleanBufferBuilder;
 use arrow::bitmap::Bitmap;
 use arrow::buffer::Buffer;
 
-use crate::column::reader::private::ColumnLevelDecoderImpl;
+use crate::column::reader::decoder::ColumnLevelDecoderImpl;
 use crate::schema::types::ColumnDescPtr;
 
 use super::{
