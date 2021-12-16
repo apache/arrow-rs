@@ -632,7 +632,8 @@ where
     let bytes_offset = (data_len + 1) * std::mem::size_of::<OffsetSize>();
     let mut offsets_buffer = MutableBuffer::from_len_zeroed(bytes_offset);
 
-    let offsets = offsets_buffer.typed_data_mut();
+    // Safety: the buffer is always treated as as a type of `OffsetSize` in the code below
+    let offsets = unsafe { offsets_buffer.typed_data_mut() };
     let mut values = MutableBuffer::new(0);
     let mut length_so_far = OffsetSize::zero();
     offsets[0] = length_so_far;
