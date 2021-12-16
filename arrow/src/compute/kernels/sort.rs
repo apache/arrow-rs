@@ -584,7 +584,7 @@ where
 {
     // create tuples that are used for sorting
     let valids = {
-        let dict_array = as_dictionary_array::<T>(&array);
+        let dict_array = as_dictionary_array::<T>(array);
         let keys = dict_array.keys();
         value_indices
             .into_iter()

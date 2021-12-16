@@ -105,6 +105,7 @@ where
 fn compare_dict_key<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
 where
     T: ArrowDictionaryKeyType,
+    T::Native: Ord,
 {
     let left = left.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
     let right = right.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
@@ -113,9 +114,9 @@ where
     let right_keys: PrimitiveArray<T> = PrimitiveArray::from(right.keys().data().clone());
 
     Box::new(move |i: usize, j: usize| {
-        let key_left = left_keys.value(i).to_usize().unwrap();
-        let key_right = right_keys.value(j).to_usize().unwrap();
-        key_left.cmp(&key_right)
+        let key_left = left_keys.value(i);
+        let key_right = right_keys.value(j);
+        <T::Native as Ord>::cmp(&key_left, &key_right)
     })
 }
 

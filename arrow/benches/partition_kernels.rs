@@ -22,12 +22,16 @@ use std::sync::Arc;
 extern crate arrow;
 use arrow::compute::kernels::partition::lexicographical_partition_ranges;
 use arrow::compute::kernels::sort::{lexsort, SortColumn};
+use arrow::compute::{sort, SortOptions};
+use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType, Int32Type};
 use arrow::util::bench_util::*;
+use arrow::util::test_util::seedable_rng;
 use arrow::{
     array::*,
     datatypes::{ArrowPrimitiveType, Float64Type, UInt8Type},
 };
 use rand::distributions::{Distribution, Standard};
+use rand::Rng;
 use std::iter;
 
 fn create_array<T: ArrowPrimitiveType>(size: usize, with_nulls: bool) -> ArrayRef
@@ -39,6 +43,38 @@ where
     Arc::new(array)
 }
 
+fn create_sorted_dictionary_array<T: ArrowDictionaryKeyType>(
+    size: usize,
+    num_distinct_keys: usize,
+) -> ArrayRef
+where
+    Standard: Distribution<T::Native>,
+{
+    let mut rng = seedable_rng();
+
+    let key_array: ArrayRef =
+        Arc::new(PrimitiveArray::<T>::from_iter_values((0..size).map(|_| {
+            T::Native::from_usize(rng.gen_range(0..num_distinct_keys)).unwrap()
+        })));
+    let sorted_key_array = sort(&key_array, None).unwrap();
+    let values = StringArray::from_iter_values(
+        (0..num_distinct_keys).map(|i| format!("{:08}", i)),
+    );
+
+    let data = ArrayData::try_new(
+        DataType::Dictionary(Box::new(T::DATA_TYPE), Box::new(DataType::Utf8)),
+        size,
+        None,
+        sorted_key_array.data().null_buffer().cloned(),
+        0,
+        key_array.data().buffers().to_vec(),
+        vec![values.data().clone()],
+    )
+    .unwrap();
+
+    Arc::new(DictionaryArray::<T>::from(data))
+}
+
 fn bench_partition(sorted_columns: &[ArrayRef]) {
     let columns = sorted_columns
         .iter()
@@ -48,6 +84,10 @@ fn bench_partition(sorted_columns: &[ArrayRef]) {
         })
         .collect::<Vec<_>>();
 
+    bench_partition_with_options(&columns);
+}
+
+fn bench_partition_with_options(columns: &[SortColumn]) {
     criterion::black_box(
         lexicographical_partition_ranges(&columns)
             .unwrap()
@@ -139,6 +179,32 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function(
         "lexicographical_partition_ranges(low cardinality) 1024",
         |b| b.iter(|| bench_partition(&sorted_columns)),
+    );
+
+    let sorted_columns = create_sorted_dictionary_array::<Int32Type>(4096, 100);
+    let sorted_columns = &[SortColumn {
+        values: sorted_columns,
+        options: Some(SortOptions {
+            assume_sorted_dictionaries: false,
+            ..Default::default()
+        }),
+    }];
+    c.bench_function(
+        "lexicographical_partition_ranges(dictionary_values) 4096",
+        |b| b.iter(|| bench_partition_with_options(sorted_columns)),
+    );
+
+    let sorted_columns = create_sorted_dictionary_array::<Int32Type>(4096, 100);
+    let sorted_columns = &[SortColumn {
+        values: sorted_columns,
+        options: Some(SortOptions {
+            assume_sorted_dictionaries: true,
+            ..Default::default()
+        }),
+    }];
+    c.bench_function(
+        "lexicographical_partition_ranges(dictionary_keys) 4096",
+        |b| b.iter(|| bench_partition_with_options(sorted_columns)),
     );
 }
 
