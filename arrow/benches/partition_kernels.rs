@@ -181,7 +181,7 @@ fn add_benchmark(c: &mut Criterion) {
         |b| b.iter(|| bench_partition(&sorted_columns)),
     );
 
-    let sorted_columns = create_sorted_dictionary_array::<Int32Type>(4096, 100);
+    let sorted_columns = create_sorted_dictionary_array::<Int32Type>(4096, 40);
     let sorted_columns = &[SortColumn {
         values: sorted_columns,
         options: Some(SortOptions {
@@ -190,11 +190,24 @@ fn add_benchmark(c: &mut Criterion) {
         }),
     }];
     c.bench_function(
-        "lexicographical_partition_ranges(dictionary_values) 4096",
+        "lexicographical_partition_ranges(dictionary_values low cardinality) 4096",
         |b| b.iter(|| bench_partition_with_options(sorted_columns)),
     );
 
-    let sorted_columns = create_sorted_dictionary_array::<Int32Type>(4096, 100);
+    let sorted_columns = create_sorted_dictionary_array::<Int32Type>(4096, 1000);
+    let sorted_columns = &[SortColumn {
+        values: sorted_columns,
+        options: Some(SortOptions {
+            assume_sorted_dictionaries: false,
+            ..Default::default()
+        }),
+    }];
+    c.bench_function(
+        "lexicographical_partition_ranges(dictionary_values high cardinality) 4096",
+        |b| b.iter(|| bench_partition_with_options(sorted_columns)),
+    );
+
+    let sorted_columns = create_sorted_dictionary_array::<Int32Type>(4096, 40);
     let sorted_columns = &[SortColumn {
         values: sorted_columns,
         options: Some(SortOptions {
@@ -203,7 +216,20 @@ fn add_benchmark(c: &mut Criterion) {
         }),
     }];
     c.bench_function(
-        "lexicographical_partition_ranges(dictionary_keys) 4096",
+        "lexicographical_partition_ranges(dictionary_keys low cardinality) 4096",
+        |b| b.iter(|| bench_partition_with_options(sorted_columns)),
+    );
+
+    let sorted_columns = create_sorted_dictionary_array::<Int32Type>(4096, 1000);
+    let sorted_columns = &[SortColumn {
+        values: sorted_columns,
+        options: Some(SortOptions {
+            assume_sorted_dictionaries: true,
+            ..Default::default()
+        }),
+    }];
+    c.bench_function(
+        "lexicographical_partition_ranges(dictionary_keys high cardinality) 4096",
         |b| b.iter(|| bench_partition_with_options(sorted_columns)),
     );
 }
