@@ -15,6 +15,8 @@ pub trait LevelsWriter {
     fn capacity(&self) -> usize;
 
     fn get(&self, idx: usize) -> i16;
+
+    fn count_nulls(&self, range: Range<usize>, max_level: i16) -> usize;
 }
 
 impl LevelsWriter for [i16] {
@@ -24,6 +26,10 @@ impl LevelsWriter for [i16] {
 
     fn get(&self, idx: usize) -> i16 {
         self[idx]
+    }
+
+    fn count_nulls(&self, range: Range<usize>, max_level: i16) -> usize {
+        self[range].iter().filter(|i| **i != max_level).count()
     }
 }
 
@@ -73,6 +79,7 @@ pub trait ColumnValueDecoder {
         out: &mut Self::Writer,
         levels: Range<usize>,
         values_read: usize,
+        null_count: usize,
         is_valid: impl Fn(usize) -> bool,
     ) -> Result<usize>;
 }
@@ -167,6 +174,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         out: &mut Self::Writer,
         levels: Range<usize>,
         values_read: usize,
+        null_count: usize,
         is_valid: impl Fn(usize) -> bool,
     ) -> Result<usize> {
         let encoding = self
@@ -178,7 +186,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
             .get_mut(&encoding)
             .unwrap_or_else(|| panic!("decoder for encoding {} should be set", encoding));
 
-        let values_to_read = levels.clone().filter(|x| is_valid(*x)).count();
+        let values_to_read = levels.end - levels.start - null_count;
 
         match self.pad_nulls {
             true => {
@@ -190,22 +198,24 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
                     return Err(general_err!("insufficient values in page"));
                 }
 
-                // Shuffle nulls
-                let mut values_pos = levels.start + values_to_read;
-                let mut level_pos = levels.end;
+                if null_count != 0 {
+                    // Shuffle nulls
+                    let mut values_pos = levels.start + values_to_read;
+                    let mut level_pos = levels.end;
 
-                while level_pos > values_pos {
-                    if is_valid(level_pos - 1) {
-                        // This values is not empty
-                        // We use swap rather than assign here because T::T doesn't
-                        // implement Copy
-                        out.swap(level_pos - 1, values_pos - 1);
-                        values_pos -= 1;
-                    } else {
-                        out[level_pos - 1] = T::T::default();
+                    while level_pos > values_pos {
+                        if is_valid(level_pos - 1) {
+                            // This values is not empty
+                            // We use swap rather than assign here because T::T doesn't
+                            // implement Copy
+                            out.swap(level_pos - 1, values_pos - 1);
+                            values_pos -= 1;
+                        } else {
+                            out[level_pos - 1] = T::T::default();
+                        }
+
+                        level_pos -= 1;
                     }
-
-                    level_pos -= 1;
                 }
 
                 Ok(values_read)

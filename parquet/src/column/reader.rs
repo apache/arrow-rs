@@ -272,6 +272,10 @@ where
                         values,
                         levels_read..levels_read + iter_batch_size,
                         values_read,
+                        def_levels.count_nulls(
+                            levels_read..levels_read + iter_batch_size,
+                            max_def_level,
+                        ),
                         |x| def_levels.get(x) == max_def_level,
                     )?
                 }
@@ -279,6 +283,7 @@ where
                     values,
                     levels_read..levels_read + iter_batch_size,
                     values_read,
+                    0,
                     |_| true,
                 )?,
             };
