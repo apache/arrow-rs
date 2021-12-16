@@ -21,7 +21,7 @@ use arrow::bitmap::Bitmap;
 use arrow::buffer::Buffer;
 
 use crate::arrow::record_reader::{
-    buffer::{RecordBuffer, TypedBuffer},
+    buffer::{RecordBuffer, TypedBuffer, ValueBuffer},
     definition_levels::{DefinitionLevelBuffer, DefinitionLevelDecoder},
 };
 use crate::column::{
@@ -32,7 +32,7 @@ use crate::column::{
     },
 };
 use crate::data_type::DataType;
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 
 pub(crate) mod buffer;
@@ -65,7 +65,7 @@ pub struct GenericRecordReader<V, CV> {
 
 impl<V, CV> GenericRecordReader<V, CV>
 where
-    V: RecordBuffer + Default,
+    V: RecordBuffer + ValueBuffer + Default,
     CV: ColumnValueDecoder<Writer = V::Writer>,
 {
     pub fn new(desc: ColumnDescPtr) -> Self {
@@ -88,7 +88,7 @@ where
 
     /// Set the current page reader.
     pub fn set_page_reader(&mut self, page_reader: Box<dyn PageReader>) -> Result<()> {
-        self.column_reader = Some(GenericColumnReader::new_null_padding(
+        self.column_reader = Some(GenericColumnReader::new(
             self.column_desc.clone(),
             page_reader,
         ));
@@ -228,6 +228,21 @@ where
             .as_mut()
             .unwrap()
             .read_batch(batch_size, def_levels, rep_levels, values)?;
+
+        if values_read < levels_read {
+            let def_levels = self.def_levels.as_ref().ok_or_else(|| {
+                general_err!(
+                    "Definition levels should exist when data is less than levels!"
+                )
+            })?;
+
+            let iter = def_levels.valid_position_iter(
+                self.values_written..self.values_written + levels_read,
+            );
+
+            self.records
+                .pad_nulls(self.values_written..self.values_written + values_read, iter);
+        }
 
         let values_read = max(levels_read, values_read);
         self.set_values_written(self.values_written + values_read)?;

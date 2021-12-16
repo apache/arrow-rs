@@ -57,7 +57,7 @@ pub trait ColumnLevelDecoder {
 pub trait ColumnValueDecoder {
     type Writer: ValuesWriter + ?Sized;
 
-    fn create(col: &ColumnDescPtr, pad_nulls: bool) -> Self;
+    fn create(col: &ColumnDescPtr) -> Self;
 
     fn set_dict(
         &mut self,
@@ -74,21 +74,12 @@ pub trait ColumnValueDecoder {
         num_values: usize,
     ) -> Result<()>;
 
-    fn read(
-        &mut self,
-        out: &mut Self::Writer,
-        levels: Range<usize>,
-        values_read: usize,
-        null_count: usize,
-        is_valid: impl Fn(usize) -> bool,
-    ) -> Result<usize>;
+    fn read(&mut self, out: &mut Self::Writer, range: Range<usize>) -> Result<usize>;
 }
 
 /// An implementation of [`ColumnValueDecoder`] for `[T::T]`
 pub struct ColumnValueDecoderImpl<T: DataType> {
     descr: ColumnDescPtr,
-
-    pad_nulls: bool,
 
     current_encoding: Option<Encoding>,
 
@@ -99,10 +90,9 @@ pub struct ColumnValueDecoderImpl<T: DataType> {
 impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     type Writer = [T::T];
 
-    fn create(descr: &ColumnDescPtr, pad_nulls: bool) -> Self {
+    fn create(descr: &ColumnDescPtr) -> Self {
         Self {
             descr: descr.clone(),
-            pad_nulls,
             current_encoding: None,
             decoders: Default::default(),
         }
@@ -169,14 +159,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         Ok(())
     }
 
-    fn read(
-        &mut self,
-        out: &mut Self::Writer,
-        levels: Range<usize>,
-        values_read: usize,
-        null_count: usize,
-        is_valid: impl Fn(usize) -> bool,
-    ) -> Result<usize> {
+    fn read(&mut self, out: &mut Self::Writer, range: Range<usize>) -> Result<usize> {
         let encoding = self
             .current_encoding
             .expect("current_encoding should be set");
@@ -186,44 +169,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
             .get_mut(&encoding)
             .unwrap_or_else(|| panic!("decoder for encoding {} should be set", encoding));
 
-        let values_to_read = levels.end - levels.start - null_count;
-
-        match self.pad_nulls {
-            true => {
-                // Read into start of buffer
-                let values_read = current_decoder
-                    .get(&mut out[levels.start..levels.start + values_to_read])?;
-
-                if values_read != values_to_read {
-                    return Err(general_err!("insufficient values in page"));
-                }
-
-                if null_count != 0 {
-                    // Shuffle nulls
-                    let mut values_pos = levels.start + values_to_read;
-                    let mut level_pos = levels.end;
-
-                    while level_pos > values_pos {
-                        if is_valid(level_pos - 1) {
-                            // This values is not empty
-                            // We use swap rather than assign here because T::T doesn't
-                            // implement Copy
-                            out.swap(level_pos - 1, values_pos - 1);
-                            values_pos -= 1;
-                        } else {
-                            out[level_pos - 1] = T::T::default();
-                        }
-
-                        level_pos -= 1;
-                    }
-                }
-
-                Ok(values_read)
-            }
-            false => {
-                current_decoder.get(&mut out[values_read..values_read + values_to_read])
-            }
-        }
+        current_decoder.get(&mut out[range])
     }
 }
 

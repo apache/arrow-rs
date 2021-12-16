@@ -138,15 +138,7 @@ where
 {
     /// Creates new column reader based on column descriptor and page reader.
     pub fn new(descr: ColumnDescPtr, page_reader: Box<dyn PageReader>) -> Self {
-        let values_decoder = V::create(&descr, false);
-        Self::new_with_decoder(descr, page_reader, values_decoder)
-    }
-
-    pub(crate) fn new_null_padding(
-        descr: ColumnDescPtr,
-        page_reader: Box<dyn PageReader>,
-    ) -> Self {
-        let values_decoder = V::create(&descr, true);
+        let values_decoder = V::create(&descr);
         Self::new_with_decoder(descr, page_reader, values_decoder)
     }
 
@@ -232,13 +224,21 @@ where
             };
 
             // If the field is required and non-repeated, there are no definition levels
-            let num_def_levels = match def_levels.as_mut() {
-                Some(levels) if self.descr.max_def_level() > 0 => self
-                    .def_level_decoder
-                    .as_mut()
-                    .expect("def_level_decoder be set")
-                    .read(*levels, levels_read..levels_read + iter_batch_size)?,
-                _ => 0,
+            let (num_def_levels, null_count) = match def_levels.as_mut() {
+                Some(levels) if self.descr.max_def_level() > 0 => {
+                    let num_def_levels = self
+                        .def_level_decoder
+                        .as_mut()
+                        .expect("def_level_decoder be set")
+                        .read(*levels, levels_read..levels_read + iter_batch_size)?;
+
+                    let null_count = levels.count_nulls(
+                        levels_read..levels_read + num_def_levels,
+                        self.descr.max_def_level(),
+                    );
+                    (num_def_levels, null_count)
+                }
+                _ => (0, 0),
             };
 
             let num_rep_levels = match rep_levels.as_mut() {
@@ -265,28 +265,10 @@ where
             // levels of batch size - [!] they will not be synced, because only definition
             // levels enforce number of non-null values to read.
 
-            let curr_values_read = match def_levels.as_ref() {
-                Some(def_levels) => {
-                    let max_def_level = self.descr.max_def_level();
-                    self.values_decoder.read(
-                        values,
-                        levels_read..levels_read + iter_batch_size,
-                        values_read,
-                        def_levels.count_nulls(
-                            levels_read..levels_read + iter_batch_size,
-                            max_def_level,
-                        ),
-                        |x| def_levels.get(x) == max_def_level,
-                    )?
-                }
-                None => self.values_decoder.read(
-                    values,
-                    levels_read..levels_read + iter_batch_size,
-                    values_read,
-                    0,
-                    |_| true,
-                )?,
-            };
+            let values_to_read = iter_batch_size - null_count;
+            let curr_values_read = self
+                .values_decoder
+                .read(values, values_read..values_read + values_to_read)?;
 
             // Update all "return" counters and internal state.
 

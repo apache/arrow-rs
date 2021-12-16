@@ -1,6 +1,7 @@
 use arrow::array::BooleanBufferBuilder;
 use arrow::bitmap::Bitmap;
 use arrow::buffer::Buffer;
+use std::ops::Range;
 
 use crate::column::reader::decoder::ColumnLevelDecoderImpl;
 use crate::schema::types::ColumnDescPtr;
@@ -66,6 +67,15 @@ impl DefinitionLevelBuffer {
         }
 
         old_bitmap
+    }
+
+    pub fn valid_position_iter(
+        &self,
+        range: Range<usize>,
+    ) -> impl Iterator<Item = usize> + '_ {
+        let max_def_level = self.max_level;
+        let slice = self.buffer.as_slice();
+        range.rev().filter(move |x| slice[*x] == max_def_level)
     }
 }
 

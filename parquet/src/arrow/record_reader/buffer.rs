@@ -1,4 +1,5 @@
 use std::marker::PhantomData;
+use std::ops::Range;
 
 use arrow::buffer::{Buffer, MutableBuffer};
 
@@ -106,5 +107,31 @@ impl<T> RecordBuffer for TypedBuffer<T> {
         let new_bytes = self.len * std::mem::size_of::<T>();
         assert!(new_bytes <= self.buffer.len());
         self.buffer.resize(new_bytes, 0);
+    }
+}
+
+pub trait ValueBuffer {
+    fn pad_nulls(
+        &mut self,
+        range: Range<usize>,
+        rev_position_iter: impl Iterator<Item = usize>,
+    );
+}
+
+impl<T> ValueBuffer for TypedBuffer<T> {
+    fn pad_nulls(
+        &mut self,
+        range: Range<usize>,
+        rev_position_iter: impl Iterator<Item = usize>,
+    ) {
+        let slice = self.as_slice_mut();
+
+        for (value_pos, level_pos) in range.rev().zip(rev_position_iter) {
+            debug_assert!(level_pos >= value_pos);
+            if level_pos <= value_pos {
+                break;
+            }
+            slice.swap(value_pos, level_pos)
+        }
     }
 }
