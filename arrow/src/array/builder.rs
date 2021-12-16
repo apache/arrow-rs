@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem;
+use std::ops::Range;
 use std::sync::Arc;
 
 use crate::array::*;
@@ -450,6 +451,41 @@ impl BooleanBufferBuilder {
 
         self.len = new_len;
         debug_assert_eq!(self.buffer.len(), new_buf_len);
+    }
+
+    /// Append `range` bits from `to_set`
+    ///
+    /// `to_set` is a slice of bits packed LSB-first into `[u8]`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `to_set` does not contain `ceil(range.end / 8)` bytes
+    pub fn append_packed_range(&mut self, range: Range<usize>, to_set: &[u8]) {
+        let count = range.end - range.start;
+        if count == 0 {
+            return;
+        }
+
+        let start_byte = range.start >> 3;
+        let end_byte = (range.end + 7) >> 3;
+        let skew = range.start & 7;
+
+        // `append_packed` requires the provided `to_set` to be byte aligned, therefore
+        // if the range being copied is not byte aligned we must first append
+        // the leading bits to reach a byte boundary
+        if skew == 0 {
+            // No skew can simply append bytes directly
+            self.append_packed(count, &to_set[start_byte..end_byte])
+        } else if start_byte + 1 == end_byte {
+            // Append bits from single byte
+            self.append_packed(count, &[to_set[start_byte] >> skew])
+        } else {
+            // Append trailing bits from first byte to reach byte boundary, then append
+            // bits from the remaining byte-aligned mask
+            let offset = 8 - skew;
+            self.append_packed(offset, &[to_set[start_byte] >> skew]);
+            self.append_packed(count - offset, &to_set[(start_byte + 1)..end_byte]);
+        }
     }
 
     #[inline]
@@ -2929,13 +2965,37 @@ mod tests {
 
         for _ in 0..100 {
             let mask_length = (rng.next_u32() % 50) as usize;
-            let bools: Vec<_> = std::iter::repeat(true).take(mask_length).collect();
+            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.next_u32() & 1 == 0))
+                .take(mask_length)
+                .collect();
 
             let mut compacted = BooleanBufferBuilder::new(mask_length);
             compacted.append_slice(&bools);
 
             buffer.append_packed(mask_length, compacted.buffer.as_slice());
             all_bools.extend_from_slice(&bools);
+        }
+
+        let src_len = 32;
+        let (src, compacted_src) = {
+            let src: Vec<_> = std::iter::from_fn(|| Some(rng.next_u32() & 1 == 0))
+                .take(src_len)
+                .collect();
+
+            let mut compacted_src = BooleanBufferBuilder::new(src_len);
+            compacted_src.append_slice(&src);
+            (src, compacted_src.finish())
+        };
+
+        for _ in 0..100 {
+            let a = rng.next_u32() as usize % src_len;
+            let b = rng.next_u32() as usize % src_len;
+
+            let start = a.min(b);
+            let end = a.max(b);
+
+            buffer.append_packed_range(start..end, compacted_src.as_slice());
+            all_bools.extend_from_slice(&src[start..end]);
         }
 
         let mut compacted = BooleanBufferBuilder::new(all_bools.len());
