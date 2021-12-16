@@ -2011,7 +2011,7 @@ mod tests {
         }
 
         // test f64 to decimal type
-        let f_data: Vec<f64> = vec![1.1, 2.2, 4.4, 1.1234567891234];
+        let f_data: Vec<f64> = vec![1.1, 2.2, 4.4, 1.123_456_789_123_4];
         let array = Float64Array::from(f_data.clone());
         let array = Arc::new(array) as ArrayRef;
         let casted_array = cast(&array, &decimal_type).unwrap();
