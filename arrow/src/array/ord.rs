@@ -24,6 +24,7 @@ use crate::datatypes::TimeUnit;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 
+use crate::compute::SortOptions;
 use num::Float;
 
 /// Compare the values at two arbitrary indices in two arrays.
@@ -101,6 +102,23 @@ where
     })
 }
 
+fn compare_dict_key<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
+where
+    T: ArrowDictionaryKeyType,
+{
+    let left = left.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
+    let right = right.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
+
+    let left_keys: PrimitiveArray<T> = PrimitiveArray::from(left.keys().data().clone());
+    let right_keys: PrimitiveArray<T> = PrimitiveArray::from(right.keys().data().clone());
+
+    Box::new(move |i: usize, j: usize| {
+        let key_left = left_keys.value(i).to_usize().unwrap();
+        let key_right = right_keys.value(j).to_usize().unwrap();
+        key_left.cmp(&key_right)
+    })
+}
+
 /// returns a comparison function that compares two values at two different positions
 /// between the two arrays.
 /// The arrays' types must be equal.
@@ -119,9 +137,32 @@ where
 /// # Ok(())
 /// # }
 /// ```
+/// The returned comparator should only be called for non-null elements as the result is undefined otherwise.
+/// The caller should check the validity of both indices and then decide whether NULLs should come first or last.
 // This is a factory of comparisons.
-// The lifetime 'a enforces that we cannot use the closure beyond any of the array's lifetime.
 pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparator> {
+    build_compare_with_options(left, right, &SortOptions::default())
+}
+
+/// returns a comparison function that compares two values at two different positions
+/// between the two arrays.
+/// The arrays' types must be equal.
+///
+/// Only the `assume_sorted_dictionaries` flag of [`SortOptions`] is currently used.
+/// If this flag is set and the arrays are dictionary encoded the comparator will use the keys
+/// instead of values for comparing. This is more efficient if the dictionaries are sorted or
+/// if the sorting is done for partitioning purposes. Setting this flag will give unexpected results
+/// when comparing two arrays with different dictionaries.
+///
+/// Other flags need to be handled when calling the comparator.
+///
+/// The returned comparator should only be called for non-null elements as the result is undefined otherwise.
+/// The caller should check the validity of both indices and then decide whether NULLs should come first or last.
+pub fn build_compare_with_options(
+    left: &dyn Array,
+    right: &dyn Array,
+    options: &SortOptions,
+) -> Result<DynComparator> {
     use DataType::*;
     use IntervalUnit::*;
     use TimeUnit::*;
@@ -192,33 +233,50 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
             Dictionary(key_type_lhs, value_type_lhs),
             Dictionary(key_type_rhs, value_type_rhs),
         ) => {
-            if value_type_lhs.as_ref() != &DataType::Utf8
-                || value_type_rhs.as_ref() != &DataType::Utf8
+            if key_type_lhs.as_ref() != key_type_rhs.as_ref()
+                || value_type_rhs.as_ref() != value_type_rhs.as_ref()
             {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Can't compare arrays of different types".to_string(),
+                ));
+            } else if options.assume_sorted_dictionaries {
+                match (key_type_lhs.as_ref(), key_type_rhs.as_ref()) {
+                    (UInt8, UInt8) => compare_dict_key::<UInt8Type>(left, right),
+                    (UInt16, UInt16) => compare_dict_key::<UInt16Type>(left, right),
+                    (UInt32, UInt32) => compare_dict_key::<UInt32Type>(left, right),
+                    (UInt64, UInt64) => compare_dict_key::<UInt64Type>(left, right),
+                    (Int8, Int8) => compare_dict_key::<Int8Type>(left, right),
+                    (Int16, Int16) => compare_dict_key::<Int16Type>(left, right),
+                    (Int32, Int32) => compare_dict_key::<Int32Type>(left, right),
+                    (Int64, Int64) => compare_dict_key::<Int64Type>(left, right),
+                    (lhs, _) => {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Dictionaries do not support keys of type {:?}",
+                            lhs
+                        )));
+                    }
+                }
+            } else if value_type_lhs.as_ref() != &DataType::Utf8 {
                 return Err(ArrowError::InvalidArgumentError(
                     "Arrow still does not support comparisons of non-string dictionary arrays"
                         .to_string(),
                 ));
-            }
-            match (key_type_lhs.as_ref(), key_type_rhs.as_ref()) {
-                (a, b) if a != b => {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "Can't compare arrays of different types".to_string(),
-                    ));
-                }
-                (UInt8, UInt8) => compare_dict_string::<UInt8Type>(left, right),
-                (UInt16, UInt16) => compare_dict_string::<UInt16Type>(left, right),
-                (UInt32, UInt32) => compare_dict_string::<UInt32Type>(left, right),
-                (UInt64, UInt64) => compare_dict_string::<UInt64Type>(left, right),
-                (Int8, Int8) => compare_dict_string::<Int8Type>(left, right),
-                (Int16, Int16) => compare_dict_string::<Int16Type>(left, right),
-                (Int32, Int32) => compare_dict_string::<Int32Type>(left, right),
-                (Int64, Int64) => compare_dict_string::<Int64Type>(left, right),
-                (lhs, _) => {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Dictionaries do not support keys of type {:?}",
-                        lhs
-                    )));
+            } else {
+                match (key_type_lhs.as_ref(), key_type_rhs.as_ref()) {
+                    (UInt8, UInt8) => compare_dict_string::<UInt8Type>(left, right),
+                    (UInt16, UInt16) => compare_dict_string::<UInt16Type>(left, right),
+                    (UInt32, UInt32) => compare_dict_string::<UInt32Type>(left, right),
+                    (UInt64, UInt64) => compare_dict_string::<UInt64Type>(left, right),
+                    (Int8, Int8) => compare_dict_string::<Int8Type>(left, right),
+                    (Int16, Int16) => compare_dict_string::<Int16Type>(left, right),
+                    (Int32, Int32) => compare_dict_string::<Int32Type>(left, right),
+                    (Int64, Int64) => compare_dict_string::<Int64Type>(left, right),
+                    (lhs, _) => {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Dictionaries do not support keys of type {:?}",
+                            lhs
+                        )));
+                    }
                 }
             }
         }
@@ -296,6 +354,23 @@ pub mod tests {
         let array = data.into_iter().collect::<DictionaryArray<Int16Type>>();
 
         let cmp = build_compare(&array, &array)?;
+
+        assert_eq!(Ordering::Less, (cmp)(0, 1));
+        assert_eq!(Ordering::Equal, (cmp)(3, 4));
+        assert_eq!(Ordering::Greater, (cmp)(2, 3));
+        Ok(())
+    }
+
+    #[test]
+    fn test_dict_keys() -> Result<()> {
+        let data = vec!["a", "b", "c", "a", "a", "c", "c"];
+        let array = data.into_iter().collect::<DictionaryArray<Int16Type>>();
+        let options = SortOptions {
+            assume_sorted_dictionaries: true,
+            ..Default::default()
+        };
+
+        let cmp = build_compare_with_options(&array, &array, &options)?;
 
         assert_eq!(Ordering::Less, (cmp)(0, 1));
         assert_eq!(Ordering::Equal, (cmp)(3, 4));

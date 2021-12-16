@@ -490,7 +490,7 @@ pub use self::equal_json::JsonEqual;
 
 // --------------------- Array's values comparison ---------------------
 
-pub use self::ord::{build_compare, DynComparator};
+pub use self::ord::{build_compare, build_compare_with_options, DynComparator};
 
 // --------------------- Array downcast helper functions ---------------------
 

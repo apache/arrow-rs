@@ -1079,10 +1079,11 @@ impl LexicographicalComparator<'_> {
                 // use ArrayData for is_valid checks later to avoid dynamic call
                 let values = column.values.as_ref();
                 let data = values.data_ref();
+                let options = column.options.unwrap_or_default();
                 Ok((
                     data,
-                    build_compare(values, values)?,
-                    column.options.unwrap_or_default(),
+                    build_compare_with_options(values, values, &options)?,
+                    options,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
