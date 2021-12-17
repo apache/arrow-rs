@@ -1242,6 +1242,23 @@ mod tests {
     }
 
     #[test]
+    fn test_take_preserve_timezone() {
+        let index = Int64Array::from(vec![Some(0), None]);
+
+        let input = TimestampNanosecondArray::from_vec(
+            vec![1_639_715_368_000_000_000, 1_639_715_368_000_000_000],
+            Some("UTC".to_owned()),
+        );
+        let result = take_impl(&input, &index, None).unwrap();
+        match result.data_type() {
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                assert_eq!(tz.clone(), Some("UTC".to_owned()))
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
     fn test_take_impl_primitive_with_int64_indices() {
         let index = Int64Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]);
 
