@@ -311,7 +311,7 @@ impl BooleanBufferBuilder {
     #[inline]
     pub fn new(capacity: usize) -> Self {
         let byte_capacity = bit_util::ceil(capacity, 8);
-        let buffer = MutableBuffer::from_len_zeroed(byte_capacity);
+        let buffer = MutableBuffer::new(byte_capacity);
         Self { buffer, len: 0 }
     }
 
@@ -2803,7 +2803,8 @@ mod tests {
         let buffer = b.finish();
         assert_eq!(1, buffer.len());
 
-        let mut b = BooleanBufferBuilder::new(4);
+        // Overallocate capacity
+        let mut b = BooleanBufferBuilder::new(8);
         b.append_slice(&[false, true, false, true]);
         assert_eq!(4, b.len());
         assert_eq!(512, b.capacity());
@@ -2959,7 +2960,7 @@ mod tests {
     fn test_bool_buffer_fuzz() {
         use rand::prelude::*;
 
-        let mut buffer = BooleanBufferBuilder::new(0);
+        let mut buffer = BooleanBufferBuilder::new(12);
         let mut all_bools = vec![];
         let mut rng = rand::thread_rng();
 
