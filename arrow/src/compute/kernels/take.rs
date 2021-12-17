@@ -528,7 +528,7 @@ where
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            T::DATA_TYPE,
+            values.data_type().clone(),
             indices.len(),
             None,
             nulls,
@@ -1239,6 +1239,23 @@ mod tests {
             vec![Some(-3.1), None, None, Some(-3.1), Some(2.21)],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_take_preserve_timezone() {
+        let index = Int64Array::from(vec![Some(0), None]);
+
+        let input = TimestampNanosecondArray::from_vec(
+            vec![1_639_715_368_000_000_000, 1_639_715_368_000_000_000],
+            Some("UTC".to_owned()),
+        );
+        let result = take_impl(&input, &index, None).unwrap();
+        match result.data_type() {
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                assert_eq!(tz.clone(), Some("UTC".to_owned()))
+            }
+            _ => panic!(),
+        }
     }
 
     #[test]
