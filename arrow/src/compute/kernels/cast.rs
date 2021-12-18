@@ -1910,6 +1910,7 @@ mod tests {
 
     #[test]
     fn test_cast_numeric_to_decimal() {
+        // test cast type
         let data_types = vec![
             DataType::Int8,
             DataType::Int16,
@@ -1924,21 +1925,58 @@ mod tests {
         }
         assert!(!can_cast_types(&DataType::UInt64, &decimal_type));
 
-        // test i8 to decimal type
-        let array = Int8Array::from(vec![1, 2, 3, 4, 5]);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array = cast(&array, &decimal_type).unwrap();
-        let decimal_array = casted_array
-            .as_any()
-            .downcast_ref::<DecimalArray>()
-            .unwrap();
-        assert_eq!(&decimal_type, decimal_array.data_type());
-        for i in 0..array.len() {
-            assert_eq!(
-                10_i128.pow(6) * (i as i128 + 1),
-                decimal_array.value(i as usize)
-            );
+        // test cast data
+        let input_datas = vec![
+            Arc::new(Int8Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(5),
+            ])) as ArrayRef, // i8
+            Arc::new(Int16Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(5),
+            ])) as ArrayRef, // i16
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(5),
+            ])) as ArrayRef, // i32
+            Arc::new(Int64Array::from(vec![
+                Some(1),
+                Some(2),
+                Some(3),
+                None,
+                Some(5),
+            ])) as ArrayRef, // i64
+        ];
+
+        // i8, i16, i32, i64
+        for array in input_datas {
+            let casted_array = cast(&array, &decimal_type).unwrap();
+            let decimal_array = casted_array
+                .as_any()
+                .downcast_ref::<DecimalArray>()
+                .unwrap();
+            assert_eq!(&decimal_type, decimal_array.data_type());
+            for i in 0..array.len() {
+                if i == 3 {
+                    assert!(decimal_array.is_null(i as usize));
+                } else {
+                    assert_eq!(
+                        10_i128.pow(6) * (i as i128 + 1),
+                        decimal_array.value(i as usize)
+                    );
+                }
+            }
         }
+
         // test i8 to decimal type with overflow the result type
         // the 100 will be converted to 1000_i128, but it is out of range for max value in the precision 3.
         let array = Int8Array::from(vec![1, 2, 3, 4, 100]);
@@ -1946,54 +1984,6 @@ mod tests {
         let casted_array = cast(&array, &DataType::Decimal(3, 1));
         assert!(casted_array.is_err());
         assert_eq!("Invalid argument error: The value of 1000 i128 is not compatible with Decimal(3,1)", casted_array.unwrap_err().to_string());
-
-        // test i16 to decimal type
-        let array = Int16Array::from(vec![1, 2, 3, 4, 5]);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array = cast(&array, &decimal_type).unwrap();
-        let decimal_array = casted_array
-            .as_any()
-            .downcast_ref::<DecimalArray>()
-            .unwrap();
-        assert_eq!(&decimal_type, decimal_array.data_type());
-        for i in 0..array.len() {
-            assert_eq!(
-                10_i128.pow(6) * (i as i128 + 1),
-                decimal_array.value(i as usize)
-            );
-        }
-
-        // test i32 to decimal type
-        let array = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array = cast(&array, &decimal_type).unwrap();
-        let decimal_array = casted_array
-            .as_any()
-            .downcast_ref::<DecimalArray>()
-            .unwrap();
-        assert_eq!(&decimal_type, decimal_array.data_type());
-        for i in 0..array.len() {
-            assert_eq!(
-                10_i128.pow(6) * (i as i128 + 1),
-                decimal_array.value(i as usize)
-            );
-        }
-
-        // test i64 to decimal type
-        let array = Int64Array::from(vec![1, 2, 3, 4, 5]);
-        let array = Arc::new(array) as ArrayRef;
-        let casted_array = cast(&array, &decimal_type).unwrap();
-        let decimal_array = casted_array
-            .as_any()
-            .downcast_ref::<DecimalArray>()
-            .unwrap();
-        assert_eq!(&decimal_type, decimal_array.data_type());
-        for i in 0..array.len() {
-            assert_eq!(
-                10_i128.pow(6) * (i as i128 + 1),
-                decimal_array.value(i as usize)
-            );
-        }
 
         // test f32 to decimal type
         let f_data: Vec<f32> = vec![1.1, 2.2, 4.4, 1.123_456_8];
