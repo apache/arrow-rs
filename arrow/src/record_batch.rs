@@ -176,15 +176,12 @@ impl RecordBatch {
     }
 
     /// Projects the schema onto the specified columns
-    pub fn project(
-        &self,
-        indices: impl IntoIterator<Item = usize> + Clone,
-    ) -> Result<RecordBatch> {
-        let projected_schema = self.schema.project(indices.clone())?;
+    pub fn project(&self, indices: &[usize]) -> Result<RecordBatch> {
+        let projected_schema = self.schema.project(indices)?;
         let batch_fields = indices
             .into_iter()
-            .map(|f: usize| {
-                self.columns.get(f).cloned().ok_or_else(|| {
+            .map(|f| {
+                self.columns.get(*f).cloned().ok_or_else(|| {
                     ArrowError::SchemaError(format!(
                         "project index {} out of bounds, max field {}",
                         f,
@@ -921,5 +918,24 @@ mod tests {
         .unwrap();
 
         assert_ne!(batch1, batch2);
+    }
+
+    #[test]
+    fn project() {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+        ]));
+        let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let c: ArrayRef = Arc::new(StringArray::from(vec!["d", "e", "f"]));
+
+        let record_batch = RecordBatch::try_from_iter(vec![("a", a.clone()), ("b", b.clone()), ("c", c.clone())])
+            .expect("valid conversion");
+
+        let expected = RecordBatch::try_from_iter(vec![("a", a), ("c", c)])
+            .expect("valid conversion");
+
+        assert_eq!(expected, record_batch.project(&vec![0, 2]).unwrap());
     }
 }
