@@ -268,8 +268,11 @@ where
                 self.values_written..self.values_written + levels_read,
             );
 
-            self.records
-                .pad_nulls(self.values_written..self.values_written + values_read, iter);
+            self.records.pad_nulls(
+                self.values_written..self.values_written + values_read,
+                self.values_written..self.values_written + levels_read,
+                iter,
+            );
         }
 
         let values_read = max(levels_read, values_read);

@@ -19,6 +19,7 @@ use std::marker::PhantomData;
 use std::ops::Range;
 
 use arrow::buffer::{Buffer, MutableBuffer};
+use arrow::datatypes::ToByteSlice;
 
 /// A buffer that supports writing new data to the end, and removing data from the front
 ///
@@ -74,6 +75,7 @@ pub trait BufferQueue: Sized {
 ///
 pub trait ScalarValue {}
 impl ScalarValue for bool {}
+impl ScalarValue for u8 {}
 impl ScalarValue for i16 {}
 impl ScalarValue for i32 {}
 impl ScalarValue for i64 {}
@@ -114,6 +116,10 @@ impl<T: ScalarValue> ScalarBuffer<T> {
         self.len == 0
     }
 
+    pub fn reserve(&mut self, additional: usize) {
+        self.buffer.reserve(additional * std::mem::size_of::<T>());
+    }
+
     pub fn resize(&mut self, len: usize) {
         self.buffer.resize(len * std::mem::size_of::<T>(), 0);
         self.len = len;
@@ -133,14 +139,8 @@ impl<T: ScalarValue> ScalarBuffer<T> {
         assert!(prefix.is_empty() && suffix.is_empty());
         buf
     }
-}
 
-impl<T: ScalarValue> BufferQueue for ScalarBuffer<T> {
-    type Output = Buffer;
-
-    type Slice = [T];
-
-    fn split_off(&mut self, len: usize) -> Self::Output {
+    pub fn take(&mut self, len: usize) -> Self {
         assert!(len <= self.len);
 
         let num_bytes = len * std::mem::size_of::<T>();
@@ -158,7 +158,39 @@ impl<T: ScalarValue> BufferQueue for ScalarBuffer<T> {
         self.buffer.resize(num_bytes, 0);
         self.len -= len;
 
-        std::mem::replace(&mut self.buffer, remaining).into()
+        Self {
+            buffer: std::mem::replace(&mut self.buffer, remaining),
+            len,
+            _phantom: Default::default(),
+        }
+    }
+}
+
+impl<T: ScalarValue + ToByteSlice> ScalarBuffer<T> {
+    pub fn push(&mut self, v: T) {
+        self.buffer.push(v);
+        self.len += 1;
+    }
+
+    pub fn extend_from_slice(&mut self, v: &[T]) {
+        self.buffer.extend_from_slice(v);
+        self.len += v.len();
+    }
+}
+
+impl<T: ScalarValue> From<ScalarBuffer<T>> for Buffer {
+    fn from(t: ScalarBuffer<T>) -> Self {
+        t.buffer.into()
+    }
+}
+
+impl<T: ScalarValue> BufferQueue for ScalarBuffer<T> {
+    type Output = Buffer;
+
+    type Slice = [T];
+
+    fn split_off(&mut self, len: usize) -> Self::Output {
+        self.take(len).into()
     }
 
     fn spare_capacity_mut(&mut self, batch_size: usize) -> &mut Self::Slice {
@@ -180,20 +212,33 @@ impl<T: ScalarValue> BufferQueue for ScalarBuffer<T> {
 
 /// A [`BufferQueue`] capable of storing column values
 pub trait ValuesBuffer: BufferQueue {
-    /// Iterate through the indexes in `range` in reverse order, moving the value at each
-    /// index to the next index returned by `rev_valid_position_iter`
+    ///
+    /// If a column contains nulls, more level data may be read than value data, as null
+    /// values are not encoded. Therefore, first the levels data is read, the null count
+    /// determined, and then the corresponding number of values read to a [`ValuesBuffer`].
+    ///
+    /// It is then necessary to move this values data into positions that correspond to
+    /// the non-null level positions. This is what this method does.
+    ///
+    /// It is provided with:
+    ///
+    /// - `values_range` - the range of values read into this [`ValuesBuffer`]
+    /// - `levels_range` - the range of levels data read
+    /// - `rev_valid_position_iter` - a reverse iterator of the valid level positions
     ///
     /// It is required that:
     ///
-    /// - `rev_valid_position_iter` has at least `range.end - range.start` elements
+    /// - `rev_valid_position_iter` has at least `values_range.end - values_range.start` elements
     /// - `rev_valid_position_iter` returns strictly monotonically decreasing values
+    /// - `rev_valid_position_iter` returns values in the range `levels_range`
     /// - the `i`th index returned by `rev_valid_position_iter` is `>= range.end - i - 1`
     ///
     /// Implementations may panic or otherwise misbehave if this is not the case
     ///
     fn pad_nulls(
         &mut self,
-        range: Range<usize>,
+        values_range: Range<usize>,
+        levels_range: Range<usize>,
         rev_valid_position_iter: impl Iterator<Item = usize>,
     );
 }
@@ -201,12 +246,14 @@ pub trait ValuesBuffer: BufferQueue {
 impl<T: ScalarValue> ValuesBuffer for ScalarBuffer<T> {
     fn pad_nulls(
         &mut self,
-        range: Range<usize>,
+        values_range: Range<usize>,
+        levels_range: Range<usize>,
         rev_valid_position_iter: impl Iterator<Item = usize>,
     ) {
         let slice = self.as_slice_mut();
+        assert!(slice.len() >= levels_range.end);
 
-        for (value_pos, level_pos) in range.rev().zip(rev_valid_position_iter) {
+        for (value_pos, level_pos) in values_range.rev().zip(rev_valid_position_iter) {
             debug_assert!(level_pos >= value_pos);
             if level_pos <= value_pos {
                 break;

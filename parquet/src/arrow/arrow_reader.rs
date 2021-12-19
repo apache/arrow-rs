@@ -251,6 +251,7 @@ mod tests {
     use crate::file::writer::{FileWriter, SerializedFileWriter};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
+    use crate::util::cursor::SliceableCursor;
     use crate::util::test_common::{get_temp_file, get_temp_filename, RandGen};
     use arrow::array::*;
     use arrow::datatypes::{DataType as ArrowDataType, Field};
@@ -966,5 +967,41 @@ mod tests {
         assert_eq!(batch.schema().as_ref(), &expected_schema);
         assert_eq!(batch.num_rows(), 4);
         assert_eq!(batch.column(0).data().null_count(), 2);
+    }
+
+    #[test]
+    fn test_invalid_utf8() {
+        // a parquet file with 1 column with invalid utf8
+        let data = vec![
+            80, 65, 82, 49, 21, 6, 21, 22, 21, 22, 92, 21, 2, 21, 0, 21, 2, 21, 0, 21, 4,
+            21, 0, 18, 28, 54, 0, 40, 5, 104, 101, 255, 108, 111, 24, 5, 104, 101, 255,
+            108, 111, 0, 0, 0, 3, 1, 5, 0, 0, 0, 104, 101, 255, 108, 111, 38, 110, 28,
+            21, 12, 25, 37, 6, 0, 25, 24, 2, 99, 49, 21, 0, 22, 2, 22, 102, 22, 102, 38,
+            8, 60, 54, 0, 40, 5, 104, 101, 255, 108, 111, 24, 5, 104, 101, 255, 108, 111,
+            0, 0, 0, 21, 4, 25, 44, 72, 4, 114, 111, 111, 116, 21, 2, 0, 21, 12, 37, 2,
+            24, 2, 99, 49, 37, 0, 76, 28, 0, 0, 0, 22, 2, 25, 28, 25, 28, 38, 110, 28,
+            21, 12, 25, 37, 6, 0, 25, 24, 2, 99, 49, 21, 0, 22, 2, 22, 102, 22, 102, 38,
+            8, 60, 54, 0, 40, 5, 104, 101, 255, 108, 111, 24, 5, 104, 101, 255, 108, 111,
+            0, 0, 0, 22, 102, 22, 2, 0, 40, 44, 65, 114, 114, 111, 119, 50, 32, 45, 32,
+            78, 97, 116, 105, 118, 101, 32, 82, 117, 115, 116, 32, 105, 109, 112, 108,
+            101, 109, 101, 110, 116, 97, 116, 105, 111, 110, 32, 111, 102, 32, 65, 114,
+            114, 111, 119, 0, 130, 0, 0, 0, 80, 65, 82, 49,
+        ];
+
+        let file = SliceableCursor::new(data);
+        let file_reader = SerializedFileReader::new(file).unwrap();
+        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
+
+        let mut record_batch_reader = arrow_reader
+            .get_record_reader_by_columns(vec![0], 10)
+            .unwrap();
+
+        let error = record_batch_reader.next().unwrap().unwrap_err();
+
+        assert!(
+            error.to_string().contains("invalid utf-8 sequence"),
+            "{}",
+            error
+        );
     }
 }

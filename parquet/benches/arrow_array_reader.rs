@@ -319,20 +319,13 @@ fn create_string_arrow_array_reader(
     ArrowArrayReader::try_new(page_iterator, column_desc, converter, None).unwrap()
 }
 
-fn create_string_complex_array_reader(
+fn create_string_byte_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> impl ArrayReader {
-    use parquet::arrow::array_reader::ComplexObjectArrayReader;
-    use parquet::arrow::converter::{Utf8ArrayConverter, Utf8Converter};
-    let converter = Utf8Converter::new(Utf8ArrayConverter {});
-    ComplexObjectArrayReader::<parquet::data_type::ByteArrayType, Utf8Converter>::new(
-        Box::new(page_iterator),
-        column_desc,
-        converter,
-        None,
-    )
-    .unwrap()
+    use parquet::arrow::array_reader::ByteArrayReader;
+    ByteArrayReader::new_with_options(Box::new(page_iterator), column_desc, None, true)
+        .unwrap()
 }
 
 fn add_benches(c: &mut Criterion) {
@@ -568,7 +561,7 @@ fn add_benches(c: &mut Criterion) {
         "read StringArray, plain encoded, mandatory, no NULLs - old",
         |b| {
             b.iter(|| {
-                let array_reader = create_string_complex_array_reader(
+                let array_reader = create_string_byte_array_reader(
                     plain_string_no_null_data.clone(),
                     mandatory_string_column_desc.clone(),
                 );
@@ -601,7 +594,7 @@ fn add_benches(c: &mut Criterion) {
         "read StringArray, plain encoded, optional, no NULLs - old",
         |b| {
             b.iter(|| {
-                let array_reader = create_string_complex_array_reader(
+                let array_reader = create_string_byte_array_reader(
                     plain_string_no_null_data.clone(),
                     optional_string_column_desc.clone(),
                 );
@@ -635,7 +628,7 @@ fn add_benches(c: &mut Criterion) {
         "read StringArray, plain encoded, optional, half NULLs - old",
         |b| {
             b.iter(|| {
-                let array_reader = create_string_complex_array_reader(
+                let array_reader = create_string_byte_array_reader(
                     plain_string_half_null_data.clone(),
                     optional_string_column_desc.clone(),
                 );
@@ -669,7 +662,7 @@ fn add_benches(c: &mut Criterion) {
         "read StringArray, dictionary encoded, mandatory, no NULLs - old",
         |b| {
             b.iter(|| {
-                let array_reader = create_string_complex_array_reader(
+                let array_reader = create_string_byte_array_reader(
                     dictionary_string_no_null_data.clone(),
                     mandatory_string_column_desc.clone(),
                 );
@@ -702,7 +695,7 @@ fn add_benches(c: &mut Criterion) {
         "read StringArray, dictionary encoded, optional, no NULLs - old",
         |b| {
             b.iter(|| {
-                let array_reader = create_string_complex_array_reader(
+                let array_reader = create_string_byte_array_reader(
                     dictionary_string_no_null_data.clone(),
                     optional_string_column_desc.clone(),
                 );
@@ -736,7 +729,7 @@ fn add_benches(c: &mut Criterion) {
         "read StringArray, dictionary encoded, optional, half NULLs - old",
         |b| {
             b.iter(|| {
-                let array_reader = create_string_complex_array_reader(
+                let array_reader = create_string_byte_array_reader(
                     dictionary_string_half_null_data.clone(),
                     optional_string_column_desc.clone(),
                 );
