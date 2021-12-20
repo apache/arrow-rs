@@ -179,7 +179,7 @@ impl RecordBatch {
     pub fn project(&self, indices: &[usize]) -> Result<RecordBatch> {
         let projected_schema = self.schema.project(indices)?;
         let batch_fields = indices
-            .into_iter()
+            .iter()
             .map(|f| {
                 self.columns.get(*f).cloned().ok_or_else(|| {
                     ArrowError::SchemaError(format!(
@@ -922,20 +922,20 @@ mod tests {
 
     #[test]
     fn project() {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(1),
-            None,
-            Some(3),
-        ]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
         let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
         let c: ArrayRef = Arc::new(StringArray::from(vec!["d", "e", "f"]));
 
-        let record_batch = RecordBatch::try_from_iter(vec![("a", a.clone()), ("b", b.clone()), ("c", c.clone())])
-            .expect("valid conversion");
+        let record_batch = RecordBatch::try_from_iter(vec![
+            ("a", a.clone()),
+            ("b", b.clone()),
+            ("c", c.clone()),
+        ])
+        .expect("valid conversion");
 
         let expected = RecordBatch::try_from_iter(vec![("a", a), ("c", c)])
             .expect("valid conversion");
 
-        assert_eq!(expected, record_batch.project(&vec![0, 2]).unwrap());
+        assert_eq!(expected, record_batch.project(&[0, 2]).unwrap());
     }
 }

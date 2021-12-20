@@ -90,7 +90,8 @@ impl Schema {
     /// Returns a new schema with only the specified columns in the new schema
     /// This carries metadata from the parent schema over as well
     pub fn project(&self, indices: &[usize]) -> Result<Schema> {
-        let new_fields = indices.into_iter()
+        let new_fields = indices
+            .iter()
             .map(|i| {
                 self.fields.get(*i).cloned().ok_or_else(|| {
                     ArrowError::SchemaError(format!(
@@ -132,7 +133,7 @@ impl Schema {
     ///     ]),
     /// );
     /// ```
-    pub fn try_merge(schemas: impl IntoIterator<Item=Self>) -> Result<Self> {
+    pub fn try_merge(schemas: impl IntoIterator<Item = Self>) -> Result<Self> {
         schemas
             .into_iter()
             .try_fold(Self::empty(), |mut merged, schema| {
@@ -423,11 +424,14 @@ mod tests {
             metadata,
         );
 
-        let projected: Result<Schema> = schema.project(&vec![0, 3]);
+        let projected: Result<Schema> = schema.project(&[0, 3]);
 
         assert!(projected.is_err());
         if let Err(e) = projected {
-            assert_eq!(e.to_string(), "Schema error: project index 3 out of bounds, max field 3".to_string())
+            assert_eq!(
+                e.to_string(),
+                "Schema error: project index 3 out of bounds, max field 3".to_string()
+            )
         }
     }
 }
