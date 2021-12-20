@@ -275,6 +275,9 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::Interval(IntervalUnit::DayTime) => {
             Arc::new(IntervalDayTimeArray::from(data)) as ArrayRef
         }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            Arc::new(IntervalMonthDayNanoArray::from(data)) as ArrayRef
+        }
         DataType::Duration(TimeUnit::Second) => {
             Arc::new(DurationSecondArray::from(data)) as ArrayRef
         }
@@ -414,6 +417,9 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
             }
             IntervalUnit::DayTime => {
                 new_null_sized_array::<IntervalDayTimeType>(data_type, length)
+            }
+            IntervalUnit::MonthDayNano => {
+                new_null_sized_array::<IntervalMonthDayNanoType>(data_type, length)
             }
         },
         DataType::FixedSizeBinary(value_len) => make_array(unsafe {

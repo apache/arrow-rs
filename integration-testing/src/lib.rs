@@ -280,6 +280,49 @@ fn array_from_json(
             }
             Ok(Arc::new(b.finish()))
         }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let mut b = IntervalMonthDayNanoBuilder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(match value {
+                        Value::Object(v) => {
+                            let months = v.get("months").unwrap();
+                            let days = v.get("days").unwrap();
+                            let nanoseconds = v.get("nanoseconds").unwrap();
+                            match (months, days, nanoseconds) {
+                                (
+                                    Value::Number(months),
+                                    Value::Number(days),
+                                    Value::Number(nanoseconds),
+                                ) => {
+                                    let months = months.as_i64().unwrap() as i32;
+                                    let days = days.as_i64().unwrap() as i32;
+                                    let nanoseconds = nanoseconds.as_i64().unwrap();
+                                    let months_days_ns: i128 = ((nanoseconds as i128)
+                                        & 0xFFFFFFFFFFFFFFFF)
+                                        << 64
+                                        | ((days as i128) & 0xFFFFFFFF) << 32
+                                        | ((months as i128) & 0xFFFFFFFF);
+                                    months_days_ns
+                                }
+                                (_, _, _) => {
+                                    panic!("Unable to parse {:?} as MonthDayNano", v)
+                                }
+                            }
+                        }
+                        _ => panic!("Unable to parse {:?} as MonthDayNano", value),
+                    }),
+                    _ => b.append_null(),
+                }?;
+            }
+            Ok(Arc::new(b.finish()))
+        }
         DataType::Float32 => {
             let mut b = Float32Builder::new(json_col.count);
             for (is_valid, value) in json_col

@@ -426,6 +426,14 @@ fn write_leaf(
                             .unwrap();
                         get_interval_dt_array_slice(array, &indices)
                     }
+                    _ => {
+                        return Err(ParquetError::NYI(
+                            format!(
+                                "Attempting to write an Arrow interval type {:?} to parquet that is not yet implemented",
+                                interval_unit
+                            )
+                        ));
+                    }
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
                     let array = column
@@ -1459,6 +1467,17 @@ mod tests {
         required_and_optional::<IntervalDayTimeArray, _>(
             0..SMALL_SIZE as i64,
             "interval_day_time_single_column",
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Attempting to write an Arrow interval type MonthDayNano to parquet that is not yet implemented"
+    )]
+    fn interval_month_day_nano_single_column() {
+        required_and_optional::<IntervalMonthDayNanoArray, _>(
+            0..SMALL_SIZE as i128,
+            "interval_month_day_nano_single_column",
         );
     }
 

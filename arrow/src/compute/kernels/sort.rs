@@ -243,6 +243,11 @@ pub fn sort_to_indices(
         DataType::Interval(IntervalUnit::DayTime) => {
             sort_primitive::<IntervalDayTimeType, _>(values, v, n, cmp, &options, limit)
         }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            sort_primitive::<IntervalMonthDayNanoType, _>(
+                values, v, n, cmp, &options, limit,
+            )
+        }
         DataType::Duration(TimeUnit::Second) => {
             sort_primitive::<DurationSecondType, _>(values, v, n, cmp, &options, limit)
         }

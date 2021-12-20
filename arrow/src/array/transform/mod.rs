@@ -257,6 +257,9 @@ fn build_extend(array: &ArrayData) -> Extend {
         | DataType::Interval(IntervalUnit::DayTime) => {
             primitive::build_extend::<i64>(array)
         }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            primitive::build_extend::<i128>(array)
+        }
         DataType::Utf8 | DataType::Binary => variable_size::build_extend::<i32>(array),
         DataType::LargeUtf8 | DataType::LargeBinary => {
             variable_size::build_extend::<i64>(array)
@@ -298,6 +301,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         | DataType::Timestamp(_, _)
         | DataType::Duration(_)
         | DataType::Interval(IntervalUnit::DayTime) => primitive::extend_nulls::<i64>,
+        DataType::Interval(IntervalUnit::MonthDayNano) => primitive::extend_nulls::<i128>,
         DataType::Utf8 | DataType::Binary => variable_size::extend_nulls::<i32>,
         DataType::LargeUtf8 | DataType::LargeBinary => variable_size::extend_nulls::<i64>,
         DataType::List(_) => list::extend_nulls::<i32>,

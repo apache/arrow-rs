@@ -171,6 +171,9 @@ where
         DataType::Interval(IntervalUnit::DayTime) => {
             downcast_take!(IntervalDayTimeType, values, indices)
         }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            downcast_take!(IntervalMonthDayNanoType, values, indices)
+        }
         DataType::Duration(TimeUnit::Second) => {
             downcast_take!(DurationSecondType, values, indices)
         }
@@ -1179,6 +1182,15 @@ mod tests {
 
         // interval_day_time
         test_take_primitive_arrays::<IntervalDayTimeType>(
+            vec![Some(0), None, Some(2), Some(-15), None],
+            &index,
+            None,
+            vec![Some(-15), None, None, Some(-15), Some(2)],
+        )
+        .unwrap();
+
+        // interval_month_day_nano
+        test_take_primitive_arrays::<IntervalMonthDayNanoType>(
             vec![Some(0), None, Some(2), Some(-15), None],
             &index,
             None,
