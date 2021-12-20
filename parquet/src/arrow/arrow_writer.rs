@@ -1547,6 +1547,38 @@ mod tests {
     }
 
     #[test]
+    fn null_list_single_column() {
+        let null_field = Field::new("item", DataType::Null, true);
+        let list_field = Field::new(
+            "emptylist",
+            DataType::List(Box::new(null_field)),
+            true,
+        );
+
+        let schema = Schema::new(vec![list_field]);
+
+        // Build a ListArray[NullArray(0)]
+
+        let a_values = NullArray::new(0);
+        let a_value_offsets =
+            arrow::buffer::Buffer::from(&[0, 0].to_byte_slice());
+        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+            "item",
+            DataType::Null, true
+        ))))
+        .len(1)
+        .add_buffer(a_value_offsets)
+        .null_bit_buffer(Buffer::from(vec![0b00011011]))
+        .add_child_data(a_values.data().clone())
+        .build()
+        .unwrap();
+
+        let a = ListArray::from(a_list_data);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+        roundtrip("test_null_list_single_column.parquet", batch, None);
+    }
+
+    #[test]
     fn large_list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets =
