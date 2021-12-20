@@ -87,6 +87,24 @@ impl Schema {
         Self { fields, metadata }
     }
 
+    /// Returns a new schema with only the specified columns in the new schema
+    /// This carries metadata from the parent schema over as well
+    pub fn project(&self, indices: &[usize]) -> Result<Schema> {
+        let new_fields = indices
+            .iter()
+            .map(|i| {
+                self.fields.get(*i).cloned().ok_or_else(|| {
+                    ArrowError::SchemaError(format!(
+                        "project index {} out of bounds, max field {}",
+                        i,
+                        self.fields().len()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self::new_with_metadata(new_fields, self.metadata.clone()))
+    }
+
     /// Merge schema into self if it is compatible. Struct fields will be merged recursively.
     ///
     /// Example:
@@ -368,5 +386,52 @@ mod tests {
         let de_schema = serde_json::from_str(&json).unwrap();
 
         assert_eq!(schema, de_schema);
+    }
+
+    #[test]
+    fn test_projection() {
+        let mut metadata = HashMap::new();
+        metadata.insert("meta".to_string(), "data".to_string());
+
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("address", DataType::Utf8, false),
+                Field::new("priority", DataType::UInt8, false),
+            ],
+            metadata,
+        );
+
+        let projected: Schema = schema.project(&[0, 2]).unwrap();
+
+        assert_eq!(projected.fields().len(), 2);
+        assert_eq!(projected.fields()[0].name(), "name");
+        assert_eq!(projected.fields()[1].name(), "priority");
+        assert_eq!(projected.metadata.get("meta").unwrap(), "data")
+    }
+
+    #[test]
+    fn test_oob_projection() {
+        let mut metadata = HashMap::new();
+        metadata.insert("meta".to_string(), "data".to_string());
+
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("name", DataType::Utf8, false),
+                Field::new("address", DataType::Utf8, false),
+                Field::new("priority", DataType::UInt8, false),
+            ],
+            metadata,
+        );
+
+        let projected: Result<Schema> = schema.project(&[0, 3]);
+
+        assert!(projected.is_err());
+        if let Err(e) = projected {
+            assert_eq!(
+                e.to_string(),
+                "Schema error: project index 3 out of bounds, max field 3".to_string()
+            )
+        }
     }
 }
