@@ -319,7 +319,7 @@ pub struct RleDecoder {
     bit_reader: Option<BitReader>,
 
     // Buffer used when `bit_reader` is not `None`, for batch reading.
-    index_buf: [i32; 1024],
+    index_buf: Option<Box<[i32; 1024]>>,
 
     // The remaining number of values in RLE for this run
     rle_left: u32,
@@ -338,7 +338,7 @@ impl RleDecoder {
             rle_left: 0,
             bit_packed_left: 0,
             bit_reader: None,
-            index_buf: [0; 1024],
+            index_buf: None,
             current_value: None,
         }
     }
@@ -440,6 +440,8 @@ impl RleDecoder {
 
         let mut values_read = 0;
         while values_read < max_values {
+            let index_buf = self.index_buf.get_or_insert_with(|| Box::new([0; 1024]));
+
             if self.rle_left > 0 {
                 let num_values =
                     cmp::min(max_values - values_read, self.rle_left as usize);
@@ -456,19 +458,18 @@ impl RleDecoder {
                 let mut num_values =
                     cmp::min(max_values - values_read, self.bit_packed_left as usize);
 
-                num_values = cmp::min(num_values, self.index_buf.len());
+                num_values = cmp::min(num_values, index_buf.len());
                 loop {
                     num_values = bit_reader.get_batch::<i32>(
-                        &mut self.index_buf[..num_values],
+                        &mut index_buf[..num_values],
                         self.bit_width as usize,
                     );
                     for i in 0..num_values {
-                        buffer[values_read + i]
-                            .clone_from(&dict[self.index_buf[i] as usize])
+                        buffer[values_read + i].clone_from(&dict[index_buf[i] as usize])
                     }
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
-                    if num_values < self.index_buf.len() {
+                    if num_values < index_buf.len() {
                         break;
                     }
                 }
