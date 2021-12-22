@@ -33,7 +33,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 arrow = { path = "../arrow", version = "7.0.0-SNAPSHOT", features = ["pyarrow"] }
-pyo3 = { version = "0.14", features = ["extension-module"] }
+pyo3 = { version = "0.15", features = ["extension-module"] }
 
 [package.metadata.maturin]
 requires-dist = ["pyarrow>=1"]
