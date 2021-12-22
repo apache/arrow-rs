@@ -310,6 +310,9 @@ impl RleEncoder {
     }
 }
 
+/// Size, in number of `i32s` of buffer to use for RLE batch reading
+const RLE_DECODER_INDEX_BUFFER_SIZE: usize = 1024;
+
 /// A RLE/Bit-Packing hybrid decoder.
 pub struct RleDecoder {
     // Number of bits used to encode the value. Must be between [0, 64].
@@ -319,7 +322,7 @@ pub struct RleDecoder {
     bit_reader: Option<BitReader>,
 
     // Buffer used when `bit_reader` is not `None`, for batch reading.
-    index_buf: Option<Box<[i32; 1024]>>,
+    index_buf: Option<Box<[i32; RLE_DECODER_INDEX_BUFFER_SIZE]>>,
 
     // The remaining number of values in RLE for this run
     rle_left: u32,
