@@ -259,14 +259,14 @@ where
     let mut result = BooleanBufferBuilder::new(left.len());
     for i in 0..left.len() {
         let haystack = left.value(i);
-        let pat = escape(right.value(i));
-        let re = if let Some(ref regex) = map.get(&pat) {
+        let pat = right.value(i);
+        let re = if let Some(ref regex) = map.get(pat) {
             regex
         } else {
-            let re_pattern = pat.replace("%", ".*").replace("_", ".");
+            let re_pattern = escape(pat).replace("%", ".*").replace("_", ".");
             let re = op(&re_pattern)?;
-            map.insert(pat.clone(), re);
-            map.get(&pat).unwrap()
+            map.insert(pat, re);
+            map.get(pat).unwrap()
         };
 
         result.append(if negate_regex {
