@@ -112,6 +112,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Dictionary(_, _),
             Null,
         ) => true,
+        (Decimal(_, _), _) => false,
+        (_, Decimal(_, _)) => false,
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
         (LargeList(list_from), LargeList(list_to)) => {
@@ -1989,9 +1991,10 @@ mod tests {
     use crate::{buffer::Buffer, util::display::array_value_to_string};
 
     macro_rules! generate_cast_test_case {
-        ($INPUT_ARRAY: expr, $INPUT_ARRAY_TYPE: expr, $OUTPUT_TYPE_ARRAY: ident, $OUTPUT_TYPE: expr, $OUTPUT_VALUES: expr) => {
+        ($INPUT_ARRAY: expr, $OUTPUT_TYPE_ARRAY: ident, $OUTPUT_TYPE: expr, $OUTPUT_VALUES: expr) => {
             // assert cast type
-            assert!(can_cast_types($INPUT_ARRAY_TYPE, $OUTPUT_TYPE));
+            let input_array_type = $INPUT_ARRAY.data_type();
+            assert!(can_cast_types(input_array_type, $OUTPUT_TYPE));
             let casted_array = cast($INPUT_ARRAY, $OUTPUT_TYPE).unwrap();
             let result_array = casted_array
                 .as_any()
@@ -2014,7 +2017,7 @@ mod tests {
 
     // TODO remove this function if the decimal array has the creator function
     fn create_decimal_array(
-        array: &Vec<Option<i128>>,
+        array: &[Option<i128>],
         precision: usize,
         scale: usize,
     ) -> Result<DecimalArray> {
@@ -2044,7 +2047,6 @@ mod tests {
         // i8
         generate_cast_test_case!(
             &array,
-            &decimal_type,
             Int8Array,
             &DataType::Int8,
             vec![Some(1_i8), Some(2_i8), Some(3_i8), None, Some(5_i8)]
@@ -2052,7 +2054,6 @@ mod tests {
         // i16
         generate_cast_test_case!(
             &array,
-            &decimal_type,
             Int16Array,
             &DataType::Int16,
             vec![Some(1_i16), Some(2_i16), Some(3_i16), None, Some(5_i16)]
@@ -2060,7 +2061,6 @@ mod tests {
         // i32
         generate_cast_test_case!(
             &array,
-            &decimal_type,
             Int32Array,
             &DataType::Int32,
             vec![Some(1_i32), Some(2_i32), Some(3_i32), None, Some(5_i32)]
@@ -2068,7 +2068,6 @@ mod tests {
         // i64
         generate_cast_test_case!(
             &array,
-            &decimal_type,
             Int64Array,
             &DataType::Int64,
             vec![Some(1_i64), Some(2_i64), Some(3_i64), None, Some(5_i64)]
@@ -2076,7 +2075,6 @@ mod tests {
         // f32
         generate_cast_test_case!(
             &array,
-            &decimal_type,
             Int64Array,
             &DataType::Int64,
             vec![Some(1_i64), Some(2_i64), Some(3_i64), None, Some(5_i64)]
@@ -2084,7 +2082,6 @@ mod tests {
         // f64
         generate_cast_test_case!(
             &array,
-            &decimal_type,
             Int64Array,
             &DataType::Int64,
             vec![Some(1_i64), Some(2_i64), Some(3_i64), None, Some(5_i64)]
@@ -2116,7 +2113,6 @@ mod tests {
         let array = Arc::new(decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            &decimal_type,
             Float32Array,
             &DataType::Float32,
             vec![
@@ -2125,8 +2121,8 @@ mod tests {
                 Some(3.25_f32),
                 None,
                 Some(5.25_f32),
-                Some(1123456.78_f32),
-                Some(1123456.78_f32)
+                Some(1_123_456.7_f32),
+                Some(1_123_456.7_f32)
             ]
         );
 
@@ -2145,7 +2141,6 @@ mod tests {
         let array = Arc::new(decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            &decimal_type,
             Float64Array,
             &DataType::Float64,
             vec![
@@ -2154,26 +2149,19 @@ mod tests {
                 Some(3.25_f64),
                 None,
                 Some(5.25_f64),
-                Some(1123456789012345.60_f64),
-                Some(1123456789012345.60_f64)
+                Some(1_123_456_789_012_345.6_f64),
+                Some(1_123_456_789_012_345.6_f64),
             ]
         );
     }
 
     #[test]
     fn test_cast_numeric_to_decimal() {
-        // test cast type
+        // test negative cast type
         let decimal_type = DataType::Decimal(38, 6);
         assert!(!can_cast_types(&DataType::UInt64, &decimal_type));
 
-        // test cast data
-        let data_types = vec![
-            DataType::Int8,
-            DataType::Int16,
-            DataType::Int32,
-            DataType::Int64,
-        ];
-
+        // i8, i16, i32, i64
         let input_datas = vec![
             Arc::new(Int8Array::from(vec![
                 Some(1),
@@ -2204,11 +2192,9 @@ mod tests {
                 Some(5),
             ])) as ArrayRef, // i64
         ];
-        // i8, i16, i32, i64
-        for (i, array) in input_datas.iter().enumerate() {
+        for array in input_datas {
             generate_cast_test_case!(
-                array,
-                &data_types[i],
+                &array,
                 DecimalArray,
                 &decimal_type,
                 vec![
@@ -2235,13 +2221,12 @@ mod tests {
             Some(2.2),
             Some(4.4),
             None,
-            Some(1.123_456_78),
-            Some(1.123_456_79),
+            Some(1.123_456_7),
+            Some(1.123_456_7),
         ]);
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            &DataType::Float32,
             DecimalArray,
             &decimal_type,
             vec![
@@ -2261,13 +2246,12 @@ mod tests {
             Some(4.4),
             None,
             Some(1.123_456_789_123_4),
-            Some(1.123_456_789_012_345_68),
-            Some(1.123_456_789_012_345_60),
+            Some(1.123_456_789_012_345_6),
+            Some(1.123_456_789_012_345_6),
         ]);
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            &DataType::Float64,
             DecimalArray,
             &decimal_type,
             vec![
@@ -4234,6 +4218,9 @@ mod tests {
             Arc::new(DurationMillisecondArray::from(vec![1000, 2000])),
             Arc::new(DurationMicrosecondArray::from(vec![1000, 2000])),
             Arc::new(DurationNanosecondArray::from(vec![1000, 2000])),
+            Arc::new(
+                create_decimal_array(&[Some(1), Some(2), Some(3), None], 38, 0).unwrap(),
+            ),
         ]
     }
 
@@ -4408,6 +4395,7 @@ mod tests {
             Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
             Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
             Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
+            Decimal(38, 0),
         ]
     }
 
