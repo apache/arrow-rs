@@ -68,6 +68,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     }
 
     match (from_type, to_type) {
+        // cast one decimal type to another decimal type
+        (Decimal(_, _), Decimal(_, _)) => true,
         // TODO now just support signed numeric to decimal, support decimal to numeric later
         (Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal(_, _))
         | (
@@ -281,6 +283,38 @@ macro_rules! cast_floating_point_to_decimal {
     }};
 }
 
+// cast decimal type array to another decimal type array
+macro_rules! cast_decimal_to_decimal {
+    ($INPUT_ARRAY: expr, $INPUT_SCALE : ident, $OUTPUT_PRECISION :ident, $OUTPUT_SCALE : ident) => {{
+        let mut decimal_builder =
+            DecimalBuilder::new($INPUT_ARRAY.len(), *$OUTPUT_PRECISION, *$OUTPUT_SCALE);
+        let array = $INPUT_ARRAY
+            .as_any()
+            .downcast_ref::<DecimalArray>()
+            .unwrap();
+        if ($INPUT_SCALE > $OUTPUT_SCALE) {
+            let div: i128 = 10_i128.pow(((*$INPUT_SCALE - *$OUTPUT_SCALE) as u32));
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    decimal_builder.append_null()?;
+                } else {
+                    decimal_builder.append_value(array.value(i) / div)?;
+                }
+            }
+        } else {
+            let mul: i128 = 10_i128.pow(((*$OUTPUT_SCALE - *$INPUT_SCALE) as u32));
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    decimal_builder.append_null()?;
+                } else {
+                    decimal_builder.append_value(array.value(i) * mul)?;
+                }
+            }
+        }
+        Ok(Arc::new(decimal_builder.finish()))
+    }};
+}
+
 /// Cast `array` to the provided data type and return a new Array with
 /// type `to_type`, if possible. It accepts `CastOptions` to allow consumers
 /// to configure cast behavior.
@@ -315,6 +349,9 @@ pub fn cast_with_options(
         return Ok(array.clone());
     }
     match (from_type, to_type) {
+        (Decimal(_, s1), Decimal(p2, s2)) => {
+            cast_decimal_to_decimal!(array, s1, p2, s2)
+        }
         (_, Decimal(precision, scale)) => {
             // cast data to decimal
             match from_type {
@@ -1907,6 +1944,14 @@ mod tests {
     use super::*;
     use crate::{buffer::Buffer, util::display::array_value_to_string};
     use num::traits::Pow;
+
+    #[test]
+    fn test_cast_decimal_to_decimal() {
+        let input_type = DataType::Decimal(20, 3);
+        let output_type = DataType::Decimal(20, 4);
+        assert!(can_cast_types(&input_type, &output_type));
+        // let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
+    }
 
     #[test]
     fn test_cast_numeric_to_decimal() {
