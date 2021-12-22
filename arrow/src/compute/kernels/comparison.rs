@@ -303,7 +303,7 @@ where
 /// use arrow::compute::like_utf8;
 ///
 /// let strings = StringArray::from(vec!["Arrow", "Arrow", "Arrow", "Ar"]);
-/// let patterns = StringArray::from(vec!["A%", "B%", "A.", "A."]);
+/// let patterns = StringArray::from(vec!["A%", "B%", "A.", "A_"]);
 ///
 /// let result = like_utf8(&strings, &patterns).unwrap();
 /// assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
