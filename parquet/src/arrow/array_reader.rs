@@ -1277,7 +1277,7 @@ struct ArrayReaderBuilder {
 }
 
 /// Used in type visitor.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ArrayReaderBuilderContext {
     def_level: i16,
     rep_level: i16,
@@ -1491,6 +1491,11 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             }
             _ => (),
         }
+        
+        dbg!(&list_type);
+        dbg!(&context);
+        dbg!(&item_type);
+        dbg!(&new_context);
 
         let item_reader = self
             .dispatch(item_type.clone(), &new_context)
@@ -1836,6 +1841,8 @@ impl<'a> ArrayReaderBuilder {
 
         for child in cur_type.get_fields() {
             let mut struct_context = context.clone();
+            dbg!(&context);
+            dbg!(&child);
             if let Some(child_reader) = self.dispatch(child.clone(), context)? {
                 // TODO: this results in calling get_arrow_field twice, it could be reused
                 // from child_reader above, by making child_reader carry its `Field`

@@ -751,9 +751,10 @@ impl LevelInfo {
 
     /// Given a level's information, calculate the offsets required to index an array correctly.
     pub(crate) fn filter_array_indices(&self) -> Vec<usize> {
-        // happy path if not dealing with lists
+        dbg!(&self);
         let is_nullable = match self.level_type {
             LevelType::Primitive(is_nullable) => is_nullable,
+            LevelType::List(is_nullable) => is_nullable,
             _ => panic!(
                 "Cannot filter indices on a non-primitive array, found {:?}",
                 self.level_type
@@ -784,6 +785,7 @@ impl LevelInfo {
                 index += 1;
             }
         });
+        dbg!(&filtered);
         filtered
     }
 }
