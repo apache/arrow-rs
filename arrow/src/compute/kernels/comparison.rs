@@ -360,7 +360,11 @@ pub fn like_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             }
         }
     } else {
-        let re_pattern = right.replace("%", ".*").replace("_", ".");
+        let re_pattern = right
+            .replace("%", ".*")
+            .replace("_", ".")
+            .replace("(", r#"\("#)
+            .replace(")", r#"\)"#);
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -436,7 +440,11 @@ pub fn nlike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             result.append(!left.value(i).ends_with(&right[1..]));
         }
     } else {
-        let re_pattern = right.replace("%", ".*").replace("_", ".");
+        let re_pattern = right
+            .replace("%", ".*")
+            .replace("_", ".")
+            .replace("(", r#"\("#)
+            .replace(")", r#"\)"#);
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -517,7 +525,11 @@ pub fn ilike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             );
         }
     } else {
-        let re_pattern = right.replace("%", ".*").replace("_", ".");
+        let re_pattern = right
+            .replace("%", ".*")
+            .replace("_", ".")
+            .replace("(", r#"\("#)
+            .replace(")", r#"\)"#);
         let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from ILIKE pattern: {}",
@@ -2229,6 +2241,13 @@ mod tests {
     );
 
     test_utf8_scalar!(
+        test_utf8_array_like_scalar_escape_testing,
+        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        "%(%)%",
+        like_utf8_scalar,
+        vec![true, true, false, false]
+    );
+    test_utf8_scalar!(
         test_utf8_array_like_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%ar%",
@@ -2290,6 +2309,13 @@ mod tests {
         vec![false, false, false, true, true, false, true]
     );
     test_utf8_scalar!(
+        test_utf8_array_nlike_escape_testing,
+        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        "%(%)%",
+        nlike_utf8_scalar,
+        vec![false, false, true, true]
+    );
+    test_utf8_scalar!(
         test_utf8_array_nlike_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%ar%",
@@ -2335,6 +2361,13 @@ mod tests {
         vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
         ilike_utf8,
         vec![true, true, true, false, false, true, false]
+    );
+    test_utf8_scalar!(
+        ilike_utf8_scalar_escape_testing,
+        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        "%(%)%",
+        ilike_utf8_scalar,
+        vec![true, true, false, false]
     );
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar,
