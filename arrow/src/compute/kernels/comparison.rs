@@ -360,11 +360,7 @@ pub fn like_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             }
         }
     } else {
-        let re_pattern = right
-            .replace("%", ".*")
-            .replace("_", ".")
-            .replace("(", r#"\("#)
-            .replace(")", r#"\)"#);
+        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -440,11 +436,7 @@ pub fn nlike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             result.append(!left.value(i).ends_with(&right[1..]));
         }
     } else {
-        let re_pattern = right
-            .replace("%", ".*")
-            .replace("_", ".")
-            .replace("(", r#"\("#)
-            .replace(")", r#"\)"#);
+        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -525,11 +517,7 @@ pub fn ilike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             );
         }
     } else {
-        let re_pattern = right
-            .replace("%", ".*")
-            .replace("_", ".")
-            .replace("(", r#"\("#)
-            .replace(")", r#"\)"#);
+        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
         let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from ILIKE pattern: {}",
@@ -2338,7 +2326,7 @@ mod tests {
         test_utf8_array_nlike_scalar_escape_regex,
         vec![".*", "a", "*"],
         ".*",
-        like_utf8_scalar,
+        nlike_utf8_scalar,
         vec![false, true, true]
     );
 
@@ -2346,7 +2334,7 @@ mod tests {
         test_utf8_array_nlike_scalar_escape_regex_dot,
         vec![".", "a", "*"],
         ".",
-        like_utf8_scalar,
+        nlike_utf8_scalar,
         vec![false, true, true]
     );
     test_utf8_scalar!(
