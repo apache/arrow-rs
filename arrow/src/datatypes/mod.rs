@@ -123,12 +123,12 @@ mod tests {
         let field_metadata: BTreeMap<String, String> = kv_array.iter().cloned().collect();
 
         // Non-empty map: should be converted as JSON obj { ... }
-        let mut first_name = Field::new("first_name", DataType::Utf8, false);
-        first_name.set_metadata(Some(field_metadata));
+        let first_name = Field::new("first_name", DataType::Utf8, false)
+            .with_metadata(Some(field_metadata));
 
         // Empty map: should be omitted.
-        let mut last_name = Field::new("last_name", DataType::Utf8, false);
-        last_name.set_metadata(Some(BTreeMap::default()));
+        let last_name = Field::new("last_name", DataType::Utf8, false)
+            .with_metadata(Some(BTreeMap::default()));
 
         let person = DataType::Struct(vec![
             first_name,
@@ -1154,8 +1154,7 @@ mod tests {
         assert!(schema2 != schema4);
         assert!(schema3 != schema4);
 
-        let mut f = Field::new("c1", DataType::Utf8, false);
-        f.set_metadata(Some(
+        let f = Field::new("c1", DataType::Utf8, false).with_metadata(Some(
             [("foo".to_string(), "bar".to_string())]
                 .iter()
                 .cloned()
@@ -1195,8 +1194,8 @@ mod tests {
     fn person_schema() -> Schema {
         let kv_array = [("k".to_string(), "v".to_string())];
         let field_metadata: BTreeMap<String, String> = kv_array.iter().cloned().collect();
-        let mut first_name = Field::new("first_name", DataType::Utf8, false);
-        first_name.set_metadata(Some(field_metadata));
+        let first_name = Field::new("first_name", DataType::Utf8, false)
+            .with_metadata(Some(field_metadata));
 
         Schema::new(vec![
             first_name,
@@ -1227,16 +1226,16 @@ mod tests {
                 .iter()
                 .cloned()
                 .collect();
-        let mut f1 = Field::new("first_name", DataType::Utf8, false);
-        f1.set_metadata(Some(metadata1));
+        let f1 = Field::new("first_name", DataType::Utf8, false)
+            .with_metadata(Some(metadata1));
 
         let metadata2: BTreeMap<String, String> =
             [("foo".to_string(), "baz".to_string())]
                 .iter()
                 .cloned()
                 .collect();
-        let mut f2 = Field::new("first_name", DataType::Utf8, false);
-        f2.set_metadata(Some(metadata2));
+        let f2 = Field::new("first_name", DataType::Utf8, false)
+            .with_metadata(Some(metadata2));
 
         assert!(
             Schema::try_merge(vec![Schema::new(vec![f1]), Schema::new(vec![f2])])
@@ -1250,8 +1249,8 @@ mod tests {
                 .iter()
                 .cloned()
                 .collect();
-        let mut f2 = Field::new("first_name", DataType::Utf8, false);
-        f2.set_metadata(Some(metadata2));
+        let f2 = Field::new("first_name", DataType::Utf8, false)
+            .with_metadata(Some(metadata2));
 
         assert!(f1.try_merge(&f2).is_ok());
         assert!(f1.metadata().is_some());
@@ -1261,15 +1260,13 @@ mod tests {
         );
 
         // 3. Some + Some
-        let mut f1 = Field::new("first_name", DataType::Utf8, false);
-        f1.set_metadata(Some(
+        let mut f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(Some(
             [("foo".to_string(), "bar".to_string())]
                 .iter()
                 .cloned()
                 .collect(),
         ));
-        let mut f2 = Field::new("first_name", DataType::Utf8, false);
-        f2.set_metadata(Some(
+        let f2 = Field::new("first_name", DataType::Utf8, false).with_metadata(Some(
             [("foo2".to_string(), "bar2".to_string())]
                 .iter()
                 .cloned()
@@ -1290,8 +1287,7 @@ mod tests {
         );
 
         // 4. Some + None.
-        let mut f1 = Field::new("first_name", DataType::Utf8, false);
-        f1.set_metadata(Some(
+        let mut f1 = Field::new("first_name", DataType::Utf8, false).with_metadata(Some(
             [("foo".to_string(), "bar".to_string())]
                 .iter()
                 .cloned()

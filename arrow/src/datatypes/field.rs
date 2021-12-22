@@ -83,6 +83,12 @@ impl Field {
         }
     }
 
+    /// Sets the metadata of this `Field` to be `metadata` and returns self
+    pub fn with_metadata(mut self, metadata: Option<BTreeMap<String, String>>) -> Self {
+        self.set_metadata(metadata);
+        self
+    }
+
     /// Returns the immutable reference to the `Field`'s optional custom metadata.
     #[inline]
     pub const fn metadata(&self) -> &Option<BTreeMap<String, String>> {
