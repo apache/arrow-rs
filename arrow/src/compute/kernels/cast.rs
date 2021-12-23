@@ -372,13 +372,7 @@ pub fn cast_with_options(
         return Ok(array.clone());
     }
     match (from_type, to_type) {
-        (Decimal(p1, s1), Decimal(p2, s2)) => {
-            if p1.eq(p2) && s1.eq(s2) {
-                Ok(array.clone())
-            } else {
-                cast_decimal_to_decimal(array, s1, p2, s2)
-            }
-        }
+        (Decimal(_, s1), Decimal(p2, s2)) => cast_decimal_to_decimal(array, s1, p2, s2),
         (Decimal(_, scale), _) => {
             // cast decimal to other type
             match to_type {
