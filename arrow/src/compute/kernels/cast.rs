@@ -69,7 +69,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 
     match (from_type, to_type) {
         // TODO UTF8/unsigned numeric to decimal
-        // TODO decimal to decimal type
+        // cast one decimal type to another decimal type
+        (Decimal(_, _), Decimal(_, _)) => true,
         // signed numeric to decimal
         (Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal(_, _)) |
         // decimal to signed numeric
@@ -435,6 +436,7 @@ pub fn cast_with_options(
         return Ok(array.clone());
     }
     match (from_type, to_type) {
+        (Decimal(_, s1), Decimal(p2, s2)) => cast_decimal_to_decimal(array, s1, p2, s2),
         (Decimal(_, scale), _) => {
             // cast decimal to other type
             match to_type {
@@ -1202,6 +1204,42 @@ const NANOSECONDS: i64 = 1_000_000_000;
 const MILLISECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MILLISECONDS;
 /// Number of days between 0001-01-01 and 1970-01-01
 const EPOCH_DAYS_FROM_CE: i32 = 719_163;
+
+/// Cast one type of decimal array to another type of decimal array
+fn cast_decimal_to_decimal(
+    array: &ArrayRef,
+    input_scale: &usize,
+    output_precision: &usize,
+    output_scale: &usize,
+) -> Result<ArrayRef> {
+    let mut decimal_builder =
+        DecimalBuilder::new(array.len(), *output_precision, *output_scale);
+    let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+    if input_scale > output_scale {
+        // For example, input_scale is 4 and output_scale is 3;
+        // Original value is 11234_i128, and will be cast to 1123_i128.
+        let div = 10_i128.pow((input_scale - output_scale) as u32);
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                decimal_builder.append_null()?;
+            } else {
+                decimal_builder.append_value(array.value(i) / div)?;
+            }
+        }
+    } else {
+        // For example, input_scale is 3 and output_scale is 4;
+        // Original value is 1123_i128, and will be cast to 11230_i128.
+        let mul = 10_i128.pow((output_scale - input_scale) as u32);
+        for i in 0..array.len() {
+            if array.is_null(i) {
+                decimal_builder.append_null()?;
+            } else {
+                decimal_builder.append_value(array.value(i) * mul)?;
+            }
+        }
+    }
+    Ok(Arc::new(decimal_builder.finish()))
+}
 
 /// Cast an array by changing its array_data type to the desired type
 ///
@@ -2097,6 +2135,34 @@ mod tests {
             }
         }
         Ok(decimal_builder.finish())
+    }
+
+    #[test]
+    fn test_cast_decimal_to_decimal() {
+        let input_type = DataType::Decimal(20, 3);
+        let output_type = DataType::Decimal(20, 4);
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
+        let input_decimal_array = create_decimal_array(&array, 20, 3).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            DecimalArray,
+            &output_type,
+            vec![
+                Some(11234560_i128),
+                Some(21234560_i128),
+                Some(31234560_i128),
+                None
+            ]
+        );
+        // negative test
+        let array = vec![Some(123456), None];
+        let input_decimal_array = create_decimal_array(&array, 10, 0).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        let result = cast(&array, &DataType::Decimal(2, 2));
+        assert!(result.is_err());
+        assert_eq!("Invalid argument error: The value of 12345600 i128 is not compatible with Decimal(2,2)".to_string(), result.unwrap_err().to_string());
     }
 
     #[test]
