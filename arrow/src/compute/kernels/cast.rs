@@ -2104,7 +2104,7 @@ mod tests {
         let array = Arc::new(input_decimal_array) as ArrayRef;
         let result = cast(&array, &DataType::Decimal(2, 2));
         assert!(result.is_err());
-        assert_eq!("Invalid argument error: The value of 12345600 i128 is not compatible with Decimal(2,2))".to_string(), result.unwrap_err().to_string());
+        assert_eq!("Invalid argument error: The value of 12345600 i128 is not compatible with Decimal(2,2)".to_string(), result.unwrap_err().to_string());
     }
 
     #[test]
