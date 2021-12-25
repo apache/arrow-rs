@@ -27,8 +27,10 @@ use crate::buffer::{bitwise_bin_op_helper, buffer_unary_not, Buffer, MutableBuff
 use crate::compute::binary_boolean_kernel;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
-    ArrowNumericType, DataType, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type, Float64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, TimeUnit, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
@@ -1136,6 +1138,60 @@ macro_rules! typed_compares {
             (DataType::LargeUtf8, DataType::LargeUtf8) => {
                 typed_cmp!($LEFT, $RIGHT, LargeStringArray, $OP_STR, i64)
             }
+            (
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampNanosecondArray,
+                    $OP_PRIM,
+                    TimestampNanosecondType
+                )
+            }
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampMicrosecondArray,
+                    $OP_PRIM,
+                    TimestampMicrosecondType
+                )
+            }
+            (
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampMillisecondArray,
+                    $OP_PRIM,
+                    TimestampMillisecondType
+                )
+            }
+            (
+                DataType::Timestamp(TimeUnit::Second, _),
+                DataType::Timestamp(TimeUnit::Second, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampSecondArray,
+                    $OP_PRIM,
+                    TimestampSecondType
+                )
+            }
+            (DataType::Date32, DataType::Date32) => {
+                typed_cmp!($LEFT, $RIGHT, Date32Array, $OP_PRIM, Date32Type)
+            }
+            (DataType::Date64, DataType::Date64) => {
+                typed_cmp!($LEFT, $RIGHT, Date64Array, $OP_PRIM, Date64Type)
+            }
             (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                 "Comparing arrays of type {} is not yet implemented",
                 t1
@@ -1508,11 +1564,39 @@ mod tests {
         };
     }
 
+    /// Evaluate `KERNEL` with two vectors as inputs and assert against the expected output.
+    /// `A_VEC` and `B_VEC` can be of type `Vec<i64>` or `Vec<Option<i64>>`.
+    /// `EXPECTED` can be either `Vec<bool>` or `Vec<Option<bool>>`.
+    /// The main reason for this macro is that inputs and outputs align nicely after `cargo fmt`.
+    macro_rules! cmp_timestamp {
+        ($KERNEL:ident, $DYN_KERNEL:ident, $TIMESTAMP_ARRAY:ident, $A_VEC:expr, $B_VEC:expr, $EXPECTED:expr) => {
+            let a = $TIMESTAMP_ARRAY::from($A_VEC);
+            let b = $TIMESTAMP_ARRAY::from($B_VEC);
+            let c = $KERNEL(&a, &b).unwrap();
+            assert_eq!(BooleanArray::from($EXPECTED), c);
+
+            // slice and test if the dynamic array works
+            let a = a.slice(0, a.len());
+            let b = b.slice(0, b.len());
+            let c = $DYN_KERNEL(a.as_ref(), b.as_ref()).unwrap();
+            assert_eq!(BooleanArray::from($EXPECTED), c);
+        };
+    }
+
     #[test]
     fn test_primitive_array_eq() {
         cmp_i64!(
             eq,
             eq_dyn,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![false, false, true, false, false, false, false, true, false, false]
+        );
+
+        cmp_timestamp!(
+            eq,
+            eq_dyn,
+            TimestampSecondArray,
             vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![false, false, true, false, false, false, false, true, false, false]
@@ -1560,6 +1644,15 @@ mod tests {
         cmp_i64!(
             neq,
             neq_dyn,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![true, true, false, true, true, true, true, false, true, true]
+        );
+
+        cmp_timestamp!(
+            neq,
+            neq_dyn,
+            TimestampMillisecondArray,
             vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![true, true, false, true, true, true, true, false, true, true]
@@ -1770,6 +1863,15 @@ mod tests {
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![false, false, false, true, true, false, false, false, true, true]
         );
+
+        cmp_timestamp!(
+            lt,
+            lt_dyn,
+            TimestampMillisecondArray,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![false, false, false, true, true, false, false, false, true, true]
+        );
     }
 
     #[test]
@@ -1787,6 +1889,15 @@ mod tests {
         cmp_i64!(
             lt,
             lt_dyn,
+            vec![None, None, Some(1), Some(1), None, None, Some(2), Some(2),],
+            vec![None, Some(1), None, Some(1), None, Some(3), None, Some(3),],
+            vec![None, None, None, Some(false), None, None, None, Some(true)]
+        );
+
+        cmp_timestamp!(
+            lt,
+            lt_dyn,
+            TimestampMillisecondArray,
             vec![None, None, Some(1), Some(1), None, None, Some(2), Some(2),],
             vec![None, Some(1), None, Some(1), None, Some(3), None, Some(3),],
             vec![None, None, None, Some(false), None, None, None, Some(true)]
