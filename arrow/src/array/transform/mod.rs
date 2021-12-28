@@ -701,9 +701,10 @@ mod tests {
         let arrays = vec![decimal_array.data()];
         let mut a = MutableArrayData::new(arrays, true, 3);
         a.extend(0, 0, 3);
+        a.extend(0, 2, 3);
         let result = a.freeze();
         let array = DecimalArray::from(result);
-        let expected = create_decimal_array(&[Some(1), Some(2), None], 10, 3);
+        let expected = create_decimal_array(&[Some(1), Some(2), None, None], 10, 3);
         assert_eq!(array, expected);
     }
     #[test]
