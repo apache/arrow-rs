@@ -1208,7 +1208,7 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
         }
         DataType::Dictionary(key_type, _value_type) => layout(key_type),
         DataType::Decimal(_, _) => {
-            // Decimals are always some fixed width; The rust implemenation
+            // Decimals are always some fixed width; The rust implementation
             // always uses 16 bytes / size of i128
             DataTypeLayout::new_fixed_width(size_of::<i128>())
         }
