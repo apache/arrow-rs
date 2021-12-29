@@ -108,11 +108,12 @@ fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
 mod tests {
     use crate::{
         array::{
-            self, new_null_array, Array, Date32Array, Date64Array, PrimitiveBuilder,
-            StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
-            Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-            Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-            TimestampNanosecondArray, TimestampSecondArray, FixedSizeBinaryBuilder,
+            self, new_null_array, Array, Date32Array, Date64Array,
+            FixedSizeBinaryBuilder, PrimitiveBuilder, StringArray, StringBuilder,
+            StringDictionaryBuilder, StructArray, Time32MillisecondArray,
+            Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+            TimestampMicrosecondArray, TimestampMillisecondArray,
+            TimestampNanosecondArray, TimestampSecondArray,
         },
         datatypes::{DataType, Field, Int32Type, Schema},
     };
@@ -311,9 +312,7 @@ mod tests {
     #[test]
     fn test_pretty_format_fixed_size_binary() -> Result<()> {
         // define a schema.
-        let field_type = DataType::FixedSizeBinary(
-            3,
-        );
+        let field_type = DataType::FixedSizeBinary(3);
         let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
 
         let mut builder = FixedSizeBinaryBuilder::new(3, 3);
