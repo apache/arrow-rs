@@ -1142,7 +1142,7 @@ impl ArrayReader for StructArrayReader {
         }
 
         // Now we can build array data
-        let mut array_data = ArrayDataBuilder::new(self.data_type.clone())
+        let mut array_data_builder = ArrayDataBuilder::new(self.data_type.clone())
             .len(children_array_len)
             .child_data(
                 children_array
@@ -1157,8 +1157,8 @@ impl ArrayReader for StructArrayReader {
             let mut def_level_data_buffer = MutableBuffer::new(buffer_size);
             def_level_data_buffer.resize(buffer_size, 0);
 
-        // Safety: the buffer is always treated as `u16` in the code below
-        let def_level_data = unsafe { def_level_data_buffer.typed_data_mut() };
+            // Safety: the buffer is always treated as `u16` in the code below
+            let def_level_data = unsafe { def_level_data_buffer.typed_data_mut() };
 
             def_level_data
                 .iter_mut()
@@ -1184,12 +1184,13 @@ impl ArrayReader for StructArrayReader {
                 bitmap_builder.append(not_null);
             }
 
-            array_data = array_data.null_bit_buffer(bitmap_builder.finish());
+            array_data_builder =
+                array_data_builder.null_bit_buffer(bitmap_builder.finish());
 
             self.def_level_buffer = Some(def_level_data_buffer.into());
         }
 
-        let array_data = unsafe { array_data.build_unchecked() };
+        let array_data = unsafe { array_data_builder.build_unchecked() };
 
         if self.struct_rep_level != 0 {
             // calculate struct rep level data, since struct doesn't add to repetition
