@@ -233,6 +233,7 @@ fn build_extend_dictionary(
 fn build_extend(array: &ArrayData) -> Extend {
     use crate::datatypes::*;
     match array.data_type() {
+        DataType::Decimal(_, _) => primitive::build_extend::<i128>(array),
         DataType::Null => null::build_extend(array),
         DataType::Boolean => boolean::build_extend(array),
         DataType::UInt8 => primitive::build_extend::<u8>(array),
@@ -281,6 +282,7 @@ fn build_extend(array: &ArrayData) -> Extend {
 fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
     use crate::datatypes::*;
     Box::new(match data_type {
+        DataType::Decimal(_, _) => primitive::extend_nulls::<i128>,
         DataType::Null => null::extend_nulls,
         DataType::Boolean => boolean::extend_nulls,
         DataType::UInt8 => primitive::extend_nulls::<u8>,
@@ -423,7 +425,8 @@ impl<'a> MutableArrayData<'a> {
         };
 
         let child_data = match &data_type {
-            DataType::Null
+            DataType::Decimal(_, _)
+            | DataType::Null
             | DataType::Boolean
             | DataType::UInt8
             | DataType::UInt16
@@ -656,6 +659,7 @@ mod tests {
 
     use super::*;
 
+    use crate::array::{DecimalArray, DecimalBuilder};
     use crate::{
         array::{
             Array, ArrayData, ArrayRef, BooleanArray, DictionaryArray,
@@ -670,6 +674,72 @@ mod tests {
         array::{ListArray, StringBuilder},
         error::Result,
     };
+
+    fn create_decimal_array(
+        array: &[Option<i128>],
+        precision: usize,
+        scale: usize,
+    ) -> DecimalArray {
+        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
+        for value in array {
+            match value {
+                None => {
+                    decimal_builder.append_null().unwrap();
+                }
+                Some(v) => {
+                    decimal_builder.append_value(*v).unwrap();
+                }
+            }
+        }
+        decimal_builder.finish()
+    }
+
+    #[test]
+    fn test_decimal() {
+        let decimal_array =
+            create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
+        let arrays = vec![decimal_array.data()];
+        let mut a = MutableArrayData::new(arrays, true, 3);
+        a.extend(0, 0, 3);
+        a.extend(0, 2, 3);
+        let result = a.freeze();
+        let array = DecimalArray::from(result);
+        let expected = create_decimal_array(&[Some(1), Some(2), None, None], 10, 3);
+        assert_eq!(array, expected);
+    }
+    #[test]
+    fn test_decimal_offset() {
+        let decimal_array =
+            create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
+        let decimal_array = decimal_array.slice(1, 3); // 2, null, 3
+        let arrays = vec![decimal_array.data()];
+        let mut a = MutableArrayData::new(arrays, true, 2);
+        a.extend(0, 0, 2); // 2, null
+        let result = a.freeze();
+        let array = DecimalArray::from(result);
+        let expected = create_decimal_array(&[Some(2), None], 10, 3);
+        assert_eq!(array, expected);
+    }
+
+    #[test]
+    fn test_decimal_null_offset_nulls() {
+        let decimal_array =
+            create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
+        let decimal_array = decimal_array.slice(1, 3); // 2, null, 3
+        let arrays = vec![decimal_array.data()];
+        let mut a = MutableArrayData::new(arrays, true, 2);
+        a.extend(0, 0, 2); // 2, null
+        a.extend_nulls(3); // 2, null, null, null, null
+        a.extend(0, 1, 3); //2, null, null, null, null, null, 3
+        let result = a.freeze();
+        let array = DecimalArray::from(result);
+        let expected = create_decimal_array(
+            &[Some(2), None, None, None, None, None, Some(3)],
+            10,
+            3,
+        );
+        assert_eq!(array, expected);
+    }
 
     /// tests extending from a primitive array w/ offset nor nulls
     #[test]
