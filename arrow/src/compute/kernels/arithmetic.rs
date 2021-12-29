@@ -57,7 +57,8 @@ where
     let buffer_size = array.len() * std::mem::size_of::<T::Native>();
     let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
-    let mut result_chunks = result.typed_data_mut().chunks_exact_mut(lanes);
+    // safety: result is newly created above, always written as a T below
+    let mut result_chunks = unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
     let mut array_chunks = array.values().chunks_exact(lanes);
 
     result_chunks
@@ -111,7 +112,8 @@ where
 
     let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
-    let mut result_chunks = result.typed_data_mut().chunks_exact_mut(lanes);
+    // safety: result is newly created above, always written as a T below
+    let mut result_chunks = unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
     let mut array_chunks = array.values().chunks_exact(lanes);
 
     result_chunks
@@ -398,7 +400,8 @@ where
     let buffer_size = left.len() * std::mem::size_of::<T::Native>();
     let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
-    let mut result_chunks = result.typed_data_mut().chunks_exact_mut(lanes);
+    // safety: result is newly created above, always written as a T below
+    let mut result_chunks = unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
     let mut left_chunks = left.values().chunks_exact(lanes);
     let mut right_chunks = right.values().chunks_exact(lanes);
 
@@ -662,7 +665,10 @@ where
             let valid_chunks = b.bit_chunks(0, left.len());
 
             // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
-            let mut result_chunks = result.typed_data_mut().chunks_exact_mut(64);
+
+            // safety: result is newly created above, always written as a T below
+            let mut result_chunks =
+                unsafe { result.typed_data_mut().chunks_exact_mut(64) };
             let mut left_chunks = left.values().chunks_exact(64);
             let mut right_chunks = right.values().chunks_exact(64);
 
@@ -707,7 +713,9 @@ where
             )?;
         }
         None => {
-            let mut result_chunks = result.typed_data_mut().chunks_exact_mut(lanes);
+            // safety: result is newly created above, always written as a T below
+            let mut result_chunks =
+                unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
             let mut left_chunks = left.values().chunks_exact(lanes);
             let mut right_chunks = right.values().chunks_exact(lanes);
 
@@ -784,7 +792,10 @@ where
             let valid_chunks = b.bit_chunks(0, left.len());
 
             // process data in chunks of 64 elements since we also get 64 bits of validity information at a time
-            let mut result_chunks = result.typed_data_mut().chunks_exact_mut(64);
+
+            // safety: result is newly created above, always written as a T below
+            let mut result_chunks =
+                unsafe { result.typed_data_mut().chunks_exact_mut(64) };
             let mut left_chunks = left.values().chunks_exact(64);
             let mut right_chunks = right.values().chunks_exact(64);
 
@@ -829,7 +840,9 @@ where
             )?;
         }
         None => {
-            let mut result_chunks = result.typed_data_mut().chunks_exact_mut(lanes);
+            // safety: result is newly created above, always written as a T below
+            let mut result_chunks =
+                unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
             let mut left_chunks = left.values().chunks_exact(lanes);
             let mut right_chunks = right.values().chunks_exact(lanes);
 
@@ -891,7 +904,8 @@ where
     let buffer_size = array.len() * std::mem::size_of::<T::Native>();
     let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
-    let mut result_chunks = result.typed_data_mut().chunks_exact_mut(lanes);
+    // safety: result is newly created above, always written as a T below
+    let mut result_chunks = unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
     let mut array_chunks = array.values().chunks_exact(lanes);
 
     result_chunks
@@ -942,7 +956,8 @@ where
     let buffer_size = array.len() * std::mem::size_of::<T::Native>();
     let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
-    let mut result_chunks = result.typed_data_mut().chunks_exact_mut(lanes);
+    // safety: result is newly created above, always written as a T below
+    let mut result_chunks = unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
     let mut array_chunks = array.values().chunks_exact(lanes);
 
     result_chunks

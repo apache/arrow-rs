@@ -79,4 +79,5 @@ harness = false
 
 [[bench]]
 name = "arrow_array_reader"
+required-features = ["test_common"]
 harness = false

@@ -121,6 +121,10 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             MutableBuffer::new(capacity * mem::size_of::<i64>()),
             empty_buffer,
         ],
+        DataType::Interval(IntervalUnit::MonthDayNano) => [
+            MutableBuffer::new(capacity * mem::size_of::<i128>()),
+            empty_buffer,
+        ],
         DataType::Utf8 | DataType::Binary => {
             let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<i32>());
             // safety: `unsafe` code assumes that this buffer is initialized with one element
@@ -1177,6 +1181,9 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
         }
         DataType::Interval(IntervalUnit::DayTime) => {
             DataTypeLayout::new_fixed_width(size_of::<i64>())
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            DataTypeLayout::new_fixed_width(size_of::<i128>())
         }
         DataType::Duration(_) => DataTypeLayout::new_fixed_width(size_of::<i64>()),
         DataType::Binary => DataTypeLayout::new_binary(size_of::<i32>()),

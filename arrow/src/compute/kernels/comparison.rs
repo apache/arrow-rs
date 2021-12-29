@@ -32,7 +32,7 @@ use crate::datatypes::{
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
-use regex::Regex;
+use regex::{escape, Regex};
 use std::any::type_name;
 use std::collections::HashMap;
 
@@ -263,7 +263,7 @@ where
         let re = if let Some(ref regex) = map.get(pat) {
             regex
         } else {
-            let re_pattern = pat.replace("%", ".*").replace("_", ".");
+            let re_pattern = escape(pat).replace("%", ".*").replace("_", ".");
             let re = op(&re_pattern)?;
             map.insert(pat, re);
             map.get(pat).unwrap()
@@ -303,7 +303,7 @@ where
 /// use arrow::compute::like_utf8;
 ///
 /// let strings = StringArray::from(vec!["Arrow", "Arrow", "Arrow", "Ar"]);
-/// let patterns = StringArray::from(vec!["A%", "B%", "A.", "A."]);
+/// let patterns = StringArray::from(vec!["A%", "B%", "A.", "A_"]);
 ///
 /// let result = like_utf8(&strings, &patterns).unwrap();
 /// assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
@@ -360,7 +360,7 @@ pub fn like_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             }
         }
     } else {
-        let re_pattern = right.replace("%", ".*").replace("_", ".");
+        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -436,7 +436,7 @@ pub fn nlike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             result.append(!left.value(i).ends_with(&right[1..]));
         }
     } else {
-        let re_pattern = right.replace("%", ".*").replace("_", ".");
+        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -517,7 +517,7 @@ pub fn ilike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             );
         }
     } else {
-        let re_pattern = right.replace("%", ".*").replace("_", ".");
+        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
         let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from ILIKE pattern: {}",
@@ -921,23 +921,22 @@ where
     let mut left_chunks = left.values().chunks_exact(lanes);
     let mut right_chunks = right.values().chunks_exact(lanes);
 
+    // safety: result is newly created above, always written as a T below
+    let result_chunks = unsafe { result.typed_data_mut() };
     let result_remainder = left_chunks
         .borrow_mut()
         .zip(right_chunks.borrow_mut())
-        .fold(
-            result.typed_data_mut(),
-            |result_slice, (left_slice, right_slice)| {
-                let simd_left = T::load(left_slice);
-                let simd_right = T::load(right_slice);
-                let simd_result = simd_op(simd_left, simd_right);
+        .fold(result_chunks, |result_slice, (left_slice, right_slice)| {
+            let simd_left = T::load(left_slice);
+            let simd_right = T::load(right_slice);
+            let simd_result = simd_op(simd_left, simd_right);
 
-                let bitmask = T::mask_to_u64(&simd_result);
-                let bytes = bitmask.to_le_bytes();
-                result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
+            let bitmask = T::mask_to_u64(&simd_result);
+            let bytes = bitmask.to_le_bytes();
+            result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
 
-                &mut result_slice[lanes / 8..]
-            },
-        );
+            &mut result_slice[lanes / 8..]
+        });
 
     let left_remainder = left_chunks.remainder();
     let right_remainder = right_chunks.remainder();
@@ -1005,19 +1004,21 @@ where
     let mut left_chunks = left.values().chunks_exact(lanes);
     let simd_right = T::init(right);
 
-    let result_remainder = left_chunks.borrow_mut().fold(
-        result.typed_data_mut(),
-        |result_slice, left_slice| {
-            let simd_left = T::load(left_slice);
-            let simd_result = simd_op(simd_left, simd_right);
+    // safety: result is newly created above, always written as a T below
+    let result_chunks = unsafe { result.typed_data_mut() };
+    let result_remainder =
+        left_chunks
+            .borrow_mut()
+            .fold(result_chunks, |result_slice, left_slice| {
+                let simd_left = T::load(left_slice);
+                let simd_result = simd_op(simd_left, simd_right);
 
-            let bitmask = T::mask_to_u64(&simd_result);
-            let bytes = bitmask.to_le_bytes();
-            result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
+                let bitmask = T::mask_to_u64(&simd_result);
+                let bytes = bitmask.to_le_bytes();
+                result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
 
-            &mut result_slice[lanes / 8..]
-        },
-    );
+                &mut result_slice[lanes / 8..]
+            });
 
     let left_remainder = left_chunks.remainder();
 
@@ -2222,10 +2223,34 @@ mod tests {
 
     test_utf8!(
         test_utf8_array_like,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
-        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
+        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
+        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
         like_utf8,
-        vec![true, true, true, false, false, true, false]
+        vec![true, true, true, false, false, true, false, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_like_scalar_escape_testing,
+        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        "%(%)%",
+        like_utf8_scalar,
+        vec![true, true, false, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_like_scalar_escape_regex,
+        vec![".*", "a", "*"],
+        ".*",
+        like_utf8_scalar,
+        vec![true, false, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_like_scalar_escape_regex_dot,
+        vec![".", "a", "*"],
+        ".",
+        like_utf8_scalar,
+        vec![true, false, false]
     );
 
     test_utf8_scalar!(
@@ -2290,6 +2315,29 @@ mod tests {
         vec![false, false, false, true, true, false, true]
     );
     test_utf8_scalar!(
+        test_utf8_array_nlike_escape_testing,
+        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        "%(%)%",
+        nlike_utf8_scalar,
+        vec![false, false, true, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_nlike_scalar_escape_regex,
+        vec![".*", "a", "*"],
+        ".*",
+        nlike_utf8_scalar,
+        vec![false, true, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_nlike_scalar_escape_regex_dot,
+        vec![".", "a", "*"],
+        ".",
+        nlike_utf8_scalar,
+        vec![false, true, true]
+    );
+    test_utf8_scalar!(
         test_utf8_array_nlike_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
         "%ar%",
@@ -2335,6 +2383,13 @@ mod tests {
         vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
         ilike_utf8,
         vec![true, true, true, false, false, true, false]
+    );
+    test_utf8_scalar!(
+        ilike_utf8_scalar_escape_testing,
+        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        "%(%)%",
+        ilike_utf8_scalar,
+        vec![true, true, false, false]
     );
     test_utf8_scalar!(
         test_utf8_array_ilike_scalar,

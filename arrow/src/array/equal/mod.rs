@@ -199,6 +199,9 @@ fn equal_values(
         | DataType::Duration(_) => primitive_equal::<i64>(
             lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
         ),
+        DataType::Interval(IntervalUnit::MonthDayNano) => primitive_equal::<i128>(
+            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
+        ),
         DataType::Utf8 | DataType::Binary => variable_sized_equal::<i32>(
             lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
         ),
