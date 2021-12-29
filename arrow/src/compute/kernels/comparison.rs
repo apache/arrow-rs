@@ -27,9 +27,11 @@ use crate::buffer::{bitwise_bin_op_helper, buffer_unary_not, Buffer, MutableBuff
 use crate::compute::binary_boolean_kernel;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
-    ArrowNumericType, DataType, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type, Float64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
@@ -1138,6 +1140,60 @@ macro_rules! typed_compares {
                 typed_cmp!($LEFT, $RIGHT, LargeStringArray, $OP_STR, i64)
             }
             (
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampNanosecondArray,
+                    $OP_PRIM,
+                    TimestampNanosecondType
+                )
+            }
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampMicrosecondArray,
+                    $OP_PRIM,
+                    TimestampMicrosecondType
+                )
+            }
+            (
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampMillisecondArray,
+                    $OP_PRIM,
+                    TimestampMillisecondType
+                )
+            }
+            (
+                DataType::Timestamp(TimeUnit::Second, _),
+                DataType::Timestamp(TimeUnit::Second, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampSecondArray,
+                    $OP_PRIM,
+                    TimestampSecondType
+                )
+            }
+            (DataType::Date32, DataType::Date32) => {
+                typed_cmp!($LEFT, $RIGHT, Date32Array, $OP_PRIM, Date32Type)
+            }
+            (DataType::Date64, DataType::Date64) => {
+                typed_cmp!($LEFT, $RIGHT, Date64Array, $OP_PRIM, Date64Type)
+            }
+            (
                 DataType::Interval(IntervalUnit::YearMonth),
                 DataType::Interval(IntervalUnit::YearMonth),
             ) => {
@@ -1515,13 +1571,14 @@ mod tests {
     use crate::{array::Int32Array, array::Int64Array, datatypes::Field};
 
     /// Evaluate `KERNEL` with two vectors as inputs and assert against the expected output.
-    /// `A_VEC` and `B_VEC` can be of type `Vec<i64>` or `Vec<Option<i64>>`.
+    /// `A_VEC` and `B_VEC` can be of type `Vec<T>` or `Vec<Option<T>>` where `T` is the native
+    /// type of the data type of the Arrow array element.
     /// `EXPECTED` can be either `Vec<bool>` or `Vec<Option<bool>>`.
     /// The main reason for this macro is that inputs and outputs align nicely after `cargo fmt`.
-    macro_rules! cmp_i64 {
-        ($KERNEL:ident, $DYN_KERNEL:ident, $A_VEC:expr, $B_VEC:expr, $EXPECTED:expr) => {
-            let a = Int64Array::from($A_VEC);
-            let b = Int64Array::from($B_VEC);
+    macro_rules! cmp_vec {
+        ($KERNEL:ident, $DYN_KERNEL:ident, $ARRAY:ident, $A_VEC:expr, $B_VEC:expr, $EXPECTED:expr) => {
+            let a = $ARRAY::from($A_VEC);
+            let b = $ARRAY::from($B_VEC);
             let c = $KERNEL(&a, &b).unwrap();
             assert_eq!(BooleanArray::from($EXPECTED), c);
 
@@ -1530,6 +1587,16 @@ mod tests {
             let b = b.slice(0, b.len());
             let c = $DYN_KERNEL(a.as_ref(), b.as_ref()).unwrap();
             assert_eq!(BooleanArray::from($EXPECTED), c);
+        };
+    }
+
+    /// Evaluate `KERNEL` with two vectors as inputs and assert against the expected output.
+    /// `A_VEC` and `B_VEC` can be of type `Vec<i64>` or `Vec<Option<i64>>`.
+    /// `EXPECTED` can be either `Vec<bool>` or `Vec<Option<bool>>`.
+    /// The main reason for this macro is that inputs and outputs align nicely after `cargo fmt`.
+    macro_rules! cmp_i64 {
+        ($KERNEL:ident, $DYN_KERNEL:ident, $A_VEC:expr, $B_VEC:expr, $EXPECTED:expr) => {
+            cmp_vec!($KERNEL, $DYN_KERNEL, Int64Array, $A_VEC, $B_VEC, $EXPECTED);
         };
     }
 
@@ -1550,6 +1617,15 @@ mod tests {
         cmp_i64!(
             eq,
             eq_dyn,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![false, false, true, false, false, false, false, true, false, false]
+        );
+
+        cmp_vec!(
+            eq,
+            eq_dyn,
+            TimestampSecondArray,
             vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![false, false, true, false, false, false, false, true, false, false]
@@ -1597,6 +1673,15 @@ mod tests {
         cmp_i64!(
             neq,
             neq_dyn,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![true, true, false, true, true, true, true, false, true, true]
+        );
+
+        cmp_vec!(
+            neq,
+            neq_dyn,
+            TimestampMillisecondArray,
             vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![true, true, false, true, true, true, true, false, true, true]
@@ -1807,6 +1892,15 @@ mod tests {
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![false, false, false, true, true, false, false, false, true, true]
         );
+
+        cmp_vec!(
+            lt,
+            lt_dyn,
+            TimestampMillisecondArray,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![false, false, false, true, true, false, false, false, true, true]
+        );
     }
 
     #[test]
@@ -1824,6 +1918,15 @@ mod tests {
         cmp_i64!(
             lt,
             lt_dyn,
+            vec![None, None, Some(1), Some(1), None, None, Some(2), Some(2),],
+            vec![None, Some(1), None, Some(1), None, Some(3), None, Some(3),],
+            vec![None, None, None, Some(false), None, None, None, Some(true)]
+        );
+
+        cmp_vec!(
+            lt,
+            lt_dyn,
+            TimestampMillisecondArray,
             vec![None, None, Some(1), Some(1), None, None, Some(2), Some(2),],
             vec![None, Some(1), None, Some(1), None, Some(3), None, Some(3),],
             vec![None, None, None, Some(false), None, None, None, Some(true)]
