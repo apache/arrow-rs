@@ -528,30 +528,30 @@ mod tests {
 
     #[test]
     fn test_buffer_builder_availability() {
-        let builder = Int8BufferBuilder::new(10);
-        let builder = Int16BufferBuilder::new(10);
-        let builder = Int32BufferBuilder::new(10);
-        let builder = Int64BufferBuilder::new(10);
-        let builder = UInt16BufferBuilder::new(10);
-        let builder = UInt32BufferBuilder::new(10);
-        let builder = Float32BufferBuilder::new(10);
-        let builder = Float64BufferBuilder::new(10);
-        let builder = TimestampSecondBufferBuilder::new(10);
-        let builder = TimestampMillisecondBufferBuilder::new(10);
-        let builder = TimestampMicrosecondBufferBuilder::new(10);
-        let builder = TimestampNanosecondBufferBuilder::new(10);
-        let builder = Date32BufferBuilder::new(10);
-        let builder = Date64BufferBuilder::new(10);
-        let builder = Time32SecondBufferBuilder::new(10);
-        let builder = Time32MillisecondBufferBuilder::new(10);
-        let builder = Time64MicrosecondBufferBuilder::new(10);
-        let builder = Time64NanosecondBufferBuilder::new(10);
-        let builder = IntervalYearMonthBufferBuilder::new(10);
-        let builder = IntervalDayTimeBufferBuilder::new(10);
-        let builder = IntervalMonthDayNanoBufferBuilder::new(10);
-        let builder = DurationSecondBufferBuilder::new(10);
-        let builder = DurationMillisecondBufferBuilder::new(10);
-        let builder = DurationMicrosecondBufferBuilder::new(10);
-        let builder = DurationNanosecondBufferBuilder::new(10);
+        let _builder = Int8BufferBuilder::new(10);
+        let _builder = Int16BufferBuilder::new(10);
+        let _builder = Int32BufferBuilder::new(10);
+        let _builder = Int64BufferBuilder::new(10);
+        let _builder = UInt16BufferBuilder::new(10);
+        let _builder = UInt32BufferBuilder::new(10);
+        let _builder = Float32BufferBuilder::new(10);
+        let _builder = Float64BufferBuilder::new(10);
+        let _builder = TimestampSecondBufferBuilder::new(10);
+        let _builder = TimestampMillisecondBufferBuilder::new(10);
+        let _builder = TimestampMicrosecondBufferBuilder::new(10);
+        let _builder = TimestampNanosecondBufferBuilder::new(10);
+        let _builder = Date32BufferBuilder::new(10);
+        let _builder = Date64BufferBuilder::new(10);
+        let _builder = Time32SecondBufferBuilder::new(10);
+        let _builder = Time32MillisecondBufferBuilder::new(10);
+        let _builder = Time64MicrosecondBufferBuilder::new(10);
+        let _builder = Time64NanosecondBufferBuilder::new(10);
+        let _builder = IntervalYearMonthBufferBuilder::new(10);
+        let _builder = IntervalDayTimeBufferBuilder::new(10);
+        let _builder = IntervalMonthDayNanoBufferBuilder::new(10);
+        let _builder = DurationSecondBufferBuilder::new(10);
+        let _builder = DurationMillisecondBufferBuilder::new(10);
+        let _builder = DurationMicrosecondBufferBuilder::new(10);
+        let _builder = DurationNanosecondBufferBuilder::new(10);
     }
 }
