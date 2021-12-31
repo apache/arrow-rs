@@ -99,6 +99,19 @@ fn infer_field_schema(string: &str, datetime_re: Option<Regex>) -> DataType {
     }
 }
 
+/// This is a collection of options for csv reader when the builder pattern cannot be used
+/// and the parameters need to be passed around
+#[derive(Debug, Default, Clone)]
+pub struct ReaderOptions {
+    has_header: bool,
+    delimiter: Option<u8>,
+    escape: Option<u8>,
+    quote: Option<u8>,
+    terminator: Option<u8>,
+    max_read_records: Option<usize>,
+    datetime_re: Option<Regex>,
+}
+
 /// Infer the schema of a CSV file by reading through the first n records of the file,
 /// with `max_read_records` controlling the maximum number of records to read.
 ///
@@ -112,41 +125,23 @@ pub fn infer_file_schema<R: Read + Seek>(
     max_read_records: Option<usize>,
     has_header: bool,
 ) -> Result<(Schema, usize)> {
-    infer_file_schema_with_csv_options(
-        reader,
-        delimiter,
+    let roptions = ReaderOptions {
+        delimiter: Some(delimiter),
         max_read_records,
         has_header,
-        None,
-        None,
-        None,
-        None,
-    )
+        ..Default::default()
+    };
+
+    infer_file_schema_with_csv_options(reader, roptions)
 }
 
 fn infer_file_schema_with_csv_options<R: Read + Seek>(
     reader: &mut R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-    escape: Option<u8>,
-    quote: Option<u8>,
-    terminator: Option<u8>,
-    datetime_re: Option<Regex>,
+    roptoins: ReaderOptions,
 ) -> Result<(Schema, usize)> {
     let saved_offset = reader.seek(SeekFrom::Current(0))?;
 
-    let (schema, records_count) = infer_reader_schema_with_csv_options(
-        reader,
-        delimiter,
-        max_read_records,
-        has_header,
-        escape,
-        quote,
-        terminator,
-        datetime_re,
-    )?;
-
+    let (schema, records_count) = infer_reader_schema_with_csv_options(reader, roptoins)?;
     // return the reader seek back to the start
     reader.seek(SeekFrom::Start(saved_offset))?;
 
@@ -165,40 +160,31 @@ pub fn infer_reader_schema<R: Read>(
     max_read_records: Option<usize>,
     has_header: bool,
 ) -> Result<(Schema, usize)> {
-    infer_reader_schema_with_csv_options(
-        reader,
-        delimiter,
+    let roptions = ReaderOptions {
+        delimiter: Some(delimiter),
         max_read_records,
         has_header,
-        None,
-        None,
-        None,
-        None,
-    )
+        ..Default::default()
+    };
+    infer_reader_schema_with_csv_options(reader, roptions)
 }
 
 fn infer_reader_schema_with_csv_options<R: Read>(
     reader: &mut R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-    escape: Option<u8>,
-    quote: Option<u8>,
-    terminator: Option<u8>,
-    datetime_re: Option<Regex>,
+    roptions: ReaderOptions,
 ) -> Result<(Schema, usize)> {
     let mut csv_reader = Reader::build_csv_reader(
         reader,
-        has_header,
-        Some(delimiter),
-        escape,
-        quote,
-        terminator,
+        roptions.has_header,
+        roptions.delimiter,
+        roptions.escape,
+        roptions.quote,
+        roptions.terminator,
     );
 
     // get or create header names
     // when has_header is false, creates default column names with column_ prefix
-    let headers: Vec<String> = if has_header {
+    let headers: Vec<String> = if roptions.has_header {
         let headers = &csv_reader.headers()?.clone();
         headers.iter().map(|s| s.to_string()).collect()
     } else {
@@ -218,7 +204,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     let mut fields = vec![];
 
     let mut record = StringRecord::new();
-    let max_records = max_read_records.unwrap_or(usize::MAX);
+    let max_records = roptions.max_read_records.unwrap_or(usize::MAX);
     while records_count < max_records {
         if !csv_reader.read_record(&mut record)? {
             break;
@@ -231,7 +217,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
                     nulls[i] = true;
                 } else {
                     column_types[i]
-                        .insert(infer_field_schema(string, datetime_re.clone()));
+                        .insert(infer_field_schema(string, roptions.datetime_re.clone()));
                 }
             }
         }
@@ -350,6 +336,7 @@ impl<R: Read> Reader<R> {
     /// If reading a `File` or an input that supports `std::io::Read` and `std::io::Seek`;
     /// you can customise the Reader, such as to enable schema inference, use
     /// `ReaderBuilder`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         reader: R,
         schema: SchemaRef,
@@ -391,6 +378,7 @@ impl<R: Read> Reader<R> {
     ///
     /// This constructor allows you more flexibility in what records are processed by the
     /// csv reader.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_reader(
         reader: R,
         schema: SchemaRef,
@@ -1185,16 +1173,17 @@ impl ReaderBuilder {
         let schema = match self.schema {
             Some(schema) => schema,
             None => {
-                let (inferred_schema, _) = infer_file_schema_with_csv_options(
-                    &mut reader,
-                    delimiter,
-                    self.max_records,
-                    self.has_header,
-                    self.escape,
-                    self.quote,
-                    self.terminator,
-                    self.datetime_re,
-                )?;
+                let roptions = ReaderOptions {
+                    delimiter: Some(delimiter),
+                    max_read_records: self.max_records,
+                    has_header: self.has_header,
+                    escape: self.escape,
+                    quote: self.quote,
+                    terminator: self.terminator,
+                    datetime_re: self.datetime_re,
+                };
+                let (inferred_schema, _) =
+                    infer_file_schema_with_csv_options(&mut reader, roptions)?;
 
                 Arc::new(inferred_schema)
             }
