@@ -891,7 +891,7 @@ pub fn gt_eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
 }
 
 macro_rules! dyn_compare_scalar {
-    // Applies `LEFT OP RIGHT` when `LEFT` is a `DictionaryArray` with keys of type `KT`
+    // Applies `LEFT OP RIGHT` when `LEFT` is a `DictionaryArray`
     ($LEFT: expr, $RIGHT: expr, $OP: ident) => {{
         let right: i128 = $RIGHT.try_into().map_err(|_| {
             ArrowError::ComputeError(String::from("Can not convert scalar to i128"))
@@ -899,9 +899,7 @@ macro_rules! dyn_compare_scalar {
         match $LEFT.data_type() {
             DataType::Int8 => {
                 let right: i8 = right.try_into().map_err(|_| {
-                    ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to i128",
-                    ))
+                    ArrowError::ComputeError(String::from("Can not convert scalar to i8"))
                 })?;
                 let left = as_primitive_array::<Int8Type>($LEFT);
                 $OP::<Int8Type>(left, right)
@@ -909,7 +907,7 @@ macro_rules! dyn_compare_scalar {
             DataType::Int16 => {
                 let right: i16 = right.try_into().map_err(|_| {
                     ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to i128",
+                        "Can not convert scalar to i16",
                     ))
                 })?;
                 let left = as_primitive_array::<Int16Type>($LEFT);
@@ -918,7 +916,7 @@ macro_rules! dyn_compare_scalar {
             DataType::Int32 => {
                 let right: i32 = right.try_into().map_err(|_| {
                     ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to i128",
+                        "Can not convert scalar to i32",
                     ))
                 })?;
                 let left = as_primitive_array::<Int32Type>($LEFT);
@@ -927,7 +925,7 @@ macro_rules! dyn_compare_scalar {
             DataType::Int64 => {
                 let right: i64 = right.try_into().map_err(|_| {
                     ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to i128",
+                        "Can not convert scalar to i64",
                     ))
                 })?;
                 let left = as_primitive_array::<Int64Type>($LEFT);
@@ -935,9 +933,7 @@ macro_rules! dyn_compare_scalar {
             }
             DataType::UInt8 => {
                 let right: u8 = right.try_into().map_err(|_| {
-                    ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to i128",
-                    ))
+                    ArrowError::ComputeError(String::from("Can not convert scalar to u8"))
                 })?;
                 let left = as_primitive_array::<UInt8Type>($LEFT);
                 $OP::<UInt8Type>(left, right)
@@ -945,7 +941,7 @@ macro_rules! dyn_compare_scalar {
             DataType::UInt16 => {
                 let right: u16 = right.try_into().map_err(|_| {
                     ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to i128",
+                        "Can not convert scalar to u16",
                     ))
                 })?;
                 let left = as_primitive_array::<UInt16Type>($LEFT);
@@ -954,7 +950,7 @@ macro_rules! dyn_compare_scalar {
             DataType::UInt32 => {
                 let right: u32 = right.try_into().map_err(|_| {
                     ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to i128",
+                        "Can not convert scalar to u32",
                     ))
                 })?;
                 let left = as_primitive_array::<UInt32Type>($LEFT);
@@ -963,7 +959,7 @@ macro_rules! dyn_compare_scalar {
             DataType::UInt64 => {
                 let right: u64 = right.try_into().map_err(|_| {
                     ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to i128",
+                        "Can not convert scalar to u64",
                     ))
                 })?;
                 let left = as_primitive_array::<UInt64Type>($LEFT);
@@ -974,6 +970,7 @@ macro_rules! dyn_compare_scalar {
             ))),
         }
     }};
+    // Applies `LEFT OP RIGHT` when `LEFT` is a `DictionaryArray` with keys of type `KT`
     ($LEFT: expr, $RIGHT: expr, $KT: ident, $OP: ident) => {{
         let right: i128 = $RIGHT.try_into().map_err(|_| {
             ArrowError::ComputeError(String::from("Can not convert scalar to i128"))
