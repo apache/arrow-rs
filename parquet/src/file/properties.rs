@@ -308,13 +308,13 @@ impl WriterPropertiesBuilder {
     }
 
     // ----------------------------------------------------------------------
-    // Setters for any column (global)
+    // Setters for all columns
 
-    /// Sets encoding for any column.
+    /// Sets encoding for all columns.
     ///
-    /// If dictionary is not enabled, this is treated as a primary encoding for all
-    /// columns. In case when dictionary is enabled for any column, this value is
-    /// considered to be a fallback encoding for that column.
+    /// If dictionary is not enabled, the provided value is treated as a primary
+    /// encoding for all columns. When dictionary is enabled for a column, this
+    /// value is considered to be a fallback encoding for that column.
     ///
     /// Panics if user tries to set dictionary encoding here, regardless of dictionary
     /// encoding flag being set.
@@ -323,13 +323,13 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets compression codec for any column.
+    /// Sets compression codec for all columns.
     pub fn set_compression(mut self, value: Compression) -> Self {
         self.default_column_properties.set_compression(value);
         self
     }
 
-    /// Sets flag to enable/disable dictionary encoding for any column.
+    /// Sets flag to enable/disable dictionary encoding for all columns.
     ///
     /// Use this method to set dictionary encoding, instead of explicitly specifying
     /// encoding in `set_encoding` method.
@@ -338,13 +338,13 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets flag to enable/disable statistics for any column.
+    /// Sets flag to enable/disable statistics for all columns.
     pub fn set_statistics_enabled(mut self, value: bool) -> Self {
         self.default_column_properties.set_statistics_enabled(value);
         self
     }
 
-    /// Sets max statistics size for any column.
+    /// Sets max statistics size for all columns.
     /// Applicable only if statistics are enabled.
     pub fn set_max_statistics_size(mut self, value: usize) -> Self {
         self.default_column_properties
