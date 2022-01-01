@@ -29,8 +29,10 @@ use crate::util::bit_util::BitReader;
 
 /// A slice of levels buffer data that is written to by a [`ColumnLevelDecoder`]
 pub trait LevelsBufferSlice {
+    /// Returns the capacity of this slice or `usize::MAX` if no limit
     fn capacity(&self) -> usize;
 
+    /// Count the number of levels in `range` not equal to `max_level`
     fn count_nulls(&self, range: Range<usize>, max_level: i16) -> usize;
 }
 
@@ -46,6 +48,7 @@ impl LevelsBufferSlice for [i16] {
 
 /// A slice of values buffer data that is written to by a [`ColumnValueDecoder`]
 pub trait ValuesBufferSlice {
+    /// Returns the capacity of this slice or `usize::MAX` if no limit
     fn capacity(&self) -> usize;
 }
 
@@ -59,8 +62,18 @@ impl<T> ValuesBufferSlice for [T] {
 pub trait ColumnLevelDecoder {
     type Slice: LevelsBufferSlice + ?Sized;
 
+    /// Create a new [`ColumnLevelDecoder`]
     fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self;
 
+    /// Read level data into `out[range]` returning the number of levels read
+    ///
+    /// `range` is provided by the caller to allow for types such as default-initialized `[T]`
+    /// that only track capacity and not length
+    ///
+    /// # Panics
+    ///
+    /// Implementations may panic if `range` overlaps with already written data
+    ///
     fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize>;
 }
 
@@ -68,8 +81,10 @@ pub trait ColumnLevelDecoder {
 pub trait ColumnValueDecoder {
     type Slice: ValuesBufferSlice + ?Sized;
 
+    /// Create a new [`ColumnValueDecoder`]
     fn new(col: &ColumnDescPtr) -> Self;
 
+    /// Set the current dictionary page
     fn set_dict(
         &mut self,
         buf: ByteBufferPtr,
@@ -78,6 +93,7 @@ pub trait ColumnValueDecoder {
         is_sorted: bool,
     ) -> Result<()>;
 
+    /// Set the current data page
     fn set_data(
         &mut self,
         encoding: Encoding,
@@ -85,6 +101,15 @@ pub trait ColumnValueDecoder {
         num_values: usize,
     ) -> Result<()>;
 
+    /// Read values data into `out[range]` returning the number of values read
+    ///
+    /// `range` is provided by the caller to allow for types such as default-initialized `[T]`
+    /// that only track capacity and not length
+    ///
+    /// # Panics
+    ///
+    /// Implementations may panic if `range` overlaps with already written data
+    ///
     fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize>;
 }
 

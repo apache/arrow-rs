@@ -86,7 +86,8 @@ impl DefinitionLevelBuffer {
         old_bitmap
     }
 
-    pub fn valid_position_iter(
+    /// Returns an iterator of the valid positions in `range` in descending order
+    pub fn rev_valid_positions_iter(
         &self,
         range: Range<usize>,
     ) -> impl Iterator<Item = usize> + '_ {

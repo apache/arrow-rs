@@ -29,7 +29,12 @@ pub trait BufferQueue: Sized {
 
     type Slice: ?Sized;
 
-    /// Split out the first `len` committed items
+    /// Split out the first `len` items
+    ///
+    /// # Panics
+    ///
+    /// Implementations must panic if `len` is beyond the length of [`BufferQueue`]
+    ///
     fn split_off(&mut self, len: usize) -> Self::Output;
 
     /// Returns a [`Self::Slice`] with at least `batch_size` capacity that can be used
@@ -59,7 +64,7 @@ pub trait BufferQueue: Sized {
     fn set_len(&mut self, len: usize);
 }
 
-/// A typed buffer similar to [`Vec<T>`] but making use of [`MutableBuffer`]
+/// A typed buffer similar to [`Vec<T>`] but using [`MutableBuffer`] for storage
 pub struct TypedBuffer<T> {
     buffer: MutableBuffer,
 
@@ -152,11 +157,18 @@ impl<T> BufferQueue for TypedBuffer<T> {
     }
 }
 
+/// A [`BufferQueue`] capable of storing column values
 pub trait ValuesBuffer: BufferQueue {
+    /// Iterate through the indexes in `range` in reverse order, moving the value at each
+    /// index to the next index returned by `rev_valid_position_iter`
+    ///
+    /// It is guaranteed that the `i`th index returned by `rev_valid_position_iter` is greater
+    /// than or equal to `range.end - i - 1`
+    ///
     fn pad_nulls(
         &mut self,
         range: Range<usize>,
-        rev_position_iter: impl Iterator<Item = usize>,
+        rev_valid_position_iter: impl Iterator<Item = usize>,
     );
 }
 
@@ -164,11 +176,11 @@ impl<T> ValuesBuffer for TypedBuffer<T> {
     fn pad_nulls(
         &mut self,
         range: Range<usize>,
-        rev_position_iter: impl Iterator<Item = usize>,
+        rev_valid_position_iter: impl Iterator<Item = usize>,
     ) {
         let slice = self.as_slice_mut();
 
-        for (value_pos, level_pos) in range.rev().zip(rev_position_iter) {
+        for (value_pos, level_pos) in range.rev().zip(rev_valid_position_iter) {
             debug_assert!(level_pos >= value_pos);
             if level_pos <= value_pos {
                 break;

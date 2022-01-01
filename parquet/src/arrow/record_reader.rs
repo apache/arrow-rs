@@ -236,7 +236,7 @@ where
                 )
             })?;
 
-            let iter = def_levels.valid_position_iter(
+            let iter = def_levels.rev_valid_positions_iter(
                 self.values_written..self.values_written + levels_read,
             );
 
