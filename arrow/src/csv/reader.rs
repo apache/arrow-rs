@@ -742,8 +742,31 @@ impl Parser for Date64Type {
     fn parse_formatted(string: &str, format: &str) -> Option<i64> {
         match Self::DATA_TYPE {
             DataType::Date64 => {
-                let date_time = chrono::DateTime::parse_from_str(string, format).ok()?;
-                Self::Native::from_i64(date_time.timestamp_millis())
+                use chrono::format::Fixed;
+                use chrono::format::StrftimeItems;
+                let fmt = StrftimeItems::new(format);
+                let has_zone = fmt.into_iter().any(|item| match item {
+                    chrono::format::Item::Fixed(fixed_item) => matches!(
+                        fixed_item,
+                        Fixed::RFC2822
+                            | Fixed::RFC3339
+                            | Fixed::TimezoneName
+                            | Fixed::TimezoneOffsetColon
+                            | Fixed::TimezoneOffsetColonZ
+                            | Fixed::TimezoneOffset
+                            | Fixed::TimezoneOffsetZ
+                    ),
+                    _ => false,
+                });
+                if has_zone {
+                    let date_time =
+                        chrono::DateTime::parse_from_str(string, format).ok()?;
+                    Self::Native::from_i64(date_time.timestamp_millis())
+                } else {
+                    let date_time =
+                        chrono::NaiveDateTime::parse_from_str(string, format).ok()?;
+                    Self::Native::from_i64(date_time.timestamp_millis())
+                }
             }
             _ => None,
         }
@@ -1673,6 +1696,14 @@ mod tests {
             parse_formatted::<Date64Type>("1900-02-28 12:34:56", "%Y-%m-%d %H:%M:%S")
                 .unwrap(),
             -2203932304000
+        );
+        assert_eq!(
+            parse_formatted::<Date64Type>(
+                "1900-02-28 12:34:56+0030",
+                "%Y-%m-%d %H:%M:%S%z"
+            )
+            .unwrap(),
+            -2203932304000 - (30 * 60 * 1000)
         );
     }
 
