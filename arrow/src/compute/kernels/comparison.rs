@@ -1246,7 +1246,7 @@ where
             | DataType::UInt32
             | DataType::UInt64 => {dyn_compare_scalar!(&left, right, key_type, gt_eq_scalar)}
             _ => Err(ArrowError::ComputeError(
-                "Kernel only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
+                "gt_eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
             ))
         }
         DataType::Int8
@@ -1260,7 +1260,7 @@ where
             dyn_compare_scalar!(&left, right, gt_eq_scalar)
         }
         _ => Err(ArrowError::ComputeError(
-            "Kernel only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
+            "gt_eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
         ))
     }
 }
