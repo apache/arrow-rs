@@ -334,11 +334,8 @@ where
                                 )?;
                                 offset = level_data.end();
 
-                                let decoder = R::new(
-                                    max_rep_level,
-                                    rep_level_encoding,
-                                    level_data,
-                                );
+                                let decoder =
+                                    R::new(max_rep_level, rep_level_encoding, level_data);
 
                                 self.rep_level_decoder = Some(decoder);
                             }
@@ -352,11 +349,8 @@ where
                                 )?;
                                 offset = level_data.end();
 
-                                let decoder = D::new(
-                                    max_def_level,
-                                    def_level_encoding,
-                                    level_data,
-                                );
+                                let decoder =
+                                    D::new(max_def_level, def_level_encoding, level_data);
 
                                 self.def_level_decoder = Some(decoder);
                             }

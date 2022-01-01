@@ -66,7 +66,7 @@ pub struct GenericRecordReader<V, CV> {
 impl<V, CV> GenericRecordReader<V, CV>
 where
     V: ValuesBuffer + Default,
-    CV: ColumnValueDecoder<Slice= V::Slice>,
+    CV: ColumnValueDecoder<Slice = V::Slice>,
 {
     pub fn new(desc: ColumnDescPtr) -> Self {
         let def_levels =
