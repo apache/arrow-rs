@@ -3,21 +3,46 @@ use std::ops::Range;
 
 use arrow::buffer::{Buffer, MutableBuffer};
 
-pub trait RecordBuffer: Sized {
+/// A buffer that supports writing new data to the end, and removing data from the front
+///
+/// Used by [RecordReader](`super::RecordReader`) to buffer up values before returning a
+/// potentially smaller number of values, corresponding to a whole number of semantic records
+pub trait BufferQueue: Sized {
     type Output: Sized;
 
-    type Writer: ?Sized;
+    type Slice: ?Sized;
 
-    /// Split out `len` items
-    fn split(&mut self, len: usize) -> Self::Output;
+    /// Split out the first `len` committed items
+    fn split_off(&mut self, len: usize) -> Self::Output;
 
-    /// Get a writer with `batch_size` capacity
-    fn writer(&mut self, batch_size: usize) -> &mut Self::Writer;
+    /// Returns a [`Self::Slice`] with at least `batch_size` capacity that can be used
+    /// to append data to the end of this [`BufferQueue`]
+    ///
+    /// NB: writes to the returned slice will not update the length of [`BufferQueue`]
+    /// instead a subsequent call should be made to [`BufferQueue::set_len`]
+    fn spare_capacity_mut(&mut self, batch_size: usize) -> &mut Self::Slice;
 
-    /// Record a write of `len` items
-    fn commit(&mut self, len: usize);
+    /// Sets the length of the [`BufferQueue`].
+    ///
+    /// Intended to be used in combination with [`BufferQueue::spare_capacity_mut`]
+    ///
+    /// # Panics
+    ///
+    /// Implementations must panic if `len` is beyond the initialized length
+    ///
+    /// Implementations may panic if `set_len` is called with less than what has been written
+    ///
+    /// This distinction is to allow for implementations that return a default initialized
+    /// [BufferQueue::Slice`] which doesn't track capacity and length separately
+    ///
+    /// For example, [`TypedBuffer<T>`] returns a default-initialized `&mut [T]`, and does not
+    /// track how much of this slice is actually written to by the caller. This is still
+    /// safe as the slice is default-initialized.
+    ///
+    fn set_len(&mut self, len: usize);
 }
 
+/// A typed buffer similar to [`Vec<T>`] but making use of [`MutableBuffer`]
 pub struct TypedBuffer<T> {
     buffer: MutableBuffer,
 
@@ -67,12 +92,12 @@ impl<T> TypedBuffer<T> {
     }
 }
 
-impl<T> RecordBuffer for TypedBuffer<T> {
+impl<T> BufferQueue for TypedBuffer<T> {
     type Output = Buffer;
 
-    type Writer = [T];
+    type Slice = [T];
 
-    fn split(&mut self, len: usize) -> Self::Output {
+    fn split_off(&mut self, len: usize) -> Self::Output {
         assert!(len <= self.len);
 
         let num_bytes = len * std::mem::size_of::<T>();
@@ -93,7 +118,7 @@ impl<T> RecordBuffer for TypedBuffer<T> {
         std::mem::replace(&mut self.buffer, remaining).into()
     }
 
-    fn writer(&mut self, batch_size: usize) -> &mut Self::Writer {
+    fn spare_capacity_mut(&mut self, batch_size: usize) -> &mut Self::Slice {
         self.buffer
             .resize((self.len + batch_size) * std::mem::size_of::<T>(), 0);
 
@@ -101,7 +126,7 @@ impl<T> RecordBuffer for TypedBuffer<T> {
         &mut self.as_slice_mut()[range]
     }
 
-    fn commit(&mut self, len: usize) {
+    fn set_len(&mut self, len: usize) {
         self.len = len;
 
         let new_bytes = self.len * std::mem::size_of::<T>();
@@ -110,7 +135,7 @@ impl<T> RecordBuffer for TypedBuffer<T> {
     }
 }
 
-pub trait ValueBuffer {
+pub trait ValuesBuffer: BufferQueue {
     fn pad_nulls(
         &mut self,
         range: Range<usize>,
@@ -118,7 +143,7 @@ pub trait ValueBuffer {
     );
 }
 
-impl<T> ValueBuffer for TypedBuffer<T> {
+impl<T> ValuesBuffer for TypedBuffer<T> {
     fn pad_nulls(
         &mut self,
         range: Range<usize>,

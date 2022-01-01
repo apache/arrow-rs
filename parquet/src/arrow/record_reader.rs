@@ -21,7 +21,7 @@ use arrow::bitmap::Bitmap;
 use arrow::buffer::Buffer;
 
 use crate::arrow::record_reader::{
-    buffer::{RecordBuffer, TypedBuffer, ValueBuffer},
+    buffer::{BufferQueue, TypedBuffer, ValuesBuffer},
     definition_levels::{DefinitionLevelBuffer, DefinitionLevelDecoder},
 };
 use crate::column::{
@@ -65,8 +65,8 @@ pub struct GenericRecordReader<V, CV> {
 
 impl<V, CV> GenericRecordReader<V, CV>
 where
-    V: RecordBuffer + ValueBuffer + Default,
-    CV: ColumnValueDecoder<Writer = V::Writer>,
+    V: ValuesBuffer + Default,
+    CV: ColumnValueDecoder<Slice= V::Slice>,
 {
     pub fn new(desc: ColumnDescPtr) -> Self {
         let def_levels =
@@ -166,7 +166,7 @@ where
     /// as record values, e.g. those from `self.num_values` to `self.values_written`.
     pub fn consume_def_levels(&mut self) -> Result<Option<Buffer>> {
         Ok(match self.def_levels.as_mut() {
-            Some(x) => Some(x.split(self.num_values)),
+            Some(x) => Some(x.split_off(self.num_values)),
             None => None,
         })
     }
@@ -175,7 +175,7 @@ where
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_rep_levels(&mut self) -> Result<Option<Buffer>> {
         Ok(match self.rep_levels.as_mut() {
-            Some(x) => Some(x.split(self.num_values)),
+            Some(x) => Some(x.split_off(self.num_values)),
             None => None,
         })
     }
@@ -183,7 +183,7 @@ where
     /// Returns currently stored buffer data.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_record_data(&mut self) -> Result<V::Output> {
-        Ok(self.records.split(self.num_values))
+        Ok(self.records.split_off(self.num_values))
     }
 
     /// Returns currently stored null bitmap data.
@@ -214,14 +214,14 @@ where
         let rep_levels = self
             .rep_levels
             .as_mut()
-            .map(|levels| levels.writer(batch_size));
+            .map(|levels| levels.spare_capacity_mut(batch_size));
 
         let def_levels = self
             .def_levels
             .as_mut()
-            .map(|levels| levels.writer(batch_size));
+            .map(|levels| levels.spare_capacity_mut(batch_size));
 
-        let values = self.records.writer(batch_size);
+        let values = self.records.spare_capacity_mut(batch_size);
 
         let (values_read, levels_read) = self
             .column_reader
@@ -286,14 +286,14 @@ where
     #[allow(clippy::unnecessary_wraps)]
     fn set_values_written(&mut self, new_values_written: usize) -> Result<()> {
         self.values_written = new_values_written;
-        self.records.commit(self.values_written);
+        self.records.set_len(self.values_written);
 
         if let Some(ref mut buf) = self.rep_levels {
-            buf.commit(self.values_written)
+            buf.set_len(self.values_written)
         };
 
         if let Some(ref mut buf) = self.def_levels {
-            buf.commit(self.values_written)
+            buf.set_len(self.values_written)
         };
 
         Ok(())

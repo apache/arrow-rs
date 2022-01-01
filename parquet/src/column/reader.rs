@@ -22,7 +22,7 @@ use std::cmp::{max, min};
 use super::page::{Page, PageReader};
 use crate::basic::*;
 use crate::column::reader::decoder::{
-    ColumnLevelDecoder, ColumnValueDecoder, LevelsWriter, ValuesWriter,
+    ColumnLevelDecoder, ColumnValueDecoder, LevelsBufferSlice, ValuesBufferSlice,
 };
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
@@ -108,6 +108,11 @@ pub type ColumnReaderImpl<T> = GenericColumnReader<
 >;
 
 #[doc(hidden)]
+/// Reads data for a given column chunk, using the provided decoders:
+///
+/// - R: [`ColumnLevelDecoder`] used to decode repetition levels
+/// - D: [`ColumnLevelDecoder`] used to decode definition levels
+/// - V: [`ColumnValueDecoder`] used to decode value data
 pub struct GenericColumnReader<R, D, V> {
     descr: ColumnDescPtr,
 
@@ -138,7 +143,7 @@ where
 {
     /// Creates new column reader based on column descriptor and page reader.
     pub fn new(descr: ColumnDescPtr, page_reader: Box<dyn PageReader>) -> Self {
-        let values_decoder = V::create(&descr);
+        let values_decoder = V::new(&descr);
         Self::new_with_decoder(descr, page_reader, values_decoder)
     }
 
@@ -182,9 +187,9 @@ where
     pub fn read_batch(
         &mut self,
         batch_size: usize,
-        mut def_levels: Option<&mut D::Writer>,
-        mut rep_levels: Option<&mut R::Writer>,
-        values: &mut V::Writer,
+        mut def_levels: Option<&mut D::Slice>,
+        mut rep_levels: Option<&mut R::Slice>,
+        values: &mut V::Slice,
     ) -> Result<(usize, usize)> {
         let mut values_read = 0;
         let mut levels_read = 0;
@@ -329,7 +334,7 @@ where
                                 )?;
                                 offset = level_data.end();
 
-                                let decoder = R::create(
+                                let decoder = R::new(
                                     max_rep_level,
                                     rep_level_encoding,
                                     level_data,
@@ -347,7 +352,7 @@ where
                                 )?;
                                 offset = level_data.end();
 
-                                let decoder = D::create(
+                                let decoder = D::new(
                                     max_def_level,
                                     def_level_encoding,
                                     level_data,
@@ -381,7 +386,7 @@ where
                             // DataPage v2 only supports RLE encoding for repetition
                             // levels
                             if self.descr.max_rep_level() > 0 {
-                                let decoder = R::create(
+                                let decoder = R::new(
                                     self.descr.max_rep_level(),
                                     Encoding::RLE,
                                     buf.range(0, rep_levels_byte_len as usize),
@@ -392,7 +397,7 @@ where
                             // DataPage v2 only supports RLE encoding for definition
                             // levels
                             if self.descr.max_def_level() > 0 {
-                                let decoder = D::create(
+                                let decoder = D::new(
                                     self.descr.max_def_level(),
                                     Encoding::RLE,
                                     buf.range(

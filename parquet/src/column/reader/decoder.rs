@@ -10,22 +10,16 @@ use crate::memory::ByteBufferPtr;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::BitReader;
 
-/// A type that can have level data written to it by a [`ColumnLevelDecoder`]
-pub trait LevelsWriter {
+/// A slice of levels buffer data that is written to by a [`ColumnLevelDecoder`]
+pub trait LevelsBufferSlice {
     fn capacity(&self) -> usize;
-
-    fn get(&self, idx: usize) -> i16;
 
     fn count_nulls(&self, range: Range<usize>, max_level: i16) -> usize;
 }
 
-impl LevelsWriter for [i16] {
+impl LevelsBufferSlice for [i16] {
     fn capacity(&self) -> usize {
         self.len()
-    }
-
-    fn get(&self, idx: usize) -> i16 {
-        self[idx]
     }
 
     fn count_nulls(&self, range: Range<usize>, max_level: i16) -> usize {
@@ -33,31 +27,31 @@ impl LevelsWriter for [i16] {
     }
 }
 
-/// A type that can have value data written to it by a [`ColumnValueDecoder`]
-pub trait ValuesWriter {
+/// A slice of values buffer data that is written to by a [`ColumnValueDecoder`]
+pub trait ValuesBufferSlice {
     fn capacity(&self) -> usize;
 }
 
-impl<T> ValuesWriter for [T] {
+impl<T> ValuesBufferSlice for [T] {
     fn capacity(&self) -> usize {
         self.len()
     }
 }
 
-/// Decodes level data to a [`LevelsWriter`]
+/// Decodes level data to a [`LevelsBufferSlice`]
 pub trait ColumnLevelDecoder {
-    type Writer: LevelsWriter + ?Sized;
+    type Slice: LevelsBufferSlice + ?Sized;
 
-    fn create(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self;
+    fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self;
 
-    fn read(&mut self, out: &mut Self::Writer, range: Range<usize>) -> Result<usize>;
+    fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize>;
 }
 
-/// Decodes value data to a [`ValuesWriter`]
+/// Decodes value data to a [`ValuesBufferSlice`]
 pub trait ColumnValueDecoder {
-    type Writer: ValuesWriter + ?Sized;
+    type Slice: ValuesBufferSlice + ?Sized;
 
-    fn create(col: &ColumnDescPtr) -> Self;
+    fn new(col: &ColumnDescPtr) -> Self;
 
     fn set_dict(
         &mut self,
@@ -74,7 +68,7 @@ pub trait ColumnValueDecoder {
         num_values: usize,
     ) -> Result<()>;
 
-    fn read(&mut self, out: &mut Self::Writer, range: Range<usize>) -> Result<usize>;
+    fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize>;
 }
 
 /// An implementation of [`ColumnValueDecoder`] for `[T::T]`
@@ -88,9 +82,9 @@ pub struct ColumnValueDecoderImpl<T: DataType> {
 }
 
 impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
-    type Writer = [T::T];
+    type Slice = [T::T];
 
-    fn create(descr: &ColumnDescPtr) -> Self {
+    fn new(descr: &ColumnDescPtr) -> Self {
         Self {
             descr: descr.clone(),
             current_encoding: None,
@@ -135,6 +129,8 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         data: ByteBufferPtr,
         num_values: usize,
     ) -> Result<()> {
+        use std::collections::hash_map::Entry;
+
         if encoding == Encoding::PLAIN_DICTIONARY {
             encoding = Encoding::RLE_DICTIONARY;
         }
@@ -145,13 +141,13 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
                 .expect("Decoder for dict should have been set")
         } else {
             // Search cache for data page decoder
-            #[allow(clippy::map_entry)]
-            if !self.decoders.contains_key(&encoding) {
-                // Initialize decoder for this page
-                let data_decoder = get_decoder::<T>(self.descr.clone(), encoding)?;
-                self.decoders.insert(encoding, data_decoder);
+            match self.decoders.entry(encoding) {
+                Entry::Occupied(e) => e.into_mut(),
+                Entry::Vacant(v) => {
+                    let data_decoder = get_decoder::<T>(self.descr.clone(), encoding)?;
+                    v.insert(data_decoder)
+                }
             }
-            self.decoders.get_mut(&encoding).unwrap()
         };
 
         decoder.set_data(data, num_values)?;
@@ -159,7 +155,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         Ok(())
     }
 
-    fn read(&mut self, out: &mut Self::Writer, range: Range<usize>) -> Result<usize> {
+    fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
         let encoding = self
             .current_encoding
             .expect("current_encoding should be set");
@@ -185,9 +181,9 @@ enum LevelDecoderInner {
 }
 
 impl ColumnLevelDecoder for ColumnLevelDecoderImpl {
-    type Writer = [i16];
+    type Slice = [i16];
 
-    fn create(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self {
+    fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self {
         let bit_width = crate::util::bit_util::log2(max_level as u64 + 1) as u8;
         match encoding {
             Encoding::RLE => {
@@ -204,7 +200,7 @@ impl ColumnLevelDecoder for ColumnLevelDecoderImpl {
         }
     }
 
-    fn read(&mut self, out: &mut Self::Writer, range: Range<usize>) -> Result<usize> {
+    fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
         match &mut self.inner {
             LevelDecoderInner::Packed(reader, bit_width) => {
                 Ok(reader.get_batch::<i16>(&mut out[range], *bit_width as usize))

@@ -7,7 +7,7 @@ use crate::column::reader::decoder::ColumnLevelDecoderImpl;
 use crate::schema::types::ColumnDescPtr;
 
 use super::{
-    buffer::{RecordBuffer, TypedBuffer},
+    buffer::{BufferQueue, TypedBuffer},
     MIN_BATCH_SIZE,
 };
 
@@ -17,21 +17,21 @@ pub struct DefinitionLevelBuffer {
     max_level: i16,
 }
 
-impl RecordBuffer for DefinitionLevelBuffer {
+impl BufferQueue for DefinitionLevelBuffer {
     type Output = Buffer;
-    type Writer = [i16];
+    type Slice = [i16];
 
-    fn split(&mut self, len: usize) -> Self::Output {
-        self.buffer.split(len)
+    fn split_off(&mut self, len: usize) -> Self::Output {
+        self.buffer.split_off(len)
     }
 
-    fn writer(&mut self, batch_size: usize) -> &mut Self::Writer {
+    fn spare_capacity_mut(&mut self, batch_size: usize) -> &mut Self::Slice {
         assert_eq!(self.buffer.len(), self.builder.len());
-        self.buffer.writer(batch_size)
+        self.buffer.spare_capacity_mut(batch_size)
     }
 
-    fn commit(&mut self, len: usize) {
-        self.buffer.commit(len);
+    fn set_len(&mut self, len: usize) {
+        self.buffer.set_len(len);
         let buf = self.buffer.as_slice();
 
         let range = self.builder.len()..len;
