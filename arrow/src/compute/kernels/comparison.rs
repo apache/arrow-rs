@@ -21,20 +21,24 @@
 //! detection is provided, you should enable the specific SIMD intrinsics using
 //! `RUSTFLAGS="-C target-feature=+avx2"` for example.  See the documentation
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
+//!
 
 use crate::array::*;
 use crate::buffer::{bitwise_bin_op_helper, buffer_unary_not, Buffer, MutableBuffer};
 use crate::compute::binary_boolean_kernel;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
-    ArrowNumericType, DataType, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type,
+    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, TimeUnit,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
-use regex::Regex;
+use regex::{escape, Regex};
 use std::any::type_name;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Helper function to perform boolean lambda function on values from two arrays, this
 /// version does not attempt to use SIMD.
@@ -263,7 +267,7 @@ where
         let re = if let Some(ref regex) = map.get(pat) {
             regex
         } else {
-            let re_pattern = pat.replace("%", ".*").replace("_", ".");
+            let re_pattern = escape(pat).replace("%", ".*").replace("_", ".");
             let re = op(&re_pattern)?;
             map.insert(pat, re);
             map.get(pat).unwrap()
@@ -303,7 +307,7 @@ where
 /// use arrow::compute::like_utf8;
 ///
 /// let strings = StringArray::from(vec!["Arrow", "Arrow", "Arrow", "Ar"]);
-/// let patterns = StringArray::from(vec!["A%", "B%", "A.", "A."]);
+/// let patterns = StringArray::from(vec!["A%", "B%", "A.", "A_"]);
 ///
 /// let result = like_utf8(&strings, &patterns).unwrap();
 /// assert_eq!(result, BooleanArray::from(vec![true, false, false, true]));
@@ -360,11 +364,7 @@ pub fn like_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             }
         }
     } else {
-        let re_pattern = right
-            .replace("%", ".*")
-            .replace("_", ".")
-            .replace("(", r#"\("#)
-            .replace(")", r#"\)"#);
+        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -440,11 +440,7 @@ pub fn nlike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             result.append(!left.value(i).ends_with(&right[1..]));
         }
     } else {
-        let re_pattern = right
-            .replace("%", ".*")
-            .replace("_", ".")
-            .replace("(", r#"\("#)
-            .replace(")", r#"\)"#);
+        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -525,11 +521,7 @@ pub fn ilike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             );
         }
     } else {
-        let re_pattern = right
-            .replace("%", ".*")
-            .replace("_", ".")
-            .replace("(", r#"\("#)
-            .replace(")", r#"\)"#);
+        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
         let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from ILIKE pattern: {}",
@@ -898,6 +890,421 @@ pub fn gt_eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     compare_op_scalar!(left, right, |a, b| a >= b)
 }
 
+macro_rules! dyn_compare_scalar {
+    // Applies `LEFT OP RIGHT` when `LEFT` is a `DictionaryArray`
+    ($LEFT: expr, $RIGHT: expr, $OP: ident) => {{
+        let right: i128 = $RIGHT.try_into().map_err(|_| {
+            ArrowError::ComputeError(String::from("Can not convert scalar to i128"))
+        })?;
+        match $LEFT.data_type() {
+            DataType::Int8 => {
+                let right: i8 = right.try_into().map_err(|_| {
+                    ArrowError::ComputeError(String::from("Can not convert scalar to i8"))
+                })?;
+                let left = as_primitive_array::<Int8Type>($LEFT);
+                $OP::<Int8Type>(left, right)
+            }
+            DataType::Int16 => {
+                let right: i16 = right.try_into().map_err(|_| {
+                    ArrowError::ComputeError(String::from(
+                        "Can not convert scalar to i16",
+                    ))
+                })?;
+                let left = as_primitive_array::<Int16Type>($LEFT);
+                $OP::<Int16Type>(left, right)
+            }
+            DataType::Int32 => {
+                let right: i32 = right.try_into().map_err(|_| {
+                    ArrowError::ComputeError(String::from(
+                        "Can not convert scalar to i32",
+                    ))
+                })?;
+                let left = as_primitive_array::<Int32Type>($LEFT);
+                $OP::<Int32Type>(left, right)
+            }
+            DataType::Int64 => {
+                let right: i64 = right.try_into().map_err(|_| {
+                    ArrowError::ComputeError(String::from(
+                        "Can not convert scalar to i64",
+                    ))
+                })?;
+                let left = as_primitive_array::<Int64Type>($LEFT);
+                $OP::<Int64Type>(left, right)
+            }
+            DataType::UInt8 => {
+                let right: u8 = right.try_into().map_err(|_| {
+                    ArrowError::ComputeError(String::from("Can not convert scalar to u8"))
+                })?;
+                let left = as_primitive_array::<UInt8Type>($LEFT);
+                $OP::<UInt8Type>(left, right)
+            }
+            DataType::UInt16 => {
+                let right: u16 = right.try_into().map_err(|_| {
+                    ArrowError::ComputeError(String::from(
+                        "Can not convert scalar to u16",
+                    ))
+                })?;
+                let left = as_primitive_array::<UInt16Type>($LEFT);
+                $OP::<UInt16Type>(left, right)
+            }
+            DataType::UInt32 => {
+                let right: u32 = right.try_into().map_err(|_| {
+                    ArrowError::ComputeError(String::from(
+                        "Can not convert scalar to u32",
+                    ))
+                })?;
+                let left = as_primitive_array::<UInt32Type>($LEFT);
+                $OP::<UInt32Type>(left, right)
+            }
+            DataType::UInt64 => {
+                let right: u64 = right.try_into().map_err(|_| {
+                    ArrowError::ComputeError(String::from(
+                        "Can not convert scalar to u64",
+                    ))
+                })?;
+                let left = as_primitive_array::<UInt64Type>($LEFT);
+                $OP::<UInt64Type>(left, right)
+            }
+            _ => Err(ArrowError::ComputeError(String::from(
+                "Unsupported data type",
+            ))),
+        }
+    }};
+    // Applies `LEFT OP RIGHT` when `LEFT` is a `DictionaryArray` with keys of type `KT`
+    ($LEFT: expr, $RIGHT: expr, $KT: ident, $OP: ident) => {{
+        let right: i128 = $RIGHT.try_into().map_err(|_| {
+            ArrowError::ComputeError(String::from("Can not convert scalar to i128"))
+        })?;
+        match $KT.as_ref() {
+            DataType::UInt8 => {
+                let left = as_dictionary_array::<UInt8Type>($LEFT);
+                unpack_dict_comparison(
+                    left,
+                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                )
+            }
+            DataType::UInt16 => {
+                let left = as_dictionary_array::<UInt16Type>($LEFT);
+                unpack_dict_comparison(
+                    left,
+                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                )
+            }
+            DataType::UInt32 => {
+                let left = as_dictionary_array::<UInt32Type>($LEFT);
+                unpack_dict_comparison(
+                    left,
+                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                )
+            }
+            DataType::UInt64 => {
+                let left = as_dictionary_array::<UInt64Type>($LEFT);
+                unpack_dict_comparison(
+                    left,
+                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                )
+            }
+            DataType::Int8 => {
+                let left = as_dictionary_array::<Int8Type>($LEFT);
+                unpack_dict_comparison(
+                    left,
+                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                )
+            }
+            DataType::Int16 => {
+                let left = as_dictionary_array::<Int16Type>($LEFT);
+                unpack_dict_comparison(
+                    left,
+                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                )
+            }
+            DataType::Int32 => {
+                let left = as_dictionary_array::<Int32Type>($LEFT);
+                unpack_dict_comparison(
+                    left,
+                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                )
+            }
+            DataType::Int64 => {
+                let left = as_dictionary_array::<Int64Type>($LEFT);
+                unpack_dict_comparison(
+                    left,
+                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                )
+            }
+            _ => Err(ArrowError::ComputeError(String::from("Unknown key type"))),
+        }
+    }};
+}
+
+macro_rules! dyn_compare_utf8_scalar {
+    ($LEFT: expr, $RIGHT: expr, $KT: ident, $OP: ident) => {{
+        match $KT.as_ref() {
+            DataType::UInt8 => {
+                let left = as_dictionary_array::<UInt8Type>($LEFT);
+                let values = as_string_array(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::UInt16 => {
+                let left = as_dictionary_array::<UInt16Type>($LEFT);
+                let values = as_string_array(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::UInt32 => {
+                let left = as_dictionary_array::<UInt32Type>($LEFT);
+                let values = as_string_array(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::UInt64 => {
+                let left = as_dictionary_array::<UInt64Type>($LEFT);
+                let values = as_string_array(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::Int8 => {
+                let left = as_dictionary_array::<Int8Type>($LEFT);
+                let values = as_string_array(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::Int16 => {
+                let left = as_dictionary_array::<Int16Type>($LEFT);
+                let values = as_string_array(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::Int32 => {
+                let left = as_dictionary_array::<Int32Type>($LEFT);
+                let values = as_string_array(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::Int64 => {
+                let left = as_dictionary_array::<Int64Type>($LEFT);
+                let values = as_string_array(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            _ => Err(ArrowError::ComputeError(String::from("Unknown key type"))),
+        }
+    }};
+}
+
+/// Perform `left == right` operation on an array and a numeric scalar
+/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
+pub fn eq_dyn_scalar<T>(left: Arc<dyn Array>, right: T) -> Result<BooleanArray>
+where
+    T: TryInto<i128> + Copy + std::fmt::Debug,
+{
+    match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => {dyn_compare_scalar!(&left, right, key_type, eq_scalar)}
+            _ => Err(ArrowError::ComputeError(
+                "eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
+            ))
+        }
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => {
+            dyn_compare_scalar!(&left, right, eq_scalar)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
+        ))
+    }
+}
+
+/// Perform `left < right` operation on an array and a numeric scalar
+/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
+pub fn lt_dyn_scalar<T>(left: Arc<dyn Array>, right: T) -> Result<BooleanArray>
+where
+    T: TryInto<i128> + Copy + std::fmt::Debug,
+{
+    match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => {dyn_compare_scalar!(&left, right, key_type, lt_scalar)}
+            _ => Err(ArrowError::ComputeError(
+                "Kernel only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
+            ))
+        }
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => {
+            dyn_compare_scalar!(&left, right, lt_scalar)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "Kernel only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
+        ))
+    }
+}
+
+/// Perform `left <= right` operation on an array and a numeric scalar
+/// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
+pub fn lt_eq_dyn_scalar<T>(left: Arc<dyn Array>, right: T) -> Result<BooleanArray>
+where
+    T: TryInto<i128> + Copy + std::fmt::Debug,
+{
+    match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64 => {dyn_compare_scalar!(&left, right, key_type, lt_eq_scalar)}
+            _ => Err(ArrowError::ComputeError(
+                "lt_eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
+            ))
+        }
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => {
+            dyn_compare_scalar!(&left, right, lt_eq_scalar)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "lt_eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
+        ))
+    }
+}
+
+/// Perform `left == right` operation on an array and a numeric scalar
+/// value. Supports StringArrays, and DictionaryArrays that have string values
+pub fn eq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanArray> {
+    let result = match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Utf8 | DataType::LargeUtf8 => {
+                dyn_compare_utf8_scalar!(&left, right, key_type, eq_utf8_scalar)
+            }
+            _ => Err(ArrowError::ComputeError(
+                "eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            )),
+        },
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            let left = as_string_array(&left);
+            eq_utf8_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
+        )),
+    };
+    result
+}
+
+/// Perform `left < right` operation on an array and a numeric scalar
+/// value. Supports StringArrays, and DictionaryArrays that have string values
+pub fn lt_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanArray> {
+    let result = match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Utf8 | DataType::LargeUtf8 => {
+                dyn_compare_utf8_scalar!(&left, right, key_type, lt_utf8_scalar)
+            }
+            _ => Err(ArrowError::ComputeError(
+                "lt_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            )),
+        },
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            let left = as_string_array(&left);
+            lt_utf8_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "lt_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
+        )),
+    };
+    result
+}
+
+/// Perform `left >= right` operation on an array and a numeric scalar
+/// value. Supports StringArrays, and DictionaryArrays that have string values
+pub fn gt_eq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanArray> {
+    let result = match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Utf8 | DataType::LargeUtf8 => {
+                dyn_compare_utf8_scalar!(&left, right, key_type, gt_eq_utf8_scalar)
+            }
+            _ => Err(ArrowError::ComputeError(
+                "gt_eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+            )),
+        },
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            let left = as_string_array(&left);
+            gt_eq_utf8_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "gt_eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
+        )),
+    };
+    result
+}
+
+/// Perform `left == right` operation on an array and a numeric scalar
+/// value. Supports BooleanArrays, and DictionaryArrays that have string values
+pub fn eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
+    let result = match left.data_type() {
+        DataType::Boolean => {
+            let left = as_boolean_array(&left);
+            eq_bool_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "Kernel only supports BooleanArray".to_string(),
+        )),
+    };
+    result
+}
+
+/// unpacks the results of comparing left.values (as a boolean)
+///
+/// TODO add example
+///
+fn unpack_dict_comparison<K>(
+    dict: &DictionaryArray<K>,
+    dict_comparison: BooleanArray,
+) -> Result<BooleanArray>
+where
+    K: ArrowNumericType,
+{
+    assert_eq!(dict_comparison.len(), dict.values().len());
+
+    let result: BooleanArray = dict
+        .keys()
+        .iter()
+        .map(|key| {
+            key.map(|key| unsafe {
+                // safety lengths were verified above
+                let key = key.to_usize().expect("Dictionary index not usize");
+                dict_comparison.value_unchecked(key)
+            })
+        })
+        .collect();
+
+    Ok(result)
+}
+
 /// Helper function to perform boolean lambda function on values from two arrays using
 /// SIMD.
 #[cfg(feature = "simd")]
@@ -1147,6 +1554,60 @@ macro_rules! typed_compares {
             }
             (DataType::LargeUtf8, DataType::LargeUtf8) => {
                 typed_cmp!($LEFT, $RIGHT, LargeStringArray, $OP_STR, i64)
+            }
+            (
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampNanosecondArray,
+                    $OP_PRIM,
+                    TimestampNanosecondType
+                )
+            }
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampMicrosecondArray,
+                    $OP_PRIM,
+                    TimestampMicrosecondType
+                )
+            }
+            (
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampMillisecondArray,
+                    $OP_PRIM,
+                    TimestampMillisecondType
+                )
+            }
+            (
+                DataType::Timestamp(TimeUnit::Second, _),
+                DataType::Timestamp(TimeUnit::Second, _),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    TimestampSecondArray,
+                    $OP_PRIM,
+                    TimestampSecondType
+                )
+            }
+            (DataType::Date32, DataType::Date32) => {
+                typed_cmp!($LEFT, $RIGHT, Date32Array, $OP_PRIM, Date32Type)
+            }
+            (DataType::Date64, DataType::Date64) => {
+                typed_cmp!($LEFT, $RIGHT, Date64Array, $OP_PRIM, Date64Type)
             }
             (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                 "Comparing arrays of type {} is not yet implemented",
@@ -1490,13 +1951,14 @@ mod tests {
     use crate::{array::Int32Array, array::Int64Array, datatypes::Field};
 
     /// Evaluate `KERNEL` with two vectors as inputs and assert against the expected output.
-    /// `A_VEC` and `B_VEC` can be of type `Vec<i64>` or `Vec<Option<i64>>`.
+    /// `A_VEC` and `B_VEC` can be of type `Vec<T>` or `Vec<Option<T>>` where `T` is the native
+    /// type of the data type of the Arrow array element.
     /// `EXPECTED` can be either `Vec<bool>` or `Vec<Option<bool>>`.
     /// The main reason for this macro is that inputs and outputs align nicely after `cargo fmt`.
-    macro_rules! cmp_i64 {
-        ($KERNEL:ident, $DYN_KERNEL:ident, $A_VEC:expr, $B_VEC:expr, $EXPECTED:expr) => {
-            let a = Int64Array::from($A_VEC);
-            let b = Int64Array::from($B_VEC);
+    macro_rules! cmp_vec {
+        ($KERNEL:ident, $DYN_KERNEL:ident, $ARRAY:ident, $A_VEC:expr, $B_VEC:expr, $EXPECTED:expr) => {
+            let a = $ARRAY::from($A_VEC);
+            let b = $ARRAY::from($B_VEC);
             let c = $KERNEL(&a, &b).unwrap();
             assert_eq!(BooleanArray::from($EXPECTED), c);
 
@@ -1505,6 +1967,16 @@ mod tests {
             let b = b.slice(0, b.len());
             let c = $DYN_KERNEL(a.as_ref(), b.as_ref()).unwrap();
             assert_eq!(BooleanArray::from($EXPECTED), c);
+        };
+    }
+
+    /// Evaluate `KERNEL` with two vectors as inputs and assert against the expected output.
+    /// `A_VEC` and `B_VEC` can be of type `Vec<i64>` or `Vec<Option<i64>>`.
+    /// `EXPECTED` can be either `Vec<bool>` or `Vec<Option<bool>>`.
+    /// The main reason for this macro is that inputs and outputs align nicely after `cargo fmt`.
+    macro_rules! cmp_i64 {
+        ($KERNEL:ident, $DYN_KERNEL:ident, $A_VEC:expr, $B_VEC:expr, $EXPECTED:expr) => {
+            cmp_vec!($KERNEL, $DYN_KERNEL, Int64Array, $A_VEC, $B_VEC, $EXPECTED);
         };
     }
 
@@ -1525,6 +1997,15 @@ mod tests {
         cmp_i64!(
             eq,
             eq_dyn,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![false, false, true, false, false, false, false, true, false, false]
+        );
+
+        cmp_vec!(
+            eq,
+            eq_dyn,
+            TimestampSecondArray,
             vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![false, false, true, false, false, false, false, true, false, false]
@@ -1572,6 +2053,15 @@ mod tests {
         cmp_i64!(
             neq,
             neq_dyn,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![true, true, false, true, true, true, true, false, true, true]
+        );
+
+        cmp_vec!(
+            neq,
+            neq_dyn,
+            TimestampMillisecondArray,
             vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![true, true, false, true, true, true, true, false, true, true]
@@ -1782,6 +2272,15 @@ mod tests {
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![false, false, false, true, true, false, false, false, true, true]
         );
+
+        cmp_vec!(
+            lt,
+            lt_dyn,
+            TimestampMillisecondArray,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![false, false, false, true, true, false, false, false, true, true]
+        );
     }
 
     #[test]
@@ -1799,6 +2298,15 @@ mod tests {
         cmp_i64!(
             lt,
             lt_dyn,
+            vec![None, None, Some(1), Some(1), None, None, Some(2), Some(2),],
+            vec![None, Some(1), None, Some(1), None, Some(3), None, Some(3),],
+            vec![None, None, None, Some(false), None, None, None, Some(true)]
+        );
+
+        cmp_vec!(
+            lt,
+            lt_dyn,
+            TimestampMillisecondArray,
             vec![None, None, Some(1), Some(1), None, None, Some(2), Some(2),],
             vec![None, Some(1), None, Some(1), None, Some(3), None, Some(3),],
             vec![None, None, None, Some(false), None, None, None, Some(true)]
@@ -2235,10 +2743,10 @@ mod tests {
 
     test_utf8!(
         test_utf8_array_like,
-        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow"],
-        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_"],
+        vec!["arrow", "arrow", "arrow", "arrow", "arrow", "arrows", "arrow", "arrow"],
+        vec!["arrow", "ar%", "%ro%", "foo", "arr", "arrow_", "arrow_", ".*"],
         like_utf8,
-        vec![true, true, true, false, false, true, false]
+        vec![true, true, true, false, false, true, false, false]
     );
 
     test_utf8_scalar!(
@@ -2248,6 +2756,23 @@ mod tests {
         like_utf8_scalar,
         vec![true, true, false, false]
     );
+
+    test_utf8_scalar!(
+        test_utf8_array_like_scalar_escape_regex,
+        vec![".*", "a", "*"],
+        ".*",
+        like_utf8_scalar,
+        vec![true, false, false]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_like_scalar_escape_regex_dot,
+        vec![".", "a", "*"],
+        ".",
+        like_utf8_scalar,
+        vec![true, false, false]
+    );
+
     test_utf8_scalar!(
         test_utf8_array_like_scalar,
         vec!["arrow", "parquet", "datafusion", "flight"],
@@ -2315,6 +2840,22 @@ mod tests {
         "%(%)%",
         nlike_utf8_scalar,
         vec![false, false, true, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_nlike_scalar_escape_regex,
+        vec![".*", "a", "*"],
+        ".*",
+        nlike_utf8_scalar,
+        vec![false, true, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_nlike_scalar_escape_regex_dot,
+        vec![".", "a", "*"],
+        ".",
+        nlike_utf8_scalar,
+        vec![false, true, true]
     );
     test_utf8_scalar!(
         test_utf8_array_nlike_scalar,
@@ -2522,4 +3063,186 @@ mod tests {
         regexp_is_match_utf8_scalar,
         vec![true, true, false, false]
     );
+    #[test]
+    fn test_eq_dyn_scalar() {
+        let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
+        let array = Arc::new(array);
+        let a_eq = eq_dyn_scalar(array, 8).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(
+                vec![Some(false), Some(false), Some(true), Some(true), Some(false)]
+            )
+        );
+    }
+    #[test]
+    fn test_eq_dyn_scalar_with_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(123).unwrap();
+        builder.append_null().unwrap();
+        builder.append(23).unwrap();
+        let array = Arc::new(builder.finish());
+        let a_eq = eq_dyn_scalar(array, 123).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(true), None, Some(false)])
+        );
+    }
+    #[test]
+    fn test_lt_dyn_scalar() {
+        let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
+        let array = Arc::new(array);
+        let a_eq = lt_dyn_scalar(array, 8).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(false), Some(false), Some(false)]
+            )
+        );
+    }
+    #[test]
+    fn test_lt_dyn_scalar_with_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(123).unwrap();
+        builder.append_null().unwrap();
+        builder.append(23).unwrap();
+        let array = Arc::new(builder.finish());
+        let a_eq = lt_dyn_scalar(array, 123).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(false), None, Some(true)])
+        );
+    }
+    #[test]
+    fn test_lt_eq_dyn_scalar() {
+        let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
+        let array = Arc::new(array);
+        let a_eq = lt_eq_dyn_scalar(array, 8).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(
+                vec![Some(true), Some(true), Some(true), Some(true), Some(false)]
+            )
+        );
+    }
+    #[test]
+    fn test_lt_eq_dyn_scalar_with_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(123).unwrap();
+        builder.append_null().unwrap();
+        builder.append(23).unwrap();
+        let array = Arc::new(builder.finish());
+        let a_eq = lt_eq_dyn_scalar(array, 23).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(false), None, Some(true)])
+        );
+    }
+
+    #[test]
+    fn test_eq_dyn_utf8_scalar() {
+        let array = StringArray::from(vec!["abc", "def", "xyz"]);
+        let array = Arc::new(array);
+        let a_eq = eq_dyn_utf8_scalar(array, "xyz").unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(false), Some(false), Some(true)])
+        );
+    }
+
+    #[test]
+    fn test_eq_dyn_utf8_scalar_with_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = StringBuilder::new(100);
+        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        builder.append("abc").unwrap();
+        builder.append_null().unwrap();
+        builder.append("def").unwrap();
+        builder.append("def").unwrap();
+        builder.append("abc").unwrap();
+        let array = Arc::new(builder.finish());
+        let a_eq = eq_dyn_utf8_scalar(array, "def").unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(
+                vec![Some(false), None, Some(true), Some(true), Some(false)]
+            )
+        );
+    }
+    #[test]
+    fn test_lt_dyn_utf8_scalar() {
+        let array = StringArray::from(vec!["abc", "def", "xyz"]);
+        let array = Arc::new(array);
+        let a_eq = lt_dyn_utf8_scalar(array, "xyz").unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(true), Some(true), Some(false)])
+        );
+    }
+    #[test]
+    fn test_lt_dyn_utf8_scalar_with_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = StringBuilder::new(100);
+        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        builder.append("abc").unwrap();
+        builder.append_null().unwrap();
+        builder.append("def").unwrap();
+        builder.append("def").unwrap();
+        builder.append("abc").unwrap();
+        let array = Arc::new(builder.finish());
+        let a_eq = lt_dyn_utf8_scalar(array, "def").unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(
+                vec![Some(true), None, Some(false), Some(false), Some(true)]
+            )
+        );
+    }
+
+    #[test]
+    fn test_gt_eq_dyn_utf8_scalar() {
+        let array = StringArray::from(vec!["abc", "def", "xyz"]);
+        let array = Arc::new(array);
+        let a_eq = gt_eq_dyn_utf8_scalar(array, "def").unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(false), Some(true), Some(true)])
+        );
+    }
+    #[test]
+    fn test_gt_eq_dyn_utf8_scalar_with_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = StringBuilder::new(100);
+        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+        builder.append("abc").unwrap();
+        builder.append_null().unwrap();
+        builder.append("def").unwrap();
+        builder.append("def").unwrap();
+        builder.append("xyz").unwrap();
+        let array = Arc::new(builder.finish());
+        let a_eq = gt_eq_dyn_utf8_scalar(array, "def").unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(
+                vec![Some(false), None, Some(true), Some(true), Some(true)]
+            )
+        );
+    }
+
+    #[test]
+    fn test_eq_dyn_bool_scalar() {
+        let array = BooleanArray::from(vec![true, false, true]);
+        let array = Arc::new(array);
+        let a_eq = eq_dyn_bool_scalar(array, false).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(false), Some(true), Some(false)])
+        );
+    }
 }

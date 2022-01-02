@@ -301,6 +301,9 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
         DataType::LargeUtf8 => make_string!(array::LargeStringArray, column, row),
         DataType::Binary => make_string_hex!(array::BinaryArray, column, row),
         DataType::LargeBinary => make_string_hex!(array::LargeBinaryArray, column, row),
+        DataType::FixedSizeBinary(_) => {
+            make_string_hex!(array::FixedSizeBinaryArray, column, row)
+        }
         DataType::Boolean => make_string!(array::BooleanArray, column, row),
         DataType::Int8 => make_string!(array::Int8Array, column, row),
         DataType::Int16 => make_string!(array::Int16Array, column, row),
