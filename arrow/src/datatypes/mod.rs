@@ -1379,28 +1379,37 @@ mod tests {
             Schema::try_merge(vec![
                 Schema::new(vec![Field::new(
                     "c1",
-                    DataType::Union(vec![
-                        Field::new("c11", DataType::Utf8, true),
-                        Field::new("c12", DataType::Utf8, true),
-                    ]),
+                    DataType::Union(
+                        vec![
+                            Field::new("c11", DataType::Utf8, true),
+                            Field::new("c12", DataType::Utf8, true),
+                        ],
+                        UnionMode::Dense
+                    ),
                     false
                 ),]),
                 Schema::new(vec![Field::new(
                     "c1",
-                    DataType::Union(vec![
-                        Field::new("c12", DataType::Utf8, true),
-                        Field::new("c13", DataType::Time64(TimeUnit::Second), true),
-                    ]),
+                    DataType::Union(
+                        vec![
+                            Field::new("c12", DataType::Utf8, true),
+                            Field::new("c13", DataType::Time64(TimeUnit::Second), true),
+                        ],
+                        UnionMode::Dense
+                    ),
                     false
                 ),])
             ])?,
             Schema::new(vec![Field::new(
                 "c1",
-                DataType::Union(vec![
-                    Field::new("c11", DataType::Utf8, true),
-                    Field::new("c12", DataType::Utf8, true),
-                    Field::new("c13", DataType::Time64(TimeUnit::Second), true),
-                ]),
+                DataType::Union(
+                    vec![
+                        Field::new("c11", DataType::Utf8, true),
+                        Field::new("c12", DataType::Utf8, true),
+                        Field::new("c13", DataType::Time64(TimeUnit::Second), true),
+                    ],
+                    UnionMode::Dense
+                ),
                 false
             ),]),
         );

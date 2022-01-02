@@ -115,7 +115,7 @@ pub enum DataType {
     /// A nested datatype that contains a number of sub-fields.
     Struct(Vec<Field>),
     /// A nested datatype that can represent slots of differing types.
-    Union(Vec<Field>),
+    Union(Vec<Field>, UnionMode),
     /// A dictionary encoded array (`key_type`, `value_type`), where
     /// each array element is an index of `key_type` into an
     /// associated dictionary of `value_type`.
@@ -174,6 +174,13 @@ pub enum IntervalUnit {
     /// as days or that the quantity of nanoseconds represents less
     /// than a day's worth of time).
     MonthDayNano,
+}
+
+// Sparse or Dense union layouts
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum UnionMode {
+    Sparse,
+    Dense,
 }
 
 impl fmt::Display for DataType {
@@ -406,7 +413,7 @@ impl DataType {
                 json!({"name": "fixedsizebinary", "byteWidth": byte_width})
             }
             DataType::Struct(_) => json!({"name": "struct"}),
-            DataType::Union(_) => json!({"name": "union"}),
+            DataType::Union(_, _) => json!({"name": "union"}),
             DataType::List(_) => json!({ "name": "list"}),
             DataType::LargeList(_) => json!({ "name": "largelist"}),
             DataType::FixedSizeList(_, length) => {
