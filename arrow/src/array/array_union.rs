@@ -55,9 +55,9 @@ impl UnionArray {
     /// are used to index into the `child_arrays`.
     ///
     /// The `value_offsets` `Buffer` is only provided in the case of a dense union, sparse unions
-    /// should use `None`.  If provided the `value_offsets` `Buffer` should contain `i32` values
-    /// The values in this array should be greater than zero and must be less than the length of the overall
-    /// array.
+    /// should use `None`.  If provided the `value_offsets` `Buffer` should contain `i32` values.
+    /// The values in this array should be greater than zero and must be less than the length of the
+    /// overall array.
     ///
     /// In both cases above we use signed integer types to maintain compatibility with other
     /// Arrow implementations.
