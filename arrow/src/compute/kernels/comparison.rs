@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines basic comparison kernels for [`PrimitiveArray`]s.
+//! Comparison kernels for `Array`s.
 //!
 //! These kernels can leverage SIMD if available on your system.  Currently no runtime
 //! detection is provided, you should enable the specific SIMD intrinsics using
@@ -38,7 +38,6 @@ use crate::util::bit_util;
 use regex::{escape, Regex};
 use std::any::type_name;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Helper function to perform boolean lambda function on values from two arrays, this
 /// version does not attempt to use SIMD.
@@ -890,149 +889,145 @@ pub fn gt_eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     compare_op_scalar!(left, right, |a, b| a >= b)
 }
 
+/// Calls $RIGHT.$TY() (e.g. `right.to_i128()`) with a nice error message.
+/// Type of expression is `Result<.., ArrowError>`
+macro_rules! try_to_type {
+    ($RIGHT: expr, $TY: ident) => {{
+        $RIGHT.$TY().ok_or_else(|| {
+            ArrowError::ComputeError(format!(
+                "Could not convert {} with {}",
+                stringify!($RIGHT),
+                stringify!($TY)
+            ))
+        })
+    }};
+}
+
 macro_rules! dyn_compare_scalar {
     // Applies `LEFT OP RIGHT` when `LEFT` is a `DictionaryArray`
     ($LEFT: expr, $RIGHT: expr, $OP: ident) => {{
-        let right: i128 = $RIGHT.try_into().map_err(|_| {
-            ArrowError::ComputeError(String::from("Can not convert scalar to i128"))
-        })?;
         match $LEFT.data_type() {
             DataType::Int8 => {
-                let right: i8 = right.try_into().map_err(|_| {
-                    ArrowError::ComputeError(String::from("Can not convert scalar to i8"))
-                })?;
+                let right = try_to_type!($RIGHT, to_i8)?;
                 let left = as_primitive_array::<Int8Type>($LEFT);
                 $OP::<Int8Type>(left, right)
             }
             DataType::Int16 => {
-                let right: i16 = right.try_into().map_err(|_| {
-                    ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to i16",
-                    ))
-                })?;
+                let right = try_to_type!($RIGHT, to_i16)?;
                 let left = as_primitive_array::<Int16Type>($LEFT);
                 $OP::<Int16Type>(left, right)
             }
             DataType::Int32 => {
-                let right: i32 = right.try_into().map_err(|_| {
-                    ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to i32",
-                    ))
-                })?;
+                let right = try_to_type!($RIGHT, to_i32)?;
                 let left = as_primitive_array::<Int32Type>($LEFT);
                 $OP::<Int32Type>(left, right)
             }
             DataType::Int64 => {
-                let right: i64 = right.try_into().map_err(|_| {
-                    ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to i64",
-                    ))
-                })?;
+                let right = try_to_type!($RIGHT, to_i64)?;
                 let left = as_primitive_array::<Int64Type>($LEFT);
                 $OP::<Int64Type>(left, right)
             }
             DataType::UInt8 => {
-                let right: u8 = right.try_into().map_err(|_| {
-                    ArrowError::ComputeError(String::from("Can not convert scalar to u8"))
-                })?;
+                let right = try_to_type!($RIGHT, to_u8)?;
                 let left = as_primitive_array::<UInt8Type>($LEFT);
                 $OP::<UInt8Type>(left, right)
             }
             DataType::UInt16 => {
-                let right: u16 = right.try_into().map_err(|_| {
-                    ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to u16",
-                    ))
-                })?;
+                let right = try_to_type!($RIGHT, to_u16)?;
                 let left = as_primitive_array::<UInt16Type>($LEFT);
                 $OP::<UInt16Type>(left, right)
             }
             DataType::UInt32 => {
-                let right: u32 = right.try_into().map_err(|_| {
-                    ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to u32",
-                    ))
-                })?;
+                let right = try_to_type!($RIGHT, to_u32)?;
                 let left = as_primitive_array::<UInt32Type>($LEFT);
                 $OP::<UInt32Type>(left, right)
             }
             DataType::UInt64 => {
-                let right: u64 = right.try_into().map_err(|_| {
-                    ArrowError::ComputeError(String::from(
-                        "Can not convert scalar to u64",
-                    ))
-                })?;
+                let right = try_to_type!($RIGHT, to_u64)?;
                 let left = as_primitive_array::<UInt64Type>($LEFT);
                 $OP::<UInt64Type>(left, right)
             }
-            _ => Err(ArrowError::ComputeError(String::from(
-                "Unsupported data type",
+            DataType::Float32 => {
+                let right = try_to_type!($RIGHT, to_f32)?;
+                let left = as_primitive_array::<Float32Type>($LEFT);
+                $OP::<Float32Type>(left, right)
+            }
+            DataType::Float64 => {
+                let right = try_to_type!($RIGHT, to_f64)?;
+                let left = as_primitive_array::<Float64Type>($LEFT);
+                $OP::<Float64Type>(left, right)
+            }
+            _ => Err(ArrowError::ComputeError(format!(
+                "Unsupported data type {:?} for comparison {} with {:?}",
+                $LEFT.data_type(),
+                stringify!($OP),
+                $RIGHT
             ))),
         }
     }};
     // Applies `LEFT OP RIGHT` when `LEFT` is a `DictionaryArray` with keys of type `KT`
     ($LEFT: expr, $RIGHT: expr, $KT: ident, $OP: ident) => {{
-        let right: i128 = $RIGHT.try_into().map_err(|_| {
-            ArrowError::ComputeError(String::from("Can not convert scalar to i128"))
-        })?;
         match $KT.as_ref() {
             DataType::UInt8 => {
                 let left = as_dictionary_array::<UInt8Type>($LEFT);
                 unpack_dict_comparison(
                     left,
-                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
                 )
             }
             DataType::UInt16 => {
                 let left = as_dictionary_array::<UInt16Type>($LEFT);
                 unpack_dict_comparison(
                     left,
-                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
                 )
             }
             DataType::UInt32 => {
                 let left = as_dictionary_array::<UInt32Type>($LEFT);
                 unpack_dict_comparison(
                     left,
-                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
                 )
             }
             DataType::UInt64 => {
                 let left = as_dictionary_array::<UInt64Type>($LEFT);
                 unpack_dict_comparison(
                     left,
-                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
                 )
             }
             DataType::Int8 => {
                 let left = as_dictionary_array::<Int8Type>($LEFT);
                 unpack_dict_comparison(
                     left,
-                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
                 )
             }
             DataType::Int16 => {
                 let left = as_dictionary_array::<Int16Type>($LEFT);
                 unpack_dict_comparison(
                     left,
-                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
                 )
             }
             DataType::Int32 => {
                 let left = as_dictionary_array::<Int32Type>($LEFT);
                 unpack_dict_comparison(
                     left,
-                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
                 )
             }
             DataType::Int64 => {
                 let left = as_dictionary_array::<Int64Type>($LEFT);
                 unpack_dict_comparison(
                     left,
-                    dyn_compare_scalar!(left.values(), right, $OP)?,
+                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
                 )
             }
-            _ => Err(ArrowError::ComputeError(String::from("Unknown key type"))),
+            _ => Err(ArrowError::ComputeError(format!(
+                "Unsupported dictionary key type {:?}",
+                $KT.as_ref()
+            ))),
         }
     }};
 }
@@ -1087,234 +1082,106 @@ macro_rules! dyn_compare_utf8_scalar {
 
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
-pub fn eq_dyn_scalar<T>(left: Arc<dyn Array>, right: T) -> Result<BooleanArray>
+pub fn eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: TryInto<i128> + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + Copy + std::fmt::Debug,
 {
     match left.data_type() {
-        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => {dyn_compare_scalar!(&left, right, key_type, eq_scalar)}
-            _ => Err(ArrowError::ComputeError(
-                "eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-            ))
+        DataType::Dictionary(key_type, _value_type) => {
+            dyn_compare_scalar!(left, right, key_type, eq_scalar)
         }
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64 => {
-            dyn_compare_scalar!(&left, right, eq_scalar)
-        }
-        _ => Err(ArrowError::ComputeError(
-            "eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-        ))
+        _ => dyn_compare_scalar!(left, right, eq_scalar),
     }
 }
 
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
-pub fn lt_dyn_scalar<T>(left: Arc<dyn Array>, right: T) -> Result<BooleanArray>
+pub fn lt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: TryInto<i128> + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + Copy + std::fmt::Debug,
 {
     match left.data_type() {
-        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => {dyn_compare_scalar!(&left, right, key_type, lt_scalar)}
-            _ => Err(ArrowError::ComputeError(
-                "Kernel only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-            ))
+        DataType::Dictionary(key_type, _value_type) => {
+            dyn_compare_scalar!(left, right, key_type, lt_scalar)
         }
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64 => {
-            dyn_compare_scalar!(&left, right, lt_scalar)
-        }
-        _ => Err(ArrowError::ComputeError(
-            "Kernel only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-        ))
+        _ => dyn_compare_scalar!(left, right, lt_scalar),
     }
 }
 
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
-pub fn lt_eq_dyn_scalar<T>(left: Arc<dyn Array>, right: T) -> Result<BooleanArray>
+pub fn lt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: TryInto<i128> + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + Copy + std::fmt::Debug,
 {
     match left.data_type() {
-        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => {dyn_compare_scalar!(&left, right, key_type, lt_eq_scalar)}
-            _ => Err(ArrowError::ComputeError(
-                "lt_eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-            ))
+        DataType::Dictionary(key_type, _value_type) => {
+            dyn_compare_scalar!(left, right, key_type, lt_eq_scalar)
         }
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64 => {
-            dyn_compare_scalar!(&left, right, lt_eq_scalar)
-        }
-        _ => Err(ArrowError::ComputeError(
-            "lt_eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-        ))
+        _ => dyn_compare_scalar!(left, right, lt_eq_scalar),
     }
 }
 
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
-pub fn gt_dyn_scalar<T>(left: Arc<dyn Array>, right: T) -> Result<BooleanArray>
+pub fn gt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: TryInto<i128> + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + Copy + std::fmt::Debug,
 {
     match left.data_type() {
-        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => {dyn_compare_scalar!(&left, right, key_type, gt_scalar)}
-            _ => Err(ArrowError::ComputeError(
-                "gt_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-            ))
+        DataType::Dictionary(key_type, _value_type) => {
+            dyn_compare_scalar!(left, right, key_type, gt_scalar)
         }
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64 => {
-            dyn_compare_scalar!(&left, right, gt_scalar)
-        }
-        _ => Err(ArrowError::ComputeError(
-            "gt_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-        ))
+        _ => dyn_compare_scalar!(left, right, gt_scalar),
     }
 }
 
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
-pub fn gt_eq_dyn_scalar<T>(left: Arc<dyn Array>, right: T) -> Result<BooleanArray>
+pub fn gt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: TryInto<i128> + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + Copy + std::fmt::Debug,
 {
     match left.data_type() {
-        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => {dyn_compare_scalar!(&left, right, key_type, gt_eq_scalar)}
-            _ => Err(ArrowError::ComputeError(
-                "gt_eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-            ))
+        DataType::Dictionary(key_type, _value_type) => {
+            dyn_compare_scalar!(left, right, key_type, gt_eq_scalar)
         }
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64 => {
-            dyn_compare_scalar!(&left, right, gt_eq_scalar)
-        }
-        _ => Err(ArrowError::ComputeError(
-            "gt_eq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-        ))
+        _ => dyn_compare_scalar!(left, right, gt_eq_scalar),
     }
 }
 
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
-pub fn neq_dyn_scalar<T>(left: Arc<dyn Array>, right: T) -> Result<BooleanArray>
+pub fn neq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: TryInto<i128> + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + Copy + std::fmt::Debug,
 {
     match left.data_type() {
-        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64 => {dyn_compare_scalar!(&left, right, key_type, neq_scalar)}
-            _ => Err(ArrowError::ComputeError(
-                "neq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-            ))
+        DataType::Dictionary(key_type, _value_type) => {
+            dyn_compare_scalar!(left, right, key_type, neq_scalar)
         }
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64 => {
-            dyn_compare_scalar!(&left, right, neq_scalar)
-        }
-        _ => Err(ArrowError::ComputeError(
-            "neq_dyn_scalar only supports PrimitiveArray or DictionaryArray with Primitive values".to_string(),
-        ))
+        _ => dyn_compare_scalar!(left, right, neq_scalar),
     }
 }
 
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn eq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanArray> {
+pub fn eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
-                dyn_compare_utf8_scalar!(&left, right, key_type, eq_utf8_scalar)
+                dyn_compare_utf8_scalar!(left, right, key_type, eq_utf8_scalar)
             }
             _ => Err(ArrowError::ComputeError(
                 "eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
             )),
         },
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            let left = as_string_array(&left);
+        DataType::Utf8 => {
+            let left = as_string_array(left);
+            eq_utf8_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = as_largestring_array(left);
             eq_utf8_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
@@ -1326,18 +1193,22 @@ pub fn eq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanAr
 
 /// Perform `left < right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn lt_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanArray> {
+pub fn lt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
-                dyn_compare_utf8_scalar!(&left, right, key_type, lt_utf8_scalar)
+                dyn_compare_utf8_scalar!(left, right, key_type, lt_utf8_scalar)
             }
             _ => Err(ArrowError::ComputeError(
                 "lt_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
             )),
         },
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            let left = as_string_array(&left);
+        DataType::Utf8 => {
+            let left = as_string_array(left);
+            lt_utf8_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = as_largestring_array(left);
             lt_utf8_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
@@ -1349,18 +1220,22 @@ pub fn lt_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanAr
 
 /// Perform `left >= right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn gt_eq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanArray> {
+pub fn gt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
-                dyn_compare_utf8_scalar!(&left, right, key_type, gt_eq_utf8_scalar)
+                dyn_compare_utf8_scalar!(left, right, key_type, gt_eq_utf8_scalar)
             }
             _ => Err(ArrowError::ComputeError(
                 "gt_eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
             )),
         },
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            let left = as_string_array(&left);
+        DataType::Utf8 => {
+            let left = as_string_array(left);
+            gt_eq_utf8_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = as_largestring_array(left);
             gt_eq_utf8_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
@@ -1372,18 +1247,22 @@ pub fn gt_eq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<Boolea
 
 /// Perform `left <= right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn lt_eq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanArray> {
+pub fn lt_eq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
-                dyn_compare_utf8_scalar!(&left, right, key_type, lt_eq_utf8_scalar)
+                dyn_compare_utf8_scalar!(left, right, key_type, lt_eq_utf8_scalar)
             }
             _ => Err(ArrowError::ComputeError(
                 "lt_eq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
             )),
         },
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            let left = as_string_array(&left);
+        DataType::Utf8 => {
+            let left = as_string_array(left);
+            lt_eq_utf8_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = as_largestring_array(left);
             lt_eq_utf8_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
@@ -1395,18 +1274,22 @@ pub fn lt_eq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<Boolea
 
 /// Perform `left > right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn gt_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanArray> {
+pub fn gt_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
-                dyn_compare_utf8_scalar!(&left, right, key_type, gt_utf8_scalar)
+                dyn_compare_utf8_scalar!(left, right, key_type, gt_utf8_scalar)
             }
             _ => Err(ArrowError::ComputeError(
                 "gt_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
             )),
         },
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            let left = as_string_array(&left);
+        DataType::Utf8 => {
+            let left = as_string_array(left);
+            gt_utf8_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = as_largestring_array(left);
             gt_utf8_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
@@ -1418,18 +1301,22 @@ pub fn gt_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanAr
 
 /// Perform `left != right` operation on an array and a numeric scalar
 /// value. Supports StringArrays, and DictionaryArrays that have string values
-pub fn neq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanArray> {
+pub fn neq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
             DataType::Utf8 | DataType::LargeUtf8 => {
-                dyn_compare_utf8_scalar!(&left, right, key_type, neq_utf8_scalar)
+                dyn_compare_utf8_scalar!(left, right, key_type, neq_utf8_scalar)
             }
             _ => Err(ArrowError::ComputeError(
                 "Kernel only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
             )),
         },
-        DataType::Utf8 | DataType::LargeUtf8 => {
-            let left = as_string_array(&left);
+        DataType::Utf8 => {
+            let left = as_string_array(left);
+            neq_utf8_scalar(left, right)
+        }
+        DataType::LargeUtf8 => {
+            let left = as_largestring_array(left);
             neq_utf8_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
@@ -1441,10 +1328,10 @@ pub fn neq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanA
 
 /// Perform `left == right` operation on an array and a numeric scalar
 /// value. Supports BooleanArrays, and DictionaryArrays that have string values
-pub fn eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
+pub fn eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Boolean => {
-            let left = as_boolean_array(&left);
+            let left = as_boolean_array(left);
             eq_bool_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
@@ -2123,6 +2010,8 @@ fn new_all_set_buffer(len: usize) -> Buffer {
 #[rustfmt::skip::macros(vec)]
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::datatypes::Int8Type;
     use crate::{array::Int32Array, array::Int64Array, datatypes::Field};
@@ -3240,11 +3129,11 @@ mod tests {
         regexp_is_match_utf8_scalar,
         vec![true, true, false, false]
     );
+
     #[test]
     fn test_eq_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let array = Arc::new(array);
-        let a_eq = eq_dyn_scalar(array, 8).unwrap();
+        let a_eq = eq_dyn_scalar(&array, 8).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3252,6 +3141,7 @@ mod tests {
             )
         );
     }
+
     #[test]
     fn test_eq_dyn_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
@@ -3260,18 +3150,34 @@ mod tests {
         builder.append(123).unwrap();
         builder.append_null().unwrap();
         builder.append(23).unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = eq_dyn_scalar(array, 123).unwrap();
+        let array = builder.finish();
+        let a_eq = eq_dyn_scalar(&array, 123).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), None, Some(false)])
         );
     }
+
+    #[test]
+    fn test_eq_dyn_scalar_float() {
+        let array: Float32Array = vec![6.0, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(false)],
+        );
+        assert_eq!(eq_dyn_scalar(&array, 8).unwrap(), expected);
+
+        let array: ArrayRef = Arc::new(array);
+        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        assert_eq!(eq_dyn_scalar(&array, 8).unwrap(), expected);
+    }
+
     #[test]
     fn test_lt_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let array = Arc::new(array);
-        let a_eq = lt_dyn_scalar(array, 8).unwrap();
+        let a_eq = lt_dyn_scalar(&array, 8).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3279,6 +3185,7 @@ mod tests {
             )
         );
     }
+
     #[test]
     fn test_lt_dyn_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
@@ -3287,18 +3194,34 @@ mod tests {
         builder.append(123).unwrap();
         builder.append_null().unwrap();
         builder.append(23).unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = lt_dyn_scalar(array, 123).unwrap();
+        let array = builder.finish();
+        let a_eq = lt_dyn_scalar(&array, 123).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), None, Some(true)])
         );
     }
+
+    #[test]
+    fn test_lt_dyn_scalar_float() {
+        let array: Float32Array = vec![6.0, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(false)],
+        );
+        assert_eq!(lt_dyn_scalar(&array, 8).unwrap(), expected);
+
+        let array: ArrayRef = Arc::new(array);
+        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        assert_eq!(lt_dyn_scalar(&array, 8).unwrap(), expected);
+    }
+
     #[test]
     fn test_lt_eq_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let array = Arc::new(array);
-        let a_eq = lt_eq_dyn_scalar(array, 8).unwrap();
+        let a_eq = lt_eq_dyn_scalar(&array, 8).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3314,8 +3237,8 @@ mod tests {
         builder.append(123).unwrap();
         builder.append_null().unwrap();
         builder.append(23).unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = lt_eq_dyn_scalar(array, 23).unwrap();
+        let array = builder.finish();
+        let a_eq = lt_eq_dyn_scalar(&array, 23).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), None, Some(true)])
@@ -3323,10 +3246,25 @@ mod tests {
     }
 
     #[test]
+    fn test_lt_eq_dyn_scalar_float() {
+        let array: Float32Array = vec![6.0, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(true), Some(false)],
+        );
+        assert_eq!(lt_eq_dyn_scalar(&array, 8).unwrap(), expected);
+
+        let array: ArrayRef = Arc::new(array);
+        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        assert_eq!(lt_eq_dyn_scalar(&array, 8).unwrap(), expected);
+    }
+
+    #[test]
     fn test_gt_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let array = Arc::new(array);
-        let a_eq = gt_dyn_scalar(array, 8).unwrap();
+        let a_eq = gt_dyn_scalar(&array, 8).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3334,6 +3272,7 @@ mod tests {
             )
         );
     }
+
     #[test]
     fn test_gt_dyn_scalar_with_dict() {
         let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
@@ -3342,8 +3281,8 @@ mod tests {
         builder.append(123).unwrap();
         builder.append_null().unwrap();
         builder.append(23).unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = gt_dyn_scalar(array, 23).unwrap();
+        let array = builder.finish();
+        let a_eq = gt_dyn_scalar(&array, 23).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), None, Some(false)])
@@ -3351,10 +3290,25 @@ mod tests {
     }
 
     #[test]
+    fn test_gt_dyn_scalar_float() {
+        let array: Float32Array = vec![6.0, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true)],
+        );
+        assert_eq!(gt_dyn_scalar(&array, 8).unwrap(), expected);
+
+        let array: ArrayRef = Arc::new(array);
+        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        assert_eq!(gt_dyn_scalar(&array, 8).unwrap(), expected);
+    }
+
+    #[test]
     fn test_gt_eq_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let array = Arc::new(array);
-        let a_eq = gt_eq_dyn_scalar(array, 8).unwrap();
+        let a_eq = gt_eq_dyn_scalar(&array, 8).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3371,8 +3325,8 @@ mod tests {
         builder.append(22).unwrap();
         builder.append_null().unwrap();
         builder.append(23).unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = gt_eq_dyn_scalar(array, 23).unwrap();
+        let array = builder.finish();
+        let a_eq = gt_eq_dyn_scalar(&array, 23).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), None, Some(true)])
@@ -3380,10 +3334,25 @@ mod tests {
     }
 
     #[test]
+    fn test_gt_eq_dyn_scalar_float() {
+        let array: Float32Array = vec![6.0, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(true), Some(true)],
+        );
+        assert_eq!(gt_eq_dyn_scalar(&array, 8).unwrap(), expected);
+
+        let array: ArrayRef = Arc::new(array);
+        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        assert_eq!(gt_eq_dyn_scalar(&array, 8).unwrap(), expected);
+    }
+
+    #[test]
     fn test_neq_dyn_scalar() {
         let array = Int32Array::from(vec![6, 7, 8, 8, 10]);
-        let array = Arc::new(array);
-        let a_eq = neq_dyn_scalar(array, 8).unwrap();
+        let a_eq = neq_dyn_scalar(&array, 8).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3400,8 +3369,8 @@ mod tests {
         builder.append(22).unwrap();
         builder.append_null().unwrap();
         builder.append(23).unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = neq_dyn_scalar(array, 23).unwrap();
+        let array = builder.finish();
+        let a_eq = neq_dyn_scalar(&array, 23).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), None, Some(false)])
@@ -3409,10 +3378,25 @@ mod tests {
     }
 
     #[test]
+    fn test_neq_dyn_scalar_float() {
+        let array: Float32Array = vec![6.0, 7.0, 8.0, 8.0, 10.0]
+            .into_iter()
+            .map(Some)
+            .collect();
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(true)],
+        );
+        assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
+
+        let array: ArrayRef = Arc::new(array);
+        let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
+        assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
+    }
+
+    #[test]
     fn test_eq_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let array = Arc::new(array);
-        let a_eq = eq_dyn_utf8_scalar(array, "xyz").unwrap();
+        let a_eq = eq_dyn_utf8_scalar(&array, "xyz").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(false), Some(true)])
@@ -3429,8 +3413,8 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = eq_dyn_utf8_scalar(array, "def").unwrap();
+        let array = builder.finish();
+        let a_eq = eq_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3441,8 +3425,7 @@ mod tests {
     #[test]
     fn test_lt_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let array = Arc::new(array);
-        let a_eq = lt_dyn_utf8_scalar(array, "xyz").unwrap();
+        let a_eq = lt_dyn_utf8_scalar(&array, "xyz").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
@@ -3458,8 +3441,8 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = lt_dyn_utf8_scalar(array, "def").unwrap();
+        let array = builder.finish();
+        let a_eq = lt_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3471,8 +3454,7 @@ mod tests {
     #[test]
     fn test_lt_eq_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let array = Arc::new(array);
-        let a_eq = lt_eq_dyn_utf8_scalar(array, "def").unwrap();
+        let a_eq = lt_eq_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
@@ -3488,8 +3470,8 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("xyz").unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = lt_eq_dyn_utf8_scalar(array, "def").unwrap();
+        let array = builder.finish();
+        let a_eq = lt_eq_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3501,8 +3483,7 @@ mod tests {
     #[test]
     fn test_gt_eq_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let array = Arc::new(array);
-        let a_eq = gt_eq_dyn_utf8_scalar(array, "def").unwrap();
+        let a_eq = gt_eq_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(true), Some(true)])
@@ -3518,8 +3499,8 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("xyz").unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = gt_eq_dyn_utf8_scalar(array, "def").unwrap();
+        let array = builder.finish();
+        let a_eq = gt_eq_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3531,8 +3512,7 @@ mod tests {
     #[test]
     fn test_gt_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let array = Arc::new(array);
-        let a_eq = gt_dyn_utf8_scalar(array, "def").unwrap();
+        let a_eq = gt_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(false), Some(true)])
@@ -3549,8 +3529,8 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("xyz").unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = gt_dyn_utf8_scalar(array, "def").unwrap();
+        let array = builder.finish();
+        let a_eq = gt_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3562,8 +3542,7 @@ mod tests {
     #[test]
     fn test_neq_dyn_utf8_scalar() {
         let array = StringArray::from(vec!["abc", "def", "xyz"]);
-        let array = Arc::new(array);
-        let a_eq = neq_dyn_utf8_scalar(array, "xyz").unwrap();
+        let a_eq = neq_dyn_utf8_scalar(&array, "xyz").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(true), Some(true), Some(false)])
@@ -3579,8 +3558,8 @@ mod tests {
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
-        let array = Arc::new(builder.finish());
-        let a_eq = neq_dyn_utf8_scalar(array, "def").unwrap();
+        let array = builder.finish();
+        let a_eq = neq_dyn_utf8_scalar(&array, "def").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(
@@ -3592,8 +3571,7 @@ mod tests {
     #[test]
     fn test_eq_dyn_bool_scalar() {
         let array = BooleanArray::from(vec![true, false, true]);
-        let array = Arc::new(array);
-        let a_eq = eq_dyn_bool_scalar(array, false).unwrap();
+        let a_eq = eq_dyn_bool_scalar(&array, false).unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(true), Some(false)])
