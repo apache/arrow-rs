@@ -441,6 +441,12 @@ impl PartialEq<Value> for NullArray {
     }
 }
 
+impl JsonEqual for ArrayRef {
+    fn equals_json(&self, json: &[&Value]) -> bool {
+        self.as_ref().equals_json(json)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

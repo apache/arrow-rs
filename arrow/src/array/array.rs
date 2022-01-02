@@ -227,6 +227,69 @@ pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
 /// A reference-counted reference to a generic `Array`.
 pub type ArrayRef = Arc<dyn Array>;
 
+/// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`
+impl Array for ArrayRef {
+    fn as_any(&self) -> &dyn Any {
+        self.as_ref().as_any()
+    }
+
+    fn data(&self) -> &ArrayData {
+        self.as_ref().data()
+    }
+
+    fn data_ref(&self) -> &ArrayData {
+        self.as_ref().data_ref()
+    }
+
+    fn data_type(&self) -> &DataType {
+        self.as_ref().data_type()
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        self.as_ref().slice(offset, length)
+    }
+
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_empty()
+    }
+
+    fn offset(&self) -> usize {
+        self.as_ref().offset()
+    }
+
+    fn is_null(&self, index: usize) -> bool {
+        self.as_ref().is_null(index)
+    }
+
+    fn is_valid(&self, index: usize) -> bool {
+        self.as_ref().is_valid(index)
+    }
+
+    fn null_count(&self) -> usize {
+        self.as_ref().null_count()
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        self.as_ref().get_buffer_memory_size()
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        self.as_ref().get_array_memory_size()
+    }
+
+    fn to_raw(
+        &self,
+    ) -> Result<(*const ffi::FFI_ArrowArray, *const ffi::FFI_ArrowSchema)> {
+        let data = self.data().clone();
+        let array = ffi::ArrowArray::try_from(data)?;
+        Ok(ffi::ArrowArray::into_raw(array))
+    }
+}
+
 /// Constructs an array using the input `data`.
 /// Returns a reference-counted `Array` instance.
 pub fn make_array(data: ArrayData) -> ArrayRef {
@@ -842,5 +905,23 @@ mod tests {
             arr.get_array_memory_size() - empty.get_array_memory_size(),
             expected_size
         );
+    }
+
+    /// Test function that takes an &dyn Array
+    fn compute_my_thing(arr: &dyn Array) -> bool {
+        !arr.is_empty()
+    }
+
+    #[test]
+    fn test_array_ref_as_array() {
+        let arr: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+
+        // works well!
+        assert!(compute_my_thing(&arr));
+
+        // Should also work when wrapped as an ArrayRef
+        let arr: ArrayRef = Arc::new(arr);
+        assert!(compute_my_thing(&arr));
+        assert!(compute_my_thing(arr.as_ref()));
     }
 }
