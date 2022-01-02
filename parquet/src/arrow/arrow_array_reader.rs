@@ -337,7 +337,11 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                             column_desc.max_def_level(),
                         );
                         def_decoder.set_data(num_values as usize, buffer_ptr.all());
-                        let value_count = Self::count_def_level_values(column_desc, def_decoder, num_values as usize)?;
+                        let value_count = Self::count_def_level_values(
+                            column_desc,
+                            def_decoder,
+                            num_values as usize,
+                        )?;
                         // create def level decoder
                         def_decoder = LevelDecoder::v1(
                             def_level_encoding,
@@ -349,9 +353,14 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                         buffer_ptr = buffer_ptr.start_from(def_levels_byte_len);
                         (Box::new(LevelValueDecoder::new(def_decoder)), value_count)
                     } else {
-                        (Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General(
-                            "def levels are not available".to_string(),
-                        )))), num_values as usize)
+                        (
+                            Box::new(<dyn ValueDecoder>::once(Err(
+                                ParquetError::General(
+                                    "def levels are not available".to_string(),
+                                ),
+                            ))),
+                            num_values as usize,
+                        )
                     };
                 // create value decoder iterator
                 let value_iter = Self::get_value_decoder(
@@ -407,10 +416,13 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                             offset,
                             def_levels_byte_len,
                         );
-                        let value_count = Self::count_def_level_values(column_desc, def_decoder, num_values as usize)?;
+                        let value_count = Self::count_def_level_values(
+                            column_desc,
+                            def_decoder,
+                            num_values as usize,
+                        )?;
                         // create def level decoder
-                        def_decoder =
-                            LevelDecoder::v2(column_desc.max_def_level());
+                        def_decoder = LevelDecoder::v2(column_desc.max_def_level());
                         def_decoder.set_data_range(
                             num_values as usize,
                             &buf,
@@ -420,9 +432,14 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
                         offset += def_levels_byte_len;
                         (Box::new(LevelValueDecoder::new(def_decoder)), value_count)
                     } else {
-                        (Box::new(<dyn ValueDecoder>::once(Err(ParquetError::General(
-                            "def levels are not available".to_string(),
-                        )))), num_values as usize)
+                        (
+                            Box::new(<dyn ValueDecoder>::once(Err(
+                                ParquetError::General(
+                                    "def levels are not available".to_string(),
+                                ),
+                            ))),
+                            num_values as usize,
+                        )
                     };
 
                 // create value decoder iterator
@@ -439,16 +456,18 @@ impl<'a, C: ArrayConverter + 'a> ArrowArrayReader<'a, C> {
         }
     }
 
-    fn count_def_level_values(column_desc: &ColumnDescriptor, level_decoder: crate::encodings::levels::LevelDecoder, num_values: usize) -> Result<usize> {
+    fn count_def_level_values(
+        column_desc: &ColumnDescriptor,
+        level_decoder: crate::encodings::levels::LevelDecoder,
+        num_values: usize,
+    ) -> Result<usize> {
         let mut def_level_decoder = LevelValueDecoder::new(level_decoder);
         let def_level_array =
             Self::build_level_array(&mut def_level_decoder, num_values)?;
         let def_level_count = def_level_array.len();
         // use eq_scalar to efficiently build null bitmap array from def levels
-        let null_bitmap_array = arrow::compute::eq_scalar(
-            &def_level_array,
-            column_desc.max_def_level(),
-        )?;
+        let null_bitmap_array =
+            arrow::compute::eq_scalar(&def_level_array, column_desc.max_def_level())?;
         // efficiently calculate values to read
         Ok(null_bitmap_array
             .values()
@@ -1244,10 +1263,12 @@ mod tests {
     use crate::column::writer::ColumnWriter;
     use crate::data_type::ByteArray;
     use crate::data_type::ByteArrayType;
+    use crate::encoding::{DictEncoder, Encoder};
     use crate::file::properties::WriterProperties;
     use crate::file::reader::SerializedFileReader;
     use crate::file::serialized_reader::SliceableCursor;
     use crate::file::writer::{FileWriter, SerializedFileWriter, TryClone};
+    use crate::memory::MemTracker;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
     use crate::util::test_common::page_util::{
@@ -1256,8 +1277,6 @@ mod tests {
     use crate::{
         basic::Encoding, column::page::PageReader, schema::types::SchemaDescPtr,
     };
-    use crate::encoding::{DictEncoder, Encoder};
-    use crate::memory::MemTracker;
     use arrow::array::{PrimitiveArray, StringArray};
     use arrow::datatypes::Int32Type as ArrowInt32;
     use rand::{distributions::uniform::SampleUniform, thread_rng, Rng};
