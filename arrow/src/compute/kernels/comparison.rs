@@ -3687,6 +3687,17 @@ mod tests {
     }
 
     #[test]
+    fn test_gt_dyn_bool_scalar() {
+        let array = BooleanArray::from(vec![true, false, true]);
+        let array = Arc::new(array);
+        let a_eq = gt_dyn_bool_scalar(array, false).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+    }
+
+    #[test]
     fn test_lt_eq_dyn_bool_scalar() {
         let array = BooleanArray::from(vec![true, false, true]);
         let array = Arc::new(array);
@@ -3694,6 +3705,17 @@ mod tests {
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(true), Some(false)])
+        );
+    }
+
+    #[test]
+    fn test_gt_eq_dyn_bool_scalar() {
+        let array = BooleanArray::from(vec![true, false, true]);
+        let array = Arc::new(array);
+        let a_eq = gt_eq_dyn_bool_scalar(array, false).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(true), Some(true), Some(true)])
         );
     }
 
