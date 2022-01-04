@@ -162,8 +162,13 @@ pub trait ValuesBuffer: BufferQueue {
     /// Iterate through the indexes in `range` in reverse order, moving the value at each
     /// index to the next index returned by `rev_valid_position_iter`
     ///
-    /// It is guaranteed that the `i`th index returned by `rev_valid_position_iter` is greater
-    /// than or equal to `range.end - i - 1`
+    /// It is required that:
+    ///
+    /// - `rev_valid_position_iter` has at least `range.end - range.start` elements
+    /// - `rev_valid_position_iter` returns strictly monotonically decreasing values
+    /// - the `i`th index returned by `rev_valid_position_iter` is `>= range.end - i - 1`
+    ///
+    /// Implementations may panic or otherwise misbehave if this is not the case
     ///
     fn pad_nulls(
         &mut self,

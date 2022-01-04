@@ -45,6 +45,11 @@ pub type RecordReader<T> =
     GenericRecordReader<TypedBuffer<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
 
 #[doc(hidden)]
+/// A generic stateful column reader that delimits semantic records
+///
+/// This type is hidden from the docs, and relies on private traits with no
+/// public implementations. As such this type signature may be changed without
+/// breaking downstream users as it can only be constructed through type aliases
 pub struct GenericRecordReader<V, CV> {
     column_desc: ColumnDescPtr,
 
