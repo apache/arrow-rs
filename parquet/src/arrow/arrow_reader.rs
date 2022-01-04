@@ -246,7 +246,7 @@ mod tests {
         FixedLenByteArrayType, Int32Type, Int64Type,
     };
     use crate::errors::Result;
-    use crate::file::properties::WriterProperties;
+    use crate::file::properties::{WriterProperties, WriterVersion};
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::writer::{FileWriter, SerializedFileWriter};
     use crate::schema::types::{Type, TypePtr};
@@ -472,7 +472,7 @@ mod tests {
     }
 
     /// Parameters for single_column_reader_test
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct TestOptions {
         /// Number of row group to write to parquet (row group size =
         /// num_row_groups / num_rows)
@@ -487,6 +487,57 @@ mod tests {
         max_data_page_size: usize,
         /// Maximum size of dictionary page in bytes
         max_dict_page_size: usize,
+        /// Writer version
+        writer_version: WriterVersion,
+    }
+
+    impl Default for TestOptions {
+        fn default() -> Self {
+            Self {
+                num_row_groups: 2,
+                num_rows: 100,
+                record_batch_size: 15,
+                null_percent: None,
+                max_data_page_size: 1024 * 1024,
+                max_dict_page_size: 1024 * 1024,
+                writer_version: WriterVersion::PARQUET_1_0,
+            }
+        }
+    }
+
+    impl TestOptions {
+        fn new(num_row_groups: usize, num_rows: usize, record_batch_size: usize) -> Self {
+            Self {
+                num_row_groups,
+                num_rows,
+                record_batch_size,
+                null_percent: None,
+                max_data_page_size: 1024 * 1024,
+                max_dict_page_size: 1024 * 1024,
+                writer_version: WriterVersion::PARQUET_1_0,
+            }
+        }
+
+        fn with_null_percent(self, null_percent: usize) -> Self {
+            Self {
+                null_percent: Some(null_percent),
+                ..self
+            }
+        }
+
+        fn with_max_data_page_size(self, max_data_page_size: usize) -> Self {
+            Self {
+                max_data_page_size,
+                ..self
+            }
+        }
+
+        fn with_max_dict_page_size(self, max_dict_page_size: usize) -> Self {
+            Self {
+                max_dict_page_size,
+                ..self
+            }
+        }
     }
 
     /// Create a parquet file and then read it using
@@ -509,88 +560,42 @@ mod tests {
         let all_options = vec![
             // choose record_batch_batch (15) so batches cross row
             // group boundaries (50 rows in 2 row groups) cases.
-            TestOptions {
-                num_row_groups: 2,
-                num_rows: 100,
-                record_batch_size: 15,
-                null_percent: None,
-                max_data_page_size: 1024 * 1024,
-                max_dict_page_size: 1024 * 1024,
-            },
+            TestOptions::new(2, 100, 15),
             // choose record_batch_batch (5) so batches sometime fall
             // on row group boundaries and (25 rows in 3 row groups
             // --> row groups of 10, 10, and 5). Tests buffer
             // refilling edge cases.
-            TestOptions {
-                num_row_groups: 3,
-                num_rows: 25,
-                record_batch_size: 5,
-                null_percent: None,
-                max_data_page_size: 1024 * 1024,
-                max_dict_page_size: 1024 * 1024,
-            },
+            TestOptions::new(3, 25, 5),
             // Choose record_batch_size (25) so all batches fall
             // exactly on row group boundary (25). Tests buffer
             // refilling edge cases.
-            TestOptions {
-                num_row_groups: 4,
-                num_rows: 100,
-                record_batch_size: 25,
-                null_percent: None,
-                max_data_page_size: 1024 * 1024,
-                max_dict_page_size: 1024 * 1024,
-            },
+            TestOptions::new(4, 100, 25),
             // Set maximum page size so row groups have multiple pages
-            TestOptions {
-                num_row_groups: 3,
-                num_rows: 256,
-                record_batch_size: 73,
-                null_percent: None,
-                max_data_page_size: 128,
-                max_dict_page_size: 1024 * 1024,
-            },
+            TestOptions::new(3, 256, 73).with_max_data_page_size(128),
             // Set small dictionary page size to test dictionary fallback
-            TestOptions {
-                num_row_groups: 3,
-                num_rows: 256,
-                record_batch_size: 57,
-                null_percent: None,
-                max_data_page_size: 1024 * 1024,
-                max_dict_page_size: 128,
-            },
+            TestOptions::new(3, 256, 57).with_max_dict_page_size(128),
             // Test optional but with no nulls
-            TestOptions {
-                num_row_groups: 2,
-                num_rows: 256,
-                record_batch_size: 127,
-                null_percent: Some(0),
-                max_data_page_size: 1024 * 1024,
-                max_dict_page_size: 1024 * 1024,
-            },
+            TestOptions::new(2, 256, 127).with_null_percent(0),
             // Test optional with nulls
-            TestOptions {
-                num_row_groups: 2,
-                num_rows: 256,
-                record_batch_size: 93,
-                null_percent: Some(25),
-                max_data_page_size: 1024 * 1024,
-                max_dict_page_size: 1024 * 1024,
-            },
+            TestOptions::new(2, 256, 93).with_null_percent(25),
         ];
 
         all_options.into_iter().for_each(|opts| {
-            // Print out options to facilitate debugging failures on CI
-            println!(
-                "Running ConvertedType::{}/ArrowType::{:?} Test with Options: {:?}",
-                converted_type, arrow_type, opts
-            );
-            single_column_reader_test::<T, A, C, G>(
-                opts,
-                rand_max,
-                converted_type,
-                arrow_type.clone(),
-                converter,
-            )
+            for writer_version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0]
+            {
+                let opts = TestOptions {
+                    writer_version,
+                    ..opts
+                };
+
+                single_column_reader_test::<T, A, C, G>(
+                    opts,
+                    rand_max,
+                    converted_type,
+                    arrow_type.clone(),
+                    converter,
+                )
+            }
         });
     }
 
@@ -609,6 +614,12 @@ mod tests {
         A: Array + 'static,
         C: Converter<Vec<Option<T::T>>, A> + 'static,
     {
+        // Print out options to facilitate debugging failures on CI
+        println!(
+            "Running single_column_reader_test ConvertedType::{}/ArrowType::{:?} with Options: {:?}",
+            converted_type, arrow_type, opts
+        );
+
         let (repetition, def_levels) = match opts.null_percent.as_ref() {
             Some(null_percent) => {
                 let mut rng = thread_rng();
@@ -746,6 +757,7 @@ mod tests {
             .set_data_pagesize_limit(opts.max_data_page_size)
             .set_dictionary_pagesize_limit(opts.max_dict_page_size)
             .set_dictionary_enabled(true)
+            .set_writer_version(opts.writer_version)
             .build();
 
         if let Some(field) = field {
