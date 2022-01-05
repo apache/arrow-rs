@@ -28,8 +28,8 @@ use crate::buffer::{bitwise_bin_op_helper, buffer_unary_not, Buffer, MutableBuff
 use crate::compute::binary_boolean_kernel;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
-    ArrowNativeType, ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+    ArrowNativeType, ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type,
+    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
     IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
