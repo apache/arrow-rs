@@ -287,11 +287,18 @@ impl LevelInfo {
                     .as_any()
                     .downcast_ref::<StructArray>()
                     .expect("Unable to get struct array");
-                let struct_level = self.calculate_child_levels(
+                let mut struct_level = self.calculate_child_levels(
                     array_offsets,
                     array_mask,
                     LevelType::Struct(field.is_nullable()),
                 );
+
+                // If the parent field is a list, calculate the children of the struct as if it
+                // were a list as well.
+                if matches!(self.level_type, LevelType::List(_)) {
+                    struct_level.level_type = LevelType::List(false);
+                }
+
                 let mut struct_levels = vec![];
                 struct_array
                     .columns()
@@ -1673,6 +1680,97 @@ mod tests {
             offset: 0,
             length: 7,
         };
+        assert_eq!(list_level, &expected_level);
+    }
+
+    #[test]
+    fn test_list_of_struct() {
+        // define schema
+        let int_field = Field::new("a", DataType::Int32, true);
+        let item_field =
+            Field::new("item", DataType::Struct(vec![int_field.clone()]), true);
+        let list_field = Field::new("list", DataType::List(Box::new(item_field)), true);
+
+        let int_builder = Int32Builder::new(10);
+        let struct_builder =
+            StructBuilder::new(vec![int_field], vec![Box::new(int_builder)]);
+        let mut list_builder = ListBuilder::new(struct_builder);
+
+        // [{a: 1}], [], null, [null, null], [{a: null}], [{a: 2}]
+        //
+        // [{a: 1}]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_value(1)
+            .unwrap();
+        values.append(true).unwrap();
+        list_builder.append(true).unwrap();
+
+        // []
+        list_builder.append(true).unwrap();
+
+        // null
+        list_builder.append(false).unwrap();
+
+        // [null, null]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values.append(false).unwrap();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values.append(false).unwrap();
+        list_builder.append(true).unwrap();
+
+        // [{a: null}]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values.append(true).unwrap();
+        list_builder.append(true).unwrap();
+
+        // [{a: 2}]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_value(2)
+            .unwrap();
+        values.append(true).unwrap();
+        list_builder.append(true).unwrap();
+
+        let array = Arc::new(list_builder.finish());
+
+        let schema = Arc::new(Schema::new(vec![list_field]));
+
+        let rb = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let batch_level = LevelInfo::new(0, rb.num_rows());
+        let list_level =
+            &batch_level.calculate_array_levels(rb.column(0), rb.schema().field(0))[0];
+
+        let expected_level = LevelInfo {
+            definition: vec![4, 1, 0, 2, 2, 3, 4],
+            repetition: Some(vec![0, 0, 0, 0, 1, 0, 0]),
+            array_offsets: vec![0, 1, 1, 1, 3, 4, 5],
+            array_mask: vec![true, true, false, false, false, false, true],
+            max_definition: 4,
+            level_type: LevelType::Primitive(true),
+            offset: 0,
+            length: 5,
+        };
+
         assert_eq!(list_level, &expected_level);
     }
 }
