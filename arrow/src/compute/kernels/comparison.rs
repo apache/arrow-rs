@@ -1308,7 +1308,7 @@ pub fn neq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray
                 dyn_compare_utf8_scalar!(left, right, key_type, neq_utf8_scalar)
             }
             _ => Err(ArrowError::ComputeError(
-                "Kernel only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+                "neq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
             )),
         },
         DataType::Utf8 => {
@@ -1320,14 +1320,14 @@ pub fn neq_dyn_utf8_scalar(left: &dyn Array, right: &str) -> Result<BooleanArray
             neq_utf8_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
-            "Kernel only supports Utf8 or LargeUtf8 arrays".to_string(),
+            "neq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
         )),
     };
     result
 }
 
 /// Perform `left == right` operation on an array and a numeric scalar
-/// value. Supports BooleanArrays, and DictionaryArrays that have string values
+/// value.
 pub fn eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Boolean => {
@@ -1335,7 +1335,82 @@ pub fn eq_dyn_bool_scalar(left: &dyn Array, right: bool) -> Result<BooleanArray>
             eq_bool_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
-            "Kernel only supports BooleanArray".to_string(),
+            "eq_dyn_bool_scalar only supports BooleanArray".to_string(),
+        )),
+    };
+    result
+}
+
+/// Perform `left < right` operation on an array and a numeric scalar
+/// value. Supports BooleanArrays.
+pub fn lt_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
+    let result = match left.data_type() {
+        DataType::Boolean => {
+            let left = as_boolean_array(&left);
+            lt_bool_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "lt_dyn_bool_scalar only supports BooleanArray".to_string(),
+        )),
+    };
+    result
+}
+
+/// Perform `left > right` operation on an array and a numeric scalar
+/// value. Supports BooleanArrays.
+pub fn gt_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
+    let result = match left.data_type() {
+        DataType::Boolean => {
+            let left = as_boolean_array(&left);
+            gt_bool_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "gt_dyn_bool_scalar only supports BooleanArray".to_string(),
+        )),
+    };
+    result
+}
+
+/// Perform `left <= right` operation on an array and a numeric scalar
+/// value. Supports BooleanArrays.
+pub fn lt_eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
+    let result = match left.data_type() {
+        DataType::Boolean => {
+            let left = as_boolean_array(&left);
+            lt_eq_bool_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "lt_eq_dyn_bool_scalar only supports BooleanArray".to_string(),
+        )),
+    };
+    result
+}
+
+/// Perform `left >= right` operation on an array and a numeric scalar
+/// value. Supports BooleanArrays.
+pub fn gt_eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
+    let result = match left.data_type() {
+        DataType::Boolean => {
+            let left = as_boolean_array(&left);
+            gt_eq_bool_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "gt_eq_dyn_bool_scalar only supports BooleanArray".to_string(),
+        )),
+    };
+    result
+}
+
+/// Perform `left != right` operation on an array and a numeric scalar
+/// value. Supports BooleanArrays.
+pub fn neq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
+    let result = match left.data_type() {
+        DataType::Boolean => {
+            let left = as_boolean_array(&left);
+            neq_bool_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "neq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
     };
     result
@@ -3575,6 +3650,61 @@ mod tests {
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![Some(false), Some(true), Some(false)])
+        );
+    }
+
+    #[test]
+    fn test_lt_dyn_bool_scalar() {
+        let array = BooleanArray::from(vec![Some(true), Some(false), Some(true), None]);
+        let array = Arc::new(array);
+        let a_eq = lt_dyn_bool_scalar(array, false).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(false), Some(false), Some(false), None])
+        );
+    }
+
+    #[test]
+    fn test_gt_dyn_bool_scalar() {
+        let array = BooleanArray::from(vec![true, false, true]);
+        let array = Arc::new(array);
+        let a_eq = gt_dyn_bool_scalar(array, false).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+    }
+
+    #[test]
+    fn test_lt_eq_dyn_bool_scalar() {
+        let array = BooleanArray::from(vec![true, false, true]);
+        let array = Arc::new(array);
+        let a_eq = lt_eq_dyn_bool_scalar(array, false).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(false), Some(true), Some(false)])
+        );
+    }
+
+    #[test]
+    fn test_gt_eq_dyn_bool_scalar() {
+        let array = BooleanArray::from(vec![true, false, true]);
+        let array = Arc::new(array);
+        let a_eq = gt_eq_dyn_bool_scalar(array, false).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(true), Some(true), Some(true)])
+        );
+    }
+
+    #[test]
+    fn test_neq_dyn_bool_scalar() {
+        let array = BooleanArray::from(vec![true, false, true]);
+        let array = Arc::new(array);
+        let a_eq = neq_dyn_bool_scalar(array, false).unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(true), Some(false), Some(true)])
         );
     }
 }

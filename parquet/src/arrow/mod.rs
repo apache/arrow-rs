@@ -118,7 +118,7 @@
 //!}
 //! ```
 
-pub mod array_reader;
+experimental_mod!(array_reader);
 pub mod arrow_array_reader;
 pub mod arrow_reader;
 pub mod arrow_writer;
