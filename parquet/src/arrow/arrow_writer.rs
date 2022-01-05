@@ -26,7 +26,8 @@ use arrow_array::Array;
 
 use super::levels::LevelInfo;
 use super::schema::{
-    add_encoded_arrow_schema_to_metadata, decimal_length_from_precision,
+    add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
+    decimal_length_from_precision,
 };
 
 use crate::column::writer::ColumnWriter;
@@ -62,7 +63,7 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
         arrow_schema: SchemaRef,
         props: Option<WriterProperties>,
     ) -> Result<Self> {
-        let schema = crate::arrow::arrow_to_parquet_schema(&arrow_schema)?;
+        let schema = arrow_to_parquet_schema(&arrow_schema)?;
         // add serialized arrow schema
         let mut props = props.unwrap_or_else(|| WriterProperties::builder().build());
         add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
@@ -470,7 +471,7 @@ macro_rules! def_get_binary_array_fn {
     ($name:ident, $ty:ty) => {
         fn $name(array: &$ty) -> Vec<ByteArray> {
             let mut byte_array = ByteArray::new();
-            let ptr = crate::memory::ByteBufferPtr::new(
+            let ptr = crate::util::memory::ByteBufferPtr::new(
                 unsafe { array.value_data().typed_data::<u8>() }.to_vec(),
             );
             byte_array.set_data(ptr);

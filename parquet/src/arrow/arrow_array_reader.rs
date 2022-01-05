@@ -19,12 +19,12 @@ use super::array_reader::ArrayReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::Encoding;
 use crate::data_type::{ByteArray, ByteArrayType};
-use crate::decoding::{Decoder, DeltaByteArrayDecoder};
+use crate::encodings::decoding::{Decoder, DeltaByteArrayDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::{
     column::page::{Page, PageIterator},
-    memory::ByteBufferPtr,
     schema::types::{ColumnDescPtr, ColumnDescriptor},
+    util::memory::ByteBufferPtr,
 };
 use arrow::{
     array::{ArrayRef, Int16Array},
