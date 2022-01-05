@@ -1425,7 +1425,7 @@ pub fn neq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanA
                 dyn_compare_utf8_scalar!(&left, right, key_type, neq_utf8_scalar)
             }
             _ => Err(ArrowError::ComputeError(
-                "Kernel only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
+                "neq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays or DictionaryArray with Utf8 or LargeUtf8 values".to_string(),
             )),
         },
         DataType::Utf8 | DataType::LargeUtf8 => {
@@ -1433,7 +1433,7 @@ pub fn neq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanA
             neq_utf8_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
-            "Kernel only supports Utf8 or LargeUtf8 arrays".to_string(),
+            "neq_dyn_utf8_scalar only supports Utf8 or LargeUtf8 arrays".to_string(),
         )),
     };
     result
@@ -1448,7 +1448,7 @@ pub fn eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanAr
             eq_bool_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
-            "Kernel only supports BooleanArray".to_string(),
+            "eq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
     };
     result
@@ -1463,7 +1463,7 @@ pub fn lt_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanAr
             lt_bool_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
-            "Kernel only supports BooleanArray".to_string(),
+            "lt_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
     };
     result
@@ -1478,7 +1478,7 @@ pub fn gt_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanAr
             gt_bool_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
-            "Kernel only supports BooleanArray".to_string(),
+            "gt_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
     };
     result
@@ -1493,7 +1493,7 @@ pub fn lt_eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<Boolea
             lt_eq_bool_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
-            "Kernel only supports BooleanArray".to_string(),
+            "lt_eq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
     };
     result
@@ -1508,7 +1508,7 @@ pub fn gt_eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<Boolea
             gt_eq_bool_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
-            "Kernel only supports BooleanArray".to_string(),
+            "gt_eq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
     };
     result
@@ -1523,7 +1523,7 @@ pub fn neq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanA
             neq_bool_scalar(left, right)
         }
         _ => Err(ArrowError::ComputeError(
-            "Kernel only supports BooleanArray".to_string(),
+            "neq_dyn_bool_scalar only supports BooleanArray".to_string(),
         )),
     };
     result
