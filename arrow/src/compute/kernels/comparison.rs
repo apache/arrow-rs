@@ -3677,12 +3677,12 @@ mod tests {
 
     #[test]
     fn test_lt_dyn_bool_scalar() {
-        let array = BooleanArray::from(vec![true, false, true]);
+        let array = BooleanArray::from(vec![Some(true), Some(false), Some(true), None]);
         let array = Arc::new(array);
         let a_eq = lt_dyn_bool_scalar(array, false).unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(vec![Some(false), Some(false), Some(false)])
+            BooleanArray::from(vec![Some(false), Some(false), Some(false), None])
         );
     }
 
@@ -3699,12 +3699,12 @@ mod tests {
 
     #[test]
     fn test_lt_eq_dyn_bool_scalar() {
-        let array = BooleanArray::from(vec![Some(true), Some(false), Some(true)]);
+        let array = BooleanArray::from(vec![true, false, true]);
         let array = Arc::new(array);
         let a_eq = lt_eq_dyn_bool_scalar(array, false).unwrap();
         assert_eq!(
             a_eq,
-            BooleanArray::from(vec![Some(false), Some(true), Some(false), None])
+            BooleanArray::from(vec![Some(false), Some(true), Some(false)])
         );
     }
 
