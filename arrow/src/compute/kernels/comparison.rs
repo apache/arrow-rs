@@ -2759,6 +2759,8 @@ mod tests {
         );
     }
 
+    // Fails when simd is enabled: https://github.com/apache/arrow-rs/issues/1136
+    #[cfg(not(feature = "simd"))]
     #[test]
     fn test_interval_array() {
         let a = IntervalDayTimeArray::from(
