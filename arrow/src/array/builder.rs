@@ -2143,12 +2143,16 @@ impl UnionBuilder {
 
         self.type_id_builder.append(i8::default());
 
-        // Handle sparse union
-        if self.value_offset_builder.is_none() {
-            for (_, fd) in self.fields.iter_mut() {
-                fd.append_null_dynamic()?;
+        match &mut self.value_offset_builder {
+            // Handle dense union
+            Some(value_offset_builder) => value_offset_builder.append(i32::default()),
+            // Handle sparse union
+            None => {
+                for (_, fd) in self.fields.iter_mut() {
+                    fd.append_null_dynamic()?;
+                }
             }
-        }
+        };
         self.len += 1;
         Ok(())
     }

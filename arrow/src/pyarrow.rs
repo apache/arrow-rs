@@ -26,7 +26,7 @@ use pyo3::import_exception;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
-use crate::array::{make_array, Array, ArrayData, ArrayRef};
+use crate::array::{Array, ArrayData, ArrayRef};
 use crate::datatypes::{DataType, Field, Schema};
 use crate::error::ArrowError;
 use crate::ffi;
@@ -145,16 +145,6 @@ impl PyArrowConvert for ArrayData {
             ),
         )?;
         Ok(array.to_object(py))
-    }
-}
-
-impl PyArrowConvert for ArrayRef {
-    fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
-        Ok(make_array(ArrayData::from_pyarrow(value)?))
-    }
-
-    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
-        self.data().to_pyarrow(py)
     }
 }
 

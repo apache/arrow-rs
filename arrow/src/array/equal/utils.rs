@@ -161,7 +161,7 @@ pub(super) fn child_logical_null_buffer(
             });
             Some(buffer.into())
         }
-        DataType::Union(_) => {
+        DataType::Union(_, _) => {
             unimplemented!("Logical equality not yet implemented for union arrays")
         }
         DataType::Dictionary(_, _) => {

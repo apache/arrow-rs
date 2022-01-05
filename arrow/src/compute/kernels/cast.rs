@@ -4454,10 +4454,13 @@ mod tests {
                 Field::new("f1", DataType::Int32, false),
                 Field::new("f2", DataType::Utf8, true),
             ]),
-            Union(vec![
-                Field::new("f1", DataType::Int32, false),
-                Field::new("f2", DataType::Utf8, true),
-            ]),
+            Union(
+                vec![
+                    Field::new("f1", DataType::Int32, false),
+                    Field::new("f2", DataType::Utf8, true),
+                ],
+                UnionMode::Dense,
+            ),
             Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
             Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
             Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),

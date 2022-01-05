@@ -736,6 +736,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555000000,23:46:03,foo
             // starting at row 2 and up to row 6.
             None,
             None,
+            None,
         );
         let rb = reader.next().unwrap().unwrap();
         let c1 = rb.column(0).as_any().downcast_ref::<Date32Array>().unwrap();

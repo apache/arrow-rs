@@ -241,7 +241,7 @@ impl LevelInfo {
                         list_level.calculate_array_levels(&child_array, list_field)
                     }
                     DataType::FixedSizeList(_, _) => unimplemented!(),
-                    DataType::Union(_) => unimplemented!(),
+                    DataType::Union(_, _) => unimplemented!(),
                 }
             }
             DataType::Map(map_field, _) => {
@@ -304,7 +304,7 @@ impl LevelInfo {
                     });
                 struct_levels
             }
-            DataType::Union(_) => unimplemented!(),
+            DataType::Union(_, _) => unimplemented!(),
             DataType::Dictionary(_, _) => {
                 // Need to check for these cases not implemented in C++:
                 // - "Writing DictionaryArray with nested dictionary type not yet supported"
@@ -743,7 +743,7 @@ impl LevelInfo {
                     array_mask,
                 )
             }
-            DataType::FixedSizeList(_, _) | DataType::Union(_) => {
+            DataType::FixedSizeList(_, _) | DataType::Union(_, _) => {
                 unimplemented!("Getting offsets not yet implemented")
             }
         }

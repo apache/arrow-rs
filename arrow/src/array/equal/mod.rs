@@ -226,7 +226,7 @@ fn equal_values(
         DataType::Struct(_) => {
             struct_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
         }
-        DataType::Union(_) => unimplemented!("See ARROW-8576"),
+        DataType::Union(_, _) => unimplemented!("See ARROW-8576"),
         DataType::Dictionary(data_type, _) => match data_type.as_ref() {
             DataType::Int8 => dictionary_equal::<i8>(
                 lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,

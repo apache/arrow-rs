@@ -87,6 +87,12 @@ impl Schema {
         Self { fields, metadata }
     }
 
+    /// Sets the metadata of this `Schema` to be `metadata` and returns self
+    pub fn with_metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
     /// Returns a new schema with only the specified columns in the new schema
     /// This carries metadata from the parent schema over as well
     pub fn project(&self, indices: &[usize]) -> Result<Schema> {
@@ -366,7 +372,7 @@ mod tests {
     #[test]
     fn test_ser_de_metadata() {
         // ser/de with empty metadata
-        let mut schema = Schema::new(vec![
+        let schema = Schema::new(vec![
             Field::new("name", DataType::Utf8, false),
             Field::new("address", DataType::Utf8, false),
             Field::new("priority", DataType::UInt8, false),
@@ -378,10 +384,8 @@ mod tests {
         assert_eq!(schema, de_schema);
 
         // ser/de with non-empty metadata
-        schema.metadata = [("key".to_owned(), "val".to_owned())]
-            .iter()
-            .cloned()
-            .collect();
+        let schema = schema
+            .with_metadata([("key".to_owned(), "val".to_owned())].into_iter().collect());
         let json = serde_json::to_string(&schema).unwrap();
         let de_schema = serde_json::from_str(&json).unwrap();
 
@@ -393,14 +397,12 @@ mod tests {
         let mut metadata = HashMap::new();
         metadata.insert("meta".to_string(), "data".to_string());
 
-        let schema = Schema::new_with_metadata(
-            vec![
-                Field::new("name", DataType::Utf8, false),
-                Field::new("address", DataType::Utf8, false),
-                Field::new("priority", DataType::UInt8, false),
-            ],
-            metadata,
-        );
+        let schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ])
+        .with_metadata(metadata);
 
         let projected: Schema = schema.project(&[0, 2]).unwrap();
 
@@ -415,14 +417,12 @@ mod tests {
         let mut metadata = HashMap::new();
         metadata.insert("meta".to_string(), "data".to_string());
 
-        let schema = Schema::new_with_metadata(
-            vec![
-                Field::new("name", DataType::Utf8, false),
-                Field::new("address", DataType::Utf8, false),
-                Field::new("priority", DataType::UInt8, false),
-            ],
-            metadata,
-        );
+        let schema = Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("address", DataType::Utf8, false),
+            Field::new("priority", DataType::UInt8, false),
+        ])
+        .with_metadata(metadata);
 
         let projected: Result<Schema> = schema.project(&[0, 3]);
 

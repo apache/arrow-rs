@@ -60,6 +60,8 @@ arrow = { path = "../arrow", version = "7.0.0-SNAPSHOT", default-features = fals
 default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
 cli = ["serde_json", "base64", "clap"]
 test_common = []
+# Experimental, unstable functionality primarily used for testing
+experimental = []
 
 [[ bin ]]
 name = "parquet-read"
@@ -79,5 +81,5 @@ harness = false
 
 [[bench]]
 name = "arrow_array_reader"
-required-features = ["test_common"]
+required-features = ["test_common", "experimental"]
 harness = false

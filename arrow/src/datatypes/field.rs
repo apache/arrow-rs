@@ -83,6 +83,12 @@ impl Field {
         }
     }
 
+    /// Sets the metadata of this `Field` to be `metadata` and returns self
+    pub fn with_metadata(mut self, metadata: Option<BTreeMap<String, String>>) -> Self {
+        self.set_metadata(metadata);
+        self
+    }
+
     /// Returns the immutable reference to the `Field`'s optional custom metadata.
     #[inline]
     pub const fn metadata(&self) -> &Option<BTreeMap<String, String>> {
@@ -111,7 +117,7 @@ impl Field {
     pub(crate) fn fields(&self) -> Vec<&Field> {
         let mut collected_fields = vec![self];
         match &self.data_type {
-            DataType::Struct(fields) | DataType::Union(fields) => {
+            DataType::Struct(fields) | DataType::Union(fields, _) => {
                 collected_fields.extend(fields.iter().map(|f| f.fields()).flatten())
             }
             DataType::List(field)
@@ -484,8 +490,8 @@ impl Field {
                     ));
                 }
             },
-            DataType::Union(nested_fields) => match &from.data_type {
-                DataType::Union(from_nested_fields) => {
+            DataType::Union(nested_fields, _) => match &from.data_type {
+                DataType::Union(from_nested_fields, _) => {
                     for from_field in from_nested_fields {
                         let mut is_new_field = true;
                         for self_field in nested_fields.iter_mut() {

@@ -72,7 +72,7 @@ pub fn schema_to_fb_offset<'a>(
 /// Convert an IPC Field to Arrow Field
 impl<'a> From<ipc::Field<'a>> for Field {
     fn from(field: ipc::Field) -> Field {
-        let mut arrow_field = if let Some(dictionary) = field.dictionary() {
+        let arrow_field = if let Some(dictionary) = field.dictionary() {
             Field::new_dict(
                 field.name().unwrap(),
                 get_data_type(field, true),
@@ -99,8 +99,7 @@ impl<'a> From<ipc::Field<'a>> for Field {
             metadata = Some(metadata_map);
         }
 
-        arrow_field.set_metadata(metadata);
-        arrow_field
+        arrow_field.with_metadata(metadata)
     }
 }
 
@@ -705,11 +704,7 @@ mod tests {
             .collect();
         let schema = Schema::new_with_metadata(
             vec![
-                {
-                    let mut f = Field::new("uint8", DataType::UInt8, false);
-                    f.set_metadata(Some(field_md));
-                    f
-                },
+                Field::new("uint8", DataType::UInt8, false).with_metadata(Some(field_md)),
                 Field::new("uint16", DataType::UInt16, true),
                 Field::new("uint32", DataType::UInt32, false),
                 Field::new("uint64", DataType::UInt64, true),
