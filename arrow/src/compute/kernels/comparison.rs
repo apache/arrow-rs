@@ -1440,7 +1440,7 @@ pub fn neq_dyn_utf8_scalar(left: Arc<dyn Array>, right: &str) -> Result<BooleanA
 }
 
 /// Perform `left == right` operation on an array and a numeric scalar
-/// value. Supports BooleanArrays, and DictionaryArrays that have string values
+/// value. Supports BooleanArrays.
 pub fn eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Boolean => {
@@ -1455,7 +1455,7 @@ pub fn eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanAr
 }
 
 /// Perform `left < right` operation on an array and a numeric scalar
-/// value. Supports BooleanArrays, and DictionaryArrays that have string values
+/// value. Supports BooleanArrays.
 pub fn lt_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Boolean => {
@@ -1470,7 +1470,7 @@ pub fn lt_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanAr
 }
 
 /// Perform `left > right` operation on an array and a numeric scalar
-/// value. Supports BooleanArrays, and DictionaryArrays that have string values
+/// value. Supports BooleanArrays.
 pub fn gt_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Boolean => {
@@ -1485,7 +1485,7 @@ pub fn gt_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanAr
 }
 
 /// Perform `left <= right` operation on an array and a numeric scalar
-/// value. Supports BooleanArrays, and DictionaryArrays that have string values
+/// value. Supports BooleanArrays.
 pub fn lt_eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Boolean => {
@@ -1500,7 +1500,7 @@ pub fn lt_eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<Boolea
 }
 
 /// Perform `left >= right` operation on an array and a numeric scalar
-/// value. Supports BooleanArrays, and DictionaryArrays that have string values
+/// value. Supports BooleanArrays.
 pub fn gt_eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Boolean => {
@@ -1515,7 +1515,7 @@ pub fn gt_eq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<Boolea
 }
 
 /// Perform `left != right` operation on an array and a numeric scalar
-/// value. Supports BooleanArrays, and DictionaryArrays that have string values
+/// value. Supports BooleanArrays.
 pub fn neq_dyn_bool_scalar(left: Arc<dyn Array>, right: bool) -> Result<BooleanArray> {
     let result = match left.data_type() {
         DataType::Boolean => {
