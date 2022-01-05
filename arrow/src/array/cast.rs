@@ -21,7 +21,7 @@ use crate::array::*;
 use crate::datatypes::*;
 
 /// Force downcast ArrayRef to PrimitiveArray<T>
-pub fn as_primitive_array<T>(arr: &ArrayRef) -> &PrimitiveArray<T>
+pub fn as_primitive_array<T>(arr: &dyn Array) -> &PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
 {
@@ -31,7 +31,7 @@ where
 }
 
 /// Force downcast ArrayRef to DictionaryArray<T>
-pub fn as_dictionary_array<T>(arr: &ArrayRef) -> &DictionaryArray<T>
+pub fn as_dictionary_array<T>(arr: &dyn Array) -> &DictionaryArray<T>
 where
     T: ArrowDictionaryKeyType,
 {
@@ -41,7 +41,9 @@ where
 }
 
 #[doc = "Force downcast ArrayRef to GenericListArray"]
-pub fn as_generic_list_array<S: OffsetSizeTrait>(arr: &ArrayRef) -> &GenericListArray<S> {
+pub fn as_generic_list_array<S: OffsetSizeTrait>(
+    arr: &dyn Array,
+) -> &GenericListArray<S> {
     arr.as_any()
         .downcast_ref::<GenericListArray<S>>()
         .expect("Unable to downcast to list array")
@@ -49,20 +51,20 @@ pub fn as_generic_list_array<S: OffsetSizeTrait>(arr: &ArrayRef) -> &GenericList
 
 #[doc = "Force downcast ArrayRef to ListArray"]
 #[inline]
-pub fn as_list_array(arr: &ArrayRef) -> &ListArray {
+pub fn as_list_array(arr: &dyn Array) -> &ListArray {
     as_generic_list_array::<i32>(arr)
 }
 
 #[doc = "Force downcast ArrayRef to LargeListArray"]
 #[inline]
-pub fn as_large_list_array(arr: &ArrayRef) -> &LargeListArray {
+pub fn as_large_list_array(arr: &dyn Array) -> &LargeListArray {
     as_generic_list_array::<i64>(arr)
 }
 
 #[doc = "Force downcast ArrayRef to GenericBinaryArray"]
 #[inline]
 pub fn as_generic_binary_array<S: BinaryOffsetSizeTrait>(
-    arr: &ArrayRef,
+    arr: &dyn Array,
 ) -> &GenericBinaryArray<S> {
     arr.as_any()
         .downcast_ref::<GenericBinaryArray<S>>()
@@ -73,7 +75,7 @@ macro_rules! array_downcast_fn {
     ($name: ident, $arrty: ty, $arrty_str:expr) => {
         #[doc = "Force downcast ArrayRef to "]
         #[doc = $arrty_str]
-        pub fn $name(arr: &ArrayRef) -> &$arrty {
+        pub fn $name(arr: &dyn Array) -> &$arrty {
             arr.as_any().downcast_ref::<$arrty>().expect(concat!(
                 "Unable to downcast to typed array through ",
                 stringify!($name)
@@ -93,3 +95,30 @@ array_downcast_fn!(as_boolean_array, BooleanArray);
 array_downcast_fn!(as_null_array, NullArray);
 array_downcast_fn!(as_struct_array, StructArray);
 array_downcast_fn!(as_union_array, UnionArray);
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn test_as_primitive_array_ref() {
+        let array: Int32Array = vec![1, 2, 3].into_iter().map(Some).collect();
+        assert!(!as_primitive_array::<Int32Type>(&array).is_empty());
+
+        // should also work when wrapped in an Arc
+        let array: ArrayRef = Arc::new(array);
+        assert!(!as_primitive_array::<Int32Type>(&array).is_empty());
+    }
+
+    #[test]
+    fn test_as_string_array_ref() {
+        let array: StringArray = vec!["foo", "bar"].into_iter().map(Some).collect();
+        assert!(!as_string_array(&array).is_empty());
+
+        // should also work when wrapped in an Arc
+        let array: ArrayRef = Arc::new(array);
+        assert!(!as_string_array(&array).is_empty())
+    }
+}
