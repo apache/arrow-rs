@@ -20,6 +20,35 @@
 For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md)
 
 
+## [7.0.0](https://github.com/apache/arrow-rs/tree/7.0.0) (2022-1-06)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/6.0.0...7.0.0)
+
+### Arrow
+
+**Breaking changes:**
+- `pretty_format_batches` now returns `Result<impl Display>` rather than `String`: [#975](https://github.com/apache/arrow-rs/pull/975)
+- `MutableBuffer::typed_data_mut` is marked `unsafe`: [#1029](https://github.com/apache/arrow-rs/pull/1029)
+- UnionArray updated match latest Arrow spec, added `UnionMode`, `UnionArray::new()` marked `unsafe`: [#885](https://github.com/apache/arrow-rs/pull/885)
+
+**New Features:**
+- Support for `Float16Array` types [#888](https://github.com/apache/arrow-rs/pull/888)
+- IPC support for `UnionArray` [#654](https://github.com/apache/arrow-rs/issues/654)
+- Dynamic comparison kernels for scalars (e.g. `eq_dyn_scalar`), including `DictionaryArray`: [#1113](https://github.com/apache/arrow-rs/issues/1113)
+
+**Enhancements:**
+- Added `Schema::with_metadata` and `Field::with_metadata` [#1092](https://github.com/apache/arrow-rs/pull/1092)
+- Support for custom datetime format for inference and parsing csv files [#1112](https://github.com/apache/arrow-rs/pull/1112)
+- Implement `Array` for `ArrayRef` for easier use [#1129](https://github.com/apache/arrow-rs/pull/1129)
+- Pretty printing display support for `FixedSizeBinaryArray` [#1097](https://github.com/apache/arrow-rs/pull/1097)
+- Dependency Upgrades: `pyo3`, `parquet-format`, `prost`, `tonic`
+- Avoid allocating vector of indices in `lexicographical_partition_ranges`[#998](https://github.com/apache/arrow-rs/pull/998)
+
+### Parquet
+
+**Fixed bugs:**
+- (parquet) Fix reading of dictionary encoded pages with null values: [#1130](https://github.com/apache/arrow-rs/pull/1130)
+
 
 # Changelog
 
