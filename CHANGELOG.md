@@ -20,9 +20,9 @@
 For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md)
 
 
-## [7.0.0](https://github.com/apache/arrow-rs/tree/7.0.0) (2022-1-06)
+## [7.0.0](https://github.com/apache/arrow-rs/tree/7.0.0) (2022-1-07)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/6.0.0...7.0.0)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/6.5.0...7.0.0)
 
 ### Arrow
 
