@@ -40,8 +40,8 @@ The arrow crate provides the following features which may be enabled:
 - `prettyprint` - support for formatting record batches as textual columns
 - `js` - support for building arrow for WebAssembly / JavaScript
 - `simd` - (_Requires Nightly Rust_) alternate optimized
-  implementations of some [compute](https://github.com/apache/arrow/tree/master/rust/arrow/src/compute)
-  kernels using explicit SIMD processor intrinsics.
+  implementations of some [compute](https://github.com/apache/arrow-rs/tree/master/arrow/src/compute/kernels)
+  kernels using explicit SIMD instructions available through [packed_simd_2](https://docs.rs/packed_simd_2/latest/packed_simd_2/).
 - `chrono-tz` - support of parsing timezone using [chrono-tz](https://docs.rs/chrono-tz/0.6.0/chrono_tz/)
 
 ## Safety
