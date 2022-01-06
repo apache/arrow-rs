@@ -29,7 +29,8 @@ use crate::compute::binary_boolean_kernel;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
     ArrowNativeType, ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, TimeUnit,
+    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
@@ -1748,6 +1749,42 @@ macro_rules! typed_compares {
             (DataType::Date64, DataType::Date64) => {
                 typed_cmp!($LEFT, $RIGHT, Date64Array, $OP_PRIM, Date64Type)
             }
+            (
+                DataType::Interval(IntervalUnit::YearMonth),
+                DataType::Interval(IntervalUnit::YearMonth),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    IntervalYearMonthArray,
+                    $OP_PRIM,
+                    IntervalYearMonthType
+                )
+            }
+            (
+                DataType::Interval(IntervalUnit::DayTime),
+                DataType::Interval(IntervalUnit::DayTime),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    IntervalDayTimeArray,
+                    $OP_PRIM,
+                    IntervalDayTimeType
+                )
+            }
+            (
+                DataType::Interval(IntervalUnit::MonthDayNano),
+                DataType::Interval(IntervalUnit::MonthDayNano),
+            ) => {
+                typed_cmp!(
+                    $LEFT,
+                    $RIGHT,
+                    IntervalMonthDayNanoArray,
+                    $OP_PRIM,
+                    IntervalMonthDayNanoType
+                )
+            }
             (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                 "Comparing arrays of type {} is not yet implemented",
                 t1
@@ -2683,6 +2720,59 @@ mod tests {
                 .downcast_ref::<BooleanArray>()
                 .unwrap(),
             &BooleanArray::from(vec![true, false, false, false]),
+        );
+    }
+
+    // Fails when simd is enabled: https://github.com/apache/arrow-rs/issues/1136
+    #[cfg(not(feature = "simd"))]
+    #[test]
+    fn test_interval_array() {
+        let a = IntervalDayTimeArray::from(
+            vec![Some(0), Some(6), Some(834), None, Some(3), None],
+        );
+        let b = IntervalDayTimeArray::from(
+            vec![Some(70), Some(6), Some(833), Some(6), Some(3), None],
+        );
+        let res = eq(&a, &b).unwrap();
+        let res_dyn = eq_dyn(&a, &b).unwrap();
+        assert_eq!(res, res_dyn);
+        assert_eq!(
+            &res_dyn,
+            &BooleanArray::from(
+                vec![Some(false), Some(true), Some(false), None, Some(true), None]
+            )
+        );
+
+        let a = IntervalMonthDayNanoArray::from(
+            vec![Some(0), Some(6), Some(834), None, Some(3), None],
+        );
+        let b = IntervalMonthDayNanoArray::from(
+            vec![Some(86), Some(5), Some(8), Some(6), Some(3), None],
+        );
+        let res = lt(&a, &b).unwrap();
+        let res_dyn = lt_dyn(&a, &b).unwrap();
+        assert_eq!(res, res_dyn);
+        assert_eq!(
+            &res_dyn,
+            &BooleanArray::from(
+                vec![Some(true), Some(false), Some(false), None, Some(false), None]
+            )
+        );
+
+        let a = IntervalYearMonthArray::from(
+            vec![Some(0), Some(623), Some(834), None, Some(3), None],
+        );
+        let b = IntervalYearMonthArray::from(
+            vec![Some(86), Some(5), Some(834), Some(6), Some(86), None],
+        );
+        let res = gt_eq(&a, &b).unwrap();
+        let res_dyn = gt_eq_dyn(&a, &b).unwrap();
+        assert_eq!(res, res_dyn);
+        assert_eq!(
+            &res_dyn,
+            &BooleanArray::from(
+                vec![Some(false), Some(true), Some(true), None, Some(false), None]
+            )
         );
     }
 
