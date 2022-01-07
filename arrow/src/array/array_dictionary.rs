@@ -109,6 +109,15 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
     pub fn is_ordered(&self) -> bool {
         self.is_ordered
     }
+
+    pub fn with_ordered(self, is_ordered: bool) -> DictionaryArray<K> {
+        Self {
+            data: self.data,
+            values: self.values,
+            keys: self.keys,
+            is_ordered,
+        }
+    }
 }
 
 /// Constructs a `DictionaryArray` from an array data reference.
