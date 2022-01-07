@@ -2390,6 +2390,11 @@ mod tests {
 
     #[test]
     fn test_sort_dicts_by_key() {
+        // this test sorts the dictionary by its keys instead of values
+        // since we do not specify the keys here directly,
+        // they get assigned in the order of the values in the vector
+        // For example values of ["B", "A", "A"] result in the keys [0, 1, 1]
+
         test_sort_string_dict_arrays::<Int8Type>(
             vec![None, Some("B"), Some("A"), None, Some("C"), Some("A")],
             Some(SortOptions {
