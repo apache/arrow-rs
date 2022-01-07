@@ -110,11 +110,14 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         self.is_ordered
     }
 
-    pub fn with_ordered(self, is_ordered: bool) -> DictionaryArray<K> {
+    /// Returns a DictionaryArray referencing the same data
+    /// with the [DictionaryArray::is_ordered] set to the given value.
+    /// Note that this does not actually reorder the values in the dictionary.
+    pub fn as_ordered(&self, is_ordered: bool) -> DictionaryArray<K> {
         Self {
-            data: self.data,
-            values: self.values,
-            keys: self.keys,
+            data: self.data.clone(),
+            values: self.values.clone(),
+            keys: PrimitiveArray::<K>::from(self.data.clone()),
             is_ordered,
         }
     }

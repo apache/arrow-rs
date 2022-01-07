@@ -77,7 +77,7 @@ where
 
     let dictionary_array = DictionaryArray::<T>::from(data);
 
-    vec![Arc::new(dictionary_array.with_ordered(mark_as_sorted))]
+    vec![Arc::new(dictionary_array.as_ordered(mark_as_sorted))]
 }
 
 fn bench_partition(sorted_columns: &[ArrayRef]) {

@@ -1187,7 +1187,7 @@ mod tests {
         let array = data
             .into_iter()
             .collect::<DictionaryArray<T>>()
-            .with_ordered(ordered);
+            .as_ordered(ordered);
         let array_values = array.values().clone();
         let dict = array_values
             .as_any()
