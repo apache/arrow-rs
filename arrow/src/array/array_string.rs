@@ -187,8 +187,15 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
             offsets.push(length_so_far);
             values.extend_from_slice(s.as_bytes());
         }
+
+        // iterator size hint may not be correct so compute the actual number of offsets
+        let actual_len = match offsets.len() {
+            0 => 0,
+            len => (len / std::mem::size_of::<OffsetSize>()) - 1
+        };
+
         let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
-            .len(data_len)
+            .len(actual_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into());
         let array_data = unsafe { array_data.build_unchecked() };
