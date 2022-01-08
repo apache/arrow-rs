@@ -29,7 +29,9 @@ This crate is tested with the latest stable version of Rust. We do not currently
 
 ## Versioning / Releases
 
-Unlike many other crates in the Rust ecosystem which spend extended time in "pre 1.0.0" state, releasing versions 0.x, the arrow-rs crate follows the versioning scheme of the overall [Apache Arrow][arrow] project in an effort to signal which language implementations have been integration tested with each other.
+The arrow crate follows the [SemVer standard](https://doc.rust-lang.org/cargo/reference/semver.html) defined by Cargo and works well within the Rust crate ecosystem.
+
+However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `7.0.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
 
 ## Features
 
@@ -50,9 +52,9 @@ TLDR: You should avoid using the `alloc` and `buffer` and `bitmap` modules if at
 
 As with all open source code, you should carefully evaluate the suitability of `arrow` for your project, taking into consideration your needs and risk tolerance prior to doing so.
 
-_Background_: There are various parts of the `arrow` crate which use `unsafe` and `transmute` code internally. We are actively working as a community to minimize undefined behavior and remove `unsafe` usage to align more with Rust's core principles of safety (e.g. the arrow2 project).
+_Background_: There are various parts of the `arrow` crate which use `unsafe` and `transmute` code internally. We are actively working as a community to minimize undefined behavior and remove `unsafe` usage to align more with Rust's core principles of safety.
 
-As `arrow` exists today, it is fairly easy to misuse the APIs, leading to undefined behavior, and it is especially easy to misuse code in modules named above.
+As `arrow` exists today, it is fairly easy to misuse the code in modules named above, leading to undefined behavior.
 
 ## Building for WASM
 
