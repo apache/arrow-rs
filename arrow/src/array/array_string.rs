@@ -379,10 +379,7 @@ impl<T: StringOffsetSizeTrait> From<GenericListArray<T>> for GenericStringArray<
 #[cfg(test)]
 mod tests {
 
-    use crate::{
-        array::{ListBuilder, StringBuilder},
-        util::test_util::BadIterator,
-    };
+    use crate::array::{ListBuilder, StringBuilder};
 
     use super::*;
 
@@ -581,8 +578,10 @@ mod tests {
             .expect("All null array has valid array data");
     }
 
+    #[cfg(feature = "test_utils")]
     #[test]
     fn bad_size_collect_string() {
+        use crate::util::test_util::BadIterator;
         let data = vec![Some("foo"), None, Some("bar")];
         let expected: StringArray = data.clone().into_iter().collect();
 
@@ -595,8 +594,10 @@ mod tests {
         assert_eq!(expected, arr);
     }
 
+    #[cfg(feature = "test_utils")]
     #[test]
     fn bad_size_collect_large_string() {
+        use crate::util::test_util::BadIterator;
         let data = vec![Some("foo"), None, Some("bar")];
         let expected: LargeStringArray = data.clone().into_iter().collect();
 
@@ -609,8 +610,10 @@ mod tests {
         assert_eq!(expected, arr);
     }
 
+    #[cfg(feature = "test_utils")]
     #[test]
     fn bad_size_iter_values_string() {
+        use crate::util::test_util::BadIterator;
         let data = vec!["foo", "bar", "baz"];
         let expected: StringArray = data.clone().into_iter().map(Some).collect();
 
@@ -623,8 +626,10 @@ mod tests {
         assert_eq!(expected, arr);
     }
 
+    #[cfg(feature = "test_utils")]
     #[test]
     fn bad_size_iter_values_large_string() {
+        use crate::util::test_util::BadIterator;
         let data = vec!["foo", "bar", "baz"];
         let expected: LargeStringArray = data.clone().into_iter().map(Some).collect();
 
