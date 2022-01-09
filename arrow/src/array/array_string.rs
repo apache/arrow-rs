@@ -189,7 +189,7 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
         }
 
         // iterator size hint may not be correct so compute the actual number of offsets
-        assert!(offsets.len() > 0); // wrote at least one
+        assert!(!offsets.is_empty()); // wrote at least one
         let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
 
         let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
