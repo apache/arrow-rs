@@ -36,7 +36,6 @@ use crate::datatypes::{
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
-use crate::util::bit_util::round_upto_multiple_of_64;
 use regex::{escape, Regex};
 use std::any::type_name;
 use std::collections::HashMap;
