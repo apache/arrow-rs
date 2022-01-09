@@ -1482,8 +1482,8 @@ where
         "Number of vector lanes must be at most 64"
     );
 
-    let buffer_size = round_upto_multiple_of_64(len);
-    let mut result = MutableBuffer::new_null(buffer_size);
+    let buffer_size = bit_util::ceil(len, 8);
+    let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
     let mut left_chunks = left.values().chunks_exact(CHUNK_SIZE);
     let mut right_chunks = right.values().chunks_exact(CHUNK_SIZE);
@@ -1527,8 +1527,9 @@ where
                 mask |= bit << i;
                 mask
             });
-        let remainder_mask_as_bytes = remainder_bitmask.to_le_bytes();
-        result_remainder.copy_from_slice(&remainder_mask_as_bytes);
+        let remainder_mask_as_bytes =
+            &remainder_bitmask.to_le_bytes()[0..bit_util::ceil(left_remainder.len(), 8)];
+        result_remainder.copy_from_slice(remainder_mask_as_bytes);
     }
 
     let data = unsafe {
@@ -1573,8 +1574,8 @@ where
         "Number of vector lanes must be at most 64"
     );
 
-    let buffer_size = round_upto_multiple_of_64(len);
-    let mut result = MutableBuffer::new_null(buffer_size);
+    let buffer_size = bit_util::ceil(len, 8);
+    let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
     let mut left_chunks = left.values().chunks_exact(CHUNK_SIZE);
     let simd_right = T::init(right);
@@ -1613,8 +1614,9 @@ where
                 mask
             },
         );
-        let remainder_mask_as_bytes = remainder_bitmask.to_le_bytes();
-        result_remainder.copy_from_slice(&remainder_mask_as_bytes);
+        let remainder_mask_as_bytes =
+            &remainder_bitmask.to_le_bytes()[0..bit_util::ceil(left_remainder.len(), 8)];
+        result_remainder.copy_from_slice(remainder_mask_as_bytes);
     }
 
     let null_bit_buffer = left
