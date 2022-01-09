@@ -185,7 +185,7 @@ where
     //  Benefit
     //      ~60% speedup
     //  Soundness
-    //      `values` is an iterator with a known size.
+    //      `values` is an iterator with a known size from a PrimitiveArray
     let buffer = unsafe { Buffer::from_trusted_len_iter(values) };
 
     let data = unsafe {
@@ -241,6 +241,7 @@ where
                 }
             },
         );
+        // Safety: Iterator comes from a PrimitiveArray which reports its size correctly
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     } else {
         // no value is null
@@ -255,6 +256,7 @@ where
                     Ok(*left % *right)
                 }
             });
+        // Safety: Iterator comes from a PrimitiveArray which reports its size correctly
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     }?;
 
@@ -311,6 +313,7 @@ where
                 }
             },
         );
+        // Safety: Iterator comes from a PrimitiveArray which reports its size correctly
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     } else {
         // no value is null
@@ -325,6 +328,7 @@ where
                     Ok(*left / *right)
                 }
             });
+        // Safety: Iterator comes from a PrimitiveArray which reports its size correctly
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     }?;
 
