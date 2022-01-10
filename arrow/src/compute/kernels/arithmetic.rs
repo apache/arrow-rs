@@ -908,12 +908,13 @@ where
     let mut result_chunks = unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
     let mut array_chunks = array.values().chunks_exact(lanes);
 
+    let simd_right = T::init(modulo);
+
     result_chunks
         .borrow_mut()
         .zip(array_chunks.borrow_mut())
         .for_each(|(result_slice, array_slice)| {
             let simd_left = T::load(array_slice);
-            let simd_right = T::init(modulo);
 
             let simd_result = T::bin_op(simd_left, simd_right, |a, b| a % b);
             T::write(simd_result, result_slice);
@@ -960,12 +961,13 @@ where
     let mut result_chunks = unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
     let mut array_chunks = array.values().chunks_exact(lanes);
 
+    let simd_right = T::init(divisor);
+
     result_chunks
         .borrow_mut()
         .zip(array_chunks.borrow_mut())
         .for_each(|(result_slice, array_slice)| {
             let simd_left = T::load(array_slice);
-            let simd_right = T::init(divisor);
 
             let simd_result = T::bin_op(simd_left, simd_right, |a, b| a / b);
             T::write(simd_result, result_slice);
