@@ -108,10 +108,11 @@ fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
 mod tests {
     use crate::{
         array::{
-            self, new_null_array, Array, Date32Array, Date64Array, PrimitiveBuilder,
-            StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
-            Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-            Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+            self, new_null_array, Array, Date32Array, Date64Array,
+            FixedSizeBinaryBuilder, PrimitiveBuilder, StringArray, StringBuilder,
+            StringDictionaryBuilder, StructArray, Time32MillisecondArray,
+            Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+            TimestampMicrosecondArray, TimestampMillisecondArray,
             TimestampNanosecondArray, TimestampSecondArray,
         },
         datatypes::{DataType, Field, Int32Type, Schema},
@@ -299,6 +300,39 @@ mod tests {
             "|           |",
             "| [7, 8, 9] |",
             "+-----------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_fixed_size_binary() -> Result<()> {
+        // define a schema.
+        let field_type = DataType::FixedSizeBinary(3);
+        let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
+
+        let mut builder = FixedSizeBinaryBuilder::new(3, 3);
+
+        builder.append_value(&[1, 2, 3]).unwrap();
+        builder.append_null();
+        builder.append_value(&[7, 8, 9]).unwrap();
+
+        let array = Arc::new(builder.finish());
+
+        let batch = RecordBatch::try_new(schema, vec![array])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
+        let expected = vec![
+            "+--------+",
+            "| d1     |",
+            "+--------+",
+            "| 010203 |",
+            "|        |",
+            "| 070809 |",
+            "+--------+",
         ];
 
         let actual: Vec<&str> = table.lines().collect();

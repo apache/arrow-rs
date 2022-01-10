@@ -18,7 +18,7 @@
 //! Contains `ArrayData`, a generic representation of Arrow array data which encapsulates
 //! common attributes and operations for Arrow array.
 
-use crate::datatypes::{DataType, IntervalUnit};
+use crate::datatypes::{DataType, IntervalUnit, UnionMode};
 use crate::error::{ArrowError, Result};
 use crate::{bitmap::Bitmap, datatypes::ArrowNativeType};
 use crate::{
@@ -194,7 +194,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
         ],
-        DataType::Union(_) => unimplemented!(),
+        DataType::Union(_, _) => unimplemented!(),
     }
 }
 
@@ -560,7 +560,7 @@ impl ArrayData {
             DataType::Map(field, _) => {
                 vec![Self::new_empty(field.data_type())]
             }
-            DataType::Union(_) => unimplemented!(),
+            DataType::Union(_, _) => unimplemented!(),
             DataType::Dictionary(_, data_type) => {
                 vec![Self::new_empty(data_type)]
             }
@@ -597,11 +597,6 @@ impl ArrayData {
         // Check that the data layout conforms to the spec
         let layout = layout(&self.data_type);
 
-        // Will validate Union when conforms to new spec:
-        // https://github.com/apache/arrow-rs/issues/85
-        if matches!(&self.data_type, DataType::Union(_)) {
-            return Ok(());
-        }
         if self.buffers.len() != layout.buffers.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Expected {} buffers in array of type {:?}, got {}",
@@ -827,10 +822,21 @@ impl ArrayData {
                 }
                 Ok(())
             }
-            DataType::Union(_fields) => {
-                // Validate Union Array as part of implementing new Union semantics
-                // See comments in `ArrayData::validate()`
-                // https://github.com/apache/arrow-rs/issues/85
+            DataType::Union(fields, mode) => {
+                self.validate_num_child_data(fields.len())?;
+
+                for (i, field) in fields.iter().enumerate() {
+                    let field_data = self.get_valid_child_data(i, field.data_type())?;
+
+                    if mode == &UnionMode::Sparse
+                        && field_data.len < (self.len + self.offset)
+                    {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Sparse union child array #{} has length smaller than expected for union array ({} < {})",
+                            i, field_data.len, self.len + self.offset
+                        )));
+                    }
+                }
                 Ok(())
             }
             DataType::Dictionary(_key_type, value_type) => {
@@ -951,10 +957,12 @@ impl ArrayData {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i64>(child.len + child.offset)?;
             }
-            DataType::Union(_) => {
+            DataType::Union(_, _) => {
                 // Validate Union Array as part of implementing new Union semantics
                 // See comments in `ArrayData::validate()`
                 // https://github.com/apache/arrow-rs/issues/85
+                //
+                // TODO file follow on ticket for full union validation
             }
             DataType::Dictionary(key_type, _value_type) => {
                 let dictionary_length: i64 = self.child_data[0].len.try_into().unwrap();
@@ -1200,15 +1208,30 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i32>()),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
-        DataType::Union(_) => {
-            DataTypeLayout::new_fixed_width(size_of::<u8>())
-            // Note sparse unions only have one buffer (u8) type_ids,
-            // and dense unions have 2 (type_ids as well as offsets).
-            // https://github.com/apache/arrow-rs/issues/85
+        DataType::Union(_, mode) => {
+            let type_ids = BufferSpec::FixedWidth {
+                byte_width: size_of::<i8>(),
+            };
+
+            DataTypeLayout {
+                buffers: match mode {
+                    UnionMode::Sparse => {
+                        vec![type_ids]
+                    }
+                    UnionMode::Dense => {
+                        vec![
+                            type_ids,
+                            BufferSpec::FixedWidth {
+                                byte_width: size_of::<i32>(),
+                            },
+                        ]
+                    }
+                },
+            }
         }
         DataType::Dictionary(key_type, _value_type) => layout(key_type),
         DataType::Decimal(_, _) => {
-            // Decimals are always some fixed width; The rust implemenation
+            // Decimals are always some fixed width; The rust implementation
             // always uses 16 bytes / size of i128
             DataTypeLayout::new_fixed_width(size_of::<i128>())
         }
@@ -1389,8 +1412,8 @@ mod tests {
     use super::*;
 
     use crate::array::{
-        Array, BooleanBuilder, Int32Array, Int32Builder, StringArray, StructBuilder,
-        UInt64Array,
+        Array, BooleanBuilder, Int32Array, Int32Builder, Int64Array, StringArray,
+        StructBuilder, UInt64Array,
     };
     use crate::buffer::Buffer;
     use crate::datatypes::Field;
@@ -2270,6 +2293,121 @@ mod tests {
     /// returns a buffer initialized with some constant value for tests
     fn make_f32_buffer(n: usize) -> Buffer {
         Buffer::from_slice_ref(&vec![42f32; n])
+    }
+
+    #[test]
+    #[should_panic(expected = "Expected Int64 but child data had Int32")]
+    fn test_validate_union_different_types() {
+        let field1 = vec![Some(1), Some(2)].into_iter().collect::<Int32Array>();
+
+        let field2 = vec![Some(1), Some(2)].into_iter().collect::<Int32Array>();
+
+        let type_ids = Buffer::from_slice_ref(&[0i8, 1i8]);
+
+        ArrayData::try_new(
+            DataType::Union(
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true), // data is int32
+                ],
+                UnionMode::Sparse,
+            ),
+            2,
+            None,
+            None,
+            0,
+            vec![type_ids],
+            vec![field1.data().clone(), field2.data().clone()],
+        )
+        .unwrap();
+    }
+
+    // sparse with wrong sized children
+    #[test]
+    #[should_panic(
+        expected = "Sparse union child array #1 has length smaller than expected for union array (1 < 2)"
+    )]
+    fn test_validate_union_sparse_different_child_len() {
+        let field1 = vec![Some(1), Some(2)].into_iter().collect::<Int32Array>();
+
+        // field 2 only has 1 item but array should have 2
+        let field2 = vec![Some(1)].into_iter().collect::<Int64Array>();
+
+        let type_ids = Buffer::from_slice_ref(&[0i8, 1i8]);
+
+        ArrayData::try_new(
+            DataType::Union(
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true),
+                ],
+                UnionMode::Sparse,
+            ),
+            2,
+            None,
+            None,
+            0,
+            vec![type_ids],
+            vec![field1.data().clone(), field2.data().clone()],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Expected 2 buffers in array of type Union")]
+    fn test_validate_union_dense_without_offsets() {
+        let field1 = vec![Some(1), Some(2)].into_iter().collect::<Int32Array>();
+
+        let field2 = vec![Some(1)].into_iter().collect::<Int64Array>();
+
+        let type_ids = Buffer::from_slice_ref(&[0i8, 1i8]);
+
+        ArrayData::try_new(
+            DataType::Union(
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true),
+                ],
+                UnionMode::Dense,
+            ),
+            2,
+            None,
+            None,
+            0,
+            vec![type_ids], // need offsets buffer here too
+            vec![field1.data().clone(), field2.data().clone()],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Need at least 8 bytes in buffers[1] in array of type Union"
+    )]
+    fn test_validate_union_dense_with_bad_len() {
+        let field1 = vec![Some(1), Some(2)].into_iter().collect::<Int32Array>();
+
+        let field2 = vec![Some(1)].into_iter().collect::<Int64Array>();
+
+        let type_ids = Buffer::from_slice_ref(&[0i8, 1i8]);
+        let offsets = Buffer::from_slice_ref(&[0i32]); // should have 2 offsets, but only have 1
+
+        ArrayData::try_new(
+            DataType::Union(
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true),
+                ],
+                UnionMode::Dense,
+            ),
+            2,
+            None,
+            None,
+            0,
+            vec![type_ids, offsets],
+            vec![field1.data().clone(), field2.data().clone()],
+        )
+        .unwrap();
     }
 
     #[test]
