@@ -60,7 +60,7 @@ use crate::arrow::converter::{
     Int96ArrayConverter, Int96Converter, IntervalDayTimeArrayConverter,
     IntervalDayTimeConverter, IntervalYearMonthArrayConverter,
     IntervalYearMonthConverter, LargeBinaryArrayConverter, LargeBinaryConverter,
-    LargeUtf8ArrayConverter, LargeUtf8Converter, Utf8ArrayConverter, Utf8Converter,
+    LargeUtf8ArrayConverter, LargeUtf8Converter,
 };
 use crate::arrow::record_reader::RecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
@@ -1690,24 +1690,12 @@ impl<'a> ArrayReaderBuilder {
                             arrow_type,
                         )?))
                     } else {
-                        // use crate::arrow::arrow_array_reader::{
-                        //     ArrowArrayReader, StringArrayConverter,
-                        // };
-                        // let converter = StringArrayConverter::new();
-                        // Ok(Box::new(ArrowArrayReader::try_new(
-                        //     *page_iterator,
-                        //     column_desc,
-                        //     converter,
-                        //     arrow_type,
-                        // )?))
-
-                        // TODO: TEMPORARY
-                        let converter = Utf8Converter::new(Utf8ArrayConverter {});
-                        Ok(Box::new(ComplexObjectArrayReader::<
-                            ByteArrayType,
-                            Utf8Converter,
-                        >::new(
-                            page_iterator,
+                        use crate::arrow::arrow_array_reader::{
+                            ArrowArrayReader, StringArrayConverter,
+                        };
+                        let converter = StringArrayConverter::new();
+                        Ok(Box::new(ArrowArrayReader::try_new(
+                            *page_iterator,
                             column_desc,
                             converter,
                             arrow_type,
