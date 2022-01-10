@@ -2469,8 +2469,8 @@ mod tests {
 
     #[test]
     fn test_complex_array_reader_dict_enc_string() {
-        use crate::encoding::{DictEncoder, Encoder};
-        use crate::memory::MemTracker;
+        use crate::encodings::encoding::{DictEncoder, Encoder};
+        use crate::util::memory::MemTracker;
         // Construct column schema
         let message_type = "
         message test_schema {

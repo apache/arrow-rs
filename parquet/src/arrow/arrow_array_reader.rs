@@ -1263,12 +1263,12 @@ mod tests {
     use crate::column::writer::ColumnWriter;
     use crate::data_type::ByteArray;
     use crate::data_type::ByteArrayType;
-    use crate::encoding::{DictEncoder, Encoder};
+    use crate::encodings::encoding::{DictEncoder, Encoder};
     use crate::file::properties::WriterProperties;
     use crate::file::reader::SerializedFileReader;
     use crate::file::serialized_reader::SliceableCursor;
     use crate::file::writer::{FileWriter, SerializedFileWriter, TryClone};
-    use crate::memory::MemTracker;
+    use crate::util::memory::MemTracker;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
     use crate::util::test_common::page_util::{
