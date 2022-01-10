@@ -370,7 +370,7 @@ mod tests {
     use super::RecordReader;
 
     struct TestPageReader {
-        pages: Box<dyn Iterator<Item = Page>>,
+        pages: Box<dyn Iterator<Item = Page> + Send>,
     }
 
     impl TestPageReader {

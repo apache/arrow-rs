@@ -144,9 +144,9 @@ impl ArrowReader for ParquetFileArrowReader {
                 .metadata()
                 .file_metadata()
                 .schema_descr_ptr(),
-            self.get_schema()?,
+            Arc::new(self.get_schema()?),
             column_indices,
-            self.file_reader.clone(),
+            Box::new(self.file_reader.clone()),
         )?;
 
         ParquetRecordBatchReader::try_new(batch_size, array_reader)

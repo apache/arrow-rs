@@ -35,7 +35,7 @@ use crate::util::{
 // Decoders
 
 /// A Parquet decoder for the data type `T`.
-pub trait Decoder<T: DataType> {
+pub trait Decoder<T: DataType>: Send {
     /// Sets the data to decode to be `data`, which should contain `num_values` of values
     /// to decode.
     fn set_data(&mut self, data: ByteBufferPtr, num_values: usize) -> Result<()>;

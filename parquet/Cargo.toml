@@ -23,7 +23,7 @@ description = "Apache Parquet implementation in Rust"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
-keywords = [ "arrow", "parquet", "hadoop" ]
+keywords = ["arrow", "parquet", "hadoop"]
 readme = "README.md"
 build = "build.rs"
 edition = "2021"
@@ -45,6 +45,8 @@ base64 = { version = "0.13", optional = true }
 clap = { version = "2.33.3", optional = true }
 serde_json = { version = "1.0", features = ["preserve_order"], optional = true }
 rand = "0.8"
+futures = { version = "0.3", optional = true }
+tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "fs", "rt", "io-util"] }
 
 [dev-dependencies]
 criterion = "0.3"
@@ -63,16 +65,18 @@ cli = ["serde_json", "base64", "clap"]
 test_common = []
 # Experimental, unstable functionality primarily used for testing
 experimental = []
+# Experimental, unstable, async API
+async = ["futures", "tokio"]
 
-[[ bin ]]
+[[bin]]
 name = "parquet-read"
 required-features = ["cli"]
 
-[[ bin ]]
+[[bin]]
 name = "parquet-schema"
 required-features = ["cli"]
 
-[[ bin ]]
+[[bin]]
 name = "parquet-rowcount"
 required-features = ["cli"]
 
