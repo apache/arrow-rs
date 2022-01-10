@@ -1471,14 +1471,21 @@ where
 
     let null_bit_buffer = combine_option_bitmap(left.data_ref(), right.data_ref(), len)?;
 
+    // we process the data in chunks so that each iteration results in one u64 of comparison result bits
+    const CHUNK_SIZE: usize = 64;
     let lanes = T::lanes();
+
+    // this is currently the case for all our datatypes and allows us to always append full bytes
+    assert!(
+        lanes <= CHUNK_SIZE,
+        "Number of vector lanes must be at most 64"
+    );
+
     let buffer_size = bit_util::ceil(len, 8);
     let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
-    // this is currently the case for all our datatypes and allows us to always append full bytes
-    assert_eq!(lanes % 8, 0, "Number of vector lanes must be multiple of 8");
-    let mut left_chunks = left.values().chunks_exact(lanes);
-    let mut right_chunks = right.values().chunks_exact(lanes);
+    let mut left_chunks = left.values().chunks_exact(CHUNK_SIZE);
+    let mut right_chunks = right.values().chunks_exact(CHUNK_SIZE);
 
     // safety: result is newly created above, always written as a T below
     let result_chunks = unsafe { result.typed_data_mut() };
@@ -1486,15 +1493,22 @@ where
         .borrow_mut()
         .zip(right_chunks.borrow_mut())
         .fold(result_chunks, |result_slice, (left_slice, right_slice)| {
-            let simd_left = T::load(left_slice);
-            let simd_right = T::load(right_slice);
-            let simd_result = simd_op(simd_left, simd_right);
+            let mut i = 0;
+            let mut bitmask = 0_u64;
+            while i < CHUNK_SIZE {
+                let simd_left = T::load(&left_slice[i..]);
+                let simd_right = T::load(&right_slice[i..]);
+                let simd_result = simd_op(simd_left, simd_right);
 
-            let bitmask = T::mask_to_u64(&simd_result);
+                let m = T::mask_to_u64(&simd_result);
+                bitmask |= m << (i / lanes);
+
+                i += lanes;
+            }
             let bytes = bitmask.to_le_bytes();
-            result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
+            result_slice[0..8].copy_from_slice(&bytes);
 
-            &mut result_slice[lanes / 8..]
+            &mut result_slice[8..]
         });
 
     let left_remainder = left_chunks.remainder();
@@ -1502,22 +1516,20 @@ where
 
     assert_eq!(left_remainder.len(), right_remainder.len());
 
-    let remainder_bitmask = left_remainder
-        .iter()
-        .zip(right_remainder.iter())
-        .enumerate()
-        .fold(0_u64, |mut mask, (i, (scalar_left, scalar_right))| {
-            let bit = if scalar_op(*scalar_left, *scalar_right) {
-                1_u64
-            } else {
-                0_u64
-            };
-            mask |= bit << i;
-            mask
-        });
-    let remainder_mask_as_bytes =
-        &remainder_bitmask.to_le_bytes()[0..bit_util::ceil(left_remainder.len(), 8)];
-    result_remainder.copy_from_slice(remainder_mask_as_bytes);
+    if !left_remainder.is_empty() {
+        let remainder_bitmask = left_remainder
+            .iter()
+            .zip(right_remainder.iter())
+            .enumerate()
+            .fold(0_u64, |mut mask, (i, (scalar_left, scalar_right))| {
+                let bit = scalar_op(*scalar_left, *scalar_right) as u64;
+                mask |= bit << i;
+                mask
+            });
+        let remainder_mask_as_bytes =
+            &remainder_bitmask.to_le_bytes()[0..bit_util::ceil(left_remainder.len(), 8)];
+        result_remainder.copy_from_slice(remainder_mask_as_bytes);
+    }
 
     let data = unsafe {
         ArrayData::new_unchecked(
@@ -1551,16 +1563,20 @@ where
 
     let len = left.len();
 
+    // we process the data in chunks so that each iteration results in one u64 of comparison result bits
+    const CHUNK_SIZE: usize = 64;
     let lanes = T::lanes();
-    let buffer_size = bit_util::ceil(len, 8);
-    let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
 
     // this is currently the case for all our datatypes and allows us to always append full bytes
     assert!(
-        lanes % 8 == 0,
-        "Number of vector lanes must be multiple of 8"
+        lanes <= CHUNK_SIZE,
+        "Number of vector lanes must be at most 64"
     );
-    let mut left_chunks = left.values().chunks_exact(lanes);
+
+    let buffer_size = bit_util::ceil(len, 8);
+    let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
+
+    let mut left_chunks = left.values().chunks_exact(CHUNK_SIZE);
     let simd_right = T::init(right);
 
     // safety: result is newly created above, always written as a T below
@@ -1569,34 +1585,38 @@ where
         left_chunks
             .borrow_mut()
             .fold(result_chunks, |result_slice, left_slice| {
-                let simd_left = T::load(left_slice);
-                let simd_result = simd_op(simd_left, simd_right);
+                let mut i = 0;
+                let mut bitmask = 0_u64;
+                while i < CHUNK_SIZE {
+                    let simd_left = T::load(&left_slice[i..]);
+                    let simd_result = simd_op(simd_left, simd_right);
 
-                let bitmask = T::mask_to_u64(&simd_result);
+                    let m = T::mask_to_u64(&simd_result);
+                    bitmask |= m << (i / lanes);
+
+                    i += lanes;
+                }
                 let bytes = bitmask.to_le_bytes();
-                result_slice[0..lanes / 8].copy_from_slice(&bytes[0..lanes / 8]);
+                result_slice[0..8].copy_from_slice(&bytes);
 
-                &mut result_slice[lanes / 8..]
+                &mut result_slice[8..]
             });
 
     let left_remainder = left_chunks.remainder();
 
-    let remainder_bitmask =
-        left_remainder
-            .iter()
-            .enumerate()
-            .fold(0_u64, |mut mask, (i, scalar_left)| {
-                let bit = if scalar_op(*scalar_left, right) {
-                    1_u64
-                } else {
-                    0_u64
-                };
+    if !left_remainder.is_empty() {
+        let remainder_bitmask = left_remainder.iter().enumerate().fold(
+            0_u64,
+            |mut mask, (i, scalar_left)| {
+                let bit = scalar_op(*scalar_left, right) as u64;
                 mask |= bit << i;
                 mask
-            });
-    let remainder_mask_as_bytes =
-        &remainder_bitmask.to_le_bytes()[0..bit_util::ceil(left_remainder.len(), 8)];
-    result_remainder.copy_from_slice(remainder_mask_as_bytes);
+            },
+        );
+        let remainder_mask_as_bytes =
+            &remainder_bitmask.to_le_bytes()[0..bit_util::ceil(left_remainder.len(), 8)];
+        result_remainder.copy_from_slice(remainder_mask_as_bytes);
+    }
 
     let null_bit_buffer = left
         .data_ref()
@@ -2723,8 +2743,6 @@ mod tests {
         );
     }
 
-    // Fails when simd is enabled: https://github.com/apache/arrow-rs/issues/1136
-    #[cfg(not(feature = "simd"))]
     #[test]
     fn test_interval_array() {
         let a = IntervalDayTimeArray::from(
