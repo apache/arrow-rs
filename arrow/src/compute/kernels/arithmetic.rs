@@ -990,6 +990,67 @@ where
     Ok(PrimitiveArray::<T>::from(data))
 }
 
+/// SIMD vectorized version of subtracting value from an array.
+#[cfg(feature = "simd")]
+fn simd_subtract_scalar<T>(
+    array: &PrimitiveArray<T>,
+    scalar: T::Native,
+) -> Result<PrimitiveArray<T>>
+where
+    T: ArrowNumericType,
+    T::Native: Add<Output = T::Native>
+        + Sub<Output = T::Native>
+        + Mul<Output = T::Native>
+        + Div<Output = T::Native>
+        + Zero,
+{
+    let lanes = T::lanes();
+    let buffer_size = array.len() * std::mem::size_of::<T::Native>();
+    let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
+
+    // safety: result is newly created above, always written as a T below
+    let mut result_chunks = unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
+    let mut array_chunks = array.values().chunks_exact(lanes);
+
+    let simd_right = T::init(scalar);
+
+    result_chunks
+        .borrow_mut()
+        .zip(array_chunks.borrow_mut())
+        .for_each(|(result_slice, array_slice)| {
+            let simd_left = T::load(array_slice);
+
+            let simd_result = T::bin_op(simd_left, simd_right, |a, b| a - b);
+            T::write(simd_result, result_slice);
+        });
+
+    let result_remainder = result_chunks.into_remainder();
+    let array_remainder = array_chunks.remainder();
+
+    result_remainder
+        .iter_mut()
+        .zip(array_remainder.iter())
+        .for_each(|(scalar_result, scalar_array)| {
+            *scalar_result = *scalar_array - scalar;
+        });
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            T::DATA_TYPE,
+            array.len(),
+            None,
+            array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(array.offset(), array.len())),
+            0,
+            vec![result.into()],
+            vec![],
+        )
+    };
+    Ok(PrimitiveArray::<T>::from(data))
+}
+
 /// Perform `left + right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
 pub fn add<T>(
@@ -1028,6 +1089,26 @@ where
     return simd_math_op(&left, &right, |a, b| a - b, |a, b| a - b);
     #[cfg(not(feature = "simd"))]
     return math_op(left, right, |a, b| a - b);
+}
+
+/// Subtract every value in an array by a scalar. If any value in the array is null then the
+/// result is also null.
+pub fn subtract_scalar<T>(
+    array: &PrimitiveArray<T>,
+    scalar: T::Native,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: Add<Output = T::Native>
+        + Sub<Output = T::Native>
+        + Mul<Output = T::Native>
+        + Div<Output = T::Native>
+        + Zero,
+{
+    #[cfg(feature = "simd")]
+    return simd_subtract_scalar(&array, scalar);
+    #[cfg(not(feature = "simd"))]
+    return Ok(unary(array, |value| value - scalar));
 }
 
 /// Perform `-` operation on an array. If value is null then the result is also null.
@@ -1238,6 +1319,25 @@ mod tests {
         assert_eq!(0, c.value(2));
         assert_eq!(2, c.value(3));
         assert_eq!(4, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_subtract_scalar() {
+        let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
+        let b = 3;
+        let c = subtract_scalar(&a, b).unwrap();
+        let expected = Int32Array::from(vec![12, 11, 6, 5, -2]);
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_primitive_array_subtract_scalar_sliced() {
+        let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
+        let a = a.slice(1, 4);
+        let a = as_primitive_array(&a);
+        let actual = subtract_scalar(a, 3).unwrap();
+        let expected = Int32Array::from(vec![None, Some(6), Some(5), None]);
+        assert_eq!(actual, expected);
     }
 
     #[test]
