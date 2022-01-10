@@ -1563,7 +1563,7 @@ where
 
     let len = left.len();
 
-    // we process the data in chunks to that each iteration results in one u64 of comparison result bits
+    // we process the data in chunks so that each iteration results in one u64 of comparison result bits
     const CHUNK_SIZE: usize = 64;
     let lanes = T::lanes();
 
