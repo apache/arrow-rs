@@ -90,14 +90,20 @@ pub trait ArrayReader {
     /// Reads at most `batch_size` records into an arrow array and return it.
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef>;
 
-    /// Returns the definition levels of data from last call of `next_batch`.
-    /// The result is used by parent array reader to calculate its own definition
-    /// levels and repetition levels, so that its parent can calculate null bitmap.
+    /// If this array has a non-zero definition level, i.e. has a nullable parent
+    /// array, returns the definition levels of data from the last call of `next_batch`
+    ///
+    /// Otherwise returns None
+    ///
+    /// This is used by parent [`ArrayReader`] to compute their null bitmaps
     fn get_def_levels(&self) -> Option<&[i16]>;
 
-    /// Return the repetition levels of data from last call of `next_batch`.
-    /// The result is used by parent array reader to calculate its own definition
-    /// levels and repetition levels, so that its parent can calculate null bitmap.
+    /// If this array has a non-zero repetition level, i.e. has a repeated parent
+    /// array, returns the repetition levels of data from the last call of `next_batch`
+    ///
+    /// Otherwise returns None
+    ///
+    /// This is used by parent [`ArrayReader`] to compute their array offsets
     fn get_rep_levels(&self) -> Option<&[i16]>;
 }
 
@@ -1136,69 +1142,77 @@ impl ArrayReader for StructArrayReader {
             return Err(general_err!("Not all children array length are the same!"));
         }
 
-        // calculate struct def level data
-        let buffer_size = children_array_len * size_of::<i16>();
-        let mut def_level_data_buffer = MutableBuffer::new(buffer_size);
-        def_level_data_buffer.resize(buffer_size, 0);
-
-        // Safety: the buffer is always treated as `u16` in the code below
-        let def_level_data = unsafe { def_level_data_buffer.typed_data_mut() };
-
-        def_level_data
-            .iter_mut()
-            .for_each(|v| *v = self.struct_def_level);
-
-        for child in &self.children {
-            if let Some(current_child_def_levels) = child.get_def_levels() {
-                if current_child_def_levels.len() != children_array_len {
-                    return Err(general_err!("Child array length are not equal!"));
-                } else {
-                    for i in 0..children_array_len {
-                        def_level_data[i] =
-                            min(def_level_data[i], current_child_def_levels[i]);
-                    }
-                }
-            }
-        }
-
-        // calculate bitmap for current array
-        let mut bitmap_builder = BooleanBufferBuilder::new(children_array_len);
-        for def_level in def_level_data {
-            let not_null = *def_level >= self.struct_def_level;
-            bitmap_builder.append(not_null);
-        }
-
         // Now we can build array data
-        let array_data = ArrayDataBuilder::new(self.data_type.clone())
+        let mut array_data_builder = ArrayDataBuilder::new(self.data_type.clone())
             .len(children_array_len)
-            .null_bit_buffer(bitmap_builder.finish())
             .child_data(
                 children_array
                     .iter()
                     .map(|x| x.data().clone())
                     .collect::<Vec<ArrayData>>(),
             );
-        let array_data = unsafe { array_data.build_unchecked() };
 
-        // calculate struct rep level data, since struct doesn't add to repetition
-        // levels, here we just need to keep repetition levels of first array
-        // TODO: Verify that all children array reader has same repetition levels
-        let rep_level_data = self
-            .children
-            .first()
-            .ok_or_else(|| {
-                general_err!("Struct array reader should have at least one child!")
-            })?
-            .get_rep_levels()
-            .map(|data| -> Result<Buffer> {
-                let mut buffer = Int16BufferBuilder::new(children_array_len);
-                buffer.append_slice(data);
-                Ok(buffer.finish())
-            })
-            .transpose()?;
+        if self.struct_def_level != 0 {
+            // calculate struct def level data
+            let buffer_size = children_array_len * size_of::<i16>();
+            let mut def_level_data_buffer = MutableBuffer::new(buffer_size);
+            def_level_data_buffer.resize(buffer_size, 0);
 
-        self.def_level_buffer = Some(def_level_data_buffer.into());
-        self.rep_level_buffer = rep_level_data;
+            // Safety: the buffer is always treated as `u16` in the code below
+            let def_level_data = unsafe { def_level_data_buffer.typed_data_mut() };
+
+            def_level_data
+                .iter_mut()
+                .for_each(|v| *v = self.struct_def_level);
+
+            for child in &self.children {
+                if let Some(current_child_def_levels) = child.get_def_levels() {
+                    if current_child_def_levels.len() != children_array_len {
+                        return Err(general_err!("Child array length are not equal!"));
+                    } else {
+                        for i in 0..children_array_len {
+                            def_level_data[i] =
+                                min(def_level_data[i], current_child_def_levels[i]);
+                        }
+                    }
+                }
+            }
+
+            // calculate bitmap for current array
+            let mut bitmap_builder = BooleanBufferBuilder::new(children_array_len);
+            for def_level in def_level_data {
+                let not_null = *def_level >= self.struct_def_level;
+                bitmap_builder.append(not_null);
+            }
+
+            array_data_builder =
+                array_data_builder.null_bit_buffer(bitmap_builder.finish());
+
+            self.def_level_buffer = Some(def_level_data_buffer.into());
+        }
+
+        let array_data = unsafe { array_data_builder.build_unchecked() };
+
+        if self.struct_rep_level != 0 {
+            // calculate struct rep level data, since struct doesn't add to repetition
+            // levels, here we just need to keep repetition levels of first array
+            // TODO: Verify that all children array reader has same repetition levels
+            let rep_level_data = self
+                .children
+                .first()
+                .ok_or_else(|| {
+                    general_err!("Struct array reader should have at least one child!")
+                })?
+                .get_rep_levels()
+                .map(|data| -> Result<Buffer> {
+                    let mut buffer = Int16BufferBuilder::new(children_array_len);
+                    buffer.append_slice(data);
+                    Ok(buffer.finish())
+                })
+                .transpose()?;
+
+            self.rep_level_buffer = rep_level_data;
+        }
         Ok(Arc::new(StructArray::from(array_data)))
     }
 
