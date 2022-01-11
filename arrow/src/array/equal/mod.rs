@@ -544,11 +544,9 @@ mod tests {
         let cases = binary_cases();
 
         for (lhs, rhs, expected) in cases {
-            let lhs = lhs.iter().map(|x| x.as_deref()).collect();
-            let rhs = rhs.iter().map(|x| x.as_deref()).collect();
-            let lhs = GenericStringArray::<OffsetSize>::from_opt_vec(lhs);
+            let lhs: GenericStringArray<OffsetSize> = lhs.into_iter().collect();
             let lhs = lhs.data();
-            let rhs = GenericStringArray::<OffsetSize>::from_opt_vec(rhs);
+            let rhs: GenericStringArray<OffsetSize> = rhs.into_iter().collect();
             let rhs = rhs.data();
             test_equal(lhs, rhs, expected);
         }

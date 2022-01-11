@@ -486,6 +486,41 @@ fn set_column_for_json_rows(
                 .expect("cannot cast dictionary to underlying values");
             set_column_for_json_rows(rows, row_count, &hydrated, col_name)
         }
+        DataType::Map(_, _) => {
+            let maparr = as_map_array(array);
+
+            let keys = maparr.keys();
+            let values = maparr.values();
+
+            // Keys have to be strings to convert to json.
+            if !matches!(keys.data_type(), DataType::Utf8) {
+                panic!("Unsupported datatype: {:#?}", array.data_type());
+            }
+
+            let keys = as_string_array(&keys);
+            let values = array_to_json_array(&values);
+
+            let mut kv = keys.iter().zip(values.into_iter());
+
+            for (i, row) in rows.iter_mut().take(row_count).enumerate() {
+                if maparr.is_null(i) {
+                    row.insert(col_name.to_string(), serde_json::Value::Null);
+                    continue;
+                }
+
+                let len = maparr.value_length(i) as usize;
+                let mut obj = serde_json::Map::new();
+
+                for (_, (k, v)) in (0..len).zip(&mut kv) {
+                    obj.insert(
+                        k.expect("keys in a map should be non-null").to_string(),
+                        v,
+                    );
+                }
+
+                row.insert(col_name.to_string(), serde_json::Value::Object(obj));
+            }
+        }
         _ => {
             panic!("Unsupported datatype: {:#?}", array.data_type());
         }
@@ -1312,6 +1347,65 @@ mod tests {
 {}
 {"list":[{}]}
 {"list":[{}]}
+"#
+        );
+    }
+
+    #[test]
+    fn json_writer_map() {
+        let keys_array =
+            super::StringArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
+        let values_array = super::Int64Array::from(vec![10, 20, 30, 40, 50]);
+
+        let keys = Field::new("keys", DataType::Utf8, false);
+        let values = Field::new("values", DataType::Int64, false);
+        let entry_struct = StructArray::from(vec![
+            (keys, Arc::new(keys_array) as ArrayRef),
+            (values, Arc::new(values_array) as ArrayRef),
+        ]);
+
+        let map_data_type = DataType::Map(
+            Box::new(Field::new(
+                "entries",
+                entry_struct.data_type().clone(),
+                true,
+            )),
+            false,
+        );
+
+        // [{"foo": 10}, null, {}, {"bar": 20, "baz": 30, "qux": 40}, {"quux": 50}, {}]
+        let entry_offsets = Buffer::from(&[0, 1, 1, 1, 4, 5, 5].to_byte_slice());
+        let valid_buffer = Buffer::from([0b00111101]);
+
+        let map_data = ArrayData::builder(map_data_type.clone())
+            .len(6)
+            .null_bit_buffer(valid_buffer)
+            .add_buffer(entry_offsets)
+            .add_child_data(entry_struct.data().clone())
+            .build()
+            .unwrap();
+
+        let map = MapArray::from(map_data);
+
+        let map_field = Field::new("map", map_data_type, false);
+        let schema = Arc::new(Schema::new(vec![map_field]));
+
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(map)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[batch]).unwrap();
+        }
+
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            r#"{"map":{"foo":10}}
+{"map":null}
+{"map":{}}
+{"map":{"bar":20,"baz":30,"qux":40}}
+{"map":{"quux":50}}
+{"map":{}}
 "#
         );
     }

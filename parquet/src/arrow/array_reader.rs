@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
@@ -62,10 +63,12 @@ use crate::arrow::converter::{
     IntervalYearMonthConverter, LargeBinaryArrayConverter, LargeBinaryConverter,
     LargeUtf8ArrayConverter, LargeUtf8Converter,
 };
-use crate::arrow::record_reader::RecordReader;
+use crate::arrow::record_reader::buffer::{ScalarValue, ValuesBuffer};
+use crate::arrow::record_reader::{GenericRecordReader, RecordReader};
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{ConvertedType, Repetition, Type as PhysicalType};
 use crate::column::page::PageIterator;
+use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::column::reader::ColumnReaderImpl;
 use crate::data_type::{
     BoolType, ByteArrayType, DataType, DoubleType, FixedLenByteArrayType, FloatType,
@@ -77,7 +80,6 @@ use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, Type, TypePtr,
 };
 use crate::schema::visitor::TypeVisitor;
-use std::any::Any;
 
 /// Array reader reads parquet data into arrow array.
 pub trait ArrayReader {
@@ -89,14 +91,20 @@ pub trait ArrayReader {
     /// Reads at most `batch_size` records into an arrow array and return it.
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef>;
 
-    /// Returns the definition levels of data from last call of `next_batch`.
-    /// The result is used by parent array reader to calculate its own definition
-    /// levels and repetition levels, so that its parent can calculate null bitmap.
+    /// If this array has a non-zero definition level, i.e. has a nullable parent
+    /// array, returns the definition levels of data from the last call of `next_batch`
+    ///
+    /// Otherwise returns None
+    ///
+    /// This is used by parent [`ArrayReader`] to compute their null bitmaps
     fn get_def_levels(&self) -> Option<&[i16]>;
 
-    /// Return the repetition levels of data from last call of `next_batch`.
-    /// The result is used by parent array reader to calculate its own definition
-    /// levels and repetition levels, so that its parent can calculate null bitmap.
+    /// If this array has a non-zero repetition level, i.e. has a repeated parent
+    /// array, returns the repetition levels of data from the last call of `next_batch`
+    ///
+    /// Otherwise returns None
+    ///
+    /// This is used by parent [`ArrayReader`] to compute their array offsets
     fn get_rep_levels(&self) -> Option<&[i16]>;
 }
 
@@ -104,11 +112,15 @@ pub trait ArrayReader {
 ///
 /// Returns the number of records read, which can be less than batch_size if
 /// pages is exhausted.
-fn read_records<T: DataType>(
-    record_reader: &mut RecordReader<T>,
+fn read_records<V, CV>(
+    record_reader: &mut GenericRecordReader<V, CV>,
     pages: &mut dyn PageIterator,
     batch_size: usize,
-) -> Result<usize> {
+) -> Result<usize>
+where
+    V: ValuesBuffer + Default,
+    CV: ColumnValueDecoder<Slice = V::Slice>,
+{
     let mut records_read = 0usize;
     while records_read < batch_size {
         let records_to_read = batch_size - records_read;
@@ -132,7 +144,11 @@ fn read_records<T: DataType>(
 
 /// A NullArrayReader reads Parquet columns stored as null int32s with an Arrow
 /// NullArray type.
-pub struct NullArrayReader<T: DataType> {
+pub struct NullArrayReader<T>
+where
+    T: DataType,
+    T::T: ScalarValue,
+{
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
@@ -142,7 +158,11 @@ pub struct NullArrayReader<T: DataType> {
     _type_marker: PhantomData<T>,
 }
 
-impl<T: DataType> NullArrayReader<T> {
+impl<T> NullArrayReader<T>
+where
+    T: DataType,
+    T::T: ScalarValue,
+{
     /// Construct null array reader.
     pub fn new(pages: Box<dyn PageIterator>, column_desc: ColumnDescPtr) -> Result<Self> {
         let record_reader = RecordReader::<T>::new(column_desc.clone());
@@ -160,7 +180,11 @@ impl<T: DataType> NullArrayReader<T> {
 }
 
 /// Implementation of primitive array reader.
-impl<T: DataType> ArrayReader for NullArrayReader<T> {
+impl<T> ArrayReader for NullArrayReader<T>
+where
+    T: DataType,
+    T::T: ScalarValue,
+{
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -200,17 +224,24 @@ impl<T: DataType> ArrayReader for NullArrayReader<T> {
 
 /// Primitive array readers are leaves of array reader tree. They accept page iterator
 /// and read them into primitive arrays.
-pub struct PrimitiveArrayReader<T: DataType> {
+pub struct PrimitiveArrayReader<T>
+where
+    T: DataType,
+    T::T: ScalarValue,
+{
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
     rep_levels_buffer: Option<Buffer>,
     column_desc: ColumnDescPtr,
     record_reader: RecordReader<T>,
-    _type_marker: PhantomData<T>,
 }
 
-impl<T: DataType> PrimitiveArrayReader<T> {
+impl<T> PrimitiveArrayReader<T>
+where
+    T: DataType,
+    T::T: ScalarValue,
+{
     /// Construct primitive array reader.
     pub fn new(
         pages: Box<dyn PageIterator>,
@@ -234,13 +265,16 @@ impl<T: DataType> PrimitiveArrayReader<T> {
             rep_levels_buffer: None,
             column_desc,
             record_reader,
-            _type_marker: PhantomData,
         })
     }
 }
 
 /// Implementation of primitive array reader.
-impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
+impl<T> ArrayReader for PrimitiveArrayReader<T>
+where
+    T: DataType,
+    T::T: ScalarValue,
+{
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -288,7 +322,7 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
             }
         };
 
-        // Convert to arrays by using the Parquet phyisical type.
+        // Convert to arrays by using the Parquet physical type.
         // The physical types are then cast to Arrow types if necessary
 
         let mut record_data = self.record_reader.consume_record_data()?;
@@ -1135,69 +1169,77 @@ impl ArrayReader for StructArrayReader {
             return Err(general_err!("Not all children array length are the same!"));
         }
 
-        // calculate struct def level data
-        let buffer_size = children_array_len * size_of::<i16>();
-        let mut def_level_data_buffer = MutableBuffer::new(buffer_size);
-        def_level_data_buffer.resize(buffer_size, 0);
-
-        // Safety: the buffer is always treated as `u16` in the code below
-        let def_level_data = unsafe { def_level_data_buffer.typed_data_mut() };
-
-        def_level_data
-            .iter_mut()
-            .for_each(|v| *v = self.struct_def_level);
-
-        for child in &self.children {
-            if let Some(current_child_def_levels) = child.get_def_levels() {
-                if current_child_def_levels.len() != children_array_len {
-                    return Err(general_err!("Child array length are not equal!"));
-                } else {
-                    for i in 0..children_array_len {
-                        def_level_data[i] =
-                            min(def_level_data[i], current_child_def_levels[i]);
-                    }
-                }
-            }
-        }
-
-        // calculate bitmap for current array
-        let mut bitmap_builder = BooleanBufferBuilder::new(children_array_len);
-        for def_level in def_level_data {
-            let not_null = *def_level >= self.struct_def_level;
-            bitmap_builder.append(not_null);
-        }
-
         // Now we can build array data
-        let array_data = ArrayDataBuilder::new(self.data_type.clone())
+        let mut array_data_builder = ArrayDataBuilder::new(self.data_type.clone())
             .len(children_array_len)
-            .null_bit_buffer(bitmap_builder.finish())
             .child_data(
                 children_array
                     .iter()
                     .map(|x| x.data().clone())
                     .collect::<Vec<ArrayData>>(),
             );
-        let array_data = unsafe { array_data.build_unchecked() };
 
-        // calculate struct rep level data, since struct doesn't add to repetition
-        // levels, here we just need to keep repetition levels of first array
-        // TODO: Verify that all children array reader has same repetition levels
-        let rep_level_data = self
-            .children
-            .first()
-            .ok_or_else(|| {
-                general_err!("Struct array reader should have at least one child!")
-            })?
-            .get_rep_levels()
-            .map(|data| -> Result<Buffer> {
-                let mut buffer = Int16BufferBuilder::new(children_array_len);
-                buffer.append_slice(data);
-                Ok(buffer.finish())
-            })
-            .transpose()?;
+        if self.struct_def_level != 0 {
+            // calculate struct def level data
+            let buffer_size = children_array_len * size_of::<i16>();
+            let mut def_level_data_buffer = MutableBuffer::new(buffer_size);
+            def_level_data_buffer.resize(buffer_size, 0);
 
-        self.def_level_buffer = Some(def_level_data_buffer.into());
-        self.rep_level_buffer = rep_level_data;
+            // Safety: the buffer is always treated as `u16` in the code below
+            let def_level_data = unsafe { def_level_data_buffer.typed_data_mut() };
+
+            def_level_data
+                .iter_mut()
+                .for_each(|v| *v = self.struct_def_level);
+
+            for child in &self.children {
+                if let Some(current_child_def_levels) = child.get_def_levels() {
+                    if current_child_def_levels.len() != children_array_len {
+                        return Err(general_err!("Child array length are not equal!"));
+                    } else {
+                        for i in 0..children_array_len {
+                            def_level_data[i] =
+                                min(def_level_data[i], current_child_def_levels[i]);
+                        }
+                    }
+                }
+            }
+
+            // calculate bitmap for current array
+            let mut bitmap_builder = BooleanBufferBuilder::new(children_array_len);
+            for def_level in def_level_data {
+                let not_null = *def_level >= self.struct_def_level;
+                bitmap_builder.append(not_null);
+            }
+
+            array_data_builder =
+                array_data_builder.null_bit_buffer(bitmap_builder.finish());
+
+            self.def_level_buffer = Some(def_level_data_buffer.into());
+        }
+
+        let array_data = unsafe { array_data_builder.build_unchecked() };
+
+        if self.struct_rep_level != 0 {
+            // calculate struct rep level data, since struct doesn't add to repetition
+            // levels, here we just need to keep repetition levels of first array
+            // TODO: Verify that all children array reader has same repetition levels
+            let rep_level_data = self
+                .children
+                .first()
+                .ok_or_else(|| {
+                    general_err!("Struct array reader should have at least one child!")
+                })?
+                .get_rep_levels()
+                .map(|data| -> Result<Buffer> {
+                    let mut buffer = Int16BufferBuilder::new(children_array_len);
+                    buffer.append_slice(data);
+                    Ok(buffer.finish())
+                })
+                .transpose()?;
+
+            self.rep_level_buffer = rep_level_data;
+        }
         Ok(Arc::new(StructArray::from(array_data)))
     }
 
@@ -1908,7 +1950,26 @@ impl<'a> ArrayReaderBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::any::Any;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+
+    use rand::distributions::uniform::SampleUniform;
+    use rand::{thread_rng, Rng};
+
+    use arrow::array::{
+        Array, ArrayRef, LargeListArray, ListArray, PrimitiveArray, StringArray,
+        StructArray,
+    };
+    use arrow::datatypes::{
+        ArrowPrimitiveType, DataType as ArrowType, Date32Type as ArrowDate32, Field,
+        Int32Type as ArrowInt32, Int64Type as ArrowInt64,
+        Time32MillisecondType as ArrowTime32MillisecondArray,
+        Time64MicrosecondType as ArrowTime64MicrosecondArray,
+        TimestampMicrosecondType as ArrowTimestampMicrosecondType,
+        TimestampMillisecondType as ArrowTimestampMillisecondType,
+    };
+
     use crate::arrow::converter::{Utf8ArrayConverter, Utf8Converter};
     use crate::arrow::schema::parquet_to_arrow_schema;
     use crate::basic::{Encoding, Type as PhysicalType};
@@ -1922,23 +1983,8 @@ mod tests {
         DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator,
     };
     use crate::util::test_common::{get_test_file, make_pages};
-    use arrow::array::{
-        Array, ArrayRef, LargeListArray, ListArray, PrimitiveArray, StringArray,
-        StructArray,
-    };
-    use arrow::datatypes::{
-        ArrowPrimitiveType, DataType as ArrowType, Date32Type as ArrowDate32, Field,
-        Int32Type as ArrowInt32, Int64Type as ArrowInt64,
-        Time32MillisecondType as ArrowTime32MillisecondArray,
-        Time64MicrosecondType as ArrowTime64MicrosecondArray,
-        TimestampMicrosecondType as ArrowTimestampMicrosecondType,
-        TimestampMillisecondType as ArrowTimestampMillisecondType,
-    };
-    use rand::distributions::uniform::SampleUniform;
-    use rand::{thread_rng, Rng};
-    use std::any::Any;
-    use std::collections::VecDeque;
-    use std::sync::Arc;
+
+    use super::*;
 
     fn make_column_chunks<T: DataType>(
         column_desc: ColumnDescPtr,
@@ -2469,8 +2515,8 @@ mod tests {
 
     #[test]
     fn test_complex_array_reader_dict_enc_string() {
-        use crate::encoding::{DictEncoder, Encoder};
-        use crate::memory::MemTracker;
+        use crate::encodings::encoding::{DictEncoder, Encoder};
+        use crate::util::memory::MemTracker;
         // Construct column schema
         let message_type = "
         message test_schema {

@@ -922,7 +922,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder};
+    use crate::encodings::decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder};
     use crate::schema::types::{
         ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType,
     };

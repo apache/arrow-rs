@@ -147,6 +147,20 @@ macro_rules! make_numeric_type {
                 // this match will get removed by the compiler since the number of lanes is known at
                 // compile-time for each concrete numeric type
                 match Self::lanes() {
+                    4 => {
+                        // the bit position in each lane indicates the index of that lane
+                        let vecidx = i128x4::new(1, 2, 4, 8);
+
+                        // broadcast the lowermost 8 bits of mask to each lane
+                        let vecmask = i128x4::splat((mask & 0x0F) as i128);
+                        // compute whether the bit corresponding to each lanes index is set
+                        let vecmask = (vecidx & vecmask).eq(vecidx);
+
+                        // transmute is necessary because the different match arms return different
+                        // mask types, at runtime only one of those expressions will exist per type,
+                        // with the type being equal to `SimdMask`.
+                        unsafe { std::mem::transmute(vecmask) }
+                    }
                     8 => {
                         // the bit position in each lane indicates the index of that lane
                         let vecidx = i64x8::new(1, 2, 4, 8, 16, 32, 64, 128);
@@ -448,11 +462,11 @@ macro_rules! make_float_numeric_type {
 make_float_numeric_type!(Float32Type, f32x16);
 make_float_numeric_type!(Float64Type, f64x8);
 
-#[cfg(all(test, simd_x86))]
+#[cfg(all(test, feature = "simd"))]
 mod tests {
     use crate::datatypes::{
         ArrowNumericType, Float32Type, Float64Type, Int32Type, Int64Type, Int8Type,
-        UInt16Type,
+        IntervalMonthDayNanoType, UInt16Type,
     };
     use packed_simd::*;
     use FromCast;
@@ -468,6 +482,17 @@ mod tests {
                 .map(|i| (if (mask & (1 << i)) != 0 { -1 } else { 0 }))
                 .collect::<Vec<$T>>()
         }};
+    }
+
+    #[test]
+    fn test_mask_i128() {
+        let mask = 0b1101;
+        let actual = IntervalMonthDayNanoType::mask_from_u64(mask);
+        let expected = expected_mask!(i128, mask);
+        let expected =
+            m128x4::from_cast(i128x4::from_slice_unaligned(expected.as_slice()));
+
+        assert_eq!(expected, actual);
     }
 
     #[test]

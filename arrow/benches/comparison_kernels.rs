@@ -22,7 +22,7 @@ use criterion::Criterion;
 extern crate arrow;
 
 use arrow::compute::*;
-use arrow::datatypes::ArrowNumericType;
+use arrow::datatypes::{ArrowNumericType, IntervalMonthDayNanoType};
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
 
@@ -138,6 +138,11 @@ fn add_benchmark(c: &mut Criterion) {
     let arr_a = create_primitive_array_with_seed::<Float32Type>(size, 0.0, 42);
     let arr_b = create_primitive_array_with_seed::<Float32Type>(size, 0.0, 43);
 
+    let arr_month_day_nano_a =
+        create_primitive_array_with_seed::<IntervalMonthDayNanoType>(size, 0.0, 43);
+    let arr_month_day_nano_b =
+        create_primitive_array_with_seed::<IntervalMonthDayNanoType>(size, 0.0, 43);
+
     let arr_string = create_string_array::<i32>(size, 0.0);
 
     c.bench_function("eq Float32", |b| b.iter(|| bench_eq(&arr_a, &arr_b)));
@@ -168,6 +173,13 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("gt_eq Float32", |b| b.iter(|| bench_gt_eq(&arr_a, &arr_b)));
     c.bench_function("gt_eq scalar Float32", |b| {
         b.iter(|| bench_gt_eq_scalar(&arr_a, 1.0))
+    });
+
+    c.bench_function("eq MonthDayNano", |b| {
+        b.iter(|| bench_eq(&arr_month_day_nano_a, &arr_month_day_nano_b))
+    });
+    c.bench_function("eq scalar MonthDayNano", |b| {
+        b.iter(|| bench_eq_scalar(&arr_month_day_nano_a, 123))
     });
 
     c.bench_function("like_utf8 scalar equals", |b| {
