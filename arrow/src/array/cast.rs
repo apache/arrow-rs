@@ -95,6 +95,7 @@ array_downcast_fn!(as_boolean_array, BooleanArray);
 array_downcast_fn!(as_null_array, NullArray);
 array_downcast_fn!(as_struct_array, StructArray);
 array_downcast_fn!(as_union_array, UnionArray);
+array_downcast_fn!(as_map_array, MapArray);
 
 #[cfg(test)]
 mod tests {
