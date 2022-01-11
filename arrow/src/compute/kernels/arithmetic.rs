@@ -996,67 +996,6 @@ where
     Ok(PrimitiveArray::<T>::from(data))
 }
 
-/// SIMD vectorized version of subtracting value from an array.
-#[cfg(feature = "simd")]
-fn simd_subtract_scalar<T>(
-    array: &PrimitiveArray<T>,
-    scalar: T::Native,
-) -> Result<PrimitiveArray<T>>
-where
-    T: ArrowNumericType,
-    T::Native: Add<Output = T::Native>
-        + Sub<Output = T::Native>
-        + Mul<Output = T::Native>
-        + Div<Output = T::Native>
-        + Zero,
-{
-    let lanes = T::lanes();
-    let buffer_size = array.len() * std::mem::size_of::<T::Native>();
-    let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
-
-    // safety: result is newly created above, always written as a T below
-    let mut result_chunks = unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
-    let mut array_chunks = array.values().chunks_exact(lanes);
-
-    let simd_right = T::init(scalar);
-
-    result_chunks
-        .borrow_mut()
-        .zip(array_chunks.borrow_mut())
-        .for_each(|(result_slice, array_slice)| {
-            let simd_left = T::load(array_slice);
-
-            let simd_result = T::bin_op(simd_left, simd_right, |a, b| a - b);
-            T::write(simd_result, result_slice);
-        });
-
-    let result_remainder = result_chunks.into_remainder();
-    let array_remainder = array_chunks.remainder();
-
-    result_remainder
-        .iter_mut()
-        .zip(array_remainder.iter())
-        .for_each(|(scalar_result, scalar_array)| {
-            *scalar_result = *scalar_array - scalar;
-        });
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            T::DATA_TYPE,
-            array.len(),
-            None,
-            array
-                .data_ref()
-                .null_buffer()
-                .map(|b| b.bit_slice(array.offset(), array.len())),
-            0,
-            vec![result.into()],
-            vec![],
-        )
-    };
-    Ok(PrimitiveArray::<T>::from(data))
-}
-
 /// Perform `left + right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
 pub fn add<T>(
@@ -1137,7 +1076,10 @@ where
         + Zero,
 {
     #[cfg(feature = "simd")]
-    return simd_subtract_scalar(&array, scalar);
+    {
+        let scalar_vector = T::init(scalar);
+        return simd_unary_math_op(array, |x| x - scalar_vector, |x| x - scalar);
+    }
     #[cfg(not(feature = "simd"))]
     return Ok(unary(array, |value| value - scalar));
 }
