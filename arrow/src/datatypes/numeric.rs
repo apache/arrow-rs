@@ -19,9 +19,7 @@ use super::*;
 #[cfg(feature = "simd")]
 use packed_simd::*;
 #[cfg(feature = "simd")]
-use std::ops::{
-    Add, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, Mul, Neg, Not, Rem, Sub,
-};
+use std::ops::{Add, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, Mul, Not, Rem, Sub};
 
 /// A subtype of primitive type that represents numeric values.
 ///
@@ -367,74 +365,6 @@ make_numeric_type!(DurationSecondType, i64, i64x8, m64x8);
 make_numeric_type!(DurationMillisecondType, i64, i64x8, m64x8);
 make_numeric_type!(DurationMicrosecondType, i64, i64x8, m64x8);
 make_numeric_type!(DurationNanosecondType, i64, i64x8, m64x8);
-
-/// A subtype of primitive type that represents signed numeric values.
-///
-/// SIMD operations are defined in this trait if available on the target system.
-#[cfg(feature = "simd")]
-pub trait ArrowSignedNumericType: ArrowNumericType
-where
-    Self::SignedSimd: Neg<Output = Self::SignedSimd>,
-{
-    /// Defines the SIMD type that should be used for this numeric type
-    type SignedSimd;
-
-    /// Loads a slice of signed numeric type into a SIMD register
-    fn load_signed(slice: &[Self::Native]) -> Self::SignedSimd;
-
-    /// Performs a SIMD unary operation on signed numeric type
-    fn signed_unary_op<F: Fn(Self::SignedSimd) -> Self::SignedSimd>(
-        a: Self::SignedSimd,
-        op: F,
-    ) -> Self::SignedSimd;
-
-    /// Writes a signed SIMD result back to a slice
-    fn write_signed(simd_result: Self::SignedSimd, slice: &mut [Self::Native]);
-}
-
-#[cfg(not(feature = "simd"))]
-pub trait ArrowSignedNumericType: ArrowNumericType
-where
-    Self::Native: std::ops::Neg<Output = Self::Native>,
-{
-}
-
-macro_rules! make_signed_numeric_type {
-    ($impl_ty:ty, $simd_ty:ident) => {
-        #[cfg(feature = "simd")]
-        impl ArrowSignedNumericType for $impl_ty {
-            type SignedSimd = $simd_ty;
-
-            #[inline]
-            fn load_signed(slice: &[Self::Native]) -> Self::SignedSimd {
-                unsafe { Self::SignedSimd::from_slice_unaligned_unchecked(slice) }
-            }
-
-            #[inline]
-            fn signed_unary_op<F: Fn(Self::SignedSimd) -> Self::SignedSimd>(
-                a: Self::SignedSimd,
-                op: F,
-            ) -> Self::SignedSimd {
-                op(a)
-            }
-
-            #[inline]
-            fn write_signed(simd_result: Self::SignedSimd, slice: &mut [Self::Native]) {
-                unsafe { simd_result.write_to_slice_unaligned_unchecked(slice) };
-            }
-        }
-
-        #[cfg(not(feature = "simd"))]
-        impl ArrowSignedNumericType for $impl_ty {}
-    };
-}
-
-make_signed_numeric_type!(Int8Type, i8x64);
-make_signed_numeric_type!(Int16Type, i16x32);
-make_signed_numeric_type!(Int32Type, i32x16);
-make_signed_numeric_type!(Int64Type, i64x8);
-make_signed_numeric_type!(Float32Type, f32x16);
-make_signed_numeric_type!(Float64Type, f64x8);
 
 #[cfg(feature = "simd")]
 pub trait ArrowFloatNumericType: ArrowNumericType {
