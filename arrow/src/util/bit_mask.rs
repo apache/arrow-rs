@@ -63,7 +63,6 @@ pub fn set_bits(
     null_count as usize
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,4 +189,3 @@ mod tests {
         assert_eq!(result, expected_null_count);
     }
 }
-
