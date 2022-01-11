@@ -239,7 +239,7 @@ mod tests {
         IntervalDayTimeArrayConverter, LargeUtf8ArrayConverter, Utf8ArrayConverter,
     };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
-    use crate::basic::{ConvertedType, Repetition};
+    use crate::basic::{ConvertedType, Encoding, Repetition};
     use crate::column::writer::get_typed_column_writer_mut;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray,
@@ -325,18 +325,29 @@ mod tests {
             ConvertedType::NONE,
             None,
             &FromConverter::new(),
+            &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
         );
         run_single_column_reader_tests::<Int32Type, Int32Array, _, Int32Type>(
             2,
             ConvertedType::NONE,
             None,
             &FromConverter::new(),
+            &[
+                Encoding::PLAIN,
+                Encoding::RLE_DICTIONARY,
+                Encoding::DELTA_BINARY_PACKED,
+            ],
         );
         run_single_column_reader_tests::<Int64Type, Int64Array, _, Int64Type>(
             2,
             ConvertedType::NONE,
             None,
             &FromConverter::new(),
+            &[
+                Encoding::PLAIN,
+                Encoding::RLE_DICTIONARY,
+                Encoding::DELTA_BINARY_PACKED,
+            ],
         );
     }
 
@@ -358,7 +369,13 @@ mod tests {
             FixedSizeBinaryArray,
             FixedSizeArrayConverter,
             RandFixedLenGen,
-        >(20, ConvertedType::NONE, None, &converter);
+        >(
+            20,
+            ConvertedType::NONE,
+            None,
+            &converter,
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
+        );
     }
 
     #[test]
@@ -369,7 +386,13 @@ mod tests {
             IntervalDayTimeArray,
             IntervalDayTimeArrayConverter,
             RandFixedLenGen,
-        >(12, ConvertedType::INTERVAL, None, &converter);
+        >(
+            12,
+            ConvertedType::INTERVAL,
+            None,
+            &converter,
+            &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
+        );
     }
 
     struct RandUtf8Gen {}
@@ -382,13 +405,20 @@ mod tests {
 
     #[test]
     fn test_utf8_single_column_reader_test() {
+        let encodings = &[
+            Encoding::PLAIN,
+            Encoding::RLE_DICTIONARY,
+            //Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_BYTE_ARRAY,
+        ];
+
         let converter = BinaryArrayConverter {};
         run_single_column_reader_tests::<
             ByteArrayType,
             BinaryArray,
             BinaryArrayConverter,
             RandUtf8Gen,
-        >(2, ConvertedType::NONE, None, &converter);
+        >(2, ConvertedType::NONE, None, &converter, encodings);
 
         let converter = Utf8ArrayConverter {};
         run_single_column_reader_tests::<
@@ -396,7 +426,7 @@ mod tests {
             StringArray,
             Utf8ArrayConverter,
             RandUtf8Gen,
-        >(2, ConvertedType::UTF8, None, &converter);
+        >(2, ConvertedType::UTF8, None, &converter, encodings);
 
         run_single_column_reader_tests::<
             ByteArrayType,
@@ -408,6 +438,7 @@ mod tests {
             ConvertedType::UTF8,
             Some(ArrowDataType::Utf8),
             &converter,
+            encodings,
         );
 
         run_single_column_reader_tests::<
@@ -423,6 +454,7 @@ mod tests {
                 Box::new(ArrowDataType::Utf8),
             )),
             &converter,
+            encodings,
         );
 
         let converter = LargeUtf8ArrayConverter {};
@@ -436,6 +468,7 @@ mod tests {
             ConvertedType::UTF8,
             Some(ArrowDataType::LargeUtf8),
             &converter,
+            encodings,
         );
     }
 
@@ -489,6 +522,8 @@ mod tests {
         max_dict_page_size: usize,
         /// Writer version
         writer_version: WriterVersion,
+        /// Encoding
+        encoding: Encoding,
     }
 
     impl Default for TestOptions {
@@ -501,6 +536,7 @@ mod tests {
                 max_data_page_size: 1024 * 1024,
                 max_dict_page_size: 1024 * 1024,
                 writer_version: WriterVersion::PARQUET_1_0,
+                encoding: Encoding::PLAIN,
             }
         }
     }
@@ -511,10 +547,7 @@ mod tests {
                 num_row_groups,
                 num_rows,
                 record_batch_size,
-                null_percent: None,
-                max_data_page_size: 1024 * 1024,
-                max_dict_page_size: 1024 * 1024,
-                writer_version: WriterVersion::PARQUET_1_0,
+                ..Default::default()
             }
         }
 
@@ -538,6 +571,23 @@ mod tests {
                 ..self
             }
         }
+
+        fn writer_props(&self) -> WriterProperties {
+            let builder = WriterProperties::builder()
+                .set_data_pagesize_limit(self.max_data_page_size)
+                .set_writer_version(self.writer_version);
+
+            let builder = match self.encoding {
+                Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => builder
+                    .set_dictionary_enabled(true)
+                    .set_dictionary_pagesize_limit(self.max_dict_page_size),
+                _ => builder
+                    .set_dictionary_enabled(false)
+                    .set_encoding(self.encoding),
+            };
+
+            builder.build()
+        }
     }
 
     /// Create a parquet file and then read it using
@@ -551,6 +601,7 @@ mod tests {
         converted_type: ConvertedType,
         arrow_type: Option<ArrowDataType>,
         converter: &C,
+        encodings: &[Encoding],
     ) where
         T: DataType,
         G: RandGen<T>,
@@ -583,18 +634,21 @@ mod tests {
         all_options.into_iter().for_each(|opts| {
             for writer_version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0]
             {
-                let opts = TestOptions {
-                    writer_version,
-                    ..opts
-                };
+                for encoding in encodings {
+                    let opts = TestOptions {
+                        writer_version,
+                        encoding: *encoding,
+                        ..opts
+                    };
 
-                single_column_reader_test::<T, A, C, G>(
-                    opts,
-                    rand_max,
-                    converted_type,
-                    arrow_type.clone(),
-                    converter,
-                )
+                    single_column_reader_test::<T, A, C, G>(
+                        opts,
+                        rand_max,
+                        converted_type,
+                        arrow_type.clone(),
+                        converter,
+                    )
+                }
             }
         });
     }
@@ -753,13 +807,7 @@ mod tests {
         opts: &TestOptions,
     ) -> Result<parquet_format::FileMetaData> {
         let file = File::create(path)?;
-        let mut writer_props = WriterProperties::builder()
-            .set_data_pagesize_limit(opts.max_data_page_size)
-            .set_dictionary_pagesize_limit(opts.max_dict_page_size)
-            .set_dictionary_enabled(true)
-            .set_writer_version(opts.writer_version)
-            .build();
-
+        let mut writer_props = opts.writer_props();
         if let Some(field) = field {
             let arrow_schema = arrow::datatypes::Schema::new(vec![field]);
             add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut writer_props);
