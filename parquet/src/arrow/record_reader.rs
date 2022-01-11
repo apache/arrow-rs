@@ -21,7 +21,7 @@ use arrow::bitmap::Bitmap;
 use arrow::buffer::Buffer;
 
 use crate::arrow::record_reader::{
-    buffer::{BufferQueue, TypedBuffer, ValuesBuffer},
+    buffer::{BufferQueue, ScalarBuffer, ValuesBuffer},
     definition_levels::{DefinitionLevelBuffer, DefinitionLevelDecoder},
 };
 use crate::column::{
@@ -42,7 +42,7 @@ const MIN_BATCH_SIZE: usize = 1024;
 
 /// A `RecordReader` is a stateful column reader that delimits semantic records.
 pub type RecordReader<T> =
-    GenericRecordReader<TypedBuffer<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
+    GenericRecordReader<ScalarBuffer<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
 
 #[doc(hidden)]
 /// A generic stateful column reader that delimits semantic records
@@ -55,7 +55,7 @@ pub struct GenericRecordReader<V, CV> {
 
     records: V,
     def_levels: Option<DefinitionLevelBuffer>,
-    rep_levels: Option<TypedBuffer<i16>>,
+    rep_levels: Option<ScalarBuffer<i16>>,
     column_reader:
         Option<GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelDecoder, CV>>,
 
@@ -77,7 +77,7 @@ where
         let def_levels =
             (desc.max_def_level() > 0).then(|| DefinitionLevelBuffer::new(&desc));
 
-        let rep_levels = (desc.max_rep_level() > 0).then(TypedBuffer::new);
+        let rep_levels = (desc.max_rep_level() > 0).then(ScalarBuffer::new);
 
         Self {
             records: Default::default(),

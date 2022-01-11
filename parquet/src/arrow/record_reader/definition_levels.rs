@@ -24,12 +24,12 @@ use crate::column::reader::decoder::ColumnLevelDecoderImpl;
 use crate::schema::types::ColumnDescPtr;
 
 use super::{
-    buffer::{BufferQueue, TypedBuffer},
+    buffer::{BufferQueue, ScalarBuffer},
     MIN_BATCH_SIZE,
 };
 
 pub struct DefinitionLevelBuffer {
-    buffer: TypedBuffer<i16>,
+    buffer: ScalarBuffer<i16>,
     builder: BooleanBufferBuilder,
     max_level: i16,
 }
@@ -62,7 +62,7 @@ impl BufferQueue for DefinitionLevelBuffer {
 impl DefinitionLevelBuffer {
     pub fn new(desc: &ColumnDescPtr) -> Self {
         Self {
-            buffer: TypedBuffer::new(),
+            buffer: ScalarBuffer::new(),
             builder: BooleanBufferBuilder::new(0),
             max_level: desc.max_def_level(),
         }

@@ -64,8 +64,24 @@ pub trait BufferQueue: Sized {
     fn set_len(&mut self, len: usize);
 }
 
+/// A marker trait for [scalar] types
+///
+/// This means that a `[Self::default()]` of length `len` can be safely created from a
+/// zero-initialized `[u8]` with length `len * std::mem::size_of::<Self>()` and
+/// alignment of `std::mem::size_of::<Self>()`
+///
+/// [scalar]: https://doc.rust-lang.org/book/ch03-02-data-types.html#scalar-types
+///
+pub trait ScalarValue {}
+impl ScalarValue for bool {}
+impl ScalarValue for i16 {}
+impl ScalarValue for i32 {}
+impl ScalarValue for i64 {}
+impl ScalarValue for f32 {}
+impl ScalarValue for f64 {}
+
 /// A typed buffer similar to [`Vec<T>`] but using [`MutableBuffer`] for storage
-pub struct TypedBuffer<T> {
+pub struct ScalarBuffer<T: ScalarValue> {
     buffer: MutableBuffer,
 
     /// Length in elements of size T
@@ -75,13 +91,13 @@ pub struct TypedBuffer<T> {
     _phantom: PhantomData<*mut T>,
 }
 
-impl<T> Default for TypedBuffer<T> {
+impl<T: ScalarValue> Default for ScalarBuffer<T> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> TypedBuffer<T> {
+impl<T: ScalarValue> ScalarBuffer<T> {
     pub fn new() -> Self {
         Self {
             buffer: MutableBuffer::new(0),
@@ -114,7 +130,7 @@ impl<T> TypedBuffer<T> {
     }
 }
 
-impl<T> BufferQueue for TypedBuffer<T> {
+impl<T: ScalarValue> BufferQueue for ScalarBuffer<T> {
     type Output = Buffer;
 
     type Slice = [T];
@@ -177,7 +193,7 @@ pub trait ValuesBuffer: BufferQueue {
     );
 }
 
-impl<T> ValuesBuffer for TypedBuffer<T> {
+impl<T: ScalarValue> ValuesBuffer for ScalarBuffer<T> {
     fn pad_nulls(
         &mut self,
         range: Range<usize>,
