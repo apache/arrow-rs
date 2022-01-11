@@ -35,22 +35,43 @@
     clippy::vec_init_then_push
 )]
 
+/// Defines a module with an experimental public API
+///
+/// The module will not be documented, and will only be public if the
+/// experimental feature flag is enabled
+///
+/// Experimental modules have no stability guarantees
+macro_rules! experimental_mod {
+    ($module:ident $(, #[$meta:meta])*) => {
+        #[cfg(feature = "experimental")]
+        #[doc(hidden)]
+        $(#[$meta])*
+        pub mod $module;
+        #[cfg(not(feature = "experimental"))]
+        $(#[$meta])*
+        mod $module;
+    };
+}
+
 #[macro_use]
 pub mod errors;
 pub mod basic;
-#[macro_use]
-pub mod data_type;
+experimental_mod!(data_type, #[macro_use]);
 
 // Exported for external use, such as benchmarks
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
 pub use self::encodings::{decoding, encoding};
+
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
 pub use self::util::memory;
 
-#[macro_use]
-pub mod util;
+experimental_mod!(util, #[macro_use]);
 #[cfg(any(feature = "arrow", test))]
 pub mod arrow;
 pub mod column;
-pub mod compression;
+experimental_mod!(compression);
 mod encodings;
 pub mod file;
 pub mod record;

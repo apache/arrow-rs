@@ -310,7 +310,7 @@ impl BooleanBufferBuilder {
     #[inline]
     pub fn new(capacity: usize) -> Self {
         let byte_capacity = bit_util::ceil(capacity, 8);
-        let buffer = MutableBuffer::from_len_zeroed(byte_capacity);
+        let buffer = MutableBuffer::new(byte_capacity);
         Self { buffer, len: 0 }
     }
 
@@ -1686,6 +1686,9 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Interval(IntervalUnit::DayTime) => {
             Box::new(IntervalDayTimeBuilder::new(capacity))
         }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            Box::new(IntervalMonthDayNanoBuilder::new(capacity))
+        }
         DataType::Duration(TimeUnit::Second) => {
             Box::new(DurationSecondBuilder::new(capacity))
         }
@@ -2031,6 +2034,7 @@ impl FieldData {
             | DataType::Time64(_)
             | DataType::Interval(IntervalUnit::DayTime)
             | DataType::Duration(_) => self.append_null::<Int64Type>()?,
+            DataType::Interval(IntervalUnit::MonthDayNano) => self.append_null::<IntervalMonthDayNanoType>()?,
             DataType::UInt8 => self.append_null::<UInt8Type>()?,
             DataType::UInt16 => self.append_null::<UInt16Type>()?,
             DataType::UInt32 => self.append_null::<UInt32Type>()?,
@@ -2139,12 +2143,16 @@ impl UnionBuilder {
 
         self.type_id_builder.append(i8::default());
 
-        // Handle sparse union
-        if self.value_offset_builder.is_none() {
-            for (_, fd) in self.fields.iter_mut() {
-                fd.append_null_dynamic()?;
+        match &mut self.value_offset_builder {
+            // Handle dense union
+            Some(value_offset_builder) => value_offset_builder.append(i32::default()),
+            // Handle sparse union
+            None => {
+                for (_, fd) in self.fields.iter_mut() {
+                    fd.append_null_dynamic()?;
+                }
             }
-        }
+        };
         self.len += 1;
         Ok(())
     }
@@ -2713,7 +2721,8 @@ mod tests {
         let buffer = b.finish();
         assert_eq!(1, buffer.len());
 
-        let mut b = BooleanBufferBuilder::new(4);
+        // Overallocate capacity
+        let mut b = BooleanBufferBuilder::new(8);
         b.append_slice(&[false, true, false, true]);
         assert_eq!(4, b.len());
         assert_eq!(512, b.capacity());

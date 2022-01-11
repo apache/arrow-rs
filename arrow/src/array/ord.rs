@@ -174,6 +174,9 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
         (Interval(DayTime), Interval(DayTime)) => {
             compare_primitives::<IntervalDayTimeType>(left, right)
         }
+        (Interval(MonthDayNano), Interval(MonthDayNano)) => {
+            compare_primitives::<IntervalMonthDayNanoType>(left, right)
+        }
         (Duration(Second), Duration(Second)) => {
             compare_primitives::<DurationSecondType>(left, right)
         }

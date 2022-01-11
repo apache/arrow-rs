@@ -171,6 +171,9 @@ where
         DataType::Interval(IntervalUnit::DayTime) => {
             downcast_take!(IntervalDayTimeType, values, indices)
         }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            downcast_take!(IntervalMonthDayNanoType, values, indices)
+        }
         DataType::Duration(TimeUnit::Second) => {
             downcast_take!(DurationSecondType, values, indices)
         }
@@ -528,7 +531,7 @@ where
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            T::DATA_TYPE,
+            values.data_type().clone(),
             indices.len(),
             None,
             nulls,
@@ -632,7 +635,8 @@ where
     let bytes_offset = (data_len + 1) * std::mem::size_of::<OffsetSize>();
     let mut offsets_buffer = MutableBuffer::from_len_zeroed(bytes_offset);
 
-    let offsets = offsets_buffer.typed_data_mut();
+    // Safety: the buffer is always treated as as a type of `OffsetSize` in the code below
+    let offsets = unsafe { offsets_buffer.typed_data_mut() };
     let mut values = MutableBuffer::new(0);
     let mut length_so_far = OffsetSize::zero();
     offsets[0] = length_so_far;
@@ -1185,6 +1189,15 @@ mod tests {
         )
         .unwrap();
 
+        // interval_month_day_nano
+        test_take_primitive_arrays::<IntervalMonthDayNanoType>(
+            vec![Some(0), None, Some(2), Some(-15), None],
+            &index,
+            None,
+            vec![Some(-15), None, None, Some(-15), Some(2)],
+        )
+        .unwrap();
+
         // duration_second
         test_take_primitive_arrays::<DurationSecondType>(
             vec![Some(0), None, Some(2), Some(-15), None],
@@ -1238,6 +1251,23 @@ mod tests {
             vec![Some(-3.1), None, None, Some(-3.1), Some(2.21)],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_take_preserve_timezone() {
+        let index = Int64Array::from(vec![Some(0), None]);
+
+        let input = TimestampNanosecondArray::from_vec(
+            vec![1_639_715_368_000_000_000, 1_639_715_368_000_000_000],
+            Some("UTC".to_owned()),
+        );
+        let result = take_impl(&input, &index, None).unwrap();
+        match result.data_type() {
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                assert_eq!(tz.clone(), Some("UTC".to_owned()))
+            }
+            _ => panic!(),
+        }
     }
 
     #[test]

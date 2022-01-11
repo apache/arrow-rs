@@ -29,7 +29,9 @@ This crate is tested with the latest stable version of Rust. We do not currently
 
 ## Versioning / Releases
 
-Unlike many other crates in the Rust ecosystem which spend extended time in "pre 1.0.0" state, releasing versions 0.x, the arrow-rs crate follows the versioning scheme of the overall [Apache Arrow][arrow] project in an effort to signal which language implementations have been integration tested with each other.
+The arrow crate follows the [SemVer standard](https://doc.rust-lang.org/cargo/reference/semver.html) defined by Cargo and works well within the Rust crate ecosystem.
+
+However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `7.0.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
 
 ## Features
 
@@ -40,27 +42,19 @@ The arrow crate provides the following features which may be enabled:
 - `prettyprint` - support for formatting record batches as textual columns
 - `js` - support for building arrow for WebAssembly / JavaScript
 - `simd` - (_Requires Nightly Rust_) alternate optimized
-  implementations of some [compute](https://github.com/apache/arrow/tree/master/rust/arrow/src/compute)
-  kernels using explicit SIMD processor intrinsics.
+  implementations of some [compute](https://github.com/apache/arrow-rs/tree/master/arrow/src/compute/kernels)
+  kernels using explicit SIMD instructions available through [packed_simd_2](https://docs.rs/packed_simd_2/latest/packed_simd_2/).
 - `chrono-tz` - support of parsing timezone using [chrono-tz](https://docs.rs/chrono-tz/0.6.0/chrono_tz/)
 
 ## Safety
 
-TLDR: You should avoid using the `alloc` and `buffer` and `bitmap` modules if at all possible. These modules contain `unsafe` code and are easy to misuse.
+TLDR: You should avoid using the `alloc` and `buffer` and `bitmap` modules if at all possible. These modules contain `unsafe` code, are easy to misuse, and are not needed for most users.
 
-As with all open source code, you should carefully evaluate the suitability of `arrow` for your project, taking into consideration your needs and risk tolerance prior to use.
+As with all open source code, you should carefully evaluate the suitability of `arrow` for your project, taking into consideration your needs and risk tolerance prior to doing so.
 
-_Background_: There are various parts of the `arrow` crate which use `unsafe` and `transmute` code internally. We are actively working as a community to minimize undefined behavior and remove `unsafe` usage to align more with Rust's core principles of safety (e.g. the arrow2 project).
+_Background_: There are various parts of the `arrow` crate which use `unsafe` and `transmute` code internally. We are actively working as a community to minimize undefined behavior and remove `unsafe` usage to align more with Rust's core principles of safety.
 
-As `arrow` exists today, it is fairly easy to misuse the APIs, leading to undefined behavior, and it is especially easy to misuse code in modules named above. For an example, as described in [the arrow2 crate](https://github.com/jorgecarleitao/arrow2#why), the following code compiles, does not panic, but results in undefined behavior:
-
-```rust
-let buffer = Buffer::from_slice_ref(&[0i32, 2i32])
-let data = ArrayData::new(DataType::Int64, 10, 0, None, 0, vec![buffer], vec![]);
-let array = Float64Array::from(Arc::new(data));
-
-println!("{:?}", array.value(1));
-```
+As `arrow` exists today, it is fairly easy to misuse the code in modules named above, leading to undefined behavior.
 
 ## Building for WASM
 

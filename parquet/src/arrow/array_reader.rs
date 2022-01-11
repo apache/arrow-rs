@@ -67,6 +67,7 @@ use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{ConvertedType, Repetition, Type as PhysicalType};
 use crate::column::page::PageIterator;
 use crate::column::reader::ColumnReaderImpl;
+use crate::data_type::private::ScalarDataType;
 use crate::data_type::{
     BoolType, ByteArrayType, DataType, DoubleType, FixedLenByteArrayType, FloatType,
     Int32Type, Int64Type, Int96Type,
@@ -100,9 +101,39 @@ pub trait ArrayReader {
     fn get_rep_levels(&self) -> Option<&[i16]>;
 }
 
+/// Uses `record_reader` to read up to `batch_size` records from `pages`
+///
+/// Returns the number of records read, which can be less than batch_size if
+/// pages is exhausted.
+fn read_records<T: ScalarDataType>(
+    record_reader: &mut RecordReader<T>,
+    pages: &mut dyn PageIterator,
+    batch_size: usize,
+) -> Result<usize> {
+    let mut records_read = 0usize;
+    while records_read < batch_size {
+        let records_to_read = batch_size - records_read;
+
+        let records_read_once = record_reader.read_records(records_to_read)?;
+        records_read += records_read_once;
+
+        // Record reader exhausted
+        if records_read_once < records_to_read {
+            if let Some(page_reader) = pages.next() {
+                // Read from new page reader (i.e. column chunk)
+                record_reader.set_page_reader(page_reader?)?;
+            } else {
+                // Page reader also exhausted
+                break;
+            }
+        }
+    }
+    Ok(records_read)
+}
+
 /// A NullArrayReader reads Parquet columns stored as null int32s with an Arrow
 /// NullArray type.
-pub struct NullArrayReader<T: DataType> {
+pub struct NullArrayReader<T: ScalarDataType> {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
@@ -112,16 +143,10 @@ pub struct NullArrayReader<T: DataType> {
     _type_marker: PhantomData<T>,
 }
 
-impl<T: DataType> NullArrayReader<T> {
+impl<T: ScalarDataType> NullArrayReader<T> {
     /// Construct null array reader.
-    pub fn new(
-        mut pages: Box<dyn PageIterator>,
-        column_desc: ColumnDescPtr,
-    ) -> Result<Self> {
-        let mut record_reader = RecordReader::<T>::new(column_desc.clone());
-        if let Some(page_reader) = pages.next() {
-            record_reader.set_page_reader(page_reader?)?;
-        }
+    pub fn new(pages: Box<dyn PageIterator>, column_desc: ColumnDescPtr) -> Result<Self> {
+        let record_reader = RecordReader::<T>::new(column_desc.clone());
 
         Ok(Self {
             data_type: ArrowType::Null,
@@ -136,7 +161,7 @@ impl<T: DataType> NullArrayReader<T> {
 }
 
 /// Implementation of primitive array reader.
-impl<T: DataType> ArrayReader for NullArrayReader<T> {
+impl<T: ScalarDataType> ArrayReader for NullArrayReader<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -148,25 +173,8 @@ impl<T: DataType> ArrayReader for NullArrayReader<T> {
 
     /// Reads at most `batch_size` records into array.
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        let mut records_read = 0usize;
-        while records_read < batch_size {
-            let records_to_read = batch_size - records_read;
-
-            // NB can be 0 if at end of page
-            let records_read_once = self.record_reader.read_records(records_to_read)?;
-            records_read += records_read_once;
-
-            // Record reader exhausted
-            if records_read_once < records_to_read {
-                if let Some(page_reader) = self.pages.next() {
-                    // Read from new page reader
-                    self.record_reader.set_page_reader(page_reader?)?;
-                } else {
-                    // Page reader also exhausted
-                    break;
-                }
-            }
-        }
+        let records_read =
+            read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
 
         // convert to arrays
         let array = arrow::array::NullArray::new(records_read);
@@ -193,7 +201,7 @@ impl<T: DataType> ArrayReader for NullArrayReader<T> {
 
 /// Primitive array readers are leaves of array reader tree. They accept page iterator
 /// and read them into primitive arrays.
-pub struct PrimitiveArrayReader<T: DataType> {
+pub struct PrimitiveArrayReader<T: ScalarDataType> {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
@@ -202,10 +210,10 @@ pub struct PrimitiveArrayReader<T: DataType> {
     record_reader: RecordReader<T>,
 }
 
-impl<T: DataType> PrimitiveArrayReader<T> {
+impl<T: ScalarDataType> PrimitiveArrayReader<T> {
     /// Construct primitive array reader.
     pub fn new(
-        mut pages: Box<dyn PageIterator>,
+        pages: Box<dyn PageIterator>,
         column_desc: ColumnDescPtr,
         arrow_type: Option<ArrowType>,
     ) -> Result<Self> {
@@ -217,10 +225,7 @@ impl<T: DataType> PrimitiveArrayReader<T> {
                 .clone(),
         };
 
-        let mut record_reader = RecordReader::<T>::new(column_desc.clone());
-        if let Some(page_reader) = pages.next() {
-            record_reader.set_page_reader(page_reader?)?;
-        }
+        let record_reader = RecordReader::<T>::new(column_desc.clone());
 
         Ok(Self {
             data_type,
@@ -234,7 +239,7 @@ impl<T: DataType> PrimitiveArrayReader<T> {
 }
 
 /// Implementation of primitive array reader.
-impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
+impl<T: ScalarDataType> ArrayReader for PrimitiveArrayReader<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -246,25 +251,7 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
 
     /// Reads at most `batch_size` records into array.
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        let mut records_read = 0usize;
-        while records_read < batch_size {
-            let records_to_read = batch_size - records_read;
-
-            // NB can be 0 if at end of page
-            let records_read_once = self.record_reader.read_records(records_to_read)?;
-            records_read += records_read_once;
-
-            // Record reader exhausted
-            if records_read_once < records_to_read {
-                if let Some(page_reader) = self.pages.next() {
-                    // Read from new page reader
-                    self.record_reader.set_page_reader(page_reader?)?;
-                } else {
-                    // Page reader also exhausted
-                    break;
-                }
-            }
-        }
+        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
 
         let target_type = self.get_data_type().clone();
         let arrow_data_type = match T::get_physical_type() {
@@ -300,7 +287,7 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
             }
         };
 
-        // Convert to arrays by using the Parquet phyisical type.
+        // Convert to arrays by using the Parquet physical type.
         // The physical types are then cast to Arrow types if necessary
 
         let mut record_data = self.record_reader.consume_record_data()?;
@@ -1152,7 +1139,8 @@ impl ArrayReader for StructArrayReader {
         let mut def_level_data_buffer = MutableBuffer::new(buffer_size);
         def_level_data_buffer.resize(buffer_size, 0);
 
-        let def_level_data = def_level_data_buffer.typed_data_mut();
+        // Safety: the buffer is always treated as `u16` in the code below
+        let def_level_data = unsafe { def_level_data_buffer.typed_data_mut() };
 
         def_level_data
             .iter_mut()
@@ -2466,6 +2454,153 @@ mod tests {
         accu_len += array.len();
 
         // Try to read values_per_page values, however there are only values_per_page/2 values
+        let array = array_reader.next_batch(values_per_page).unwrap();
+        assert_eq!(array.len(), values_per_page / 2);
+        assert_eq!(
+            Some(&def_levels[accu_len..(accu_len + array.len())]),
+            array_reader.get_def_levels()
+        );
+        assert_eq!(
+            Some(&rep_levels[accu_len..(accu_len + array.len())]),
+            array_reader.get_rep_levels()
+        );
+    }
+
+    #[test]
+    fn test_complex_array_reader_dict_enc_string() {
+        use crate::encodings::encoding::{DictEncoder, Encoder};
+        use crate::util::memory::MemTracker;
+        // Construct column schema
+        let message_type = "
+        message test_schema {
+            REPEATED Group test_mid {
+                OPTIONAL BYTE_ARRAY leaf (UTF8);
+            }
+        }
+        ";
+        let num_pages = 2;
+        let values_per_page = 100;
+        let str_base = "Hello World";
+
+        let schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+        let column_desc = schema.column(0);
+        let max_def_level = column_desc.max_def_level();
+        let max_rep_level = column_desc.max_rep_level();
+
+        assert_eq!(max_def_level, 2);
+        assert_eq!(max_rep_level, 1);
+
+        let mut rng = thread_rng();
+        let mut pages: Vec<Vec<Page>> = Vec::new();
+
+        let mut rep_levels = Vec::with_capacity(num_pages * values_per_page);
+        let mut def_levels = Vec::with_capacity(num_pages * values_per_page);
+        let mut all_values = Vec::with_capacity(num_pages * values_per_page);
+
+        for i in 0..num_pages {
+            let mem_tracker = Arc::new(MemTracker::new());
+            let mut dict_encoder =
+                DictEncoder::<ByteArrayType>::new(column_desc.clone(), mem_tracker);
+            // add data page
+            let mut values = Vec::with_capacity(values_per_page);
+
+            for _ in 0..values_per_page {
+                let def_level = rng.gen_range(0..max_def_level + 1);
+                let rep_level = rng.gen_range(0..max_rep_level + 1);
+                if def_level == max_def_level {
+                    let len = rng.gen_range(1..str_base.len());
+                    let slice = &str_base[..len];
+                    values.push(ByteArray::from(slice));
+                    all_values.push(Some(slice.to_string()));
+                } else {
+                    all_values.push(None)
+                }
+                rep_levels.push(rep_level);
+                def_levels.push(def_level)
+            }
+
+            let range = i * values_per_page..(i + 1) * values_per_page;
+            let mut pb =
+                DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
+            pb.add_rep_levels(max_rep_level, &rep_levels.as_slice()[range.clone()]);
+            pb.add_def_levels(max_def_level, &def_levels.as_slice()[range]);
+            let _ = dict_encoder.put(&values);
+            let indices = dict_encoder
+                .write_indices()
+                .expect("write_indices() should be OK");
+            pb.add_indices(indices);
+            let data_page = pb.consume();
+            // for each page log num_values vs actual values in page
+            // println!("page num_values: {}, values.len(): {}", data_page.num_values(), values.len());
+            // add dictionary page
+            let dict = dict_encoder
+                .write_dict()
+                .expect("write_dict() should be OK");
+            let dict_page = Page::DictionaryPage {
+                buf: dict,
+                num_values: dict_encoder.num_entries() as u32,
+                encoding: Encoding::RLE_DICTIONARY,
+                is_sorted: false,
+            };
+            pages.push(vec![dict_page, data_page]);
+        }
+
+        let page_iterator = InMemoryPageIterator::new(schema, column_desc.clone(), pages);
+        let converter = Utf8Converter::new(Utf8ArrayConverter {});
+        let mut array_reader =
+            ComplexObjectArrayReader::<ByteArrayType, Utf8Converter>::new(
+                Box::new(page_iterator),
+                column_desc,
+                converter,
+                None,
+            )
+            .unwrap();
+
+        let mut accu_len: usize = 0;
+
+        // println!("---------- reading a batch of {} values ----------", values_per_page / 2);
+        let array = array_reader.next_batch(values_per_page / 2).unwrap();
+        assert_eq!(array.len(), values_per_page / 2);
+        assert_eq!(
+            Some(&def_levels[accu_len..(accu_len + array.len())]),
+            array_reader.get_def_levels()
+        );
+        assert_eq!(
+            Some(&rep_levels[accu_len..(accu_len + array.len())]),
+            array_reader.get_rep_levels()
+        );
+        accu_len += array.len();
+
+        // Read next values_per_page values, the first values_per_page/2 ones are from the first column chunk,
+        // and the last values_per_page/2 ones are from the second column chunk
+        // println!("---------- reading a batch of {} values ----------", values_per_page);
+        let array = array_reader.next_batch(values_per_page).unwrap();
+        assert_eq!(array.len(), values_per_page);
+        assert_eq!(
+            Some(&def_levels[accu_len..(accu_len + array.len())]),
+            array_reader.get_def_levels()
+        );
+        assert_eq!(
+            Some(&rep_levels[accu_len..(accu_len + array.len())]),
+            array_reader.get_rep_levels()
+        );
+        let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+        for i in 0..array.len() {
+            if array.is_valid(i) {
+                assert_eq!(
+                    all_values[i + accu_len].as_ref().unwrap().as_str(),
+                    strings.value(i)
+                )
+            } else {
+                assert_eq!(all_values[i + accu_len], None)
+            }
+        }
+        accu_len += array.len();
+
+        // Try to read values_per_page values, however there are only values_per_page/2 values
+        // println!("---------- reading a batch of {} values ----------", values_per_page);
         let array = array_reader.next_batch(values_per_page).unwrap();
         assert_eq!(array.len(), values_per_page / 2);
         assert_eq!(

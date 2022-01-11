@@ -639,8 +639,11 @@ pub const ENUM_MAX_INTERVAL_UNIT: i16 = 1;
     note = "Use associated constants instead. This will no longer be generated in 2021."
 )]
 #[allow(non_camel_case_types)]
-pub const ENUM_VALUES_INTERVAL_UNIT: [IntervalUnit; 2] =
-    [IntervalUnit::YEAR_MONTH, IntervalUnit::DAY_TIME];
+pub const ENUM_VALUES_INTERVAL_UNIT: [IntervalUnit; 3] = [
+    IntervalUnit::YEAR_MONTH,
+    IntervalUnit::DAY_TIME,
+    IntervalUnit::MONTH_DAY_NANO,
+];
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(transparent)]
@@ -649,15 +652,18 @@ pub struct IntervalUnit(pub i16);
 impl IntervalUnit {
     pub const YEAR_MONTH: Self = Self(0);
     pub const DAY_TIME: Self = Self(1);
+    pub const MONTH_DAY_NANO: Self = Self(2);
 
     pub const ENUM_MIN: i16 = 0;
-    pub const ENUM_MAX: i16 = 1;
-    pub const ENUM_VALUES: &'static [Self] = &[Self::YEAR_MONTH, Self::DAY_TIME];
+    pub const ENUM_MAX: i16 = 2;
+    pub const ENUM_VALUES: &'static [Self] =
+        &[Self::YEAR_MONTH, Self::DAY_TIME, Self::MONTH_DAY_NANO];
     /// Returns the variant's name or "" if unknown.
     pub fn variant_name(self) -> Option<&'static str> {
         match self {
             Self::YEAR_MONTH => Some("YEAR_MONTH"),
             Self::DAY_TIME => Some("DAY_TIME"),
+            Self::MONTH_DAY_NANO => Some("MONTH_DAY_NANO"),
             _ => None,
         }
     }

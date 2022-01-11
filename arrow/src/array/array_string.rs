@@ -187,8 +187,13 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
             offsets.push(length_so_far);
             values.extend_from_slice(s.as_bytes());
         }
+
+        // iterator size hint may not be correct so compute the actual number of offsets
+        assert!(!offsets.is_empty()); // wrote at least one
+        let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
+
         let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
-            .len(data_len)
+            .len(actual_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into());
         let array_data = unsafe { array_data.build_unchecked() };
@@ -571,5 +576,71 @@ mod tests {
             .data()
             .validate_full()
             .expect("All null array has valid array data");
+    }
+
+    #[cfg(feature = "test_utils")]
+    #[test]
+    fn bad_size_collect_string() {
+        use crate::util::test_util::BadIterator;
+        let data = vec![Some("foo"), None, Some("bar")];
+        let expected: StringArray = data.clone().into_iter().collect();
+
+        // Iterator reports too many items
+        let arr: StringArray = BadIterator::new(3, 10, data.clone()).collect();
+        assert_eq!(expected, arr);
+
+        // Iterator reports too few items
+        let arr: StringArray = BadIterator::new(3, 1, data.clone()).collect();
+        assert_eq!(expected, arr);
+    }
+
+    #[cfg(feature = "test_utils")]
+    #[test]
+    fn bad_size_collect_large_string() {
+        use crate::util::test_util::BadIterator;
+        let data = vec![Some("foo"), None, Some("bar")];
+        let expected: LargeStringArray = data.clone().into_iter().collect();
+
+        // Iterator reports too many items
+        let arr: LargeStringArray = BadIterator::new(3, 10, data.clone()).collect();
+        assert_eq!(expected, arr);
+
+        // Iterator reports too few items
+        let arr: LargeStringArray = BadIterator::new(3, 1, data.clone()).collect();
+        assert_eq!(expected, arr);
+    }
+
+    #[cfg(feature = "test_utils")]
+    #[test]
+    fn bad_size_iter_values_string() {
+        use crate::util::test_util::BadIterator;
+        let data = vec!["foo", "bar", "baz"];
+        let expected: StringArray = data.clone().into_iter().map(Some).collect();
+
+        // Iterator reports too many items
+        let arr = StringArray::from_iter_values(BadIterator::new(3, 10, data.clone()));
+        assert_eq!(expected, arr);
+
+        // Iterator reports too few items
+        let arr = StringArray::from_iter_values(BadIterator::new(3, 1, data.clone()));
+        assert_eq!(expected, arr);
+    }
+
+    #[cfg(feature = "test_utils")]
+    #[test]
+    fn bad_size_iter_values_large_string() {
+        use crate::util::test_util::BadIterator;
+        let data = vec!["foo", "bar", "baz"];
+        let expected: LargeStringArray = data.clone().into_iter().map(Some).collect();
+
+        // Iterator reports too many items
+        let arr =
+            LargeStringArray::from_iter_values(BadIterator::new(3, 10, data.clone()));
+        assert_eq!(expected, arr);
+
+        // Iterator reports too few items
+        let arr =
+            LargeStringArray::from_iter_values(BadIterator::new(3, 1, data.clone()));
+        assert_eq!(expected, arr);
     }
 }

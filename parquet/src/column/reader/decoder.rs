@@ -20,12 +20,13 @@ use std::ops::Range;
 
 use crate::basic::Encoding;
 use crate::data_type::DataType;
-use crate::decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder};
-use crate::encodings::rle::RleDecoder;
+use crate::encodings::{
+    decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder},
+    rle::RleDecoder,
+};
 use crate::errors::{ParquetError, Result};
-use crate::memory::ByteBufferPtr;
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::BitReader;
+use crate::util::{bit_util::BitReader, memory::ByteBufferPtr};
 
 /// A slice of levels buffer data that is written to by a [`ColumnLevelDecoder`]
 pub trait LevelsBufferSlice {
