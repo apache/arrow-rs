@@ -19,7 +19,7 @@ use std::cmp::{max, min};
 use std::mem::{replace, size_of};
 
 use crate::column::{page::PageReader, reader::ColumnReaderImpl};
-use crate::data_type::DataType;
+use crate::data_type::private::ScalarDataType;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::BooleanBufferBuilder;
@@ -29,7 +29,7 @@ use arrow::buffer::{Buffer, MutableBuffer};
 const MIN_BATCH_SIZE: usize = 1024;
 
 /// A `RecordReader` is a stateful column reader that delimits semantic records.
-pub struct RecordReader<T: DataType> {
+pub struct RecordReader<T: ScalarDataType> {
     column_desc: ColumnDescPtr,
 
     records: MutableBuffer,
@@ -47,7 +47,7 @@ pub struct RecordReader<T: DataType> {
     values_written: usize,
 }
 
-impl<T: DataType> RecordReader<T> {
+impl<T: ScalarDataType> RecordReader<T> {
     pub fn new(column_schema: ColumnDescPtr) -> Self {
         let (def_levels, null_map) = if column_schema.max_def_level() > 0 {
             (

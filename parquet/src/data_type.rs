@@ -572,6 +572,7 @@ impl AsBytes for str {
 }
 
 pub(crate) mod private {
+    use super::*;
     use crate::encodings::decoding::PlainDecoderDetails;
     use crate::util::bit_util::{round_upto_power_of_2, BitReader, BitWriter};
     use crate::util::memory::ByteBufferPtr;
@@ -1032,6 +1033,21 @@ pub(crate) mod private {
             self
         }
     }
+
+    /// A marker trait for [`DataType`] with a [scalar] physical type
+    ///
+    /// This means that a `[Self::T::default()]` of length `len` can be safely created from a
+    /// zero-initialized `[u8]` with length `len * Self::get_type_size()` and
+    /// alignment of `Self::get_type_size()`
+    ///
+    /// [scalar]: https://doc.rust-lang.org/book/ch03-02-data-types.html#scalar-types
+    ///
+    pub trait ScalarDataType: DataType {}
+    impl ScalarDataType for BoolType {}
+    impl ScalarDataType for Int32Type {}
+    impl ScalarDataType for Int64Type {}
+    impl ScalarDataType for FloatType {}
+    impl ScalarDataType for DoubleType {}
 }
 
 /// Contains the Parquet physical type information as well as the Rust primitive type
