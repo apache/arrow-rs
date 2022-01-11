@@ -97,7 +97,7 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits 
         let bytes = bitmap.bits.as_slice();
         Box::new(move |mutable, start, len| {
             utils::resize_for_bits(&mut mutable.null_buffer, mutable.len + len);
-            mutable.null_count += utils::set_bits(
+            mutable.null_count += crate::util::bit_mask::set_bits(
                 mutable.null_buffer.as_slice_mut(),
                 bytes,
                 mutable.len,

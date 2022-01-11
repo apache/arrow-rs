@@ -399,60 +399,6 @@ impl BooleanBufferBuilder {
         }
     }
 
-    /// Append `count` bits from `to_set`
-    ///
-    /// `to_set` is a slice of bits packed LSB-first into `[u8]`
-    ///
-    /// # Panics
-    ///
-    /// Panics if `to_set` does not contain `ceil(count / 8)` bytes
-    #[inline]
-    pub fn append_packed(&mut self, count: usize, to_set: &[u8]) {
-        assert_eq!((count + 7) >> 3, to_set.len());
-
-        let new_len = self.len + count;
-        let new_buf_len = (new_len + 7) >> 3;
-        self.buffer.reserve(new_buf_len - self.buffer.len());
-
-        let whole_bytes = count >> 3;
-        let overrun = count & 7;
-
-        let skew = self.len & 7;
-        if skew == 0 {
-            self.buffer.extend_from_slice(&to_set[..whole_bytes]);
-            if overrun > 0 {
-                let masked = to_set[whole_bytes] & ((1 << overrun) - 1);
-                self.buffer.push(masked)
-            }
-
-            self.len = new_len;
-            debug_assert_eq!(self.buffer.len(), new_buf_len);
-            return;
-        }
-
-        for to_set_byte in &to_set[..whole_bytes] {
-            let low = *to_set_byte << skew;
-            let high = *to_set_byte >> (8 - skew);
-
-            *self.buffer.last_mut().unwrap() |= low;
-            self.buffer.push(high);
-        }
-
-        if overrun > 0 {
-            let masked = to_set[whole_bytes] & ((1 << overrun) - 1);
-            let low = masked << skew;
-            *self.buffer.last_mut().unwrap() |= low;
-
-            if overrun > 8 - skew {
-                let high = masked >> (8 - skew);
-                self.buffer.push(high)
-            }
-        }
-
-        self.len = new_len;
-        debug_assert_eq!(self.buffer.len(), new_buf_len);
-    }
-
     /// Append `range` bits from `to_set`
     ///
     /// `to_set` is a slice of bits packed LSB-first into `[u8]`
@@ -461,31 +407,16 @@ impl BooleanBufferBuilder {
     ///
     /// Panics if `to_set` does not contain `ceil(range.end / 8)` bytes
     pub fn append_packed_range(&mut self, range: Range<usize>, to_set: &[u8]) {
-        let count = range.end - range.start;
-        if count == 0 {
-            return;
-        }
-
-        let start_byte = range.start >> 3;
-        let end_byte = (range.end + 7) >> 3;
-        let skew = range.start & 7;
-
-        // `append_packed` requires the provided `to_set` to be byte aligned, therefore
-        // if the range being copied is not byte aligned we must first append
-        // the leading bits to reach a byte boundary
-        if skew == 0 {
-            // No skew can simply append bytes directly
-            self.append_packed(count, &to_set[start_byte..end_byte])
-        } else if start_byte + 1 == end_byte {
-            // Append bits from single byte
-            self.append_packed(count, &[to_set[start_byte] >> skew])
-        } else {
-            // Append trailing bits from first byte to reach byte boundary, then append
-            // bits from the remaining byte-aligned mask
-            let offset = 8 - skew;
-            self.append_packed(offset, &[to_set[start_byte] >> skew]);
-            self.append_packed(count - offset, &to_set[(start_byte + 1)..end_byte]);
-        }
+        let offset_write = self.len;
+        let len = range.end - range.start;
+        self.advance(len);
+        crate::util::bit_mask::set_bits(
+            self.buffer.as_slice_mut(),
+            to_set,
+            offset_write,
+            range.start,
+            len,
+        );
     }
 
     #[inline]
@@ -2926,56 +2857,12 @@ mod tests {
     }
 
     #[test]
-    fn test_bit_append_packed() {
-        let mut buffer = BooleanBufferBuilder::new(0);
-
-        buffer.append_packed(8, &[0b11111111]);
-        assert_eq!(buffer.buffer.as_slice(), &[0b11111111]);
-        assert_eq!(buffer.len(), 8);
-
-        buffer.append_packed(3, &[0b01010010]);
-        assert_eq!(buffer.buffer.as_slice(), &[0b11111111, 0b00000010]);
-        assert_eq!(buffer.len(), 11);
-
-        buffer.append_packed(5, &[0b00010100]);
-        assert_eq!(buffer.buffer.as_slice(), &[0b11111111, 0b10100010]);
-        assert_eq!(buffer.len(), 16);
-
-        buffer.append_packed(2, &[0b11110010]);
-        assert_eq!(
-            buffer.buffer.as_slice(),
-            &[0b11111111, 0b10100010, 0b00000010]
-        );
-        assert_eq!(buffer.len(), 18);
-
-        buffer.append_packed(15, &[0b11011010, 0b01010101]);
-        assert_eq!(
-            buffer.buffer.as_slice(),
-            &[0b11111111, 0b10100010, 0b01101010, 0b01010111, 0b00000001]
-        );
-        assert_eq!(buffer.len(), 33);
-    }
-
-    #[test]
     fn test_bool_buffer_fuzz() {
         use rand::prelude::*;
 
         let mut buffer = BooleanBufferBuilder::new(12);
         let mut all_bools = vec![];
         let mut rng = rand::thread_rng();
-
-        for _ in 0..100 {
-            let mask_length = (rng.next_u32() % 50) as usize;
-            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.next_u32() & 1 == 0))
-                .take(mask_length)
-                .collect();
-
-            let mut compacted = BooleanBufferBuilder::new(mask_length);
-            compacted.append_slice(&bools);
-
-            buffer.append_packed(mask_length, compacted.buffer.as_slice());
-            all_bools.extend_from_slice(&bools);
-        }
 
         let src_len = 32;
         let (src, compacted_src) = {

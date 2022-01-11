@@ -16,11 +16,8 @@
 // under the License.
 
 use crate::array::ArrayData;
-
-use super::{
-    Extend, _MutableArrayData,
-    utils::{resize_for_bits, set_bits},
-};
+use crate::util::bit_mask::set_bits;
+use super::{Extend, _MutableArrayData, utils::resize_for_bits};
 
 pub(super) fn build_extend(array: &ArrayData) -> Extend {
     let values = array.buffers()[0].as_slice();
