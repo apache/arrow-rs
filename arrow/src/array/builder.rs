@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem;
+use std::ops::Range;
 use std::sync::Arc;
 
 use crate::array::*;
@@ -396,6 +397,26 @@ impl BooleanBufferBuilder {
                 unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i) }
             }
         }
+    }
+
+    /// Append `range` bits from `to_set`
+    ///
+    /// `to_set` is a slice of bits packed LSB-first into `[u8]`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `to_set` does not contain `ceil(range.end / 8)` bytes
+    pub fn append_packed_range(&mut self, range: Range<usize>, to_set: &[u8]) {
+        let offset_write = self.len;
+        let len = range.end - range.start;
+        self.advance(len);
+        crate::util::bit_mask::set_bits(
+            self.buffer.as_slice_mut(),
+            to_set,
+            offset_write,
+            range.start,
+            len,
+        );
     }
 
     #[inline]
@@ -2841,6 +2862,42 @@ mod tests {
         buffer.append_n(8, true);
         buffer.append_n(4, false);
         assert!(buffer.get_bit(11));
+    }
+
+    #[test]
+    fn test_bool_buffer_fuzz() {
+        use rand::prelude::*;
+
+        let mut buffer = BooleanBufferBuilder::new(12);
+        let mut all_bools = vec![];
+        let mut rng = rand::thread_rng();
+
+        let src_len = 32;
+        let (src, compacted_src) = {
+            let src: Vec<_> = std::iter::from_fn(|| Some(rng.next_u32() & 1 == 0))
+                .take(src_len)
+                .collect();
+
+            let mut compacted_src = BooleanBufferBuilder::new(src_len);
+            compacted_src.append_slice(&src);
+            (src, compacted_src.finish())
+        };
+
+        for _ in 0..100 {
+            let a = rng.next_u32() as usize % src_len;
+            let b = rng.next_u32() as usize % src_len;
+
+            let start = a.min(b);
+            let end = a.max(b);
+
+            buffer.append_packed_range(start..end, compacted_src.as_slice());
+            all_bools.extend_from_slice(&src[start..end]);
+        }
+
+        let mut compacted = BooleanBufferBuilder::new(all_bools.len());
+        compacted.append_slice(&all_bools);
+
+        assert_eq!(buffer.finish(), compacted.finish())
     }
 
     #[test]
