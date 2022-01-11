@@ -140,7 +140,8 @@ where
         .iter()
         .zip(right_chunks.iter())
         .map(|(left, right)| op(left, right));
-    // Soundness: `BitChunks` is a trusted len iterator
+    // Soundness: `BitChunks` is a `BitChunks` iterator which
+    // correctly reports its upper bound
     let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
 
     let remainder_bytes = ceil(left_chunks.remainder_len(), 8);

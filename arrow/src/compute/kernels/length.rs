@@ -48,7 +48,7 @@ where
     //  Benefit
     //      ~60% speedup
     //  Soundness
-    //      `values` is an iterator with a known size.
+    //      `values` come from a slice iterator with a known size.
     let buffer = unsafe { Buffer::from_trusted_len_iter(lengths) };
 
     let null_bit_buffer = array
