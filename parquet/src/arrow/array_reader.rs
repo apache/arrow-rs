@@ -67,6 +67,7 @@ use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::{ConvertedType, Repetition, Type as PhysicalType};
 use crate::column::page::PageIterator;
 use crate::column::reader::ColumnReaderImpl;
+use crate::data_type::private::ScalarDataType;
 use crate::data_type::{
     BoolType, ByteArrayType, DataType, DoubleType, FixedLenByteArrayType, FloatType,
     Int32Type, Int64Type, Int96Type,
@@ -104,7 +105,7 @@ pub trait ArrayReader {
 ///
 /// Returns the number of records read, which can be less than batch_size if
 /// pages is exhausted.
-fn read_records<T: DataType>(
+fn read_records<T: ScalarDataType>(
     record_reader: &mut RecordReader<T>,
     pages: &mut dyn PageIterator,
     batch_size: usize,
@@ -132,7 +133,7 @@ fn read_records<T: DataType>(
 
 /// A NullArrayReader reads Parquet columns stored as null int32s with an Arrow
 /// NullArray type.
-pub struct NullArrayReader<T: DataType> {
+pub struct NullArrayReader<T: ScalarDataType> {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
@@ -142,7 +143,7 @@ pub struct NullArrayReader<T: DataType> {
     _type_marker: PhantomData<T>,
 }
 
-impl<T: DataType> NullArrayReader<T> {
+impl<T: ScalarDataType> NullArrayReader<T> {
     /// Construct null array reader.
     pub fn new(pages: Box<dyn PageIterator>, column_desc: ColumnDescPtr) -> Result<Self> {
         let record_reader = RecordReader::<T>::new(column_desc.clone());
@@ -160,7 +161,7 @@ impl<T: DataType> NullArrayReader<T> {
 }
 
 /// Implementation of primitive array reader.
-impl<T: DataType> ArrayReader for NullArrayReader<T> {
+impl<T: ScalarDataType> ArrayReader for NullArrayReader<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -200,7 +201,7 @@ impl<T: DataType> ArrayReader for NullArrayReader<T> {
 
 /// Primitive array readers are leaves of array reader tree. They accept page iterator
 /// and read them into primitive arrays.
-pub struct PrimitiveArrayReader<T: DataType> {
+pub struct PrimitiveArrayReader<T: ScalarDataType> {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
@@ -210,7 +211,7 @@ pub struct PrimitiveArrayReader<T: DataType> {
     _type_marker: PhantomData<T>,
 }
 
-impl<T: DataType> PrimitiveArrayReader<T> {
+impl<T: ScalarDataType> PrimitiveArrayReader<T> {
     /// Construct primitive array reader.
     pub fn new(
         pages: Box<dyn PageIterator>,
@@ -240,7 +241,7 @@ impl<T: DataType> PrimitiveArrayReader<T> {
 }
 
 /// Implementation of primitive array reader.
-impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
+impl<T: ScalarDataType> ArrayReader for PrimitiveArrayReader<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -288,7 +289,7 @@ impl<T: DataType> ArrayReader for PrimitiveArrayReader<T> {
             }
         };
 
-        // Convert to arrays by using the Parquet phyisical type.
+        // Convert to arrays by using the Parquet physical type.
         // The physical types are then cast to Arrow types if necessary
 
         let mut record_data = self.record_reader.consume_record_data()?;
