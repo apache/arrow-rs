@@ -42,12 +42,16 @@ use std::borrow::BorrowMut;
 #[cfg(feature = "simd")]
 use std::slice::{ChunksExact, ChunksExactMut};
 
+/// Creates a new PrimitiveArray by applying `simd_op` to the input `array`.
+/// If the length of the array is not multiple of the number of vector lanes
+/// then the remainder of the array will be calculated using `scalar_op`.
+/// Any operation on a `NULL` value will result in a `NULL` value in the output.
 #[cfg(feature = "simd")]
 fn simd_unary_math_op<T, SIMD_OP, SCALAR_OP>(
     array: &PrimitiveArray<T>,
     simd_op: SIMD_OP,
     scalar_op: SCALAR_OP,
-) -> Result<PrimitiveArray<T>>
+) -> PrimitiveArray<T>
 where
     T: ArrowNumericType,
     SIMD_OP: Fn(T::Simd) -> T::Simd,
@@ -94,7 +98,7 @@ where
             vec![],
         )
     };
-    Ok(PrimitiveArray::<T>::from(data))
+    PrimitiveArray::<T>::from(data)
 }
 
 /// Helper function to perform math lambda function on values from two arrays. If either
@@ -155,7 +159,7 @@ where
 ///
 /// This function errors if:
 /// * the arrays have different lengths
-/// * a value in `right` has a value that is both valid and zero
+/// * there is an element where both left and right values are valid and the right value is `0`
 fn math_checked_divide_op<T, F>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
@@ -223,7 +227,14 @@ where
     Ok(PrimitiveArray::<T>::from(data))
 }
 
-/// SIMD vectorized version of `math_op` above.
+/// Creates a new PrimitiveArray by applying `simd_op` to the `left` and `right` input arrays.
+/// If the length of the arrays is not multiple of the number of vector lanes
+/// then the remainder of the array will be calculated using `scalar_op`.
+/// Any operation on a `NULL` value will result in a `NULL` value in the output.
+///
+/// # Errors
+///
+/// This function errors if the arrays have different lengths
 #[cfg(feature = "simd")]
 fn simd_math_op<T, SIMD_OP, SCALAR_OP>(
     left: &PrimitiveArray<T>,
@@ -289,9 +300,12 @@ where
     Ok(PrimitiveArray::<T>::from(data))
 }
 
-/// SIMD vectorized implementation of `left % right`.
-/// If any of the lanes marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero`
-/// is returned. The contents of no-valid lanes are undefined.
+/// Calculates the modulus operation `left % right` on two SIMD inputs.
+/// The lower-most bits of `valid_mask` specify which vector lanes are considered as valid.
+///
+/// # Errors
+///
+/// This function returns a [`ArrowError::DivideByZero`] if a valid element in `right` is `0`
 #[cfg(feature = "simd")]
 #[inline]
 fn simd_checked_modulus<T: ArrowNumericType>(
@@ -323,9 +337,12 @@ where
     }
 }
 
-/// SIMD vectorized implementation of `left / right`.
-/// If any of the lanes marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero`
-/// is returned. The contents of no-valid lanes are undefined.
+/// Calculates the division operation `left / right` on two SIMD inputs.
+/// The lower-most bits of `valid_mask` specify which vector lanes are considered as valid.
+///
+/// # Errors
+///
+/// This function returns a [`ArrowError::DivideByZero`] if a valid element in `right` is `0`
 #[cfg(feature = "simd")]
 #[inline]
 fn simd_checked_divide<T: ArrowNumericType>(
@@ -357,8 +374,13 @@ where
     }
 }
 
-/// Scalar implementation of `left % right` for the remainder elements after complete chunks have been processed using SIMD.
-/// If any of the values marked as valid in `valid_mask` are `0` then an `ArrowError::DivideByZero` is returned.
+/// Applies `op` on the remainder elements of two input chunks and writes the result into
+/// the remainder elements of `result_chunks`.
+/// The lower-most bits of `valid_mask` specify which elements are considered as valid.
+///
+/// # Errors
+///
+/// This function returns a [`ArrowError::DivideByZero`] if a valid element in `right` is `0`
 #[cfg(feature = "simd")]
 #[inline]
 fn simd_checked_divide_op_remainder<T, F>(
@@ -396,10 +418,16 @@ where
     Ok(())
 }
 
-/// SIMD vectorized version of `divide`.
+/// Creates a new PrimitiveArray by applying `simd_op` to the `left` and `right` input array.
+/// If the length of the arrays is not multiple of the number of vector lanes
+/// then the remainder of the array will be calculated using `scalar_op`.
+/// Any operation on a `NULL` value will result in a `NULL` value in the output.
 ///
-/// The divide kernels need their own implementation as there is a need to handle situations
-/// where a divide by `0` occurs.  This is complicated by `NULL` slots and padding.
+/// # Errors
+///
+/// This function errors if:
+/// * the arrays have different lengths
+/// * there is an element where both left and right values are valid and the right value is `0`
 #[cfg(feature = "simd")]
 fn simd_checked_divide_op<T, SIMD_OP, SCALAR_OP>(
     left: &PrimitiveArray<T>,
@@ -557,7 +585,11 @@ where
     #[cfg(feature = "simd")]
     {
         let scalar_vector = T::init(scalar);
-        return simd_unary_math_op(array, |x| x + scalar_vector, |x| x + scalar);
+        return Ok(simd_unary_math_op(
+            array,
+            |x| x + scalar_vector,
+            |x| x + scalar,
+        ));
     }
     #[cfg(not(feature = "simd"))]
     return Ok(unary(array, |value| value + scalar));
@@ -588,7 +620,7 @@ where
     #[cfg(feature = "simd")]
     {
         let zero_vector = T::init(T::default_value());
-        return simd_unary_math_op(array, |x| zero_vector - x, |x| -x);
+        return Ok(simd_unary_math_op(array, |x| zero_vector - x, |x| -x));
     }
     #[cfg(not(feature = "simd"))]
     return Ok(unary(array, |x| -x));
@@ -606,7 +638,11 @@ where
     #[cfg(feature = "simd")]
     {
         let raise_vector = T::init(raise);
-        return simd_unary_math_op(array, |x| T::pow(x, raise_vector), |x| x.pow(raise));
+        return Ok(simd_unary_math_op(
+            array,
+            |x| T::pow(x, raise_vector),
+            |x| x.pow(raise),
+        ));
     }
     #[cfg(not(feature = "simd"))]
     return Ok(unary(array, |x| x.pow(raise)));
@@ -682,7 +718,11 @@ where
     #[cfg(feature = "simd")]
     {
         let modulo_vector = T::init(modulo);
-        return simd_unary_math_op(&array, |a| a % modulo_vector, |a| a % modulo);
+        return Ok(simd_unary_math_op(
+            &array,
+            |a| a % modulo_vector,
+            |a| a % modulo,
+        ));
     }
     #[cfg(not(feature = "simd"))]
     return Ok(unary(array, |a| a % modulo));
@@ -705,7 +745,11 @@ where
     #[cfg(feature = "simd")]
     {
         let divisor_vector = T::init(divisor);
-        return simd_unary_math_op(&array, |a| a / divisor_vector, |a| a / divisor);
+        return Ok(simd_unary_math_op(
+            &array,
+            |a| a / divisor_vector,
+            |a| a / divisor,
+        ));
     }
     #[cfg(not(feature = "simd"))]
     return Ok(unary(array, |a| a / divisor));
