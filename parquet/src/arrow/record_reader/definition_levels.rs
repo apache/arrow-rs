@@ -349,8 +349,10 @@ pub fn count_set_bits(bytes: &[u8], range: Range<usize>) -> usize {
 }
 
 fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
-    let mut byte_idx = bytes.len() - 1;
-    let mut in_progress = bytes.get(byte_idx).cloned().unwrap_or(0);
+    let (mut byte_idx, mut in_progress) = match bytes.len() {
+        0 => (0, 0),
+        len => (len - 1, bytes[len - 1]),
+    };
 
     std::iter::from_fn(move || loop {
         if in_progress != 0 {
@@ -377,7 +379,7 @@ mod tests {
     #[test]
     fn test_bit_fns() {
         let mut rng = thread_rng();
-        let mask_length = (rng.next_u32() % 50) as usize;
+        let mask_length = rng.gen_range(1..20);
         let bools: Vec<_> = std::iter::from_fn(|| Some(rng.next_u32() & 1 == 0))
             .take(mask_length)
             .collect();
@@ -394,6 +396,8 @@ mod tests {
             .collect();
         assert_eq!(actual, expected);
 
+        assert_eq!(iter_set_bits_rev(&[]).count(), 0);
+        assert_eq!(count_set_bits(&[], 0..0), 0);
         assert_eq!(count_set_bits(&[0xFF], 1..1), 0);
 
         for _ in 0..20 {
