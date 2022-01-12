@@ -83,6 +83,22 @@ where
     /// If `null_mask_only` is true only the null bitmask will be generated and
     /// [`Self::consume_def_levels`] and [`Self::consume_rep_levels`] will always return `None`
     ///
+    /// It is insufficient to solely check that that the max definition level is 1 as we
+    /// need there to be no nullable parent array that will required decoded definition levels
+    ///
+    /// In particular consider the case of:
+    ///
+    /// ```ignore
+    /// message nested {
+    ///   OPTIONAL Group group {
+    ///     REQUIRED INT32 leaf;
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// The maximum definition level of leaf is 1, however, we still need to decode the
+    /// definition levels so that the parent group can be constructed correctly
+    ///
     pub(crate) fn new_with_options(desc: ColumnDescPtr, null_mask_only: bool) -> Self {
         let def_levels = (desc.max_def_level() > 0)
             .then(|| DefinitionLevelBuffer::new(&desc, null_mask_only));

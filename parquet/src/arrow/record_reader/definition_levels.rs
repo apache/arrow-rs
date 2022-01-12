@@ -41,6 +41,10 @@ enum BufferInner {
         max_level: i16,
     },
     /// Only compute null bitmask - requires max level to be 1
+    ///
+    /// This is an optimisation for the common case of a nullable scalar column, as decoding
+    /// the definition level data is only required when decoding nested structures
+    ///
     Mask { nulls: BooleanBufferBuilder },
 }
 
@@ -228,6 +232,20 @@ impl ColumnLevelDecoder for DefinitionLevelDecoder {
     }
 }
 
+/// An optimized decoder for decoding [RLE] and [BIT_PACKED] data with a bit width of 1
+/// directly into a bitmask
+///
+/// This is significantly faster than decoding the data into `[i16]` and then computing
+/// a bitmask from this, as not only can it skip this buffer allocation and construction,
+/// but it can exploit properties of the encoded data to reduce work further
+///
+/// In particular:
+///
+/// * Packed runs are already bitmask encoded and can simply be appended
+/// * Runs of 1 or 0 bits can be efficiently appended with byte (or larger) operations
+///
+/// [RLE]: https://github.com/apache/parquet-format/blob/master/Encodings.md#run-length-encoding--bit-packing-hybrid-rle--3
+/// [BIT_PACKED]: https://github.com/apache/parquet-format/blob/master/Encodings.md#bit-packed-deprecated-bit_packed--4
 struct PackedDecoder {
     data: ByteBufferPtr,
     data_offset: usize,
