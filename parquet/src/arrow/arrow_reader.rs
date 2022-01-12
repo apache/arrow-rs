@@ -423,13 +423,13 @@ mod tests {
             RandUtf8Gen,
         >(2, ConvertedType::NONE, None, &converter, encodings);
 
-        let converter = Utf8ArrayConverter {};
+        let utf8_converter = Utf8ArrayConverter {};
         run_single_column_reader_tests::<
             ByteArrayType,
             StringArray,
             Utf8ArrayConverter,
             RandUtf8Gen,
-        >(2, ConvertedType::UTF8, None, &converter, encodings);
+        >(2, ConvertedType::UTF8, None, &utf8_converter, encodings);
 
         run_single_column_reader_tests::<
             ByteArrayType,
@@ -440,27 +440,11 @@ mod tests {
             2,
             ConvertedType::UTF8,
             Some(ArrowDataType::Utf8),
-            &converter,
+            &utf8_converter,
             encodings,
         );
 
-        run_single_column_reader_tests::<
-            ByteArrayType,
-            StringArray,
-            Utf8ArrayConverter,
-            RandUtf8Gen,
-        >(
-            2,
-            ConvertedType::UTF8,
-            Some(ArrowDataType::Dictionary(
-                Box::new(ArrowDataType::Int32),
-                Box::new(ArrowDataType::Utf8),
-            )),
-            &converter,
-            encodings,
-        );
-
-        let converter = LargeUtf8ArrayConverter {};
+        let large_utf8_converter = LargeUtf8ArrayConverter {};
         run_single_column_reader_tests::<
             ByteArrayType,
             LargeStringArray,
@@ -470,9 +454,78 @@ mod tests {
             2,
             ConvertedType::UTF8,
             Some(ArrowDataType::LargeUtf8),
-            &converter,
+            &large_utf8_converter,
             encodings,
         );
+
+        let small_key_types = [ArrowDataType::Int8, ArrowDataType::UInt8];
+        for key in &small_key_types {
+            for encoding in encodings {
+                let mut opts = TestOptions::new(2, 20, 15).with_null_percent(50);
+                opts.encoding = *encoding;
+
+                // Cannot run full test suite as keys overflow, run small test instead
+                single_column_reader_test::<
+                    ByteArrayType,
+                    StringArray,
+                    Utf8ArrayConverter,
+                    RandUtf8Gen,
+                >(
+                    opts,
+                    2,
+                    ConvertedType::UTF8,
+                    Some(ArrowDataType::Dictionary(
+                        Box::new(key.clone()),
+                        Box::new(ArrowDataType::Utf8),
+                    )),
+                    &utf8_converter,
+                );
+            }
+        }
+
+        let key_types = [
+            ArrowDataType::Int16,
+            ArrowDataType::UInt16,
+            ArrowDataType::Int32,
+            ArrowDataType::UInt32,
+            ArrowDataType::Int64,
+            ArrowDataType::UInt64,
+        ];
+
+        for key in &key_types {
+            run_single_column_reader_tests::<
+                ByteArrayType,
+                StringArray,
+                Utf8ArrayConverter,
+                RandUtf8Gen,
+            >(
+                2,
+                ConvertedType::UTF8,
+                Some(ArrowDataType::Dictionary(
+                    Box::new(key.clone()),
+                    Box::new(ArrowDataType::Utf8),
+                )),
+                &utf8_converter,
+                encodings,
+            );
+
+            // https://github.com/apache/arrow-rs/issues/1179
+            // run_single_column_reader_tests::<
+            //     ByteArrayType,
+            //     LargeStringArray,
+            //     LargeUtf8ArrayConverter,
+            //     RandUtf8Gen,
+            // >(
+            //     2,
+            //     ConvertedType::UTF8,
+            //     Some(ArrowDataType::Dictionary(
+            //         Box::new(key.clone()),
+            //         Box::new(ArrowDataType::LargeUtf8),
+            //     )),
+            //     &large_utf8_converter,
+            //     encodings
+            // );
+        }
     }
 
     #[test]
@@ -792,7 +845,7 @@ mod tests {
                     }
                 }
                 assert_eq!(a.data_type(), b.data_type());
-                assert_eq!(a.data(), b.data());
+                assert_eq!(a.data(), b.data(), "{:#?} vs {:#?}", a.data(), b.data());
 
                 total_read = end;
             } else {

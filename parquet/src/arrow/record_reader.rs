@@ -268,7 +268,7 @@ where
                 self.values_written,
                 values_read,
                 levels_read,
-                def_levels.rev_valid_positions_iter(),
+                def_levels.nulls().as_slice(),
             );
         }
 
