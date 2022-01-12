@@ -249,10 +249,11 @@ mod tests {
     use crate::file::properties::{WriterProperties, WriterVersion};
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::writer::{FileWriter, SerializedFileWriter};
+    use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
-    use crate::util::test_common::{get_temp_filename, RandGen};
+    use crate::util::test_common::{get_temp_file, get_temp_filename, RandGen};
     use arrow::array::*;
-    use arrow::datatypes::DataType as ArrowDataType;
+    use arrow::datatypes::{DataType as ArrowDataType, Field};
     use arrow::record_batch::RecordBatchReader;
     use rand::{thread_rng, RngCore};
     use serde_json::json;
@@ -867,5 +868,55 @@ mod tests {
         for batch in record_batch_reader {
             batch.unwrap();
         }
+    }
+
+    #[test]
+    fn test_nested_nullability() {
+        let message_type = "message nested {
+          OPTIONAL Group group {
+            REQUIRED INT32 leaf;
+          }
+        }";
+
+        let file = get_temp_file("nested_nullability.parquet", &[]);
+        let schema = Arc::new(parse_message_type(message_type).unwrap());
+
+        {
+            // Write using low-level parquet API (#1167)
+            let writer_props = Arc::new(WriterProperties::builder().build());
+            let mut writer = SerializedFileWriter::new(
+                file.try_clone().unwrap(),
+                schema,
+                writer_props,
+            )
+            .unwrap();
+
+            let mut row_group_writer = writer.next_row_group().unwrap();
+            let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+
+            get_typed_column_writer_mut::<Int32Type>(&mut column_writer)
+                .write_batch(&[34, 76], Some(&[0, 1, 0, 1]), None)
+                .unwrap();
+
+            row_group_writer.close_column(column_writer).unwrap();
+            writer.close_row_group(row_group_writer).unwrap();
+
+            writer.close().unwrap();
+        }
+
+        let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
+        let mut batch = ParquetFileArrowReader::new(file_reader);
+        let reader = batch.get_record_reader_by_columns(vec![0], 1024).unwrap();
+
+        let expected_schema = arrow::datatypes::Schema::new(vec![Field::new(
+            "group",
+            ArrowDataType::Struct(vec![Field::new("leaf", ArrowDataType::Int32, false)]),
+            true,
+        )]);
+
+        let batch = reader.into_iter().next().unwrap().unwrap();
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
+        assert_eq!(batch.num_rows(), 4);
+        assert_eq!(batch.column(0).data().null_count(), 2);
     }
 }
