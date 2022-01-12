@@ -207,7 +207,7 @@ mod tests {
 
     use std::iter;
 
-    use crate::util::test_common::{get_temp_file, get_test_file};
+    use crate::util::test_common::get_test_file;
 
     #[test]
     fn test_io_read_fully() {
@@ -272,8 +272,8 @@ mod tests {
 
     #[test]
     fn test_io_write_with_pos() {
-        let mut file = get_temp_file("file_sink_test", &[b'a', b'b', b'c']);
-        file.seek(SeekFrom::Current(3)).unwrap();
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(&[b'a', b'b', b'c']).unwrap();
 
         // Write into sink
         let mut sink = FileSink::new(&file);
@@ -300,8 +300,9 @@ mod tests {
             .flatten()
             .take(3 * DEFAULT_BUF_SIZE)
             .collect();
-        // always use different temp files as test might be run in parallel
-        let mut file = get_temp_file("large_file_sink_test", &patterned_data);
+
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(&patterned_data).unwrap();
 
         // seek the underlying file to the first 'd'
         file.seek(SeekFrom::Start(3)).unwrap();

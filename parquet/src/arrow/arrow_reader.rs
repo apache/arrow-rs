@@ -250,7 +250,7 @@ mod tests {
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::writer::{FileWriter, SerializedFileWriter};
     use crate::schema::types::{Type, TypePtr};
-    use crate::util::test_common::{get_temp_filename, RandGen};
+    use crate::util::test_common::RandGen;
     use arrow::array::*;
     use arrow::datatypes::DataType as ArrowDataType;
     use arrow::record_batch::RecordBatchReader;
@@ -260,7 +260,8 @@ mod tests {
     use std::cmp::min;
     use std::convert::TryFrom;
     use std::fs::File;
-    use std::path::{Path, PathBuf};
+    use std::io::Seek;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     #[test]
@@ -702,8 +703,6 @@ mod tests {
             })
             .collect();
 
-        let path = get_temp_filename();
-
         let len = match T::get_physical_type() {
             crate::basic::Type::FIXED_LEN_BYTE_ARRAY => rand_max,
             crate::basic::Type::INT96 => 12,
@@ -730,18 +729,21 @@ mod tests {
             .clone()
             .map(|t| arrow::datatypes::Field::new("leaf", t, false));
 
+        let mut file = tempfile::tempfile().unwrap();
+
         generate_single_column_file_with_data::<T>(
             &values,
             def_levels.as_ref(),
-            path.as_path(),
+            file.try_clone().unwrap(), // Cannot use &mut File (#1163)
             schema,
             arrow_field,
             &opts,
         )
         .unwrap();
 
-        let parquet_reader =
-            SerializedFileReader::try_from(File::open(&path).unwrap()).unwrap();
+        file.rewind().unwrap();
+
+        let parquet_reader = SerializedFileReader::try_from(file).unwrap();
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(parquet_reader));
 
         let mut record_reader = arrow_reader
@@ -801,12 +803,11 @@ mod tests {
     fn generate_single_column_file_with_data<T: DataType>(
         values: &[Vec<T::T>],
         def_levels: Option<&Vec<Vec<i16>>>,
-        path: &Path,
+        file: File,
         schema: TypePtr,
         field: Option<arrow::datatypes::Field>,
         opts: &TestOptions,
     ) -> Result<parquet_format::FileMetaData> {
-        let file = File::create(path)?;
         let mut writer_props = opts.writer_props();
         if let Some(field) = field {
             let arrow_schema = arrow::datatypes::Schema::new(vec![field]);
