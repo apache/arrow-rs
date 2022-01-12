@@ -1061,6 +1061,29 @@ where
     return math_op(left, right, |a, b| a - b);
 }
 
+/// Subtract every value in an array by a scalar. If any value in the array is null then the
+/// result is also null.
+pub fn subtract_scalar<T>(
+    array: &PrimitiveArray<T>,
+    scalar: T::Native,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: Add<Output = T::Native>
+        + Sub<Output = T::Native>
+        + Mul<Output = T::Native>
+        + Div<Output = T::Native>
+        + Zero,
+{
+    #[cfg(feature = "simd")]
+    {
+        let scalar_vector = T::init(scalar);
+        return simd_unary_math_op(array, |x| x - scalar_vector, |x| x - scalar);
+    }
+    #[cfg(not(feature = "simd"))]
+    return Ok(unary(array, |value| value - scalar));
+}
+
 /// Perform `-` operation on an array. If value is null then the result is also null.
 pub fn negate<T>(array: &PrimitiveArray<T>) -> Result<PrimitiveArray<T>>
 where
@@ -1309,6 +1332,25 @@ mod tests {
         assert_eq!(0, c.value(2));
         assert_eq!(2, c.value(3));
         assert_eq!(4, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_subtract_scalar() {
+        let a = Int32Array::from(vec![15, 14, 9, 8, 1]);
+        let b = 3;
+        let c = subtract_scalar(&a, b).unwrap();
+        let expected = Int32Array::from(vec![12, 11, 6, 5, -2]);
+        assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_primitive_array_subtract_scalar_sliced() {
+        let a = Int32Array::from(vec![Some(15), None, Some(9), Some(8), None]);
+        let a = a.slice(1, 4);
+        let a = as_primitive_array(&a);
+        let actual = subtract_scalar(a, 3).unwrap();
+        let expected = Int32Array::from(vec![None, Some(6), Some(5), None]);
+        assert_eq!(actual, expected);
     }
 
     #[test]
