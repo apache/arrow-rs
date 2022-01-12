@@ -392,7 +392,41 @@ fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
 mod tests {
     use super::*;
 
+    use crate::encodings::rle::RleEncoder;
     use rand::{thread_rng, Rng, RngCore};
+
+    #[test]
+    fn test_packed_decoder() {
+        let mut rng = thread_rng();
+        let len: usize = rng.gen_range(512..1024);
+
+        let mut expected = BooleanBufferBuilder::new(len);
+        let mut encoder = RleEncoder::new(1, 1024);
+        for _ in 0..len {
+            let bool = rng.gen_bool(0.8);
+            assert!(encoder.put(bool as u64).unwrap());
+            expected.append(bool);
+        }
+        assert_eq!(expected.len(), len);
+
+        let encoded = encoder.consume().unwrap();
+        let mut decoder = PackedDecoder::new(Encoding::RLE, ByteBufferPtr::new(encoded));
+
+        // Decode data in random length intervals
+        let mut decoded = BooleanBufferBuilder::new(len);
+        loop {
+            let remaining = len - decoded.len();
+            if remaining == 0 {
+                break;
+            }
+
+            let to_read = rng.gen_range(1..=remaining);
+            decoder.read(&mut decoded, to_read).unwrap();
+        }
+
+        assert_eq!(decoded.len(), len);
+        assert_eq!(decoded.as_slice(), expected.as_slice());
+    }
 
     #[test]
     fn test_bit_fns() {
