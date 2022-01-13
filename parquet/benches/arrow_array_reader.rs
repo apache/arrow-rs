@@ -301,8 +301,13 @@ fn create_int32_primitive_array_reader(
     column_desc: ColumnDescPtr,
 ) -> impl ArrayReader {
     use parquet::arrow::array_reader::PrimitiveArrayReader;
-    PrimitiveArrayReader::<Int32Type>::new(Box::new(page_iterator), column_desc, None)
-        .unwrap()
+    PrimitiveArrayReader::<Int32Type>::new_with_options(
+        Box::new(page_iterator),
+        column_desc,
+        None,
+        true,
+    )
+    .unwrap()
 }
 
 fn create_string_arrow_array_reader(

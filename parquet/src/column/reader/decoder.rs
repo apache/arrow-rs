@@ -219,8 +219,7 @@ pub struct ColumnLevelDecoderImpl {
 
 enum LevelDecoderInner {
     Packed(BitReader, u8),
-    /// Boxed as `RleDecoder` contains an inline buffer
-    Rle(Box<RleDecoder>),
+    Rle(RleDecoder),
 }
 
 impl ColumnLevelDecoder for ColumnLevelDecoderImpl {
@@ -230,7 +229,7 @@ impl ColumnLevelDecoder for ColumnLevelDecoderImpl {
         let bit_width = crate::util::bit_util::log2(max_level as u64 + 1) as u8;
         match encoding {
             Encoding::RLE => {
-                let mut decoder = Box::new(RleDecoder::new(bit_width));
+                let mut decoder = RleDecoder::new(bit_width);
                 decoder.set_data(data);
                 Self {
                     inner: LevelDecoderInner::Rle(decoder),
