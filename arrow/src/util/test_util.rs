@@ -147,7 +147,7 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
             "env `{}` is undefined or has empty value, and the pre-defined data dir `{}` not found\n\
              HINT: try running `git submodule update --init`",
             udf_env,
-            pb.display().to_string(),
+            pb.display(),
         ).into())
     }
 }
