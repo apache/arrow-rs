@@ -248,6 +248,17 @@ where
         column_desc: ColumnDescPtr,
         arrow_type: Option<ArrowType>,
     ) -> Result<Self> {
+        Self::new_with_options(pages, column_desc, arrow_type, false)
+    }
+
+    /// Construct primitive array reader with ability to only compute null mask and not
+    /// buffer level data
+    pub fn new_with_options(
+        pages: Box<dyn PageIterator>,
+        column_desc: ColumnDescPtr,
+        arrow_type: Option<ArrowType>,
+        null_mask_only: bool,
+    ) -> Result<Self> {
         // Check if Arrow type is specified, else create it from Parquet type
         let data_type = match arrow_type {
             Some(t) => t,
@@ -256,7 +267,7 @@ where
                 .clone(),
         };
 
-        let record_reader = RecordReader::<T>::new(column_desc.clone());
+        let record_reader = RecordReader::<T>::new_with_options(column_desc.clone(), null_mask_only);
 
         Ok(Self {
             data_type,
@@ -1350,19 +1361,26 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             let mut new_context = context.clone();
             new_context.path.append(vec![cur_type.name().to_string()]);
 
-            match cur_type.get_basic_info().repetition() {
+            let null_mask_only = match cur_type.get_basic_info().repetition() {
                 Repetition::REPEATED => {
                     new_context.def_level += 1;
                     new_context.rep_level += 1;
+                    false
                 }
                 Repetition::OPTIONAL => {
                     new_context.def_level += 1;
-                }
-                _ => (),
-            }
 
-            let reader =
-                self.build_for_primitive_type_inner(cur_type.clone(), &new_context)?;
+                    // Can just compute null mask if no parent
+                    context.def_level == 0 && context.rep_level == 0
+                }
+                _ => false,
+            };
+
+            let reader = self.build_for_primitive_type_inner(
+                cur_type.clone(),
+                &new_context,
+                null_mask_only,
+            )?;
 
             if cur_type.get_basic_info().repetition() == Repetition::REPEATED {
                 Err(ArrowError(
@@ -1641,6 +1659,7 @@ impl<'a> ArrayReaderBuilder {
         &self,
         cur_type: TypePtr,
         context: &'a ArrayReaderBuilderContext,
+        null_mask_only: bool,
     ) -> Result<Box<dyn ArrayReader>> {
         let column_desc = Arc::new(ColumnDescriptor::new(
             cur_type.clone(),
@@ -1658,11 +1677,14 @@ impl<'a> ArrayReaderBuilder {
             .map(|f| f.data_type().clone());
 
         match cur_type.get_physical_type() {
-            PhysicalType::BOOLEAN => Ok(Box::new(PrimitiveArrayReader::<BoolType>::new(
-                page_iterator,
-                column_desc,
-                arrow_type,
-            )?)),
+            PhysicalType::BOOLEAN => Ok(Box::new(
+                PrimitiveArrayReader::<BoolType>::new_with_options(
+                    page_iterator,
+                    column_desc,
+                    arrow_type,
+                    null_mask_only,
+                )?,
+            )),
             PhysicalType::INT32 => {
                 if let Some(ArrowType::Null) = arrow_type {
                     Ok(Box::new(NullArrayReader::<Int32Type>::new(
@@ -1670,18 +1692,24 @@ impl<'a> ArrayReaderBuilder {
                         column_desc,
                     )?))
                 } else {
-                    Ok(Box::new(PrimitiveArrayReader::<Int32Type>::new(
-                        page_iterator,
-                        column_desc,
-                        arrow_type,
-                    )?))
+                    Ok(Box::new(
+                        PrimitiveArrayReader::<Int32Type>::new_with_options(
+                            page_iterator,
+                            column_desc,
+                            arrow_type,
+                            null_mask_only,
+                        )?,
+                    ))
                 }
             }
-            PhysicalType::INT64 => Ok(Box::new(PrimitiveArrayReader::<Int64Type>::new(
-                page_iterator,
-                column_desc,
-                arrow_type,
-            )?)),
+            PhysicalType::INT64 => Ok(Box::new(
+                PrimitiveArrayReader::<Int64Type>::new_with_options(
+                    page_iterator,
+                    column_desc,
+                    arrow_type,
+                    null_mask_only,
+                )?,
+            )),
             PhysicalType::INT96 => {
                 // get the optional timezone information from arrow type
                 let timezone = arrow_type
@@ -1705,18 +1733,22 @@ impl<'a> ArrayReaderBuilder {
                     arrow_type,
                 )?))
             }
-            PhysicalType::FLOAT => Ok(Box::new(PrimitiveArrayReader::<FloatType>::new(
-                page_iterator,
-                column_desc,
-                arrow_type,
-            )?)),
-            PhysicalType::DOUBLE => {
-                Ok(Box::new(PrimitiveArrayReader::<DoubleType>::new(
+            PhysicalType::FLOAT => Ok(Box::new(
+                PrimitiveArrayReader::<FloatType>::new_with_options(
                     page_iterator,
                     column_desc,
                     arrow_type,
-                )?))
-            }
+                    null_mask_only,
+                )?,
+            )),
+            PhysicalType::DOUBLE => Ok(Box::new(
+                PrimitiveArrayReader::<DoubleType>::new_with_options(
+                    page_iterator,
+                    column_desc,
+                    arrow_type,
+                    null_mask_only,
+                )?,
+            )),
             PhysicalType::BYTE_ARRAY => {
                 if cur_type.get_basic_info().converted_type() == ConvertedType::UTF8 {
                     if let Some(ArrowType::LargeUtf8) = arrow_type {

@@ -114,6 +114,11 @@ impl<T: ScalarValue> ScalarBuffer<T> {
         self.len == 0
     }
 
+    pub fn resize(&mut self, len: usize) {
+        self.buffer.resize(len * std::mem::size_of::<T>(), 0);
+        self.len = len;
+    }
+
     #[inline]
     pub fn as_slice(&self) -> &[T] {
         let (prefix, buf, suffix) = unsafe { self.buffer.as_slice().align_to::<T>() };

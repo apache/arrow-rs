@@ -73,9 +73,35 @@ where
     V: ValuesBuffer + Default,
     CV: ColumnValueDecoder<Slice = V::Slice>,
 {
+    /// Create a new [`GenericRecordReader`]
     pub fn new(desc: ColumnDescPtr) -> Self {
-        let def_levels =
-            (desc.max_def_level() > 0).then(|| DefinitionLevelBuffer::new(&desc));
+        Self::new_with_options(desc, false)
+    }
+
+    /// Create a new [`GenericRecordReader`] with the ability to only generate the bitmask
+    ///
+    /// If `null_mask_only` is true only the null bitmask will be generated and
+    /// [`Self::consume_def_levels`] and [`Self::consume_rep_levels`] will always return `None`
+    ///
+    /// It is insufficient to solely check that that the max definition level is 1 as we
+    /// need there to be no nullable parent array that will required decoded definition levels
+    ///
+    /// In particular consider the case of:
+    ///
+    /// ```ignore
+    /// message nested {
+    ///   OPTIONAL Group group {
+    ///     REQUIRED INT32 leaf;
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// The maximum definition level of leaf is 1, however, we still need to decode the
+    /// definition levels so that the parent group can be constructed correctly
+    ///
+    pub(crate) fn new_with_options(desc: ColumnDescPtr, null_mask_only: bool) -> Self {
+        let def_levels = (desc.max_def_level() > 0)
+            .then(|| DefinitionLevelBuffer::new(&desc, null_mask_only));
 
         let rep_levels = (desc.max_rep_level() > 0).then(ScalarBuffer::new);
 
@@ -171,7 +197,7 @@ where
     /// as record values, e.g. those from `self.num_values` to `self.values_written`.
     pub fn consume_def_levels(&mut self) -> Result<Option<Buffer>> {
         Ok(match self.def_levels.as_mut() {
-            Some(x) => Some(x.split_off(self.num_values)),
+            Some(x) => x.split_levels(self.num_values),
             None => None,
         })
     }
@@ -221,10 +247,7 @@ where
             .as_mut()
             .map(|levels| levels.spare_capacity_mut(batch_size));
 
-        let def_levels = self
-            .def_levels
-            .as_mut()
-            .map(|levels| levels.spare_capacity_mut(batch_size));
+        let def_levels = self.def_levels.as_mut();
 
         let values = self.records.spare_capacity_mut(batch_size);
 
