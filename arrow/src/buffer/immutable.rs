@@ -244,6 +244,7 @@ impl std::ops::Deref for Buffer {
 }
 
 unsafe impl Sync for Buffer {}
+// false positive, see https://github.com/apache/arrow-rs/pull/1169
 #[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for Buffer {}
 
