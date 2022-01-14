@@ -131,9 +131,9 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
             // validate up front that we can do all of the conversions needed below
             u32::try_from(self.values.len())
                 .and_then(usize::try_from)
-                .map_err(|_| ArrowError::DictionaryKeyOverflowError)
-                .map(K::Native::from_usize)
-                .map_err(|_| ArrowError::DictionaryKeyOverflowError)?;
+                .ok()
+                .and_then(K::Native::from_usize)
+                .ok_or(ArrowError::DictionaryKeyOverflowError)?;
 
             let sort_indices = sort_to_indices(self.values(), None, None)?;
             let sorted_dictionary = take(
