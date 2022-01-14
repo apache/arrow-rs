@@ -1081,9 +1081,9 @@ mod tests {
     fn test_convert_float_to_string() {
         assert_eq!(format!("{}", Field::Float(1.0)), "1.0");
         assert_eq!(format!("{}", Field::Float(9.63)), "9.63");
-        assert_eq!(format!("{}", Field::Float(1e-15)), "0.000000000000001");
+        assert_eq!(format!("{}", Field::Float(1e-15)), "1e-15");
         assert_eq!(format!("{}", Field::Float(1e-16)), "1E-16");
-        assert_eq!(format!("{}", Field::Float(1e19)), "10000000000000000000.0");
+        assert_eq!(format!("{}", Field::Float(1e19)), "1e19");
         assert_eq!(format!("{}", Field::Float(1e20)), "1E20");
         assert_eq!(format!("{}", Field::Float(1.7976931E30)), "1.7976931E30");
         assert_eq!(format!("{}", Field::Float(-1.7976931E30)), "-1.7976931E30");
@@ -1093,9 +1093,9 @@ mod tests {
     fn test_convert_double_to_string() {
         assert_eq!(format!("{}", Field::Double(1.0)), "1.0");
         assert_eq!(format!("{}", Field::Double(9.63)), "9.63");
-        assert_eq!(format!("{}", Field::Double(1e-15)), "0.000000000000001");
+        assert_eq!(format!("{}", Field::Double(1e-15)), "1e-15");
         assert_eq!(format!("{}", Field::Double(1e-16)), "1E-16");
-        assert_eq!(format!("{}", Field::Double(1e19)), "10000000000000000000.0");
+        assert_eq!(format!("{}", Field::Double(1e19)), "1e19");
         assert_eq!(format!("{}", Field::Double(1e20)), "1E20");
         assert_eq!(
             format!("{}", Field::Double(1.79769313486E308)),
