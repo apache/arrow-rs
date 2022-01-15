@@ -716,15 +716,19 @@ impl fmt::Display for Field {
             Field::Float(value) => {
                 if !(1e-15..=1e19).contains(&value) {
                     write!(f, "{:E}", value)
+                } else if value.trunc() == value {
+                    write!(f, "{}.0", value)
                 } else {
-                    write!(f, "{:?}", value)
+                    write!(f, "{}", value)
                 }
             }
             Field::Double(value) => {
                 if !(1e-15..=1e19).contains(&value) {
                     write!(f, "{:E}", value)
+                } else if value.trunc() == value {
+                    write!(f, "{}.0", value)
                 } else {
-                    write!(f, "{:?}", value)
+                    write!(f, "{}", value)
                 }
             }
             Field::Decimal(ref value) => {

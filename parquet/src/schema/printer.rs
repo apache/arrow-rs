@@ -246,7 +246,7 @@ fn print_logical_and_converted(
         None => {
             // Also print converted type if it is available
             match converted_type {
-                ConvertedType::NONE => format!(""),
+                ConvertedType::NONE => String::new(),
                 decimal @ ConvertedType::DECIMAL => {
                     // For decimal type we should print precision and scale if they
                     // are > 0, e.g. DECIMAL(9,2) -
@@ -256,7 +256,7 @@ fn print_logical_and_converted(
                             format!("({},{})", p, s)
                         }
                         (p, 0) if p > 0 => format!("({})", p),
-                        _ => format!(""),
+                        _ => String::new(),
                     };
                     format!("{}{}", decimal, precision_scale)
                 }
