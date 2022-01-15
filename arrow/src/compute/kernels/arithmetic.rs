@@ -756,6 +756,22 @@ where
     return math_checked_divide_op(left, right, |a, b| a / b);
 }
 
+/// Perform `left / right` operation on two arrays without checking for division by zero.
+/// If either left or right value is null then the result is also null. If any right hand value is zero then the result of this
+pub fn divide_unchecked<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowFloatNumericType,
+    T::Native: Div<Output = T::Native>,
+{
+    #[cfg(feature = "simd")]
+    return simd_math_op(&left, &right, |a, b| a / b, |a, b| a / b);
+    #[cfg(not(feature = "simd"))]
+    return math_op(left, right, |a, b| a / b);
+}
+
 /// Modulus every value in an array by a scalar. If any value in the array is null then the
 /// result is also null. If the scalar is zero then the result of this operation will be
 /// `Err(ArrowError::DivideByZero)`.
