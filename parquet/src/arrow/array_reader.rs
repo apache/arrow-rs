@@ -824,6 +824,36 @@ fn remove_indices(
             indices,
             size
         ),
+        ArrowType::Struct(fields) => {
+            let struct_array = arr.as_any()
+                .downcast_ref::<StructArray>()
+                .expect("Array should be a struct");
+
+            // Recursively call remove indices on each of the structs fields
+            let new_columns = fields.into_iter()
+                .zip(struct_array.columns())
+                .map(|(field, column)| {
+                    let dt = field.data_type().clone();
+                     Ok((field,
+                         remove_indices(column.clone(), dt, indices.clone())?))
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            if arr.data().null_count() == 0 {
+                // No nulls, nothing to do.
+                Ok(Arc::new(StructArray::from(new_columns)))
+            } else {
+                // Construct a new validity buffer by removing `indices` from the original validity
+                // map.
+                let mut valid = BooleanBufferBuilder::new(arr.len() - indices.len());
+                for idx in 0..arr.len() {
+                    if !indices.contains(&idx) {
+                        valid.append(!arr.is_null(idx));
+                    }
+                }
+                Ok(Arc::new(StructArray::from((new_columns, valid.finish()))))
+            }
+        }
         _ => Err(ParquetError::General(format!(
             "ListArray of type List({:?}) is not supported by array_reader",
             item_type
@@ -1562,7 +1592,6 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
         match item_reader_type {
             ArrowType::List(_)
             | ArrowType::FixedSizeList(_, _)
-            | ArrowType::Struct(_)
             | ArrowType::Dictionary(_, _) => Err(ArrowError(format!(
                 "reading List({:?}) into arrow not supported yet",
                 item_type

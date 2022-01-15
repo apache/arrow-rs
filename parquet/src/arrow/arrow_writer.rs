@@ -1770,4 +1770,104 @@ mod tests {
         let stats = column.statistics().unwrap();
         assert_eq!(stats.null_count(), 2);
     }
+
+    #[test]
+    fn test_list_of_struct_roundtrip() {
+        // define schema
+        let int_field = Field::new("a", DataType::Int32, true);
+        let int_field2 = Field::new("b", DataType::Int32, true);
+
+        let int_builder = Int32Builder::new(10);
+        let int_builder2 = Int32Builder::new(10);
+
+        let struct_builder = StructBuilder::new(
+            vec![int_field, int_field2],
+            vec![Box::new(int_builder), Box::new(int_builder2)],
+        );
+        let mut list_builder = ListBuilder::new(struct_builder);
+
+        // Construct the following array
+        // [{a: 1, b: 2}], [], null, [null, null], [{a: null, b: 3}], [{a: 2, b: null}]
+
+        // [{a: 1, b: 2}]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_value(1)
+            .unwrap();
+        values
+            .field_builder::<Int32Builder>(1)
+            .unwrap()
+            .append_value(2)
+            .unwrap();
+        values.append(true).unwrap();
+        list_builder.append(true).unwrap();
+
+        // []
+        list_builder.append(true).unwrap();
+
+        // null
+        list_builder.append(false).unwrap();
+
+        // [null, null]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values
+            .field_builder::<Int32Builder>(1)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values.append(false).unwrap();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values
+            .field_builder::<Int32Builder>(1)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values.append(false).unwrap();
+        list_builder.append(true).unwrap();
+
+        // [{a: null, b: 3}]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values
+            .field_builder::<Int32Builder>(1)
+            .unwrap()
+            .append_value(3)
+            .unwrap();
+        values.append(true).unwrap();
+        list_builder.append(true).unwrap();
+
+        // [{a: 2, b: null}]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_value(2)
+            .unwrap();
+        values
+            .field_builder::<Int32Builder>(1)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values.append(true).unwrap();
+        list_builder.append(true).unwrap();
+
+        let array = Arc::new(list_builder.finish());
+
+        one_column_roundtrip("test_struct_in_list.parquet", array, true, Some(10));
+    }
 }
