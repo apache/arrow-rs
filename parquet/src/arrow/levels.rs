@@ -758,6 +758,13 @@ impl LevelInfo {
 
     /// Given a level's information, calculate the offsets required to index an array correctly.
     pub(crate) fn filter_array_indices(&self) -> Vec<usize> {
+        if !matches!(self.level_type, LevelType::Primitive(_)) {
+            panic!(
+                "Cannot filter indices on a non-primitive array, found {:?}",
+                self.level_type
+            );
+        }
+
         // happy path if not dealing with lists
         if self.repetition.is_none() {
             return self
@@ -780,8 +787,9 @@ impl LevelInfo {
 
         for len in self.array_offsets.windows(2).map(|s| s[1] - s[0]) {
             if len == 0 {
-                // Skip this definition level (it should be less than max_definition)
-                definition_levels.next();
+                // Skip this definition level--the iterator should not be empty, and the definition
+                // level be less than max_definition, i.e., a null value)
+                assert!(*definition_levels.next().unwrap() < self.max_definition);
             } else {
                 for (_, def) in (0..len).zip(&mut definition_levels) {
                     if *def == self.max_definition {
