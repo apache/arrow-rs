@@ -628,7 +628,11 @@ where
     #[cfg(feature = "simd")]
     {
         let scalar_vector = T::init(scalar);
-        return simd_unary_math_op(array, |x| x - scalar_vector, |x| x - scalar);
+        return Ok(simd_unary_math_op(
+            array,
+            |x| x - scalar_vector,
+            |x| x - scalar,
+        ));
     }
     #[cfg(not(feature = "simd"))]
     return Ok(unary(array, |value| value - scalar));
@@ -706,7 +710,11 @@ where
     #[cfg(feature = "simd")]
     {
         let scalar_vector = T::init(scalar);
-        return simd_unary_math_op(array, |x| x * scalar_vector, |x| x * scalar);
+        return Ok(simd_unary_math_op(
+            array,
+            |x| x * scalar_vector,
+            |x| x * scalar,
+        ));
     }
     #[cfg(not(feature = "simd"))]
     return Ok(unary(array, |value| value * scalar));
