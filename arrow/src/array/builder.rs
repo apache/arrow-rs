@@ -367,6 +367,14 @@ impl BooleanBufferBuilder {
         }
     }
 
+    /// Resizes the buffer, either truncating its contents (with no change in capacity), or
+    /// growing it (potentially reallocating it) and writing `false` in the newly available bits.
+    #[inline]
+    pub fn resize(&mut self, len: usize) {
+        let len_bytes = bit_util::ceil(len, 8);
+        self.buffer.resize(len_bytes, 0)
+    }
+
     #[inline]
     pub fn append(&mut self, v: bool) {
         self.advance(1);

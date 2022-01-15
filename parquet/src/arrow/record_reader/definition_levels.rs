@@ -105,25 +105,25 @@ impl DefinitionLevelBuffer {
 
     /// Split `len` levels out of `self`
     pub fn split_bitmask(&mut self, len: usize) -> Bitmap {
-        let builder = match &mut self.inner {
+        let old_builder = match &mut self.inner {
             BufferInner::Full { nulls, .. } => nulls,
             BufferInner::Mask { nulls } => nulls,
         };
 
-        let old_len = builder.len();
-        let num_left_values = old_len - len;
-        let new_bitmap_builder =
+        // Compute the number of values left behind
+        let num_left_values = old_builder.len() - len;
+        let mut new_builder =
             BooleanBufferBuilder::new(MIN_BATCH_SIZE.max(num_left_values));
 
-        let old_bitmap = std::mem::replace(builder, new_bitmap_builder).finish();
-        let old_bitmap = Bitmap::from(old_bitmap);
+        // Copy across remaining values
+        new_builder.append_packed_range(len..old_builder.len(), old_builder.as_slice());
 
-        for i in len..old_len {
-            builder.append(old_bitmap.is_set(i));
-        }
+        // Truncate buffer
+        old_builder.resize(len);
 
-        self.len = builder.len();
-        old_bitmap
+        // Swap into self
+        self.len = new_builder.len();
+        Bitmap::from(std::mem::replace(old_builder, new_builder).finish())
     }
 
     /// Returns an iterator of the valid positions in `range` in descending order
@@ -391,8 +391,11 @@ fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
+    use crate::basic::Type as PhysicalType;
     use crate::encodings::rle::RleEncoder;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
     use rand::{thread_rng, Rng, RngCore};
 
     #[test]
@@ -461,5 +464,31 @@ mod tests {
 
             assert_eq!(actual, expected);
         }
+    }
+
+    #[test]
+    fn test_split_off() {
+        let t = Type::primitive_type_builder("col", PhysicalType::INT32)
+            .build()
+            .unwrap();
+
+        let descriptor = Arc::new(ColumnDescriptor::new(
+            Arc::new(t),
+            1,
+            0,
+            ColumnPath::new(vec![]),
+        ));
+
+        let mut buffer = DefinitionLevelBuffer::new(&descriptor, true);
+        match &mut buffer.inner {
+            BufferInner::Mask { nulls } => nulls.append_n(100, false),
+            _ => unreachable!(),
+        };
+
+        let bitmap = buffer.split_bitmask(19);
+
+        // Should have split off 19 records leaving, 81 behind
+        assert_eq!(bitmap.len(), 3 * 8); // Note: bitmask only tracks bytes not bits
+        assert_eq!(buffer.nulls().len(), 81);
     }
 }
