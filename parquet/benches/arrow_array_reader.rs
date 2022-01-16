@@ -366,10 +366,10 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read Int32Array, plain encoded, mandatory, no NULLs - new",
@@ -380,10 +380,10 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     let plain_int32_no_null_data = build_plain_encoded_int32_page_iterator(
         schema.clone(),
@@ -399,10 +399,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read Int32Array, plain encoded, optional, no NULLs - new",
@@ -413,10 +413,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     // int32, plain encoded, half NULLs
     let plain_int32_half_null_data = build_plain_encoded_int32_page_iterator(
@@ -433,10 +433,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read Int32Array, plain encoded, optional, half NULLs - new",
@@ -447,10 +447,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     // int32, dictionary encoded, no NULLs
     let dictionary_int32_no_null_data = build_dictionary_encoded_int32_page_iterator(
@@ -467,10 +467,10 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read Int32Array, dictionary encoded, mandatory, no NULLs - new",
@@ -481,10 +481,10 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     let dictionary_int32_no_null_data = build_dictionary_encoded_int32_page_iterator(
         schema.clone(),
@@ -500,10 +500,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read Int32Array, dictionary encoded, optional, no NULLs - new",
@@ -514,10 +514,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     // int32, dictionary encoded, half NULLs
     let dictionary_int32_half_null_data = build_dictionary_encoded_int32_page_iterator(
@@ -534,10 +534,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read Int32Array, dictionary encoded, optional, half NULLs - new",
@@ -548,10 +548,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     // string benchmarks
     //==============================
@@ -571,10 +571,10 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read StringArray, plain encoded, mandatory, no NULLs - new",
@@ -585,10 +585,10 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     let plain_string_no_null_data = build_plain_encoded_string_page_iterator(
         schema.clone(),
@@ -604,10 +604,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read StringArray, plain encoded, optional, no NULLs - new",
@@ -618,10 +618,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     // string, plain encoded, half NULLs
     let plain_string_half_null_data = build_plain_encoded_string_page_iterator(
@@ -638,10 +638,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read StringArray, plain encoded, optional, half NULLs - new",
@@ -652,10 +652,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     // string, dictionary encoded, no NULLs
     let dictionary_string_no_null_data = build_dictionary_encoded_string_page_iterator(
@@ -672,10 +672,10 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read StringArray, dictionary encoded, mandatory, no NULLs - new",
@@ -686,10 +686,10 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     let dictionary_string_no_null_data = build_dictionary_encoded_string_page_iterator(
         schema.clone(),
@@ -705,10 +705,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read StringArray, dictionary encoded, optional, no NULLs - new",
@@ -719,10 +719,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     // string, dictionary encoded, half NULLs
     let dictionary_string_half_null_data = build_dictionary_encoded_string_page_iterator(
@@ -739,10 +739,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.bench_function(
         "read StringArray, dictionary encoded, optional, half NULLs - new",
@@ -753,10 +753,10 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
+                assert_eq!(count, EXPECTED_VALUE_COUNT);
             })
         },
     );
-    assert_eq!(count, EXPECTED_VALUE_COUNT);
 
     group.finish();
 }
