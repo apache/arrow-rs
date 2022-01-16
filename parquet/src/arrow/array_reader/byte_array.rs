@@ -171,8 +171,12 @@ impl<I: OffsetSizeTrait + ScalarValue> ColumnValueDecoder
         }
 
         let mut buffer = OffsetBuffer::default();
-        let mut decoder =
-            ByteArrayDecoderPlain::new(buf, num_values as usize, self.validate_utf8);
+        let mut decoder = ByteArrayDecoderPlain::new(
+            buf,
+            num_values as usize,
+            Some(num_values as usize),
+            self.validate_utf8,
+        );
         decoder.read(&mut buffer, usize::MAX)?;
         self.dict = Some(buffer);
         Ok(())
@@ -182,11 +186,13 @@ impl<I: OffsetSizeTrait + ScalarValue> ColumnValueDecoder
         &mut self,
         encoding: Encoding,
         data: ByteBufferPtr,
-        num_values: usize,
+        num_levels: usize,
+        num_values: Option<usize>,
     ) -> Result<()> {
         self.decoder = Some(ByteArrayDecoder::new(
             encoding,
             data,
+            num_levels,
             num_values,
             self.validate_utf8,
         )?);
@@ -212,12 +218,14 @@ impl ByteArrayDecoder {
     pub fn new(
         encoding: Encoding,
         data: ByteBufferPtr,
-        num_values: usize,
+        num_levels: usize,
+        num_values: Option<usize>,
         validate_utf8: bool,
     ) -> Result<Self> {
         let decoder = match encoding {
             Encoding::PLAIN => ByteArrayDecoder::Plain(ByteArrayDecoderPlain::new(
                 data,
+                num_levels,
                 num_values,
                 validate_utf8,
             )),
@@ -225,10 +233,10 @@ impl ByteArrayDecoder {
                 ByteArrayDecoder::Dictionary(ByteArrayDecoderDictionary::new(data))
             }
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
-                ByteArrayDecoderDeltaLength::new(data, num_values, validate_utf8)?,
+                ByteArrayDecoderDeltaLength::new(data, validate_utf8)?,
             ),
             Encoding::DELTA_BYTE_ARRAY => ByteArrayDecoder::DeltaByteArray(
-                ByteArrayDecoderDelta::new(data, num_values, validate_utf8)?,
+                ByteArrayDecoderDelta::new(data, validate_utf8)?,
             ),
             _ => {
                 return Err(general_err!(
@@ -264,17 +272,25 @@ impl ByteArrayDecoder {
 pub struct ByteArrayDecoderPlain {
     buf: ByteBufferPtr,
     offset: usize,
-    remaining_values: usize,
     validate_utf8: bool,
+
+    /// This is a maximum as the null count is not always known, e.g. value data from
+    /// a v1 data page
+    max_remaining_values: usize,
 }
 
 impl ByteArrayDecoderPlain {
-    pub fn new(buf: ByteBufferPtr, values: usize, validate_utf8: bool) -> Self {
+    pub fn new(
+        buf: ByteBufferPtr,
+        num_levels: usize,
+        num_values: Option<usize>,
+        validate_utf8: bool,
+    ) -> Self {
         Self {
             buf,
             validate_utf8,
             offset: 0,
-            remaining_values: values,
+            max_remaining_values: num_values.unwrap_or(num_levels),
         }
     }
 
@@ -285,7 +301,7 @@ impl ByteArrayDecoderPlain {
     ) -> Result<usize> {
         let initial_values_length = output.values.len();
 
-        let to_read = len.min(self.remaining_values);
+        let to_read = len.min(self.max_remaining_values);
         output.offsets.reserve(to_read);
 
         let remaining_bytes = self.buf.len() - self.offset;
@@ -295,7 +311,7 @@ impl ByteArrayDecoderPlain {
 
         let estimated_bytes = remaining_bytes
             .checked_mul(to_read)
-            .map(|x| x / self.remaining_values)
+            .map(|x| x / self.max_remaining_values)
             .unwrap_or_default();
 
         output.values.reserve(estimated_bytes);
@@ -322,7 +338,7 @@ impl ByteArrayDecoderPlain {
             self.offset = end_offset;
             read += 1;
         }
-        self.remaining_values -= to_read;
+        self.max_remaining_values -= to_read;
 
         if self.validate_utf8 {
             output.values_as_str(initial_values_length)?;
@@ -341,9 +357,11 @@ pub struct ByteArrayDecoderDeltaLength {
 }
 
 impl ByteArrayDecoderDeltaLength {
-    fn new(data: ByteBufferPtr, values: usize, validate_utf8: bool) -> Result<Self> {
+    fn new(data: ByteBufferPtr, validate_utf8: bool) -> Result<Self> {
         let mut len_decoder = DeltaBitPackDecoder::<Int32Type>::new();
-        len_decoder.set_data(data.all(), values)?;
+        len_decoder.set_data(data.all(), 0)?;
+        let values = len_decoder.values_left();
+
         let mut lengths = vec![0; values];
         len_decoder.get(&mut lengths)?;
 
@@ -409,24 +427,25 @@ pub struct ByteArrayDecoderDelta {
 }
 
 impl ByteArrayDecoderDelta {
-    fn new(data: ByteBufferPtr, values: usize, validate_utf8: bool) -> Result<Self> {
+    fn new(data: ByteBufferPtr, validate_utf8: bool) -> Result<Self> {
         let mut prefix = DeltaBitPackDecoder::<Int32Type>::new();
-        prefix.set_data(data.all(), values)?;
-        let mut prefix_lengths = vec![0; values];
-        let read = prefix.get(&mut prefix_lengths)?;
-        prefix_lengths.truncate(read);
+        prefix.set_data(data.all(), 0)?;
+
+        let num_prefix = prefix.values_left();
+        let mut prefix_lengths = vec![0; num_prefix];
+        assert_eq!(prefix.get(&mut prefix_lengths)?, num_prefix);
 
         let mut suffix = DeltaBitPackDecoder::<Int32Type>::new();
-        suffix.set_data(data.start_from(prefix.get_offset()), values)?;
-        let mut suffix_lengths = vec![0; values];
-        let read = suffix.get(&mut suffix_lengths)?;
-        suffix_lengths.truncate(read);
+        suffix.set_data(data.start_from(prefix.get_offset()), 0)?;
 
-        if prefix_lengths.len() != suffix_lengths.len() {
+        let num_suffix = suffix.values_left();
+        let mut suffix_lengths = vec![0; num_suffix];
+        assert_eq!(suffix.get(&mut suffix_lengths)?, num_suffix);
+
+        if num_prefix != num_suffix {
             return Err(general_err!(format!(
                 "inconsistent DELTA_BYTE_ARRAY lengths, prefixes: {}, suffixes: {}",
-                prefix_lengths.len(),
-                suffix_lengths.len()
+                num_prefix, num_suffix
             )));
         }
 

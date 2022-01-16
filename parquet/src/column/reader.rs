@@ -371,6 +371,7 @@ where
                                 encoding,
                                 buf.start_from(offset),
                                 num_values as usize,
+                                None,
                             )?;
                             return Ok(true);
                         }
@@ -379,13 +380,17 @@ where
                             buf,
                             num_values,
                             encoding,
-                            num_nulls: _,
+                            num_nulls,
                             num_rows: _,
                             def_levels_byte_len,
                             rep_levels_byte_len,
                             is_compressed: _,
                             statistics: _,
                         } => {
+                            if num_nulls > num_values {
+                                return Err(general_err!("more nulls than values in page, contained {} values and {} nulls", num_values, num_nulls));
+                            }
+
                             self.num_buffered_values = num_values;
                             self.num_decoded_values = 0;
 
@@ -420,6 +425,7 @@ where
                                     (rep_levels_byte_len + def_levels_byte_len) as usize,
                                 ),
                                 num_values as usize,
+                                Some((num_values - num_nulls) as usize),
                             )?;
                             return Ok(true);
                         }

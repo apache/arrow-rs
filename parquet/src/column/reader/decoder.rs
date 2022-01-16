@@ -95,11 +95,22 @@ pub trait ColumnValueDecoder {
     ) -> Result<()>;
 
     /// Set the current data page
+    ///
+    /// - `encoding` - the encoding of the page
+    /// - `data` - a point to the page's uncompressed value data
+    /// - `num_levels` - the number of levels contained within the page, i.e. values including nulls
+    /// - `num_values` - the number of non-null values contained within the page (V2 page only)
+    ///
+    /// Note: data encoded with [`Encoding::RLE`] may not know its exact length, as the final
+    /// run may be zero-padded. As such if `num_values` is not provided (i.e. `None`),
+    /// subsequent calls to `ColumnValueDecoder::read` may yield more values than
+    /// non-null definition levels within the page
     fn set_data(
         &mut self,
         encoding: Encoding,
         data: ByteBufferPtr,
-        num_values: usize,
+        num_levels: usize,
+        num_values: Option<usize>,
     ) -> Result<()>;
 
     /// Read values data into `out[range]` returning the number of values read
@@ -170,7 +181,8 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         &mut self,
         mut encoding: Encoding,
         data: ByteBufferPtr,
-        num_values: usize,
+        num_levels: usize,
+        num_values: Option<usize>,
     ) -> Result<()> {
         use std::collections::hash_map::Entry;
 
@@ -193,7 +205,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
             }
         };
 
-        decoder.set_data(data, num_values)?;
+        decoder.set_data(data, num_values.unwrap_or(num_levels))?;
         self.current_encoding = Some(encoding);
         Ok(())
     }
