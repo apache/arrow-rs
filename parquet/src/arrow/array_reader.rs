@@ -54,7 +54,6 @@ use arrow::datatypes::{
     UInt64Type as ArrowUInt64Type, UInt8Type as ArrowUInt8Type,
 };
 use arrow::util::bit_util;
-use byte_array::make_byte_array_reader;
 
 use crate::arrow::converter::{
     BinaryArrayConverter, BinaryConverter, Converter, DecimalArrayConverter,
@@ -83,6 +82,8 @@ use crate::schema::visitor::TypeVisitor;
 
 mod byte_array;
 mod offset_buffer;
+
+pub use byte_array::make_byte_array_reader;
 
 /// Array reader reads parquet data into arrow array.
 pub trait ArrayReader {

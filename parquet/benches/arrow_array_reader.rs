@@ -47,6 +47,7 @@ const PAGES_PER_GROUP: usize = 2;
 const VALUES_PER_PAGE: usize = 10_000;
 const BATCH_SIZE: usize = 8192;
 
+use arrow::array::Array;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 pub fn seedable_rng() -> StdRng {
@@ -273,7 +274,7 @@ fn build_dictionary_encoded_string_page_iterator(
     InMemoryPageIterator::new(schema, column_desc, pages)
 }
 
-fn bench_array_reader(mut array_reader: impl ArrayReader) -> usize {
+fn bench_array_reader(mut array_reader: Box<dyn ArrayReader>) -> usize {
     // test procedure: read data in batches of 8192 until no more data
     let mut total_count = 0;
     loop {
@@ -290,42 +291,46 @@ fn bench_array_reader(mut array_reader: impl ArrayReader) -> usize {
 fn create_int32_arrow_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
-) -> impl ArrayReader {
+) -> Box<dyn ArrayReader> {
     use parquet::arrow::arrow_array_reader::{ArrowArrayReader, PrimitiveArrayConverter};
     let converter = PrimitiveArrayConverter::<arrow::datatypes::Int32Type>::new();
-    ArrowArrayReader::try_new(page_iterator, column_desc, converter, None).unwrap()
+    let reader =
+        ArrowArrayReader::try_new(page_iterator, column_desc, converter, None).unwrap();
+    Box::new(reader)
 }
 
 fn create_int32_primitive_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
-) -> impl ArrayReader {
+) -> Box<dyn ArrayReader> {
     use parquet::arrow::array_reader::PrimitiveArrayReader;
-    PrimitiveArrayReader::<Int32Type>::new_with_options(
+    let reader = PrimitiveArrayReader::<Int32Type>::new_with_options(
         Box::new(page_iterator),
         column_desc,
         None,
         true,
     )
-    .unwrap()
+    .unwrap();
+    Box::new(reader)
 }
 
 fn create_string_arrow_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
-) -> impl ArrayReader {
+) -> Box<dyn ArrayReader> {
     use parquet::arrow::arrow_array_reader::{ArrowArrayReader, StringArrayConverter};
     let converter = StringArrayConverter::new();
-    ArrowArrayReader::try_new(page_iterator, column_desc, converter, None).unwrap()
+    let reader =
+        ArrowArrayReader::try_new(page_iterator, column_desc, converter, None).unwrap();
+    Box::new(reader)
 }
 
 fn create_string_byte_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
-) -> impl ArrayReader {
-    use parquet::arrow::array_reader::ByteArrayReader;
-    ByteArrayReader::new_with_options(Box::new(page_iterator), column_desc, None, true)
-        .unwrap()
+) -> Box<dyn ArrayReader> {
+    use parquet::arrow::array_reader::make_byte_array_reader;
+    make_byte_array_reader(Box::new(page_iterator), column_desc, None, true).unwrap()
 }
 
 fn add_benches(c: &mut Criterion) {
