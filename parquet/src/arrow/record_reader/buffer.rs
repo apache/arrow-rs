@@ -16,7 +16,6 @@
 // under the License.
 
 use std::marker::PhantomData;
-use std::ops::Range;
 
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::ToByteSlice;
@@ -222,23 +221,24 @@ pub trait ValuesBuffer: BufferQueue {
     ///
     /// It is provided with:
     ///
-    /// - `values_range` - the range of values read into this [`ValuesBuffer`]
-    /// - `levels_range` - the range of levels data read
+    /// - `read_offset` - the offset in [`ValuesBuffer`] to start null padding from
+    /// - `values_read` - the number of values read
+    /// - `levels_read` - the number of levels read
     /// - `rev_valid_position_iter` - a reverse iterator of the valid level positions
     ///
     /// It is required that:
     ///
-    /// - `rev_valid_position_iter` has at least `values_range.end - values_range.start` elements
+    /// - `rev_valid_position_iter` has at least `values_len` elements
     /// - `rev_valid_position_iter` returns strictly monotonically decreasing values
-    /// - `rev_valid_position_iter` returns values in the range `levels_range`
-    /// - the `i`th index returned by `rev_valid_position_iter` is `>= range.end - i - 1`
+    /// - `rev_valid_position_iter` returns values in the range `read_offset..read_offset+levels_len`
     ///
     /// Implementations may panic or otherwise misbehave if this is not the case
     ///
     fn pad_nulls(
         &mut self,
-        values_range: Range<usize>,
-        levels_range: Range<usize>,
+        read_offset: usize,
+        values_read: usize,
+        levels_read: usize,
         rev_valid_position_iter: impl Iterator<Item = usize>,
     );
 }
@@ -246,13 +246,15 @@ pub trait ValuesBuffer: BufferQueue {
 impl<T: ScalarValue> ValuesBuffer for ScalarBuffer<T> {
     fn pad_nulls(
         &mut self,
-        values_range: Range<usize>,
-        levels_range: Range<usize>,
+        read_offset: usize,
+        values_read: usize,
+        levels_read: usize,
         rev_valid_position_iter: impl Iterator<Item = usize>,
     ) {
         let slice = self.as_slice_mut();
-        assert!(slice.len() >= levels_range.end);
+        assert!(slice.len() >= read_offset + levels_read);
 
+        let values_range = read_offset..read_offset + values_read;
         for (value_pos, level_pos) in values_range.rev().zip(rev_valid_position_iter) {
             debug_assert!(level_pos >= value_pos);
             if level_pos <= value_pos {

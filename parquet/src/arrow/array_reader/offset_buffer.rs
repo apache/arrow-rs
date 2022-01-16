@@ -23,7 +23,6 @@ use crate::errors::{ParquetError, Result};
 use arrow::array::{make_array, ArrayDataBuilder, ArrayRef, OffsetSizeTrait};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
-use std::ops::Range;
 
 pub struct OffsetBuffer<I: ScalarValue> {
     pub offsets: ScalarBuffer<I>,
@@ -163,19 +162,20 @@ impl<I: OffsetSizeTrait + ScalarValue> BufferQueue for OffsetBuffer<I> {
 impl<I: OffsetSizeTrait + ScalarValue> ValuesBuffer for OffsetBuffer<I> {
     fn pad_nulls(
         &mut self,
-        values_range: Range<usize>,
-        levels_range: Range<usize>,
+        read_offset: usize,
+        values_read: usize,
+        levels_read: usize,
         rev_position_iter: impl Iterator<Item = usize>,
     ) {
-        assert_eq!(values_range.start, levels_range.start);
-        assert_eq!(self.offsets.len(), values_range.end + 1);
-        self.offsets.resize(levels_range.end + 1);
+        assert_eq!(self.offsets.len(), read_offset + values_read + 1);
+        self.offsets.resize(read_offset + levels_read + 1);
 
         let offsets = self.offsets.as_slice_mut();
 
-        let mut last_pos = levels_range.end + 1;
+        let mut last_pos = read_offset + levels_read + 1;
         let mut last_start_offset = I::from_usize(self.values.len()).unwrap();
 
+        let values_range = read_offset..read_offset + values_read;
         for (value_pos, level_pos) in values_range.clone().rev().zip(rev_position_iter) {
             assert!(level_pos >= value_pos);
             assert!(level_pos < last_pos);
