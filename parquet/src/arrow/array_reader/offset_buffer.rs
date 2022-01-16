@@ -156,42 +156,33 @@ impl<I: OffsetSizeTrait + ScalarValue> ValuesBuffer for OffsetBuffer<I> {
 
         let offsets = self.offsets.as_slice_mut();
 
-        let values_start = values_range.start;
-        let mut last_offset = levels_range.end + 1;
+        let mut last_pos = levels_range.end + 1;
+        let mut last_start_offset = I::from_usize(self.values.len()).unwrap();
 
-        for (value_pos, level_pos) in values_range.rev().zip(rev_position_iter) {
+        for (value_pos, level_pos) in values_range.clone().rev().zip(rev_position_iter) {
             assert!(level_pos >= value_pos);
-            assert!(level_pos < last_offset);
+            assert!(level_pos < last_pos);
+
+            let end_offset = offsets[value_pos + 1];
+            let start_offset = offsets[value_pos];
+
+            // Fill in any nulls
+            for x in &mut offsets[level_pos + 1..last_pos] {
+                *x = end_offset;
+            }
 
             if level_pos == value_pos {
-                // Pad leading nulls if necessary
-                if level_pos != last_offset {
-                    let value = offsets[last_offset];
-                    for x in &mut offsets[level_pos + 1..last_offset] {
-                        *x = value;
-                    }
-                }
-
-                // We are done
                 return;
             }
 
-            // Fill in any nulls
-            let value_end = offsets[value_pos + 1];
-            let value_start = offsets[value_pos];
-
-            for x in &mut offsets[level_pos + 1..last_offset] {
-                *x = value_end;
-            }
-
-            offsets[level_pos] = value_start;
-            last_offset = level_pos;
+            offsets[level_pos] = start_offset;
+            last_pos = level_pos;
+            last_start_offset = start_offset;
         }
 
         // Pad leading nulls up to `last_offset`
-        let value = offsets[values_start];
-        for x in &mut offsets[values_start + 1..last_offset] {
-            *x = value
+        for x in &mut offsets[values_range.start + 1..last_pos] {
+            *x = last_start_offset
         }
     }
 }
