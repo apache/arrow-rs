@@ -160,12 +160,12 @@ mod tests {
     use crate::basic::SortOrder;
     use crate::basic::Type;
     use crate::schema::types::Type as SchemaType;
-    use crate::util::test_common::get_temp_file;
+    use crate::util::cursor::SliceableCursor;
     use parquet_format::TypeDefinedOrder;
 
     #[test]
     fn test_parse_metadata_size_smaller_than_footer() {
-        let test_file = get_temp_file("corrupt-1.parquet", &[]);
+        let test_file = tempfile::tempfile().unwrap();
         let reader_result = parse_metadata(&test_file);
         assert!(reader_result.is_err());
         assert_eq!(
@@ -176,8 +176,8 @@ mod tests {
 
     #[test]
     fn test_parse_metadata_corrupt_footer() {
-        let test_file = get_temp_file("corrupt-2.parquet", &[1, 2, 3, 4, 5, 6, 7, 8]);
-        let reader_result = parse_metadata(&test_file);
+        let data = SliceableCursor::new(Arc::new(vec![1, 2, 3, 4, 5, 6, 7, 8]));
+        let reader_result = parse_metadata(&data);
         assert!(reader_result.is_err());
         assert_eq!(
             reader_result.err().unwrap(),
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn test_parse_metadata_invalid_length() {
         let test_file =
-            get_temp_file("corrupt-3.parquet", &[0, 0, 0, 255, b'P', b'A', b'R', b'1']);
+            SliceableCursor::new(Arc::new(vec![0, 0, 0, 255, b'P', b'A', b'R', b'1']));
         let reader_result = parse_metadata(&test_file);
         assert!(reader_result.is_err());
         assert_eq!(
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn test_parse_metadata_invalid_start() {
         let test_file =
-            get_temp_file("corrupt-4.parquet", &[255, 0, 0, 0, b'P', b'A', b'R', b'1']);
+            SliceableCursor::new(Arc::new(vec![255, 0, 0, 0, b'P', b'A', b'R', b'1']));
         let reader_result = parse_metadata(&test_file);
         assert!(reader_result.is_err());
         assert_eq!(
