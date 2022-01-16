@@ -29,13 +29,22 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
         self.offsets.len() - 1
     }
 
+    /// If `validate_utf8` this verifies that the first character of `data` is
+    /// the start of a UTF-8 codepoint
+    ///
+    /// Note: This does not verify that the entirety of `data` is valid
+    /// UTF-8. This should be done by calling [`Self::values_as_str`] after
+    /// all data has been written
     pub fn try_push(&mut self, data: &[u8], validate_utf8: bool) -> Result<()> {
         if validate_utf8 {
-            if let Err(e) = std::str::from_utf8(data) {
-                return Err(ParquetError::General(format!(
-                    "encountered non UTF-8 data: {}",
-                    e
-                )));
+            if let Some(&b) = data.first() {
+                // A valid code-point iff it does not start with 0b10xxxxxx
+                // Bit-magic taken from `std::str::is_char_boundary`
+                if (b as i8) < -0x40 {
+                    return Err(ParquetError::General(
+                        "encountered non UTF-8 data".to_string(),
+                    ));
+                }
             }
         }
 
@@ -68,6 +77,16 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
         Ok(())
     }
 
+    /// Returns the values buffer as a string slice, returning an error
+    /// if it is invalid UTF-8
+    ///
+    /// `start_offset` is the offset in bytes from the start
+    pub fn values_as_str(&self, start_offset: usize) -> Result<&str> {
+        std::str::from_utf8(&self.values.as_slice()[start_offset..]).map_err(|e| {
+            ParquetError::General(format!("encountered non UTF-8 data: {}", e))
+        })
+    }
+
     pub fn into_array(
         self,
         null_buffer: Option<Buffer>,
@@ -84,7 +103,7 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
 
         let data = match cfg!(debug_assertions) {
             true => array_data_builder.build().unwrap(),
-            false => unsafe { array_data_builder.build_unchecked() }
+            false => unsafe { array_data_builder.build_unchecked() },
         };
 
         make_array(data)

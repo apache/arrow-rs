@@ -283,6 +283,8 @@ impl ByteArrayDecoderPlain {
         output: &mut OffsetBuffer<I>,
         len: usize,
     ) -> Result<usize> {
+        let initial_values_length = output.values.len();
+
         let to_read = len.min(self.remaining_values);
         output.offsets.reserve(to_read);
 
@@ -321,6 +323,10 @@ impl ByteArrayDecoderPlain {
             read += 1;
         }
         self.remaining_values -= to_read;
+
+        if self.validate_utf8 {
+            output.values_as_str(initial_values_length)?;
+        }
         Ok(to_read)
     }
 }
@@ -355,6 +361,8 @@ impl ByteArrayDecoderDeltaLength {
         output: &mut OffsetBuffer<I>,
         len: usize,
     ) -> Result<usize> {
+        let initial_values_length = output.values.len();
+
         let to_read = len.min(self.lengths.len() - self.length_offset);
         output.offsets.reserve(to_read);
 
@@ -381,6 +389,10 @@ impl ByteArrayDecoderDeltaLength {
 
         self.data_offset += start_offset;
         self.length_offset += to_read;
+
+        if self.validate_utf8 {
+            output.values_as_str(initial_values_length)?;
+        }
         Ok(to_read)
     }
 }
@@ -424,6 +436,7 @@ impl ByteArrayDecoderDelta {
         output: &mut OffsetBuffer<I>,
         len: usize,
     ) -> Result<usize> {
+        let initial_values_length = output.values.len();
         assert_eq!(self.prefix_lengths.len(), self.suffix_lengths.len());
 
         let to_read = len.min(self.prefix_lengths.len() - self.length_offset);
@@ -455,6 +468,10 @@ impl ByteArrayDecoderDelta {
         }
 
         self.length_offset += to_read;
+
+        if self.validate_utf8 {
+            output.values_as_str(initial_values_length)?;
+        }
         Ok(to_read)
     }
 }
