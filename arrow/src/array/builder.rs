@@ -2949,7 +2949,10 @@ mod tests {
         builder.resize(20);
 
         assert_eq!(builder.len, 20);
-        assert_eq!(builder.buffer.as_slice(), &[0b00001111, 0b00011000, 0b00000000]);
+        assert_eq!(
+            builder.buffer.as_slice(),
+            &[0b00001111, 0b00011000, 0b00000000]
+        );
 
         builder.resize(5);
         assert_eq!(builder.len, 5);
