@@ -258,11 +258,15 @@ where
             // At this point we have read values, definition and repetition levels.
             // If both definition and repetition levels are defined, their counts
             // should be equal. Values count is always less or equal to definition levels.
-            if num_def_levels != 0 && num_rep_levels != 0 {
-                assert_eq!(
-                    num_def_levels, num_rep_levels,
-                    "Number of decoded rep / def levels did not match"
-                );
+            if num_def_levels != 0
+                && num_rep_levels != 0
+                && num_rep_levels != num_def_levels
+            {
+                return Err(general_err!(
+                    "inconsistent number of levels read - def: {}, rep: {}",
+                    num_def_levels,
+                    num_rep_levels
+                ));
             }
 
             // Note that if field is not required, but no definition levels are provided,
@@ -274,6 +278,14 @@ where
             let curr_values_read = self
                 .values_decoder
                 .read(values, values_read..values_read + values_to_read)?;
+
+            if num_def_levels != 0 && curr_values_read != num_def_levels - null_count {
+                return Err(general_err!(
+                    "insufficient values read from column - expected: {}, got: {}",
+                    num_def_levels - null_count,
+                    curr_values_read
+                ));
+            }
 
             // Update all "return" counters and internal state.
 

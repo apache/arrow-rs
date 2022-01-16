@@ -413,12 +413,22 @@ impl ByteArrayDecoderDelta {
         let mut prefix = DeltaBitPackDecoder::<Int32Type>::new();
         prefix.set_data(data.all(), values)?;
         let mut prefix_lengths = vec![0; values];
-        prefix.get(&mut prefix_lengths)?;
+        let read = prefix.get(&mut prefix_lengths)?;
+        prefix_lengths.truncate(read);
 
         let mut suffix = DeltaBitPackDecoder::<Int32Type>::new();
         suffix.set_data(data.start_from(prefix.get_offset()), values)?;
         let mut suffix_lengths = vec![0; values];
-        suffix.get(&mut suffix_lengths)?;
+        let read = suffix.get(&mut suffix_lengths)?;
+        suffix_lengths.truncate(read);
+
+        if prefix_lengths.len() != suffix_lengths.len() {
+            return Err(general_err!(format!(
+                "inconsistent DELTA_BYTE_ARRAY lengths, prefixes: {}, suffixes: {}",
+                prefix_lengths.len(),
+                suffix_lengths.len()
+            )));
+        }
 
         Ok(Self {
             prefix_lengths,
@@ -479,6 +489,7 @@ impl ByteArrayDecoderDelta {
 pub struct ByteArrayDecoderDictionary {
     decoder: RleDecoder,
     index_buf: Box<[i32; 1024]>,
+    index_buf_len: usize,
     index_offset: usize,
 }
 
@@ -491,7 +502,8 @@ impl ByteArrayDecoderDictionary {
         Self {
             decoder,
             index_buf: Box::new([0; 1024]),
-            index_offset: 1024,
+            index_buf_len: 0,
+            index_offset: 0,
         }
     }
 
@@ -504,18 +516,16 @@ impl ByteArrayDecoderDictionary {
         let mut values_read = 0;
 
         while values_read != len {
-            if self.index_offset == self.index_buf.len() {
-                let decoded = self.decoder.get_batch(self.index_buf.as_mut())?;
-                self.index_offset = 0;
-                if decoded != self.index_buf.len() && decoded < len - values_read {
-                    return Err(ParquetError::EOF(
-                        "insufficient values in RLE byte array".into(),
-                    ));
+            if self.index_offset == self.index_buf_len {
+                let read = self.decoder.get_batch(self.index_buf.as_mut())?;
+                if read == 0 {
+                    break;
                 }
+                self.index_buf_len = read;
+                self.index_offset = 0;
             }
 
-            let to_read =
-                (len - values_read).min(self.index_buf.len() - self.index_offset);
+            let to_read = (len - values_read).min(self.index_buf_len - self.index_offset);
 
             output.extend_from_dictionary(
                 &self.index_buf[self.index_offset..self.index_offset + to_read],
