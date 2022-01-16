@@ -37,6 +37,7 @@ use arrow::datatypes::DataType as ArrowType;
 use std::any::Any;
 use std::ops::Range;
 
+/// Returns an [`ArrayReader`] that decodes the provided byte array column
 pub fn make_byte_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
@@ -73,6 +74,7 @@ pub fn make_byte_array_reader(
     }
 }
 
+/// An [`ArrayReader`] for variable length byte arrays
 struct ByteArrayReader<I: ScalarValue> {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
@@ -133,6 +135,7 @@ impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
     }
 }
 
+/// A [`ColumnValueDecoder`] for variable length byte arrays
 struct ByteArrayColumnValueDecoder<I: ScalarValue> {
     dict: Option<OffsetBuffer<I>>,
     decoder: Option<ByteArrayDecoder>,
@@ -200,13 +203,15 @@ impl<I: OffsetSizeTrait + ScalarValue> ColumnValueDecoder
     }
 
     fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
-        self.decoder
-            .as_mut()
-            .expect("decoder set")
-            .read(out, range, self.dict.as_ref())
+        self.decoder.as_mut().expect("decoder set").read(
+            out,
+            range.end - range.start,
+            self.dict.as_ref(),
+        )
     }
 }
 
+/// A generic decoder from uncompressed parquet value data to [`OffsetBuffer`]
 pub enum ByteArrayDecoder {
     Plain(ByteArrayDecoderPlain),
     Dictionary(ByteArrayDecoderDictionary),
@@ -249,13 +254,13 @@ impl ByteArrayDecoder {
         Ok(decoder)
     }
 
+    /// Read up to `len` values to `out` with the optional dictionary
     pub fn read<I: OffsetSizeTrait + ScalarValue>(
         &mut self,
         out: &mut OffsetBuffer<I>,
-        range: Range<usize>,
+        len: usize,
         dict: Option<&OffsetBuffer<I>>,
     ) -> Result<usize> {
-        let len = range.end - range.start;
         match self {
             ByteArrayDecoder::Plain(d) => d.read(out, len),
             ByteArrayDecoder::Dictionary(d) => {
@@ -268,7 +273,7 @@ impl ByteArrayDecoder {
     }
 }
 
-/// Decoder for [`Encoding::PLAIN`]
+/// Decoder from [`Encoding::PLAIN`] data to [`OffsetBuffer`]
 pub struct ByteArrayDecoderPlain {
     buf: ByteBufferPtr,
     offset: usize,
@@ -347,7 +352,7 @@ impl ByteArrayDecoderPlain {
     }
 }
 
-/// Decoder for [`Encoding::DELTA_LENGTH_BYTE_ARRAY`]
+/// Decoder from [`Encoding::DELTA_LENGTH_BYTE_ARRAY`] data to [`OffsetBuffer`]
 pub struct ByteArrayDecoderDeltaLength {
     lengths: Vec<i32>,
     data: ByteBufferPtr,
@@ -415,7 +420,7 @@ impl ByteArrayDecoderDeltaLength {
     }
 }
 
-/// Decoder for [`Encoding::DELTA_BYTE_ARRAY`]
+/// Decoder from [`Encoding::DELTA_BYTE_ARRAY`] to [`OffsetBuffer`]
 pub struct ByteArrayDecoderDelta {
     prefix_lengths: Vec<i32>,
     suffix_lengths: Vec<i32>,
@@ -505,6 +510,7 @@ impl ByteArrayDecoderDelta {
     }
 }
 
+/// Decoder from [`Encoding::RLE_DICTIONARY`] to [`OffsetBuffer`]
 pub struct ByteArrayDecoderDictionary {
     decoder: RleDecoder,
     index_buf: Box<[i32; 1024]>,

@@ -24,6 +24,8 @@ use arrow::array::{make_array, ArrayDataBuilder, ArrayRef, OffsetSizeTrait};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
 
+/// A buffer of variable-sized byte arrays that can be converted into
+/// a corresponding [`ArrayRef`]
 pub struct OffsetBuffer<I: ScalarValue> {
     pub offsets: ScalarBuffer<I>,
     pub values: ScalarBuffer<u8>,
@@ -41,6 +43,7 @@ impl<I: ScalarValue> Default for OffsetBuffer<I> {
 }
 
 impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
+    /// Returns the number of byte arrays in this buffer
     pub fn len(&self) -> usize {
         self.offsets.len() - 1
     }
@@ -73,6 +76,10 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
         Ok(())
     }
 
+    /// Extends this buffer with a list of keys
+    ///
+    /// For each value `key` in `keys` this will insert
+    /// `&dict_values[dict_offsets[key]..dict_offsets[key+1]]`
     pub fn extend_from_dictionary<K: ArrowNativeType, V: ArrowNativeType>(
         &mut self,
         keys: &[K],
@@ -103,6 +110,7 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
         })
     }
 
+    /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
     pub fn into_array(
         self,
         null_buffer: Option<Buffer>,
