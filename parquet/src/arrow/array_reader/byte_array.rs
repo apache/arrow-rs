@@ -346,7 +346,7 @@ impl ByteArrayDecoderPlain {
         self.max_remaining_values -= to_read;
 
         if self.validate_utf8 {
-            output.values_as_str(initial_values_length)?;
+            output.check_valid_utf8(initial_values_length)?;
         }
         Ok(to_read)
     }
@@ -414,7 +414,7 @@ impl ByteArrayDecoderDeltaLength {
         self.length_offset += to_read;
 
         if self.validate_utf8 {
-            output.values_as_str(initial_values_length)?;
+            output.check_valid_utf8(initial_values_length)?;
         }
         Ok(to_read)
     }
@@ -504,7 +504,7 @@ impl ByteArrayDecoderDelta {
         self.length_offset += to_read;
 
         if self.validate_utf8 {
-            output.values_as_str(initial_values_length)?;
+            output.check_valid_utf8(initial_values_length)?;
         }
         Ok(to_read)
     }

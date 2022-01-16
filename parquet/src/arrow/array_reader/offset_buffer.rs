@@ -100,14 +100,18 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
         Ok(())
     }
 
-    /// Returns the values buffer as a string slice, returning an error
-    /// if it is invalid UTF-8
+    /// Validates that `&self.values[start_offset..]` is a valid UTF-8 sequence
     ///
-    /// `start_offset` is the offset in bytes from the start
-    pub fn values_as_str(&self, start_offset: usize) -> Result<&str> {
-        std::str::from_utf8(&self.values.as_slice()[start_offset..]).map_err(|e| {
-            ParquetError::General(format!("encountered non UTF-8 data: {}", e))
-        })
+    /// This MUST be combined with validating that the offsets start on a character
+    /// boundary, otherwise it would be possible for the values array to be a valid UTF-8
+    /// sequence, but not the individual string slices it contains
+    ///
+    /// [`Self::try_push`] can perform this validation check on insertion
+    pub fn check_valid_utf8(&self, start_offset: usize) -> Result<()> {
+        match std::str::from_utf8(&self.values.as_slice()[start_offset..]) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(general_err!("encountered non UTF-8 data: {}", e)),
+        }
     }
 
     /// Converts this into an [`ArrayRef`] with the provided `data_type` and `null_buffer`
@@ -215,5 +219,119 @@ impl<I: OffsetSizeTrait + ScalarValue> ValuesBuffer for OffsetBuffer<I> {
 impl<I: ScalarValue> ValuesBufferSlice for OffsetBuffer<I> {
     fn capacity(&self) -> usize {
         usize::MAX
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Array, LargeStringArray, StringArray};
+
+    #[test]
+    fn test_offset_buffer_empty() {
+        let buffer = OffsetBuffer::<i32>::default();
+        let array = buffer.into_array(None, ArrowType::Utf8);
+        let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(strings.len(), 0);
+    }
+
+    #[test]
+    fn test_offset_buffer_append() {
+        let mut buffer = OffsetBuffer::<i64>::default();
+        buffer.try_push("hello".as_bytes(), true).unwrap();
+        buffer.try_push("bar".as_bytes(), true).unwrap();
+        buffer
+            .extend_from_dictionary(&[1, 3, 0, 2], &[0, 2, 4, 5, 6], "abcdef".as_bytes())
+            .unwrap();
+
+        let array = buffer.into_array(None, ArrowType::LargeUtf8);
+        let strings = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        assert_eq!(
+            strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
+            vec!["hello", "bar", "cd", "f", "ab", "e"]
+        )
+    }
+
+    #[test]
+    fn test_offset_buffer_split() {
+        let mut buffer = OffsetBuffer::<i32>::default();
+        for v in ["hello", "world", "cupcakes", "a", "b", "c"] {
+            buffer.try_push(v.as_bytes(), false).unwrap()
+        }
+        let split = buffer.split_off(3);
+
+        let array = split.into_array(None, ArrowType::Utf8);
+        let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(
+            strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
+            vec!["hello", "world", "cupcakes"]
+        );
+
+        buffer.try_push("test".as_bytes(), false).unwrap();
+        let array = buffer.into_array(None, ArrowType::Utf8);
+        let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(
+            strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
+            vec!["a", "b", "c", "test"]
+        );
+    }
+
+    #[test]
+    fn test_offset_buffer_pad_nulls() {
+        let mut buffer = OffsetBuffer::<i32>::default();
+        for v in ["a", "b", "c", "def", "gh"] {
+            buffer.try_push(v.as_bytes(), false).unwrap()
+        }
+
+        // Both trailing and leading nulls
+        buffer.pad_nulls(1, 4, 10, [8, 7, 5, 3].into_iter());
+
+        // No null buffer - nulls -> ""
+        let array = buffer.into_array(None, ArrowType::Utf8);
+        let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(
+            strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
+            vec!["a", "", "", "b", "", "c", "", "def", "gh", "", ""]
+        );
+    }
+
+    #[test]
+    fn test_utf8_validation() {
+        let valid_2_byte_utf8 = &[0b11001000, 0b10001000];
+        std::str::from_utf8(valid_2_byte_utf8).unwrap();
+        let valid_3_byte_utf8 = &[0b11101000, 0b10001000, 0b10001000];
+        std::str::from_utf8(valid_3_byte_utf8).unwrap();
+        let valid_4_byte_utf8 = &[0b11110010, 0b10101000, 0b10101001, 0b10100101];
+        std::str::from_utf8(valid_4_byte_utf8).unwrap();
+
+        let mut buffer = OffsetBuffer::<i32>::default();
+        buffer.try_push(valid_2_byte_utf8, true).unwrap();
+        buffer.try_push(valid_3_byte_utf8, true).unwrap();
+        buffer.try_push(valid_4_byte_utf8, true).unwrap();
+
+        // Cannot append string starting with incomplete codepoint
+        buffer.try_push(&valid_2_byte_utf8[1..], true).unwrap_err();
+        buffer.try_push(&valid_3_byte_utf8[1..], true).unwrap_err();
+        buffer.try_push(&valid_3_byte_utf8[2..], true).unwrap_err();
+        buffer.try_push(&valid_4_byte_utf8[1..], true).unwrap_err();
+        buffer.try_push(&valid_4_byte_utf8[2..], true).unwrap_err();
+        buffer.try_push(&valid_4_byte_utf8[3..], true).unwrap_err();
+
+        // Can append data containing an incomplete codepoint
+        buffer.try_push(&[0b01111111, 0b10111111], true).unwrap();
+
+        assert_eq!(buffer.len(), 4);
+        assert_eq!(buffer.values.len(), 11);
+
+        buffer.try_push(valid_3_byte_utf8, true).unwrap();
+
+        // Should fail due to incomplete codepoint
+        buffer.check_valid_utf8(0).unwrap_err();
+
+        // After broken codepoint -> success
+        buffer.check_valid_utf8(11).unwrap();
+
+        // Fails if run from middle of codepoint
+        buffer.check_valid_utf8(12).unwrap_err();
     }
 }

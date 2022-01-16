@@ -366,8 +366,8 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -380,8 +380,8 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -399,8 +399,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -413,8 +413,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -433,8 +433,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -447,8 +447,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -467,8 +467,8 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -481,8 +481,8 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -500,8 +500,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -514,8 +514,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -534,8 +534,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -548,8 +548,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_int32_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -571,8 +571,8 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -585,8 +585,8 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -604,8 +604,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -618,8 +618,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -638,8 +638,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -652,8 +652,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -672,8 +672,8 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -686,8 +686,8 @@ fn add_benches(c: &mut Criterion) {
                     mandatory_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -705,8 +705,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -719,8 +719,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -739,8 +739,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
@@ -753,8 +753,8 @@ fn add_benches(c: &mut Criterion) {
                     optional_string_column_desc.clone(),
                 );
                 count = bench_array_reader(array_reader);
-                assert_eq!(count, EXPECTED_VALUE_COUNT);
-            })
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
         },
     );
 
