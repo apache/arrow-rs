@@ -411,7 +411,7 @@ mod tests {
         let encodings = &[
             Encoding::PLAIN,
             Encoding::RLE_DICTIONARY,
-            //Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
             Encoding::DELTA_BYTE_ARRAY,
         ];
 
