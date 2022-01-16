@@ -209,7 +209,11 @@ impl ArrowNativeType for i64 {
 
 impl JsonSerializable for i128 {
     fn into_json_value(self) -> Option<Value> {
-        Some(self.into())
+        // Serialize as string to avoid issues with arbitrary_precision serde_json feature
+        // - https://github.com/serde-rs/json/issues/559
+        // - https://github.com/serde-rs/json/issues/845
+        // - https://github.com/serde-rs/json/issues/846
+        Some(self.to_string().into())
     }
 }
 

@@ -46,7 +46,7 @@ pub type SchemaRef = Arc<Schema>;
 mod tests {
     use super::*;
     use crate::error::Result;
-    use serde_json::Value::{Bool, Number as VNumber};
+    use serde_json::Value::{Bool, Number as VNumber, String as VString};
     use serde_json::{Number, Value};
     use std::{
         collections::{BTreeMap, HashMap},
@@ -1175,7 +1175,7 @@ mod tests {
         assert_eq!(Some(VNumber(Number::from(1))), 1i16.into_json_value());
         assert_eq!(Some(VNumber(Number::from(1))), 1i32.into_json_value());
         assert_eq!(Some(VNumber(Number::from(1))), 1i64.into_json_value());
-        assert_eq!(Some(VNumber(Number::from(1))), 1i128.into_json_value());
+        assert_eq!(Some(VString("1".to_string())), 1i128.into_json_value());
         assert_eq!(Some(VNumber(Number::from(1))), 1u8.into_json_value());
         assert_eq!(Some(VNumber(Number::from(1))), 1u16.into_json_value());
         assert_eq!(Some(VNumber(Number::from(1))), 1u32.into_json_value());
