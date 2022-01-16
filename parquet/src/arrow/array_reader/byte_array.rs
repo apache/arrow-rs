@@ -234,7 +234,7 @@ impl ByteArrayDecoder {
                 num_values,
                 validate_utf8,
             )),
-            Encoding::RLE_DICTIONARY => {
+            Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
                 ByteArrayDecoder::Dictionary(ByteArrayDecoderDictionary::new(data))
             }
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
