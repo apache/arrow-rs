@@ -606,7 +606,7 @@ mod tests {
         let mut encoder =
             get_encoder::<ByteArrayType>(descriptor, encoding, mem_tracker).unwrap();
 
-        encoder.put(&data).unwrap();
+        encoder.put(data).unwrap();
         encoder.flush_buffer().unwrap()
     }
 
