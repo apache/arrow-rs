@@ -1721,6 +1721,6 @@ mod tests {
 
         let array = Arc::new(list_builder.finish());
 
-        one_column_roundtrip("test_struct_in_list.parquet", array, true, Some(10));
+        one_column_roundtrip(array, true, Some(10));
     }
 }
