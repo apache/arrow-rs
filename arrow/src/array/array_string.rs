@@ -138,9 +138,10 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
     }
 
     /// Creates a `GenericStringArray` based on an iterator of values without nulls
-    pub fn from_iter_values<Ptr, I: IntoIterator<Item = Ptr>>(iter: I) -> Self
+    pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
         Ptr: AsRef<str>,
+        I: IntoIterator<Item = Ptr>,
     {
         let iter = iter.into_iter();
         let (_, data_len) = iter.size_hint();
@@ -306,7 +307,7 @@ impl<OffsetSize: StringOffsetSizeTrait> From<Vec<&str>>
     for GenericStringArray<OffsetSize>
 {
     fn from(v: Vec<&str>) -> Self {
-        GenericStringArray::<OffsetSize>::from_iter_values(v)
+        Self::from_iter_values(v)
     }
 }
 
@@ -314,7 +315,7 @@ impl<OffsetSize: StringOffsetSizeTrait> From<Vec<String>>
     for GenericStringArray<OffsetSize>
 {
     fn from(v: Vec<String>) -> Self {
-        GenericStringArray::<OffsetSize>::from_iter_values(v)
+        Self::from_iter_values(v)
     }
 }
 
