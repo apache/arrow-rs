@@ -697,6 +697,13 @@ pub fn eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     compare_op_scalar!(left, right, |a, b| a == b)
 }
 
+pub fn eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &[u8]
+) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a, b| a == b)
+}
+
 #[inline]
 fn binary_boolean_op<F>(
     left: &BooleanArray,
@@ -1162,6 +1169,19 @@ where
             dyn_compare_scalar!(left, right, key_type, neq_scalar)
         }
         _ => dyn_compare_scalar!(left, right, neq_scalar),
+    }
+}
+
+/// Perform `left == right` operation on an array and a numrtic scalar value.
+/// Only support BinaryArrays so far.
+pub fn eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            eq_binary_scalar(left, right)
+        },
+        _ => Err(ArrowError::ComputeError(
+            "eq_dyn_binary_scalar only supports Binary arrays".to_string()))
     }
 }
 
@@ -3574,6 +3594,17 @@ mod tests {
         let array: ArrayRef = Arc::new(array);
         let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
         assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_eq_dyn_binary_scalar() {
+        let values: Vec<&[u8]> = vec![b"one", b"two", b"", b"three"];
+        let array = BinaryArray::from(values);
+        let a_eq = eq_dyn_binary_scalar(&array, b"two").unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![Some(false), Some(true), Some(false), Some(false)])
+        )
     }
 
     #[test]
