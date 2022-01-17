@@ -143,6 +143,7 @@ impl<I: OffsetSizeTrait + ScalarValue> BufferQueue for OffsetBuffer<I> {
     type Slice = Self;
 
     fn split_off(&mut self, len: usize) -> Self::Output {
+        assert!(self.offsets.len() > len, "{} > {}", self.offsets.len(), len);
         let remaining_offsets = self.offsets.len() - len - 1;
         let offsets = self.offsets.as_slice();
 

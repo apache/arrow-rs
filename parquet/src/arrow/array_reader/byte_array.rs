@@ -579,11 +579,13 @@ impl ByteArrayDecoderDictionary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::record_reader::buffer::ValuesBuffer;
     use crate::basic::Type as PhysicalType;
     use crate::data_type::{ByteArray, ByteArrayType};
     use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
     use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
     use crate::util::memory::MemTracker;
+    use arrow::array::{Array, StringArray};
     use std::sync::Arc;
 
     fn column() -> ColumnDescPtr {
@@ -664,6 +666,34 @@ mod tests {
             assert_eq!(output.offsets.as_slice(), &[0, 5, 10, 11, 12]);
 
             assert_eq!(decoder.read(&mut output, 4..8).unwrap(), 0);
+
+            let valid = vec![false, false, true, true, false, true, true, false, false];
+            let rev_position_iter = valid
+                .iter()
+                .enumerate()
+                .rev()
+                .filter_map(|(i, valid)| valid.then(|| i));
+
+            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+
+            output.pad_nulls(0, 4, valid.len(), rev_position_iter);
+            let array = output.into_array(Some(valid_buffer), ArrowType::Utf8);
+            let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+
+            assert_eq!(
+                strings.iter().collect::<Vec<_>>(),
+                vec![
+                    None,
+                    None,
+                    Some("hello"),
+                    Some("world"),
+                    None,
+                    Some("a"),
+                    Some("b"),
+                    None,
+                    None,
+                ]
+            );
         }
     }
 }
