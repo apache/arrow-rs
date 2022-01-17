@@ -124,22 +124,10 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     }
 
     /// Creates a [GenericBinaryArray] from a vector of byte slices
+    ///
+    /// See also [`Self::from_iter_values`]
     pub fn from_vec(v: Vec<&[u8]>) -> Self {
-        let mut offsets = Vec::with_capacity(v.len() + 1);
-        let mut values = Vec::new();
-        let mut length_so_far: OffsetSize = OffsetSize::zero();
-        offsets.push(length_so_far);
-        for s in &v {
-            length_so_far += OffsetSize::from_usize(s.len()).unwrap();
-            offsets.push(length_so_far);
-            values.extend_from_slice(s);
-        }
-        let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
-            .len(v.len())
-            .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_buffer(Buffer::from_slice_ref(&values));
-        let array_data = unsafe { array_data.build_unchecked() };
-        GenericBinaryArray::<OffsetSize>::from(array_data)
+        Self::from_iter_values(v)
     }
 
     /// Creates a [GenericBinaryArray] from a vector of Optional (null) byte slices
@@ -170,6 +158,42 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)
+    }
+
+    /// Creates a `GenericBinaryArray` based on an iterator of values without nulls
+    pub fn from_iter_values<Ptr, I>(iter: I) -> Self
+    where
+        Ptr: AsRef<[u8]>,
+        I: IntoIterator<Item = Ptr>,
+    {
+        let iter = iter.into_iter();
+        let (_, data_len) = iter.size_hint();
+        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
+
+        let mut offsets =
+            MutableBuffer::new((data_len + 1) * std::mem::size_of::<OffsetSize>());
+        let mut values = MutableBuffer::new(0);
+
+        let mut length_so_far = OffsetSize::zero();
+        offsets.push(length_so_far);
+
+        for s in iter {
+            let s = s.as_ref();
+            length_so_far += OffsetSize::from_usize(s.len()).unwrap();
+            offsets.push(length_so_far);
+            values.extend_from_slice(s);
+        }
+
+        // iterator size hint may not be correct so compute the actual number of offsets
+        assert!(!offsets.is_empty()); // wrote at least one
+        let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
+
+        let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
+            .len(actual_len)
+            .add_buffer(offsets.into())
+            .add_buffer(values.into());
+        let array_data = unsafe { array_data.build_unchecked() };
+        Self::from(array_data)
     }
 }
 
@@ -359,7 +383,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> From<Vec<Option<&[u8]>>>
     for GenericBinaryArray<OffsetSize>
 {
     fn from(v: Vec<Option<&[u8]>>) -> Self {
-        GenericBinaryArray::<OffsetSize>::from_opt_vec(v)
+        Self::from_opt_vec(v)
     }
 }
 
@@ -367,13 +391,13 @@ impl<OffsetSize: BinaryOffsetSizeTrait> From<Vec<&[u8]>>
     for GenericBinaryArray<OffsetSize>
 {
     fn from(v: Vec<&[u8]>) -> Self {
-        GenericBinaryArray::<OffsetSize>::from_vec(v)
+        Self::from_iter_values(v)
     }
 }
 
 impl<T: BinaryOffsetSizeTrait> From<GenericListArray<T>> for GenericBinaryArray<T> {
     fn from(v: GenericListArray<T>) -> Self {
-        GenericBinaryArray::<T>::from_list(v)
+        Self::from_list(v)
     }
 }
 
