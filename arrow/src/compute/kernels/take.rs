@@ -131,6 +131,10 @@ where
             let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
             Ok(Arc::new(take_boolean(values, indices)?))
         }
+        DataType::Decimal(_, _) => {
+            let decimal_values = values.as_any().downcast_ref::<DecimalArray>().unwrap();
+            Ok(Arc::new(take_decimal128(decimal_values, indices)?))
+        }
         DataType::Int8 => downcast_take!(Int8Type, values, indices),
         DataType::Int16 => downcast_take!(Int16Type, values, indices),
         DataType::Int32 => downcast_take!(Int32Type, values, indices),
@@ -481,6 +485,38 @@ where
     };
 
     Ok((buffer, nulls))
+}
+
+/// `take` implementation for decimal arrays
+fn take_decimal128<IndexType>(
+    decimal_values: &DecimalArray,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<DecimalArray>
+where
+    IndexType: ArrowNumericType,
+    IndexType::Native: ToPrimitive,
+{
+    // TODO optimize decimal take and construct decimal array from MutableBuffer
+    let mut builder = DecimalBuilder::new(
+        indices.len(),
+        decimal_values.precision(),
+        decimal_values.scale(),
+    );
+    for i in 0..indices.len() {
+        if indices.is_null(i) {
+            builder.append_null()?;
+        } else {
+            let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
+                ArrowError::ComputeError("Cast to usize failed".to_string())
+            })?;
+            if decimal_values.is_null(index) {
+                builder.append_null()?
+            } else {
+                builder.append_value(decimal_values.value(index))?
+            }
+        }
+    }
+    Ok(builder.finish())
 }
 
 /// `take` implementation for all primitive arrays
@@ -921,6 +957,43 @@ mod tests {
     use super::*;
     use crate::compute::util::tests::build_fixed_size_list_nullable;
 
+    fn test_take_decimal_arrays(
+        data: Vec<Option<i128>>,
+        index: &UInt32Array,
+        options: Option<TakeOptions>,
+        expected_data: Vec<Option<i128>>,
+        precision: &usize,
+        scale: &usize,
+    ) -> Result<()> {
+        let mut builder = DecimalBuilder::new(data.len(), *precision, *scale);
+        for value in data {
+            match value {
+                None => {
+                    builder.append_null()?;
+                }
+                Some(v) => {
+                    builder.append_value(v)?;
+                }
+            }
+        }
+        let output = builder.finish();
+        let mut builder = DecimalBuilder::new(expected_data.len(), *precision, *scale);
+        for value in expected_data {
+            match value {
+                None => {
+                    builder.append_null()?;
+                }
+                Some(v) => {
+                    builder.append_value(v)?;
+                }
+            }
+        }
+        let expected = Arc::new(builder.finish()) as ArrayRef;
+        let output = take(&output, index, options).unwrap();
+        assert_eq!(&output, &expected);
+        Ok(())
+    }
+
     fn test_take_boolean_arrays(
         data: Vec<Option<bool>>,
         index: &UInt32Array,
@@ -1015,6 +1088,38 @@ mod tests {
             struct_builder.append(value.is_some()).unwrap();
         }
         struct_builder.finish()
+    }
+
+    #[test]
+    fn test_take_decimal128_non_null_indices() {
+        let index = UInt32Array::from(vec![0, 5, 3, 1, 4, 2]);
+        let precision: usize = 10;
+        let scale: usize = 5;
+        test_take_decimal_arrays(
+            vec![None, Some(3), Some(5), Some(2), Some(3), None],
+            &index,
+            None,
+            vec![None, None, Some(2), Some(3), Some(3), Some(5)],
+            &precision,
+            &scale,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_take_decimal128() {
+        let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]);
+        let precision: usize = 10;
+        let scale: usize = 5;
+        test_take_decimal_arrays(
+            vec![Some(0), Some(1), Some(2), Some(3), Some(4)],
+            &index,
+            None,
+            vec![Some(3), None, Some(1), Some(3), Some(2)],
+            &precision,
+            &scale,
+        )
+        .unwrap();
     }
 
     #[test]
