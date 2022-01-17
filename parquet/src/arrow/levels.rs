@@ -758,14 +758,14 @@ impl LevelInfo {
 
     /// Given a level's information, calculate the offsets required to index an array correctly.
     pub(crate) fn filter_array_indices(&self) -> Vec<usize> {
-        // happy path if not dealing with lists
-        let is_nullable = match self.level_type {
-            LevelType::Primitive(is_nullable) => is_nullable,
-            _ => panic!(
+        if !matches!(self.level_type, LevelType::Primitive(_)) {
+            panic!(
                 "Cannot filter indices on a non-primitive array, found {:?}",
                 self.level_type
-            ),
-        };
+            );
+        }
+
+        // happy path if not dealing with lists
         if self.repetition.is_none() {
             return self
                 .definition
@@ -780,17 +780,26 @@ impl LevelInfo {
                 })
                 .collect();
         }
+
         let mut filtered = vec![];
-        // remove slots that are false from definition_mask
+        let mut definition_levels = self.definition.iter();
         let mut index = 0;
-        self.definition.iter().for_each(|def| {
-            if *def == self.max_definition {
-                filtered.push(index);
+
+        for len in self.array_offsets.windows(2).map(|s| s[1] - s[0]) {
+            if len == 0 {
+                // Skip this definition level--the iterator should not be empty, and the definition
+                // level be less than max_definition, i.e., a null value)
+                assert!(*definition_levels.next().unwrap() < self.max_definition);
+            } else {
+                for (_, def) in (0..len).zip(&mut definition_levels) {
+                    if *def == self.max_definition {
+                        filtered.push(index);
+                    }
+                    index += 1;
+                }
             }
-            if *def >= self.max_definition - is_nullable as i16 {
-                index += 1;
-            }
-        });
+        }
+
         filtered
     }
 }
@@ -1772,5 +1781,43 @@ mod tests {
         };
 
         assert_eq!(list_level, &expected_level);
+    }
+
+    #[test]
+    fn test_nested_indices() {
+        // Given a buffer like
+        // [0, null, null, 1, 2]
+        //
+        // The two level infos below might represent the two structures
+        // 1: [{a: 0}], [], null, [null, null], [{a: 1}], [{a: 2}]
+        // 2: [0], [], null, [null, null], [1], [2]
+        //
+        // (That is, their only difference is that the leaf values are nested one level deeper in a
+        // struct).
+
+        let level1 = LevelInfo {
+            definition: vec![4, 1, 0, 2, 2, 4, 4],
+            repetition: Some(vec![0, 0, 0, 0, 1, 0, 0]),
+            array_offsets: vec![0, 1, 1, 1, 3, 4, 5],
+            array_mask: vec![true, true, false, false, false, false, true],
+            max_definition: 4,
+            level_type: LevelType::Primitive(true),
+            offset: 0,
+            length: 5,
+        };
+
+        let level2 = LevelInfo {
+            definition: vec![3, 1, 0, 2, 2, 3, 3],
+            repetition: Some(vec![0, 0, 0, 0, 1, 0, 0]),
+            array_offsets: vec![0, 1, 1, 1, 3, 4, 5],
+            array_mask: vec![true, true, false, false, false, false, true],
+            max_definition: 3,
+            level_type: LevelType::Primitive(true),
+            offset: 0,
+            length: 5,
+        };
+
+        // filter_array_indices should return the same indices in this case.
+        assert_eq!(level1.filter_array_indices(), level2.filter_array_indices());
     }
 }

@@ -367,6 +367,15 @@ impl BooleanBufferBuilder {
         }
     }
 
+    /// Resizes the buffer, either truncating its contents (with no change in capacity), or
+    /// growing it (potentially reallocating it) and writing `false` in the newly available bits.
+    #[inline]
+    pub fn resize(&mut self, len: usize) {
+        let len_bytes = bit_util::ceil(len, 8);
+        self.buffer.resize(len_bytes, 0);
+        self.len = len;
+    }
+
     #[inline]
     pub fn append(&mut self, v: bool) {
         self.advance(1);
@@ -2929,6 +2938,29 @@ mod tests {
         let arr2 = builder.finish();
 
         assert_eq!(arr1, arr2);
+    }
+
+    #[test]
+    fn test_boolean_array_builder_resize() {
+        let mut builder = BooleanBufferBuilder::new(20);
+        builder.append_n(4, true);
+        builder.append_n(7, false);
+        builder.append_n(2, true);
+        builder.resize(20);
+
+        assert_eq!(builder.len, 20);
+        assert_eq!(
+            builder.buffer.as_slice(),
+            &[0b00001111, 0b00011000, 0b00000000]
+        );
+
+        builder.resize(5);
+        assert_eq!(builder.len, 5);
+        assert_eq!(builder.buffer.as_slice(), &[0b00001111]);
+
+        builder.append_n(4, true);
+        assert_eq!(builder.len, 9);
+        assert_eq!(builder.buffer.as_slice(), &[0b11101111, 0b00000001]);
     }
 
     #[test]

@@ -70,11 +70,8 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
 
         let max_row_group_size = props.max_row_group_size();
 
-        let file_writer = SerializedFileWriter::new(
-            writer.try_clone()?,
-            schema.root_schema_ptr(),
-            Arc::new(props),
-        )?;
+        let file_writer =
+            SerializedFileWriter::new(writer, schema.root_schema_ptr(), Arc::new(props))?;
 
         Ok(Self {
             writer: file_writer,
@@ -605,7 +602,6 @@ mod tests {
         statistics::Statistics,
         writer::InMemoryWriteableCursor,
     };
-    use crate::util::test_common::get_temp_file;
 
     #[test]
     fn arrow_writer() {
@@ -624,7 +620,7 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
                 .unwrap();
 
-        roundtrip("test_arrow_write.parquet", batch, Some(SMALL_SIZE / 2));
+        roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -685,11 +681,7 @@ mod tests {
         // build a record batch
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
-        roundtrip(
-            "test_arrow_writer_non_null.parquet",
-            batch,
-            Some(SMALL_SIZE / 2),
-        );
+        roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -730,7 +722,7 @@ mod tests {
 
         // This test fails if the max row group size is less than the batch's length
         // see https://github.com/apache/arrow-rs/issues/518
-        roundtrip("test_arrow_writer_list.parquet", batch, None);
+        roundtrip(batch, None);
     }
 
     #[test]
@@ -770,7 +762,7 @@ mod tests {
         // see https://github.com/apache/arrow-rs/issues/518
         assert_eq!(batch.column(0).data().null_count(), 0);
 
-        roundtrip("test_arrow_writer_list_non_null.parquet", batch, None);
+        roundtrip(batch, None);
     }
 
     #[test]
@@ -799,11 +791,7 @@ mod tests {
         )
         .unwrap();
 
-        roundtrip(
-            "test_arrow_writer_binary.parquet",
-            batch,
-            Some(SMALL_SIZE / 2),
-        );
+        roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -822,11 +810,7 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(decimal_values)])
                 .unwrap();
 
-        roundtrip(
-            "test_arrow_writer_decimal.parquet",
-            batch,
-            Some(SMALL_SIZE / 2),
-        );
+        roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -912,17 +896,8 @@ mod tests {
         )
         .unwrap();
 
-        roundtrip(
-            "test_arrow_writer_complex.parquet",
-            batch.clone(),
-            Some(SMALL_SIZE / 2),
-        );
-
-        roundtrip(
-            "test_arrow_writer_complex_small_batch.parquet",
-            batch,
-            Some(SMALL_SIZE / 3),
-        );
+        roundtrip(batch.clone(), Some(SMALL_SIZE / 2));
+        roundtrip(batch, Some(SMALL_SIZE / 3));
     }
 
     #[test]
@@ -960,11 +935,7 @@ mod tests {
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(some_nested_object)])
                 .unwrap();
 
-        roundtrip(
-            "test_arrow_writer_complex_mixed.parquet",
-            batch,
-            Some(SMALL_SIZE / 2),
-        );
+        roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -994,7 +965,7 @@ mod tests {
         let mut reader = builder.build(std::io::Cursor::new(json_content)).unwrap();
 
         let batch = reader.next().unwrap().unwrap();
-        roundtrip("test_arrow_writer_map.parquet", batch, None);
+        roundtrip(batch, None);
     }
 
     #[test]
@@ -1028,11 +999,7 @@ mod tests {
         // build a racord batch
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
-        roundtrip(
-            "test_arrow_writer_2_level_struct.parquet",
-            batch,
-            Some(SMALL_SIZE / 2),
-        );
+        roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1064,11 +1031,7 @@ mod tests {
         // build a racord batch
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
-        roundtrip(
-            "test_arrow_writer_2_level_struct_non_null.parquet",
-            batch,
-            Some(SMALL_SIZE / 2),
-        );
+        roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1102,21 +1065,13 @@ mod tests {
         // build a racord batch
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 
-        roundtrip(
-            "test_arrow_writer_2_level_struct_mixed_null.parquet",
-            batch,
-            Some(SMALL_SIZE / 2),
-        );
+        roundtrip(batch, Some(SMALL_SIZE / 2));
     }
 
     const SMALL_SIZE: usize = 7;
 
-    fn roundtrip(
-        filename: &str,
-        expected_batch: RecordBatch,
-        max_row_group_size: Option<usize>,
-    ) -> File {
-        let file = get_temp_file(filename, &[]);
+    fn roundtrip(expected_batch: RecordBatch, max_row_group_size: Option<usize>) -> File {
+        let file = tempfile::tempfile().unwrap();
 
         let mut writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
@@ -1154,7 +1109,6 @@ mod tests {
     }
 
     fn one_column_roundtrip(
-        filename: &str,
         values: ArrayRef,
         nullable: bool,
         max_row_group_size: Option<usize>,
@@ -1167,20 +1121,20 @@ mod tests {
         let expected_batch =
             RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
 
-        roundtrip(filename, expected_batch, max_row_group_size)
+        roundtrip(expected_batch, max_row_group_size)
     }
 
-    fn values_required<A, I>(iter: I, filename: &str)
+    fn values_required<A, I>(iter: I)
     where
         A: From<Vec<I::Item>> + Array + 'static,
         I: IntoIterator,
     {
         let raw_values: Vec<_> = iter.into_iter().collect();
         let values = Arc::new(A::from(raw_values));
-        one_column_roundtrip(filename, values, false, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(values, false, Some(SMALL_SIZE / 2));
     }
 
-    fn values_optional<A, I>(iter: I, filename: &str)
+    fn values_optional<A, I>(iter: I)
     where
         A: From<Vec<Option<I::Item>>> + Array + 'static,
         I: IntoIterator,
@@ -1191,32 +1145,27 @@ mod tests {
             .map(|(i, v)| if i % 2 == 0 { None } else { Some(v) })
             .collect();
         let optional_values = Arc::new(A::from(optional_raw_values));
-        one_column_roundtrip(filename, optional_values, true, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(optional_values, true, Some(SMALL_SIZE / 2));
     }
 
-    fn required_and_optional<A, I>(iter: I, filename: &str)
+    fn required_and_optional<A, I>(iter: I)
     where
         A: From<Vec<I::Item>> + From<Vec<Option<I::Item>>> + Array + 'static,
         I: IntoIterator + Clone,
     {
-        values_required::<A, I>(iter.clone(), filename);
-        values_optional::<A, I>(iter, filename);
+        values_required::<A, I>(iter.clone());
+        values_optional::<A, I>(iter);
     }
 
     #[test]
     fn all_null_primitive_single_column() {
         let values = Arc::new(Int32Array::from(vec![None; SMALL_SIZE]));
-        one_column_roundtrip(
-            "all_null_primitive_single_column",
-            values,
-            true,
-            Some(SMALL_SIZE / 2),
-        );
+        one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
     }
     #[test]
     fn null_single_column() {
         let values = Arc::new(NullArray::new(SMALL_SIZE));
-        one_column_roundtrip("null_single_column", values, true, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
         // null arrays are always nullable, a test with non-nullable nulls fails
     }
 
@@ -1224,7 +1173,6 @@ mod tests {
     fn bool_single_column() {
         required_and_optional::<BooleanArray, _>(
             [true, false].iter().cycle().copied().take(SMALL_SIZE),
-            "bool_single_column",
         );
     }
 
@@ -1242,7 +1190,7 @@ mod tests {
             Schema::new(vec![Field::new("col", values.data_type().clone(), true)]);
         let expected_batch =
             RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
-        let file = get_temp_file("bool_large_single_column", &[]);
+        let file = tempfile::tempfile().unwrap();
 
         let mut writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
@@ -1256,67 +1204,52 @@ mod tests {
 
     #[test]
     fn i8_single_column() {
-        required_and_optional::<Int8Array, _>(0..SMALL_SIZE as i8, "i8_single_column");
+        required_and_optional::<Int8Array, _>(0..SMALL_SIZE as i8);
     }
 
     #[test]
     fn i16_single_column() {
-        required_and_optional::<Int16Array, _>(0..SMALL_SIZE as i16, "i16_single_column");
+        required_and_optional::<Int16Array, _>(0..SMALL_SIZE as i16);
     }
 
     #[test]
     fn i32_single_column() {
-        required_and_optional::<Int32Array, _>(0..SMALL_SIZE as i32, "i32_single_column");
+        required_and_optional::<Int32Array, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
     fn i64_single_column() {
-        required_and_optional::<Int64Array, _>(0..SMALL_SIZE as i64, "i64_single_column");
+        required_and_optional::<Int64Array, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
     fn u8_single_column() {
-        required_and_optional::<UInt8Array, _>(0..SMALL_SIZE as u8, "u8_single_column");
+        required_and_optional::<UInt8Array, _>(0..SMALL_SIZE as u8);
     }
 
     #[test]
     fn u16_single_column() {
-        required_and_optional::<UInt16Array, _>(
-            0..SMALL_SIZE as u16,
-            "u16_single_column",
-        );
+        required_and_optional::<UInt16Array, _>(0..SMALL_SIZE as u16);
     }
 
     #[test]
     fn u32_single_column() {
-        required_and_optional::<UInt32Array, _>(
-            0..SMALL_SIZE as u32,
-            "u32_single_column",
-        );
+        required_and_optional::<UInt32Array, _>(0..SMALL_SIZE as u32);
     }
 
     #[test]
     fn u64_single_column() {
-        required_and_optional::<UInt64Array, _>(
-            0..SMALL_SIZE as u64,
-            "u64_single_column",
-        );
+        required_and_optional::<UInt64Array, _>(0..SMALL_SIZE as u64);
     }
 
     #[test]
     fn f32_single_column() {
-        required_and_optional::<Float32Array, _>(
-            (0..SMALL_SIZE).map(|i| i as f32),
-            "f32_single_column",
-        );
+        required_and_optional::<Float32Array, _>((0..SMALL_SIZE).map(|i| i as f32));
     }
 
     #[test]
     fn f64_single_column() {
-        required_and_optional::<Float64Array, _>(
-            (0..SMALL_SIZE).map(|i| i as f64),
-            "f64_single_column",
-        );
+        required_and_optional::<Float64Array, _>((0..SMALL_SIZE).map(|i| i as f64));
     }
 
     // The timestamp array types don't implement From<Vec<T>> because they need the timezone
@@ -1328,7 +1261,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampSecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip("timestamp_second_single_column", values, false, Some(3));
+        one_column_roundtrip(values, false, Some(3));
     }
 
     #[test]
@@ -1336,12 +1269,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMillisecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip(
-            "timestamp_millisecond_single_column",
-            values,
-            false,
-            Some(SMALL_SIZE / 2 + 1),
-        );
+        one_column_roundtrip(values, false, Some(SMALL_SIZE / 2 + 1));
     }
 
     #[test]
@@ -1349,12 +1277,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMicrosecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip(
-            "timestamp_microsecond_single_column",
-            values,
-            false,
-            Some(SMALL_SIZE / 2 + 2),
-        );
+        one_column_roundtrip(values, false, Some(SMALL_SIZE / 2 + 2));
     }
 
     #[test]
@@ -1362,20 +1285,12 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampNanosecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip(
-            "timestamp_nanosecond_single_column",
-            values,
-            false,
-            Some(SMALL_SIZE / 2),
-        );
+        one_column_roundtrip(values, false, Some(SMALL_SIZE / 2));
     }
 
     #[test]
     fn date32_single_column() {
-        required_and_optional::<Date32Array, _>(
-            0..SMALL_SIZE as i32,
-            "date32_single_column",
-        );
+        required_and_optional::<Date32Array, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
@@ -1383,92 +1298,61 @@ mod tests {
         // Date64 must be a multiple of 86400000, see ARROW-10925
         required_and_optional::<Date64Array, _>(
             (0..(SMALL_SIZE as i64 * 86400000)).step_by(86400000),
-            "date64_single_column",
         );
     }
 
     #[test]
     fn time32_second_single_column() {
-        required_and_optional::<Time32SecondArray, _>(
-            0..SMALL_SIZE as i32,
-            "time32_second_single_column",
-        );
+        required_and_optional::<Time32SecondArray, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
     fn time32_millisecond_single_column() {
-        required_and_optional::<Time32MillisecondArray, _>(
-            0..SMALL_SIZE as i32,
-            "time32_millisecond_single_column",
-        );
+        required_and_optional::<Time32MillisecondArray, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
     fn time64_microsecond_single_column() {
-        required_and_optional::<Time64MicrosecondArray, _>(
-            0..SMALL_SIZE as i64,
-            "time64_microsecond_single_column",
-        );
+        required_and_optional::<Time64MicrosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
     fn time64_nanosecond_single_column() {
-        required_and_optional::<Time64NanosecondArray, _>(
-            0..SMALL_SIZE as i64,
-            "time64_nanosecond_single_column",
-        );
+        required_and_optional::<Time64NanosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
     #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_second_single_column() {
-        required_and_optional::<DurationSecondArray, _>(
-            0..SMALL_SIZE as i64,
-            "duration_second_single_column",
-        );
+        required_and_optional::<DurationSecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
     #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_millisecond_single_column() {
-        required_and_optional::<DurationMillisecondArray, _>(
-            0..SMALL_SIZE as i64,
-            "duration_millisecond_single_column",
-        );
+        required_and_optional::<DurationMillisecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
     #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_microsecond_single_column() {
-        required_and_optional::<DurationMicrosecondArray, _>(
-            0..SMALL_SIZE as i64,
-            "duration_microsecond_single_column",
-        );
+        required_and_optional::<DurationMicrosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
     #[should_panic(expected = "Converting Duration to parquet not supported")]
     fn duration_nanosecond_single_column() {
-        required_and_optional::<DurationNanosecondArray, _>(
-            0..SMALL_SIZE as i64,
-            "duration_nanosecond_single_column",
-        );
+        required_and_optional::<DurationNanosecondArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
     fn interval_year_month_single_column() {
-        required_and_optional::<IntervalYearMonthArray, _>(
-            0..SMALL_SIZE as i32,
-            "interval_year_month_single_column",
-        );
+        required_and_optional::<IntervalYearMonthArray, _>(0..SMALL_SIZE as i32);
     }
 
     #[test]
     fn interval_day_time_single_column() {
-        required_and_optional::<IntervalDayTimeArray, _>(
-            0..SMALL_SIZE as i64,
-            "interval_day_time_single_column",
-        );
+        required_and_optional::<IntervalDayTimeArray, _>(0..SMALL_SIZE as i64);
     }
 
     #[test]
@@ -1476,10 +1360,7 @@ mod tests {
         expected = "Attempting to write an Arrow interval type MonthDayNano to parquet that is not yet implemented"
     )]
     fn interval_month_day_nano_single_column() {
-        required_and_optional::<IntervalMonthDayNanoArray, _>(
-            0..SMALL_SIZE as i128,
-            "interval_month_day_nano_single_column",
-        );
+        required_and_optional::<IntervalMonthDayNanoArray, _>(0..SMALL_SIZE as i128);
     }
 
     #[test]
@@ -1489,7 +1370,7 @@ mod tests {
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         // BinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
-        values_required::<BinaryArray, _>(many_vecs_iter, "binary_single_column");
+        values_required::<BinaryArray, _>(many_vecs_iter);
     }
 
     #[test]
@@ -1499,10 +1380,7 @@ mod tests {
         let many_vecs_iter = many_vecs.iter().map(|v| v.as_slice());
 
         // LargeBinaryArrays can't be built from Vec<Option<&str>>, so only call `values_required`
-        values_required::<LargeBinaryArray, _>(
-            many_vecs_iter,
-            "large_binary_single_column",
-        );
+        values_required::<LargeBinaryArray, _>(many_vecs_iter);
     }
 
     #[test]
@@ -1514,12 +1392,7 @@ mod tests {
         builder.append_value(b"1112").unwrap();
         let array = Arc::new(builder.finish());
 
-        one_column_roundtrip(
-            "fixed_size_binary_single_column",
-            array,
-            true,
-            Some(SMALL_SIZE / 2),
-        );
+        one_column_roundtrip(array, true, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1527,7 +1400,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
         let raw_strs = raw_values.iter().map(|s| s.as_str());
 
-        required_and_optional::<StringArray, _>(raw_strs, "string_single_column");
+        required_and_optional::<StringArray, _>(raw_strs);
     }
 
     #[test]
@@ -1535,10 +1408,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE).map(|i| i.to_string()).collect();
         let raw_strs = raw_values.iter().map(|s| s.as_str());
 
-        required_and_optional::<LargeStringArray, _>(
-            raw_strs,
-            "large_string_single_column",
-        );
+        required_and_optional::<LargeStringArray, _>(raw_strs);
     }
 
     #[test]
@@ -1563,7 +1433,7 @@ mod tests {
         let a = ListArray::from(a_list_data);
         let values = Arc::new(a);
 
-        one_column_roundtrip("list_single_column", values, true, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1589,12 +1459,7 @@ mod tests {
         let a = LargeListArray::from(a_list_data);
         let values = Arc::new(a);
 
-        one_column_roundtrip(
-            "large_list_single_column",
-            values,
-            true,
-            Some(SMALL_SIZE / 2),
-        );
+        one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1604,7 +1469,7 @@ mod tests {
         let s = StructArray::from(vec![(struct_field_a, Arc::new(a_values) as ArrayRef)]);
 
         let values = Arc::new(s);
-        one_column_roundtrip("struct_single_column", values, false, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(values, false, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1627,11 +1492,7 @@ mod tests {
         // build a record batch
         let expected_batch = RecordBatch::try_new(schema, vec![Arc::new(d)]).unwrap();
 
-        roundtrip(
-            "test_arrow_writer_string_dictionary.parquet",
-            expected_batch,
-            Some(SMALL_SIZE / 2),
-        );
+        roundtrip(expected_batch, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1658,11 +1519,7 @@ mod tests {
         // build a record batch
         let expected_batch = RecordBatch::try_new(schema, vec![Arc::new(d)]).unwrap();
 
-        roundtrip(
-            "test_arrow_writer_primitive_dictionary.parquet",
-            expected_batch,
-            Some(SMALL_SIZE / 2),
-        );
+        roundtrip(expected_batch, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1685,11 +1542,7 @@ mod tests {
         // build a record batch
         let expected_batch = RecordBatch::try_new(schema, vec![Arc::new(d)]).unwrap();
 
-        roundtrip(
-            "test_arrow_writer_string_dictionary_unsigned_index.parquet",
-            expected_batch,
-            Some(SMALL_SIZE / 2),
-        );
+        roundtrip(expected_batch, Some(SMALL_SIZE / 2));
     }
 
     #[test]
@@ -1704,7 +1557,7 @@ mod tests {
             u32::MAX - 1,
             u32::MAX,
         ]));
-        let file = one_column_roundtrip("u32_min_max_single_column", values, false, None);
+        let file = one_column_roundtrip(values, false, None);
 
         // check statistics are valid
         let reader = SerializedFileReader::new(file).unwrap();
@@ -1735,7 +1588,7 @@ mod tests {
             u64::MAX - 1,
             u64::MAX,
         ]));
-        let file = one_column_roundtrip("u64_min_max_single_column", values, false, None);
+        let file = one_column_roundtrip(values, false, None);
 
         // check statistics are valid
         let reader = SerializedFileReader::new(file).unwrap();
@@ -1758,7 +1611,7 @@ mod tests {
     fn statistics_null_counts_only_nulls() {
         // check that null-count statistics for "only NULL"-columns are correct
         let values = Arc::new(UInt64Array::from(vec![None, None]));
-        let file = one_column_roundtrip("null_counts", values, true, None);
+        let file = one_column_roundtrip(values, true, None);
 
         // check statistics are valid
         let reader = SerializedFileReader::new(file).unwrap();

@@ -1044,7 +1044,6 @@ mod tests {
     use crate::{
         arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader},
         schema::{parser::parse_message_type, types::SchemaDescriptor},
-        util::test_common::get_temp_file,
     };
 
     #[test]
@@ -2124,7 +2123,7 @@ mod tests {
         );
 
         // write to an empty parquet file so that schema is serialized
-        let file = get_temp_file("test_arrow_schema_roundtrip.parquet", &[]);
+        let file = tempfile::tempfile().unwrap();
         let mut writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
             Arc::new(schema.clone()),
@@ -2195,7 +2194,7 @@ mod tests {
         );
 
         // write to an empty parquet file so that schema is serialized
-        let file = get_temp_file("test_arrow_schema_roundtrip_lists.parquet", &[]);
+        let file = tempfile::tempfile().unwrap();
         let mut writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
             Arc::new(schema.clone()),
