@@ -699,7 +699,7 @@ pub fn eq_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
 
 pub fn eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
-    right: &[u8]
+    right: &[u8],
 ) -> Result<BooleanArray> {
     compare_op_scalar!(left, right, |a, b| a == b)
 }
@@ -1179,9 +1179,10 @@ pub fn eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArr
         DataType::Binary => {
             let left = as_generic_binary_array::<i32>(left);
             eq_binary_scalar(left, right)
-        },
+        }
         _ => Err(ArrowError::ComputeError(
-            "eq_dyn_binary_scalar only supports Binary arrays".to_string()))
+            "eq_dyn_binary_scalar only supports Binary arrays".to_string(),
+        )),
     }
 }
 
