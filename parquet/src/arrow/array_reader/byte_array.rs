@@ -235,7 +235,9 @@ impl ByteArrayDecoder {
                 validate_utf8,
             )),
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
-                ByteArrayDecoder::Dictionary(ByteArrayDecoderDictionary::new(data))
+                ByteArrayDecoder::Dictionary(ByteArrayDecoderDictionary::new(
+                    data, num_levels, num_values,
+                ))
             }
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
                 ByteArrayDecoderDeltaLength::new(data, validate_utf8)?,
@@ -410,7 +412,7 @@ impl ByteArrayDecoderDeltaLength {
             start_offset = end_offset;
         }
 
-        self.data_offset += start_offset;
+        self.data_offset = start_offset;
         self.length_offset += to_read;
 
         if self.validate_utf8 {
@@ -513,13 +515,18 @@ impl ByteArrayDecoderDelta {
 /// Decoder from [`Encoding::RLE_DICTIONARY`] to [`OffsetBuffer`]
 pub struct ByteArrayDecoderDictionary {
     decoder: RleDecoder,
+
     index_buf: Box<[i32; 1024]>,
     index_buf_len: usize,
     index_offset: usize,
+
+    /// This is a maximum as the null count is not always known, e.g. value data from
+    /// a v1 data page
+    max_remaining_values: usize,
 }
 
 impl ByteArrayDecoderDictionary {
-    fn new(data: ByteBufferPtr) -> Self {
+    fn new(data: ByteBufferPtr, num_levels: usize, num_values: Option<usize>) -> Self {
         let bit_width = data[0];
         let mut decoder = RleDecoder::new(bit_width);
         decoder.set_data(data.start_from(1));
@@ -529,6 +536,7 @@ impl ByteArrayDecoderDictionary {
             index_buf: Box::new([0; 1024]),
             index_buf_len: 0,
             index_offset: 0,
+            max_remaining_values: num_values.unwrap_or(num_levels),
         }
     }
 
@@ -540,7 +548,7 @@ impl ByteArrayDecoderDictionary {
     ) -> Result<usize> {
         let mut values_read = 0;
 
-        while values_read != len {
+        while values_read != len && self.max_remaining_values != 0 {
             if self.index_offset == self.index_buf_len {
                 let read = self.decoder.get_batch(self.index_buf.as_mut())?;
                 if read == 0 {
@@ -550,7 +558,9 @@ impl ByteArrayDecoderDictionary {
                 self.index_offset = 0;
             }
 
-            let to_read = (len - values_read).min(self.index_buf_len - self.index_offset);
+            let to_read = (len - values_read)
+                .min(self.index_buf_len - self.index_offset)
+                .min(self.max_remaining_values);
 
             output.extend_from_dictionary(
                 &self.index_buf[self.index_offset..self.index_offset + to_read],
@@ -560,7 +570,100 @@ impl ByteArrayDecoderDictionary {
 
             self.index_offset += to_read;
             values_read += to_read;
+            self.max_remaining_values -= to_read;
         }
         Ok(values_read)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::basic::Type as PhysicalType;
+    use crate::data_type::{ByteArray, ByteArrayType};
+    use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
+    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
+    use crate::util::memory::MemTracker;
+    use std::sync::Arc;
+
+    fn column() -> ColumnDescPtr {
+        let t = Type::primitive_type_builder("col", PhysicalType::BYTE_ARRAY)
+            .with_converted_type(ConvertedType::UTF8)
+            .build()
+            .unwrap();
+
+        Arc::new(ColumnDescriptor::new(
+            Arc::new(t),
+            1,
+            0,
+            ColumnPath::new(vec![]),
+        ))
+    }
+
+    fn get_encoded(encoding: Encoding, data: &[ByteArray]) -> ByteBufferPtr {
+        let descriptor = column();
+        let mem_tracker = Arc::new(MemTracker::new());
+        let mut encoder =
+            get_encoder::<ByteArrayType>(descriptor, encoding, mem_tracker).unwrap();
+
+        encoder.put(&data).unwrap();
+        encoder.flush_buffer().unwrap()
+    }
+
+    #[test]
+    fn test_byte_array_decoder() {
+        let data: Vec<_> = vec!["hello", "world", "a", "b"]
+            .into_iter()
+            .map(ByteArray::from)
+            .collect();
+
+        let mut dict_encoder =
+            DictEncoder::<ByteArrayType>::new(column(), Arc::new(MemTracker::new()));
+
+        dict_encoder.put(&data).unwrap();
+        let encoded_rle = dict_encoder.flush_buffer().unwrap();
+        let encoded_dictionary = dict_encoder.write_dict().unwrap();
+
+        // A column chunk with all the encodings!
+        let pages = vec![
+            (Encoding::PLAIN, get_encoded(Encoding::PLAIN, &data)),
+            (
+                Encoding::DELTA_BYTE_ARRAY,
+                get_encoded(Encoding::DELTA_BYTE_ARRAY, &data),
+            ),
+            (
+                Encoding::DELTA_LENGTH_BYTE_ARRAY,
+                get_encoded(Encoding::DELTA_LENGTH_BYTE_ARRAY, &data),
+            ),
+            (Encoding::PLAIN_DICTIONARY, encoded_rle.clone()),
+            (Encoding::RLE_DICTIONARY, encoded_rle),
+        ];
+
+        let column_desc = column();
+        let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
+
+        decoder
+            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .unwrap();
+
+        for (encoding, page) in pages {
+            let mut output = OffsetBuffer::<i32>::default();
+            decoder.set_data(encoding, page, 4, Some(4)).unwrap();
+
+            assert_eq!(decoder.read(&mut output, 0..1).unwrap(), 1);
+
+            assert_eq!(output.values.as_slice(), "hello".as_bytes());
+            assert_eq!(output.offsets.as_slice(), &[0, 5]);
+
+            assert_eq!(decoder.read(&mut output, 1..2).unwrap(), 1);
+            assert_eq!(output.values.as_slice(), "helloworld".as_bytes());
+            assert_eq!(output.offsets.as_slice(), &[0, 5, 10]);
+
+            assert_eq!(decoder.read(&mut output, 2..4).unwrap(), 2);
+            assert_eq!(output.values.as_slice(), "helloworldab".as_bytes());
+            assert_eq!(output.offsets.as_slice(), &[0, 5, 10, 11, 12]);
+
+            assert_eq!(decoder.read(&mut output, 4..8).unwrap(), 0);
+        }
     }
 }
