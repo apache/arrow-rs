@@ -221,6 +221,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Timestamp(_, _), Timestamp(_, _) | Date32 | Date64) => true,
         // date64 to timestamp might not make sense,
         (Int64, Duration(_)) => true,
+        (Duration(_), Int64) => true,
         (_, _) => false,
     }
 }
@@ -1111,6 +1112,7 @@ pub fn cast_with_options(
                 }
             }
         }
+        (Duration(_), Int64) => cast_array_data::<Int64Type>(array, to_type.clone()),
         (_, _) => Err(ArrowError::CastError(format!(
             "Casting from {:?} to {:?} not supported",
             from_type, to_type,
@@ -2763,6 +2765,25 @@ mod tests {
         assert_eq!(864000003, c.value(0));
         assert_eq!(1545696002, c.value(1));
         assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_duration_to_i64() {
+        let base = vec![5, 6, 7, 8, 100000000];
+
+        let duration_arrays = vec![
+            Arc::new(DurationNanosecondArray::from(base.clone())) as ArrayRef,
+            Arc::new(DurationMicrosecondArray::from(base.clone())) as ArrayRef,
+            Arc::new(DurationMillisecondArray::from(base.clone())) as ArrayRef,
+            Arc::new(DurationSecondArray::from(base.clone())) as ArrayRef,
+        ];
+
+        for arr in duration_arrays {
+            assert!(can_cast_types(arr.data_type(), &DataType::Int64));
+            let result = cast(&arr, &DataType::Int64).unwrap();
+            let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+            assert_eq!(base.as_slice(), result.values());
+        }
     }
 
     #[test]
