@@ -222,6 +222,13 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // date64 to timestamp might not make sense,
         (Int64, Duration(_)) => true,
         (Duration(_), Int64) => true,
+        (Interval(from_type), Int64) => {
+            match from_type{
+                IntervalUnit::YearMonth => true,
+                IntervalUnit::DayTime => true,
+                IntervalUnit::MonthDayNano => false, // Native type is i128
+            }
+        }
         (_, _) => false,
     }
 }
@@ -359,7 +366,6 @@ macro_rules! cast_decimal_to_float {
 /// * To or from `StructArray`
 /// * List to primitive
 /// * Utf8 to boolean
-/// * Interval and duration
 pub fn cast_with_options(
     array: &ArrayRef,
     to_type: &DataType,
@@ -1113,6 +1119,16 @@ pub fn cast_with_options(
             }
         }
         (Duration(_), Int64) => cast_array_data::<Int64Type>(array, to_type.clone()),
+        (Interval(from_type), Int64) => match from_type {
+            IntervalUnit::YearMonth => {
+                cast_numeric_arrays::<IntervalYearMonthType, Int64Type>(array)
+            }
+            IntervalUnit::DayTime => cast_array_data::<Int64Type>(array, to_type.clone()),
+            IntervalUnit::MonthDayNano => Err(ArrowError::CastError(format!(
+                "Casting from {:?} to {:?} not supported",
+                from_type, to_type,
+            ))),
+        },
         (_, _) => Err(ArrowError::CastError(format!(
             "Casting from {:?} to {:?} not supported",
             from_type, to_type,
@@ -2779,6 +2795,25 @@ mod tests {
         ];
 
         for arr in duration_arrays {
+            assert!(can_cast_types(arr.data_type(), &DataType::Int64));
+            let result = cast(&arr, &DataType::Int64).unwrap();
+            let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
+            assert_eq!(base.as_slice(), result.values());
+        }
+    }
+
+    #[test]
+    fn test_cast_interval_to_i64() {
+        let base = vec![5, 6, 7, 8];
+
+        let interval_arrays = vec![
+            Arc::new(IntervalDayTimeArray::from(base.clone())) as ArrayRef,
+            Arc::new(IntervalYearMonthArray::from(
+                base.iter().map(|x| *x as i32).collect::<Vec<i32>>(),
+            )) as ArrayRef,
+        ];
+
+        for arr in interval_arrays {
             assert!(can_cast_types(arr.data_type(), &DataType::Int64));
             let result = cast(&arr, &DataType::Int64).unwrap();
             let result = result.as_any().downcast_ref::<Int64Array>().unwrap();
