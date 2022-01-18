@@ -681,22 +681,6 @@ pub fn regexp_is_match_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
     Ok(BooleanArray::from(data))
 }
 
-/// Perform `left == right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
-pub fn eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
-    left: &GenericBinaryArray<OffsetSize>,
-    right: &GenericBinaryArray<OffsetSize>,
-) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a == b)
-}
-
-/// Perform `left == right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar
-pub fn eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
-    left: &GenericBinaryArray<OffsetSize>,
-    right: &[u8],
-) -> Result<BooleanArray> {
-    compare_op_scalar!(left, right, |a, b| a == b)
-}
-
 /// Perform `left == right` operation on [`StringArray`] / [`LargeStringArray`].
 pub fn eq_utf8<OffsetSize: StringOffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
@@ -826,6 +810,22 @@ pub fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray>
     eq_bool_scalar(left, !right)
 }
 
+/// Perform `left == right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
+pub fn eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &GenericBinaryArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    compare_op!(left, right, |a, b| a == b)
+}
+
+/// Perform `left == right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar
+pub fn eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &[u8],
+) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a, b| a == b)
+}
+
 /// Perform `left != right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
 pub fn neq_binary<OffsetSize: BinaryOffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
@@ -898,7 +898,7 @@ pub fn gt_eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
     compare_op!(left, right, |a, b| a >= b)
 }
 
-/// Perform `left <= right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
+/// Perform `left >= right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
 pub fn gt_eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
