@@ -126,12 +126,8 @@ impl DefinitionLevelBuffer {
         Bitmap::from(std::mem::replace(old_builder, new_builder).finish())
     }
 
-    /// Returns an iterator of the valid positions in `range` in descending order
-    pub fn rev_valid_positions_iter(
-        &self,
-        range: Range<usize>,
-    ) -> impl Iterator<Item = usize> + '_ {
-        assert_eq!(range.start, self.len);
+    /// Returns an iterator of the valid positions in descending order
+    pub fn rev_valid_positions_iter(&self) -> impl Iterator<Item = usize> + '_ {
         iter_set_bits_rev(self.nulls().as_slice())
     }
 

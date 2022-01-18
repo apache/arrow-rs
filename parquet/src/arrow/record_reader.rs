@@ -264,12 +264,12 @@ where
                 )
             })?;
 
-            let iter = def_levels.rev_valid_positions_iter(
-                self.values_written..self.values_written + levels_read,
+            self.records.pad_nulls(
+                self.values_written,
+                values_read,
+                levels_read,
+                def_levels.rev_valid_positions_iter(),
             );
-
-            self.records
-                .pad_nulls(self.values_written..self.values_written + values_read, iter);
         }
 
         let values_read = max(levels_read, values_read);

@@ -60,8 +60,7 @@ use crate::arrow::converter::{
     DecimalConverter, FixedLenBinaryConverter, FixedSizeArrayConverter,
     Int96ArrayConverter, Int96Converter, IntervalDayTimeArrayConverter,
     IntervalDayTimeConverter, IntervalYearMonthArrayConverter,
-    IntervalYearMonthConverter, LargeBinaryArrayConverter, LargeBinaryConverter,
-    LargeUtf8ArrayConverter, LargeUtf8Converter,
+    IntervalYearMonthConverter, Utf8ArrayConverter, Utf8Converter,
 };
 use crate::arrow::record_reader::buffer::{ScalarValue, ValuesBuffer};
 use crate::arrow::record_reader::{GenericRecordReader, RecordReader};
@@ -80,6 +79,11 @@ use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, Type, TypePtr,
 };
 use crate::schema::visitor::TypeVisitor;
+
+mod byte_array;
+mod offset_buffer;
+
+pub use byte_array::make_byte_array_reader;
 
 /// Array reader reads parquet data into arrow array.
 pub trait ArrayReader {
@@ -1778,57 +1782,43 @@ impl<'a> ArrayReaderBuilder {
                     null_mask_only,
                 )?,
             )),
-            PhysicalType::BYTE_ARRAY => {
-                if cur_type.get_basic_info().converted_type() == ConvertedType::UTF8 {
-                    if let Some(ArrowType::LargeUtf8) = arrow_type {
-                        let converter =
-                            LargeUtf8Converter::new(LargeUtf8ArrayConverter {});
-                        Ok(Box::new(ComplexObjectArrayReader::<
-                            ByteArrayType,
-                            LargeUtf8Converter,
-                        >::new(
-                            page_iterator,
-                            column_desc,
-                            converter,
-                            arrow_type,
-                        )?))
-                    } else {
-                        use crate::arrow::arrow_array_reader::{
-                            ArrowArrayReader, StringArrayConverter,
-                        };
-                        let converter = StringArrayConverter::new();
-                        Ok(Box::new(ArrowArrayReader::try_new(
-                            *page_iterator,
-                            column_desc,
-                            converter,
-                            arrow_type,
-                        )?))
+            PhysicalType::BYTE_ARRAY => match arrow_type {
+                // TODO: Replace with optimised dictionary reader (#171)
+                Some(ArrowType::Dictionary(_, _)) => {
+                    match cur_type.get_basic_info().converted_type() {
+                        ConvertedType::UTF8 => {
+                            let converter = Utf8Converter::new(Utf8ArrayConverter {});
+                            Ok(Box::new(ComplexObjectArrayReader::<
+                                ByteArrayType,
+                                Utf8Converter,
+                            >::new(
+                                page_iterator,
+                                column_desc,
+                                converter,
+                                arrow_type,
+                            )?))
+                        }
+                        _ => {
+                            let converter = BinaryConverter::new(BinaryArrayConverter {});
+                            Ok(Box::new(ComplexObjectArrayReader::<
+                                ByteArrayType,
+                                BinaryConverter,
+                            >::new(
+                                page_iterator,
+                                column_desc,
+                                converter,
+                                arrow_type,
+                            )?))
+                        }
                     }
-                } else if let Some(ArrowType::LargeBinary) = arrow_type {
-                    let converter =
-                        LargeBinaryConverter::new(LargeBinaryArrayConverter {});
-                    Ok(Box::new(ComplexObjectArrayReader::<
-                        ByteArrayType,
-                        LargeBinaryConverter,
-                    >::new(
-                        page_iterator,
-                        column_desc,
-                        converter,
-                        arrow_type,
-                    )?))
-                } else {
-                    let converter = BinaryConverter::new(BinaryArrayConverter {});
-                    Ok(Box::new(ComplexObjectArrayReader::<
-                        ByteArrayType,
-                        BinaryConverter,
-                    >::new(
-                        page_iterator,
-                        column_desc,
-                        converter,
-                        arrow_type,
-                    )?))
                 }
-            }
+                _ => make_byte_array_reader(
+                    page_iterator,
+                    column_desc,
+                    arrow_type,
+                    null_mask_only,
+                ),
+            },
             PhysicalType::FIXED_LEN_BYTE_ARRAY
                 if cur_type.get_basic_info().converted_type()
                     == ConvertedType::DECIMAL =>
