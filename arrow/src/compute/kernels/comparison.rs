@@ -2971,6 +2971,22 @@ mod tests {
     }
 
     test_binary!(
+        test_binary_array_eq,
+        vec![b"arrow", b"arrow", b"arrow", b"arrow"],
+        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        eq_binary,
+        vec![true, false, false, false]
+    );
+
+    test_binary_scalar!(
+        test_binary_array_eq_scalar,
+        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        "arrow".as_bytes(),
+        eq_binary_scalar,
+        vec![true, false, false, false]
+    );
+
+    test_binary!(
         test_binary_array_neq,
         vec![b"arrow", b"arrow", b"arrow", b"arrow"],
         vec![b"arrow", b"parquet", b"datafusion", b"flight"],
