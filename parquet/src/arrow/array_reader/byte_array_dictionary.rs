@@ -20,7 +20,7 @@ use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::array::{ArrayData, ArrayDataBuilder, ArrayRef, OffsetSizeTrait};
+use arrow::array::{Array, ArrayData, ArrayRef, OffsetSizeTrait};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
 
@@ -280,13 +280,8 @@ where
             ByteArrayDecoderPlain::new(buf, len, Some(len), self.validate_utf8);
         decoder.read(&mut buffer, usize::MAX)?;
 
-        let data = ArrayDataBuilder::new(self.value_type.clone())
-            .len(buffer.len())
-            .add_buffer(buffer.offsets.into())
-            .add_buffer(buffer.values.into())
-            .build()?;
-
-        self.dict = Some(Arc::new(data));
+        let array = buffer.into_array(None, self.value_type.clone());
+        self.dict = Some(Arc::new(array.data().clone()));
         Ok(())
     }
 
@@ -372,7 +367,7 @@ mod tests {
     use arrow::compute::cast;
 
     use crate::arrow::array_reader::test_util::{
-        byte_array_all_encodings, utf8_column, encode_dictionary,
+        byte_array_all_encodings, encode_dictionary, utf8_column,
     };
     use crate::arrow::record_reader::buffer::ValuesBuffer;
     use crate::data_type::ByteArray;
