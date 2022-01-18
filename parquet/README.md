@@ -23,7 +23,6 @@
 
 This crate contains the official Native Rust implementation of [Apache Parquet](https://parquet.apache.org/), which is part of the [Apache Arrow](https://arrow.apache.org/) project.
 
-
 ## Example
 
 Example usage of reading data:
