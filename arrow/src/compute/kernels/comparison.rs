@@ -810,6 +810,102 @@ pub fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray>
     eq_bool_scalar(left, !right)
 }
 
+/// Perform `left == right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
+pub fn eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &GenericBinaryArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    compare_op!(left, right, |a, b| a == b)
+}
+
+/// Perform `left == right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar
+pub fn eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &[u8],
+) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a, b| a == b)
+}
+
+/// Perform `left != right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
+pub fn neq_binary<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &GenericBinaryArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    compare_op!(left, right, |a, b| a != b)
+}
+
+/// Perform `left != right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
+pub fn neq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &[u8],
+) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a, b| a != b)
+}
+
+/// Perform `left < right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
+pub fn lt_binary<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &GenericBinaryArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    compare_op!(left, right, |a, b| a < b)
+}
+
+/// Perform `left < right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
+pub fn lt_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &[u8],
+) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a, b| a < b)
+}
+
+/// Perform `left <= right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
+pub fn lt_eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &GenericBinaryArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    compare_op!(left, right, |a, b| a <= b)
+}
+
+/// Perform `left <= right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
+pub fn lt_eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &[u8],
+) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a, b| a <= b)
+}
+
+/// Perform `left > right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
+pub fn gt_binary<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &GenericBinaryArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    compare_op!(left, right, |a, b| a > b)
+}
+
+/// Perform `left > right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
+pub fn gt_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &[u8],
+) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a, b| a > b)
+}
+
+/// Perform `left >= right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
+pub fn gt_eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &GenericBinaryArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    compare_op!(left, right, |a, b| a >= b)
+}
+
+/// Perform `left >= right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
+pub fn gt_eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+    left: &GenericBinaryArray<OffsetSize>,
+    right: &[u8],
+) -> Result<BooleanArray> {
+    compare_op_scalar!(left, right, |a, b| a >= b)
+}
+
 /// Perform `left != right` operation on [`StringArray`] / [`LargeStringArray`].
 pub fn neq_utf8<OffsetSize: StringOffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
@@ -2793,6 +2889,177 @@ mod tests {
             )
         );
     }
+
+    macro_rules! test_binary {
+        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let left = BinaryArray::from_vec($left);
+                let right = BinaryArray::from_vec($right);
+                let res = $op(&left, &right).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(v, expected[i]);
+                }
+
+                let left = LargeBinaryArray::from_vec($left);
+                let right = LargeBinaryArray::from_vec($right);
+                let res = $op(&left, &right).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(v, expected[i]);
+                }
+            }
+        };
+    }
+
+    #[test]
+    fn test_binary_eq_scalar_on_slice() {
+        let a = BinaryArray::from_opt_vec(
+            vec![Some(b"hi"), None, Some(b"hello"), Some(b"world")],
+        );
+        let a = a.slice(1, 3);
+        let a = as_generic_binary_array::<i32>(&a);
+        let a_eq = eq_binary_scalar(a, b"hello").unwrap();
+        assert_eq!(
+            a_eq,
+            BooleanArray::from(vec![None, Some(true), Some(false)])
+        );
+    }
+
+    macro_rules! test_binary_scalar {
+        ($test_name:ident, $left:expr, $right:expr, $op:expr, $expected:expr) => {
+            #[test]
+            fn $test_name() {
+                let left = BinaryArray::from_vec($left);
+                let res = $op(&left, $right).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(
+                        v,
+                        expected[i],
+                        "unexpected result when comparing {:?} at position {} to {:?} ",
+                        left.value(i),
+                        i,
+                        $right
+                    );
+                }
+
+                let left = LargeBinaryArray::from_vec($left);
+                let res = $op(&left, $right).unwrap();
+                let expected = $expected;
+                assert_eq!(expected.len(), res.len());
+                for i in 0..res.len() {
+                    let v = res.value(i);
+                    assert_eq!(
+                        v,
+                        expected[i],
+                        "unexpected result when comparing {:?} at position {} to {:?} ",
+                        left.value(i),
+                        i,
+                        $right
+                    );
+                }
+            }
+        };
+    }
+
+    test_binary!(
+        test_binary_array_eq,
+        vec![b"arrow", b"arrow", b"arrow", b"arrow"],
+        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        eq_binary,
+        vec![true, false, false, false]
+    );
+
+    test_binary_scalar!(
+        test_binary_array_eq_scalar,
+        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        "arrow".as_bytes(),
+        eq_binary_scalar,
+        vec![true, false, false, false]
+    );
+
+    test_binary!(
+        test_binary_array_neq,
+        vec![b"arrow", b"arrow", b"arrow", b"arrow"],
+        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        neq_binary,
+        vec![false, true, true, true]
+    );
+    test_binary_scalar!(
+        test_binary_array_neq_scalar,
+        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        "arrow".as_bytes(),
+        neq_binary_scalar,
+        vec![false, true, true, true]
+    );
+
+    test_binary!(
+        test_binary_array_lt,
+        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"flight", b"flight", b"flight", b"flight"],
+        lt_binary,
+        vec![true, true, false, false]
+    );
+    test_binary_scalar!(
+        test_binary_array_lt_scalar,
+        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        "flight".as_bytes(),
+        lt_binary_scalar,
+        vec![true, true, false, false]
+    );
+
+    test_binary!(
+        test_binary_array_lt_eq,
+        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"flight", b"flight", b"flight", b"flight"],
+        lt_eq_binary,
+        vec![true, true, true, false]
+    );
+    test_binary_scalar!(
+        test_binary_array_lt_eq_scalar,
+        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        "flight".as_bytes(),
+        lt_eq_binary_scalar,
+        vec![true, true, true, false]
+    );
+
+    test_binary!(
+        test_binary_array_gt,
+        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"flight", b"flight", b"flight", b"flight"],
+        gt_binary,
+        vec![false, false, false, true]
+    );
+    test_binary_scalar!(
+        test_binary_array_gt_scalar,
+        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        "flight".as_bytes(),
+        gt_binary_scalar,
+        vec![false, false, false, true]
+    );
+
+    test_binary!(
+        test_binary_array_gt_eq,
+        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"flight", b"flight", b"flight", b"flight"],
+        gt_eq_binary,
+        vec![false, false, true, true]
+    );
+    test_binary_scalar!(
+        test_binary_array_gt_eq_scalar,
+        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        "flight".as_bytes(),
+        gt_eq_binary_scalar,
+        vec![false, false, true, true]
+    );
 
     // Expected behaviour:
     // contains("ab", ["ab", "cd", null]) = true
