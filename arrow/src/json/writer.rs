@@ -136,15 +136,12 @@ fn struct_array_to_jsonmap_array(
         .collect::<Vec<JsonMap<String, Value>>>();
 
     for (j, struct_col) in array.columns().iter().enumerate() {
-        match set_column_for_json_rows(
+        set_column_for_json_rows(
             &mut inner_objs,
             row_count,
             struct_col,
             inner_col_names[j],
-        ) {
-            Ok(_) => {}
-            Err(e) => return Err(e),
-        }
+        )?
     }
     Ok(inner_objs)
 }
@@ -178,20 +175,20 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>> {
         DataType::UInt64 => primitive_array_to_json::<UInt64Type>(array),
         DataType::Float32 => primitive_array_to_json::<Float32Type>(array),
         DataType::Float64 => primitive_array_to_json::<Float64Type>(array),
-        DataType::List(_) => Ok(as_list_array(array)
+        DataType::List(_) => as_list_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Value::Array(array_to_json_array(&v).unwrap()),
-                None => Value::Null,
+                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                None => Ok(Value::Null),
             })
-            .collect()),
-        DataType::LargeList(_) => Ok(as_large_list_array(array)
+            .collect(),
+        DataType::LargeList(_) => as_large_list_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Value::Array(array_to_json_array(&v).unwrap()),
-                None => Value::Null,
+                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                None => Ok(Value::Null),
             })
-            .collect()),
+            .collect(),
         DataType::Struct(_) => {
             let jsonmaps =
                 struct_array_to_jsonmap_array(as_struct_array(array), array.len())?;
