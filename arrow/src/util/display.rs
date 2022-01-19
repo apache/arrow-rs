@@ -313,7 +313,7 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
         DataType::UInt16 => make_string!(array::UInt16Array, column, row),
         DataType::UInt32 => make_string!(array::UInt32Array, column, row),
         DataType::UInt64 => make_string!(array::UInt64Array, column, row),
-        DataType::Float16 => make_string!(array::Float32Array, column, row),
+        DataType::Float16 => make_string!(array::Float16Array, column, row),
         DataType::Float32 => make_string!(array::Float32Array, column, row),
         DataType::Float64 => make_string!(array::Float64Array, column, row),
         DataType::Decimal(..) => make_string_from_decimal(column, row),
