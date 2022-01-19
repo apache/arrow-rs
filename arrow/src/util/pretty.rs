@@ -109,8 +109,8 @@ mod tests {
     use crate::{
         array::{
             self, new_null_array, Array, Date32Array, Date64Array,
-            FixedSizeBinaryBuilder, PrimitiveBuilder, StringArray, StringBuilder,
-            StringDictionaryBuilder, StructArray, Time32MillisecondArray,
+            FixedSizeBinaryBuilder, Float16Array, PrimitiveBuilder, StringArray,
+            StringBuilder, StringDictionaryBuilder, StructArray, Time32MillisecondArray,
             Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
             TimestampMicrosecondArray, TimestampMillisecondArray,
             TimestampNanosecondArray, TimestampSecondArray,
@@ -122,6 +122,8 @@ mod tests {
     use crate::array::{DecimalBuilder, FixedSizeListBuilder, Int32Array};
     use std::fmt::Write;
     use std::sync::Arc;
+
+    use half::f16;
 
     #[test]
     fn test_pretty_format_batches() -> Result<()> {
@@ -689,6 +691,36 @@ mod tests {
         ];
         let expected = String::from(s.join("\n"));
         assert_eq!(expected, buf);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_float16_display() -> Result<()> {
+        let values = vec![
+            Some(f16::from_f32(f32::NAN)),
+            Some(f16::from_f32(4.0)),
+            Some(f16::from_f32(f32::NEG_INFINITY)),
+        ];
+        let array = Arc::new(values.into_iter().collect::<Float16Array>()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f16",
+            array.data_type().clone(),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![array])?;
+
+        let table = pretty_format_batches(&[batch])?.to_string();
+
+        let expected = vec![
+            "+------+", "| f16  |", "+------+", "| NaN  |", "| 4    |", "| -inf |",
+            "+------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
 
         Ok(())
     }
