@@ -304,10 +304,10 @@ mod tests {
     use std::sync::Arc;
 
     use crate::array::{
-        array::Array, ArrayDataBuilder, ArrayRef, BinaryOffsetSizeTrait, BooleanArray,
-        DecimalBuilder, FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray,
-        Int32Builder, ListBuilder, NullArray, PrimitiveBuilder, StringArray,
-        StringDictionaryBuilder, StringOffsetSizeTrait, StructArray,
+        array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryOffsetSizeTrait,
+        BooleanArray, DecimalBuilder, FixedSizeBinaryBuilder, FixedSizeListBuilder,
+        GenericBinaryArray, Int32Builder, ListBuilder, NullArray, PrimitiveBuilder,
+        StringArray, StringDictionaryBuilder, StringOffsetSizeTrait, StructArray,
     };
     use crate::array::{GenericStringArray, Int32Array};
     use crate::buffer::Buffer;
@@ -1296,5 +1296,39 @@ mod tests {
             &[Some("a"), None, Some("a"), Some("d")],
         );
         test_equal(&a, &b, false);
+    }
+
+    #[test]
+    fn test_non_null_empty_strings() {
+        let s = StringArray::from(vec![Some(""), Some(""), Some("")]);
+
+        let string1 = s.data();
+
+        let string2 = ArrayData::builder(DataType::Utf8)
+            .len(string1.len())
+            .buffers(string1.buffers().to_vec())
+            .build()
+            .unwrap();
+
+        // string2 is identical to string1 except that it has no validity buffer but since there
+        // are no nulls, string1 and string2 are equal
+        test_equal(string1, &string2, true);
+    }
+
+    #[test]
+    fn test_null_empty_strings() {
+        let s = StringArray::from(vec![Some(""), None, Some("")]);
+
+        let string1 = s.data();
+
+        let string2 = ArrayData::builder(DataType::Utf8)
+            .len(string1.len())
+            .buffers(string1.buffers().to_vec())
+            .build()
+            .unwrap();
+
+        // string2 is identical to string1 except that it has no validity buffer since string1 has
+        // nulls in it, string1 and string2 are not equal
+        test_equal(string1, &string2, false);
     }
 }
