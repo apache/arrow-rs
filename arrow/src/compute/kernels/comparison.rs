@@ -2924,7 +2924,7 @@ mod tests {
         );
         let a = a.slice(1, 3);
         let a = as_generic_binary_array::<i32>(&a);
-        let a_eq = eq_binary_scalar(&a, b"hello").unwrap();
+        let a_eq = eq_binary_scalar(a, b"hello").unwrap();
         assert_eq!(
             a_eq,
             BooleanArray::from(vec![None, Some(true), Some(false)])
