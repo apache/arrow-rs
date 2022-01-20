@@ -167,7 +167,13 @@ where
                 break;
             }
 
-            let batch_size = max(num_records - records_read, MIN_BATCH_SIZE);
+            // If repetition levels present, we don't know how much more to read
+            // in order to read the requested number of records, therefore read at least
+            // MIN_BATCH_SIZE, otherwise read exactly what was requested
+            let batch_size = match &self.rep_levels {
+                Some(_) => max(num_records - records_read, MIN_BATCH_SIZE),
+                None => num_records - records_read,
+            };
 
             // Try to more value from parquet pages
             let values_read = self.read_one_batch(batch_size)?;
