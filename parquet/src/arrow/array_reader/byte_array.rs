@@ -203,11 +203,12 @@ impl<I: OffsetSizeTrait + ScalarValue> ColumnValueDecoder
     }
 
     fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
-        self.decoder.as_mut().expect("decoder set").read(
-            out,
-            range.end - range.start,
-            self.dict.as_ref(),
-        )
+        let decoder = self
+            .decoder
+            .as_mut()
+            .ok_or_else(|| general_err!("no decoder set"))?;
+
+        decoder.read(out, range.end - range.start, self.dict.as_ref())
     }
 }
 
@@ -266,7 +267,9 @@ impl ByteArrayDecoder {
         match self {
             ByteArrayDecoder::Plain(d) => d.read(out, len),
             ByteArrayDecoder::Dictionary(d) => {
-                let dict = dict.expect("dictionary set");
+                let dict = dict
+                    .ok_or_else(|| general_err!("missing dictionary page for column"))?;
+
                 d.read(out, dict, len)
             }
             ByteArrayDecoder::DeltaLength(d) => d.read(out, len),
@@ -546,6 +549,10 @@ impl ByteArrayDecoderDictionary {
         dict: &OffsetBuffer<I>,
         len: usize,
     ) -> Result<usize> {
+        if dict.is_empty() {
+            return Ok(0); // All data must be NULL
+        }
+
         let mut values_read = 0;
 
         while values_read != len && self.max_remaining_values != 0 {
@@ -579,9 +586,7 @@ impl ByteArrayDecoderDictionary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array_reader::test_util::{
-        byte_array_all_encodings, utf8_column,
-    };
+    use crate::arrow::array_reader::test_util::{byte_array_all_encodings, utf8_column};
     use crate::arrow::record_reader::buffer::ValuesBuffer;
     use arrow::array::{Array, StringArray};
 
@@ -637,6 +642,24 @@ mod tests {
                     None,
                 ]
             );
+        }
+    }
+
+    #[test]
+    fn test_byte_array_decoder_nulls() {
+        let (pages, encoded_dictionary) = byte_array_all_encodings(Vec::<&str>::new());
+
+        let column_desc = utf8_column();
+        let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
+
+        decoder
+            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .unwrap();
+
+        for (encoding, page) in pages {
+            let mut output = OffsetBuffer::<i32>::default();
+            decoder.set_data(encoding, page, 4, None).unwrap();
+            assert_eq!(decoder.read(&mut output, 0..1024).unwrap(), 0);
         }
     }
 }

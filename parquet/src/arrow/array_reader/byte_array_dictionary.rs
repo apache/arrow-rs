@@ -326,12 +326,21 @@ where
             } => {
                 let len = (range.end - range.start).min(*max_remaining_values);
 
-                let dict = self.dict.as_ref().expect("dictionary set");
+                let dict = self
+                    .dict
+                    .as_ref()
+                    .ok_or_else(|| general_err!("missing dictionary page for column"))?;
+
                 assert_eq!(dict.data_type(), &self.value_type);
+
+                if dict.is_empty() {
+                    return Ok(0); // All data must be NULL
+                }
 
                 match out.as_keys(dict) {
                     Some(keys) => {
                         // Happy path - can just copy keys
+                        // Keys will be validated on conversion to arrow
                         decoder.get_batch(keys.spare_capacity_mut(len))
                     }
                     None => {
@@ -374,10 +383,13 @@ mod tests {
 
     use super::*;
 
+    fn utf8_dictionary() -> ArrowType {
+        ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8))
+    }
+
     #[test]
     fn test_dictionary_preservation() {
-        let data_type =
-            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
+        let data_type = utf8_dictionary();
 
         let data: Vec<_> = vec!["0", "1", "0", "1", "2", "1", "2"]
             .into_iter()
@@ -443,8 +455,7 @@ mod tests {
 
     #[test]
     fn test_dictionary_fallback() {
-        let data_type =
-            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
+        let data_type = utf8_dictionary();
         let data = vec!["hello", "world", "a", "b"];
 
         let (pages, encoded_dictionary) = byte_array_all_encodings(data.clone());
@@ -506,5 +517,32 @@ mod tests {
         decoder
             .set_dict(dictionary, 128, Encoding::RLE_DICTIONARY, false)
             .unwrap();
+    }
+
+    #[test]
+    fn test_nulls() {
+        let data_type = utf8_dictionary();
+        let (pages, encoded_dictionary) = byte_array_all_encodings(Vec::<&str>::new());
+
+        let column_desc = utf8_column();
+        let mut decoder = DictionaryDecoder::new(&column_desc);
+
+        decoder
+            .set_dict(encoded_dictionary, 4, Encoding::PLAIN_DICTIONARY, false)
+            .unwrap();
+
+        for (encoding, page) in pages {
+            let mut output = DictionaryBuffer::<i32, i32>::default();
+            decoder.set_data(encoding, page, 8, None).unwrap();
+            assert_eq!(decoder.read(&mut output, 0..1024).unwrap(), 0);
+
+            output.pad_nulls(0, 0, 8, &[0]);
+            let array = output
+                .into_array(Some(Buffer::from(&[0])), &data_type)
+                .unwrap();
+
+            assert_eq!(array.len(), 8);
+            assert_eq!(array.null_count(), 8);
+        }
     }
 }

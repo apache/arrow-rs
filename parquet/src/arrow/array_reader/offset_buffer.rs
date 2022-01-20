@@ -367,4 +367,17 @@ mod tests {
         // Fails if run from middle of codepoint
         buffer.check_valid_utf8(12).unwrap_err();
     }
+
+    #[test]
+    fn test_pad_nulls_empty() {
+        let mut buffer = OffsetBuffer::<i32>::default();
+        let valid_mask = Buffer::from_iter(std::iter::repeat(false).take(9));
+        buffer.pad_nulls(0, 0, 9, valid_mask.as_slice());
+
+        let array = buffer.into_array(Some(valid_mask), ArrowType::Utf8);
+        let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(strings.len(), 9);
+        assert!(strings.iter().all(|x| x.is_none()))
+    }
 }

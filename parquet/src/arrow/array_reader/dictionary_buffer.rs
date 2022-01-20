@@ -106,11 +106,21 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                 let dict_offsets = unsafe { values.buffers()[0].typed_data::<V>() };
                 let dict_values = &values.buffers()[1].as_slice();
 
-                spilled.extend_from_dictionary(
-                    keys.as_slice(),
-                    dict_offsets,
-                    dict_values,
-                )?;
+                if values.is_empty() {
+                    // If dictionary is empty, zero pad offsets
+                    spilled.offsets.resize(keys.len() + 1);
+                } else {
+                    // Note: at this point null positions will have arbitrary dictionary keys
+                    // and this will hydrate them to the corresponding byte array. This is
+                    // likely sub-optimal, as we would prefer zero length null "slots", but
+                    // spilling is already a degenerate case and so it is unclear if this is
+                    // worth optimising for, e.g. by keeping a null mask around
+                    spilled.extend_from_dictionary(
+                        keys.as_slice(),
+                        dict_offsets,
+                        dict_values,
+                    )?;
+                }
 
                 *self = Self::Values { values: spilled };
                 match self {
@@ -131,15 +141,18 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
 
         match self {
             Self::Dict { keys, values } => {
-                let min = K::from_usize(0).unwrap();
-                let max = K::from_usize(values.len()).unwrap();
+                // Validate keys unless dictionary is empty
+                if !values.is_empty() {
+                    let min = K::from_usize(0).unwrap();
+                    let max = K::from_usize(values.len()).unwrap();
 
-                // It may be possible to use SIMD here
-                if keys.as_slice().iter().any(|x| *x < min || *x >= max) {
-                    return Err(general_err!(
-                        "dictionary key beyond bounds of dictionary: 0..{}",
-                        values.len()
-                    ));
+                    // It may be possible to use SIMD here
+                    if keys.as_slice().iter().any(|x| *x < min || *x >= max) {
+                        return Err(general_err!(
+                            "dictionary key beyond bounds of dictionary: 0..{}",
+                            values.len()
+                        ));
+                    }
                 }
 
                 let mut builder = ArrayDataBuilder::new(data_type.clone())
