@@ -79,7 +79,7 @@ macro_rules! make_reader {
 /// * A column chunk contains non-dictionary encoded pages
 ///
 /// It is therefore recommended that if `pages` contains data from multiple column chunks,
-/// that the batch size used is a divisor of the row group size
+/// that the read batch size used is a divisor of the row group size
 ///
 pub fn make_byte_array_dictionary_reader(
     pages: Box<dyn PageIterator>,
