@@ -42,8 +42,6 @@
 - BooleanBufferBuilder Append Packed [\#1038](https://github.com/apache/arrow-rs/issues/1038) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - parquet Performance Optimization: StructArrayReader Redundant Level & Bitmap Computation [\#1034](https://github.com/apache/arrow-rs/issues/1034) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Reduce Public Parquet API [\#1032](https://github.com/apache/arrow-rs/issues/1032) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Add dyn\_xx\_lit type kernels  [\#986](https://github.com/apache/arrow-rs/issues/986) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Add native comparison kernel support for `DictionaryArray` [\#869](https://github.com/apache/arrow-rs/issues/869) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Add `from_iter_values` for binary array [\#1188](https://github.com/apache/arrow-rs/pull/1188) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Jimexist](https://github.com/Jimexist))
 - Add support for `MapArray` in json writer [\#1149](https://github.com/apache/arrow-rs/pull/1149) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([helgikrs](https://github.com/helgikrs))
 
