@@ -20,7 +20,7 @@ use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayData, ArrayRef, OffsetSizeTrait};
+use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
 
@@ -214,7 +214,7 @@ enum MaybeDictionaryDecoder {
 /// A [`ColumnValueDecoder`] for dictionary encoded variable length byte arrays
 struct DictionaryDecoder<K, V> {
     /// The current dictionary
-    dict: Option<Arc<ArrayData>>,
+    dict: Option<ArrayRef>,
 
     /// Dictionary decoder
     decoder: Option<MaybeDictionaryDecoder>,
@@ -281,7 +281,7 @@ where
         decoder.read(&mut buffer, usize::MAX)?;
 
         let array = buffer.into_array(None, self.value_type.clone());
-        self.dict = Some(Arc::new(array.data().clone()));
+        self.dict = Some(Arc::new(array));
         Ok(())
     }
 
@@ -353,8 +353,10 @@ where
                         let len = decoder.get_batch(&mut keys)?;
 
                         assert_eq!(dict.data_type(), &self.value_type);
-                        let dict_offsets = unsafe { dict.buffers()[0].typed_data::<V>() };
-                        let dict_values = &dict.buffers()[1].as_slice();
+
+                        let dict_buffers = dict.data().buffers();
+                        let dict_offsets = unsafe { dict_buffers[0].typed_data::<V>() };
+                        let dict_values = dict_buffers[1].as_slice();
 
                         values.extend_from_dictionary(
                             &keys[..len],

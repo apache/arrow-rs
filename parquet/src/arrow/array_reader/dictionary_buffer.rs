@@ -21,7 +21,7 @@ use crate::arrow::record_reader::buffer::{
 };
 use crate::column::reader::decoder::ValuesBufferSlice;
 use crate::errors::{ParquetError, Result};
-use arrow::array::{make_array, ArrayData, ArrayDataBuilder, ArrayRef, OffsetSizeTrait};
+use arrow::array::{make_array, ArrayDataBuilder, ArrayRef, OffsetSizeTrait};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
 use std::sync::Arc;
@@ -31,7 +31,7 @@ use std::sync::Arc;
 pub enum DictionaryBuffer<K: ScalarValue, V: ScalarValue> {
     Dict {
         keys: ScalarBuffer<K>,
-        values: Arc<ArrayData>,
+        values: ArrayRef,
     },
     Values {
         values: OffsetBuffer<V>,
@@ -63,15 +63,17 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
     /// # Panic
     ///
     /// Panics if the dictionary is too large for `K`
-    pub fn as_keys(
-        &mut self,
-        dictionary: &Arc<ArrayData>,
-    ) -> Option<&mut ScalarBuffer<K>> {
+    pub fn as_keys(&mut self, dictionary: &ArrayRef) -> Option<&mut ScalarBuffer<K>> {
         assert!(K::from_usize(dictionary.len()).is_some());
 
         match self {
             Self::Dict { keys, values } => {
-                if Arc::ptr_eq(values, dictionary) {
+                // Need to discard fat pointer for equality check
+                // - https://stackoverflow.com/a/67114787
+                // - https://github.com/rust-lang/rust/issues/46139
+                let values_ptr = values.as_ref() as *const _ as *const ();
+                let dict_ptr = dictionary.as_ref() as *const _ as *const ();
+                if values_ptr == dict_ptr {
                     Some(keys)
                 } else if keys.is_empty() {
                     *values = Arc::clone(dictionary);
@@ -103,8 +105,9 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
             Self::Values { values } => Ok(values),
             Self::Dict { keys, values } => {
                 let mut spilled = OffsetBuffer::default();
-                let dict_offsets = unsafe { values.buffers()[0].typed_data::<V>() };
-                let dict_values = &values.buffers()[1].as_slice();
+                let dict_buffers = values.data().buffers();
+                let dict_offsets = unsafe { dict_buffers[0].typed_data::<V>() };
+                let dict_values = dict_buffers[1].as_slice();
 
                 if values.is_empty() {
                     // If dictionary is empty, zero pad offsets
@@ -158,7 +161,7 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                 let mut builder = ArrayDataBuilder::new(data_type.clone())
                     .len(keys.len())
                     .add_buffer(keys.into())
-                    .add_child_data(values.as_ref().clone());
+                    .add_child_data(values.data().clone());
 
                 if let Some(buffer) = null_buffer {
                     builder = builder.null_bit_buffer(buffer);
@@ -259,11 +262,8 @@ mod tests {
         let dict_type =
             ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
 
-        let d1 = Arc::new(
-            StringArray::from(vec!["hello", "world", "", "a", "b"])
-                .data()
-                .clone(),
-        );
+        let d1: ArrayRef =
+            Arc::new(StringArray::from(vec!["hello", "world", "", "a", "b"]));
 
         let mut buffer = DictionaryBuffer::<i32, i32>::default();
 
@@ -326,7 +326,7 @@ mod tests {
         // Can recreate with new dictionary as values is empty
         assert!(matches!(&buffer, DictionaryBuffer::Values { .. }));
         assert_eq!(buffer.len(), 0);
-        let d2 = Arc::new(StringArray::from(vec!["bingo", ""]).data().clone());
+        let d2 = Arc::new(StringArray::from(vec!["bingo", ""])) as ArrayRef;
         buffer
             .as_keys(&d2)
             .unwrap()
@@ -345,11 +345,11 @@ mod tests {
         // Can recreate with new dictionary as keys empty
         assert!(matches!(&buffer, DictionaryBuffer::Dict { .. }));
         assert_eq!(buffer.len(), 0);
-        let d3 = Arc::new(StringArray::from(vec!["bongo"]).data().clone());
+        let d3 = Arc::new(StringArray::from(vec!["bongo"])) as ArrayRef;
         buffer.as_keys(&d3).unwrap().extend_from_slice(&[0, 0]);
 
         // Cannot change dictionary as keys not empty
-        let d4 = Arc::new(StringArray::from(vec!["bananas"]).data().clone());
+        let d4 = Arc::new(StringArray::from(vec!["bananas"])) as ArrayRef;
         assert!(buffer.as_keys(&d4).is_none());
     }
 
@@ -359,7 +359,7 @@ mod tests {
             ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
 
         let mut buffer = DictionaryBuffer::<i32, i32>::default();
-        let d = Arc::new(StringArray::from(vec!["", "f"]).data().clone());
+        let d = Arc::new(StringArray::from(vec!["", "f"])) as ArrayRef;
         buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 2, 0]);
 
         let err = buffer.into_array(None, &dict_type).unwrap_err().to_string();
@@ -370,7 +370,7 @@ mod tests {
         );
 
         let mut buffer = DictionaryBuffer::<i32, i32>::default();
-        let d = Arc::new(StringArray::from(vec![""]).data().clone());
+        let d = Arc::new(StringArray::from(vec![""])) as ArrayRef;
         buffer.as_keys(&d).unwrap().extend_from_slice(&[0, 1, 0]);
 
         let err = buffer.spill_values().unwrap_err().to_string();
