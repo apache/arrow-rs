@@ -40,7 +40,7 @@
 //!
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
-use arrow::array::{make_array, ArrayRef, MapArray, StructArray};
+use arrow::array::{make_array, Array, ArrayRef, MapArray, StructArray};
 use arrow::datatypes::{DataType, Field};
 
 /// Keeps track of the level information per array that is needed to write an Arrow array to Parquet.
@@ -711,12 +711,11 @@ impl LevelInfo {
                 ((0..=(len as i64)).collect(), array_mask)
             }
             DataType::List(_) | DataType::Map(_, _) => {
-                let data = array.data();
-                let offsets = unsafe { data.buffers()[0].typed_data::<i32>() };
+                let offsets = unsafe { array.data().buffers()[0].typed_data::<i32>() };
                 let offsets = offsets
                     .to_vec()
                     .into_iter()
-                    .skip(offset)
+                    .skip(array.offset() + offset)
                     .take(len + 1)
                     .map(|v| v as i64)
                     .collect::<Vec<i64>>();
@@ -729,7 +728,7 @@ impl LevelInfo {
             DataType::LargeList(_) => {
                 let offsets = unsafe { array.data().buffers()[0].typed_data::<i64>() }
                     .iter()
-                    .skip(offset)
+                    .skip(array.offset() + offset)
                     .take(len + 1)
                     .copied()
                     .collect();
