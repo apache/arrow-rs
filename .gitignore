@@ -8,3 +8,6 @@ rusty-tags.vi
 venv/*
 # created by doctests
 parquet/data.parquet
+# release notes cache
+.githubchangeloggenerator.cache
+.githubchangeloggenerator.cache.log
