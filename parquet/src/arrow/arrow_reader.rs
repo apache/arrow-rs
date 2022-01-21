@@ -578,6 +578,11 @@ mod tests {
         record_batch_size: usize,
         /// Percentage of nulls in column or None if required
         null_percent: Option<usize>,
+        /// Set write batch size
+        ///
+        /// This is the number of rows that are written at once to a page and
+        /// therefore acts as a bound on the page granularity of a row group
+        write_batch_size: usize,
         /// Maximum size of page in bytes
         max_data_page_size: usize,
         /// Maximum size of dictionary page in bytes
@@ -595,6 +600,7 @@ mod tests {
                 num_rows: 100,
                 record_batch_size: 15,
                 null_percent: None,
+                write_batch_size: 64,
                 max_data_page_size: 1024 * 1024,
                 max_dict_page_size: 1024 * 1024,
                 writer_version: WriterVersion::PARQUET_1_0,
@@ -637,6 +643,7 @@ mod tests {
         fn writer_props(&self) -> WriterProperties {
             let builder = WriterProperties::builder()
                 .set_data_pagesize_limit(self.max_data_page_size)
+                .set_write_batch_size(self.write_batch_size)
                 .set_writer_version(self.writer_version);
 
             let builder = match self.encoding {
