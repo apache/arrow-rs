@@ -525,4 +525,44 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_dictionary_concat_reuse() {
+        let array: DictionaryArray<Int8Type> =
+            vec!["a", "a", "b", "c"].into_iter().collect();
+        let array_copy: DictionaryArray<Int8Type> = array.data().clone().into();
+
+        // dictionary is "a", "b", "c"
+        assert_eq!(
+            array.values(),
+            &(Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef)
+        );
+        assert_eq!(array.keys(), &Int8Array::from(vec![0, 0, 1, 2]));
+
+        // concatenate it with itself
+        let combined = concat(&[&array_copy as _, &array as _]).unwrap();
+
+        let combined = combined
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .unwrap();
+
+        assert_eq!(
+            combined.values(),
+            &(Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef),
+            "Actual: {:#?}",
+            combined
+        );
+
+        assert_eq!(
+            combined.keys(),
+            &Int8Array::from(vec![0, 0, 1, 2, 0, 0, 1, 2])
+        );
+
+        // Should have reused the dictionary
+        assert!(array.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
+        assert!(
+            array_copy.data().child_data()[0].ptr_eq(&combined.data().child_data()[0])
+        );
+    }
 }
