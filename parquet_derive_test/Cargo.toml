@@ -17,7 +17,7 @@
 
 [package]
 name = "parquet_derive_test"
-version = "7.0.0"
+version = "8.0.0"
 license = "Apache-2.0"
 description = "Integration test package for parquet-derive"
 homepage = "https://github.com/apache/arrow-rs"
@@ -29,6 +29,6 @@ publish = false
 rust-version = "1.57"
 
 [dependencies]
-parquet = { path = "../parquet", version = "7.0.0" }
-parquet_derive = { path = "../parquet_derive", version = "7.0.0" }
+parquet = { path = "../parquet", version = "8.0.0" }
+parquet_derive = { path = "../parquet_derive", version = "8.0.0" }
 chrono = "0.4.19"
