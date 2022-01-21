@@ -421,7 +421,7 @@ mod tests {
 
         assert!(matches!(output, DictionaryBuffer::Dict { .. }));
 
-        assert_eq!(decoder.read(&mut output, 6..10).unwrap(), 4);
+        assert_eq!(decoder.read(&mut output, 0..4).unwrap(), 4);
 
         valid.extend_from_slice(&[false, false, true, true, false, true, true, false]);
         let valid_buffer = Buffer::from_iter(valid.iter().cloned());
