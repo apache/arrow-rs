@@ -341,7 +341,9 @@ where
                     Some(keys) => {
                         // Happy path - can just copy keys
                         // Keys will be validated on conversion to arrow
-                        decoder.get_batch(keys.spare_capacity_mut(len))
+                        let keys_slice = keys.spare_capacity_mut(range.start + len);
+                        let len = decoder.get_batch(&mut keys_slice[range.start..])?;
+                        Ok(len)
                     }
                     None => {
                         // Sad path - need to recompute dictionary
