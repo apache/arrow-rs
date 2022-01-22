@@ -40,29 +40,17 @@ while let Some(record) = iter.next() {
 }
 ```
 
-See [crate documentation](https://docs.rs/crate/parquet) on available API.
+For an example of reading to Arrow arrays, please see [here](https://docs.rs/parquet/latest/parquet/arrow/index.html)
+
+See [crate documentation](https://docs.rs/parquet/latest/parquet/) for the full API.
 
 ## Rust Version Compatbility
 
 This crate is tested with the latest stable version of Rust. We do not currrently test against other, older versions of the Rust compiler.
 
-## Upgrading from versions prior to 4.0
-
-If you are upgrading from version 3.0 or previous of this crate, you
-likely need to change your code to use [`ConvertedType`] rather than
-[`LogicalType`] to preserve existing behaviour in your code.
-
-Version 2.4.0 of the Parquet format introduced a `LogicalType` to replace the existing `ConvertedType`.
-This crate used `parquet::basic::LogicalType` to map to the `ConvertedType`, but this has been renamed to `parquet::basic::ConvertedType` from version 4.0 of this crate.
-
-The `ConvertedType` is deprecated in the format, but is still written
-to preserve backward compatibility.
-It is preferred that `LogicalType` is used, as it supports nanosecond
-precision timestamps without using the deprecated `Int96` Parquet type.
-
 ## Supported Parquet Version
 
-- Parquet-format 2.6.0
+- Parquet-format 4.0.0
 
 To update Parquet format to a newer version, check if [parquet-format](https://github.com/sunchao/parquet-format-rs)
 version is available. Then simply update version of `parquet-format` crate in Cargo.toml.
@@ -81,7 +69,7 @@ version is available. Then simply update version of `parquet-format` crate in Ca
   - [ ] Row record writer
   - [x] Arrow record writer
 - [ ] Predicate pushdown
-- [x] Parquet format 2.6.0 support
+- [x] Parquet format 4.0.0 support
 
 ## License
 

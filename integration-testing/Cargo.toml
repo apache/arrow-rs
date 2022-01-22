@@ -18,7 +18,7 @@
 [package]
 name = "arrow-integration-testing"
 description = "Binaries used in the Arrow integration tests"
-version = "7.0.0"
+version = "8.0.0"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]

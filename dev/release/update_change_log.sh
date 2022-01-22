@@ -36,7 +36,9 @@ pushd ${SOURCE_TOP_DIR}
 docker run -it --rm -e CHANGELOG_GITHUB_TOKEN=$CHANGELOG_GITHUB_TOKEN -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user apache \
     --project arrow-rs \
-    --since-tag 6.0.0 \
-    --future-release 7.0.0
-
-sed -i "s/\\\n/\n\n/" CHANGELOG.md
+    --cache-file=.githubchangeloggenerator.cache \
+    --cache-log=.githubchangeloggenerator.cache.log \
+    --http-cache \
+    --max-issues=300 \
+    --since-tag 7.0.0 \
+    --future-release 8.0.0

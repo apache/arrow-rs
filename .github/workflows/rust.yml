@@ -131,7 +131,8 @@ jobs:
     strategy:
       matrix:
         arch: [amd64]
-        rust: [nightly]
+        # pin nightly until  https://github.com/rust-lang/packed_simd/pull/341 is resolved
+        rust: [nightly-2022-01-17]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -345,7 +346,8 @@ jobs:
     strategy:
       matrix:
         arch: [amd64]
-        rust: [nightly]
+        # pin nightly until  https://github.com/rust-lang/packed_simd/pull/341 is resolved
+        rust: [nightly-2022-01-17]
     container:
       image: ${{ matrix.arch }}/rust
       env:
