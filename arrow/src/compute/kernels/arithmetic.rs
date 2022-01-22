@@ -433,7 +433,7 @@ where
     T: ArrowNumericType,
     T::Native: Add<Output = T::Native>,
 {
-    return math_op(left, right, |a, b| a + b);
+    math_op(left, right, |a, b| a + b)
 }
 
 /// Add every value in an array by a scalar. If any value in the array is null then the
@@ -446,7 +446,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: Add<Output = T::Native>,
 {
-    return Ok(unary(array, |value| value + scalar));
+    Ok(unary(array, |value| value + scalar))
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -459,7 +459,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: Sub<Output = T::Native>,
 {
-    return math_op(left, right, |a, b| a - b);
+    math_op(left, right, |a, b| a - b)
 }
 
 /// Subtract every value in an array by a scalar. If any value in the array is null then the
@@ -476,7 +476,7 @@ where
         + Div<Output = T::Native>
         + Zero,
 {
-    return Ok(unary(array, |value| value - scalar));
+    Ok(unary(array, |value| value - scalar))
 }
 
 /// Perform `-` operation on an array. If value is null then the result is also null.
@@ -485,7 +485,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: Neg<Output = T::Native>,
 {
-    return Ok(unary(array, |x| -x));
+    Ok(unary(array, |x| -x))
 }
 
 /// Raise array with floating point values to the power of a scalar.
@@ -497,7 +497,7 @@ where
     T: datatypes::ArrowFloatNumericType,
     T::Native: Pow<T::Native, Output = T::Native>,
 {
-    return Ok(unary(array, |x| x.pow(raise)));
+    Ok(unary(array, |x| x.pow(raise)))
 }
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
@@ -510,7 +510,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: Mul<Output = T::Native>,
 {
-    return math_op(left, right, |a, b| a * b);
+    math_op(left, right, |a, b| a * b)
 }
 
 /// Multiply every value in an array by a scalar. If any value in the array is null then the
@@ -529,7 +529,7 @@ where
         + Zero
         + One,
 {
-    return Ok(unary(array, |value| value * scalar));
+    Ok(unary(array, |value| value * scalar))
 }
 
 /// Perform `left % right` operation on two arrays. If either left or right value is null
@@ -579,7 +579,7 @@ where
     T: datatypes::ArrowFloatNumericType,
     T::Native: Div<Output = T::Native>,
 {
-    return math_op(left, right, |a, b| a / b);
+    math_op(left, right, |a, b| a / b)
 }
 
 /// Modulus every value in an array by a scalar. If any value in the array is null then the
@@ -597,7 +597,7 @@ where
         return Err(ArrowError::DivideByZero);
     }
 
-    return Ok(unary(array, |a| a % modulo));
+    Ok(unary(array, |a| a % modulo))
 }
 
 /// Divide every value in an array by a scalar. If any value in the array is null then the
@@ -614,7 +614,7 @@ where
     if divisor.is_zero() {
         return Err(ArrowError::DivideByZero);
     }
-    return Ok(unary(array, |a| a / divisor));
+    Ok(unary(array, |a| a / divisor))
 }
 
 #[cfg(test)]
