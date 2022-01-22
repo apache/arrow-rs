@@ -15,40 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::util::bit_chunk_iterator::BitChunks;
+use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
 use std::ops::Range;
 
 /// Counts the number of set bits in the provided range
 pub fn count_set_bits(bytes: &[u8], range: Range<usize>) -> usize {
-    let mut count = 0_usize;
-    let chunks = BitChunks::new(bytes, range.start, range.end - range.start);
-    chunks.iter().for_each(|chunk| {
-        count += chunk.count_ones() as usize;
-    });
-    count += chunks.remainder_bits().count_ones() as usize;
-    count
+    let unaligned = UnalignedBitChunk::new(bytes, range.start, range.end - range.start);
+    unaligned.count_ones()
 }
 
 /// Iterates through the set bit positions in `bytes` in reverse order
 pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
-    let (mut byte_idx, mut in_progress) = match bytes.len() {
-        0 => (0, 0),
-        len => (len - 1, bytes[len - 1]),
-    };
+    let bit_length = bytes.len() * 8;
+    let unaligned = UnalignedBitChunk::new(bytes, 0, bit_length);
+    let mut chunk_end_idx =
+        bit_length + unaligned.lead_padding() + unaligned.trailing_padding();
 
-    std::iter::from_fn(move || loop {
-        if in_progress != 0 {
-            let bit_pos = 7 - in_progress.leading_zeros();
-            in_progress ^= 1 << bit_pos;
-            return Some((byte_idx << 3) + (bit_pos as usize));
-        }
-
-        if byte_idx == 0 {
+    unaligned.iter().rev().flat_map(move |mut chunk| {
+        let chunk_idx = chunk_end_idx - 64;
+        chunk_end_idx = chunk_idx;
+        std::iter::from_fn(move || {
+            if chunk != 0 {
+                let bit_pos = 63 - chunk.leading_zeros();
+                chunk ^= 1 << bit_pos;
+                return Some(chunk_idx + (bit_pos as usize));
+            }
             return None;
-        }
-
-        byte_idx -= 1;
-        in_progress = bytes[byte_idx];
+        })
     })
 }
 
@@ -61,7 +54,7 @@ mod tests {
     #[test]
     fn test_bit_fns() {
         let mut rng = thread_rng();
-        let mask_length = rng.gen_range(1..20);
+        let mask_length = rng.gen_range(1..1024);
         let bools: Vec<_> = std::iter::from_fn(|| Some(rng.next_u32() & 1 == 0))
             .take(mask_length)
             .collect();

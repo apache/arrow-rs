@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -15,8 +17,192 @@
 // specific language governing permissions and limitations
 // under the License.
 use crate::util::bit_util::ceil;
-use std::fmt::Debug;
 
+/// Iterates over an arbitrarily aligned byte buffer
+///
+/// Yields an iterator of aligned u64, along with the leading and trailing
+/// u64 necessary to align the buffer to a 8-byte boundary
+///
+/// This is unlike [`BitChunkIterator`] which only exposes a trailing u64,
+/// and consequently has to perform more work for each read
+#[derive(Debug)]
+pub struct UnalignedBitChunk<'a> {
+    lead_padding: usize,
+    trailing_padding: usize,
+
+    prefix: Option<u64>,
+    chunks: &'a [u64],
+    suffix: Option<u64>,
+}
+
+impl<'a> UnalignedBitChunk<'a> {
+    /// Create a from a byte array, and and an offset and length in bits
+    pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
+        if len == 0 {
+            return Self {
+                lead_padding: 0,
+                trailing_padding: 0,
+                prefix: None,
+                chunks: &[],
+                suffix: None,
+            };
+        }
+
+        let byte_offset = offset / 8;
+        let offset_padding = offset % 8;
+
+        let bytes_len = (len + offset_padding + 7) / 8;
+        let buffer = &buffer[byte_offset..byte_offset + bytes_len];
+
+        let prefix_mask = compute_prefix_mask(offset_padding);
+
+        // If less than 8 bytes, read into prefix
+        if buffer.len() <= 8 {
+            let (suffix_mask, trailing_padding) =
+                compute_suffix_mask(len, offset_padding);
+            let prefix = read_u64(buffer) & suffix_mask & prefix_mask;
+
+            return Self {
+                lead_padding: offset_padding,
+                trailing_padding,
+                prefix: Some(prefix),
+                chunks: &[],
+                suffix: None,
+            };
+        }
+
+        // If less than 16 bytes, read into prefix and suffix
+        if buffer.len() <= 16 {
+            let (suffix_mask, trailing_padding) =
+                compute_suffix_mask(len, offset_padding);
+            let prefix = read_u64(&buffer[..8]) & prefix_mask;
+            let suffix = read_u64(&buffer[8..]) & suffix_mask;
+
+            return Self {
+                lead_padding: offset_padding,
+                trailing_padding,
+                prefix: Some(prefix),
+                chunks: &[],
+                suffix: Some(suffix),
+            };
+        }
+
+        // Read into prefix and suffix as needed
+        let (prefix, mut chunks, suffix) = unsafe { buffer.align_to::<u64>() };
+        assert!(
+            prefix.len() < 8 && suffix.len() < 8,
+            "align_to did not return largest possible aligned slice"
+        );
+
+        let (alignment_padding, prefix) = match (offset_padding, prefix.is_empty()) {
+            (0, true) => (0, None),
+            (_, true) => {
+                let prefix = chunks[0] & prefix_mask;
+                chunks = &chunks[1..];
+                (0, Some(prefix))
+            }
+            (_, false) => {
+                let alignment_padding = (8 - prefix.len()) * 8;
+
+                let prefix = (read_u64(prefix) & prefix_mask) << alignment_padding;
+                (alignment_padding, Some(prefix))
+            }
+        };
+
+        let lead_padding = offset_padding + alignment_padding;
+        let (suffix_mask, trailing_padding) = compute_suffix_mask(len, lead_padding);
+
+        let suffix = match (trailing_padding, suffix.is_empty()) {
+            (0, _) => None,
+            (_, true) => {
+                let suffix = chunks[chunks.len() - 1] & suffix_mask;
+                chunks = &chunks[..chunks.len() - 1];
+                Some(suffix)
+            }
+            (_, false) => Some(read_u64(suffix) & suffix_mask),
+        };
+
+        Self {
+            lead_padding,
+            trailing_padding,
+            prefix,
+            chunks,
+            suffix,
+        }
+    }
+
+    pub fn lead_padding(&self) -> usize {
+        self.lead_padding
+    }
+
+    pub fn trailing_padding(&self) -> usize {
+        self.trailing_padding
+    }
+
+    pub fn prefix(&self) -> Option<u64> {
+        self.prefix
+    }
+
+    pub fn suffix(&self) -> Option<u64> {
+        self.suffix
+    }
+
+    pub fn chunks(&self) -> &'a [u64] {
+        self.chunks
+    }
+
+    pub fn iter(&self) -> UnalignedBitChunkIterator<'a> {
+        self.prefix
+            .into_iter()
+            .chain(self.chunks.iter().cloned())
+            .chain(self.suffix.into_iter())
+    }
+
+    /// Counts the number of ones
+    pub fn count_ones(&self) -> usize {
+        self.iter().map(|x| x.count_ones() as usize).sum()
+    }
+}
+
+pub type UnalignedBitChunkIterator<'a> = std::iter::Chain<
+    std::iter::Chain<
+        std::option::IntoIter<u64>,
+        std::iter::Cloned<std::slice::Iter<'a, u64>>,
+    >,
+    std::option::IntoIter<u64>,
+>;
+
+#[inline]
+fn read_u64(input: &[u8]) -> u64 {
+    let len = input.len().min(8);
+    let mut buf = [0_u8; 8];
+    (&mut buf[..len]).copy_from_slice(input);
+    u64::from_le_bytes(buf)
+}
+
+#[inline]
+fn compute_prefix_mask(lead_padding: usize) -> u64 {
+    !((1 << lead_padding) - 1)
+}
+
+#[inline]
+fn compute_suffix_mask(len: usize, lead_padding: usize) -> (u64, usize) {
+    let trailing_bits = (len + lead_padding) % 64;
+
+    if trailing_bits == 0 {
+        return (u64::MAX, 0);
+    }
+
+    let trailing_padding = 64 - trailing_bits;
+    let suffix_mask = (1 << trailing_bits) - 1;
+    (suffix_mask, trailing_padding)
+}
+
+/// Iterates over an arbitrarily aligned byte buffer
+///
+/// Yields an iterator of u64, and a remainder. The first byte in the buffer
+/// will be the least significant byte in output u64
+///
 #[derive(Debug)]
 pub struct BitChunks<'a> {
     buffer: &'a [u8],
@@ -174,7 +360,11 @@ impl ExactSizeIterator for BitChunkIterator<'_> {
 
 #[cfg(test)]
 mod tests {
+    use rand::prelude::*;
+
+    use crate::alloc::ALIGNMENT;
     use crate::buffer::Buffer;
+    use crate::util::bit_chunk_iterator::UnalignedBitChunk;
 
     #[test]
     fn test_iter_aligned() {
@@ -271,5 +461,146 @@ mod tests {
 
         assert_eq!(u64::MAX, bitchunks.iter().last().unwrap());
         assert_eq!(0x7F, bitchunks.remainder_bits());
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn test_unaligned_bit_chunk_iterator() {
+        // This test exploits the fact Buffer is at least 64-byte aligned
+        assert!(ALIGNMENT > 64);
+
+        let buffer = Buffer::from(&[0xFF; 5]);
+        let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 40);
+
+        assert_eq!(unaligned.prefix(), Some((1 << 40) - 1));
+        assert_eq!(unaligned.suffix(), None);
+        assert!(unaligned.chunks().is_empty());
+        assert_eq!(unaligned.lead_padding(), 0);
+        assert_eq!(unaligned.trailing_padding(), 24);
+
+        let buffer = buffer.slice(1);
+        let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 32);
+
+        assert_eq!(unaligned.prefix(), Some((1 << 32) - 1));
+        assert_eq!(unaligned.suffix(), None);
+        assert!(unaligned.chunks().is_empty());
+        assert_eq!(unaligned.lead_padding(), 0);
+        assert_eq!(unaligned.trailing_padding(), 32);
+
+        let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 5, 27);
+
+        assert_eq!(unaligned.prefix(), Some(((1 << 32) - 1) - ((1 << 5) - 1)));
+        assert_eq!(unaligned.suffix(), None);
+        assert!(unaligned.chunks().is_empty());
+        assert_eq!(unaligned.lead_padding(), 5);
+        assert_eq!(unaligned.trailing_padding(), 32);
+
+        let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 12, 20);
+
+        assert_eq!(unaligned.prefix(), Some(((1 << 24) - 1) - ((1 << 4) - 1)));
+        assert_eq!(unaligned.suffix(), None);
+        assert!(unaligned.chunks().is_empty());
+        assert_eq!(unaligned.lead_padding(), 4);
+        assert_eq!(unaligned.trailing_padding(), 40);
+
+        let buffer = Buffer::from(&[0xFF; 14]);
+        let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 112);
+
+        assert_eq!(unaligned.prefix(), Some(u64::MAX));
+        assert_eq!(unaligned.suffix(), Some((1 << 48) - 1));
+        assert!(unaligned.chunks().is_empty());
+        assert_eq!(unaligned.lead_padding(), 0);
+        assert_eq!(unaligned.trailing_padding(), 16);
+
+        let buffer = Buffer::from(&[0xFF; 16]);
+        let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 128);
+
+        assert_eq!(unaligned.prefix(), Some(u64::MAX));
+        assert_eq!(unaligned.suffix(), Some(u64::MAX));
+        assert!(unaligned.chunks().is_empty());
+
+        let buffer = Buffer::from(&[0xFF; 64]);
+        let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 512);
+
+        assert_eq!(unaligned.suffix(), None);
+        assert_eq!(unaligned.prefix(), None);
+        assert_eq!(unaligned.chunks(), [u64::MAX; 8].as_slice());
+        assert_eq!(unaligned.lead_padding(), 0);
+        assert_eq!(unaligned.trailing_padding(), 0);
+
+        let buffer = buffer.slice(1);
+        let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 504);
+
+        assert_eq!(unaligned.prefix(), Some(u64::MAX - 0xFF));
+        assert_eq!(unaligned.suffix(), None);
+        assert_eq!(unaligned.chunks(), [u64::MAX; 7].as_slice());
+        assert_eq!(unaligned.lead_padding(), 8);
+        assert_eq!(unaligned.trailing_padding(), 0);
+
+        let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 17, 300);
+
+        assert_eq!(unaligned.prefix(), Some(u64::MAX - (1 << 25) + 1));
+        assert_eq!(unaligned.suffix(), Some((1 << 5) - 1));
+        assert_eq!(unaligned.chunks(), [u64::MAX; 4].as_slice());
+        assert_eq!(unaligned.lead_padding(), 25);
+        assert_eq!(unaligned.trailing_padding(), 59);
+
+        let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 17, 0);
+
+        assert_eq!(unaligned.prefix(), None);
+        assert_eq!(unaligned.suffix(), None);
+        assert!(unaligned.chunks().is_empty());
+        assert_eq!(unaligned.lead_padding(), 0);
+        assert_eq!(unaligned.trailing_padding(), 0);
+
+        let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 17, 1);
+
+        assert_eq!(unaligned.prefix(), Some(2));
+        assert_eq!(unaligned.suffix(), None);
+        assert!(unaligned.chunks().is_empty());
+        assert_eq!(unaligned.lead_padding(), 1);
+        assert_eq!(unaligned.trailing_padding(), 62);
+    }
+
+    #[test]
+    fn fuzz_unaligned_bit_chunk_iterator() {
+        let mut rng = thread_rng();
+
+        for _ in 0..100 {
+            let mask_len = rng.gen_range(0..1024);
+            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.gen()))
+                .take(mask_len)
+                .collect();
+            let buffer = Buffer::from_iter(bools.iter().cloned());
+
+            let offset = rng.gen_range(0..(64.min(mask_len)));
+            let truncate = rng.gen_range(0..(128.min(mask_len - offset)));
+
+            let unaligned = UnalignedBitChunk::new(
+                buffer.as_slice(),
+                offset,
+                mask_len - offset - truncate,
+            );
+
+            let bool_slice = &bools[offset..mask_len - truncate];
+
+            let count = unaligned.count_ones();
+            let expected_count = bool_slice.iter().filter(|x| **x).count();
+
+            assert_eq!(count, expected_count);
+
+            let collected: Vec<u64> = unaligned.iter().collect();
+
+            let get_bit = |idx: usize| -> bool {
+                let padded_index = idx + unaligned.lead_padding();
+                let byte_idx = padded_index / 64;
+                let bit_idx = padded_index % 64;
+                (collected[byte_idx] & (1 << bit_idx)) != 0
+            };
+
+            for (idx, b) in bool_slice.iter().enumerate() {
+                assert_eq!(*b, get_bit(idx))
+            }
+        }
     }
 }
