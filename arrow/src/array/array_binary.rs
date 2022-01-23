@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Borrow;
 use std::convert::{From, TryInto};
 use std::fmt;
 use std::{any::Any, iter::FromIterator};
 
+use super::BooleanBufferBuilder;
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
@@ -690,7 +692,8 @@ impl Array for FixedSizeBinaryArray {
     }
 }
 
-/// A type of `DecimalArray` whose elements are binaries.
+/// `DecimalArray` stores fixed width decimal numbers,
+/// with a fixed precision and scale.
 ///
 /// # Examples
 ///
@@ -816,12 +819,37 @@ impl DecimalArray {
         let array_data = unsafe { builder.build_unchecked() };
         Self::from(array_data)
     }
+
+    /// Creates a [DecimalArray] with default precision and scale,
+    /// based on an iterator of `i128` values without nulls
+    pub fn from_iter_values<I: IntoIterator<Item = i128>>(iter: I) -> Self {
+        let val_buf: Buffer = iter.into_iter().collect();
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                Self::default_type(),
+                val_buf.len() / std::mem::size_of::<i128>(),
+                None,
+                None,
+                0,
+                vec![val_buf],
+                vec![],
+            )
+        };
+        DecimalArray::from(data)
+    }
+
     pub fn precision(&self) -> usize {
         self.precision
     }
 
     pub fn scale(&self) -> usize {
         self.scale
+    }
+
+    /// The default precision and scale used when not specified
+    pub fn default_type() -> DataType {
+        // Keep maximum precision
+        DataType::Decimal(38, 10)
     }
 }
 
@@ -845,6 +873,42 @@ impl From<ArrayData> for DecimalArray {
             scale,
             length,
         }
+    }
+}
+
+impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalArray {
+    fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let size_hint = upper.unwrap_or(lower);
+
+        let mut null_buf = BooleanBufferBuilder::new(size_hint);
+
+        let buffer: Buffer = iter
+            .map(|item| {
+                if let Some(a) = item.borrow() {
+                    null_buf.append(true);
+                    *a
+                } else {
+                    null_buf.append(false);
+                    // arbitrary value for NULL
+                    0
+                }
+            })
+            .collect();
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                Self::default_type(),
+                null_buf.len(),
+                None,
+                Some(null_buf.into()),
+                0,
+                vec![buffer],
+                vec![],
+            )
+        };
+        DecimalArray::from(data)
     }
 }
 
@@ -1308,6 +1372,31 @@ mod tests {
         assert_eq!(8_887_000_000, decimal_array.value(0));
         assert_eq!(-8_887_000_000, decimal_array.value(1));
         assert_eq!(16, decimal_array.value_length());
+    }
+
+    #[test]
+    fn test_decimal_from_iter_values() {
+        let array = DecimalArray::from_iter_values(vec![-100, 0, 101].into_iter());
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
+        assert_eq!(-100, array.value(0));
+        assert_eq!(false, array.is_null(0));
+        assert_eq!(0, array.value(1));
+        assert_eq!(false, array.is_null(1));
+        assert_eq!(101, array.value(2));
+        assert_eq!(false, array.is_null(2));
+    }
+
+    #[test]
+    fn test_decimal_from_iter() {
+        let array: DecimalArray = vec![Some(-100), None, Some(101)].into_iter().collect();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
+        assert_eq!(-100, array.value(0));
+        assert_eq!(false, array.is_null(0));
+        assert_eq!(true, array.is_null(1));
+        assert_eq!(101, array.value(2));
+        assert_eq!(false, array.is_null(2));
     }
 
     #[test]

@@ -127,7 +127,12 @@ pub enum DataType {
     /// This type mostly used to represent low cardinality string
     /// arrays or a limited set of primitive types as integers.
     Dictionary(Box<DataType>, Box<DataType>),
-    /// Decimal value with precision and scale
+    /// Exact decimal value with precision and scale
+    ///
+    /// * precision is the total number of digits
+    /// * scale is the number of digits past the decimal
+    ///
+    /// For example the number 123.45 has precision 5 and scale 2.
     Decimal(usize, usize),
     /// A Map is a logical nested type that is represented as
     ///
@@ -188,6 +193,12 @@ impl fmt::Display for DataType {
         write!(f, "{:?}", self)
     }
 }
+
+/// The maximum precision for [DataType::Decimal] values
+pub const DECIMAL_MAX_PRECISION: usize = 38;
+
+/// The maximum scale for [DataType::Decimal] values
+pub const DECIMAL_MAX_SCALE: usize = 38;
 
 impl DataType {
     /// Parse a data type from a JSON representation.
