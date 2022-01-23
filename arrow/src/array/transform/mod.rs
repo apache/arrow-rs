@@ -141,26 +141,28 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits 
 /// ```
 pub struct MutableArrayData<'a> {
     arrays: Vec<&'a ArrayData>,
-    // The attributes in [_MutableArrayData] cannot be in [MutableArrayData] due to
-    // mutability invariants (interior mutability):
-    // [MutableArrayData] contains a function that can only mutate [_MutableArrayData], not
-    // [MutableArrayData] itself
+    /// The attributes in [_MutableArrayData] cannot be in [MutableArrayData] due to
+    /// mutability invariants (interior mutability):
+    /// [MutableArrayData] contains a function that can only mutate [_MutableArrayData], not
+    /// [MutableArrayData] itself
     data: _MutableArrayData<'a>,
 
-    // the child data of the `Array` in Dictionary arrays.
-    // This is not stored in `MutableArrayData` because these values constant and only needed
-    // at the end, when freezing [_MutableArrayData].
+    /// the child data of the `Array` in Dictionary arrays.
+    /// This is not stored in `MutableArrayData` because these values constant and only needed
+    /// at the end, when freezing [_MutableArrayData].
     dictionary: Option<ArrayData>,
 
-    // function used to extend values from arrays. This function's lifetime is bound to the array
-    // because it reads values from it.
+    /// function used to extend values from arrays. This function's lifetime is bound to the array
+    /// because it reads values from it.
     extend_values: Vec<Extend<'a>>,
-    // function used to extend nulls from arrays. This function's lifetime is bound to the array
-    // because it reads nulls from it.
+    /// function used to extend nulls from arrays. This function's lifetime is bound to the array
+    /// because it reads nulls from it.
     extend_null_bits: Vec<ExtendNullBits<'a>>,
 
-    // function used to extend nulls.
-    // this is independent of the arrays and therefore has no lifetime.
+    /// function used to extend nulls values
+    /// this is independent of the arrays and therefore has no lifetime.
+    ///
+    /// Note: this does not extend the null bitmask
     extend_nulls: Option<ExtendNulls>,
 }
 
@@ -627,7 +629,7 @@ impl<'a> MutableArrayData<'a> {
         let extend_nulls = self
             .extend_nulls
             .as_mut()
-            .expect("MutableArrayData created without nulls");
+            .expect("Cannot append nulls to MutableArrayData created with nulls disabled");
 
         // TODO: null_buffer should probably be extended here as well
         // otherwise is_valid() could later panic
@@ -673,7 +675,7 @@ mod tests {
 
     use super::*;
 
-    use crate::array::{DecimalArray, DecimalBuilder};
+    use crate::array::{make_array, DecimalArray, DecimalBuilder};
     use crate::{
         array::{
             Array, ArrayData, ArrayRef, BooleanArray, DictionaryArray,
@@ -1453,6 +1455,24 @@ mod tests {
         let expected = FixedSizeBinaryArray::try_from_sparse_iter(expected.into_iter())
             .expect("Failed to create FixedSizeBinaryArray from iterable");
         assert_eq!(&result, expected.data());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Cannot append nulls to MutableArrayData created with nulls disabled"
+    )]
+    fn test_disabled_nulls() {
+        let ints: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(4), Some(5)]));
+
+        let mut data = MutableArrayData::new(vec![ints.data()], false, 3);
+        data.extend(0, 1, 2);
+        data.extend_nulls(1);
+        data.extend(0, 0, 1);
+        let data = make_array(data.freeze());
+
+        let data = data.as_any().downcast_ref::<Int32Array>();
+        println!("{:?}", data.iter().collect::<Vec<_>>());
     }
 
     /*
