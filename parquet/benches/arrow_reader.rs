@@ -288,17 +288,6 @@ fn bench_array_reader(mut array_reader: Box<dyn ArrayReader>) -> usize {
     total_count
 }
 
-fn create_int32_arrow_array_reader(
-    page_iterator: impl PageIterator + 'static,
-    column_desc: ColumnDescPtr,
-) -> Box<dyn ArrayReader> {
-    use parquet::arrow::arrow_array_reader::{ArrowArrayReader, PrimitiveArrayConverter};
-    let converter = PrimitiveArrayConverter::<arrow::datatypes::Int32Type>::new();
-    let reader =
-        ArrowArrayReader::try_new(page_iterator, column_desc, converter, None).unwrap();
-    Box::new(reader)
-}
-
 fn create_int32_primitive_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
@@ -311,17 +300,6 @@ fn create_int32_primitive_array_reader(
         true,
     )
     .unwrap();
-    Box::new(reader)
-}
-
-fn create_string_arrow_array_reader(
-    page_iterator: impl PageIterator + 'static,
-    column_desc: ColumnDescPtr,
-) -> Box<dyn ArrayReader> {
-    use parquet::arrow::arrow_array_reader::{ArrowArrayReader, StringArrayConverter};
-    let converter = StringArrayConverter::new();
-    let reader =
-        ArrowArrayReader::try_new(page_iterator, column_desc, converter, None).unwrap();
     Box::new(reader)
 }
 
@@ -357,66 +335,32 @@ fn add_benches(c: &mut Criterion) {
         mandatory_int32_column_desc.clone(),
         0.0,
     );
-    group.bench_function(
-        "read Int32Array, plain encoded, mandatory, no NULLs - old",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_int32_primitive_array_reader(
-                    plain_int32_no_null_data.clone(),
-                    mandatory_int32_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read Int32Array, plain encoded, mandatory, no NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_int32_arrow_array_reader(
-                    plain_int32_no_null_data.clone(),
-                    mandatory_int32_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
+    group.bench_function("read Int32Array, plain encoded, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_int32_primitive_array_reader(
+                plain_int32_no_null_data.clone(),
+                mandatory_int32_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
 
     let plain_int32_no_null_data = build_plain_encoded_int32_page_iterator(
         schema.clone(),
         optional_int32_column_desc.clone(),
         0.0,
     );
-    group.bench_function(
-        "read Int32Array, plain encoded, optional, no NULLs - old",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_int32_primitive_array_reader(
-                    plain_int32_no_null_data.clone(),
-                    optional_int32_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read Int32Array, plain encoded, optional, no NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_int32_arrow_array_reader(
-                    plain_int32_no_null_data.clone(),
-                    optional_int32_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
+    group.bench_function("read Int32Array, plain encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_int32_primitive_array_reader(
+                plain_int32_no_null_data.clone(),
+                optional_int32_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
 
     // int32, plain encoded, half NULLs
     let plain_int32_half_null_data = build_plain_encoded_int32_page_iterator(
@@ -425,24 +369,10 @@ fn add_benches(c: &mut Criterion) {
         0.5,
     );
     group.bench_function(
-        "read Int32Array, plain encoded, optional, half NULLs - old",
+        "read Int32Array, plain encoded, optional, half NULLs",
         |b| {
             b.iter(|| {
                 let array_reader = create_int32_primitive_array_reader(
-                    plain_int32_half_null_data.clone(),
-                    optional_int32_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read Int32Array, plain encoded, optional, half NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_int32_arrow_array_reader(
                     plain_int32_half_null_data.clone(),
                     optional_int32_column_desc.clone(),
                 );
@@ -459,24 +389,10 @@ fn add_benches(c: &mut Criterion) {
         0.0,
     );
     group.bench_function(
-        "read Int32Array, dictionary encoded, mandatory, no NULLs - old",
+        "read Int32Array, dictionary encoded, mandatory, no NULLs",
         |b| {
             b.iter(|| {
                 let array_reader = create_int32_primitive_array_reader(
-                    dictionary_int32_no_null_data.clone(),
-                    mandatory_int32_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read Int32Array, dictionary encoded, mandatory, no NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_int32_arrow_array_reader(
                     dictionary_int32_no_null_data.clone(),
                     mandatory_int32_column_desc.clone(),
                 );
@@ -492,24 +408,10 @@ fn add_benches(c: &mut Criterion) {
         0.0,
     );
     group.bench_function(
-        "read Int32Array, dictionary encoded, optional, no NULLs - old",
+        "read Int32Array, dictionary encoded, optional, no NULLs",
         |b| {
             b.iter(|| {
                 let array_reader = create_int32_primitive_array_reader(
-                    dictionary_int32_no_null_data.clone(),
-                    optional_int32_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read Int32Array, dictionary encoded, optional, no NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_int32_arrow_array_reader(
                     dictionary_int32_no_null_data.clone(),
                     optional_int32_column_desc.clone(),
                 );
@@ -526,24 +428,10 @@ fn add_benches(c: &mut Criterion) {
         0.5,
     );
     group.bench_function(
-        "read Int32Array, dictionary encoded, optional, half NULLs - old",
+        "read Int32Array, dictionary encoded, optional, half NULLs",
         |b| {
             b.iter(|| {
                 let array_reader = create_int32_primitive_array_reader(
-                    dictionary_int32_half_null_data.clone(),
-                    optional_int32_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read Int32Array, dictionary encoded, optional, half NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_int32_arrow_array_reader(
                     dictionary_int32_half_null_data.clone(),
                     optional_int32_column_desc.clone(),
                 );
@@ -563,24 +451,10 @@ fn add_benches(c: &mut Criterion) {
         0.0,
     );
     group.bench_function(
-        "read StringArray, plain encoded, mandatory, no NULLs - old",
+        "read StringArray, plain encoded, mandatory, no NULLs",
         |b| {
             b.iter(|| {
                 let array_reader = create_string_byte_array_reader(
-                    plain_string_no_null_data.clone(),
-                    mandatory_string_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read StringArray, plain encoded, mandatory, no NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_string_arrow_array_reader(
                     plain_string_no_null_data.clone(),
                     mandatory_string_column_desc.clone(),
                 );
@@ -595,33 +469,16 @@ fn add_benches(c: &mut Criterion) {
         optional_string_column_desc.clone(),
         0.0,
     );
-    group.bench_function(
-        "read StringArray, plain encoded, optional, no NULLs - old",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_string_byte_array_reader(
-                    plain_string_no_null_data.clone(),
-                    optional_string_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read StringArray, plain encoded, optional, no NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_string_arrow_array_reader(
-                    plain_string_no_null_data.clone(),
-                    optional_string_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
+    group.bench_function("read StringArray, plain encoded, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_string_byte_array_reader(
+                plain_string_no_null_data.clone(),
+                optional_string_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
 
     // string, plain encoded, half NULLs
     let plain_string_half_null_data = build_plain_encoded_string_page_iterator(
@@ -630,24 +487,10 @@ fn add_benches(c: &mut Criterion) {
         0.5,
     );
     group.bench_function(
-        "read StringArray, plain encoded, optional, half NULLs - old",
+        "read StringArray, plain encoded, optional, half NULLs",
         |b| {
             b.iter(|| {
                 let array_reader = create_string_byte_array_reader(
-                    plain_string_half_null_data.clone(),
-                    optional_string_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read StringArray, plain encoded, optional, half NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_string_arrow_array_reader(
                     plain_string_half_null_data.clone(),
                     optional_string_column_desc.clone(),
                 );
@@ -664,24 +507,10 @@ fn add_benches(c: &mut Criterion) {
         0.0,
     );
     group.bench_function(
-        "read StringArray, dictionary encoded, mandatory, no NULLs - old",
+        "read StringArray, dictionary encoded, mandatory, no NULLs",
         |b| {
             b.iter(|| {
                 let array_reader = create_string_byte_array_reader(
-                    dictionary_string_no_null_data.clone(),
-                    mandatory_string_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read StringArray, dictionary encoded, mandatory, no NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_string_arrow_array_reader(
                     dictionary_string_no_null_data.clone(),
                     mandatory_string_column_desc.clone(),
                 );
@@ -697,24 +526,10 @@ fn add_benches(c: &mut Criterion) {
         0.0,
     );
     group.bench_function(
-        "read StringArray, dictionary encoded, optional, no NULLs - old",
+        "read StringArray, dictionary encoded, optional, no NULLs",
         |b| {
             b.iter(|| {
                 let array_reader = create_string_byte_array_reader(
-                    dictionary_string_no_null_data.clone(),
-                    optional_string_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read StringArray, dictionary encoded, optional, no NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_string_arrow_array_reader(
                     dictionary_string_no_null_data.clone(),
                     optional_string_column_desc.clone(),
                 );
@@ -731,24 +546,10 @@ fn add_benches(c: &mut Criterion) {
         0.5,
     );
     group.bench_function(
-        "read StringArray, dictionary encoded, optional, half NULLs - old",
+        "read StringArray, dictionary encoded, optional, half NULLs",
         |b| {
             b.iter(|| {
                 let array_reader = create_string_byte_array_reader(
-                    dictionary_string_half_null_data.clone(),
-                    optional_string_column_desc.clone(),
-                );
-                count = bench_array_reader(array_reader);
-            });
-            assert_eq!(count, EXPECTED_VALUE_COUNT);
-        },
-    );
-
-    group.bench_function(
-        "read StringArray, dictionary encoded, optional, half NULLs - new",
-        |b| {
-            b.iter(|| {
-                let array_reader = create_string_arrow_array_reader(
                     dictionary_string_half_null_data.clone(),
                     optional_string_column_desc.clone(),
                 );
