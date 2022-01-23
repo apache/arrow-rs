@@ -650,7 +650,8 @@ impl ArrayData {
         }
 
         // check null bit buffer size
-        if let Some(null_bit_buffer) = self.null_bitmap.as_ref() {
+        if let Some(null_bit_map) = self.null_bitmap.as_ref() {
+            let null_bit_buffer = null_bit_map.buffer_ref();
             let needed_len = bit_util::ceil(len_plus_offset, 8);
             if null_bit_buffer.len() < needed_len {
                 return Err(ArrowError::InvalidArgumentError(format!(
@@ -2505,5 +2506,29 @@ mod tests {
         let cloned = crate::array::make_array(cloned_data);
 
         assert_eq!(&struct_array_slice, &cloned);
+    }
+
+    #[test]
+    fn test_validate_bitmask_length() {
+        let data = MutableBuffer::from_len_zeroed(9 * 4).into();
+        let nulls = MutableBuffer::new_null(1).into();
+
+        let err = ArrayData::try_new(
+            DataType::Int32,
+            9,
+            Some(9),
+            Some(nulls),
+            0,
+            vec![data],
+            vec![],
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("null_bit_buffer size too small. got 1 needed 2"),
+            "{}",
+            err
+        )
     }
 }
