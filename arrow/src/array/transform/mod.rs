@@ -552,17 +552,19 @@ impl<'a> MutableArrayData<'a> {
 
         let extend_nulls = build_extend_nulls(data_type);
 
-        let extend_null_bits = arrays
-            .iter()
-            .map(|array| build_extend_null_bits(array, use_nulls))
-            .collect();
-
-        let null_buffer = if use_nulls {
+        let (null_buffer, extend_null_bits) = if use_nulls {
             let null_bytes = bit_util::ceil(array_capacity, 8);
-            MutableBuffer::from_len_zeroed(null_bytes)
+
+            let extend_null_bits = arrays
+                .iter()
+                .map(|array| build_extend_null_bits(array, use_nulls))
+                .collect();
+
+            (MutableBuffer::from_len_zeroed(null_bytes), extend_null_bits)
         } else {
-            // create 0 capacity mutable buffer with the intention that it won't be used
-            MutableBuffer::with_capacity(0)
+            // create 0 capacity mutable buffer and no extend_null_bits
+            // with the intention that they won't be used
+            (MutableBuffer::with_capacity(0), vec![])
         };
 
         let extend_values = match &data_type {
@@ -608,7 +610,9 @@ impl<'a> MutableArrayData<'a> {
     /// This function panics if the range is out of bounds, i.e. if `start + len >= array.len()`.
     pub fn extend(&mut self, index: usize, start: usize, end: usize) {
         let len = end - start;
-        (self.extend_null_bits[index])(&mut self.data, start, len);
+        if !self.extend_null_bits.is_empty() {
+            (self.extend_null_bits[index])(&mut self.data, start, len);
+        }
         (self.extend_values[index])(&mut self.data, index, start, len);
         self.data.len += len;
     }
