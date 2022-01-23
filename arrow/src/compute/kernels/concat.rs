@@ -530,7 +530,7 @@ mod tests {
     fn test_dictionary_concat_reuse() {
         let array: DictionaryArray<Int8Type> =
             vec!["a", "a", "b", "c"].into_iter().collect();
-        let array_copy: DictionaryArray<Int8Type> = array.data().clone().into();
+        let copy: DictionaryArray<Int8Type> = array.data().clone().into();
 
         // dictionary is "a", "b", "c"
         assert_eq!(
@@ -540,7 +540,7 @@ mod tests {
         assert_eq!(array.keys(), &Int8Array::from(vec![0, 0, 1, 2]));
 
         // concatenate it with itself
-        let combined = concat(&[&array_copy as _, &array as _]).unwrap();
+        let combined = concat(&[&copy as _, &array as _]).unwrap();
 
         let combined = combined
             .as_any()
@@ -561,8 +561,14 @@ mod tests {
 
         // Should have reused the dictionary
         assert!(array.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
-        assert!(
-            array_copy.data().child_data()[0].ptr_eq(&combined.data().child_data()[0])
-        );
+        assert!(copy.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
+
+        let new: DictionaryArray<Int8Type> = vec!["d"].into_iter().collect();
+        let combined = concat(&[&copy as _, &array as _, &new as _]).unwrap();
+
+        // Should not have reused the dictionary
+        assert!(!array.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
+        assert!(!copy.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
+        assert!(!new.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
     }
 }

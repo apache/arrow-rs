@@ -1158,7 +1158,7 @@ impl ArrayData {
 
     /// Returns true if this `ArrayData` is equal to `other`, using pointer comparisons
     /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
-    /// return false negatives
+    /// return false when the arrays are logically equal
     pub fn ptr_eq(&self, other: &Self) -> bool {
         if self.offset != other.offset
             || self.len != other.len
