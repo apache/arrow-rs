@@ -161,7 +161,7 @@ pub struct MutableArrayData<'a> {
 
     // function used to extend nulls.
     // this is independent of the arrays and therefore has no lifetime.
-    extend_nulls: ExtendNulls,
+    extend_nulls: Option<ExtendNulls>,
 }
 
 impl<'a> std::fmt::Debug for MutableArrayData<'a> {
@@ -550,9 +550,7 @@ impl<'a> MutableArrayData<'a> {
             _ => None,
         };
 
-        let extend_nulls = build_extend_nulls(data_type);
-
-        let (null_buffer, extend_null_bits) = if use_nulls {
+        let (null_buffer, extend_nulls, extend_null_bits) = if use_nulls {
             let null_bytes = bit_util::ceil(array_capacity, 8);
 
             let extend_null_bits = arrays
@@ -560,11 +558,15 @@ impl<'a> MutableArrayData<'a> {
                 .map(|array| build_extend_null_bits(array, use_nulls))
                 .collect();
 
-            (MutableBuffer::from_len_zeroed(null_bytes), extend_null_bits)
+            (
+                MutableBuffer::from_len_zeroed(null_bytes),
+                Some(build_extend_nulls(data_type)),
+                extend_null_bits,
+            )
         } else {
             // create 0 capacity mutable buffer and no extend_null_bits
             // with the intention that they won't be used
-            (MutableBuffer::with_capacity(0), vec![])
+            (MutableBuffer::with_capacity(0), None, vec![])
         };
 
         let extend_values = match &data_type {
@@ -618,12 +620,20 @@ impl<'a> MutableArrayData<'a> {
     }
 
     /// Extends this [MutableArrayData] with null elements, disregarding the bound arrays
+    ///
+    /// # Panic
+    /// This function panics if [`MutableArrayData`] was created with use_nulls set to false
     pub fn extend_nulls(&mut self, len: usize) {
+        let extend_nulls = self
+            .extend_nulls
+            .as_mut()
+            .expect("MutableArrayData created without nulls");
+
         // TODO: null_buffer should probably be extended here as well
         // otherwise is_valid() could later panic
         // add test to confirm
         self.data.null_count += len;
-        (self.extend_nulls)(&mut self.data, len);
+        extend_nulls(&mut self.data, len);
         self.data.len += len;
     }
 
