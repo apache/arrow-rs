@@ -905,6 +905,62 @@ impl From<ArrayData> for DecimalArray {
     }
 }
 
+/// an iterator that returns Some(i128) or None, that can be used on a
+/// DecimalArray
+#[derive(Debug)]
+pub struct DecimalIter<'a>  {
+    array: &'a DecimalArray,
+    current: usize,
+    current_end: usize,
+}
+
+impl <'a> DecimalIter<'a> {
+    pub fn new(array: &'a DecimalArray) -> Self {
+        Self {
+            array,
+            current: 0,
+            current_end: array.len()
+        }
+    }
+}
+
+impl <'a> std::iter::Iterator for DecimalIter<'a> {
+    type Item = Option<i128>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current == self.current_end {
+            None
+        } else {
+            let old = self.current;
+            self.current += 1;
+            // TODO: Improve performance by avoiding bounds check here
+            // (by using adding a `value_unchecked, for example)
+            if self.array.is_null(old) {
+                Some(None)
+            } else {
+                Some(Some(self.array.value(old)))
+            }
+        }
+    }
+}
+
+
+impl<'a> IntoIterator for &'a DecimalArray {
+    type Item = Option<i128>;
+    type IntoIter = DecimalIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        DecimalIter::<'a>::new(self)
+    }
+}
+
+impl<'a> DecimalArray {
+    /// constructs a new iterator
+    pub fn iter(&'a self) -> DecimalIter<'a> {
+        DecimalIter::new(self)
+    }
+}
+
 impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalArray {
     fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
         let iter = iter.into_iter();
@@ -1403,30 +1459,6 @@ mod tests {
         assert_eq!(16, decimal_array.value_length());
     }
 
-    #[test]
-    fn test_decimal_from_iter_values() {
-        let array = DecimalArray::from_iter_values(vec![-100, 0, 101].into_iter());
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
-        assert_eq!(-100, array.value(0));
-        assert_eq!(false, array.is_null(0));
-        assert_eq!(0, array.value(1));
-        assert_eq!(false, array.is_null(1));
-        assert_eq!(101, array.value(2));
-        assert_eq!(false, array.is_null(2));
-    }
-
-    #[test]
-    fn test_decimal_from_iter() {
-        let array: DecimalArray = vec![Some(-100), None, Some(101)].into_iter().collect();
-        assert_eq!(array.len(), 3);
-        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
-        assert_eq!(-100, array.value(0));
-        assert_eq!(false, array.is_null(0));
-        assert_eq!(true, array.is_null(1));
-        assert_eq!(101, array.value(2));
-        assert_eq!(false, array.is_null(2));
-    }
 
     #[test]
     fn test_decimal_append_error_value() {
@@ -1460,6 +1492,48 @@ mod tests {
         assert_eq!("9.9", arr.value_as_string(0));
         assert_eq!("-9.9", arr.value_as_string(1));
     }
+    #[test]
+    fn test_decimal_from_iter_values() {
+        let array = DecimalArray::from_iter_values(vec![-100, 0, 101].into_iter());
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
+        assert_eq!(-100, array.value(0));
+        assert_eq!(false, array.is_null(0));
+        assert_eq!(0, array.value(1));
+        assert_eq!(false, array.is_null(1));
+        assert_eq!(101, array.value(2));
+        assert_eq!(false, array.is_null(2));
+    }
+
+    #[test]
+    fn test_decimal_from_iter() {
+        let array: DecimalArray = vec![Some(-100), None, Some(101)].into_iter().collect();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
+        assert_eq!(-100, array.value(0));
+        assert_eq!(false, array.is_null(0));
+        assert_eq!(true, array.is_null(1));
+        assert_eq!(101, array.value(2));
+        assert_eq!(false, array.is_null(2));
+    }
+
+    #[test]
+    fn test_decimal_iter() {
+        let data = vec![Some(-100), None, Some(101)];
+        let array: DecimalArray = data.clone().into_iter().collect();
+
+        let collected: Vec<_> = array.iter().collect();
+        assert_eq!(data, collected);
+    }
+
+    #[test]
+    fn test_decimal_into_iter() {
+        let data = vec![Some(-100), None, Some(101)];
+        let array: DecimalArray = data.clone().into_iter().collect();
+
+        let collected: Vec<_> = array.iter().collect();
+        assert_eq!(data, collected);
+    }
 
     #[test]
     fn test_decimal_array_value_as_string() {
@@ -1468,6 +1542,20 @@ mod tests {
             decimal_builder.append_value(value).unwrap();
         }
         let arr = decimal_builder.finish();
+
+        assert_eq!("123.450", arr.value_as_string(0));
+        assert_eq!("-123.450", arr.value_as_string(1));
+        assert_eq!("0.100", arr.value_as_string(2));
+        assert_eq!("-0.100", arr.value_as_string(3));
+        assert_eq!("0.010", arr.value_as_string(4));
+        assert_eq!("-0.010", arr.value_as_string(5));
+        assert_eq!("0.000", arr.value_as_string(6));
+    }
+
+
+    #[test]
+    fn test_decimal_array_with_precision_and_scale() {
+        let arr = DecimalArray::from_iter_values([123450, -123450, 100, -100, 10, -10, 0]);
 
         assert_eq!("123.450", arr.value_as_string(0));
         assert_eq!("-123.450", arr.value_as_string(1));
