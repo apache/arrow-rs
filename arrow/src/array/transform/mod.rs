@@ -19,12 +19,11 @@ use super::{
     data::{into_buffers, new_buffers},
     ArrayData, ArrayDataBuilder,
 };
-use crate::array::StringOffsetSizeTrait;
+use crate::array::{BooleanBufferBuilder, StringOffsetSizeTrait};
 use crate::{
     buffer::MutableBuffer,
     datatypes::DataType,
     error::{ArrowError, Result},
-    util::bit_util,
 };
 use half::f16;
 use std::mem;
@@ -53,7 +52,7 @@ struct _MutableArrayData<'a> {
     pub null_count: usize,
 
     pub len: usize,
-    pub null_buffer: MutableBuffer,
+    pub null_buffer: Option<BooleanBufferBuilder>,
 
     // arrow specification only allows up to 3 buffers (2 ignoring the nulls above).
     // Thus, we place them in the stack to avoid bound checks and greater data locality.
@@ -83,39 +82,35 @@ impl<'a> _MutableArrayData<'a> {
             .null_count(self.null_count)
             .buffers(buffers)
             .child_data(child_data);
-        if self.null_count > 0 {
-            array_data_builder =
-                array_data_builder.null_bit_buffer(self.null_buffer.into());
+
+        if let Some(mut null_buffer) = self.null_buffer {
+            assert_eq!(null_buffer.len(), self.len, "Inconsistent bitmap");
+            if self.null_count > 0 {
+                array_data_builder =
+                    array_data_builder.null_bit_buffer(null_buffer.finish());
+            }
+        } else {
+            assert_eq!(self.null_count, 0, "Non-zero null count but no null bitmap")
         }
 
         array_data_builder
     }
 }
 
-fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits {
+/// Build a function to extend a `MutableArrayData` with a slice of the null bitmap of `array`
+fn build_extend_null_bits(array: &ArrayData) -> ExtendNullBits {
     if let Some(bitmap) = array.null_bitmap() {
         let bytes = bitmap.bits.as_slice();
         Box::new(move |mutable, start, len| {
-            utils::resize_for_bits(&mut mutable.null_buffer, mutable.len + len);
-            mutable.null_count += crate::util::bit_mask::set_bits(
-                mutable.null_buffer.as_slice_mut(),
-                bytes,
-                mutable.len,
-                array.offset() + start,
-                len,
-            );
-        })
-    } else if use_nulls {
-        Box::new(|mutable, _, len| {
-            utils::resize_for_bits(&mut mutable.null_buffer, mutable.len + len);
-            let write_data = mutable.null_buffer.as_slice_mut();
-            let offset = mutable.len;
-            (0..len).for_each(|i| {
-                bit_util::set_bit(write_data, offset + i);
-            });
+            let nulls = mutable.null_buffer.as_mut().expect("expected null buffer");
+            let start = array.offset() + start;
+            mutable.null_count += nulls.append_packed_range(start..start + len, bytes);
         })
     } else {
-        Box::new(|_, _, _| {})
+        Box::new(|mutable, _, len| {
+            let nulls = mutable.null_buffer.as_mut().expect("expected null buffer");
+            nulls.append_n(len, true)
+        })
     }
 }
 
@@ -155,6 +150,7 @@ pub struct MutableArrayData<'a> {
     /// function used to extend values from arrays. This function's lifetime is bound to the array
     /// because it reads values from it.
     extend_values: Vec<Extend<'a>>,
+
     /// function used to extend nulls from arrays. This function's lifetime is bound to the array
     /// because it reads nulls from it.
     extend_null_bits: Vec<ExtendNullBits<'a>>,
@@ -379,9 +375,12 @@ impl<'a> MutableArrayData<'a> {
     /// returns a new [MutableArrayData] with capacity to `capacity` slots and specialized to create an
     /// [ArrayData] from multiple `arrays`.
     ///
-    /// `use_nulls` is a flag used to optimize insertions. It should be `false` if the only source of nulls
-    /// are the arrays themselves and `true` if the user plans to call [MutableArrayData::extend_nulls].
-    /// In other words, if `use_nulls` is `false`, calling [MutableArrayData::extend_nulls] should not be used.
+    /// `use_nulls` is a flag used to optimize insertions, if `use_nulls` is `true` a null bitmap
+    /// will be created regardless of the contents of `arrays`, otherwise a null bitmap will
+    /// be computed only if `arrays` contains nulls.
+    ///
+    /// Code that plans to call [MutableArrayData::extend_nulls] MUST set `use_nulls` to `true`,
+    /// in order to ensure that a null bitmap is computed.
     pub fn new(arrays: Vec<&'a ArrayData>, use_nulls: bool, capacity: usize) -> Self {
         Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
     }
@@ -553,22 +552,19 @@ impl<'a> MutableArrayData<'a> {
         };
 
         let (null_buffer, extend_nulls, extend_null_bits) = if use_nulls {
-            let null_bytes = bit_util::ceil(array_capacity, 8);
-
             let extend_null_bits = arrays
                 .iter()
-                .map(|array| build_extend_null_bits(array, use_nulls))
+                .map(|array| build_extend_null_bits(array))
                 .collect();
 
             (
-                MutableBuffer::from_len_zeroed(null_bytes),
+                Some(BooleanBufferBuilder::new(array_capacity)),
                 Some(build_extend_nulls(data_type)),
                 extend_null_bits,
             )
         } else {
-            // create 0 capacity mutable buffer and no extend_null_bits
-            // with the intention that they won't be used
-            (MutableBuffer::with_capacity(0), None, vec![])
+            // create no null buffer and no extend_null_bits
+            (None, None, vec![])
         };
 
         let extend_values = match &data_type {
@@ -626,15 +622,16 @@ impl<'a> MutableArrayData<'a> {
     /// # Panic
     /// This function panics if [`MutableArrayData`] was created with use_nulls set to false
     pub fn extend_nulls(&mut self, len: usize) {
-        let extend_nulls = self
-            .extend_nulls
-            .as_mut()
-            .expect("Cannot append nulls to MutableArrayData created with nulls disabled");
+        let nulls = self.data.null_buffer.as_mut().expect(
+            "Cannot append nulls to MutableArrayData created with nulls disabled",
+        );
+        let extend_nulls = self.extend_nulls.as_mut().expect("extend nulls");
 
-        // TODO: null_buffer should probably be extended here as well
-        // otherwise is_valid() could later panic
-        // add test to confirm
+        // Extend null bitmap
+        nulls.append_n(len, false);
         self.data.null_count += len;
+
+        // Extend values
         extend_nulls(&mut self.data, len);
         self.data.len += len;
     }
@@ -675,7 +672,7 @@ mod tests {
 
     use super::*;
 
-    use crate::array::{make_array, DecimalArray, DecimalBuilder};
+    use crate::array::{DecimalArray, DecimalBuilder};
     use crate::{
         array::{
             Array, ArrayData, ArrayRef, BooleanArray, DictionaryArray,
@@ -1468,11 +1465,17 @@ mod tests {
         let mut data = MutableArrayData::new(vec![ints.data()], false, 3);
         data.extend(0, 1, 2);
         data.extend_nulls(1);
-        data.extend(0, 0, 1);
-        let data = make_array(data.freeze());
+    }
 
-        let data = data.as_any().downcast_ref::<Int32Array>();
-        println!("{:?}", data.iter().collect::<Vec<_>>());
+    #[test]
+    fn test_nulls() {
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        let mut data = MutableArrayData::new(vec![ints.data()], true, 3);
+        data.extend_nulls(9);
+        let data = data.freeze();
+
+        assert_eq!(data.len(), 9);
+        assert_eq!(data.null_buffer().unwrap().len(), 2);
     }
 
     /*

@@ -412,10 +412,12 @@ impl BooleanBufferBuilder {
     ///
     /// `to_set` is a slice of bits packed LSB-first into `[u8]`
     ///
+    /// Returns the number of `0` bits written
+    ///
     /// # Panics
     ///
     /// Panics if `to_set` does not contain `ceil(range.end / 8)` bytes
-    pub fn append_packed_range(&mut self, range: Range<usize>, to_set: &[u8]) {
+    pub fn append_packed_range(&mut self, range: Range<usize>, to_set: &[u8]) -> usize {
         let offset_write = self.len;
         let len = range.end - range.start;
         self.advance(len);
@@ -425,7 +427,7 @@ impl BooleanBufferBuilder {
             offset_write,
             range.start,
             len,
-        );
+        )
     }
 
     /// Returns the packed bits
