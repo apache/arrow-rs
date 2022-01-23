@@ -1770,7 +1770,7 @@ macro_rules! typed_cmp {
 }
 
 macro_rules! typed_compares {
-    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: ident, $OP_PRIM: ident, $OP_STR: ident) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: ident, $OP_PRIM: ident, $OP_STR: ident, $OP_BINARY: ident) => {{
         match ($LEFT.data_type(), $RIGHT.data_type()) {
             (DataType::Boolean, DataType::Boolean) => {
                 typed_cmp!($LEFT, $RIGHT, BooleanArray, $OP_BOOL)
@@ -1810,6 +1810,12 @@ macro_rules! typed_compares {
             }
             (DataType::LargeUtf8, DataType::LargeUtf8) => {
                 typed_cmp!($LEFT, $RIGHT, LargeStringArray, $OP_STR, i64)
+            }
+            (DataType::Binary, DataType::Binary) => {
+                typed_cmp!($LEFT, $RIGHT, BinaryArray, $OP_BINARY, i32)
+            }
+            (DataType::LargeBinary, DataType::LargeBinary) => {
+                typed_cmp!($LEFT, $RIGHT, LargeBinaryArray, $OP_BINARY, i64)
             }
             (
                 DataType::Timestamp(TimeUnit::Nanosecond, _),
@@ -1918,7 +1924,7 @@ macro_rules! typed_compares {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, eq_bool, eq, eq_utf8)
+    typed_compares!(left, right, eq_bool, eq, eq_utf8, eq_binary)
 }
 
 /// Perform `left != right` operation on two (dynamic) [`Array`]s.
@@ -1926,7 +1932,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, neq_bool, neq, neq_utf8)
+    typed_compares!(left, right, neq_bool, neq, neq_utf8, neq_binary)
 }
 
 /// Perform `left < right` operation on two (dynamic) [`Array`]s.
@@ -1934,7 +1940,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, lt_bool, lt, lt_utf8)
+    typed_compares!(left, right, lt_bool, lt, lt_utf8, lt_binary)
 }
 
 /// Perform `left <= right` operation on two (dynamic) [`Array`]s.
@@ -1942,7 +1948,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, lt_eq_bool, lt_eq, lt_eq_utf8)
+    typed_compares!(left, right, lt_eq_bool, lt_eq, lt_eq_utf8, lt_eq_binary)
 }
 
 /// Perform `left > right` operation on two (dynamic) [`Array`]s.
@@ -1950,7 +1956,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, gt_bool, gt, gt_utf8)
+    typed_compares!(left, right, gt_bool, gt, gt_utf8, gt_binary)
 }
 
 /// Perform `left >= right` operation on two (dynamic) [`Array`]s.
@@ -1958,7 +1964,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, gt_eq_bool, gt_eq, gt_eq_utf8)
+    typed_compares!(left, right, gt_eq_bool, gt_eq, gt_eq_utf8, gt_eq_binary)
 }
 
 /// Perform `left == right` operation on two [`PrimitiveArray`]s.
