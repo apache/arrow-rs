@@ -26,6 +26,7 @@ use super::{
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
 };
 use crate::buffer::Buffer;
+use crate::datatypes::{DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};
 use crate::error::ArrowError;
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
@@ -700,12 +701,19 @@ impl Array for FixedSizeBinaryArray {
 /// ```
 ///    use arrow::array::{Array, DecimalArray, DecimalBuilder};
 ///    use arrow::datatypes::DataType;
-///    let mut builder = DecimalBuilder::new(30, 23, 6);
 ///
-///    builder.append_value(8_887_000_000).unwrap();
-///    builder.append_null().unwrap();
-///    builder.append_value(-8_887_000_000).unwrap();
-///    let decimal_array: DecimalArray = builder.finish();
+///    // Create a DecimalArray with the default precision and scale
+///    let decimal_array: DecimalArray = vec![
+///       Some(8_887_000_000),
+///       None,
+///       Some(-8_887_000_000),
+///     ]
+///     .into_iter().collect();
+///
+///    // set precision and scale so values are interpreted
+///    // as `8887.000000`, `Null`, and `-8887.000000`
+///    let decimal_array = decimal_array
+///     .with_precision_and_scale(23, 6);
 ///
 ///    assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
 ///    assert_eq!(8_887_000_000, decimal_array.value(0));
@@ -838,12 +846,33 @@ impl DecimalArray {
         DecimalArray::from(data)
     }
 
+    /// Return the precision (total digits) that can be stored by this array
     pub fn precision(&self) -> usize {
         self.precision
     }
 
+    /// Return the scale (digits after the decimal) that can be stored by this array
     pub fn scale(&self) -> usize {
         self.scale
+    }
+
+    /// Returns a DecimalArray with the same data as self, with the
+    /// specified precision.
+    ///
+    /// panic's if the precision is larger than
+    /// [`DECIMAL_MAX_PRECISION`] or scale is larger than
+    /// [`DECIMAL_MAX_SCALE`];
+    pub fn with_precision_and_scale(mut self, precision: usize, scale: usize) -> Self {
+        assert!(precision <= DECIMAL_MAX_PRECISION);
+        assert!(scale <= DECIMAL_MAX_SCALE);
+        assert_eq!(self.data.data_type(), &DataType::Decimal(self.precision, self.scale));
+
+        // safety: self.data is valid DataType::Decimal
+        let new_data_type = DataType::Decimal(precision, scale);
+        self.precision = precision;
+        self.scale = scale;
+        self.data = self.data.with_data_type(new_data_type);
+        self
     }
 
     /// The default precision and scale used when not specified

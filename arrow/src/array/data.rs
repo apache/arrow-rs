@@ -357,6 +357,23 @@ impl ArrayData {
         &self.data_type
     }
 
+    /// Updates the [DataType] of this ArrayData/
+    ///
+    /// panic's if the new DataType is not compatible with the
+    /// existing type.
+    ///
+    /// Note: currently only changing a [DataType::Decimal]s precision
+    /// and scale are supported
+    #[inline]
+    pub fn with_data_type(mut self, new_data_type: DataType) -> Self {
+        assert!(matches!(self.data_type, DataType::Decimal(_, _)),
+                "only DecimalType is supported for existing type");
+        assert!(matches!(new_data_type, DataType::Decimal(_, _)),
+                "only DecimalType is supported for new datatype");
+        self.data_type = new_data_type;
+        self
+    }
+
     /// Returns a slice of buffers for this array data
     pub fn buffers(&self) -> &[Buffer] {
         &self.buffers[..]
