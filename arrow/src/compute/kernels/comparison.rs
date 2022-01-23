@@ -2972,86 +2972,86 @@ mod tests {
 
     test_binary!(
         test_binary_array_eq,
-        vec![b"arrow", b"arrow", b"arrow", b"arrow"],
-        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        vec![b"arrow", b"arrow", b"arrow", b"arrow", &[0xff, 0xf8]],
+        vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
         eq_binary,
-        vec![true, false, false, false]
+        vec![true, false, false, false, true]
     );
 
     test_binary_scalar!(
         test_binary_array_eq_scalar,
-        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
         "arrow".as_bytes(),
         eq_binary_scalar,
-        vec![true, false, false, false]
+        vec![true, false, false, false, false]
     );
 
     test_binary!(
         test_binary_array_neq,
-        vec![b"arrow", b"arrow", b"arrow", b"arrow"],
-        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        vec![b"arrow", b"arrow", b"arrow", b"arrow", &[0xff, 0xf8]],
+        vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf9]],
         neq_binary,
-        vec![false, true, true, true]
+        vec![false, true, true, true, true]
     );
     test_binary_scalar!(
         test_binary_array_neq_scalar,
-        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
         "arrow".as_bytes(),
         neq_binary_scalar,
-        vec![false, true, true, true]
+        vec![false, true, true, true, true]
     );
 
     test_binary!(
         test_binary_array_lt,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
-        vec![b"flight", b"flight", b"flight", b"flight"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
+        vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf9]],
         lt_binary,
-        vec![true, true, false, false]
+        vec![true, true, false, false, true]
     );
     test_binary_scalar!(
         test_binary_array_lt_scalar,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
         lt_binary_scalar,
-        vec![true, true, false, false]
+        vec![true, true, false, false, false]
     );
 
     test_binary!(
         test_binary_array_lt_eq,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
-        vec![b"flight", b"flight", b"flight", b"flight"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
+        vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf8, 0xf9]],
         lt_eq_binary,
-        vec![true, true, true, false]
+        vec![true, true, true, false, true]
     );
     test_binary_scalar!(
         test_binary_array_lt_eq_scalar,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
         lt_eq_binary_scalar,
-        vec![true, true, true, false]
+        vec![true, true, true, false, false]
     );
 
     test_binary!(
         test_binary_array_gt,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
-        vec![b"flight", b"flight", b"flight", b"flight"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf9]],
+        vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf8]],
         gt_binary,
-        vec![false, false, false, true]
+        vec![false, false, false, true, true]
     );
     test_binary_scalar!(
         test_binary_array_gt_scalar,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
         gt_binary_scalar,
-        vec![false, false, false, true]
+        vec![false, false, false, true, true]
     );
 
     test_binary!(
         test_binary_array_gt_eq,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
-        vec![b"flight", b"flight", b"flight", b"flight"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
+        vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf8]],
         gt_eq_binary,
-        vec![false, false, true, true]
+        vec![false, false, true, true, true]
     );
     test_binary_scalar!(
         test_binary_array_gt_eq_scalar,
