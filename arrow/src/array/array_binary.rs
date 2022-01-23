@@ -859,13 +859,34 @@ impl DecimalArray {
     /// Returns a DecimalArray with the same data as self, with the
     /// specified precision.
     ///
-    /// panic's if the precision is larger than
-    /// [`DECIMAL_MAX_PRECISION`] or scale is larger than
-    /// [`DECIMAL_MAX_SCALE`];
+    /// panic's if:
+    /// 1. the precision is larger than [`DECIMAL_MAX_PRECISION`]
+    /// 2. scale is larger than [`DECIMAL_MAX_SCALE`];
+    /// 3. scale is > precision
     pub fn with_precision_and_scale(mut self, precision: usize, scale: usize) -> Self {
-        assert!(precision <= DECIMAL_MAX_PRECISION);
-        assert!(scale <= DECIMAL_MAX_SCALE);
-        assert_eq!(self.data.data_type(), &DataType::Decimal(self.precision, self.scale));
+        assert!(
+            precision <= DECIMAL_MAX_PRECISION,
+            "precision {} is greater than max {}",
+            precision,
+            DECIMAL_MAX_PRECISION
+        );
+        assert!(
+            scale <= DECIMAL_MAX_SCALE,
+            "scale {} is greater than max {}",
+            scale,
+            DECIMAL_MAX_SCALE
+        );
+        assert!(
+            scale <= precision,
+            "scale {} is greater than precision {}",
+            scale,
+            precision
+        );
+
+        assert_eq!(
+            self.data.data_type(),
+            &DataType::Decimal(self.precision, self.scale)
+        );
 
         // safety: self.data is valid DataType::Decimal
         let new_data_type = DataType::Decimal(precision, scale);
@@ -908,23 +929,23 @@ impl From<ArrayData> for DecimalArray {
 /// an iterator that returns Some(i128) or None, that can be used on a
 /// DecimalArray
 #[derive(Debug)]
-pub struct DecimalIter<'a>  {
+pub struct DecimalIter<'a> {
     array: &'a DecimalArray,
     current: usize,
     current_end: usize,
 }
 
-impl <'a> DecimalIter<'a> {
+impl<'a> DecimalIter<'a> {
     pub fn new(array: &'a DecimalArray) -> Self {
         Self {
             array,
             current: 0,
-            current_end: array.len()
+            current_end: array.len(),
         }
     }
 }
 
-impl <'a> std::iter::Iterator for DecimalIter<'a> {
+impl<'a> std::iter::Iterator for DecimalIter<'a> {
     type Item = Option<i128>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -943,7 +964,6 @@ impl <'a> std::iter::Iterator for DecimalIter<'a> {
         }
     }
 }
-
 
 impl<'a> IntoIterator for &'a DecimalArray {
     type Item = Option<i128>;
@@ -1459,7 +1479,6 @@ mod tests {
         assert_eq!(16, decimal_array.value_length());
     }
 
-
     #[test]
     fn test_decimal_append_error_value() {
         let mut decimal_builder = DecimalBuilder::new(10, 5, 3);
@@ -1498,11 +1517,11 @@ mod tests {
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
         assert_eq!(-100, array.value(0));
-        assert_eq!(false, array.is_null(0));
+        assert!(!array.is_null(0));
         assert_eq!(0, array.value(1));
-        assert_eq!(false, array.is_null(1));
+        assert!(!array.is_null(1));
         assert_eq!(101, array.value(2));
-        assert_eq!(false, array.is_null(2));
+        assert!(!array.is_null(2));
     }
 
     #[test]
@@ -1511,10 +1530,10 @@ mod tests {
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
         assert_eq!(-100, array.value(0));
-        assert_eq!(false, array.is_null(0));
-        assert_eq!(true, array.is_null(1));
+        assert!(!array.is_null(0));
+        assert!(array.is_null(1));
         assert_eq!(101, array.value(2));
-        assert_eq!(false, array.is_null(2));
+        assert!(!array.is_null(2));
     }
 
     #[test]
@@ -1552,18 +1571,37 @@ mod tests {
         assert_eq!("0.000", arr.value_as_string(6));
     }
 
-
     #[test]
     fn test_decimal_array_with_precision_and_scale() {
-        let arr = DecimalArray::from_iter_values([123450, -123450, 100, -100, 10, -10, 0]);
+        let arr = DecimalArray::from_iter_values([12345, 456, 7890, -123223423432432])
+            .with_precision_and_scale(20, 2);
 
-        assert_eq!("123.450", arr.value_as_string(0));
-        assert_eq!("-123.450", arr.value_as_string(1));
-        assert_eq!("0.100", arr.value_as_string(2));
-        assert_eq!("-0.100", arr.value_as_string(3));
-        assert_eq!("0.010", arr.value_as_string(4));
-        assert_eq!("-0.010", arr.value_as_string(5));
-        assert_eq!("0.000", arr.value_as_string(6));
+        assert_eq!(arr.data_type(), &DataType::Decimal(20, 2));
+        assert_eq!(arr.precision(), 20);
+        assert_eq!(arr.scale(), 2);
+
+        let actual: Vec<_> = (0..arr.len()).map(|i| arr.value_as_string(i)).collect();
+        let expected = vec!["123.45", "4.56", "78.90", "-1232234234324.32"];
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[should_panic(expected = "precision 40 is greater than max 38")]
+    fn test_decimal_array_with_precision_and_scale_invalid_precision() {
+        DecimalArray::from_iter_values([12345, 456]).with_precision_and_scale(40, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "scale 40 is greater than max 38")]
+    fn test_decimal_array_with_precision_and_scale_invalid_scale() {
+        DecimalArray::from_iter_values([12345, 456]).with_precision_and_scale(20, 40);
+    }
+
+    #[test]
+    #[should_panic(expected = "scale 10 is greater than precision 4")]
+    fn test_decimal_array_with_precision_and_scale_invalid_precision_and_scale() {
+        DecimalArray::from_iter_values([12345, 456]).with_precision_and_scale(4, 10);
     }
 
     #[test]
