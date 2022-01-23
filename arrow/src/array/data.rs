@@ -1622,14 +1622,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "null_bit_buffer size too small. got 8 needed 13")]
+    #[should_panic(expected = "null_bit_buffer size too small. got 1 needed 2")]
     fn test_bitmap_too_small() {
-        let buffer = make_i32_buffer(100);
+        let buffer = make_i32_buffer(9);
         let null_bit_buffer = Buffer::from(vec![0b11111111]);
 
         ArrayData::try_new(
             DataType::Int32,
-            100,
+            9,
             Some(0),
             Some(null_bit_buffer),
             0,
@@ -2506,29 +2506,5 @@ mod tests {
         let cloned = crate::array::make_array(cloned_data);
 
         assert_eq!(&struct_array_slice, &cloned);
-    }
-
-    #[test]
-    fn test_validate_bitmask_length() {
-        let data = MutableBuffer::from_len_zeroed(9 * 4).into();
-        let nulls = MutableBuffer::new_null(1).into();
-
-        let err = ArrayData::try_new(
-            DataType::Int32,
-            9,
-            Some(9),
-            Some(nulls),
-            0,
-            vec![data],
-            vec![],
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(
-            err.contains("null_bit_buffer size too small. got 1 needed 2"),
-            "{}",
-            err
-        )
     }
 }
