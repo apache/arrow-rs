@@ -1129,6 +1129,54 @@ macro_rules! dyn_compare_scalar {
     }};
 }
 
+macro_rules! dyn_compare_binary_scalar {
+    ($LEFT: expr, $RIGHT: expr, $KT: ident, $OP: ident) => {
+        match $KT.as_ref() {
+            DataType::UInt8 => {
+                let left = as_dictionary_array::<UInt8Type>($LEFT);
+                let values = as_generic_binary_array::<i32>(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::UInt16 => {
+                let left = as_dictionary_array::<UInt16Type>($LEFT);
+                let values = as_generic_binary_array::<i32>(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::UInt32 => {
+                let left = as_dictionary_array::<UInt32Type>($LEFT);
+                let values = as_generic_binary_array::<i32>(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::UInt64 => {
+                let left = as_dictionary_array::<UInt64Type>($LEFT);
+                let values = as_generic_binary_array::<i32>(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::Int8 => {
+                let left = as_dictionary_array::<Int8Type>($LEFT);
+                let values = as_generic_binary_array::<i32>(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::Int16 => {
+                let left = as_dictionary_array::<Int16Type>($LEFT);
+                let values = as_generic_binary_array::<i32>(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::Int32 => {
+                let left = as_dictionary_array::<Int32Type>($LEFT);
+                let values = as_generic_binary_array::<i32>(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            DataType::Int64 => {
+                let left = as_dictionary_array::<Int64Type>($LEFT);
+                let values = as_generic_binary_array::<i32>(left.values());
+                unpack_dict_comparison(left, $OP(values, $RIGHT)?)
+            }
+            _ => Err(ArrowError::ComputeError(String::from("Unknown key type"))),
+        }
+    };
+}
+
 macro_rules! dyn_compare_utf8_scalar {
     ($LEFT: expr, $RIGHT: expr, $KT: ident, $OP: ident) => {{
         match $KT.as_ref() {
@@ -1258,6 +1306,162 @@ where
             dyn_compare_scalar!(left, right, key_type, neq_scalar)
         }
         _ => dyn_compare_scalar!(left, right, neq_scalar),
+    }
+}
+
+/// Perform `left == right` operation on an array and a numeric scalar
+/// value. Supports BinaryArrays, and DictionaryArrays that have binary values
+pub fn eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Binary | DataType::LargeBinary => {
+                dyn_compare_binary_scalar!(left, right, key_type, eq_binary_scalar)
+            }
+            _ => Err(ArrowError::ComputeError(
+                "eq_dyn_binary_scalar only supports Binary or LargeBinary arrays or DictionaryArray with Binary or LargeBinary values".to_string(),
+            )),
+        },
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            eq_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            eq_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "eq_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
+        ))
+    }
+}
+
+/// Perform `left != right` operation on an array and a numeric scalar
+/// value. Supports BinaryArrays, and DictionaryArrays that have binary values
+pub fn neq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Binary | DataType::LargeBinary => {
+                dyn_compare_binary_scalar!(left, right, key_type, neq_binary_scalar)
+            }
+            _ => Err(ArrowError::ComputeError(
+                "neq_dyn_binary_scalar only supports Binary or LargeBinary arrays or DictionaryArray with Binary or LargeBinary values".to_string(),
+            )),
+        },
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            neq_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            neq_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "neq_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
+        ))
+    }
+}
+
+/// Perform `left < right` operation on an array and a numeric scalar
+/// value. Supports BinaryArrays, and DictionaryArrays that have binary values
+pub fn lt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Binary | DataType::LargeBinary => {
+                dyn_compare_binary_scalar!(left, right, key_type, lt_binary_scalar)
+            }
+            _ => Err(ArrowError::ComputeError(
+                "lt_dyn_binary_scalar only supports Binary or LargeBinary arrays or DictionaryArray with Binary or LargeBinary values".to_string(),
+            )),
+        },
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            lt_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            lt_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "lt_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
+        ))
+    }   
+}
+
+/// Perform `left <= right` operation on an array and a numeric scalar
+/// value. Supports BinaryArrays, and DictionaryArrays that have binary values
+pub fn lt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Binary | DataType::LargeBinary => {
+                dyn_compare_binary_scalar!(left, right, key_type, lt_eq_binary_scalar)
+            }
+            _ => Err(ArrowError::ComputeError(
+                "lt_eq_dyn_binary_scalar only supports Binary or LargeBinary arrays or DictionaryArray with Binary or LargeBinary values".to_string(),
+            )),
+        },
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            lt_eq_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            lt_eq_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "lt_eq_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
+        ))
+    }
+}
+
+/// Perform `left > right` operation on an array and a numeric scalar
+/// value. Supports BinaryArrays, and DictionaryArrays that have binary values
+pub fn gt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Binary | DataType::LargeBinary => {
+                dyn_compare_binary_scalar!(left, right, key_type, gt_binary_scalar)
+            }
+            _ => Err(ArrowError::ComputeError(
+                "gt_dyn_binary_scalar only supports Binary or LargeBinary arrays or DictionaryArray with Binary or LargeBinary values".to_string(),
+            )),
+        },
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            gt_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            gt_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "gt_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
+        ))
+    }
+}
+
+/// Perform `left >= right` operation on an array and a numeric scalar
+/// value. Supports BinaryArrays, and DictionaryArrays that have binary values
+pub fn gt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Dictionary(key_type, value_type) => match value_type.as_ref() {
+            DataType::Binary | DataType::LargeBinary => {
+                dyn_compare_binary_scalar!(left, right, key_type, gt_eq_binary_scalar)
+            }
+            _ => Err(ArrowError::ComputeError(
+                "gt_eq_dyn_binary_scalar only supports Binary or LargeBinary arrays or DictionaryArray with Binary or LargeBinary values".to_string(),
+            )),
+        },
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            gt_eq_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            gt_eq_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "gt_eq_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
+        ))
     }
 }
 
