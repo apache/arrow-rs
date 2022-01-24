@@ -3265,10 +3265,10 @@ mod tests {
     );
     test_binary_scalar!(
         test_binary_array_gt_eq_scalar,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
         gt_eq_binary_scalar,
-        vec![false, false, true, true]
+        vec![false, false, true, true, true]
     );
 
     // Expected behaviour:
@@ -4051,6 +4051,132 @@ mod tests {
         let array: ArrayRef = Arc::new(array);
         let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
         assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_eq_dyn_binary_scalar() {
+        let array = BinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let large_array = LargeBinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let scalar = "flight".as_bytes();
+        let expected = BooleanArray::from(vec![false, false, true, false, false]);
+
+        assert_eq!(
+            eq_binary_scalar(&array, scalar).unwrap(),
+            expected
+        );
+        assert_eq!(
+            eq_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_eq_dyn_binary_scalar_with_dict() {
+        
+    }
+    #[test]
+    fn test_neq_dyn_binary_scalar() {
+        let array = BinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let large_array = LargeBinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let scalar = "flight".as_bytes();
+        let expected = BooleanArray::from(vec![true, true, false, true, true]);
+
+        assert_eq!(
+            neq_binary_scalar(&array, scalar).unwrap(),
+            expected
+        );
+        assert_eq!(
+            neq_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_neq_dyn_binary_scalar_with_dict() {
+        
+    }
+    #[test]
+    fn test_lt_dyn_binary_scalar() {
+        let array = BinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let large_array = LargeBinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let scalar = "flight".as_bytes();
+        let expected = BooleanArray::from(vec![true, true, false, false, false]);
+
+        assert_eq!(
+            lt_binary_scalar(&array, scalar).unwrap(),
+            expected
+        );
+        assert_eq!(
+            lt_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
+    }
+    #[test]
+    fn test_lt_dyn_binary_scalar_with_dict() {
+        
+    }
+    #[test]
+    fn test_lt_eq_dyn_binary_scalar() {
+        let array = BinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let large_array = LargeBinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let scalar = "flight".as_bytes();
+        let expected = BooleanArray::from(vec![true, true, true, false, false]);
+
+        assert_eq!(
+            lt_eq_binary_scalar(&array, scalar).unwrap(),
+            expected
+        );
+        assert_eq!(
+            lt_eq_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_lt_eq_dyn_binary_scalar_with_dict() {
+        
+    }
+    #[test]
+    fn test_gt_dyn_binary_scalar() {
+        let array = BinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let large_array = LargeBinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let scalar = "flight".as_bytes();
+        let expected = BooleanArray::from(vec![false, false, false, true, true]);
+
+        assert_eq!(
+            gt_binary_scalar(&array, scalar).unwrap(),
+            expected
+        );
+        assert_eq!(
+            gt_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
+    }
+    #[test]
+    fn test_gt_dyn_binary_scalar_with_dict() {
+        
+    }
+
+    #[test]
+    fn test_gt_eq_dyn_binary_scalar() {
+        let array = BinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let large_array = LargeBinaryArray::from_vec(vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]]);
+        let scalar = "flight".as_bytes();
+        let expected = BooleanArray::from(vec![false, false, true, true, true]);
+
+        assert_eq!(
+            gt_eq_binary_scalar(&array, scalar).unwrap(),
+            expected
+        );
+        assert_eq!(
+            gt_eq_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_gt_eq_dyn_binary_scalar_with_dict() {
+        
     }
 
     #[test]
