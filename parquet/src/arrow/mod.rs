@@ -119,7 +119,6 @@
 //! ```
 
 experimental_mod!(array_reader);
-experimental_mod!(arrow_array_reader);
 pub mod arrow_reader;
 pub mod arrow_writer;
 mod bit_util;
