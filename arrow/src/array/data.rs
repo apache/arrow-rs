@@ -1155,6 +1155,41 @@ impl ArrayData {
             Ok(())
         })
     }
+
+    /// Returns true if this `ArrayData` is equal to `other`, using pointer comparisons
+    /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
+    /// return false when the arrays are logically equal
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        if self.offset != other.offset
+            || self.len != other.len
+            || self.null_count != other.null_count
+            || self.data_type != other.data_type
+            || self.buffers.len() != other.buffers.len()
+            || self.child_data.len() != other.child_data.len()
+        {
+            return false;
+        }
+
+        match (&self.null_bitmap, &other.null_bitmap) {
+            (Some(a), Some(b)) if a.bits.as_ptr() != b.bits.as_ptr() => return false,
+            (Some(_), None) | (None, Some(_)) => return false,
+            _ => {}
+        };
+
+        if !self
+            .buffers
+            .iter()
+            .zip(other.buffers.iter())
+            .all(|(a, b)| a.as_ptr() == b.as_ptr())
+        {
+            return false;
+        }
+
+        self.child_data
+            .iter()
+            .zip(other.child_data.iter())
+            .all(|(a, b)| a.ptr_eq(b))
+    }
 }
 
 /// Return the expected [`DataTypeLayout`] Arrays of this data
@@ -1547,12 +1582,51 @@ mod tests {
             .add_buffer(make_i32_buffer(1))
             .build()
             .unwrap();
+
         let float_data = ArrayData::builder(DataType::Float32)
             .len(1)
             .add_buffer(make_f32_buffer(1))
             .build()
             .unwrap();
         assert_ne!(int_data, float_data);
+        assert!(!int_data.ptr_eq(&float_data));
+        assert!(int_data.ptr_eq(&int_data));
+
+        let int_data_clone = int_data.clone();
+        assert_eq!(int_data, int_data_clone);
+        assert!(int_data.ptr_eq(&int_data_clone));
+        assert!(int_data_clone.ptr_eq(&int_data));
+
+        let int_data_slice = int_data_clone.slice(1, 0);
+        assert!(int_data_slice.ptr_eq(&int_data_slice));
+        assert!(!int_data.ptr_eq(&int_data_slice));
+        assert!(!int_data_slice.ptr_eq(&int_data));
+
+        let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
+        let offsets_buffer = Buffer::from_slice_ref(&[0_i32, 2_i32, 2_i32, 5_i32]);
+        let string_data = ArrayData::try_new(
+            DataType::Utf8,
+            3,
+            Some(1),
+            Some(Buffer::from_iter(vec![true, false, true])),
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+
+        assert_ne!(float_data, string_data);
+        assert!(!float_data.ptr_eq(&string_data));
+
+        assert!(string_data.ptr_eq(&string_data));
+
+        let string_data_cloned = string_data.clone();
+        assert!(string_data_cloned.ptr_eq(&string_data));
+        assert!(string_data.ptr_eq(&string_data_cloned));
+
+        let string_data_slice = string_data.slice(1, 2);
+        assert!(string_data_slice.ptr_eq(&string_data_slice));
+        assert!(!string_data_slice.ptr_eq(&string_data))
     }
 
     #[test]
