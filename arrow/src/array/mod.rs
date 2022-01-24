@@ -400,9 +400,9 @@ pub use self::array_string::StringOffsetSizeTrait;
 
 // --------------------- Array Builder ---------------------
 
+pub use self::builder::make_builder;
 pub use self::builder::BooleanBufferBuilder;
 pub use self::builder::BufferBuilder;
-pub use self::builder::make_builder;
 
 pub type Int8BufferBuilder = BufferBuilder<i8>;
 pub type Int16BufferBuilder = BufferBuilder<i16>;
