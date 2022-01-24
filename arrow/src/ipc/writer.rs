@@ -515,7 +515,7 @@ impl<W: Write> FileWriter<W> {
 
         Ok(())
     }
-    
+
     /// Unwraps the BufWriter housed in FileWriter.writer, returning the underlying
     /// writer
     ///
