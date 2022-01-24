@@ -121,6 +121,7 @@
 experimental_mod!(array_reader);
 pub mod arrow_reader;
 pub mod arrow_writer;
+mod bit_util;
 experimental_mod!(converter);
 pub(in crate::arrow) mod levels;
 pub(in crate::arrow) mod record_reader;

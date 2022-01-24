@@ -167,7 +167,30 @@ where
                 break;
             }
 
-            let batch_size = max(num_records - records_read, MIN_BATCH_SIZE);
+            // If repetition levels present, we don't know how much more to read
+            // in order to read the requested number of records, therefore read at least
+            // MIN_BATCH_SIZE, otherwise read **exactly** what was requested. This helps
+            // to avoid a degenerate case where the buffers are never fully drained.
+            //
+            // Consider the scenario where the user is requesting batches of MIN_BATCH_SIZE.
+            //
+            // When transitioning across a row group boundary, this will read some remainder
+            // from the row group `r`, before reading MIN_BATCH_SIZE from the next row group,
+            // leaving `MIN_BATCH_SIZE + r` in the buffer.
+            //
+            // The client will then only split off the `MIN_BATCH_SIZE` they actually wanted,
+            // leaving behind `r`. This will continue indefinitely.
+            //
+            // Aside from wasting cycles splitting and shuffling buffers unnecessarily, this
+            // prevents dictionary preservation from functioning correctly as the buffer
+            // will never be emptied, allowing a new dictionary to be registered.
+            //
+            // This degenerate case can still occur for repeated fields, but
+            // it is avoided for the more common case of a non-repeated field
+            let batch_size = match &self.rep_levels {
+                Some(_) => max(num_records - records_read, MIN_BATCH_SIZE),
+                None => num_records - records_read,
+            };
 
             // Try to more value from parquet pages
             let values_read = self.read_one_batch(batch_size)?;
@@ -268,7 +291,7 @@ where
                 self.values_written,
                 values_read,
                 levels_read,
-                def_levels.rev_valid_positions_iter(),
+                def_levels.nulls().as_slice(),
             );
         }
 
