@@ -650,7 +650,8 @@ impl ArrayData {
         }
 
         // check null bit buffer size
-        if let Some(null_bit_buffer) = self.null_bitmap.as_ref() {
+        if let Some(null_bit_map) = self.null_bitmap.as_ref() {
+            let null_bit_buffer = null_bit_map.buffer_ref();
             let needed_len = bit_util::ceil(len_plus_offset, 8);
             if null_bit_buffer.len() < needed_len {
                 return Err(ArrowError::InvalidArgumentError(format!(
@@ -1695,14 +1696,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "null_bit_buffer size too small. got 8 needed 13")]
+    #[should_panic(expected = "null_bit_buffer size too small. got 1 needed 2")]
     fn test_bitmap_too_small() {
-        let buffer = make_i32_buffer(100);
+        let buffer = make_i32_buffer(9);
         let null_bit_buffer = Buffer::from(vec![0b11111111]);
 
         ArrayData::try_new(
             DataType::Int32,
-            100,
+            9,
             Some(0),
             Some(null_bit_buffer),
             0,
