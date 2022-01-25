@@ -24,7 +24,6 @@ use std::sync::Arc;
 
 extern crate arrow;
 
-use arrow::compute::kernels::limit::*;
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
 use arrow::{compute::kernels::arithmetic::*, util::test_util::seedable_rng};
@@ -59,43 +58,68 @@ fn bench_divide(arr_a: &ArrayRef, arr_b: &ArrayRef) {
     criterion::black_box(divide(arr_a, arr_b).unwrap());
 }
 
+fn bench_divide_unchecked(arr_a: &ArrayRef, arr_b: &ArrayRef) {
+    let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
+    let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
+    criterion::black_box(divide_unchecked(arr_a, arr_b).unwrap());
+}
+
 fn bench_divide_scalar(array: &ArrayRef, divisor: f32) {
     let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
     criterion::black_box(divide_scalar(array, divisor).unwrap());
 }
 
-fn bench_limit(arr_a: &ArrayRef, max: usize) {
-    criterion::black_box(limit(arr_a, max));
+fn bench_modulo(arr_a: &ArrayRef, arr_b: &ArrayRef) {
+    let arr_a = arr_a.as_any().downcast_ref::<Float32Array>().unwrap();
+    let arr_b = arr_b.as_any().downcast_ref::<Float32Array>().unwrap();
+    criterion::black_box(modulus(arr_a, arr_b).unwrap());
+}
+
+fn bench_modulo_scalar(array: &ArrayRef, divisor: f32) {
+    let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
+    criterion::black_box(modulus_scalar(array, divisor).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {
-    let arr_a = create_array(512, false);
-    let arr_b = create_array(512, false);
+    const BATCH_SIZE: usize = 64 * 1024;
+    let arr_a = create_array(BATCH_SIZE, false);
+    let arr_b = create_array(BATCH_SIZE, false);
     let scalar = seedable_rng().gen();
 
-    c.bench_function("add 512", |b| b.iter(|| bench_add(&arr_a, &arr_b)));
-    c.bench_function("subtract 512", |b| {
-        b.iter(|| bench_subtract(&arr_a, &arr_b))
+    c.bench_function("add", |b| b.iter(|| bench_add(&arr_a, &arr_b)));
+    c.bench_function("subtract", |b| b.iter(|| bench_subtract(&arr_a, &arr_b)));
+    c.bench_function("multiply", |b| b.iter(|| bench_multiply(&arr_a, &arr_b)));
+    c.bench_function("divide", |b| b.iter(|| bench_divide(&arr_a, &arr_b)));
+    c.bench_function("divide_unchecked", |b| {
+        b.iter(|| bench_divide_unchecked(&arr_a, &arr_b))
     });
-    c.bench_function("multiply 512", |b| {
-        b.iter(|| bench_multiply(&arr_a, &arr_b))
-    });
-    c.bench_function("divide 512", |b| b.iter(|| bench_divide(&arr_a, &arr_b)));
-    c.bench_function("divide_scalar 512", |b| {
+    c.bench_function("divide_scalar", |b| {
         b.iter(|| bench_divide_scalar(&arr_a, scalar))
     });
-    c.bench_function("limit 512, 512", |b| b.iter(|| bench_limit(&arr_a, 512)));
+    c.bench_function("modulo", |b| b.iter(|| bench_modulo(&arr_a, &arr_b)));
+    c.bench_function("modulo_scalar", |b| {
+        b.iter(|| bench_modulo_scalar(&arr_a, scalar))
+    });
 
-    let arr_a_nulls = create_array(512, false);
-    let arr_b_nulls = create_array(512, false);
-    c.bench_function("add_nulls_512", |b| {
+    let arr_a_nulls = create_array(BATCH_SIZE, true);
+    let arr_b_nulls = create_array(BATCH_SIZE, true);
+    c.bench_function("add_nulls", |b| {
         b.iter(|| bench_add(&arr_a_nulls, &arr_b_nulls))
     });
-    c.bench_function("divide_nulls_512", |b| {
+    c.bench_function("divide_nulls", |b| {
         b.iter(|| bench_divide(&arr_a_nulls, &arr_b_nulls))
     });
-    c.bench_function("divide_scalar_nulls_512", |b| {
+    c.bench_function("divide_nulls_unchecked", |b| {
+        b.iter(|| bench_divide_unchecked(&arr_a_nulls, &arr_b_nulls))
+    });
+    c.bench_function("divide_scalar_nulls", |b| {
         b.iter(|| bench_divide_scalar(&arr_a_nulls, scalar))
+    });
+    c.bench_function("modulo_nulls", |b| {
+        b.iter(|| bench_modulo(&arr_a_nulls, &arr_b_nulls))
+    });
+    c.bench_function("modulo_scalar_nulls", |b| {
+        b.iter(|| bench_modulo_scalar(&arr_a_nulls, scalar))
     });
 }
 

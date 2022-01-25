@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "7.0.0"
+version = "8.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -70,10 +70,6 @@ prettyprint = ["comfy-table"]
 # an optional dependency for supporting compile to wasm32-unknown-unknown
 # target without assuming an environment containing JavaScript.
 test_utils = ["rand"]
-# this is only intended to be used in single-threaded programs: it verifies that
-# all allocated memory is being released (no memory leaks).
-# See README for details
-memory-check = []
 pyarrow = ["pyo3"]
 
 [dev-dependencies]
