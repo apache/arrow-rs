@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines a bitmap, which is used to track which values in an Arrow array are null.
-//! This is called a "validity bitmap" in the Arrow documentation.
+//! Defines [Bitmap] for tracking validity bitmaps
 
 use crate::buffer::Buffer;
 use crate::error::Result;
@@ -26,6 +25,10 @@ use std::mem;
 use std::ops::{BitAnd, BitOr};
 
 #[derive(Debug, Clone)]
+/// Defines a bitmap, which is used to track which values in an Arrow
+/// array are null.
+///
+/// This is called a "validity bitmap" in the Arrow documentation.
 pub struct Bitmap {
     pub(crate) bits: Buffer,
 }
@@ -44,6 +47,7 @@ impl Bitmap {
         }
     }
 
+    /// Return the length of this Bitmap in bits (not bytes)
     pub fn len(&self) -> usize {
         self.bits.len() * 8
     }
