@@ -375,14 +375,14 @@ impl<'a> MutableArrayData<'a> {
     /// returns a new [MutableArrayData] with capacity to `capacity` slots and specialized to create an
     /// [ArrayData] from multiple `arrays`.
     ///
-    /// `use_nulls` is a flag used to optimize insertions, if `use_nulls` is `true` a null bitmap
-    /// will be created regardless of the contents of `arrays`, otherwise a null bitmap will
+    /// `compute_nulls` is a flag used to optimize insertions, if `compute_nulls` is `true` a null
+    /// bitmap will be created regardless of the contents of `arrays`, otherwise a null bitmap will
     /// be computed only if `arrays` contains nulls.
     ///
-    /// Code that plans to call [MutableArrayData::extend_nulls] MUST set `use_nulls` to `true`,
+    /// Code that plans to call [MutableArrayData::extend_nulls] MUST set `compute_nulls` to `true`,
     /// in order to ensure that a null bitmap is computed.
-    pub fn new(arrays: Vec<&'a ArrayData>, use_nulls: bool, capacity: usize) -> Self {
-        Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
+    pub fn new(arrays: Vec<&'a ArrayData>, compute_nulls: bool, capacity: usize) -> Self {
+        Self::with_capacities(arrays, compute_nulls, Capacities::Array(capacity))
     }
 
     /// Similar to [MutableArray::new], but lets users define the preallocated capacities of the array.
@@ -393,7 +393,7 @@ impl<'a> MutableArrayData<'a> {
     /// a [Capacities] variant is not yet supported.
     pub fn with_capacities(
         arrays: Vec<&'a ArrayData>,
-        mut use_nulls: bool,
+        mut compute_nulls: bool,
         capacities: Capacities,
     ) -> Self {
         let data_type = arrays[0].data_type();
@@ -402,7 +402,7 @@ impl<'a> MutableArrayData<'a> {
         // if any of the arrays has nulls, insertions from any array requires setting bits
         // as there is at least one array with nulls.
         if arrays.iter().any(|array| array.null_count() > 0) {
-            use_nulls = true;
+            compute_nulls = true;
         };
 
         let mut array_capacity;
@@ -471,7 +471,9 @@ impl<'a> MutableArrayData<'a> {
                 };
 
                 vec![MutableArrayData::with_capacities(
-                    childs, use_nulls, capacities,
+                    childs,
+                    compute_nulls,
+                    capacities,
                 )]
             }
             // the dictionary type just appends keys and clones the values.
@@ -488,7 +490,7 @@ impl<'a> MutableArrayData<'a> {
                                 .collect::<Vec<_>>();
                             MutableArrayData::with_capacities(
                                 child_arrays,
-                                use_nulls,
+                                compute_nulls,
                                 child_cap.clone(),
                             )
                         })
@@ -502,7 +504,7 @@ impl<'a> MutableArrayData<'a> {
                                 .iter()
                                 .map(|array| &array.child_data()[i])
                                 .collect::<Vec<_>>();
-                            MutableArrayData::new(child_arrays, use_nulls, capacity)
+                            MutableArrayData::new(child_arrays, compute_nulls, capacity)
                         })
                         .collect::<Vec<_>>()
                 }
@@ -512,7 +514,7 @@ impl<'a> MutableArrayData<'a> {
                             .iter()
                             .map(|array| &array.child_data()[i])
                             .collect::<Vec<_>>();
-                        MutableArrayData::new(child_arrays, use_nulls, array_capacity)
+                        MutableArrayData::new(child_arrays, compute_nulls, array_capacity)
                     })
                     .collect::<Vec<_>>(),
             },
@@ -557,7 +559,7 @@ impl<'a> MutableArrayData<'a> {
             _ => (None, false),
         };
 
-        let (null_buffer, extend_nulls, extend_null_bits) = if use_nulls {
+        let (null_buffer, extend_nulls, extend_null_bits) = if compute_nulls {
             let extend_null_bits = arrays
                 .iter()
                 .map(|array| build_extend_null_bits(array))
@@ -631,7 +633,7 @@ impl<'a> MutableArrayData<'a> {
     /// Extends this [MutableArrayData] with null elements, disregarding the bound arrays
     ///
     /// # Panic
-    /// This function panics if [`MutableArrayData`] was created with use_nulls set to false
+    /// This function panics if [`MutableArrayData`] is not computing nulls
     pub fn extend_nulls(&mut self, len: usize) {
         let nulls = self.data.null_buffer.as_mut().expect(
             "Cannot append nulls to MutableArrayData created with nulls disabled",
