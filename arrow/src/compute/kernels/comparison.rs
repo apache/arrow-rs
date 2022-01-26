@@ -3962,14 +3962,11 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_binary_scalar() {
-        let array = BinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
-        let large_array = LargeBinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
         let scalar = "flight".as_bytes();
-        let expected = BooleanArray::from(vec![false, false, true, false, false]);
+        let expected = BooleanArray::from(vec![Some(false), Some(false), Some(true), Some(false), Some(false), None]);
 
         assert_eq!(eq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
         assert_eq!(
@@ -3980,14 +3977,11 @@ mod tests {
 
     #[test]
     fn test_neq_dyn_binary_scalar() {
-        let array = BinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
-        let large_array = LargeBinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
         let scalar = "flight".as_bytes();
-        let expected = BooleanArray::from(vec![true, true, false, true, true]);
+        let expected = BooleanArray::from(vec![Some(true), Some(true), Some(false), Some(true), Some(true), None]);
 
         assert_eq!(neq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
         assert_eq!(
@@ -3998,14 +3992,11 @@ mod tests {
 
     #[test]
     fn test_lt_dyn_binary_scalar() {
-        let array = BinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
-        let large_array = LargeBinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
         let scalar = "flight".as_bytes();
-        let expected = BooleanArray::from(vec![true, true, false, false, false]);
+        let expected = BooleanArray::from(vec![Some(true), Some(true), Some(false), Some(false), Some(false), None]);
 
         assert_eq!(lt_dyn_binary_scalar(&array, scalar).unwrap(), expected);
         assert_eq!(
@@ -4016,14 +4007,11 @@ mod tests {
 
     #[test]
     fn test_lt_eq_dyn_binary_scalar() {
-        let array = BinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
-        let large_array = LargeBinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
         let scalar = "flight".as_bytes();
-        let expected = BooleanArray::from(vec![true, true, true, false, false]);
+        let expected = BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false), Some(false), None]);
 
         assert_eq!(lt_eq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
         assert_eq!(
@@ -4034,14 +4022,11 @@ mod tests {
 
     #[test]
     fn test_gt_dyn_binary_scalar() {
-        let array = BinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
-        let large_array = LargeBinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
         let scalar = "flight".as_bytes();
-        let expected = BooleanArray::from(vec![false, false, false, true, true]);
+        let expected = BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true), Some(true), None]);
 
         assert_eq!(gt_dyn_binary_scalar(&array, scalar).unwrap(), expected);
         assert_eq!(
@@ -4052,14 +4037,11 @@ mod tests {
 
     #[test]
     fn test_gt_eq_dyn_binary_scalar() {
-        let array = BinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
-        let large_array = LargeBinaryArray::from_vec(
-            vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
-        );
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
         let scalar = "flight".as_bytes();
-        let expected = BooleanArray::from(vec![false, false, true, true, true]);
+        let expected = BooleanArray::from(vec![Some(false), Some(false), Some(true), Some(true), Some(true), None]);
 
         assert_eq!(gt_eq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
         assert_eq!(
