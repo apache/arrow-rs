@@ -1181,7 +1181,7 @@ macro_rules! dyn_compare_utf8_scalar {
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1195,7 +1195,7 @@ where
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn lt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1209,7 +1209,7 @@ where
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn lt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1223,7 +1223,7 @@ where
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn gt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1237,7 +1237,7 @@ where
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn gt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1251,7 +1251,7 @@ where
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn neq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
