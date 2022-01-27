@@ -48,7 +48,7 @@ impl Bitmap {
     }
 
     /// Return the length of this Bitmap in bits (not bytes)
-    pub fn len(&self) -> usize {
+    pub fn bit_len(&self) -> usize {
         self.bits.len() * 8
     }
 
@@ -121,9 +121,9 @@ mod tests {
 
     #[test]
     fn test_bitmap_length() {
-        assert_eq!(512, Bitmap::new(63 * 8).len());
-        assert_eq!(512, Bitmap::new(64 * 8).len());
-        assert_eq!(1024, Bitmap::new(65 * 8).len());
+        assert_eq!(512, Bitmap::new(63 * 8).bit_len());
+        assert_eq!(512, Bitmap::new(64 * 8).bit_len());
+        assert_eq!(1024, Bitmap::new(65 * 8).bit_len());
     }
 
     #[test]
