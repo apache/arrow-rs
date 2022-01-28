@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains asynchronous APIs for interacting with parquet files
+//! Contains asynchronous APIs for reading parquet files into
+//! arrow [`RecordBatch`]
 
 use std::collections::VecDeque;
 use std::fmt::Formatter;
@@ -45,7 +46,12 @@ use crate::file::PARQUET_MAGIC;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 use crate::util::memory::ByteBufferPtr;
 
-/// A builder used to construct a [`ParquetRecordBatchStream`]
+/// A builder used to construct a [`ParquetRecordBatchStream`] for a parquet file
+///
+/// In particular, this handles reading the parquet file metadata, allowing consumers
+/// to use this information to select what specific columns, row groups, etc...
+/// they wish to be read by the resulting stream
+///
 pub struct ParquetRecordBatchStreamBuilder<T> {
     input: T,
 
@@ -61,6 +67,7 @@ pub struct ParquetRecordBatchStreamBuilder<T> {
 }
 
 impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
+    /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
     pub async fn new(mut input: T) -> Result<Self> {
         let metadata = Arc::new(read_footer(&mut input).await?);
 
@@ -79,18 +86,22 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
         })
     }
 
+    /// Returns a reference to the [`ParquetMetaData`] for this parquet file
     pub fn metadata(&self) -> &Arc<ParquetMetaData> {
         &self.metadata
     }
 
+    /// Returns the arrow [`SchemaRef`] for this parquet file
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
+    /// Set the size of [`RecordBatch`] to produce
     pub fn with_batch_size(self, batch_size: usize) -> Self {
         Self { batch_size, ..self }
     }
 
+    /// Only read data from the provided row group indexes
     pub fn with_row_groups(self, row_groups: Vec<usize>) -> Self {
         Self {
             row_groups: Some(row_groups),
@@ -98,6 +109,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
         }
     }
 
+    /// Only read data from the provided column indexes
     pub fn with_projection(self, projection: Vec<usize>) -> Self {
         Self {
             projection: Some(projection.into()),
@@ -105,6 +117,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
         }
     }
 
+    /// Build a new [`ParquetRecordBatchStream`]
     pub fn build(self) -> Result<ParquetRecordBatchStream<T>> {
         let num_columns = self.schema.fields().len();
         let num_row_groups = self.metadata.row_groups().len();
@@ -149,9 +162,31 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
     }
 }
 
+enum StreamState<T> {
+    Init,
+    /// Decoding a batch
+    Decoding(ParquetRecordBatchReader),
+    /// Reading data from input
+    Reading(BoxFuture<'static, Result<(T, InMemoryRowGroup)>>),
+    /// Error
+    Error,
+}
+
+impl<T> std::fmt::Debug for StreamState<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StreamState::Init => write!(f, "StreamState::Init"),
+            StreamState::Decoding(_) => write!(f, "StreamState::Decoding"),
+            StreamState::Reading(_) => write!(f, "StreamState::Reading"),
+            StreamState::Error => write!(f, "StreamState::Error"),
+        }
+    }
+}
+
 /// A [`Stream`] of [`RecordBatch`] for a parquet file
 pub struct ParquetRecordBatchStream<T> {
     metadata: Arc<ParquetMetaData>,
+
     schema: SchemaRef,
 
     batch_size: usize,
@@ -166,21 +201,14 @@ pub struct ParquetRecordBatchStream<T> {
     state: StreamState<T>,
 }
 
-enum StreamState<T> {
-    Init,
-    /// Decoding a batch
-    Decoding(ParquetRecordBatchReader),
-    /// Reading data from input
-    Reading(BoxFuture<'static, Result<(T, InMemoryRowGroup)>>),
-    /// Error
-    Error,
-}
-
 impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ParquetRecordBatchStream")
             .field("metadata", &self.metadata)
             .field("schema", &self.schema)
+            .field("batch_size", &self.batch_size)
+            .field("columns", &self.columns)
+            .field("state", &self.state)
             .finish()
     }
 }
@@ -351,8 +379,6 @@ impl RowGroupCollection for InMemoryRowGroup {
         }))
     }
 }
-
-struct ColumnChunkMetadata {}
 
 #[derive(Clone)]
 struct InMemoryColumnChunk {
