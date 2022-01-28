@@ -427,24 +427,57 @@ impl PageIterator for ColumnChunkIterator {
 
 #[cfg(test)]
 mod tests {
+    use arrow::util::pretty::pretty_format_batches;
     use futures::TryStreamExt;
     use tokio::fs::File;
 
     use super::*;
 
+    fn assert_batches_eq(batches: &[RecordBatch], expected_lines: &[&str]) {
+        let formatted = pretty_format_batches(batches).unwrap().to_string();
+        let actual_lines: Vec<_> = formatted.trim().lines().collect();
+        assert_eq!(
+            &actual_lines, expected_lines,
+            "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
+            expected_lines, actual_lines
+        );
+    }
+
     #[tokio::test]
     async fn test_parquet_stream() {
         let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/nested_structs.rust.parquet", testdata);
+        let path = format!("{}/alltypes_plain.parquet", testdata);
         let file = File::open(path).await.unwrap();
 
-        let stream = ParquetRecordBatchStreamBuilder::new(file)
+        let builder = ParquetRecordBatchStreamBuilder::new(file)
             .await
             .unwrap()
+            .with_projection(vec![1, 2, 6])
+            .with_batch_size(3);
+
+        let stream = builder
             .build()
             .unwrap();
 
         let results = stream.try_collect::<Vec<_>>().await.unwrap();
-        println!("{:?}", results);
+        assert_eq!(results.len(), 3);
+
+        assert_batches_eq(
+            &results,
+            &[
+                "+----------+-------------+-----------+",
+                "| bool_col | tinyint_col | float_col |",
+                "+----------+-------------+-----------+",
+                "| true     | 0           | 0         |",
+                "| false    | 1           | 1.1       |",
+                "| true     | 0           | 0         |",
+                "| false    | 1           | 1.1       |",
+                "| true     | 0           | 0         |",
+                "| false    | 1           | 1.1       |",
+                "| true     | 0           | 0         |",
+                "| false    | 1           | 1.1       |",
+                "+----------+-------------+-----------+",
+            ],
+        );
     }
 }
