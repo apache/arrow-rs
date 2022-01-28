@@ -1037,7 +1037,7 @@ pub(crate) mod private {
 
 /// Contains the Parquet physical type information as well as the Rust primitive type
 /// presentation.
-pub trait DataType: 'static + Sync + Send {
+pub trait DataType: 'static + Send {
     type T: private::ParquetValueType;
 
     /// Returns Parquet physical type.
