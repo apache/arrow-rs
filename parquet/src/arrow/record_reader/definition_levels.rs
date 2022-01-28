@@ -411,7 +411,7 @@ mod tests {
         let bitmap = buffer.split_bitmask(19);
 
         // Should have split off 19 records leaving, 81 behind
-        assert_eq!(bitmap.len(), 3 * 8); // Note: bitmask only tracks bytes not bits
+        assert_eq!(bitmap.bit_len(), 3 * 8); // Note: bitmask only tracks bytes not bits
         assert_eq!(buffer.nulls().len(), 81);
     }
 }
