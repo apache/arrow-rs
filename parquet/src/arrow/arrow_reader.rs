@@ -328,6 +328,48 @@ mod tests {
     }
 
     #[test]
+    fn test_null_column_reader_test() {
+        let mut file = tempfile::tempfile().unwrap();
+
+        let schema = "
+            message message {
+                OPTIONAL INT32 int32;
+            }
+        ";
+        let schema = Arc::new(parse_message_type(schema).unwrap());
+
+        let def_levels = vec![vec![0, 0, 0], vec![0, 0, 0, 0]];
+        generate_single_column_file_with_data::<Int32Type>(
+            &[vec![], vec![]],
+            Some(&def_levels),
+            file.try_clone().unwrap(), // Cannot use &mut File (#1163)
+            schema,
+            Some(Field::new("int32", ArrowDataType::Null, true)),
+            &Default::default(),
+        )
+        .unwrap();
+
+        file.rewind().unwrap();
+
+        let parquet_reader = SerializedFileReader::try_from(file).unwrap();
+        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(parquet_reader));
+        let record_reader = arrow_reader.get_record_reader(2).unwrap();
+
+        let batches = record_reader.collect::<ArrowResult<Vec<_>>>().unwrap();
+
+        assert_eq!(batches.len(), 4);
+        for batch in &batches[0..3] {
+            assert_eq!(batch.num_rows(), 2);
+            assert_eq!(batch.num_columns(), 1);
+            assert_eq!(batch.column(0).null_count(), 2);
+        }
+
+        assert_eq!(batches[3].num_rows(), 1);
+        assert_eq!(batches[3].num_columns(), 1);
+        assert_eq!(batches[3].column(0).null_count(), 1);
+    }
+
+    #[test]
     fn test_primitive_single_column_reader_test() {
         run_single_column_reader_tests::<BoolType, BooleanArray, _, BoolType>(
             2,
