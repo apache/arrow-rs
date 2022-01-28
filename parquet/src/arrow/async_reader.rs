@@ -112,7 +112,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
     /// Only read data from the provided column indexes
     pub fn with_projection(self, projection: Vec<usize>) -> Self {
         Self {
-            projection: Some(projection.into()),
+            projection: Some(projection),
             ..self
         }
     }
@@ -339,7 +339,7 @@ async fn read_footer<T: AsyncRead + AsyncSeek + Unpin>(
     let mut buf = [0_u8; 8];
     input.read_exact(&mut buf).await?;
 
-    if &buf[4..] != PARQUET_MAGIC {
+    if buf[4..] != PARQUET_MAGIC {
         return Err(general_err!("Invalid Parquet file. Corrupt footer"));
     }
 
@@ -455,9 +455,7 @@ mod tests {
             .with_projection(vec![1, 2, 6])
             .with_batch_size(3);
 
-        let stream = builder
-            .build()
-            .unwrap();
+        let stream = builder.build().unwrap();
 
         let results = stream.try_collect::<Vec<_>>().await.unwrap();
         assert_eq!(results.len(), 3);
