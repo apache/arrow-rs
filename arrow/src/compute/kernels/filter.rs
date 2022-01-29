@@ -105,7 +105,7 @@ impl<'a> Iterator for SlicesIterator<'a> {
                 }
                 None => {
                     return Some((
-                        start_chunk + start_bit as usize,
+                        start_chunk + start_bit as usize - 64,
                         std::mem::replace(&mut self.len, 0),
                     ));
                 }
