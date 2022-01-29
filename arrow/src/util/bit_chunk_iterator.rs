@@ -472,65 +472,71 @@ mod tests {
         let buffer = Buffer::from(&[0xFF; 5]);
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 40);
 
-        assert_eq!(unaligned.prefix(), Some((1 << 40) - 1));
-        assert_eq!(unaligned.suffix(), None);
-        assert!(unaligned.chunks().is_empty());
+        assert!(unaligned.chunks().is_empty()); // Less than 128 elements
         assert_eq!(unaligned.lead_padding(), 0);
         assert_eq!(unaligned.trailing_padding(), 24);
+        // 24x 1 bit then 40x 0 bits
+        assert_eq!(unaligned.prefix(), Some(0b0000000000000000000000001111111111111111111111111111111111111111));
+        assert_eq!(unaligned.suffix(), None);
 
         let buffer = buffer.slice(1);
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 32);
 
-        assert_eq!(unaligned.prefix(), Some((1 << 32) - 1));
-        assert_eq!(unaligned.suffix(), None);
-        assert!(unaligned.chunks().is_empty());
+        assert!(unaligned.chunks().is_empty()); // Less than 128 elements
         assert_eq!(unaligned.lead_padding(), 0);
         assert_eq!(unaligned.trailing_padding(), 32);
+        // 32x 1 bit then 32x 0 bits
+        assert_eq!(unaligned.prefix(), Some(0b0000000000000000000000000000000011111111111111111111111111111111));
+        assert_eq!(unaligned.suffix(), None);
 
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 5, 27);
 
-        assert_eq!(unaligned.prefix(), Some(((1 << 32) - 1) - ((1 << 5) - 1)));
-        assert_eq!(unaligned.suffix(), None);
-        assert!(unaligned.chunks().is_empty());
-        assert_eq!(unaligned.lead_padding(), 5);
+        assert!(unaligned.chunks().is_empty()); // Less than 128 elements
+        assert_eq!(unaligned.lead_padding(), 5); // 5 % 8 == 5
         assert_eq!(unaligned.trailing_padding(), 32);
+        // 5x 0 bit, 27x 1 bit then 32x 0 bits
+        assert_eq!(unaligned.prefix(), Some(0b0000000000000000000000000000000011111111111111111111111111100000));
+        assert_eq!(unaligned.suffix(), None);
 
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 12, 20);
 
-        assert_eq!(unaligned.prefix(), Some(((1 << 24) - 1) - ((1 << 4) - 1)));
-        assert_eq!(unaligned.suffix(), None);
-        assert!(unaligned.chunks().is_empty());
-        assert_eq!(unaligned.lead_padding(), 4);
+        assert!(unaligned.chunks().is_empty()); // Less than 128 elements
+        assert_eq!(unaligned.lead_padding(), 4); // 12 % 8 == 4
         assert_eq!(unaligned.trailing_padding(), 40);
+        // 4x 0 bit, 20x 1 bit then 40x 0 bits
+        assert_eq!(unaligned.prefix(), Some(0b0000000000000000000000000000000000000000111111111111111111110000));
+        assert_eq!(unaligned.suffix(), None);
 
         let buffer = Buffer::from(&[0xFF; 14]);
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 112);
 
+        assert!(unaligned.chunks().is_empty()); // Less than 128 elements
+        assert_eq!(unaligned.lead_padding(), 0); // No offset and buffer aligned on 64-bit boundary
+        assert_eq!(unaligned.trailing_padding(), 16);
         assert_eq!(unaligned.prefix(), Some(u64::MAX));
         assert_eq!(unaligned.suffix(), Some((1 << 48) - 1));
-        assert!(unaligned.chunks().is_empty());
-        assert_eq!(unaligned.lead_padding(), 0);
-        assert_eq!(unaligned.trailing_padding(), 16);
 
         let buffer = Buffer::from(&[0xFF; 16]);
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 128);
 
         assert_eq!(unaligned.prefix(), Some(u64::MAX));
         assert_eq!(unaligned.suffix(), Some(u64::MAX));
-        assert!(unaligned.chunks().is_empty());
+        assert!(unaligned.chunks().is_empty()); // Exactly 128 elements
 
         let buffer = Buffer::from(&[0xFF; 64]);
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 512);
 
+        // Buffer is completely aligned and larger than 128 elements -> all in chunks array
         assert_eq!(unaligned.suffix(), None);
         assert_eq!(unaligned.prefix(), None);
         assert_eq!(unaligned.chunks(), [u64::MAX; 8].as_slice());
         assert_eq!(unaligned.lead_padding(), 0);
         assert_eq!(unaligned.trailing_padding(), 0);
 
-        let buffer = buffer.slice(1);
+        let buffer = buffer.slice(1); // Offset buffer 1 byte off 64-bit alignment
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 504);
 
+        // Need a prefix with 1 byte of lead padding to bring the buffer into alignment
         assert_eq!(unaligned.prefix(), Some(u64::MAX - 0xFF));
         assert_eq!(unaligned.suffix(), None);
         assert_eq!(unaligned.chunks(), [u64::MAX; 7].as_slice());
@@ -539,11 +545,17 @@ mod tests {
 
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 17, 300);
 
-        assert_eq!(unaligned.prefix(), Some(u64::MAX - (1 << 25) + 1));
-        assert_eq!(unaligned.suffix(), Some((1 << 5) - 1));
-        assert_eq!(unaligned.chunks(), [u64::MAX; 4].as_slice());
+        // Out of 64-bit alignment by 8 bits from buffer, and 17 bits from provided offset
+        //   => need 8 + 17 = 25 bits of lead padding + 39 bits in prefix
+        //
+        // This leaves 300 - 17 = 261 bits remaining
+        //   => 4x 64-bit aligned 64-bit chunks + 5 remaining bits
+        //   => trailing padding of 59 bits
         assert_eq!(unaligned.lead_padding(), 25);
         assert_eq!(unaligned.trailing_padding(), 59);
+        assert_eq!(unaligned.prefix(), Some(u64::MAX - (1 << 25) + 1));
+        assert_eq!(unaligned.suffix(), Some(0b11111));
+        assert_eq!(unaligned.chunks(), [u64::MAX; 4].as_slice());
 
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 17, 0);
 
