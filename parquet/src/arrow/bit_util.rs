@@ -40,7 +40,7 @@ pub fn iter_set_bits_rev(bytes: &[u8]) -> impl Iterator<Item = usize> + '_ {
                 chunk ^= 1 << bit_pos;
                 return Some(chunk_idx + (bit_pos as usize));
             }
-            return None;
+            None
         })
     })
 }
