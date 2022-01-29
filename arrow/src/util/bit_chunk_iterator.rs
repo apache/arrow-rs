@@ -571,10 +571,14 @@ mod tests {
             let bools: Vec<_> = std::iter::from_fn(|| Some(rng.gen()))
                 .take(mask_len)
                 .collect();
+
             let buffer = Buffer::from_iter(bools.iter().cloned());
 
-            let offset = rng.gen_range(0..(64.min(mask_len)));
-            let truncate = rng.gen_range(0..(128.min(mask_len - offset)));
+            let max_offset = 64.min(mask_len);
+            let offset = rng.gen::<usize>().checked_rem(max_offset).unwrap_or(0);
+
+            let max_truncate = 128.min(mask_len - offset);
+            let truncate = rng.gen::<usize>().checked_rem(max_truncate).unwrap_or(0);
 
             let unaligned = UnalignedBitChunk::new(
                 buffer.as_slice(),
