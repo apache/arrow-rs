@@ -27,7 +27,7 @@ use super::{
 };
 use crate::buffer::Buffer;
 use crate::datatypes::{DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};
-use crate::error::ArrowError;
+use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
@@ -494,7 +494,7 @@ impl FixedSizeBinaryArray {
     /// # Errors
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
-    pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
+    pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self>
     where
         T: Iterator<Item = Option<U>>,
         U: AsRef<[u8]>,
@@ -505,7 +505,7 @@ impl FixedSizeBinaryArray {
         let mut null_buf = MutableBuffer::from_len_zeroed(0);
         let mut buffer = MutableBuffer::from_len_zeroed(0);
         let mut prepend = 0;
-        iter.try_for_each(|item| -> Result<(), ArrowError> {
+        iter.try_for_each(|item| -> Result<()> {
             // extend null bitmask by one byte per each 8 items
             if byte == 0 {
                 null_buf.push(0u8);
@@ -578,7 +578,7 @@ impl FixedSizeBinaryArray {
     /// # Errors
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
-    pub fn try_from_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
+    pub fn try_from_iter<T, U>(mut iter: T) -> Result<Self>
     where
         T: Iterator<Item = U>,
         U: AsRef<[u8]>,
@@ -586,7 +586,7 @@ impl FixedSizeBinaryArray {
         let mut len = 0;
         let mut size = None;
         let mut buffer = MutableBuffer::from_len_zeroed(0);
-        iter.try_for_each(|item| -> Result<(), ArrowError> {
+        iter.try_for_each(|item| -> Result<()> {
             let slice = item.as_ref();
             if let Some(size) = size {
                 if size != slice.len() {
@@ -713,7 +713,8 @@ impl Array for FixedSizeBinaryArray {
 ///    // set precision and scale so values are interpreted
 ///    // as `8887.000000`, `Null`, and `-8887.000000`
 ///    let decimal_array = decimal_array
-///     .with_precision_and_scale(23, 6);
+///     .with_precision_and_scale(23, 6)
+///     .unwrap();
 ///
 ///    assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
 ///    assert_eq!(8_887_000_000, decimal_array.value(0));
@@ -859,41 +860,45 @@ impl DecimalArray {
     /// Returns a DecimalArray with the same data as self, with the
     /// specified precision.
     ///
-    /// panic's if:
-    /// 1. the precision is larger than [`DECIMAL_MAX_PRECISION`]
-    /// 2. scale is larger than [`DECIMAL_MAX_SCALE`];
-    /// 3. scale is > precision
-    pub fn with_precision_and_scale(mut self, precision: usize, scale: usize) -> Self {
-        assert!(
-            precision <= DECIMAL_MAX_PRECISION,
-            "precision {} is greater than max {}",
-            precision,
-            DECIMAL_MAX_PRECISION
-        );
-        assert!(
-            scale <= DECIMAL_MAX_SCALE,
-            "scale {} is greater than max {}",
-            scale,
-            DECIMAL_MAX_SCALE
-        );
-        assert!(
-            scale <= precision,
-            "scale {} is greater than precision {}",
-            scale,
-            precision
-        );
+    /// Returns an Error if:
+    /// 1. `precision` is larger than [`DECIMAL_MAX_PRECISION`]
+    /// 2. `scale` is larger than [`DECIMAL_MAX_SCALE`];
+    /// 3. `scale` is > `precision`
+    pub fn with_precision_and_scale(
+        mut self,
+        precision: usize,
+        scale: usize,
+    ) -> Result<Self> {
+        if precision > DECIMAL_MAX_PRECISION {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "precision {} is greater than max {}",
+                precision, DECIMAL_MAX_PRECISION
+            )));
+        }
+        if scale > DECIMAL_MAX_SCALE {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "scale {} is greater than max {}",
+                scale, DECIMAL_MAX_SCALE
+            )));
+        }
+        if scale > precision {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "scale {} is greater than precision {}",
+                scale, precision
+            )));
+        }
 
         assert_eq!(
             self.data.data_type(),
             &DataType::Decimal(self.precision, self.scale)
         );
 
-        // safety: self.data is valid DataType::Decimal
+        // safety: self.data is valid DataType::Decimal as checked above
         let new_data_type = DataType::Decimal(precision, scale);
         self.precision = precision;
         self.scale = scale;
         self.data = self.data.with_data_type(new_data_type);
-        self
+        Ok(self)
     }
 
     /// The default precision and scale used when not specified
@@ -1574,7 +1579,8 @@ mod tests {
     #[test]
     fn test_decimal_array_with_precision_and_scale() {
         let arr = DecimalArray::from_iter_values([12345, 456, 7890, -123223423432432])
-            .with_precision_and_scale(20, 2);
+            .with_precision_and_scale(20, 2)
+            .unwrap();
 
         assert_eq!(arr.data_type(), &DataType::Decimal(20, 2));
         assert_eq!(arr.precision(), 20);
@@ -1589,19 +1595,25 @@ mod tests {
     #[test]
     #[should_panic(expected = "precision 40 is greater than max 38")]
     fn test_decimal_array_with_precision_and_scale_invalid_precision() {
-        DecimalArray::from_iter_values([12345, 456]).with_precision_and_scale(40, 2);
+        DecimalArray::from_iter_values([12345, 456])
+            .with_precision_and_scale(40, 2)
+            .unwrap();
     }
 
     #[test]
     #[should_panic(expected = "scale 40 is greater than max 38")]
     fn test_decimal_array_with_precision_and_scale_invalid_scale() {
-        DecimalArray::from_iter_values([12345, 456]).with_precision_and_scale(20, 40);
+        DecimalArray::from_iter_values([12345, 456])
+            .with_precision_and_scale(20, 40)
+            .unwrap();
     }
 
     #[test]
     #[should_panic(expected = "scale 10 is greater than precision 4")]
     fn test_decimal_array_with_precision_and_scale_invalid_precision_and_scale() {
-        DecimalArray::from_iter_values([12345, 456]).with_precision_and_scale(4, 10);
+        DecimalArray::from_iter_values([12345, 456])
+            .with_precision_and_scale(4, 10)
+            .unwrap();
     }
 
     #[test]
