@@ -17,6 +17,13 @@
 
 //! Contains reader which reads parquet data into arrow array.
 
+use std::sync::Arc;
+
+use arrow::datatypes::{DataType as ArrowType, Schema, SchemaRef};
+use arrow::error::Result as ArrowResult;
+use arrow::record_batch::{RecordBatch, RecordBatchReader};
+use arrow::{array::StructArray, error::ArrowError};
+
 use crate::arrow::array_reader::{build_array_reader, ArrayReader, StructArrayReader};
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::schema::{
@@ -25,11 +32,6 @@ use crate::arrow::schema::{
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::FileReader;
-use arrow::datatypes::{DataType as ArrowType, Schema, SchemaRef};
-use arrow::error::Result as ArrowResult;
-use arrow::record_batch::{RecordBatch, RecordBatchReader};
-use arrow::{array::StructArray, error::ArrowError};
-use std::sync::Arc;
 
 /// Arrow reader api.
 /// With this api, user can get arrow schema from parquet file, and read parquet data
@@ -233,13 +235,29 @@ impl ParquetRecordBatchReader {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::min;
+    use std::convert::TryFrom;
+    use std::fs::File;
+    use std::io::Seek;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use rand::{thread_rng, RngCore};
+    use serde_json::json;
+    use serde_json::Value::{Array as JArray, Null as JNull, Object as JObject};
+
+    use arrow::array::*;
+    use arrow::datatypes::{DataType as ArrowDataType, Field};
+    use arrow::error::Result as ArrowResult;
+    use arrow::record_batch::{RecordBatch, RecordBatchReader};
+
     use crate::arrow::arrow_reader::{ArrowReader, ParquetFileArrowReader};
     use crate::arrow::converter::{
         BinaryArrayConverter, Converter, FixedSizeArrayConverter, FromConverter,
         IntervalDayTimeArrayConverter, LargeUtf8ArrayConverter, Utf8ArrayConverter,
     };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
-    use crate::basic::{ConvertedType, Encoding, Repetition};
+    use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
     use crate::column::writer::get_typed_column_writer_mut;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray,
@@ -253,18 +271,6 @@ mod tests {
     use crate::schema::types::{Type, TypePtr};
     use crate::util::cursor::SliceableCursor;
     use crate::util::test_common::RandGen;
-    use arrow::array::*;
-    use arrow::datatypes::{DataType as ArrowDataType, Field};
-    use arrow::record_batch::RecordBatchReader;
-    use rand::{thread_rng, RngCore};
-    use serde_json::json;
-    use serde_json::Value::{Array as JArray, Null as JNull, Object as JObject};
-    use std::cmp::min;
-    use std::convert::TryFrom;
-    use std::fs::File;
-    use std::io::Seek;
-    use std::path::PathBuf;
-    use std::sync::Arc;
 
     #[test]
     fn test_arrow_reader_all_columns() {
@@ -319,6 +325,48 @@ mod tests {
         assert_eq!(original_schema[1], record_batch_reader.schema().fields()[0]);
 
         compare_batch_json(&mut record_batch_reader, projected_json_values, max_len);
+    }
+
+    #[test]
+    fn test_null_column_reader_test() {
+        let mut file = tempfile::tempfile().unwrap();
+
+        let schema = "
+            message message {
+                OPTIONAL INT32 int32;
+            }
+        ";
+        let schema = Arc::new(parse_message_type(schema).unwrap());
+
+        let def_levels = vec![vec![0, 0, 0], vec![0, 0, 0, 0]];
+        generate_single_column_file_with_data::<Int32Type>(
+            &[vec![], vec![]],
+            Some(&def_levels),
+            file.try_clone().unwrap(), // Cannot use &mut File (#1163)
+            schema,
+            Some(Field::new("int32", ArrowDataType::Null, true)),
+            &Default::default(),
+        )
+        .unwrap();
+
+        file.rewind().unwrap();
+
+        let parquet_reader = SerializedFileReader::try_from(file).unwrap();
+        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(parquet_reader));
+        let record_reader = arrow_reader.get_record_reader(2).unwrap();
+
+        let batches = record_reader.collect::<ArrowResult<Vec<_>>>().unwrap();
+
+        assert_eq!(batches.len(), 4);
+        for batch in &batches[0..3] {
+            assert_eq!(batch.num_rows(), 2);
+            assert_eq!(batch.num_columns(), 1);
+            assert_eq!(batch.column(0).null_count(), 2);
+        }
+
+        assert_eq!(batches[3].num_rows(), 1);
+        assert_eq!(batches[3].num_columns(), 1);
+        assert_eq!(batches[3].column(0).null_count(), 1);
     }
 
     #[test]
@@ -423,13 +471,13 @@ mod tests {
             RandUtf8Gen,
         >(2, ConvertedType::NONE, None, &converter, encodings);
 
-        let converter = Utf8ArrayConverter {};
+        let utf8_converter = Utf8ArrayConverter {};
         run_single_column_reader_tests::<
             ByteArrayType,
             StringArray,
             Utf8ArrayConverter,
             RandUtf8Gen,
-        >(2, ConvertedType::UTF8, None, &converter, encodings);
+        >(2, ConvertedType::UTF8, None, &utf8_converter, encodings);
 
         run_single_column_reader_tests::<
             ByteArrayType,
@@ -440,27 +488,11 @@ mod tests {
             2,
             ConvertedType::UTF8,
             Some(ArrowDataType::Utf8),
-            &converter,
+            &utf8_converter,
             encodings,
         );
 
-        run_single_column_reader_tests::<
-            ByteArrayType,
-            StringArray,
-            Utf8ArrayConverter,
-            RandUtf8Gen,
-        >(
-            2,
-            ConvertedType::UTF8,
-            Some(ArrowDataType::Dictionary(
-                Box::new(ArrowDataType::Int32),
-                Box::new(ArrowDataType::Utf8),
-            )),
-            &converter,
-            encodings,
-        );
-
-        let converter = LargeUtf8ArrayConverter {};
+        let large_utf8_converter = LargeUtf8ArrayConverter {};
         run_single_column_reader_tests::<
             ByteArrayType,
             LargeStringArray,
@@ -470,9 +502,78 @@ mod tests {
             2,
             ConvertedType::UTF8,
             Some(ArrowDataType::LargeUtf8),
-            &converter,
+            &large_utf8_converter,
             encodings,
         );
+
+        let small_key_types = [ArrowDataType::Int8, ArrowDataType::UInt8];
+        for key in &small_key_types {
+            for encoding in encodings {
+                let mut opts = TestOptions::new(2, 20, 15).with_null_percent(50);
+                opts.encoding = *encoding;
+
+                // Cannot run full test suite as keys overflow, run small test instead
+                single_column_reader_test::<
+                    ByteArrayType,
+                    StringArray,
+                    Utf8ArrayConverter,
+                    RandUtf8Gen,
+                >(
+                    opts,
+                    2,
+                    ConvertedType::UTF8,
+                    Some(ArrowDataType::Dictionary(
+                        Box::new(key.clone()),
+                        Box::new(ArrowDataType::Utf8),
+                    )),
+                    &utf8_converter,
+                );
+            }
+        }
+
+        let key_types = [
+            ArrowDataType::Int16,
+            ArrowDataType::UInt16,
+            ArrowDataType::Int32,
+            ArrowDataType::UInt32,
+            ArrowDataType::Int64,
+            ArrowDataType::UInt64,
+        ];
+
+        for key in &key_types {
+            run_single_column_reader_tests::<
+                ByteArrayType,
+                StringArray,
+                Utf8ArrayConverter,
+                RandUtf8Gen,
+            >(
+                2,
+                ConvertedType::UTF8,
+                Some(ArrowDataType::Dictionary(
+                    Box::new(key.clone()),
+                    Box::new(ArrowDataType::Utf8),
+                )),
+                &utf8_converter,
+                encodings,
+            );
+
+            // https://github.com/apache/arrow-rs/issues/1179
+            // run_single_column_reader_tests::<
+            //     ByteArrayType,
+            //     LargeStringArray,
+            //     LargeUtf8ArrayConverter,
+            //     RandUtf8Gen,
+            // >(
+            //     2,
+            //     ConvertedType::UTF8,
+            //     Some(ArrowDataType::Dictionary(
+            //         Box::new(key.clone()),
+            //         Box::new(ArrowDataType::LargeUtf8),
+            //     )),
+            //     &large_utf8_converter,
+            //     encodings
+            // );
+        }
     }
 
     #[test]
@@ -519,6 +620,11 @@ mod tests {
         record_batch_size: usize,
         /// Percentage of nulls in column or None if required
         null_percent: Option<usize>,
+        /// Set write batch size
+        ///
+        /// This is the number of rows that are written at once to a page and
+        /// therefore acts as a bound on the page granularity of a row group
+        write_batch_size: usize,
         /// Maximum size of page in bytes
         max_data_page_size: usize,
         /// Maximum size of dictionary page in bytes
@@ -536,6 +642,7 @@ mod tests {
                 num_rows: 100,
                 record_batch_size: 15,
                 null_percent: None,
+                write_batch_size: 64,
                 max_data_page_size: 1024 * 1024,
                 max_dict_page_size: 1024 * 1024,
                 writer_version: WriterVersion::PARQUET_1_0,
@@ -578,6 +685,7 @@ mod tests {
         fn writer_props(&self) -> WriterProperties {
             let builder = WriterProperties::builder()
                 .set_data_pagesize_limit(self.max_data_page_size)
+                .set_write_batch_size(self.write_batch_size)
                 .set_writer_version(self.writer_version);
 
             let builder = match self.encoding {
@@ -792,7 +900,7 @@ mod tests {
                     }
                 }
                 assert_eq!(a.data_type(), b.data_type());
-                assert_eq!(a.data(), b.data());
+                assert_eq!(a.data(), b.data(), "{:#?} vs {:#?}", a.data(), b.data());
 
                 total_read = end;
             } else {
@@ -1004,5 +1112,102 @@ mod tests {
             "{}",
             error
         );
+    }
+
+    #[test]
+    fn test_dictionary_preservation() {
+        let mut fields = vec![Arc::new(
+            Type::primitive_type_builder("leaf", PhysicalType::BYTE_ARRAY)
+                .with_repetition(Repetition::OPTIONAL)
+                .with_converted_type(ConvertedType::UTF8)
+                .build()
+                .unwrap(),
+        )];
+
+        let schema = Arc::new(
+            Type::group_type_builder("test_schema")
+                .with_fields(&mut fields)
+                .build()
+                .unwrap(),
+        );
+
+        let dict_type = ArrowDataType::Dictionary(
+            Box::new(ArrowDataType::Int32),
+            Box::new(ArrowDataType::Utf8),
+        );
+
+        let arrow_field = Field::new("leaf", dict_type, true);
+
+        let mut file = tempfile::tempfile().unwrap();
+
+        let values = vec![
+            vec![
+                ByteArray::from("hello"),
+                ByteArray::from("a"),
+                ByteArray::from("b"),
+                ByteArray::from("d"),
+            ],
+            vec![
+                ByteArray::from("c"),
+                ByteArray::from("a"),
+                ByteArray::from("b"),
+            ],
+        ];
+
+        let def_levels = vec![
+            vec![1, 0, 0, 1, 0, 0, 1, 1],
+            vec![0, 0, 1, 1, 0, 0, 1, 0, 0],
+        ];
+
+        let opts = TestOptions {
+            encoding: Encoding::RLE_DICTIONARY,
+            ..Default::default()
+        };
+
+        generate_single_column_file_with_data::<ByteArrayType>(
+            &values,
+            Some(&def_levels),
+            file.try_clone().unwrap(), // Cannot use &mut File (#1163)
+            schema,
+            Some(arrow_field),
+            &opts,
+        )
+        .unwrap();
+
+        file.rewind().unwrap();
+
+        let parquet_reader = SerializedFileReader::try_from(file).unwrap();
+        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(parquet_reader));
+
+        let record_reader = arrow_reader.get_record_reader(3).unwrap();
+
+        let batches = record_reader
+            .collect::<ArrowResult<Vec<RecordBatch>>>()
+            .unwrap();
+
+        assert_eq!(batches.len(), 6);
+        assert!(batches.iter().all(|x| x.num_columns() == 1));
+
+        let row_counts = batches
+            .iter()
+            .map(|x| (x.num_rows(), x.column(0).null_count()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            row_counts,
+            vec![(3, 2), (3, 2), (3, 1), (3, 1), (3, 2), (2, 2)]
+        );
+
+        let get_dict =
+            |batch: &RecordBatch| batch.column(0).data().child_data()[0].clone();
+
+        // First and second batch in same row group -> same dictionary
+        assert_eq!(get_dict(&batches[0]), get_dict(&batches[1]));
+        // Third batch spans row group -> computed dictionary
+        assert_ne!(get_dict(&batches[1]), get_dict(&batches[2]));
+        assert_ne!(get_dict(&batches[2]), get_dict(&batches[3]));
+        // Fourth, fifth and sixth from same row group -> same dictionary
+        assert_eq!(get_dict(&batches[3]), get_dict(&batches[4]));
+        assert_eq!(get_dict(&batches[4]), get_dict(&batches[5]));
     }
 }

@@ -35,6 +35,73 @@ use std::any::Any;
 /// [`UnionBuilder`]can be used to create  `UnionArray`'s of primitive types.  `UnionArray`'s of nested
 /// types are also supported but not via `UnionBuilder`, see the tests for examples.
 ///
+/// # Examples
+/// ## Create a dense UnionArray `[1, 3.2, 34]`
+/// ```
+/// use arrow::buffer::Buffer;
+/// use arrow::datatypes::*;
+/// use std::sync::Arc;
+/// use arrow::array::{Array, Int32Array, Float64Array, UnionArray};
+///
+/// let int_array = Int32Array::from(vec![1, 34]);
+/// let float_array = Float64Array::from(vec![3.2]);
+/// let type_id_buffer = Buffer::from_slice_ref(&[0_i8, 1, 0]);
+/// let value_offsets_buffer = Buffer::from_slice_ref(&[0_i32, 0, 1]);
+///
+/// let children: Vec<(Field, Arc<dyn Array>)> = vec![
+///     (Field::new("A", DataType::Int32, false), Arc::new(int_array)),
+///     (Field::new("B", DataType::Float64, false), Arc::new(float_array)),
+/// ];
+///
+/// let array = UnionArray::try_new(
+///     type_id_buffer,
+///     Some(value_offsets_buffer),
+///     children,
+///     None,
+/// ).unwrap();
+///
+/// let value = array.value(0).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
+/// assert_eq!(1, value);
+///
+/// let value = array.value(1).as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+/// assert!(3.2 - value < f64::EPSILON);
+///
+/// let value = array.value(2).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
+/// assert_eq!(34, value);
+/// ```
+///
+/// ## Create a sparse UnionArray `[1, 3.2, 34]`
+/// ```
+/// use arrow::buffer::Buffer;
+/// use arrow::datatypes::*;
+/// use std::sync::Arc;
+/// use arrow::array::{Array, Int32Array, Float64Array, UnionArray};
+///
+/// let int_array = Int32Array::from(vec![Some(1), None, Some(34)]);
+/// let float_array = Float64Array::from(vec![None, Some(3.2), None]);
+/// let type_id_buffer = Buffer::from_slice_ref(&[0_i8, 1, 0]);
+///
+/// let children: Vec<(Field, Arc<dyn Array>)> = vec![
+///     (Field::new("A", DataType::Int32, false), Arc::new(int_array)),
+///     (Field::new("B", DataType::Float64, false), Arc::new(float_array)),
+/// ];
+///
+/// let array = UnionArray::try_new(
+///     type_id_buffer,
+///     None,
+///     children,
+///     None,
+/// ).unwrap();
+///
+/// let value = array.value(0).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
+/// assert_eq!(1, value);
+///
+/// let value = array.value(1).as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+/// assert!(3.2 - value < f64::EPSILON);
+///
+/// let value = array.value(2).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
+/// assert_eq!(34, value);
+/// ```
 pub struct UnionArray {
     data: ArrayData,
     boxed_fields: Vec<ArrayRef>,

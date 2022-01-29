@@ -56,11 +56,10 @@ use arrow::datatypes::{
 use arrow::util::bit_util;
 
 use crate::arrow::converter::{
-    BinaryArrayConverter, BinaryConverter, Converter, DecimalArrayConverter,
-    DecimalConverter, FixedLenBinaryConverter, FixedSizeArrayConverter,
-    Int96ArrayConverter, Int96Converter, IntervalDayTimeArrayConverter,
-    IntervalDayTimeConverter, IntervalYearMonthArrayConverter,
-    IntervalYearMonthConverter, Utf8ArrayConverter, Utf8Converter,
+    Converter, DecimalArrayConverter, DecimalConverter, FixedLenBinaryConverter,
+    FixedSizeArrayConverter, Int96ArrayConverter, Int96Converter,
+    IntervalDayTimeArrayConverter, IntervalDayTimeConverter,
+    IntervalYearMonthArrayConverter, IntervalYearMonthConverter,
 };
 use crate::arrow::record_reader::buffer::{ScalarValue, ValuesBuffer};
 use crate::arrow::record_reader::{GenericRecordReader, RecordReader};
@@ -70,8 +69,8 @@ use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
 use crate::column::reader::ColumnReaderImpl;
 use crate::data_type::{
-    BoolType, ByteArrayType, DataType, DoubleType, FixedLenByteArrayType, FloatType,
-    Int32Type, Int64Type, Int96Type,
+    BoolType, DataType, DoubleType, FixedLenByteArrayType, FloatType, Int32Type,
+    Int64Type, Int96Type,
 };
 use crate::errors::{ParquetError, ParquetError::ArrowError, Result};
 use crate::file::reader::{FilePageIterator, FileReader};
@@ -81,9 +80,15 @@ use crate::schema::types::{
 use crate::schema::visitor::TypeVisitor;
 
 mod byte_array;
+mod byte_array_dictionary;
+mod dictionary_buffer;
 mod offset_buffer;
 
+#[cfg(test)]
+mod test_util;
+
 pub use byte_array::make_byte_array_reader;
+pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 
 /// Array reader reads parquet data into arrow array.
 pub trait ArrayReader {
@@ -209,6 +214,10 @@ where
         // save definition and repetition buffers
         self.def_levels_buffer = self.record_reader.consume_def_levels()?;
         self.rep_levels_buffer = self.record_reader.consume_rep_levels()?;
+
+        // Must consume bitmap buffer
+        self.record_reader.consume_bitmap_buffer()?;
+
         self.record_reader.reset();
         Ok(Arc::new(array))
     }
@@ -271,7 +280,8 @@ where
                 .clone(),
         };
 
-        let record_reader = RecordReader::<T>::new_with_options(column_desc.clone(), null_mask_only);
+        let record_reader =
+            RecordReader::<T>::new_with_options(column_desc.clone(), null_mask_only);
 
         Ok(Self {
             data_type,
@@ -829,17 +839,18 @@ fn remove_indices(
             size
         ),
         ArrowType::Struct(fields) => {
-            let struct_array = arr.as_any()
+            let struct_array = arr
+                .as_any()
                 .downcast_ref::<StructArray>()
                 .expect("Array should be a struct");
 
             // Recursively call remove indices on each of the structs fields
-            let new_columns = fields.into_iter()
+            let new_columns = fields
+                .into_iter()
                 .zip(struct_array.columns())
                 .map(|(field, column)| {
                     let dt = field.data_type().clone();
-                     Ok((field,
-                         remove_indices(column.clone(), dt, indices.clone())?))
+                    Ok((field, remove_indices(column.clone(), dt, indices.clone())?))
                 })
                 .collect::<Result<Vec<_>>>()?;
 
@@ -1783,35 +1794,12 @@ impl<'a> ArrayReaderBuilder {
                 )?,
             )),
             PhysicalType::BYTE_ARRAY => match arrow_type {
-                // TODO: Replace with optimised dictionary reader (#171)
-                Some(ArrowType::Dictionary(_, _)) => {
-                    match cur_type.get_basic_info().converted_type() {
-                        ConvertedType::UTF8 => {
-                            let converter = Utf8Converter::new(Utf8ArrayConverter {});
-                            Ok(Box::new(ComplexObjectArrayReader::<
-                                ByteArrayType,
-                                Utf8Converter,
-                            >::new(
-                                page_iterator,
-                                column_desc,
-                                converter,
-                                arrow_type,
-                            )?))
-                        }
-                        _ => {
-                            let converter = BinaryConverter::new(BinaryArrayConverter {});
-                            Ok(Box::new(ComplexObjectArrayReader::<
-                                ByteArrayType,
-                                BinaryConverter,
-                            >::new(
-                                page_iterator,
-                                column_desc,
-                                converter,
-                                arrow_type,
-                            )?))
-                        }
-                    }
-                }
+                Some(ArrowType::Dictionary(_, _)) => make_byte_array_dictionary_reader(
+                    page_iterator,
+                    column_desc,
+                    arrow_type,
+                    null_mask_only,
+                ),
                 _ => make_byte_array_reader(
                     page_iterator,
                     column_desc,
@@ -2025,7 +2013,7 @@ mod tests {
     use crate::arrow::schema::parquet_to_arrow_schema;
     use crate::basic::{Encoding, Type as PhysicalType};
     use crate::column::page::{Page, PageReader};
-    use crate::data_type::{ByteArray, DataType, Int32Type, Int64Type};
+    use crate::data_type::{ByteArray, ByteArrayType, DataType, Int32Type, Int64Type};
     use crate::errors::Result;
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::schema::parser::parse_message_type;

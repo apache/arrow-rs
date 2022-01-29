@@ -567,6 +567,14 @@ impl<T: DataType> ColumnWriterImpl<T> {
     /// Returns true if there is enough data for a data page, false otherwise.
     #[inline]
     fn should_add_data_page(&self) -> bool {
+        // This is necessary in the event of a much larger dictionary size than page size
+        //
+        // In such a scenario the dictionary decoder may return an estimated encoded
+        // size in excess of the page size limit, even when there are no buffered values
+        if self.num_buffered_values == 0 {
+            return false;
+        }
+
         match self.dict_encoder {
             Some(ref encoder) => {
                 encoder.estimated_data_encoded_size() >= self.props.data_pagesize_limit()

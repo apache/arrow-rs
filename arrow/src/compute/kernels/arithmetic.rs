@@ -29,7 +29,6 @@ use num::{One, Zero};
 use crate::buffer::Buffer;
 #[cfg(feature = "simd")]
 use crate::buffer::MutableBuffer;
-#[cfg(not(feature = "simd"))]
 use crate::compute::kernels::arity::unary;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes;
@@ -41,65 +40,6 @@ use num::traits::Pow;
 use std::borrow::BorrowMut;
 #[cfg(feature = "simd")]
 use std::slice::{ChunksExact, ChunksExactMut};
-
-/// Creates a new PrimitiveArray by applying `simd_op` to the input `array`.
-/// If the length of the array is not multiple of the number of vector lanes
-/// then the remainder of the array will be calculated using `scalar_op`.
-/// Any operation on a `NULL` value will result in a `NULL` value in the output.
-#[cfg(feature = "simd")]
-fn simd_unary_math_op<T, SIMD_OP, SCALAR_OP>(
-    array: &PrimitiveArray<T>,
-    simd_op: SIMD_OP,
-    scalar_op: SCALAR_OP,
-) -> PrimitiveArray<T>
-where
-    T: ArrowNumericType,
-    SIMD_OP: Fn(T::Simd) -> T::Simd,
-    SCALAR_OP: Fn(T::Native) -> T::Native,
-{
-    let lanes = T::lanes();
-    let buffer_size = array.len() * std::mem::size_of::<T::Native>();
-
-    let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
-
-    // safety: result is newly created above, always written as a T below
-    let mut result_chunks = unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
-    let mut array_chunks = array.values().chunks_exact(lanes);
-
-    result_chunks
-        .borrow_mut()
-        .zip(array_chunks.borrow_mut())
-        .for_each(|(result_slice, input_slice)| {
-            let simd_input = T::load(input_slice);
-            let simd_result = T::unary_op(simd_input, &simd_op);
-            T::write(simd_result, result_slice);
-        });
-
-    let result_remainder = result_chunks.into_remainder();
-    let array_remainder = array_chunks.remainder();
-
-    result_remainder.into_iter().zip(array_remainder).for_each(
-        |(scalar_result, scalar_input)| {
-            *scalar_result = scalar_op(*scalar_input);
-        },
-    );
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            T::DATA_TYPE,
-            array.len(),
-            None,
-            array
-                .data_ref()
-                .null_buffer()
-                .map(|b| b.bit_slice(array.offset(), array.len())),
-            0,
-            vec![result.into()],
-            vec![],
-        )
-    };
-    PrimitiveArray::<T>::from(data)
-}
 
 /// Helper function to perform math lambda function on values from two arrays. If either
 /// left or right value is null then the output value is also null, so `1 + null` is
@@ -221,79 +161,6 @@ where
             null_bit_buffer,
             0,
             vec![buffer],
-            vec![],
-        )
-    };
-    Ok(PrimitiveArray::<T>::from(data))
-}
-
-/// Creates a new PrimitiveArray by applying `simd_op` to the `left` and `right` input arrays.
-/// If the length of the arrays is not multiple of the number of vector lanes
-/// then the remainder of the array will be calculated using `scalar_op`.
-/// Any operation on a `NULL` value will result in a `NULL` value in the output.
-///
-/// # Errors
-///
-/// This function errors if the arrays have different lengths
-#[cfg(feature = "simd")]
-fn simd_math_op<T, SIMD_OP, SCALAR_OP>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
-    simd_op: SIMD_OP,
-    scalar_op: SCALAR_OP,
-) -> Result<PrimitiveArray<T>>
-where
-    T: ArrowNumericType,
-    SIMD_OP: Fn(T::Simd, T::Simd) -> T::Simd,
-    SCALAR_OP: Fn(T::Native, T::Native) -> T::Native,
-{
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform math operation on arrays of different length".to_string(),
-        ));
-    }
-
-    let null_bit_buffer =
-        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
-
-    let lanes = T::lanes();
-    let buffer_size = left.len() * std::mem::size_of::<T::Native>();
-    let mut result = MutableBuffer::new(buffer_size).with_bitset(buffer_size, false);
-
-    // safety: result is newly created above, always written as a T below
-    let mut result_chunks = unsafe { result.typed_data_mut().chunks_exact_mut(lanes) };
-    let mut left_chunks = left.values().chunks_exact(lanes);
-    let mut right_chunks = right.values().chunks_exact(lanes);
-
-    result_chunks
-        .borrow_mut()
-        .zip(left_chunks.borrow_mut().zip(right_chunks.borrow_mut()))
-        .for_each(|(result_slice, (left_slice, right_slice))| {
-            let simd_left = T::load(left_slice);
-            let simd_right = T::load(right_slice);
-            let simd_result = T::bin_op(simd_left, simd_right, &simd_op);
-            T::write(simd_result, result_slice);
-        });
-
-    let result_remainder = result_chunks.into_remainder();
-    let left_remainder = left_chunks.remainder();
-    let right_remainder = right_chunks.remainder();
-
-    result_remainder
-        .iter_mut()
-        .zip(left_remainder.iter().zip(right_remainder.iter()))
-        .for_each(|(scalar_result, (scalar_left, scalar_right))| {
-            *scalar_result = scalar_op(*scalar_left, *scalar_right);
-        });
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            T::DATA_TYPE,
-            left.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![result.into()],
             vec![],
         )
     };
@@ -566,10 +433,7 @@ where
     T: ArrowNumericType,
     T::Native: Add<Output = T::Native>,
 {
-    #[cfg(feature = "simd")]
-    return simd_math_op(&left, &right, |a, b| a + b, |a, b| a + b);
-    #[cfg(not(feature = "simd"))]
-    return math_op(left, right, |a, b| a + b);
+    math_op(left, right, |a, b| a + b)
 }
 
 /// Add every value in an array by a scalar. If any value in the array is null then the
@@ -582,17 +446,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: Add<Output = T::Native>,
 {
-    #[cfg(feature = "simd")]
-    {
-        let scalar_vector = T::init(scalar);
-        return Ok(simd_unary_math_op(
-            array,
-            |x| x + scalar_vector,
-            |x| x + scalar,
-        ));
-    }
-    #[cfg(not(feature = "simd"))]
-    return Ok(unary(array, |value| value + scalar));
+    Ok(unary(array, |value| value + scalar))
 }
 
 /// Perform `left - right` operation on two arrays. If either left or right value is null
@@ -605,10 +459,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: Sub<Output = T::Native>,
 {
-    #[cfg(feature = "simd")]
-    return simd_math_op(&left, &right, |a, b| a - b, |a, b| a - b);
-    #[cfg(not(feature = "simd"))]
-    return math_op(left, right, |a, b| a - b);
+    math_op(left, right, |a, b| a - b)
 }
 
 /// Subtract every value in an array by a scalar. If any value in the array is null then the
@@ -625,17 +476,7 @@ where
         + Div<Output = T::Native>
         + Zero,
 {
-    #[cfg(feature = "simd")]
-    {
-        let scalar_vector = T::init(scalar);
-        return Ok(simd_unary_math_op(
-            array,
-            |x| x - scalar_vector,
-            |x| x - scalar,
-        ));
-    }
-    #[cfg(not(feature = "simd"))]
-    return Ok(unary(array, |value| value - scalar));
+    Ok(unary(array, |value| value - scalar))
 }
 
 /// Perform `-` operation on an array. If value is null then the result is also null.
@@ -644,13 +485,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: Neg<Output = T::Native>,
 {
-    #[cfg(feature = "simd")]
-    {
-        let zero_vector = T::init(T::default_value());
-        return Ok(simd_unary_math_op(array, |x| zero_vector - x, |x| -x));
-    }
-    #[cfg(not(feature = "simd"))]
-    return Ok(unary(array, |x| -x));
+    Ok(unary(array, |x| -x))
 }
 
 /// Raise array with floating point values to the power of a scalar.
@@ -662,17 +497,7 @@ where
     T: datatypes::ArrowFloatNumericType,
     T::Native: Pow<T::Native, Output = T::Native>,
 {
-    #[cfg(feature = "simd")]
-    {
-        let raise_vector = T::init(raise);
-        return Ok(simd_unary_math_op(
-            array,
-            |x| T::pow(x, raise_vector),
-            |x| x.pow(raise),
-        ));
-    }
-    #[cfg(not(feature = "simd"))]
-    return Ok(unary(array, |x| x.pow(raise)));
+    Ok(unary(array, |x| x.pow(raise)))
 }
 
 /// Perform `left * right` operation on two arrays. If either left or right value is null
@@ -685,10 +510,7 @@ where
     T: datatypes::ArrowNumericType,
     T::Native: Mul<Output = T::Native>,
 {
-    #[cfg(feature = "simd")]
-    return simd_math_op(&left, &right, |a, b| a * b, |a, b| a * b);
-    #[cfg(not(feature = "simd"))]
-    return math_op(left, right, |a, b| a * b);
+    math_op(left, right, |a, b| a * b)
 }
 
 /// Multiply every value in an array by a scalar. If any value in the array is null then the
@@ -707,17 +529,7 @@ where
         + Zero
         + One,
 {
-    #[cfg(feature = "simd")]
-    {
-        let scalar_vector = T::init(scalar);
-        return Ok(simd_unary_math_op(
-            array,
-            |x| x * scalar_vector,
-            |x| x * scalar,
-        ));
-    }
-    #[cfg(not(feature = "simd"))]
-    return Ok(unary(array, |value| value * scalar));
+    Ok(unary(array, |value| value * scalar))
 }
 
 /// Perform `left % right` operation on two arrays. If either left or right value is null
@@ -756,6 +568,20 @@ where
     return math_checked_divide_op(left, right, |a, b| a / b);
 }
 
+/// Perform `left / right` operation on two arrays without checking for division by zero.
+/// The result of dividing by zero follows normal floating point rules.
+/// If either left or right value is null then the result is also null. If any right hand value is zero then the result of this
+pub fn divide_unchecked<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: datatypes::ArrowFloatNumericType,
+    T::Native: Div<Output = T::Native>,
+{
+    math_op(left, right, |a, b| a / b)
+}
+
 /// Modulus every value in an array by a scalar. If any value in the array is null then the
 /// result is also null. If the scalar is zero then the result of this operation will be
 /// `Err(ArrowError::DivideByZero)`.
@@ -771,17 +597,7 @@ where
         return Err(ArrowError::DivideByZero);
     }
 
-    #[cfg(feature = "simd")]
-    {
-        let modulo_vector = T::init(modulo);
-        return Ok(simd_unary_math_op(
-            &array,
-            |a| a % modulo_vector,
-            |a| a % modulo,
-        ));
-    }
-    #[cfg(not(feature = "simd"))]
-    return Ok(unary(array, |a| a % modulo));
+    Ok(unary(array, |a| a % modulo))
 }
 
 /// Divide every value in an array by a scalar. If any value in the array is null then the
@@ -798,17 +614,7 @@ where
     if divisor.is_zero() {
         return Err(ArrowError::DivideByZero);
     }
-    #[cfg(feature = "simd")]
-    {
-        let divisor_vector = T::init(divisor);
-        return Ok(simd_unary_math_op(
-            &array,
-            |a| a / divisor_vector,
-            |a| a / divisor,
-        ));
-    }
-    #[cfg(not(feature = "simd"))]
-    return Ok(unary(array, |a| a / divisor));
+    Ok(unary(array, |a| a / divisor))
 }
 
 #[cfg(test)]

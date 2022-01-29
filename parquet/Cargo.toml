@@ -81,6 +81,6 @@ name = "arrow_writer"
 harness = false
 
 [[bench]]
-name = "arrow_array_reader"
+name = "arrow_reader"
 required-features = ["test_common", "experimental"]
 harness = false

@@ -400,6 +400,7 @@ pub use self::array_string::StringOffsetSizeTrait;
 
 // --------------------- Array Builder ---------------------
 
+pub use self::builder::make_builder;
 pub use self::builder::BooleanBufferBuilder;
 pub use self::builder::BufferBuilder;
 

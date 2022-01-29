@@ -18,21 +18,15 @@
 //! Defines memory-related functions, such as allocate/deallocate/reallocate memory
 //! regions, cache and allocation alignments.
 
+use std::alloc::{handle_alloc_error, Layout};
 use std::mem::size_of;
 use std::ptr::NonNull;
-use std::{
-    alloc::{handle_alloc_error, Layout},
-    sync::atomic::AtomicIsize,
-};
 
 mod alignment;
 mod types;
 
 pub use alignment::ALIGNMENT;
 pub use types::NativeType;
-
-// If this number is not zero after all objects have been `drop`, there is a memory leak
-pub static mut ALLOCATIONS: AtomicIsize = AtomicIsize::new(0);
 
 #[inline]
 unsafe fn null_pointer<T: NativeType>() -> NonNull<T> {
@@ -48,7 +42,6 @@ pub fn allocate_aligned<T: NativeType>(size: usize) -> NonNull<T> {
             null_pointer()
         } else {
             let size = size * size_of::<T>();
-            ALLOCATIONS.fetch_add(size as isize, std::sync::atomic::Ordering::SeqCst);
 
             let layout = Layout::from_size_align_unchecked(size, ALIGNMENT);
             let raw_ptr = std::alloc::alloc(layout) as *mut T;
@@ -66,7 +59,6 @@ pub fn allocate_aligned_zeroed<T: NativeType>(size: usize) -> NonNull<T> {
             null_pointer()
         } else {
             let size = size * size_of::<T>();
-            ALLOCATIONS.fetch_add(size as isize, std::sync::atomic::Ordering::SeqCst);
 
             let layout = Layout::from_size_align_unchecked(size, ALIGNMENT);
             let raw_ptr = std::alloc::alloc_zeroed(layout) as *mut T;
@@ -86,7 +78,6 @@ pub fn allocate_aligned_zeroed<T: NativeType>(size: usize) -> NonNull<T> {
 pub unsafe fn free_aligned<T: NativeType>(ptr: NonNull<T>, size: usize) {
     if ptr != null_pointer() {
         let size = size * size_of::<T>();
-        ALLOCATIONS.fetch_sub(size as isize, std::sync::atomic::Ordering::SeqCst);
         std::alloc::dealloc(
             ptr.as_ptr() as *mut u8,
             Layout::from_size_align_unchecked(size, ALIGNMENT),
@@ -121,10 +112,6 @@ pub unsafe fn reallocate<T: NativeType>(
         return null_pointer();
     }
 
-    ALLOCATIONS.fetch_add(
-        new_size as isize - old_size as isize,
-        std::sync::atomic::Ordering::SeqCst,
-    );
     let raw_ptr = std::alloc::realloc(
         ptr.as_ptr() as *mut u8,
         Layout::from_size_align_unchecked(old_size, ALIGNMENT),
