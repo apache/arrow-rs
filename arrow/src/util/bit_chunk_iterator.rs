@@ -476,7 +476,10 @@ mod tests {
         assert_eq!(unaligned.lead_padding(), 0);
         assert_eq!(unaligned.trailing_padding(), 24);
         // 24x 1 bit then 40x 0 bits
-        assert_eq!(unaligned.prefix(), Some(0b0000000000000000000000001111111111111111111111111111111111111111));
+        assert_eq!(
+            unaligned.prefix(),
+            Some(0b0000000000000000000000001111111111111111111111111111111111111111)
+        );
         assert_eq!(unaligned.suffix(), None);
 
         let buffer = buffer.slice(1);
@@ -486,7 +489,10 @@ mod tests {
         assert_eq!(unaligned.lead_padding(), 0);
         assert_eq!(unaligned.trailing_padding(), 32);
         // 32x 1 bit then 32x 0 bits
-        assert_eq!(unaligned.prefix(), Some(0b0000000000000000000000000000000011111111111111111111111111111111));
+        assert_eq!(
+            unaligned.prefix(),
+            Some(0b0000000000000000000000000000000011111111111111111111111111111111)
+        );
         assert_eq!(unaligned.suffix(), None);
 
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 5, 27);
@@ -495,7 +501,10 @@ mod tests {
         assert_eq!(unaligned.lead_padding(), 5); // 5 % 8 == 5
         assert_eq!(unaligned.trailing_padding(), 32);
         // 5x 0 bit, 27x 1 bit then 32x 0 bits
-        assert_eq!(unaligned.prefix(), Some(0b0000000000000000000000000000000011111111111111111111111111100000));
+        assert_eq!(
+            unaligned.prefix(),
+            Some(0b0000000000000000000000000000000011111111111111111111111111100000)
+        );
         assert_eq!(unaligned.suffix(), None);
 
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 12, 20);
@@ -504,7 +513,10 @@ mod tests {
         assert_eq!(unaligned.lead_padding(), 4); // 12 % 8 == 4
         assert_eq!(unaligned.trailing_padding(), 40);
         // 4x 0 bit, 20x 1 bit then 40x 0 bits
-        assert_eq!(unaligned.prefix(), Some(0b0000000000000000000000000000000000000000111111111111111111110000));
+        assert_eq!(
+            unaligned.prefix(),
+            Some(0b0000000000000000000000000000000000000000111111111111111111110000)
+        );
         assert_eq!(unaligned.suffix(), None);
 
         let buffer = Buffer::from(&[0xFF; 14]);
