@@ -631,48 +631,60 @@ mod tests {
         Ok(())
     }
 
+    fn test_slices_fuzz(mask_len: usize, offset: usize, truncate: usize) {
+        let mut rng = thread_rng();
+
+        let bools: Vec<bool> = std::iter::from_fn(|| Some(rng.gen()))
+            .take(mask_len)
+            .collect();
+
+        let buffer = Buffer::from_iter(bools.iter().cloned());
+
+        let truncated_length = mask_len - offset - truncate;
+
+        let data = ArrayDataBuilder::new(DataType::Boolean)
+            .len(truncated_length)
+            .offset(offset)
+            .add_buffer(buffer)
+            .build()
+            .unwrap();
+
+        let bool_array = BooleanArray::from(data);
+
+        let bits: Vec<_> = SlicesIterator::new(&bool_array)
+            .flat_map(|(start, end)| start..end)
+            .collect();
+
+        let expected_bits: Vec<_> = bools
+            .iter()
+            .skip(offset)
+            .take(truncated_length)
+            .enumerate()
+            .flat_map(|(idx, v)| v.then(|| idx))
+            .collect();
+
+        assert_eq!(bits, expected_bits);
+    }
+
     #[test]
     fn fuzz_test_slices_iterator() {
         let mut rng = thread_rng();
 
         for _ in 0..100 {
             let mask_len = rng.gen_range(0..1024);
-            let bools: Vec<bool> = std::iter::from_fn(|| Some(rng.gen()))
-                .take(mask_len)
-                .collect();
-
-            let buffer = Buffer::from_iter(bools.iter().cloned());
-
             let max_offset = 64.min(mask_len);
             let offset = rng.gen::<usize>().checked_rem(max_offset).unwrap_or(0);
 
             let max_truncate = 128.min(mask_len - offset);
             let truncate = rng.gen::<usize>().checked_rem(max_truncate).unwrap_or(0);
 
-            let truncated_length = mask_len - offset - truncate;
-
-            let data = ArrayDataBuilder::new(DataType::Boolean)
-                .len(truncated_length)
-                .offset(offset)
-                .add_buffer(buffer)
-                .build()
-                .unwrap();
-
-            let bool_array = BooleanArray::from(data);
-
-            let bits: Vec<_> = SlicesIterator::new(&bool_array)
-                .flat_map(|(start, end)| start..end)
-                .collect();
-
-            let expected_bits: Vec<_> = bools
-                .iter()
-                .skip(offset)
-                .take(truncated_length)
-                .enumerate()
-                .flat_map(|(idx, v)| v.then(|| idx))
-                .collect();
-
-            assert_eq!(bits, expected_bits);
+            test_slices_fuzz(mask_len, offset, truncate);
         }
+
+        test_slices_fuzz(64, 0, 0);
+        test_slices_fuzz(64, 8, 0);
+        test_slices_fuzz(64, 8, 8);
+        test_slices_fuzz(32, 8, 8);
+        test_slices_fuzz(32, 5, 9);
     }
 }
