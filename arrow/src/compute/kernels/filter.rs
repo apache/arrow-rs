@@ -34,7 +34,7 @@ pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
 pub struct SlicesIterator<'a> {
     iter: UnalignedBitChunkIterator<'a>,
     len: usize,
-    offset: usize,
+    chunk_end_offset: usize,
     current_chunk: u64,
 }
 
@@ -45,13 +45,13 @@ impl<'a> SlicesIterator<'a> {
         let chunk = UnalignedBitChunk::new(values.as_slice(), filter.offset(), len);
         let mut iter = chunk.iter();
 
-        let offset = chunk.lead_padding();
+        let chunk_end_offset = 64 - chunk.lead_padding();
         let current_chunk = iter.next().unwrap_or(0);
 
         Self {
             iter,
             len,
-            offset,
+            chunk_end_offset,
             current_chunk,
         }
     }
@@ -61,11 +61,11 @@ impl<'a> SlicesIterator<'a> {
             if self.current_chunk != 0 {
                 // Find the index of the first 1
                 let bit_pos = self.current_chunk.trailing_zeros();
-                return Some((self.offset, bit_pos));
+                return Some((self.chunk_end_offset, bit_pos));
             }
 
             self.current_chunk = self.iter.next()?;
-            self.offset += 64;
+            self.chunk_end_offset += 64;
         }
     }
 }
@@ -93,15 +93,15 @@ impl<'a> Iterator for SlicesIterator<'a> {
                 self.current_chunk &= !((1 << end_bit) - 1);
 
                 return Some((
-                    start_chunk + start_bit as usize,
-                    self.offset + end_bit as usize,
+                    start_chunk + start_bit as usize - 64,
+                    self.chunk_end_offset + end_bit as usize - 64,
                 ));
             }
 
             match self.iter.next() {
                 Some(next) => {
                     self.current_chunk = next;
-                    self.offset += 64;
+                    self.chunk_end_offset += 64;
                 }
                 None => {
                     return Some((
@@ -252,6 +252,7 @@ mod tests {
         buffer::Buffer,
         datatypes::{DataType, Field},
     };
+    use rand::prelude::*;
 
     macro_rules! def_temporal_test {
         ($test:ident, $array_type: ident, $data: expr) => {
@@ -628,5 +629,50 @@ mod tests {
         assert_eq!(out.len(), 0);
         assert_eq!(out.data_type(), &DataType::Int64);
         Ok(())
+    }
+
+    #[test]
+    fn fuzz_test_slices_iterator() {
+        let mut rng = thread_rng();
+
+        for _ in 0..100 {
+            let mask_len = rng.gen_range(0..1024);
+            let bools: Vec<bool> = std::iter::from_fn(|| Some(rng.gen()))
+                .take(mask_len)
+                .collect();
+
+            let buffer = Buffer::from_iter(bools.iter().cloned());
+
+            let max_offset = 64.min(mask_len);
+            let offset = rng.gen::<usize>().checked_rem(max_offset).unwrap_or(0);
+
+            let max_truncate = 128.min(mask_len - offset);
+            let truncate = rng.gen::<usize>().checked_rem(max_truncate).unwrap_or(0);
+
+            let truncated_length = mask_len - offset - truncate;
+
+            let data = ArrayDataBuilder::new(DataType::Boolean)
+                .len(truncated_length)
+                .offset(offset)
+                .add_buffer(buffer)
+                .build()
+                .unwrap();
+
+            let bool_array = BooleanArray::from(data);
+
+            let bits: Vec<_> = SlicesIterator::new(&bool_array)
+                .flat_map(|(start, end)| start..end)
+                .collect();
+
+            let expected_bits: Vec<_> = bools
+                .iter()
+                .skip(offset)
+                .take(truncated_length)
+                .enumerate()
+                .flat_map(|(idx, v)| v.then(|| idx))
+                .collect();
+
+            assert_eq!(bits, expected_bits);
+        }
     }
 }
