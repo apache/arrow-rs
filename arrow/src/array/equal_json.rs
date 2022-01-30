@@ -937,11 +937,11 @@ mod tests {
     #[test]
     fn test_decimal_json_equal() {
         // Test the equal case
-        let mut builder = DecimalBuilder::new(30, 23, 6);
-        builder.append_value(1_000).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(-250).unwrap();
-        let arrow_array: DecimalArray = builder.finish();
+        let arrow_array = [Some(1_000), None, Some(-250)]
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(23, 6)
+            .unwrap();
         let json_array: Value = serde_json::from_str(
             r#"
             [
@@ -956,10 +956,11 @@ mod tests {
         assert!(json_array.eq(&arrow_array));
 
         // Test unequal case
-        builder.append_value(1_000).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(55).unwrap();
-        let arrow_array: DecimalArray = builder.finish();
+        let arrow_array = [Some(1_000), None, Some(55)]
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(23, 6)
+            .unwrap();
         let json_array: Value = serde_json::from_str(
             r#"
             [
