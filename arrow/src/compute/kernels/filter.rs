@@ -261,7 +261,7 @@ pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
 ) -> Result<RecordBatch> {
-    let filter = FilterBuilder::new(&predicate).cache().build();
+    let filter = FilterBuilder::new(&predicate).optimize().build();
 
     let filtered_arrays = record_batch
         .columns()
@@ -272,18 +272,7 @@ pub fn filter_record_batch(
     RecordBatch::try_new(record_batch.schema(), filtered_arrays)
 }
 
-#[derive(Debug)]
-enum FilterIterator {
-    // A lazily evaluated iterator of ranges
-    SlicesIterator,
-    // A lazily evaluated iterator of indices
-    IndexIterator,
-    // A precomputed list of indices
-    Indices(Vec<usize>),
-    // A precomputed array of ranges
-    Slices(Vec<(usize, usize)>),
-}
-
+/// A builder to construct [`FilterPredicate`]
 #[derive(Debug)]
 pub struct FilterBuilder {
     filter: BooleanArray,
@@ -292,6 +281,7 @@ pub struct FilterBuilder {
 }
 
 impl FilterBuilder {
+    /// Create a new [`FilterBuilder`] that can be used construct [`FilterPredicate`]
     pub fn new(filter: &BooleanArray) -> Self {
         let filter = match filter.null_count() {
             0 => BooleanArray::from(filter.data().clone()),
@@ -313,12 +303,15 @@ impl FilterBuilder {
         }
     }
 
-    pub fn cache(mut self) -> Self {
-        // TODO: Is caching always beneficial?
+    /// Compute an optimised representation of the provided `filter` mask that can be
+    /// applied to an array more quickly.
+    ///
+    /// Note: There is limited benefit to calling this to then filter a single array
+    /// Note: This will likely have a larger memory footprint than the original mask
+    pub fn optimize(mut self) -> Self {
         match self.iterator {
             FilterIterator::SlicesIterator => {
                 let slices = SlicesIterator::new(&self.filter).collect();
-                // TODO: Check slice array length significantly less than count
                 self.iterator = FilterIterator::Slices(slices)
             }
             FilterIterator::IndexIterator => {
@@ -330,6 +323,7 @@ impl FilterBuilder {
         self
     }
 
+    /// Construct the final `FilterPredicate`
     pub fn build(self) -> FilterPredicate {
         FilterPredicate {
             filter: self.filter,
@@ -339,6 +333,20 @@ impl FilterBuilder {
     }
 }
 
+/// The internal iterator type of [`FilterPredicate`]
+#[derive(Debug)]
+enum FilterIterator {
+    // A lazily evaluated iterator of ranges
+    SlicesIterator,
+    // A lazily evaluated iterator of indices
+    IndexIterator,
+    // A precomputed list of indices
+    Indices(Vec<usize>),
+    // A precomputed array of ranges
+    Slices(Vec<(usize, usize)>),
+}
+
+/// A filtering predicate that can be applied to an [`Array`]
 #[derive(Debug)]
 pub struct FilterPredicate {
     filter: BooleanArray,
@@ -347,6 +355,7 @@ pub struct FilterPredicate {
 }
 
 impl FilterPredicate {
+    /// Selects rows from `values` based on this [`FilterPredicate`]
     pub fn filter(&self, values: &dyn Array) -> Result<ArrayRef> {
         filter_array(values, self)
     }
@@ -497,17 +506,73 @@ fn filter_null_mask(
 fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.as_slice();
 
-    // TODO: Optimise this
-    let mut buf = MutableBuffer::from_len_zeroed(bit_util::ceil(predicate.count, 8));
-    let dst = buf.as_slice_mut();
-
-    for (dst_idx, src_idx) in IndexIterator::new(&predicate.filter).enumerate() {
-        if bit_util::get_bit(src, src_idx + offset) {
-            bit_util::set_bit(dst, dst_idx);
+    match &predicate.iterator {
+        FilterIterator::IndexIterator => {
+            let bits = IndexIterator::new(&predicate.filter)
+                .map(|src_idx| bit_util::get_bit(src, src_idx + offset));
+            unsafe { collect_filtered_bits(bits, predicate.count) }
+        }
+        FilterIterator::Indices(indices) => {
+            let bits = indices
+                .iter()
+                .map(|src_idx| bit_util::get_bit(src, *src_idx + offset));
+            unsafe { collect_filtered_bits(bits, predicate.count) }
+        }
+        FilterIterator::SlicesIterator => {
+            let mut builder =
+                BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            for (start, end) in SlicesIterator::new(&predicate.filter) {
+                builder.append_packed_range(start..end, src)
+            }
+            builder.finish()
+        }
+        FilterIterator::Slices(slices) => {
+            let mut builder =
+                BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            for (start, end) in slices {
+                builder.append_packed_range(*start..*end, src)
+            }
+            builder.finish()
         }
     }
+}
 
-    buf.into()
+/// Collects the provided boolean iterator into a `Buffer`
+///
+/// Largely copied from `MutableBuffer::from_trusted_len_iter_bool`
+///
+/// TODO: DRY this up
+unsafe fn collect_filtered_bits(
+    mut src: impl Iterator<Item = bool>,
+    bit_len: usize,
+) -> Buffer {
+    let aligned_len = bit_util::ceil(bit_len, 64) * 8;
+    let mut buffer = MutableBuffer::new(aligned_len);
+
+    'a: loop {
+        let mut byte_accum: u64 = 0;
+        let mut mask: u64 = 1;
+
+        while mask != 0 {
+            if let Some(value) = src.next() {
+                byte_accum |= match value {
+                    true => mask,
+                    false => 0,
+                };
+                mask <<= 1;
+            } else {
+                if mask != 1 {
+                    buffer.push_unchecked(byte_accum);
+                }
+                break 'a;
+            }
+        }
+        buffer.push_unchecked(byte_accum);
+    }
+
+    // Truncate to byte length - technically not necessary but cannot hurt
+    buffer.resize(bit_util::ceil(bit_len, 8), 0);
+    buffer.into()
 }
 
 /// `filter` implementation for boolean buffers

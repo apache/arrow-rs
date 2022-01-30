@@ -42,9 +42,9 @@ fn add_benchmark(c: &mut Criterion) {
     let dense_filter_array = create_boolean_array(size, 0.0, 1.0 - 1.0 / 1024.0);
     let sparse_filter_array = create_boolean_array(size, 0.0, 1.0 / 1024.0);
 
-    let filter = FilterBuilder::new(&filter_array).cache().build();
-    let dense_filter = FilterBuilder::new(&dense_filter_array).cache().build();
-    let sparse_filter = FilterBuilder::new(&sparse_filter_array).cache().build();
+    let filter = FilterBuilder::new(&filter_array).optimize().build();
+    let dense_filter = FilterBuilder::new(&dense_filter_array).optimize().build();
+    let sparse_filter = FilterBuilder::new(&sparse_filter_array).optimize().build();
 
     let data_array = create_primitive_array::<UInt8Type>(size, 0.0);
 
