@@ -938,7 +938,7 @@ mod tests {
     fn test_decimal_json_equal() {
         // Test the equal case
         let arrow_array = [Some(1_000), None, Some(-250)]
-            .into_iter()
+            .iter()
             .collect::<DecimalArray>()
             .with_precision_and_scale(23, 6)
             .unwrap();
@@ -957,7 +957,7 @@ mod tests {
 
         // Test unequal case
         let arrow_array = [Some(1_000), None, Some(55)]
-            .into_iter()
+            .iter()
             .collect::<DecimalArray>()
             .with_precision_and_scale(23, 6)
             .unwrap();

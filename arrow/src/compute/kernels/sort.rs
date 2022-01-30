@@ -1107,7 +1107,7 @@ mod tests {
     use std::sync::Arc;
 
     fn create_decimal_array(data: &[Option<i128>]) -> DecimalArray {
-        data.into_iter()
+        data.iter()
             .collect::<DecimalArray>()
             .with_precision_and_scale(23, 6)
             .unwrap()

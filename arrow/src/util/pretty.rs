@@ -520,7 +520,7 @@ mod tests {
         let precision = 10;
         let scale = 2;
 
-        let array = vec![Some(101), None, Some(200), Some(3040)]
+        let array = [Some(101), None, Some(200), Some(3040)]
             .into_iter()
             .collect::<DecimalArray>()
             .with_precision_and_scale(precision, scale)
@@ -560,7 +560,7 @@ mod tests {
         let precision = 5;
         let scale = 0;
 
-        let array = vec![Some(101), None, Some(200), Some(3040)]
+        let array = [Some(101), None, Some(200), Some(3040)]
             .into_iter()
             .collect::<DecimalArray>()
             .with_precision_and_scale(precision, scale)

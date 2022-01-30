@@ -1579,7 +1579,7 @@ mod tests {
 
     #[test]
     fn test_decimal_array_value_as_string() {
-        let arr = vec![123450, -123450, 100, -100, 10, -10, 0]
+        let arr = [123450, -123450, 100, -100, 10, -10, 0]
             .into_iter()
             .map(Some)
             .collect::<DecimalArray>()
@@ -1648,8 +1648,8 @@ mod tests {
 
     #[test]
     fn test_decimal_array_fmt_debug() {
-        let arr = vec![Some(8887000000), Some(-8887000000), None]
-            .into_iter()
+        let arr = [Some(8887000000), Some(-8887000000), None]
+            .iter()
             .collect::<DecimalArray>()
             .with_precision_and_scale(23, 6)
             .unwrap();

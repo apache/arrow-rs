@@ -810,7 +810,7 @@ mod tests {
     }
 
     fn create_decimal_array(data: &[Option<i128>]) -> ArrayData {
-        data.into_iter()
+        data.iter()
             .collect::<DecimalArray>()
             .with_precision_and_scale(23, 6)
             .unwrap()

@@ -2074,7 +2074,7 @@ mod tests {
         scale: usize,
     ) -> Result<DecimalArray> {
         array
-            .into_iter()
+            .iter()
             .collect::<DecimalArray>()
             .with_precision_and_scale(precision, scale)
     }

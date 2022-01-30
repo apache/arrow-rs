@@ -794,7 +794,7 @@ mod tests {
     #[test]
     fn test_decimal_round_trip() -> Result<()> {
         // create an array natively
-        let original_array = vec![Some(12345_i128), Some(-12345_i128), None]
+        let original_array = [Some(12345_i128), Some(-12345_i128), None]
             .into_iter()
             .collect::<DecimalArray>()
             .with_precision_and_scale(6, 2)
