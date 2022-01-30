@@ -702,7 +702,7 @@ impl Array for FixedSizeBinaryArray {
 /// # Examples
 ///
 /// ```
-///    use arrow::array::{Array, DecimalArray, DecimalBuilder};
+///    use arrow::array::{Array, DecimalArray};
 ///    use arrow::datatypes::DataType;
 ///
 ///    // Create a DecimalArray with the default precision and scale
