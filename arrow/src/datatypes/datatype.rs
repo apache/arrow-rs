@@ -286,6 +286,9 @@ pub const DECIMAL_MAX_PRECISION: usize = 38;
 /// The maximum scale for [DataType::Decimal] values
 pub const DECIMAL_MAX_SCALE: usize = 38;
 
+/// The default scale for [DataType::Decimal] values
+pub const DECIMAL_DEFAULT_SCALE: usize = 10;
+
 /// Validates that the specified `i128` value can be properly
 /// interpreted as a Decimal number with precision `precision`
 #[inline]

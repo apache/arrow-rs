@@ -27,7 +27,8 @@ use super::{
 };
 use crate::buffer::Buffer;
 use crate::datatypes::{
-    validate_decimal_precision, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE,
+    validate_decimal_precision, DECIMAL_DEFAULT_SCALE, DECIMAL_MAX_PRECISION,
+    DECIMAL_MAX_SCALE,
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
@@ -914,10 +915,10 @@ impl DecimalArray {
         Ok(self)
     }
 
-    /// The default precision and scale used when not specified
+    /// The default precision and scale used when not specified.
     pub fn default_type() -> DataType {
         // Keep maximum precision
-        DataType::Decimal(38, 10)
+        DataType::Decimal(DECIMAL_MAX_PRECISION, DECIMAL_DEFAULT_SCALE)
     }
 }
 
