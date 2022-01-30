@@ -1001,7 +1001,7 @@ macro_rules! try_to_type {
 }
 
 macro_rules! dyn_compare_scalar {
-    // Applies `LEFT OP RIGHT` when `LEFT` is a `DictionaryArray`
+    // Applies `LEFT OP RIGHT` when `LEFT` is a `PrimitiveArray`
     ($LEFT: expr, $RIGHT: expr, $OP: ident) => {{
         match $LEFT.data_type() {
             DataType::Int8 => {
@@ -2030,12 +2030,112 @@ macro_rules! typed_compares {
     }};
 }
 
+macro_rules! typed_dict_cmp {
+    ($LEFT: expr, $RIGHT: expr, $OP_PRIM: ident, $KT: tt) => {{
+        match ($LEFT.value_type(), $RIGHT.value_type()) {
+            (DataType::Int8, DataType::Int8) => {
+                $OP_PRIM::<$KT, Int8Type>($LEFT, $RIGHT)
+            }
+            (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
+                "Comparing dictionary arrays of value type {} is not yet implemented",
+                t1
+            ))),
+            (t1, t2) => Err(ArrowError::CastError(format!(
+                "Cannot compare two dictionary arrays of different value types ({} and {})",
+                t1, t2
+            ))),
+        }
+    }};
+}
+
+macro_rules! typed_dict_compares {
+   // Applies `LEFT OP RIGHT` when `LEFT` and `RIGHT` both are `DictionaryArray`
+    ($LEFT: expr, $RIGHT: expr, $OP_PRIM: ident) => {{
+        match ($LEFT.data_type(), $RIGHT.data_type()) {
+            (DataType::Dictionary(left_key_type, _), DataType::Dictionary(right_key_type, _))=> {
+                match (left_key_type.as_ref(), right_key_type.as_ref()) {
+                    (DataType::Int8, DataType::Int8) => {
+                        let left = as_dictionary_array::<Int8Type>($LEFT);
+                        let right = as_dictionary_array::<Int8Type>($RIGHT);
+                        typed_dict_cmp!(left, right, $OP_PRIM, Int8Type)
+                    }
+                    (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
+                        "Comparing dictionary arrays of type {} is not yet implemented",
+                        t1
+                    ))),
+                    (t1, t2) => Err(ArrowError::CastError(format!(
+                        "Cannot compare two dictionary arrays of different key types ({} and {})",
+                        t1, t2
+                    ))),
+                }
+            }
+            (t1, t2) => Err(ArrowError::CastError(format!(
+                "Cannot compare dictionary array with non-dictionary array ({} and {})",
+                t1, t2
+            ))),
+        }
+    }};
+}
+
+/// Perform `left == right` operation on two `DictionaryArray`s.
+/// Only when two arrays are of the same type the comparison will happen otherwise it will err
+/// with a casting error.
+pub fn eq_dict<K, T>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+) -> Result<BooleanArray>
+where
+    K: ArrowNumericType,
+    T: ArrowNumericType,
+{
+    assert_eq!(left.keys().len(), right.keys().len());
+
+    let left_values = left
+        .values()
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .unwrap();
+    let right_values = right
+        .values()
+        .as_any()
+        .downcast_ref::<PrimitiveArray<T>>()
+        .unwrap();
+
+    let mut result = vec![];
+
+    for idx in 0..left.keys().len() {
+        unsafe {
+            let left_key = left
+                .keys()
+                .value_unchecked(idx)
+                .to_usize()
+                .expect("Dictionary index not usize");
+            let left_value = left_values.value_unchecked(left_key);
+            let right_key = right
+                .keys()
+                .value_unchecked(idx)
+                .to_usize()
+                .expect("Dictionary index not usize");
+            let right_value = right_values.value_unchecked(right_key);
+
+            result.push(left_value == right_value);
+        }
+    }
+
+    Ok(BooleanArray::from(result))
+}
+
 /// Perform `left == right` operation on two (dynamic) [`Array`]s.
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, eq_bool, eq, eq_utf8, eq_binary)
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_compares!(left, right, eq_dict)
+        }
+        _ => typed_compares!(left, right, eq_bool, eq, eq_utf8, eq_binary),
+    }
 }
 
 /// Perform `left != right` operation on two (dynamic) [`Array`]s.
@@ -2359,6 +2459,7 @@ mod tests {
 
     use super::*;
     use crate::datatypes::Int8Type;
+    use crate::datatypes::ToByteSlice;
     use crate::{array::Int32Array, array::Int64Array, datatypes::Field};
 
     /// Evaluate `KERNEL` with two vectors as inputs and assert against the expected output.
@@ -4293,6 +4394,45 @@ mod tests {
         let a_eq = neq_dyn_bool_scalar(&array, false).unwrap();
         assert_eq!(
             a_eq,
+            BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+    }
+
+    fn get_dictionary_array(keys: Buffer) -> DictionaryArray<Int8Type> {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int8)
+            .len(8)
+            .add_buffer(Buffer::from(
+                &[10_i8, 11, 12, 13, 14, 15, 16, 17].to_byte_slice(),
+            ))
+            .build()
+            .unwrap();
+
+        // Construct a dictionary array from the above two
+        let key_type = DataType::Int8;
+        let value_type = DataType::Int8;
+        let dict_data_type =
+            DataType::Dictionary(Box::new(key_type), Box::new(value_type));
+        let dict_data = ArrayData::builder(dict_data_type.clone())
+            .len(3)
+            .add_buffer(keys.clone())
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap();
+        Int8DictionaryArray::from(dict_data)
+    }
+
+    #[test]
+    fn test_eq_dyn_dictionary_array() {
+        let keys1 = Buffer::from(&[2_i8, 3, 4].to_byte_slice());
+        let keys2 = Buffer::from(&[2_i8, 4, 4].to_byte_slice());
+        let dict_array1 = get_dictionary_array(keys1);
+        let dict_array2 = get_dictionary_array(keys2);
+
+        let result = eq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
             BooleanArray::from(vec![Some(true), Some(false), Some(true)])
         );
     }
