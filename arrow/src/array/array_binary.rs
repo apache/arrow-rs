@@ -895,10 +895,8 @@ impl DecimalArray {
         // precision. For performance, only check if the precision is
         // decreased
         if precision < self.precision {
-            for v in self.iter() {
-                if let Some(v) = v {
-                    validate_decimal_precision(v, precision)?;
-                }
+            for v in self.iter().flatten() {
+                validate_decimal_precision(v, precision)?;
             }
         }
 
