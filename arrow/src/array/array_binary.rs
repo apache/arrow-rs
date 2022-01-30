@@ -26,7 +26,9 @@ use super::{
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
 };
 use crate::buffer::Buffer;
-use crate::datatypes::{DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};
+use crate::datatypes::{
+    validate_decimal_precision, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE,
+};
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
@@ -888,6 +890,17 @@ impl DecimalArray {
             )));
         }
 
+        // Ensure that all values are within the requested
+        // precision. For performance, only check if the precision is
+        // decreased
+        if precision < self.precision {
+            for v in self.iter() {
+                if let Some(v) = v {
+                    validate_decimal_precision(v, precision)?;
+                }
+            }
+        }
+
         assert_eq!(
             self.data.data_type(),
             &DataType::Decimal(self.precision, self.scale)
@@ -1590,6 +1603,17 @@ mod tests {
         let expected = vec!["123.45", "4.56", "78.90", "-1232234234324.32"];
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "-123223423432432 is too small to store in a Decimal of precision 5. Min is -99999"
+    )]
+    fn test_decimal_array_with_precision_and_scale_out_of_range() {
+        DecimalArray::from_iter_values([12345, 456, 7890, -123223423432432])
+            // precision is too small to hold value
+            .with_precision_and_scale(5, 2)
+            .unwrap();
     }
 
     #[test]
