@@ -48,6 +48,18 @@ fn add_benchmark(c: &mut Criterion) {
 
     let data_array = create_primitive_array::<UInt8Type>(size, 0.0);
 
+    c.bench_function("filter optimize", |b| {
+        b.iter(|| FilterBuilder::new(&filter_array).optimize().build())
+    });
+
+    c.bench_function("filter optimize high selectivity", |b| {
+        b.iter(|| FilterBuilder::new(&dense_filter_array).optimize().build())
+    });
+
+    c.bench_function("filter optimize low selectivity", |b| {
+        b.iter(|| FilterBuilder::new(&sparse_filter_array).optimize().build())
+    });
+
     c.bench_function("filter u8", |b| {
         b.iter(|| bench_filter(&data_array, &filter_array))
     });
