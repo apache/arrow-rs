@@ -252,7 +252,7 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// # }
 /// ```
 pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef> {
-    let predicate = FilterBuilder::new(&predicate).build();
+    let predicate = FilterBuilder::new(predicate).build();
     filter_array(values, &predicate)
 }
 
@@ -261,7 +261,7 @@ pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
 ) -> Result<RecordBatch> {
-    let filter = FilterBuilder::new(&predicate).optimize().build();
+    let filter = FilterBuilder::new(predicate).optimize().build();
 
     let filtered_arrays = record_batch
         .columns()

@@ -32,7 +32,7 @@ fn bench_filter(data_array: &dyn Array, filter_array: &BooleanArray) {
     criterion::black_box(filter(data_array, filter_array).unwrap());
 }
 
-fn bench_built_filter<'a>(filter: &FilterPredicate, array: &dyn Array) {
+fn bench_built_filter(filter: &FilterPredicate, array: &dyn Array) {
     criterion::black_box(filter.filter(array).unwrap());
 }
 
