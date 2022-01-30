@@ -1490,7 +1490,7 @@ mod tests {
         let mut result = decimal_builder.append_value(123456);
         let mut error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: The value of 123456 i128 is not compatible with Decimal(5,3)",
+            "Invalid argument error: 123456 is too large to store in a Decimal of precision 5. Max is 99999",
             error.to_string()
         );
         decimal_builder.append_value(12345).unwrap();
@@ -1501,14 +1501,14 @@ mod tests {
         result = decimal_builder.append_value(100);
         error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: The value of 100 i128 is not compatible with Decimal(2,1)",
+            "Invalid argument error: 100 is too large to store in a Decimal of precision 2. Max is 99",
             error.to_string()
         );
         decimal_builder.append_value(99).unwrap();
         result = decimal_builder.append_value(-100);
         error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: The value of -100 i128 is not compatible with Decimal(2,1)",
+            "Invalid argument error: -100 is too small to store in a Decimal of precision 2. Min is -99",
             error.to_string()
         );
         decimal_builder.append_value(-99).unwrap();

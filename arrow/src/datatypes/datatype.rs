@@ -194,11 +194,119 @@ impl fmt::Display for DataType {
     }
 }
 
+/// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value
+/// that can be stored in [DataType::Decimal] value of precision `p`
+pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
+    9,
+    99,
+    999,
+    9999,
+    99999,
+    999999,
+    9999999,
+    99999999,
+    999999999,
+    9999999999,
+    99999999999,
+    999999999999,
+    9999999999999,
+    99999999999999,
+    999999999999999,
+    9999999999999999,
+    99999999999999999,
+    999999999999999999,
+    9999999999999999999,
+    99999999999999999999,
+    999999999999999999999,
+    9999999999999999999999,
+    99999999999999999999999,
+    999999999999999999999999,
+    9999999999999999999999999,
+    99999999999999999999999999,
+    999999999999999999999999999,
+    9999999999999999999999999999,
+    99999999999999999999999999999,
+    999999999999999999999999999999,
+    9999999999999999999999999999999,
+    99999999999999999999999999999999,
+    999999999999999999999999999999999,
+    9999999999999999999999999999999999,
+    99999999999999999999999999999999999,
+    999999999999999999999999999999999999,
+    9999999999999999999999999999999999999,
+    170141183460469231731687303715884105727,
+];
+
+/// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value
+/// that can be stored in a [DataType::Decimal] value of precision `p`
+pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
+    -9,
+    -99,
+    -999,
+    -9999,
+    -99999,
+    -999999,
+    -9999999,
+    -99999999,
+    -999999999,
+    -9999999999,
+    -99999999999,
+    -999999999999,
+    -9999999999999,
+    -99999999999999,
+    -999999999999999,
+    -9999999999999999,
+    -99999999999999999,
+    -999999999999999999,
+    -9999999999999999999,
+    -99999999999999999999,
+    -999999999999999999999,
+    -9999999999999999999999,
+    -99999999999999999999999,
+    -999999999999999999999999,
+    -9999999999999999999999999,
+    -99999999999999999999999999,
+    -999999999999999999999999999,
+    -9999999999999999999999999999,
+    -99999999999999999999999999999,
+    -999999999999999999999999999999,
+    -9999999999999999999999999999999,
+    -99999999999999999999999999999999,
+    -999999999999999999999999999999999,
+    -9999999999999999999999999999999999,
+    -99999999999999999999999999999999999,
+    -999999999999999999999999999999999999,
+    -9999999999999999999999999999999999999,
+    -170141183460469231731687303715884105728,
+];
+
 /// The maximum precision for [DataType::Decimal] values
 pub const DECIMAL_MAX_PRECISION: usize = 38;
 
 /// The maximum scale for [DataType::Decimal] values
 pub const DECIMAL_MAX_SCALE: usize = 38;
+
+/// Validates that the specified `i128` value can be properly
+/// interpreted as a Decimal number with precision `precision`
+#[inline]
+pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Result<i128> {
+    let max = MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1];
+    let min = MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1];
+
+    if value > max {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{} is too large to store in a Decimal of precision {}. Max is {}",
+            value, precision, max
+        )))
+    } else if value < min {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{} is too small to store in a Decimal of precision {}. Min is {}",
+            value, precision, min
+        )))
+    } else {
+        Ok(value)
+    }
+}
 
 impl DataType {
     /// Parse a data type from a JSON representation.
