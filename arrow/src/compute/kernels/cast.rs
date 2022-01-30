@@ -260,39 +260,41 @@ pub fn cast(array: &ArrayRef, to_type: &DataType) -> Result<ArrayRef> {
 // cast the integer array to defined decimal data type array
 macro_rules! cast_integer_to_decimal {
     ($ARRAY: expr, $ARRAY_TYPE: ident, $PRECISION : ident, $SCALE : ident) => {{
-        let mut decimal_builder = DecimalBuilder::new($ARRAY.len(), *$PRECISION, *$SCALE);
         let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
         let mul: i128 = 10_i128.pow(*$SCALE as u32);
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                decimal_builder.append_null()?;
-            } else {
-                // convert i128 first
-                let v = array.value(i) as i128;
-                // if the input value is overflow, it will throw an error.
-                decimal_builder.append_value(mul * v)?;
-            }
-        }
-        Ok(Arc::new(decimal_builder.finish()))
+        let decimal_array = array
+            .iter()
+            .map(|v| {
+                v.map(|v| {
+                    let v = v as i128;
+                    // with_precision_and_scale validates the
+                    // value is within range for the output precision
+                    mul * v
+                })
+            })
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*$PRECISION, *$SCALE)?;
+        Ok(Arc::new(decimal_array))
     }};
 }
 
 // cast the floating-point array to defined decimal data type array
 macro_rules! cast_floating_point_to_decimal {
     ($ARRAY: expr, $ARRAY_TYPE: ident, $PRECISION : ident, $SCALE : ident) => {{
-        let mut decimal_builder = DecimalBuilder::new($ARRAY.len(), *$PRECISION, *$SCALE);
         let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
         let mul = 10_f64.powi(*$SCALE as i32);
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                decimal_builder.append_null()?;
-            } else {
-                let v = ((array.value(i) as f64) * mul) as i128;
-                // if the input value is overflow, it will throw an error.
-                decimal_builder.append_value(v)?;
-            }
-        }
-        Ok(Arc::new(decimal_builder.finish()))
+        let decimal_array = array
+            .iter()
+            .map(|v| {
+                v.map(|v| {
+                    // with_precision_and_scale validates the
+                    // value is within range for the output precision
+                    ((v as f64) * mul) as i128
+                })
+            })
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*$PRECISION, *$SCALE)?;
+        Ok(Arc::new(decimal_array))
     }};
 }
 
@@ -1166,33 +1168,28 @@ fn cast_decimal_to_decimal(
     output_precision: &usize,
     output_scale: &usize,
 ) -> Result<ArrayRef> {
-    let mut decimal_builder =
-        DecimalBuilder::new(array.len(), *output_precision, *output_scale);
     let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
-    if input_scale > output_scale {
+
+    let output_array = if input_scale > output_scale {
         // For example, input_scale is 4 and output_scale is 3;
         // Original value is 11234_i128, and will be cast to 1123_i128.
         let div = 10_i128.pow((input_scale - output_scale) as u32);
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(array.value(i) / div)?;
-            }
-        }
+        array
+            .iter()
+            .map(|v| v.map(|v| v / div))
+            .collect::<DecimalArray>()
     } else {
         // For example, input_scale is 3 and output_scale is 4;
         // Original value is 1123_i128, and will be cast to 11230_i128.
         let mul = 10_i128.pow((output_scale - input_scale) as u32);
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(array.value(i) * mul)?;
-            }
-        }
+        array
+            .iter()
+            .map(|v| v.map(|v| v * mul))
+            .collect::<DecimalArray>()
     }
-    Ok(Arc::new(decimal_builder.finish()))
+    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+    Ok(Arc::new(output_array))
 }
 
 /// Cast an array by changing its array_data type to the desired type
@@ -2071,24 +2068,15 @@ mod tests {
         };
     }
 
-    // TODO remove this function if the decimal array has the creator function
     fn create_decimal_array(
         array: &[Option<i128>],
         precision: usize,
         scale: usize,
     ) -> Result<DecimalArray> {
-        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
-        for value in array {
-            match value {
-                None => {
-                    decimal_builder.append_null()?;
-                }
-                Some(v) => {
-                    decimal_builder.append_value(*v)?;
-                }
-            }
-        }
-        Ok(decimal_builder.finish())
+        array
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(precision, scale)
     }
 
     #[test]
