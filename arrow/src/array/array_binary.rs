@@ -943,6 +943,12 @@ impl From<ArrayData> for DecimalArray {
     }
 }
 
+impl From<DecimalArray> for ArrayData {
+    fn from(array: DecimalArray) -> Self {
+        array.data
+    }
+}
+
 /// an iterator that returns Some(i128) or None, that can be used on a
 /// DecimalArray
 #[derive(Debug)]
