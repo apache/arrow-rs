@@ -2034,7 +2034,7 @@ macro_rules! typed_compares {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
-/// 
+///
 /// # Example
 /// ```
 /// use arrow::array::{StringArray, BooleanArray};
@@ -2052,7 +2052,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
-/// 
+///
 /// # Example
 /// ```
 /// use arrow::array::{BinaryArray, BooleanArray};
@@ -2072,7 +2072,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
-/// 
+///
 /// # Example
 /// ```
 /// use arrow::array::{PrimitiveArray, BooleanArray};
@@ -2091,7 +2091,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
-/// 
+///
 /// # Example
 /// ```
 /// use arrow::array::{PrimitiveArray, BooleanArray};
@@ -2110,7 +2110,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
-/// 
+///
 /// # Example
 /// ```
 /// use arrow::array::BooleanArray;
@@ -2128,7 +2128,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
-/// 
+///
 /// # Example
 /// ```
 /// use arrow::array::{BooleanArray, StringArray};
