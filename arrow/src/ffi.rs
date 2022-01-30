@@ -760,8 +760,8 @@ mod tests {
     use super::*;
     use crate::array::{
         make_array, Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
-        DecimalBuilder, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, OffsetSizeTrait, StringOffsetSizeTrait, Time32MillisecondArray,
+        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array,
+        OffsetSizeTrait, StringOffsetSizeTrait, Time32MillisecondArray,
         TimestampMillisecondArray,
     };
     use crate::compute::kernels;
@@ -794,11 +794,11 @@ mod tests {
     #[test]
     fn test_decimal_round_trip() -> Result<()> {
         // create an array natively
-        let mut builder = DecimalBuilder::new(5, 6, 2);
-        builder.append_value(12345_i128).unwrap();
-        builder.append_value(-12345_i128).unwrap();
-        builder.append_null().unwrap();
-        let original_array = builder.finish();
+        let original_array = vec![Some(12345_i128), Some(-12345_i128), None]
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(6, 2)
+            .unwrap();
 
         // export it
         let array = ArrowArray::try_from(original_array.data().clone())?;
