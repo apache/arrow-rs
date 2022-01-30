@@ -28,22 +28,15 @@ use std::sync::Arc;
 use TimeUnit::*;
 
 macro_rules! downcast_filter {
-    ($type: ty, $values: expr, $filter: expr, $filter_count: expr) => {{
+    ($type: ty, $values: expr, $filter: expr) => {{
         let values = $values
             .as_any()
             .downcast_ref::<PrimitiveArray<$type>>()
             .expect("Unable to downcast to a primitive array");
 
-        Ok(Arc::new(filter_primitive::<$type>(
-            &values,
-            $filter,
-            $filter_count,
-        )))
+        Ok(Arc::new(filter_primitive::<$type>(&values, $filter)))
     }};
 }
-
-/// Function that can filter arbitrary arrays
-pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
 
 /// An iterator of `(usize, usize)` each representing an interval `[start,end[` whose
 /// slots of a [BooleanArray] are true. Each interval corresponds to a contiguous region of memory to be
@@ -192,11 +185,17 @@ fn filter_count(filter: &BooleanArray) -> usize {
         .count_set_bits_offset(filter.offset(), filter.len())
 }
 
+/// Function that can filter arbitrary arrays
+#[deprecated]
+pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
+
 /// Returns a prepared function optimized to filter multiple arrays.
 /// Creating this function requires time, but using it is faster than [filter] when the
 /// same filter needs to be applied to multiple arrays (e.g. a multi-column `RecordBatch`).
 /// WARNING: the nulls of `filter` are ignored and the value on its slot is considered.
 /// Therefore, it is considered undefined behavior to pass `filter` with null values.
+#[deprecated]
+#[allow(deprecated)]
 pub fn build_filter(filter: &BooleanArray) -> Result<Filter> {
     let iter = SlicesIterator::new(filter);
     let filter_count = filter_count(filter);
@@ -253,24 +252,116 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// # }
 /// ```
 pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef> {
-    if predicate.null_count() > 0 {
-        // this greatly simplifies subsequent filtering code
-        // now we only have a boolean mask to deal with
-        let predicate = prep_null_mask_filter(predicate);
-        return filter(values, &predicate);
+    let predicate = FilterBuilder::new(&predicate).build();
+    filter_array(values, &predicate)
+}
+
+/// Returns a new [RecordBatch] with arrays containing only values matching the filter.
+pub fn filter_record_batch(
+    record_batch: &RecordBatch,
+    predicate: &BooleanArray,
+) -> Result<RecordBatch> {
+    let filter = FilterBuilder::new(&predicate).cache().build();
+
+    let filtered_arrays = record_batch
+        .columns()
+        .iter()
+        .map(|a| filter_array(a, &filter))
+        .collect::<Result<Vec<_>>>()?;
+
+    RecordBatch::try_new(record_batch.schema(), filtered_arrays)
+}
+
+#[derive(Debug)]
+enum FilterIterator {
+    // A lazily evaluated iterator of ranges
+    SlicesIterator,
+    // A lazily evaluated iterator of indices
+    IndexIterator,
+    // A precomputed list of indices
+    Indices(Vec<usize>),
+    // A precomputed array of ranges
+    Slices(Vec<(usize, usize)>),
+}
+
+#[derive(Debug)]
+pub struct FilterBuilder {
+    filter: BooleanArray,
+    count: usize,
+    iterator: FilterIterator,
+}
+
+impl FilterBuilder {
+    pub fn new(filter: &BooleanArray) -> Self {
+        let filter = match filter.null_count() {
+            0 => BooleanArray::from(filter.data().clone()),
+            _ => prep_null_mask_filter(filter),
+        };
+
+        let count = filter_count(&filter);
+        let selectivity_frac = count as f64 / filter.len() as f64;
+        let iterator = if selectivity_frac > 0.8 {
+            FilterIterator::SlicesIterator
+        } else {
+            FilterIterator::IndexIterator
+        };
+
+        Self {
+            filter,
+            count,
+            iterator,
+        }
     }
 
-    if predicate.len() > values.len() {
+    pub fn cache(mut self) -> Self {
+        // TODO: Is caching always beneficial?
+        match self.iterator {
+            FilterIterator::SlicesIterator => {
+                let slices = SlicesIterator::new(&self.filter).collect();
+                // TODO: Check slice array length significantly less than count
+                self.iterator = FilterIterator::Slices(slices)
+            }
+            FilterIterator::IndexIterator => {
+                let indices = IndexIterator::new(&self.filter).collect();
+                self.iterator = FilterIterator::Indices(indices)
+            }
+            _ => {}
+        }
+        self
+    }
+
+    pub fn build(self) -> FilterPredicate {
+        FilterPredicate {
+            filter: self.filter,
+            count: self.count,
+            iterator: self.iterator,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct FilterPredicate {
+    filter: BooleanArray,
+    count: usize,
+    iterator: FilterIterator,
+}
+
+impl FilterPredicate {
+    pub fn filter(&self, values: &dyn Array) -> Result<ArrayRef> {
+        filter_array(values, self)
+    }
+}
+
+fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<ArrayRef> {
+    if predicate.filter.len() > values.len() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Filter predicate of length {} is larger than target array of length {}",
-            predicate.len(),
+            predicate.filter.len(),
             values.len()
         )));
     }
 
-    let filter_count = filter_count(predicate);
-
-    match filter_count {
+    match predicate.count {
         0 => {
             // return empty
             Ok(new_empty_array(values.data_type()))
@@ -284,108 +375,98 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef> 
         _ => match values.data_type() {
             DataType::Boolean => {
                 let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
-                Ok(Arc::new(filter_boolean(values, predicate, filter_count)))
+                Ok(Arc::new(filter_boolean(values, predicate)))
             }
-            DataType::Int8 => downcast_filter!(Int8Type, values, predicate, filter_count),
+            DataType::Int8 => {
+                downcast_filter!(Int8Type, values, predicate)
+            }
             DataType::Int16 => {
-                downcast_filter!(Int16Type, values, predicate, filter_count)
+                downcast_filter!(Int16Type, values, predicate)
             }
             DataType::Int32 => {
-                downcast_filter!(Int32Type, values, predicate, filter_count)
+                downcast_filter!(Int32Type, values, predicate)
             }
             DataType::Int64 => {
-                downcast_filter!(Int64Type, values, predicate, filter_count)
+                downcast_filter!(Int64Type, values, predicate)
             }
             DataType::UInt8 => {
-                downcast_filter!(UInt8Type, values, predicate, filter_count)
+                downcast_filter!(UInt8Type, values, predicate)
             }
             DataType::UInt16 => {
-                downcast_filter!(UInt16Type, values, predicate, filter_count)
+                downcast_filter!(UInt16Type, values, predicate)
             }
             DataType::UInt32 => {
-                downcast_filter!(UInt32Type, values, predicate, filter_count)
+                downcast_filter!(UInt32Type, values, predicate)
             }
             DataType::UInt64 => {
-                downcast_filter!(UInt64Type, values, predicate, filter_count)
+                downcast_filter!(UInt64Type, values, predicate)
             }
             DataType::Float32 => {
-                downcast_filter!(Float32Type, values, predicate, filter_count)
+                downcast_filter!(Float32Type, values, predicate)
             }
             DataType::Float64 => {
-                downcast_filter!(Float64Type, values, predicate, filter_count)
+                downcast_filter!(Float64Type, values, predicate)
             }
             DataType::Date32 => {
-                downcast_filter!(Date32Type, values, predicate, filter_count)
+                downcast_filter!(Date32Type, values, predicate)
             }
             DataType::Date64 => {
-                downcast_filter!(Date64Type, values, predicate, filter_count)
+                downcast_filter!(Date64Type, values, predicate)
             }
             DataType::Time32(Second) => {
-                downcast_filter!(Time32SecondType, values, predicate, filter_count)
+                downcast_filter!(Time32SecondType, values, predicate)
             }
             DataType::Time32(Millisecond) => {
-                downcast_filter!(Time32MillisecondType, values, predicate, filter_count)
+                downcast_filter!(Time32MillisecondType, values, predicate)
             }
             DataType::Time64(Microsecond) => {
-                downcast_filter!(Time64MicrosecondType, values, predicate, filter_count)
+                downcast_filter!(Time64MicrosecondType, values, predicate)
             }
             DataType::Time64(Nanosecond) => {
-                downcast_filter!(Time64NanosecondType, values, predicate, filter_count)
+                downcast_filter!(Time64NanosecondType, values, predicate)
             }
             DataType::Timestamp(Second, _) => {
-                downcast_filter!(TimestampSecondType, values, predicate, filter_count)
+                downcast_filter!(TimestampSecondType, values, predicate)
             }
             DataType::Timestamp(Millisecond, _) => {
-                downcast_filter!(
-                    TimestampMillisecondType,
-                    values,
-                    predicate,
-                    filter_count
-                )
+                downcast_filter!(TimestampMillisecondType, values, predicate)
             }
             DataType::Timestamp(Microsecond, _) => {
-                downcast_filter!(
-                    TimestampMicrosecondType,
-                    values,
-                    predicate,
-                    filter_count
-                )
+                downcast_filter!(TimestampMicrosecondType, values, predicate)
             }
             DataType::Timestamp(Nanosecond, _) => {
-                downcast_filter!(TimestampNanosecondType, values, predicate, filter_count)
+                downcast_filter!(TimestampNanosecondType, values, predicate)
             }
             DataType::Interval(IntervalUnit::YearMonth) => {
-                downcast_filter!(IntervalYearMonthType, values, predicate, filter_count)
+                downcast_filter!(IntervalYearMonthType, values, predicate)
             }
             DataType::Interval(IntervalUnit::DayTime) => {
-                downcast_filter!(IntervalDayTimeType, values, predicate, filter_count)
+                downcast_filter!(IntervalDayTimeType, values, predicate)
             }
             DataType::Interval(IntervalUnit::MonthDayNano) => {
-                downcast_filter!(
-                    IntervalMonthDayNanoType,
-                    values,
-                    predicate,
-                    filter_count
-                )
+                downcast_filter!(IntervalMonthDayNanoType, values, predicate)
             }
             DataType::Duration(TimeUnit::Second) => {
-                downcast_filter!(DurationSecondType, values, predicate, filter_count)
+                downcast_filter!(DurationSecondType, values, predicate)
             }
             DataType::Duration(TimeUnit::Millisecond) => {
-                downcast_filter!(DurationMillisecondType, values, predicate, filter_count)
+                downcast_filter!(DurationMillisecondType, values, predicate)
             }
             DataType::Duration(TimeUnit::Microsecond) => {
-                downcast_filter!(DurationMicrosecondType, values, predicate, filter_count)
+                downcast_filter!(DurationMicrosecondType, values, predicate)
             }
             DataType::Duration(TimeUnit::Nanosecond) => {
-                downcast_filter!(DurationNanosecondType, values, predicate, filter_count)
+                downcast_filter!(DurationNanosecondType, values, predicate)
             }
             _ => {
                 // fallback to using MutableArrayData
-                let mut mutable =
-                    MutableArrayData::new(vec![values.data_ref()], false, filter_count);
+                let mut mutable = MutableArrayData::new(
+                    vec![values.data_ref()],
+                    false,
+                    predicate.count,
+                );
 
-                let iter = SlicesIterator::new(predicate);
+                let iter = SlicesIterator::new(&predicate.filter);
                 iter.for_each(|(start, end)| mutable.extend(0, start, end));
 
                 let data = mutable.freeze();
@@ -395,47 +476,16 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef> 
     }
 }
 
-/// Returns a new [RecordBatch] with arrays containing only values matching the filter.
-pub fn filter_record_batch(
-    record_batch: &RecordBatch,
-    predicate: &BooleanArray,
-) -> Result<RecordBatch> {
-    if predicate.null_count() > 0 {
-        // this greatly simplifies subsequent filtering code
-        // now we only have a boolean mask to deal with
-        let predicate = prep_null_mask_filter(predicate);
-        return filter_record_batch(record_batch, &predicate);
-    }
-
-    let num_columns = record_batch.columns().len();
-
-    let filtered_arrays = match num_columns {
-        1 => {
-            vec![filter(record_batch.columns()[0].as_ref(), predicate)?]
-        }
-        _ => {
-            let filter = build_filter(predicate)?;
-            record_batch
-                .columns()
-                .iter()
-                .map(|a| make_array(filter(a.data())))
-                .collect()
-        }
-    };
-    RecordBatch::try_new(record_batch.schema(), filtered_arrays)
-}
-
 fn filter_null_mask(
     data: &ArrayData,
-    filter: &BooleanArray,
-    filter_count: usize,
+    predicate: &FilterPredicate,
 ) -> Option<(usize, Buffer)> {
     if data.null_count() == 0 {
         return None;
     }
 
-    let nulls = filter_bits(data.null_buffer()?, data.offset(), filter, filter_count);
-    let null_count = filter_count - nulls.count_set_bits();
+    let nulls = filter_bits(data.null_buffer()?, data.offset(), predicate);
+    let null_count = predicate.count - nulls.count_set_bits();
 
     if null_count == 0 {
         return None;
@@ -444,19 +494,14 @@ fn filter_null_mask(
     Some((null_count, nulls))
 }
 
-fn filter_bits(
-    buffer: &Buffer,
-    offset: usize,
-    filter: &BooleanArray,
-    filter_count: usize,
-) -> Buffer {
+fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.as_slice();
 
     // TODO: Optimise this
-    let mut buf = MutableBuffer::from_len_zeroed(bit_util::ceil(filter_count, 8));
+    let mut buf = MutableBuffer::from_len_zeroed(bit_util::ceil(predicate.count, 8));
     let dst = buf.as_slice_mut();
 
-    for (dst_idx, src_idx) in IndexIterator::new(filter).enumerate() {
+    for (dst_idx, src_idx) in IndexIterator::new(&predicate.filter).enumerate() {
         if bit_util::get_bit(src, src_idx + offset) {
             bit_util::set_bit(dst, dst_idx);
         }
@@ -466,34 +511,29 @@ fn filter_bits(
 }
 
 /// `filter` implementation for boolean buffers
-fn filter_boolean(
-    values: &BooleanArray,
-    filter: &BooleanArray,
-    filter_count: usize,
-) -> BooleanArray {
+fn filter_boolean(values: &BooleanArray, predicate: &FilterPredicate) -> BooleanArray {
     let data = values.data();
     assert_eq!(data.buffers().len(), 1);
     assert_eq!(data.child_data().len(), 0);
 
-    let values = filter_bits(&data.buffers()[0], data.offset(), filter, filter_count);
+    let values = filter_bits(&data.buffers()[0], data.offset(), predicate);
 
     let mut builder = ArrayDataBuilder::new(DataType::Boolean)
-        .len(filter_count)
+        .len(predicate.count)
         .add_buffer(values);
 
-    if let Some((null_count, nulls)) = filter_null_mask(data, filter, filter_count) {
+    if let Some((null_count, nulls)) = filter_null_mask(data, predicate) {
         builder = builder.null_count(null_count).null_bit_buffer(nulls);
     }
 
-    let data = builder.build().unwrap(); // TODO: unsafe { builder.build_unchecked() };
+    let data = unsafe { builder.build_unchecked() };
     BooleanArray::from(data)
 }
 
 /// `filter` implementation for primitive arrays
 fn filter_primitive<T>(
     values: &PrimitiveArray<T>,
-    filter: &BooleanArray,
-    filter_count: usize,
+    predicate: &FilterPredicate,
 ) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
@@ -504,24 +544,36 @@ where
 
     let values = data.buffer::<T::Native>(0);
 
-    let mut buffer = MutableBuffer::with_capacity(filter_count * T::get_byte_width());
+    let mut buffer = MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
 
-    let selectivity_frac = filter_count as f64 / filter.len() as f64;
-    if selectivity_frac > 0.8 {
-        for (start, end) in SlicesIterator::new(filter) {
-            buffer.extend_from_slice(&values[start..end]);
+    match &predicate.iterator {
+        FilterIterator::SlicesIterator => {
+            for (start, end) in SlicesIterator::new(&predicate.filter) {
+                buffer.extend_from_slice(&values[start..end]);
+            }
         }
-    } else {
-        for idx in IndexIterator::new(filter) {
-            unsafe { buffer.push_unchecked(values[idx]) };
+        FilterIterator::Slices(slices) => {
+            for (start, end) in slices {
+                buffer.extend_from_slice(&values[*start..*end]);
+            }
+        }
+        FilterIterator::IndexIterator => {
+            for idx in IndexIterator::new(&predicate.filter) {
+                unsafe { buffer.push_unchecked(values[idx]) };
+            }
+        }
+        FilterIterator::Indices(indices) => {
+            for idx in indices {
+                unsafe { buffer.push_unchecked(values[*idx]) };
+            }
         }
     }
 
     let mut builder = ArrayDataBuilder::new(data.data_type().clone())
-        .len(filter_count)
+        .len(predicate.count)
         .add_buffer(buffer.into());
 
-    if let Some((null_count, nulls)) = filter_null_mask(data, filter, filter_count) {
+    if let Some((null_count, nulls)) = filter_null_mask(data, predicate) {
         builder = builder.null_count(null_count).null_bit_buffer(nulls);
     }
 

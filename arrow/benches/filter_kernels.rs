@@ -18,12 +18,12 @@ extern crate arrow;
 
 use std::sync::Arc;
 
-use arrow::compute::{filter_record_batch, Filter};
+use arrow::compute::{filter_record_batch, FilterBuilder, FilterPredicate};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bench_util::*;
 
 use arrow::array::*;
-use arrow::compute::{build_filter, filter};
+use arrow::compute::filter;
 use arrow::datatypes::{Field, Float32Type, Schema, UInt8Type};
 
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -32,8 +32,8 @@ fn bench_filter(data_array: &dyn Array, filter_array: &BooleanArray) {
     criterion::black_box(filter(data_array, filter_array).unwrap());
 }
 
-fn bench_built_filter<'a>(filter: &Filter<'a>, data: &impl Array) {
-    criterion::black_box(filter(data.data()));
+fn bench_built_filter<'a>(filter: &FilterPredicate, array: &dyn Array) {
+    criterion::black_box(filter.filter(array).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -42,9 +42,9 @@ fn add_benchmark(c: &mut Criterion) {
     let dense_filter_array = create_boolean_array(size, 0.0, 1.0 - 1.0 / 1024.0);
     let sparse_filter_array = create_boolean_array(size, 0.0, 1.0 / 1024.0);
 
-    let filter = build_filter(&filter_array).unwrap();
-    let dense_filter = build_filter(&dense_filter_array).unwrap();
-    let sparse_filter = build_filter(&sparse_filter_array).unwrap();
+    let filter = FilterBuilder::new(&filter_array).cache().build();
+    let dense_filter = FilterBuilder::new(&dense_filter_array).cache().build();
+    let sparse_filter = FilterBuilder::new(&sparse_filter_array).cache().build();
 
     let data_array = create_primitive_array::<UInt8Type>(size, 0.0);
 
