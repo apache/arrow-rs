@@ -163,6 +163,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
 }
 
 enum StreamState<T> {
+    /// At the start of a new row group, or the end of the parquet stream
     Init,
     /// Decoding a batch
     Decoding(ParquetRecordBatchReader),
@@ -183,7 +184,7 @@ impl<T> std::fmt::Debug for StreamState<T> {
     }
 }
 
-/// A [`Stream`] of [`RecordBatch`] for a parquet file
+/// An asynchronous [`Stream`] of [`RecordBatch`] for a parquet file
 pub struct ParquetRecordBatchStream<T> {
     metadata: Arc<ParquetMetaData>,
 

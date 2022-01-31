@@ -111,7 +111,7 @@ jobs:
           cargo test
           cd arrow
           # re-run tests on arrow workspace with additional features
-          cargo test --features=prettyprint
+          cargo test --features=prettyprint --features=async
           # run test on arrow with minimal set of features
           cargo test --no-default-features
           cargo run --example builders
@@ -238,7 +238,7 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cargo clippy --features test_common --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
+          cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
 
   check_benches:
     name: Check Benchmarks (but don't run them)

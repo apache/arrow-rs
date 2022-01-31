@@ -65,7 +65,7 @@ cli = ["serde_json", "base64", "clap"]
 test_common = []
 # Experimental, unstable functionality primarily used for testing
 experimental = []
-# Experimental, unstable, async API
+# Enable async API
 async = ["futures", "tokio"]
 
 [[bin]]
