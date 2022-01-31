@@ -23,7 +23,7 @@
 
 We try to release a new version of Arrow every two weeks. This cadence balances getting new features into arrow without overwhelming downstream projects with too frequent changes.
 
-If any code has been merged to master that has a breaking API change, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md), the major version number incremented changed (e.g. `7.0.0` to `8.0.0`). Otherwise the new minor version incremented (e.g. `7.0.0` to `7.1.0`).
+If any code has been merged to master that has a breaking API change, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md), the major version number incremented changed (e.g. `8.0.0` to `8.0.0`). Otherwise the new minor version incremented (e.g. `8.0.0` to `7.1.0`).
 
 # Release Mechanics
 

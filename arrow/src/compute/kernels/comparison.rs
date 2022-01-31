@@ -1181,7 +1181,7 @@ macro_rules! dyn_compare_utf8_scalar {
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1195,7 +1195,7 @@ where
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn lt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1209,7 +1209,7 @@ where
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn lt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1223,7 +1223,7 @@ where
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn gt_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1237,7 +1237,7 @@ where
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn gt_eq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
@@ -1251,13 +1251,124 @@ where
 /// value. Supports PrimitiveArrays, and DictionaryArrays that have primitive values
 pub fn neq_dyn_scalar<T>(left: &dyn Array, right: T) -> Result<BooleanArray>
 where
-    T: num::ToPrimitive + Copy + std::fmt::Debug,
+    T: num::ToPrimitive + std::fmt::Debug,
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
             dyn_compare_scalar!(left, right, key_type, neq_scalar)
         }
         _ => dyn_compare_scalar!(left, right, neq_scalar),
+    }
+}
+
+/// Perform `left == right` operation on an array and a numeric scalar
+/// value. Supports BinaryArray and LargeBinaryArray
+pub fn eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            eq_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            eq_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "eq_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
+        )),
+    }
+}
+
+/// Perform `left != right` operation on an array and a numeric scalar
+/// value. Supports BinaryArray and LargeBinaryArray
+pub fn neq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            neq_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            neq_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "neq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
+                .to_string(),
+        )),
+    }
+}
+
+/// Perform `left < right` operation on an array and a numeric scalar
+/// value. Supports BinaryArray and LargeBinaryArray
+pub fn lt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            lt_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            lt_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "lt_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
+        )),
+    }
+}
+
+/// Perform `left <= right` operation on an array and a numeric scalar
+/// value. Supports BinaryArray and LargeBinaryArray
+pub fn lt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            lt_eq_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            lt_eq_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "lt_eq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
+                .to_string(),
+        )),
+    }
+}
+
+/// Perform `left > right` operation on an array and a numeric scalar
+/// value. Supports BinaryArray and LargeBinaryArray
+pub fn gt_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            gt_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            gt_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "gt_dyn_binary_scalar only supports Binary or LargeBinary arrays".to_string(),
+        )),
+    }
+}
+
+/// Perform `left >= right` operation on an array and a numeric scalar
+/// value. Supports BinaryArray and LargeBinaryArray
+pub fn gt_eq_dyn_binary_scalar(left: &dyn Array, right: &[u8]) -> Result<BooleanArray> {
+    match left.data_type() {
+        DataType::Binary => {
+            let left = as_generic_binary_array::<i32>(left);
+            gt_eq_binary_scalar(left, right)
+        }
+        DataType::LargeBinary => {
+            let left = as_generic_binary_array::<i64>(left);
+            gt_eq_binary_scalar(left, right)
+        }
+        _ => Err(ArrowError::ComputeError(
+            "gt_eq_dyn_binary_scalar only supports Binary or LargeBinary arrays"
+                .to_string(),
+        )),
     }
 }
 
@@ -1770,7 +1881,7 @@ macro_rules! typed_cmp {
 }
 
 macro_rules! typed_compares {
-    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: ident, $OP_PRIM: ident, $OP_STR: ident) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: ident, $OP_PRIM: ident, $OP_STR: ident, $OP_BINARY: ident) => {{
         match ($LEFT.data_type(), $RIGHT.data_type()) {
             (DataType::Boolean, DataType::Boolean) => {
                 typed_cmp!($LEFT, $RIGHT, BooleanArray, $OP_BOOL)
@@ -1810,6 +1921,12 @@ macro_rules! typed_compares {
             }
             (DataType::LargeUtf8, DataType::LargeUtf8) => {
                 typed_cmp!($LEFT, $RIGHT, LargeStringArray, $OP_STR, i64)
+            }
+            (DataType::Binary, DataType::Binary) => {
+                typed_cmp!($LEFT, $RIGHT, BinaryArray, $OP_BINARY, i32)
+            }
+            (DataType::LargeBinary, DataType::LargeBinary) => {
+                typed_cmp!($LEFT, $RIGHT, LargeBinaryArray, $OP_BINARY, i64)
             }
             (
                 DataType::Timestamp(TimeUnit::Nanosecond, _),
@@ -1918,7 +2035,7 @@ macro_rules! typed_compares {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, eq_bool, eq, eq_utf8)
+    typed_compares!(left, right, eq_bool, eq, eq_utf8, eq_binary)
 }
 
 /// Perform `left != right` operation on two (dynamic) [`Array`]s.
@@ -1926,7 +2043,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, neq_bool, neq, neq_utf8)
+    typed_compares!(left, right, neq_bool, neq, neq_utf8, neq_binary)
 }
 
 /// Perform `left < right` operation on two (dynamic) [`Array`]s.
@@ -1934,7 +2051,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, lt_bool, lt, lt_utf8)
+    typed_compares!(left, right, lt_bool, lt, lt_utf8, lt_binary)
 }
 
 /// Perform `left <= right` operation on two (dynamic) [`Array`]s.
@@ -1942,7 +2059,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, lt_eq_bool, lt_eq, lt_eq_utf8)
+    typed_compares!(left, right, lt_eq_bool, lt_eq, lt_eq_utf8, lt_eq_binary)
 }
 
 /// Perform `left > right` operation on two (dynamic) [`Array`]s.
@@ -1950,7 +2067,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, gt_bool, gt, gt_utf8)
+    typed_compares!(left, right, gt_bool, gt, gt_utf8, gt_binary)
 }
 
 /// Perform `left >= right` operation on two (dynamic) [`Array`]s.
@@ -1958,7 +2075,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
 pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, gt_eq_bool, gt_eq, gt_eq_utf8)
+    typed_compares!(left, right, gt_eq_bool, gt_eq, gt_eq_utf8, gt_eq_binary)
 }
 
 /// Perform `left == right` operation on two [`PrimitiveArray`]s.
@@ -2972,93 +3089,93 @@ mod tests {
 
     test_binary!(
         test_binary_array_eq,
-        vec![b"arrow", b"arrow", b"arrow", b"arrow"],
-        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        vec![b"arrow", b"arrow", b"arrow", b"arrow", &[0xff, 0xf8]],
+        vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
         eq_binary,
-        vec![true, false, false, false]
+        vec![true, false, false, false, true]
     );
 
     test_binary_scalar!(
         test_binary_array_eq_scalar,
-        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
         "arrow".as_bytes(),
         eq_binary_scalar,
-        vec![true, false, false, false]
+        vec![true, false, false, false, false]
     );
 
     test_binary!(
         test_binary_array_neq,
-        vec![b"arrow", b"arrow", b"arrow", b"arrow"],
-        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        vec![b"arrow", b"arrow", b"arrow", b"arrow", &[0xff, 0xf8]],
+        vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf9]],
         neq_binary,
-        vec![false, true, true, true]
+        vec![false, true, true, true, true]
     );
     test_binary_scalar!(
         test_binary_array_neq_scalar,
-        vec![b"arrow", b"parquet", b"datafusion", b"flight"],
+        vec![b"arrow", b"parquet", b"datafusion", b"flight", &[0xff, 0xf8]],
         "arrow".as_bytes(),
         neq_binary_scalar,
-        vec![false, true, true, true]
+        vec![false, true, true, true, true]
     );
 
     test_binary!(
         test_binary_array_lt,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
-        vec![b"flight", b"flight", b"flight", b"flight"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
+        vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf9]],
         lt_binary,
-        vec![true, true, false, false]
+        vec![true, true, false, false, true]
     );
     test_binary_scalar!(
         test_binary_array_lt_scalar,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
         lt_binary_scalar,
-        vec![true, true, false, false]
+        vec![true, true, false, false, false]
     );
 
     test_binary!(
         test_binary_array_lt_eq,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
-        vec![b"flight", b"flight", b"flight", b"flight"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
+        vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf8, 0xf9]],
         lt_eq_binary,
-        vec![true, true, true, false]
+        vec![true, true, true, false, true]
     );
     test_binary_scalar!(
         test_binary_array_lt_eq_scalar,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
         lt_eq_binary_scalar,
-        vec![true, true, true, false]
+        vec![true, true, true, false, false]
     );
 
     test_binary!(
         test_binary_array_gt,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
-        vec![b"flight", b"flight", b"flight", b"flight"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf9]],
+        vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf8]],
         gt_binary,
-        vec![false, false, false, true]
+        vec![false, false, false, true, true]
     );
     test_binary_scalar!(
         test_binary_array_gt_scalar,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
         gt_binary_scalar,
-        vec![false, false, false, true]
+        vec![false, false, false, true, true]
     );
 
     test_binary!(
         test_binary_array_gt_eq,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
-        vec![b"flight", b"flight", b"flight", b"flight"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
+        vec![b"flight", b"flight", b"flight", b"flight", &[0xff, 0xf8]],
         gt_eq_binary,
-        vec![false, false, true, true]
+        vec![false, false, true, true, true]
     );
     test_binary_scalar!(
         test_binary_array_gt_eq_scalar,
-        vec![b"arrow", b"datafusion", b"flight", b"parquet"],
+        vec![b"arrow", b"datafusion", b"flight", b"parquet", &[0xff, 0xf8]],
         "flight".as_bytes(),
         gt_eq_binary_scalar,
-        vec![false, false, true, true]
+        vec![false, false, true, true, true]
     );
 
     // Expected behaviour:
@@ -3841,6 +3958,108 @@ mod tests {
         let array: ArrayRef = Arc::new(array);
         let array = crate::compute::cast(&array, &DataType::Float64).unwrap();
         assert_eq!(neq_dyn_scalar(&array, 8).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_eq_dyn_binary_scalar() {
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
+        let scalar = "flight".as_bytes();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(true), Some(false), Some(false), None],
+        );
+
+        assert_eq!(eq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(
+            eq_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_neq_dyn_binary_scalar() {
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
+        let scalar = "flight".as_bytes();
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(true), Some(true), None],
+        );
+
+        assert_eq!(neq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(
+            neq_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_lt_dyn_binary_scalar() {
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
+        let scalar = "flight".as_bytes();
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(false), Some(false), Some(false), None],
+        );
+
+        assert_eq!(lt_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(
+            lt_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_lt_eq_dyn_binary_scalar() {
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
+        let scalar = "flight".as_bytes();
+        let expected = BooleanArray::from(
+            vec![Some(true), Some(true), Some(true), Some(false), Some(false), None],
+        );
+
+        assert_eq!(lt_eq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(
+            lt_eq_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_gt_dyn_binary_scalar() {
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
+        let scalar = "flight".as_bytes();
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(true), Some(true), None],
+        );
+
+        assert_eq!(gt_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(
+            gt_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_gt_eq_dyn_binary_scalar() {
+        let data: Vec<Option<&[u8]>> = vec![Some(b"arrow"), Some(b"datafusion"), Some(b"flight"), Some(b"parquet"), Some(&[0xff, 0xf8]), None];
+        let array = BinaryArray::from(data.clone());
+        let large_array = LargeBinaryArray::from(data);
+        let scalar = &[0xff, 0xf8];
+        let expected = BooleanArray::from(
+            vec![Some(false), Some(false), Some(false), Some(false), Some(true), None],
+        );
+
+        assert_eq!(gt_eq_dyn_binary_scalar(&array, scalar).unwrap(), expected);
+        assert_eq!(
+            gt_eq_dyn_binary_scalar(&large_array, scalar).unwrap(),
+            expected
+        );
     }
 
     #[test]

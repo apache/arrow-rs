@@ -520,34 +520,40 @@ impl<'a> MutableArrayData<'a> {
             }
         };
 
-        let dictionary = match &data_type {
-            DataType::Dictionary(_, _) => match arrays.len() {
-                0 => unreachable!(),
-                1 => Some(arrays[0].child_data()[0].clone()),
-                _ => {
-                    if let Capacities::Dictionary(_, _) = capacities {
-                        panic!("dictionary capacity not yet supported")
+        // Get the dictionary if any, and if it is a concatenation of multiple
+        let (dictionary, dict_concat) = match &data_type {
+            DataType::Dictionary(_, _) => {
+                // If more than one dictionary, concatenate dictionaries together
+                let dict_concat = !arrays
+                    .windows(2)
+                    .all(|a| a[0].child_data()[0].ptr_eq(&a[1].child_data()[0]));
+
+                match dict_concat {
+                    false => (Some(arrays[0].child_data()[0].clone()), false),
+                    true => {
+                        if let Capacities::Dictionary(_, _) = capacities {
+                            panic!("dictionary capacity not yet supported")
+                        }
+                        let dictionaries: Vec<_> =
+                            arrays.iter().map(|array| &array.child_data()[0]).collect();
+                        let lengths: Vec<_> = dictionaries
+                            .iter()
+                            .map(|dictionary| dictionary.len())
+                            .collect();
+                        let capacity = lengths.iter().sum();
+
+                        let mut mutable =
+                            MutableArrayData::new(dictionaries, false, capacity);
+
+                        for (i, len) in lengths.iter().enumerate() {
+                            mutable.extend(i, 0, *len)
+                        }
+
+                        (Some(mutable.freeze()), true)
                     }
-                    // Concat dictionaries together
-                    let dictionaries: Vec<_> =
-                        arrays.iter().map(|array| &array.child_data()[0]).collect();
-                    let lengths: Vec<_> = dictionaries
-                        .iter()
-                        .map(|dictionary| dictionary.len())
-                        .collect();
-                    let capacity = lengths.iter().sum();
-
-                    let mut mutable =
-                        MutableArrayData::new(dictionaries, false, capacity);
-
-                    for (i, len) in lengths.iter().enumerate() {
-                        mutable.extend(i, 0, *len)
-                    }
-
-                    Some(mutable.freeze())
                 }
-            },
-            _ => None,
+            }
+            _ => (None, false),
         };
 
         let extend_nulls = build_extend_nulls(data_type);
@@ -572,8 +578,13 @@ impl<'a> MutableArrayData<'a> {
                     .iter()
                     .map(|array| {
                         let offset = next_offset;
-                        next_offset += array.child_data()[0].len();
-                        build_extend_dictionary(array, offset, next_offset)
+                        let dict_len = array.child_data()[0].len();
+
+                        if dict_concat {
+                            next_offset += dict_len;
+                        }
+
+                        build_extend_dictionary(array, offset, offset + dict_len)
                             .ok_or(ArrowError::DictionaryKeyOverflowError)
                     })
                     .collect();

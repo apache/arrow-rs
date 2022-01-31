@@ -64,7 +64,8 @@ use std::ops::Neg;
 lazy_static! {
     static ref PARSE_DECIMAL_RE: Regex =
         Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
-    static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d*\.\d+|\d+\.\d*)$").unwrap();
+    static ref DECIMAL_RE: Regex =
+        Regex::new(r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$").unwrap();
     static ref INTEGER_RE: Regex = Regex::new(r"^-?(\d+)$").unwrap();
     static ref BOOLEAN_RE: Regex = RegexBuilder::new(r"^(true)$|^(false)$")
         .case_insensitive(true)
@@ -1570,7 +1571,7 @@ mod tests {
         let mut csv = builder.build(file).unwrap();
         let batch = csv.next().unwrap().unwrap();
 
-        assert_eq!(5, batch.num_rows());
+        assert_eq!(7, batch.num_rows());
         assert_eq!(6, batch.num_columns());
 
         let schema = batch.schema();
@@ -1872,6 +1873,7 @@ mod tests {
         writeln!(csv1, "c1,c2,c3")?;
         writeln!(csv1, "1,\"foo\",0.5")?;
         writeln!(csv1, "3,\"bar\",1")?;
+        writeln!(csv1, "3,\"bar\",2e-06")?;
         // reading csv2 will set c2 to optional
         writeln!(csv2, "c1,c2,c3,c4")?;
         writeln!(csv2, "10,,3.14,true")?;
@@ -1887,7 +1889,7 @@ mod tests {
                 csv4.path().to_str().unwrap().to_string(),
             ],
             b',',
-            Some(3), // only csv1 and csv2 should be read
+            Some(4), // only csv1 and csv2 should be read
             true,
         )?;
 

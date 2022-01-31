@@ -515,6 +515,18 @@ impl<W: Write> FileWriter<W> {
 
         Ok(())
     }
+
+    /// Unwraps the BufWriter housed in FileWriter.writer, returning the underlying
+    /// writer
+    ///
+    /// The buffer is flushed and the FileWriter is finished before returning the
+    /// writer.
+    pub fn into_inner(mut self) -> Result<W> {
+        if !self.finished {
+            self.finish()?;
+        }
+        self.writer.into_inner().map_err(ArrowError::from)
+    }
 }
 
 pub struct StreamWriter<W: Write> {

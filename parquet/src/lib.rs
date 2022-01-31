@@ -56,7 +56,9 @@ macro_rules! experimental_mod {
 #[macro_use]
 pub mod errors;
 pub mod basic;
-experimental_mod!(data_type, #[macro_use]);
+
+#[macro_use]
+pub mod data_type;
 
 // Exported for external use, such as benchmarks
 #[cfg(feature = "experimental")]

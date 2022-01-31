@@ -25,7 +25,7 @@ rust-version = "1.57"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-parquet_derive = { path = "../../../../parquet_derive", version = "7.0.0" }
+parquet_derive = { path = "../../../../parquet_derive", version = "8.0.0" }
 
 # Keep this out of the default workspace
 [workspace]

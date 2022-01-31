@@ -17,7 +17,7 @@
 
 [package]
 name = "parquet_derive"
-version = "7.0.0"
+version = "8.0.0"
 license = "Apache-2.0"
 description = "Derive macros for the Rust implementation of Apache Parquet"
 homepage = "https://github.com/apache/arrow-rs"
@@ -35,4 +35,4 @@ proc-macro = true
 proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "1.0", features = ["full", "extra-traits"] }
-parquet = { path = "../parquet", version = "7.0.0" }
+parquet = { path = "../parquet", version = "8.0.0" }

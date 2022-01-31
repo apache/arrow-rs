@@ -119,9 +119,9 @@
 //! ```
 
 experimental_mod!(array_reader);
-experimental_mod!(arrow_array_reader);
 pub mod arrow_reader;
 pub mod arrow_writer;
+mod bit_util;
 experimental_mod!(converter);
 pub(in crate::arrow) mod levels;
 pub(in crate::arrow) mod record_reader;
@@ -131,7 +131,6 @@ pub use self::arrow_reader::ArrowReader;
 pub use self::arrow_reader::ParquetFileArrowReader;
 pub use self::arrow_writer::ArrowWriter;
 
-#[cfg(feature = "experimental")]
 pub use self::schema::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns,
     parquet_to_arrow_schema_by_root_columns,
