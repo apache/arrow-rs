@@ -22,7 +22,6 @@ use std::sync::Arc;
 
 use arrow::array as arrow_array;
 use arrow::array::ArrayRef;
-use arrow::compute::concat;
 use arrow::datatypes::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::Array;
@@ -148,7 +147,6 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
             self.max_row_group_size
         );
 
-        let batch_level = LevelInfo::new(0, num_rows);
         let mut row_group_writer = self.writer.next_row_group()?;
 
         for (col_buffer, field) in self.buffer.iter_mut().zip(self.arrow_schema.fields())
@@ -172,14 +170,18 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
                 }
             }
 
-            // Workaround write logic expecting a single array
-            let array_refs: Vec<_> = arrays.iter().map(|x| x.as_ref()).collect();
-            let array = concat(array_refs.as_slice())?;
+            let mut levels: Vec<_> = arrays
+                .iter()
+                .map(|array| {
+                    let batch_level = LevelInfo::new(0, array.len());
+                    let mut levels = batch_level.calculate_array_levels(&array, field);
+                    // Reverse levels as we pop() them when writing arrays
+                    levels.reverse();
+                    levels
+                })
+                .collect();
 
-            let mut levels = batch_level.calculate_array_levels(&array, field);
-            // Reverse levels as we pop() them when writing arrays
-            levels.reverse();
-            write_leaves(&mut row_group_writer, &array, &mut levels)?;
+            write_leaves(row_group_writer.as_mut(), &arrays, &mut levels)?;
         }
 
         self.writer.close_row_group(row_group_writer)?;
@@ -198,23 +200,25 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
 
 /// Convenience method to get the next ColumnWriter from the RowGroupWriter
 #[inline]
-#[allow(clippy::borrowed_box)]
-fn get_col_writer(
-    row_group_writer: &mut Box<dyn RowGroupWriter>,
-) -> Result<ColumnWriter> {
+fn get_col_writer(row_group_writer: &mut dyn RowGroupWriter) -> Result<ColumnWriter> {
     let col_writer = row_group_writer
         .next_column()?
         .expect("Unable to get column writer");
     Ok(col_writer)
 }
 
-#[allow(clippy::borrowed_box)]
 fn write_leaves(
-    row_group_writer: &mut Box<dyn RowGroupWriter>,
-    array: &arrow_array::ArrayRef,
-    levels: &mut Vec<LevelInfo>,
+    row_group_writer: &mut dyn RowGroupWriter,
+    arrays: &[ArrayRef],
+    levels: &mut [Vec<LevelInfo>],
 ) -> Result<()> {
-    match array.data_type() {
+    assert_eq!(arrays.len(), levels.len());
+    assert!(!arrays.is_empty());
+
+    let data_type = arrays.first().unwrap().data_type().clone();
+    assert!(arrays.iter().all(|a| a.data_type() == &data_type));
+
+    match &data_type {
         ArrowDataType::Null
         | ArrowDataType::Boolean
         | ArrowDataType::Int8
@@ -241,50 +245,76 @@ fn write_leaves(
         | ArrowDataType::Decimal(_, _)
         | ArrowDataType::FixedSizeBinary(_) => {
             let mut col_writer = get_col_writer(row_group_writer)?;
-            write_leaf(
-                &mut col_writer,
-                array,
-                levels.pop().expect("Levels exhausted"),
-            )?;
+            for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
+                write_leaf(
+                    &mut col_writer,
+                    array,
+                    levels.pop().expect("Levels exhausted"),
+                )?;
+            }
             row_group_writer.close_column(col_writer)?;
             Ok(())
         }
         ArrowDataType::List(_) | ArrowDataType::LargeList(_) => {
-            // write the child list
-            let data = array.data();
-            let child_array = arrow_array::make_array(data.child_data()[0].clone());
-            write_leaves(row_group_writer, &child_array, levels)?;
+            let arrays: Vec<_> = arrays.iter().map(|array|{
+                // write the child list
+                let data = array.data();
+                arrow_array::make_array(data.child_data()[0].clone())
+            }).collect();
+
+            write_leaves(row_group_writer, &arrays, levels)?;
             Ok(())
         }
-        ArrowDataType::Struct(_) => {
-            let struct_array: &arrow_array::StructArray = array
-                .as_any()
-                .downcast_ref::<arrow_array::StructArray>()
-                .expect("Unable to get struct array");
-            for field in struct_array.columns() {
-                write_leaves(row_group_writer, field, levels)?;
+        ArrowDataType::Struct(fields) => {
+            // Groups child arrays by field
+            let mut field_arrays = vec![Vec::with_capacity(arrays.len()); fields.len()];
+
+            for array in arrays {
+                let struct_array: &arrow_array::StructArray = array
+                    .as_any()
+                    .downcast_ref::<arrow_array::StructArray>()
+                    .expect("Unable to get struct array");
+
+                assert_eq!(struct_array.columns().len(), fields.len());
+
+                for (child_array, field) in field_arrays.iter_mut().zip(struct_array.columns()) {
+                    child_array.push(field.clone())
+                }
             }
+
+            for field in field_arrays {
+                write_leaves(row_group_writer, &field, levels)?;
+            }
+
             Ok(())
         }
         ArrowDataType::Map(_, _) => {
-            let map_array: &arrow_array::MapArray = array
-                .as_any()
-                .downcast_ref::<arrow_array::MapArray>()
-                .expect("Unable to get map array");
-            write_leaves(row_group_writer, &map_array.keys(), levels)?;
-            write_leaves(row_group_writer, &map_array.values(), levels)?;
+            let mut keys = Vec::with_capacity(arrays.len());
+            let mut values = Vec::with_capacity(arrays.len());
+            for array in arrays {
+                let map_array: &arrow_array::MapArray = array
+                    .as_any()
+                    .downcast_ref::<arrow_array::MapArray>()
+                    .expect("Unable to get map array");
+                keys.push(map_array.keys());
+                values.push(map_array.values());
+            }
+
+            write_leaves(row_group_writer, &keys, levels)?;
+            write_leaves(row_group_writer, &values, levels)?;
             Ok(())
         }
         ArrowDataType::Dictionary(_, value_type) => {
-            // cast dictionary to a primitive
-            let array = arrow::compute::cast(array, value_type)?;
-
             let mut col_writer = get_col_writer(row_group_writer)?;
-            write_leaf(
-                &mut col_writer,
-                &array,
-                levels.pop().expect("Levels exhausted"),
-            )?;
+            for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
+                // cast dictionary to a primitive
+                let array = arrow::compute::cast(array, value_type)?;
+                write_leaf(
+                    &mut col_writer,
+                    &array,
+                    levels.pop().expect("Levels exhausted"),
+                )?;
+            }
             row_group_writer.close_column(col_writer)?;
             Ok(())
         }
@@ -295,7 +325,7 @@ fn write_leaves(
             Err(ParquetError::NYI(
                 format!(
                     "Attempting to write an Arrow type {:?} to parquet that is not yet implemented",
-                    array.data_type()
+                    data_type
                 )
             ))
         }
