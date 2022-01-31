@@ -174,7 +174,7 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
                 .iter()
                 .map(|array| {
                     let batch_level = LevelInfo::new(0, array.len());
-                    let mut levels = batch_level.calculate_array_levels(&array, field);
+                    let mut levels = batch_level.calculate_array_levels(array, field);
                     // Reverse levels as we pop() them when writing arrays
                     levels.reverse();
                     levels
