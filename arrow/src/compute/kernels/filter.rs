@@ -631,6 +631,32 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_slices() {
+        // takes up 2 u64s
+        let bools = std::iter::repeat(true).take(10)
+            .chain(std::iter::repeat(false).take(30))
+            .chain(std::iter::repeat(true).take(20))
+            .chain(std::iter::repeat(false).take(17))
+            .chain(std::iter::repeat(true).take(4));
+
+        let bool_array: BooleanArray = bools.map(Some).collect();
+
+        let slices: Vec<_> = SlicesIterator::new(&bool_array).collect();
+        let expected = vec![(0, 10), (40, 60), (77, 81)];
+        assert_eq!(slices, expected);
+
+        // slice with offset and truncated len
+        let len = bool_array.len();
+        let sliced_array = bool_array.slice(7, len-10);
+        let sliced_array = sliced_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        let slices: Vec<_> = SlicesIterator::new(&sliced_array).collect();
+        let expected = vec![(0, 3), (33, 53), (70, 71)];
+        assert_eq!(slices, expected);
+    }
     fn test_slices_fuzz(mask_len: usize, offset: usize, truncate: usize) {
         let mut rng = thread_rng();
 
