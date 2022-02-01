@@ -694,6 +694,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, UInt32Type, UInt8Type};
     use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
+    use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
 
     use crate::arrow::{ArrowReader, ParquetFileArrowReader};
@@ -1896,5 +1897,131 @@ mod tests {
         let expected_values: Vec<_> =
             [0..100, 0..50, 200..500].into_iter().flatten().collect();
         assert_eq!(&values, &expected_values)
+    }
+
+    #[test]
+    fn complex_aggregate() {
+        // Tests aggregating nested data
+        let field_a = Field::new("leaf_a", DataType::Int32, false);
+        let field_b = Field::new("leaf_b", DataType::Int32, true);
+        let struct_a = Field::new(
+            "struct_a",
+            DataType::Struct(vec![field_a.clone(), field_b.clone()]),
+            true,
+        );
+
+        let list_a = Field::new("list", DataType::List(Box::new(struct_a)), true);
+        let struct_b =
+            Field::new("struct_b", DataType::Struct(vec![list_a.clone()]), false);
+
+        let schema = Arc::new(Schema::new(vec![struct_b]));
+
+        // create nested data
+        let field_a_array = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+        let field_b_array =
+            Int32Array::from_iter(vec![Some(1), None, Some(2), None, None, Some(6)]);
+
+        let struct_a_array = StructArray::from(vec![
+            (field_a.clone(), Arc::new(field_a_array) as ArrayRef),
+            (field_b.clone(), Arc::new(field_b_array) as ArrayRef),
+        ]);
+
+        let list_data = ArrayDataBuilder::new(list_a.data_type().clone())
+            .len(5)
+            .add_buffer(Buffer::from_iter(vec![
+                0_i32, 1_i32, 1_i32, 3_i32, 3_i32, 5_i32,
+            ]))
+            .null_bit_buffer(Buffer::from_iter(vec![true, false, true, false, true]))
+            .child_data(vec![struct_a_array.data().clone()])
+            .build()
+            .unwrap();
+
+        let list_a_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
+        let struct_b_array = StructArray::from(vec![(list_a.clone(), list_a_array)]);
+
+        let batch1 = RecordBatch::try_from_iter(vec![(
+            "struct_b",
+            Arc::new(struct_b_array) as ArrayRef,
+        )])
+        .unwrap();
+
+        let field_a_array = Int32Array::from(vec![6, 7, 8, 9, 10]);
+        let field_b_array = Int32Array::from_iter(vec![None, None, None, Some(1), None]);
+
+        let struct_a_array = StructArray::from(vec![
+            (field_a, Arc::new(field_a_array) as ArrayRef),
+            (field_b, Arc::new(field_b_array) as ArrayRef),
+        ]);
+
+        let list_data = ArrayDataBuilder::new(list_a.data_type().clone())
+            .len(2)
+            .add_buffer(Buffer::from_iter(vec![0_i32, 4_i32, 5_i32]))
+            .child_data(vec![struct_a_array.data().clone()])
+            .build()
+            .unwrap();
+
+        let list_a_array = Arc::new(ListArray::from(list_data)) as ArrayRef;
+        let struct_b_array = StructArray::from(vec![(list_a, list_a_array)]);
+
+        let batch2 = RecordBatch::try_from_iter(vec![(
+            "struct_b",
+            Arc::new(struct_b_array) as ArrayRef,
+        )])
+        .unwrap();
+
+        let batches = &[batch1, batch2];
+
+        // Verify data is as expected
+
+        let expected = r#"
+            +-------------------------------------------------------------------------------------------------------------------------------------+
+            | struct_b                                                                                                                            |
+            +-------------------------------------------------------------------------------------------------------------------------------------+
+            | {"list": [{"leaf_a": 1, "leaf_b": 1}]}                                                                                              |
+            | {"list": null}                                                                                                                      |
+            | {"list": [{"leaf_a": 2, "leaf_b": null}, {"leaf_a": 3, "leaf_b": 2}]}                                                               |
+            | {"list": null}                                                                                                                      |
+            | {"list": [{"leaf_a": 4, "leaf_b": null}, {"leaf_a": 5, "leaf_b": null}]}                                                            |
+            | {"list": [{"leaf_a": 6, "leaf_b": null}, {"leaf_a": 7, "leaf_b": null}, {"leaf_a": 8, "leaf_b": null}, {"leaf_a": 9, "leaf_b": 1}]} |
+            | {"list": [{"leaf_a": 10, "leaf_b": null}]}                                                                                          |
+            +-------------------------------------------------------------------------------------------------------------------------------------+
+        "#.trim().split('\n').map(|x| x.trim()).collect::<Vec<_>>().join("\n");
+
+        let actual = pretty_format_batches(batches).unwrap().to_string();
+        assert_eq!(actual, expected);
+
+        // Write data
+        let file = tempfile::tempfile().unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(200)
+            .build();
+
+        let mut writer =
+            ArrowWriter::try_new(file.try_clone().unwrap(), schema, Some(props)).unwrap();
+
+        for batch in batches {
+            writer.write(batch).unwrap();
+        }
+        writer.close().unwrap();
+
+        // Read Data
+        let reader = SerializedFileReader::new(file).unwrap();
+
+        // Should have written a single row group
+        assert_eq!(reader.metadata().num_row_groups(), 1);
+
+        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
+        let batches = arrow_reader
+            .get_record_reader(2)
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(batches.len(), 4);
+        let batch_counts: Vec<_> = batches.iter().map(|x| x.num_rows()).collect();
+        assert_eq!(&batch_counts, &[2, 2, 2, 1]);
+
+        let actual = pretty_format_batches(&batches).unwrap().to_string();
+        assert_eq!(actual, expected);
     }
 }
