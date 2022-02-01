@@ -32,7 +32,7 @@ rust-version = "1.57"
 [dependencies]
 parquet-format = "4.0.0"
 byteorder = "1"
-thrift = "0.13"
+thrift = "0.15"
 snap = { version = "1.0", optional = true }
 brotli = { version = "3.3", optional = true }
 flate2 = { version = "1.0", optional = true }
