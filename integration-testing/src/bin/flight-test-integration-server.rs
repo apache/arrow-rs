@@ -29,9 +29,9 @@ async fn main() -> Result {
 
     let matches = App::new("rust flight-test-integration-server")
         .about("Integration testing server for Flight.")
-        .arg(Arg::with_name("port").long("port").takes_value(true))
+        .arg(Arg::new("port").long("port").takes_value(true))
         .arg(
-            Arg::with_name("scenario")
+            Arg::new("scenario")
                 .long("scenario")
                 .takes_value(true),
         )

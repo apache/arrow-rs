@@ -28,11 +28,11 @@ async fn main() -> Result {
     tracing_subscriber::fmt::init();
 
     let matches = App::new("rust flight-test-integration-client")
-        .arg(Arg::with_name("host").long("host").takes_value(true))
-        .arg(Arg::with_name("port").long("port").takes_value(true))
-        .arg(Arg::with_name("path").long("path").takes_value(true))
+        .arg(Arg::new("host").long("host").takes_value(true))
+        .arg(Arg::new("port").long("port").takes_value(true))
+        .arg(Arg::new("path").long("path").takes_value(true))
         .arg(
-            Arg::with_name("scenario")
+            Arg::new("scenario")
                 .long("scenario")
                 .takes_value(true),
         )
