@@ -698,7 +698,7 @@ mod tests {
     use arrow::{array::*, buffer::Buffer};
 
     use crate::arrow::{ArrowReader, ParquetFileArrowReader};
-    use crate::file::metadata::{FileMetaData, ParquetMetaData};
+    use crate::file::metadata::ParquetMetaData;
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
         statistics::Statistics,
