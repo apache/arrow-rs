@@ -15,6 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! This crate contains the official Native Rust implementation of
+//! [Apache Parquet](https://parquet.apache.org/), part of
+//! the [Apache Arrow](https://arrow.apache.org/) project.
+//!
+//! # Getting Started
+//! Start with some examples:
+//!
+//! 1. [mod@file] for reading and writing parquet files using the
+//! [ColumnReader](column::reader::ColumnReader) API.
+//!
+//! 2. [arrow] for reading and writing parquet files to Arrow
+//! `RecordBatch`es
+//!
+//! 3. [arrow::async_reader] for `async` reading and writing parquet
+//! files to Arrow `RecordBatch`es (requires the `async` feature).
 #![allow(incomplete_features)]
 #![allow(dead_code)]
 #![allow(non_camel_case_types)]
