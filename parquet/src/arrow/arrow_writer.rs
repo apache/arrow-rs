@@ -698,6 +698,7 @@ mod tests {
     use arrow::{array::*, buffer::Buffer};
 
     use crate::arrow::{ArrowReader, ParquetFileArrowReader};
+    use crate::file::metadata::{FileMetaData, ParquetMetaData};
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
         statistics::Statistics,
@@ -1825,6 +1826,10 @@ mod tests {
         one_column_roundtrip(array, true, Some(10));
     }
 
+    fn row_group_sizes(metadata: &ParquetMetaData) -> Vec<i64> {
+        metadata.row_groups().iter().map(|x| x.num_rows()).collect()
+    }
+
     #[test]
     fn test_aggregates_records() {
         let arrays = [
@@ -1858,14 +1863,7 @@ mod tests {
         writer.close().unwrap();
 
         let reader = SerializedFileReader::new(file).unwrap();
-        let row_group_sizes: Vec<_> = reader
-            .metadata()
-            .row_groups()
-            .iter()
-            .map(|x| x.num_rows())
-            .collect();
-
-        assert_eq!(&row_group_sizes, &[200, 200, 50]);
+        assert_eq!(&row_group_sizes(reader.metadata()), &[200, 200, 50]);
 
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
         let batches = arrow_reader
@@ -1993,7 +1991,7 @@ mod tests {
         // Write data
         let file = tempfile::tempfile().unwrap();
         let props = WriterProperties::builder()
-            .set_max_row_group_size(200)
+            .set_max_row_group_size(6)
             .build();
 
         let mut writer =
@@ -2007,8 +2005,9 @@ mod tests {
         // Read Data
         let reader = SerializedFileReader::new(file).unwrap();
 
-        // Should have written a single row group
-        assert_eq!(reader.metadata().num_row_groups(), 1);
+        // Should have written entire first batch and first row of second to the first row group
+        // leaving a single row in the second row group
+        assert_eq!(&row_group_sizes(reader.metadata()), &[6, 1]);
 
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
         let batches = arrow_reader
