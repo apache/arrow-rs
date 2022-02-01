@@ -56,6 +56,11 @@ impl<'a> SlicesIterator<'a> {
         }
     }
 
+    /// Returns `Some((chunk_offset, bit_offset))` for the next chunk that has at
+    /// least one bit set, or None if there is no such chunk.
+    ///
+    /// Where `chunk_offset` is the bit offset to the current `usize`d chunk
+    /// and `bit_offset` is the offset of the first `1` bit in that chunk
     fn advance_to_set_bit(&mut self) -> Option<(usize, u32)> {
         loop {
             if self.current_chunk != 0 {
@@ -634,7 +639,8 @@ mod tests {
     #[test]
     fn test_slices() {
         // takes up 2 u64s
-        let bools = std::iter::repeat(true).take(10)
+        let bools = std::iter::repeat(true)
+            .take(10)
             .chain(std::iter::repeat(false).take(30))
             .chain(std::iter::repeat(true).take(20))
             .chain(std::iter::repeat(false).take(17))
@@ -648,15 +654,16 @@ mod tests {
 
         // slice with offset and truncated len
         let len = bool_array.len();
-        let sliced_array = bool_array.slice(7, len-10);
+        let sliced_array = bool_array.slice(7, len - 10);
         let sliced_array = sliced_array
             .as_any()
             .downcast_ref::<BooleanArray>()
             .unwrap();
-        let slices: Vec<_> = SlicesIterator::new(&sliced_array).collect();
+        let slices: Vec<_> = SlicesIterator::new(sliced_array).collect();
         let expected = vec![(0, 3), (33, 53), (70, 71)];
         assert_eq!(slices, expected);
     }
+
     fn test_slices_fuzz(mask_len: usize, offset: usize, truncate: usize) {
         let mut rng = thread_rng();
 
