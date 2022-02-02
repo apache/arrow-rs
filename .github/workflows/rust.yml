@@ -107,22 +107,31 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
+          
           # run tests on all workspace members with default feature list
           cargo test
+          
+          # Switch to arrow crate
           cd arrow
-          # re-run tests on arrow workspace with additional features
+          # re-run tests on arrow crate with additional features
           cargo test --features=prettyprint
-          # run test on arrow with minimal set of features
+          # run test on arrow crate with minimal set of features
           cargo test --no-default-features
           cargo run --example builders
           cargo run --example dynamic_types
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
-          # Exit arrow directory
-          cd ..
-          (cd parquet && cargo check --no-default-features)
-          (cd arrow && cargo check --no-default-features)
-          (cd arrow-flight && cargo check --no-default-features)
+          cargo check --no-default-features
+          
+          # Switch to parquet crate
+          cd ../parquet
+          # re-run tests on parquet crate with async feature enabled
+          cargo test --features=async
+          cargo check --no-default-features
+          
+          # Switch to arrow-flight
+          cd ../arrow-flight
+          cargo check --no-default-features
 
   # test the --features "simd" of the arrow crate. This requires nightly.
   linux-test-simd:
@@ -237,7 +246,7 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cargo clippy --features test_common --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
+          cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
 
   check_benches:
     name: Check Benchmarks (but don't run them)

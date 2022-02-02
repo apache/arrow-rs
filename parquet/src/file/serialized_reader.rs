@@ -271,7 +271,7 @@ impl<T: Read> SerializedPageReader<T> {
     }
 }
 
-impl<T: Read> Iterator for SerializedPageReader<T> {
+impl<T: Read + Send> Iterator for SerializedPageReader<T> {
     type Item = Result<Page>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -279,7 +279,7 @@ impl<T: Read> Iterator for SerializedPageReader<T> {
     }
 }
 
-impl<T: Read> PageReader for SerializedPageReader<T> {
+impl<T: Read + Send> PageReader for SerializedPageReader<T> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         while self.seen_num_values < self.total_num_values {
             let page_header = self.read_page_header()?;

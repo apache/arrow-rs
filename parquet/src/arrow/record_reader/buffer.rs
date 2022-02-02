@@ -95,7 +95,8 @@ pub struct ScalarBuffer<T: ScalarValue> {
     len: usize,
 
     /// Placeholder to allow `T` as an invariant generic parameter
-    _phantom: PhantomData<*mut T>,
+    /// without making it !Send
+    _phantom: PhantomData<fn(T) -> T>,
 }
 
 impl<T: ScalarValue> Default for ScalarBuffer<T> {

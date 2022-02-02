@@ -189,7 +189,7 @@ impl PageWriteSpec {
 
 /// API for reading pages from a column chunk.
 /// This offers a iterator like API to get the next page.
-pub trait PageReader: Iterator<Item = Result<Page>> {
+pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// Gets the next page in the column chunk associated with this reader.
     /// Returns `None` if there are no pages left.
     fn get_next_page(&mut self) -> Result<Option<Page>>;
@@ -220,7 +220,7 @@ pub trait PageWriter {
 }
 
 /// An iterator over pages of some specific column in a parquet file.
-pub trait PageIterator: Iterator<Item = Result<Box<dyn PageReader>>> {
+pub trait PageIterator: Iterator<Item = Result<Box<dyn PageReader>>> + Send {
     /// Get schema of parquet file.
     fn schema(&mut self) -> Result<SchemaDescPtr>;
 

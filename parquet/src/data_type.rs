@@ -598,6 +598,7 @@ pub(crate) mod private {
         + super::FromBytes
         + super::SliceAsBytes
         + PartialOrd
+        + Send
     {
         /// Encode the value directly from a higher level encoder
         fn encode<W: std::io::Write>(
@@ -1036,7 +1037,7 @@ pub(crate) mod private {
 
 /// Contains the Parquet physical type information as well as the Rust primitive type
 /// presentation.
-pub trait DataType: 'static {
+pub trait DataType: 'static + Send {
     type T: private::ParquetValueType;
 
     /// Returns Parquet physical type.
