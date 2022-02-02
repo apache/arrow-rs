@@ -40,6 +40,16 @@ macro_rules! downcast_filter {
     }};
 }
 
+macro_rules! downcast_dict_filter {
+    ($type: ty, $values: expr, $filter: expr) => {{
+        let values = $values
+            .as_any()
+            .downcast_ref::<DictionaryArray<$type>>()
+            .expect("Unable to downcast to a dictionary array");
+        Ok(Arc::new(filter_dict::<$type>(values, $filter)))
+    }};
+}
+
 /// An iterator of `(usize, usize)` each representing an interval `[start,end[` whose
 /// slots of a [BooleanArray] are true. Each interval corresponds to a contiguous region of memory to be
 /// "taken" from an array to be filtered.
@@ -487,6 +497,17 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
                     .unwrap();
                 Ok(Arc::new(filter_string::<i64>(values, predicate)))
             }
+            DataType::Dictionary(key_type, _) => match key_type.as_ref() {
+                DataType::Int8 => downcast_dict_filter!(Int8Type, values, predicate),
+                DataType::Int16 => downcast_dict_filter!(Int16Type, values, predicate),
+                DataType::Int32 => downcast_dict_filter!(Int32Type, values, predicate),
+                DataType::Int64 => downcast_dict_filter!(Int64Type, values, predicate),
+                DataType::UInt8 => downcast_dict_filter!(UInt8Type, values, predicate),
+                DataType::UInt16 => downcast_dict_filter!(UInt16Type, values, predicate),
+                DataType::UInt32 => downcast_dict_filter!(UInt32Type, values, predicate),
+                DataType::UInt64 => downcast_dict_filter!(UInt64Type, values, predicate),
+                t => unimplemented!("Take not supported for dictionary key type {:?}", t),
+            },
             _ => {
                 // fallback to using MutableArrayData
                 let mut mutable = MutableArrayData::new(
@@ -724,7 +745,7 @@ where
         for idx in iter {
             let (start, end, len) = self.get_value_range(idx);
             self.cur_offset += len;
-            self.dst_offsets.push(self.cur_offset); // push_unchecked?
+            self.dst_offsets.push(self.cur_offset);
             self.dst_values
                 .extend_from_slice(&self.src_values[start..end]);
         }
@@ -786,6 +807,33 @@ where
 
     let data = unsafe { builder.build_unchecked() };
     GenericStringArray::from(data)
+}
+
+/// `filter` implementation for dictionaries
+fn filter_dict<T>(
+    array: &DictionaryArray<T>,
+    predicate: &FilterPredicate,
+) -> DictionaryArray<T>
+where
+    T: ArrowPrimitiveType,
+    T::Native: num::Num,
+{
+    let filtered_keys = filter_primitive::<T>(array.keys(), predicate);
+    let filtered_data = filtered_keys.data_ref();
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            array.data_type().clone(),
+            filtered_keys.len(),
+            Some(filtered_data.null_count()),
+            filtered_data.null_buffer().cloned(),
+            0,
+            filtered_data.buffers().to_vec(),
+            array.data().child_data().to_vec(),
+        )
+    };
+
+    DictionaryArray::<T>::from(data)
 }
 
 #[cfg(test)]

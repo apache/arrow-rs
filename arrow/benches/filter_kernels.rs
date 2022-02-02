@@ -148,6 +148,30 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_built_filter(&sparse_filter, &data_array))
     });
 
+    let data_array = create_string_dict_array::<Int32Type>(size, 0.0);
+    c.bench_function("filter context string dictionary", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function("filter context string dictionary high selectivity", |b| {
+        b.iter(|| bench_built_filter(&dense_filter, &data_array))
+    });
+    c.bench_function("filter context string dictionary low selectivity", |b| {
+        b.iter(|| bench_built_filter(&sparse_filter, &data_array))
+    });
+
+    let data_array = create_string_dict_array::<Int32Type>(size, 0.5);
+    c.bench_function("filter context string dictionary w NULLs", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function(
+        "filter context string dictionary w NULLs high selectivity",
+        |b| b.iter(|| bench_built_filter(&dense_filter, &data_array)),
+    );
+    c.bench_function(
+        "filter context string dictionary w NULLs low selectivity",
+        |b| b.iter(|| bench_built_filter(&sparse_filter, &data_array)),
+    );
+
     let data_array = create_primitive_array::<Float32Type>(size, 0.0);
 
     let field = Field::new("c1", data_array.data_type().clone(), true);
