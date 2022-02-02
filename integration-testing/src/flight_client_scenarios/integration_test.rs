@@ -38,7 +38,7 @@ type Result<T = (), E = Error> = std::result::Result<T, E>;
 
 type Client = FlightServiceClient<tonic::transport::Channel>;
 
-pub async fn run_scenario(host: &str, port: &str, path: &str) -> Result {
+pub async fn run_scenario(host: &str, port: u16, path: &str) -> Result {
     let url = format!("http://{}:{}", host, port);
 
     let client = FlightServiceClient::connect(url).await?;

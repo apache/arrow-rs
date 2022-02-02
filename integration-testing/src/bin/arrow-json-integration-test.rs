@@ -15,52 +15,46 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fs::File;
-
-use clap::{App, Arg};
-
 use arrow::error::{ArrowError, Result};
 use arrow::ipc::reader::FileReader;
 use arrow::ipc::writer::FileWriter;
 use arrow::util::integration_util::*;
 use arrow_integration_testing::read_json_file;
+use clap::Parser;
+use std::fs::File;
+
+#[derive(clap::ArgEnum, Debug, Clone)]
+#[clap(rename_all = "SCREAMING_SNAKE_CASE")]
+enum Mode {
+    ArrowToJson,
+    JsonToArrow,
+    Validate,
+}
+
+#[derive(Debug, Parser)]
+#[clap(author, version, about("rust arrow-json-integration-test"), long_about = None)]
+struct Args {
+    #[clap(short, long)]
+    integration: bool,
+    #[clap(short, long, help("Path to ARROW file"))]
+    arrow: String,
+    #[clap(short, long, help("Path to JSON file"))]
+    json: String,
+    #[clap(arg_enum, short, long, default_value_t = Mode::Validate, help="Mode of integration testing tool")]
+    mode: Mode,
+    #[clap(short, long)]
+    verbose: bool,
+}
 
 fn main() -> Result<()> {
-    let matches = App::new("rust arrow-json-integration-test")
-        .arg(Arg::with_name("integration")
-            .long("integration"))
-        .arg(Arg::with_name("arrow")
-            .long("arrow")
-            .help("path to ARROW file")
-            .takes_value(true))
-        .arg(Arg::with_name("json")
-            .long("json")
-            .help("path to JSON file")
-            .takes_value(true))
-        .arg(Arg::with_name("mode")
-            .long("mode")
-            .help("mode of integration testing tool (ARROW_TO_JSON, JSON_TO_ARROW, VALIDATE)")
-            .takes_value(true)
-            .default_value("VALIDATE"))
-        .arg(Arg::with_name("verbose")
-            .long("verbose")
-            .help("enable/disable verbose mode"))
-        .get_matches();
-
-    let arrow_file = matches
-        .value_of("arrow")
-        .expect("must provide path to arrow file");
-    let json_file = matches
-        .value_of("json")
-        .expect("must provide path to json file");
-    let mode = matches.value_of("mode").unwrap();
-    let verbose = true; //matches.value_of("verbose").is_some();
-
-    match mode {
-        "JSON_TO_ARROW" => json_to_arrow(json_file, arrow_file, verbose),
-        "ARROW_TO_JSON" => arrow_to_json(arrow_file, json_file, verbose),
-        "VALIDATE" => validate(arrow_file, json_file, verbose),
-        _ => panic!("mode {} not supported", mode),
+    let args = Args::parse();
+    let arrow_file = args.arrow;
+    let json_file = args.json;
+    let verbose = args.verbose;
+    match args.mode {
+        Mode::JsonToArrow => json_to_arrow(&json_file, &arrow_file, verbose),
+        Mode::ArrowToJson => arrow_to_json(&arrow_file, &json_file, verbose),
+        Mode::Validate => validate(&arrow_file, &json_file, verbose),
     }
 }
 

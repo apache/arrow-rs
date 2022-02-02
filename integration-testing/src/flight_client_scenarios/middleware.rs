@@ -24,7 +24,7 @@ use tonic::{Request, Status};
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
-pub async fn run_scenario(host: &str, port: &str) -> Result {
+pub async fn run_scenario(host: &str, port: u16) -> Result {
     let url = format!("http://{}:{}", host, port);
     let conn = tonic::transport::Endpoint::new(url)?.connect().await?;
     let mut client = FlightServiceClient::with_interceptor(conn, middleware_interceptor);

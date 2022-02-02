@@ -37,7 +37,7 @@ use prost::Message;
 
 use crate::{AUTH_PASSWORD, AUTH_USERNAME};
 
-pub async fn scenario_setup(port: &str) -> Result {
+pub async fn scenario_setup(port: u16) -> Result {
     let service = AuthBasicProtoScenarioImpl {
         username: AUTH_USERNAME.into(),
         password: AUTH_PASSWORD.into(),
