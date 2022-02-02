@@ -24,7 +24,7 @@ use arrow::util::bench_util::*;
 
 use arrow::array::*;
 use arrow::compute::filter;
-use arrow::datatypes::{Field, Float32Type, Schema, UInt8Type};
+use arrow::datatypes::{Field, Float32Type, Int32Type, Schema, UInt8Type};
 
 use criterion::{criterion_group, criterion_main, Criterion};
 
@@ -77,6 +77,38 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| bench_built_filter(&dense_filter, &data_array))
     });
     c.bench_function("filter context u8 low selectivity", |b| {
+        b.iter(|| bench_built_filter(&sparse_filter, &data_array))
+    });
+
+    let data_array = create_primitive_array::<Int32Type>(size, 0.0);
+    c.bench_function("filter i32", |b| {
+        b.iter(|| bench_filter(&data_array, &filter_array))
+    });
+    c.bench_function("filter i32 high selectivity", |b| {
+        b.iter(|| bench_filter(&data_array, &dense_filter_array))
+    });
+    c.bench_function("filter i32 low selectivity", |b| {
+        b.iter(|| bench_filter(&data_array, &sparse_filter_array))
+    });
+
+    c.bench_function("filter context i32", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function("filter context i32 high selectivity", |b| {
+        b.iter(|| bench_built_filter(&dense_filter, &data_array))
+    });
+    c.bench_function("filter context i32 low selectivity", |b| {
+        b.iter(|| bench_built_filter(&sparse_filter, &data_array))
+    });
+
+    let data_array = create_primitive_array::<Int32Type>(size, 0.5);
+    c.bench_function("filter context i32 w NULLs", |b| {
+        b.iter(|| bench_built_filter(&filter, &data_array))
+    });
+    c.bench_function("filter context i32 w NULLs high selectivity", |b| {
+        b.iter(|| bench_built_filter(&dense_filter, &data_array))
+    });
+    c.bench_function("filter context i32 w NULLs low selectivity", |b| {
         b.iter(|| bench_built_filter(&sparse_filter, &data_array))
     });
 

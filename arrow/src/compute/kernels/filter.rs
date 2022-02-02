@@ -186,6 +186,8 @@ fn filter_count(filter: &BooleanArray) -> usize {
 }
 
 /// Function that can filter arbitrary arrays
+///
+/// Deprecated: Use [`FilterPredicate`] instead
 #[deprecated]
 pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
 
@@ -194,6 +196,8 @@ pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
 /// same filter needs to be applied to multiple arrays (e.g. a multi-column `RecordBatch`).
 /// WARNING: the nulls of `filter` are ignored and the value on its slot is considered.
 /// Therefore, it is considered undefined behavior to pass `filter` with null values.
+///
+/// Deprecated: Use [`FilterBuilder`] instead
 #[deprecated]
 #[allow(deprecated)]
 pub fn build_filter(filter: &BooleanArray) -> Result<Filter> {
@@ -281,7 +285,7 @@ pub struct FilterBuilder {
 }
 
 impl FilterBuilder {
-    /// Create a new [`FilterBuilder`] that can be used construct [`FilterPredicate`]
+    /// Create a new [`FilterBuilder`] that can be used to construct a [`FilterPredicate`]
     pub fn new(filter: &BooleanArray) -> Self {
         let filter = match filter.null_count() {
             0 => BooleanArray::from(filter.data().clone()),
@@ -485,6 +489,9 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
     }
 }
 
+/// Computes a new null mask for `data` based on `predicate`
+///
+/// Returns `None` if no nulls in the result
 fn filter_null_mask(
     data: &ArrayData,
     predicate: &FilterPredicate,
@@ -503,6 +510,7 @@ fn filter_null_mask(
     Some((null_count, nulls))
 }
 
+/// Filter the packed bitmask `buffer`, with `predicate` starting at bit offset `offset`
 fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.as_slice();
 
