@@ -17,6 +17,13 @@
 
 //! Defines miscellaneous array kernels.
 
+use std::ops::AddAssign;
+use std::sync::Arc;
+
+use num::Zero;
+
+use TimeUnit::*;
+
 use crate::array::*;
 use crate::buffer::{buffer_bin_and, Buffer, MutableBuffer};
 use crate::datatypes::*;
@@ -24,10 +31,6 @@ use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
 use crate::util::bit_chunk_iterator::{UnalignedBitChunk, UnalignedBitChunkIterator};
 use crate::util::bit_util;
-use num::Zero;
-use std::ops::AddAssign;
-use std::sync::Arc;
-use TimeUnit::*;
 
 macro_rules! downcast_filter {
     ($type: ty, $values: expr, $filter: expr) => {{
@@ -151,11 +154,12 @@ impl<'a> Iterator for SlicesIterator<'a> {
 struct IndexIterator<'a> {
     current_chunk: u64,
     chunk_end_offset: usize,
+    remaining: usize,
     iter: UnalignedBitChunkIterator<'a>,
 }
 
 impl<'a> IndexIterator<'a> {
-    fn new(filter: &'a BooleanArray) -> Self {
+    fn new(filter: &'a BooleanArray, len: usize) -> Self {
         assert_eq!(filter.null_count(), 0);
         let data = filter.data();
         let chunks =
@@ -168,6 +172,7 @@ impl<'a> IndexIterator<'a> {
         Self {
             current_chunk,
             chunk_end_offset,
+            remaining: len,
             iter,
         }
     }
@@ -177,16 +182,23 @@ impl<'a> Iterator for IndexIterator<'a> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
+        while self.remaining != 0 {
             if self.current_chunk != 0 {
                 let bit_pos = self.current_chunk.trailing_zeros();
                 self.current_chunk ^= 1 << bit_pos;
+                self.remaining -= 1;
                 return Some(self.chunk_end_offset + (bit_pos as usize) - 64);
             }
 
-            self.current_chunk = self.iter.next()?;
+            // Must panic if exhausted early as trusted length iterator
+            self.current_chunk = self.iter.next().expect("IndexIterator exhausted early");
             self.chunk_end_offset += 64;
         }
+        None
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
     }
 }
 
@@ -331,7 +343,7 @@ impl FilterBuilder {
                 self.iterator = FilterIterator::Slices(slices)
             }
             FilterIterator::IndexIterator => {
-                let indices = IndexIterator::new(&self.filter).collect();
+                let indices = IndexIterator::new(&self.filter, self.count).collect();
                 self.iterator = FilterIterator::Indices(indices)
             }
             _ => {}
@@ -553,15 +565,19 @@ fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> B
 
     match &predicate.iterator {
         FilterIterator::IndexIterator => {
-            let bits = IndexIterator::new(&predicate.filter)
+            let bits = IndexIterator::new(&predicate.filter, predicate.count)
                 .map(|src_idx| bit_util::get_bit(src, src_idx + offset));
-            unsafe { collect_filtered_bits(bits, predicate.count) }
+
+            // SAFETY: `IndexIterator` reports its size correctly
+            unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
         FilterIterator::Indices(indices) => {
             let bits = indices
                 .iter()
                 .map(|src_idx| bit_util::get_bit(src, *src_idx + offset));
-            unsafe { collect_filtered_bits(bits, predicate.count) }
+
+            // SAFETY: `Vec::iter()` reports its size correctly
+            unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
         FilterIterator::SlicesIterator => {
             let mut builder =
@@ -580,44 +596,6 @@ fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> B
             builder.finish()
         }
     }
-}
-
-/// Collects the provided boolean iterator into a `Buffer`
-///
-/// Largely copied from `MutableBuffer::from_trusted_len_iter_bool`
-///
-/// TODO: DRY this up
-unsafe fn collect_filtered_bits(
-    mut src: impl Iterator<Item = bool>,
-    bit_len: usize,
-) -> Buffer {
-    let aligned_len = bit_util::ceil(bit_len, 64) * 8;
-    let mut buffer = MutableBuffer::new(aligned_len);
-
-    'a: loop {
-        let mut byte_accum: u64 = 0;
-        let mut mask: u64 = 1;
-
-        while mask != 0 {
-            if let Some(value) = src.next() {
-                byte_accum |= match value {
-                    true => mask,
-                    false => 0,
-                };
-                mask <<= 1;
-            } else {
-                if mask != 1 {
-                    buffer.push_unchecked(byte_accum);
-                }
-                break 'a;
-            }
-        }
-        buffer.push_unchecked(byte_accum);
-    }
-
-    // Truncate to byte length - technically not necessary but cannot hurt
-    buffer.resize(bit_util::ceil(bit_len, 8), 0);
-    buffer.into()
 }
 
 /// `filter` implementation for boolean buffers
@@ -655,30 +633,37 @@ where
     let values = data.buffer::<T::Native>(0);
     assert!(values.len() >= predicate.filter.len());
 
-    let mut buffer = MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
-
-    match &predicate.iterator {
+    let buffer = match &predicate.iterator {
         FilterIterator::SlicesIterator => {
+            let mut buffer =
+                MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 buffer.extend_from_slice(&values[start..end]);
             }
+            buffer
         }
         FilterIterator::Slices(slices) => {
+            let mut buffer =
+                MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
             for (start, end) in slices {
                 buffer.extend_from_slice(&values[*start..*end]);
             }
+            buffer
         }
         FilterIterator::IndexIterator => {
-            for idx in IndexIterator::new(&predicate.filter) {
-                unsafe { buffer.push_unchecked(values[idx]) };
-            }
+            let iter =
+                IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
+
+            // SAFETY: IndexIterator is trusted length
+            unsafe { MutableBuffer::from_trusted_len_iter(iter) }
         }
         FilterIterator::Indices(indices) => {
-            for idx in indices {
-                unsafe { buffer.push_unchecked(values[*idx]) };
-            }
+            let iter = indices.iter().map(|x| values[*x]);
+
+            // SAFETY: `Vec::iter` is trusted length
+            unsafe { MutableBuffer::from_trusted_len_iter(iter) }
         }
-    }
+    };
 
     let mut builder = ArrayDataBuilder::new(data.data_type().clone())
         .len(predicate.count)
@@ -791,7 +776,7 @@ where
         }
         FilterIterator::Slices(slices) => filter.extend_slices(slices.iter().cloned()),
         FilterIterator::IndexIterator => {
-            filter.extend_idx(IndexIterator::new(&predicate.filter))
+            filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
         }
         FilterIterator::Indices(indices) => filter.extend_idx(indices.iter().cloned()),
     }
@@ -838,13 +823,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use rand::prelude::*;
+
     use crate::datatypes::Int64Type;
     use crate::{
         buffer::Buffer,
         datatypes::{DataType, Field},
     };
-    use rand::prelude::*;
+
+    use super::*;
 
     macro_rules! def_temporal_test {
         ($test:ident, $array_type: ident, $data: expr) => {
@@ -1275,7 +1262,8 @@ mod tests {
             .flat_map(|(start, end)| start..end)
             .collect();
 
-        let index_bits: Vec<_> = IndexIterator::new(&filter).collect();
+        let count = filter_count(&filter);
+        let index_bits: Vec<_> = IndexIterator::new(&filter, count).collect();
 
         let expected_bits: Vec<_> = bools
             .iter()

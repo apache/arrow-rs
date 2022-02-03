@@ -475,35 +475,36 @@ impl MutableBuffer {
         let (_, upper) = iterator.size_hint();
         let upper = upper.expect("from_trusted_len_iter requires an upper limit");
 
-        let mut result = {
-            let byte_capacity: usize = upper.saturating_add(7) / 8;
-            MutableBuffer::new(byte_capacity)
-        };
+        let aligned_len = bit_util::ceil(upper, 64) * 8;
+        let mut result = MutableBuffer::new(aligned_len);
 
         'a: loop {
-            let mut byte_accum: u8 = 0;
-            let mut mask: u8 = 1;
+            let mut accum: u64 = 0;
+            let mut mask: u64 = 1;
 
-            //collect (up to) 8 bits into a byte
+            //collect (up to) 64 bits into a u64
             while mask != 0 {
                 if let Some(value) = iterator.next() {
-                    byte_accum |= match value {
+                    accum |= match value {
                         true => mask,
                         false => 0,
                     };
                     mask <<= 1;
                 } else {
                     if mask != 1 {
-                        // Add last byte
-                        result.push_unchecked(byte_accum);
+                        // Add accumulator
+                        result.push_unchecked(accum);
                     }
                     break 'a;
                 }
             }
 
             // Soundness: from_trusted_len
-            result.push_unchecked(byte_accum);
+            result.push_unchecked(accum);
         }
+
+        // Truncate to byte length - technically not necessary but cannot hurt
+        result.resize(bit_util::ceil(upper, 8), 0);
         result
     }
 
