@@ -111,6 +111,7 @@ pub fn create_string_array<Offset: StringOffsetSizeTrait>(
 }
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
+/// consisting of random 4 character alphanumeric strings
 pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
     size: usize,
     null_density: f32,

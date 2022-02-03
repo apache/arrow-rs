@@ -32,6 +32,14 @@ use crate::record_batch::RecordBatch;
 use crate::util::bit_chunk_iterator::{UnalignedBitChunk, UnalignedBitChunkIterator};
 use crate::util::bit_util;
 
+/// If the filter selects more than this fraction of rows, use
+/// [`SlicesIterator`] to copy ranges of values. Otherwise iterate
+/// over individual rows using [`IndexIterator`]
+///
+/// Threshold of 0.8 chosen based on <https://dl.acm.org/doi/abs/10.1145/3465998.3466009>
+///
+const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.8;
+
 macro_rules! downcast_filter {
     ($type: ty, $values: expr, $filter: expr) => {{
         let values = $values
@@ -149,8 +157,8 @@ impl<'a> Iterator for SlicesIterator<'a> {
 
 /// An iterator of `usize` whose index in [`BooleanArray`] is true
 ///
-/// This provides the best performance on all but the most selective predicates, where the
-/// benefits of copying large runs instead favours [`SlicesIterator`]
+/// This provides the best performance on all but the least selective predicates (which keep most
+/// / all rows), where the benefits of copying large runs instead favours [`SlicesIterator`]
 struct IndexIterator<'a> {
     current_chunk: u64,
     chunk_end_offset: usize,
@@ -318,7 +326,7 @@ impl FilterBuilder {
 
         let count = filter_count(&filter);
         let selectivity_frac = count as f64 / filter.len() as f64;
-        let iterator = if selectivity_frac > 0.8 {
+        let iterator = if selectivity_frac > FILTER_SLICES_SELECTIVITY_THRESHOLD {
             FilterIterator::SlicesIterator
         } else {
             FilterIterator::IndexIterator
@@ -518,7 +526,9 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
                 DataType::UInt16 => downcast_dict_filter!(UInt16Type, values, predicate),
                 DataType::UInt32 => downcast_dict_filter!(UInt32Type, values, predicate),
                 DataType::UInt64 => downcast_dict_filter!(UInt64Type, values, predicate),
-                t => unimplemented!("Take not supported for dictionary key type {:?}", t),
+                t => {
+                    unimplemented!("Filter not supported for dictionary key type {:?}", t)
+                }
             },
             _ => {
                 // fallback to using MutableArrayData
@@ -550,6 +560,8 @@ fn filter_null_mask(
     }
 
     let nulls = filter_bits(data.null_buffer()?, data.offset(), predicate);
+    // The filtered `nulls` has a length of `predicate.count` bits and
+    // therefore the null count is this minus the number of valid bits
     let null_count = predicate.count - nulls.count_set_bits();
 
     if null_count == 0 {
@@ -694,17 +706,17 @@ where
     OffsetSize: Zero + AddAssign + StringOffsetSizeTrait,
 {
     fn new(capacity: usize, array: &'a GenericStringArray<OffsetSize>) -> Self {
-        let bytes_offset = (capacity + 1) * std::mem::size_of::<OffsetSize>();
-        let mut offsets = MutableBuffer::new(bytes_offset);
-        let values = MutableBuffer::new(0);
+        let num_offsets_bytes = (capacity + 1) * std::mem::size_of::<OffsetSize>();
+        let mut dst_offsets = MutableBuffer::new(num_offsets_bytes);
+        let dst_values = MutableBuffer::new(0);
         let cur_offset = OffsetSize::zero();
-        offsets.push(cur_offset);
+        dst_offsets.push(cur_offset);
 
         Self {
             src_offsets: array.value_offsets(),
             src_values: &array.data().buffers()[1],
-            dst_offsets: offsets,
-            dst_values: values,
+            dst_offsets,
+            dst_values,
             cur_offset,
         }
     }
@@ -809,7 +821,7 @@ where
     let data = unsafe {
         ArrayData::new_unchecked(
             array.data_type().clone(),
-            filtered_keys.len(),
+            filtered_data.len(),
             Some(filtered_data.null_count()),
             filtered_data.null_buffer().cloned(),
             0,
