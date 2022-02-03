@@ -107,10 +107,10 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          
+
           # run tests on all workspace members with default feature list
           cargo test
-          
+
           # Switch to arrow crate
           cd arrow
           # re-run tests on arrow crate with additional features
@@ -122,13 +122,13 @@ jobs:
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
           cargo check --no-default-features
-          
+
           # Switch to parquet crate
           cd ../parquet
           # re-run tests on parquet crate with async feature enabled
           cargo test --features=async
           cargo check --no-default-features
-          
+
           # Switch to arrow-flight
           cd ../arrow-flight
           cargo check --no-default-features
@@ -208,7 +208,7 @@ jobs:
           cargo test
 
   clippy:
-    name: Clippy
+    name: Clippy + Docs
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
     strategy:
@@ -247,6 +247,12 @@ jobs:
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
           cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
+      - name: Run cargo doc
+        run: |
+          export CARGO_HOME="/github/home/.cargo"
+          export CARGO_TARGET_DIR="/github/home/target"
+          export RUSTDOCFLAGS="-Dwarnings"
+          cargo doc --document-private-items --no-deps --workspace
 
   check_benches:
     name: Check Benchmarks (but don't run them)
@@ -289,7 +295,7 @@ jobs:
           cargo check --benches --workspace
 
   lint:
-    name: Lint
+    name: cargo fmt
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
