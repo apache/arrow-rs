@@ -252,7 +252,7 @@ jobs:
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
           export RUSTDOCFLAGS="-Dwarnings"
-          cargo doc --document-private-items --no-deps --workspace
+          cargo doc --document-private-items --no-deps --workspace --all-features
 
   check_benches:
     name: Check Benchmarks (but don't run them)
