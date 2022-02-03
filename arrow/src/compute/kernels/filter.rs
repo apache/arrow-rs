@@ -835,6 +835,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use rand::distributions::{Alphanumeric, Standard};
     use rand::prelude::*;
 
     use crate::datatypes::Int64Type;
@@ -1309,5 +1310,114 @@ mod tests {
         test_slices_fuzz(64, 8, 8);
         test_slices_fuzz(32, 8, 8);
         test_slices_fuzz(32, 5, 9);
+    }
+
+    /// Filters `values` by `predicate` using standard rust iterators
+    fn filter_rust<T>(values: impl IntoIterator<Item = T>, predicate: &[bool]) -> Vec<T> {
+        values
+            .into_iter()
+            .zip(predicate)
+            .filter(|(_, x)| **x)
+            .map(|(a, _)| a)
+            .collect()
+    }
+
+    /// Generates an array of length `len` with `valid_percent` non-null values
+    fn gen_primitive<T>(len: usize, valid_percent: f64) -> Vec<Option<T>>
+    where
+        Standard: Distribution<T>,
+    {
+        let mut rng = thread_rng();
+        (0..len)
+            .map(|_| rng.gen_bool(valid_percent).then(|| rng.gen()))
+            .collect()
+    }
+
+    /// Generates an array of length `len` with `valid_percent` non-null values
+    fn gen_strings(
+        len: usize,
+        valid_percent: f64,
+        str_len_range: std::ops::Range<usize>,
+    ) -> Vec<Option<String>> {
+        let mut rng = thread_rng();
+        (0..len)
+            .map(|_| {
+                rng.gen_bool(valid_percent).then(|| {
+                    let len = rng.gen_range(str_len_range.clone());
+                    (0..len)
+                        .map(|_| char::from(rng.sample(Alphanumeric)))
+                        .collect()
+                })
+            })
+            .collect()
+    }
+
+    /// Returns an iterator that calls `Option::as_deref` on each item
+    fn as_deref<T: std::ops::Deref>(
+        src: &[Option<T>],
+    ) -> impl Iterator<Item = Option<&T::Target>> {
+        src.iter().map(|x| x.as_deref())
+    }
+
+    #[test]
+    fn fuzz_filter() {
+        let mut rng = thread_rng();
+
+        for _ in 0..100 {
+            let filter_percent = rng.gen_range(0.0..1.0);
+            let valid_percent = rng.gen_range(0.0..1.0);
+            let array_len = rng.gen_range(32..256);
+
+            // Construct a predicate
+            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.gen_bool(filter_percent)))
+                .take(array_len)
+                .collect();
+
+            let predicate = BooleanArray::from_iter(bools.iter().cloned().map(Some));
+
+            // Test i32
+            let values = gen_primitive(array_len, valid_percent);
+            let src = Int32Array::from_iter(values.iter().cloned());
+
+            let filtered = filter(&src, &predicate).unwrap();
+            let array = filtered.as_any().downcast_ref::<Int32Array>().unwrap();
+            let actual: Vec<_> = array.iter().collect();
+
+            assert_eq!(actual, filter_rust(values, &bools));
+
+            // Test string
+            let strings = gen_strings(array_len, valid_percent, 0..20);
+            let src = StringArray::from_iter(as_deref(&strings));
+
+            let filtered = filter(&src, &predicate).unwrap();
+            let array = filtered.as_any().downcast_ref::<StringArray>().unwrap();
+            let actual: Vec<_> = array.iter().collect();
+
+            let expected_strings = filter_rust(as_deref(&strings), &bools);
+            assert_eq!(actual, expected_strings);
+
+            // Test string dictionary
+            let src = DictionaryArray::<Int32Type>::from_iter(as_deref(&strings));
+            let filtered = filter(&src, &predicate).unwrap();
+
+            let array = filtered
+                .as_any()
+                .downcast_ref::<DictionaryArray<Int32Type>>()
+                .unwrap();
+
+            let values = array
+                .values()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .unwrap();
+
+            let actual: Vec<_> = array
+                .keys()
+                .iter()
+                .map(|key| key.map(|key| values.value(key as usize)))
+                .collect();
+
+            assert_eq!(actual, expected_strings);
+        }
     }
 }
