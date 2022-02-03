@@ -424,6 +424,7 @@ jobs:
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
+          rustup component add rustfmt
       - name: Run cargo doc
         run: |
           export CARGO_HOME="/github/home/.cargo"
