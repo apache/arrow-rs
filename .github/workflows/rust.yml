@@ -208,7 +208,7 @@ jobs:
           cargo test
 
   clippy:
-    name: Clippy + Docs
+    name: Clippy
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
     strategy:
@@ -247,12 +247,6 @@ jobs:
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
           cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
-      - name: Run cargo doc
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          export RUSTDOCFLAGS="-Dwarnings"
-          cargo doc --document-private-items --no-deps --workspace --all-features
 
   check_benches:
     name: Check Benchmarks (but don't run them)
@@ -295,7 +289,7 @@ jobs:
           cargo check --benches --workspace
 
   lint:
-    name: cargo fmt
+    name: Lint (cargo fmt)
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -397,6 +391,46 @@ jobs:
           cd arrow
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
+
+  # test doc links still work
+  docs:
+    name: Docs are clean on AMD64 Rust ${{ matrix.rust }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64]
+        rust: [nightly]
+    container:
+      image: ${{ matrix.arch }}/rust
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Cache Cargo
+        uses: actions/cache@v2
+        with:
+          path: /github/home/.cargo
+          key: cargo-nightly-cache3-
+      - name: Cache Rust dependencies
+        uses: actions/cache@v2
+        with:
+          path: /github/home/target
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install ${{ matrix.rust }}
+          rustup default ${{ matrix.rust }}
+      - name: Run cargo doc
+        run: |
+          export CARGO_HOME="/github/home/.cargo"
+          export CARGO_TARGET_DIR="/github/home/target"
+          export RUSTDOCFLAGS="-Dwarnings"
+          cargo doc --document-private-items --no-deps --workspace --all-features
+
 
   # test builds with various feature flag combinations outside the main workspace
   default-build:
