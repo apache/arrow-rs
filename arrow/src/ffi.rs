@@ -148,7 +148,8 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
 }
 
 impl FFI_ArrowSchema {
-    /// create a new [`Ffi_ArrowSchema`]. This fails if the fields' [`DataType`] is not supported.
+    /// create a new [`FFI_ArrowSchema`]. This fails if the fields'
+    /// [`DataType`] is not supported.
     pub fn try_new(format: &str, children: Vec<FFI_ArrowSchema>) -> Result<Self> {
         let mut this = Self::empty();
 
@@ -622,6 +623,7 @@ pub trait ArrowArrayRef {
     fn data_type(&self) -> Result<DataType>;
 }
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// Struct used to move an Array from and to the C Data Interface.
 /// Its main responsibility is to expose functionality that requires
 /// both [FFI_ArrowArray] and [FFI_ArrowSchema].

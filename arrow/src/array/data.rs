@@ -588,7 +588,7 @@ impl ArrayData {
     /// contents of the buffers (e.g. that all offsets for UTF8 arrays
     /// are within the bounds of the values buffer).
     ///
-    /// See [`validate_full`] to validate fully the offset content
+    /// See [ArrayData::validate_full] to validate fully the offset content
     /// and the validitiy of utf8 data
     pub fn validate(&self) -> Result<()> {
         // Need at least this mich space in each buffer
@@ -918,7 +918,7 @@ impl ArrayData {
     /// 3. All dictionary offsets are valid
     ///
     /// Does not (yet) check
-    /// 1. Union type_ids are valid (see https://github.com/apache/arrow-rs/issues/85)
+    /// 1. Union type_ids are valid see [#85](https://github.com/apache/arrow-rs/issues/85)
     /// Note calls `validate()` internally
     pub fn validate_full(&self) -> Result<()> {
         // Check all buffer sizes prior to looking at them more deeply in this function
@@ -1075,8 +1075,8 @@ impl ArrayData {
             })
     }
 
-    /// Ensures that all strings formed by the offsets in buffers[0]
-    /// into buffers[1] are valid utf8 sequences
+    /// Ensures that all strings formed by the offsets in `buffers[0]`
+    /// into `buffers[1]` are valid utf8 sequences
     fn validate_utf8<T>(&self) -> Result<()>
     where
         T: ArrowNativeType + std::convert::TryInto<usize> + num::Num + std::fmt::Display,
@@ -1099,7 +1099,7 @@ impl ArrayData {
         )
     }
 
-    /// Ensures that all offsets in buffers[0] into buffers[1] are
+    /// Ensures that all offsets in `buffers[0]` into `buffers[1]` are
     /// between `0` and `offset_limit`
     fn validate_offsets_full<T>(&self, offset_limit: usize) -> Result<()>
     where

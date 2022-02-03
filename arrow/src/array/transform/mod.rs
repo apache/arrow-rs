@@ -384,8 +384,8 @@ impl<'a> MutableArrayData<'a> {
         Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
     }
 
-    /// Similar to [MutableArray::new], but lets users define the preallocated capacities of the array.
-    /// See also [MutableArray::new] for more information on the arguments.
+    /// Similar to [MutableArrayData::new], but lets users define the preallocated capacities of the array.
+    /// See also [MutableArrayData::new] for more information on the arguments.
     ///
     /// # Panic
     /// This function panics if the given `capacities` don't match the data type of `arrays`. Or when

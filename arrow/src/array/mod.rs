@@ -325,8 +325,8 @@ pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 /// ```
 pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 ///
-/// A primitive array where each element is of type `TimestampSecondType.`
-/// See also [`Timestamp.`](crate::datatypes::Timestamp)
+/// A primitive array where each element is of type [TimestampSecondType].
+/// See also [`Timestamp`](crate::datatypes::DataType::Timestamp).
 ///
 /// # Example: UTC timestamps post epoch
 /// ```

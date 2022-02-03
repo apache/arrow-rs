@@ -123,7 +123,7 @@ impl LevelInfo {
     /// The parent struct's nullness is tracked, as it determines whether the child
     /// max_definition should be incremented.
     /// The 'is_parent_struct' variable asks "is this field's parent a struct?".
-    /// * If we are starting at a [RecordBatch], this is `false`.
+    /// * If we are starting at a [RecordBatch](arrow::record_batch::RecordBatch), this is `false`.
     /// * If we are calculating a list's child, this is `false`.
     /// * If we are calculating a struct (i.e. `field.data_type90 == Struct`),
     /// this depends on whether the struct is a child of a struct.
