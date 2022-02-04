@@ -61,7 +61,7 @@ macro_rules! downcast_dict_filter {
     }};
 }
 
-/// An iterator of `(usize, usize)` each representing an interval `[start,end[` whose
+/// An iterator of `(usize, usize)` each representing an interval `[start, end]` whose
 /// slots of a [BooleanArray] are true. Each interval corresponds to a contiguous region of memory
 /// to be "taken" from an array to be filtered.
 ///
@@ -313,7 +313,7 @@ pub fn filter_record_batch(
 pub struct FilterBuilder {
     filter: BooleanArray,
     count: usize,
-    iterator: FilterIterator,
+    strategy: IterationStrategy,
 }
 
 impl FilterBuilder {
@@ -325,17 +325,21 @@ impl FilterBuilder {
         };
 
         let count = filter_count(&filter);
+        // Compute the selectivity of the predicate by dividing the number of true
+        // bits in the predicate by the predicate's total length
+        //
+        // This can then be used as a heuristic for the optimal iteration strategy
         let selectivity_frac = count as f64 / filter.len() as f64;
-        let iterator = if selectivity_frac > FILTER_SLICES_SELECTIVITY_THRESHOLD {
-            FilterIterator::SlicesIterator
+        let strategy = if selectivity_frac > FILTER_SLICES_SELECTIVITY_THRESHOLD {
+            IterationStrategy::SlicesIterator
         } else {
-            FilterIterator::IndexIterator
+            IterationStrategy::IndexIterator
         };
 
         Self {
             filter,
             count,
-            iterator,
+            strategy,
         }
     }
 
@@ -345,14 +349,14 @@ impl FilterBuilder {
     /// Note: There is limited benefit to calling this to then filter a single array
     /// Note: This will likely have a larger memory footprint than the original mask
     pub fn optimize(mut self) -> Self {
-        match self.iterator {
-            FilterIterator::SlicesIterator => {
+        match self.strategy {
+            IterationStrategy::SlicesIterator => {
                 let slices = SlicesIterator::new(&self.filter).collect();
-                self.iterator = FilterIterator::Slices(slices)
+                self.strategy = IterationStrategy::Slices(slices)
             }
-            FilterIterator::IndexIterator => {
+            IterationStrategy::IndexIterator => {
                 let indices = IndexIterator::new(&self.filter, self.count).collect();
-                self.iterator = FilterIterator::Indices(indices)
+                self.strategy = IterationStrategy::Indices(indices)
             }
             _ => {}
         }
@@ -364,14 +368,14 @@ impl FilterBuilder {
         FilterPredicate {
             filter: self.filter,
             count: self.count,
-            iterator: self.iterator,
+            strategy: self.strategy,
         }
     }
 }
 
-/// The internal iterator type of [`FilterPredicate`]
+/// The iteration strategy used to evaluate [`FilterPredicate`]
 #[derive(Debug)]
-enum FilterIterator {
+enum IterationStrategy {
     // A lazily evaluated iterator of ranges
     SlicesIterator,
     // A lazily evaluated iterator of indices
@@ -387,7 +391,7 @@ enum FilterIterator {
 pub struct FilterPredicate {
     filter: BooleanArray,
     count: usize,
-    iterator: FilterIterator,
+    strategy: IterationStrategy,
 }
 
 impl FilterPredicate {
@@ -538,8 +542,17 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
                     predicate.count,
                 );
 
-                let iter = SlicesIterator::new(&predicate.filter);
-                iter.for_each(|(start, end)| mutable.extend(0, start, end));
+                match &predicate.strategy {
+                    IterationStrategy::Slices(slices) => {
+                        slices
+                            .iter()
+                            .for_each(|(start, end)| mutable.extend(0, *start, *end));
+                    }
+                    _ => {
+                        let iter = SlicesIterator::new(&predicate.filter);
+                        iter.for_each(|(start, end)| mutable.extend(0, start, end));
+                    }
+                }
 
                 let data = mutable.freeze();
                 Ok(make_array(data))
@@ -550,7 +563,10 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
 
 /// Computes a new null mask for `data` based on `predicate`
 ///
-/// Returns `None` if no nulls in the result
+/// If the predicate selected no null-rows, returns `None`, otherwise returns
+/// `Some((null_count, null_buffer))` where `null_count` is the number of nulls
+/// in the filtered output, and `null_buffer` is the filtered null buffer
+///
 fn filter_null_mask(
     data: &ArrayData,
     predicate: &FilterPredicate,
@@ -575,15 +591,15 @@ fn filter_null_mask(
 fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.as_slice();
 
-    match &predicate.iterator {
-        FilterIterator::IndexIterator => {
+    match &predicate.strategy {
+        IterationStrategy::IndexIterator => {
             let bits = IndexIterator::new(&predicate.filter, predicate.count)
                 .map(|src_idx| bit_util::get_bit(src, src_idx + offset));
 
             // SAFETY: `IndexIterator` reports its size correctly
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
-        FilterIterator::Indices(indices) => {
+        IterationStrategy::Indices(indices) => {
             let bits = indices
                 .iter()
                 .map(|src_idx| bit_util::get_bit(src, *src_idx + offset));
@@ -591,7 +607,7 @@ fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> B
             // SAFETY: `Vec::iter()` reports its size correctly
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
-        FilterIterator::SlicesIterator => {
+        IterationStrategy::SlicesIterator => {
             let mut builder =
                 BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
             for (start, end) in SlicesIterator::new(&predicate.filter) {
@@ -599,7 +615,7 @@ fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> B
             }
             builder.finish()
         }
-        FilterIterator::Slices(slices) => {
+        IterationStrategy::Slices(slices) => {
             let mut builder =
                 BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
             for (start, end) in slices {
@@ -645,8 +661,8 @@ where
     let values = data.buffer::<T::Native>(0);
     assert!(values.len() >= predicate.filter.len());
 
-    let buffer = match &predicate.iterator {
-        FilterIterator::SlicesIterator => {
+    let buffer = match &predicate.strategy {
+        IterationStrategy::SlicesIterator => {
             let mut buffer =
                 MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
             for (start, end) in SlicesIterator::new(&predicate.filter) {
@@ -654,7 +670,7 @@ where
             }
             buffer
         }
-        FilterIterator::Slices(slices) => {
+        IterationStrategy::Slices(slices) => {
             let mut buffer =
                 MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
             for (start, end) in slices {
@@ -662,14 +678,14 @@ where
             }
             buffer
         }
-        FilterIterator::IndexIterator => {
+        IterationStrategy::IndexIterator => {
             let iter =
                 IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
 
             // SAFETY: IndexIterator is trusted length
             unsafe { MutableBuffer::from_trusted_len_iter(iter) }
         }
-        FilterIterator::Indices(indices) => {
+        IterationStrategy::Indices(indices) => {
             let iter = indices.iter().map(|x| values[*x]);
 
             // SAFETY: `Vec::iter` is trusted length
@@ -782,15 +798,15 @@ where
     assert_eq!(data.child_data().len(), 0);
     let mut filter = FilterString::new(predicate.count, array);
 
-    match &predicate.iterator {
-        FilterIterator::SlicesIterator => {
+    match &predicate.strategy {
+        IterationStrategy::SlicesIterator => {
             filter.extend_slices(SlicesIterator::new(&predicate.filter))
         }
-        FilterIterator::Slices(slices) => filter.extend_slices(slices.iter().cloned()),
-        FilterIterator::IndexIterator => {
+        IterationStrategy::Slices(slices) => filter.extend_slices(slices.iter().cloned()),
+        IterationStrategy::IndexIterator => {
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
         }
-        FilterIterator::Indices(indices) => filter.extend_idx(indices.iter().cloned()),
+        IterationStrategy::Indices(indices) => filter.extend_idx(indices.iter().cloned()),
     }
 
     let mut builder = ArrayDataBuilder::new(data.data_type().clone())
