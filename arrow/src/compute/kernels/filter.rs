@@ -70,7 +70,7 @@ macro_rules! downcast_dict_filter {
 pub struct SlicesIterator<'a> {
     iter: UnalignedBitChunkIterator<'a>,
     len: usize,
-    chunk_end_offset: usize,
+    current_offset: i64,
     current_chunk: u64,
 }
 
@@ -81,13 +81,13 @@ impl<'a> SlicesIterator<'a> {
         let chunk = UnalignedBitChunk::new(values.as_slice(), filter.offset(), len);
         let mut iter = chunk.iter();
 
-        let chunk_end_offset = 64 - chunk.lead_padding();
+        let current_offset = -(chunk.lead_padding() as i64);
         let current_chunk = iter.next().unwrap_or(0);
 
         Self {
             iter,
             len,
-            chunk_end_offset,
+            current_offset,
             current_chunk,
         }
     }
@@ -95,18 +95,18 @@ impl<'a> SlicesIterator<'a> {
     /// Returns `Some((chunk_offset, bit_offset))` for the next chunk that has at
     /// least one bit set, or None if there is no such chunk.
     ///
-    /// Where `chunk_offset` is the bit offset to the current `usize`d chunk
+    /// Where `chunk_offset` is the bit offset to the current `u64` chunk
     /// and `bit_offset` is the offset of the first `1` bit in that chunk
-    fn advance_to_set_bit(&mut self) -> Option<(usize, u32)> {
+    fn advance_to_set_bit(&mut self) -> Option<(i64, u32)> {
         loop {
             if self.current_chunk != 0 {
                 // Find the index of the first 1
                 let bit_pos = self.current_chunk.trailing_zeros();
-                return Some((self.chunk_end_offset, bit_pos));
+                return Some((self.current_offset, bit_pos));
             }
 
             self.current_chunk = self.iter.next()?;
-            self.chunk_end_offset += 64;
+            self.current_offset += 64;
         }
     }
 }
@@ -134,19 +134,19 @@ impl<'a> Iterator for SlicesIterator<'a> {
                 self.current_chunk &= !((1 << end_bit) - 1);
 
                 return Some((
-                    start_chunk + start_bit as usize - 64,
-                    self.chunk_end_offset + end_bit as usize - 64,
+                    (start_chunk + start_bit as i64) as usize,
+                    (self.current_offset + end_bit as i64) as usize,
                 ));
             }
 
             match self.iter.next() {
                 Some(next) => {
                     self.current_chunk = next;
-                    self.chunk_end_offset += 64;
+                    self.current_offset += 64;
                 }
                 None => {
                     return Some((
-                        start_chunk + start_bit as usize - 64,
+                        (start_chunk + start_bit as i64) as usize,
                         std::mem::replace(&mut self.len, 0),
                     ));
                 }
@@ -161,7 +161,7 @@ impl<'a> Iterator for SlicesIterator<'a> {
 /// / all rows), where the benefits of copying large runs instead favours [`SlicesIterator`]
 struct IndexIterator<'a> {
     current_chunk: u64,
-    chunk_end_offset: usize,
+    chunk_offset: i64,
     remaining: usize,
     iter: UnalignedBitChunkIterator<'a>,
 }
@@ -175,11 +175,11 @@ impl<'a> IndexIterator<'a> {
         let mut iter = chunks.iter();
 
         let current_chunk = iter.next().unwrap_or(0);
-        let chunk_end_offset = 64 - chunks.lead_padding();
+        let chunk_offset = -(chunks.lead_padding() as i64);
 
         Self {
             current_chunk,
-            chunk_end_offset,
+            chunk_offset,
             remaining: len,
             iter,
         }
@@ -195,12 +195,12 @@ impl<'a> Iterator for IndexIterator<'a> {
                 let bit_pos = self.current_chunk.trailing_zeros();
                 self.current_chunk ^= 1 << bit_pos;
                 self.remaining -= 1;
-                return Some(self.chunk_end_offset + (bit_pos as usize) - 64);
+                return Some((self.chunk_offset + bit_pos as i64) as usize);
             }
 
             // Must panic if exhausted early as trusted length iterator
             self.current_chunk = self.iter.next().expect("IndexIterator exhausted early");
-            self.chunk_end_offset += 64;
+            self.chunk_offset += 64;
         }
         None
     }
