@@ -89,7 +89,7 @@ experimental_mod!(util, #[macro_use]);
 pub mod arrow;
 pub mod column;
 experimental_mod!(compression);
-mod encodings;
+pub mod encodings;
 pub mod file;
 pub mod record;
 pub mod schema;
