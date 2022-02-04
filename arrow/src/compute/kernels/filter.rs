@@ -62,10 +62,10 @@ macro_rules! downcast_dict_filter {
 }
 
 /// An iterator of `(usize, usize)` each representing an interval `[start,end[` whose
-/// slots of a [BooleanArray] are true. Each interval corresponds to a contiguous region of memory to be
-/// "taken" from an array to be filtered.
+/// slots of a [BooleanArray] are true. Each interval corresponds to a contiguous region of memory
+/// to be "taken" from an array to be filtered.
 ///
-/// This is most performant for highly selective filters with long contiguous runs
+/// This is only performant for the least selective filters that copy across long contiguous runs
 #[derive(Debug)]
 pub struct SlicesIterator<'a> {
     iter: UnalignedBitChunkIterator<'a>,
