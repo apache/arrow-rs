@@ -46,8 +46,7 @@
     clippy::same_item_push,
     clippy::too_many_arguments,
     clippy::transmute_ptr_to_ptr,
-    clippy::upper_case_acronyms,
-    clippy::vec_init_then_push
+    clippy::upper_case_acronyms
 )]
 
 /// Defines a module with an experimental public API
