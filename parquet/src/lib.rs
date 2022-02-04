@@ -43,7 +43,6 @@
     clippy::needless_range_loop,
     clippy::new_without_default,
     clippy::or_fun_call,
-    clippy::same_item_push,
     clippy::too_many_arguments,
 )]
 
