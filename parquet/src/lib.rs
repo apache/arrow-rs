@@ -45,7 +45,6 @@
     clippy::or_fun_call,
     clippy::same_item_push,
     clippy::too_many_arguments,
-    clippy::transmute_ptr_to_ptr,
 )]
 
 /// Defines a module with an experimental public API
