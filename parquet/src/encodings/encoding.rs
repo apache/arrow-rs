@@ -50,9 +50,9 @@ pub trait Encoder<T: DataType> {
         let num_values = values.len();
         let mut buffer = Vec::with_capacity(num_values);
         // TODO: this is pretty inefficient. Revisit in future.
-        for i in 0..num_values {
+        for (i, item) in values.iter().enumerate().take(num_values) {
             if bit_util::get_bit(valid_bits, i) {
-                buffer.push(values[i].clone());
+                buffer.push(item.clone());
             }
         }
         self.put(&buffer[..])?;
