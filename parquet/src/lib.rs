@@ -34,7 +34,6 @@
 #![allow(non_camel_case_types)]
 #![allow(
     clippy::from_over_into,
-    clippy::many_single_char_names,
     clippy::needless_range_loop,
     clippy::new_without_default,
     clippy::or_fun_call,
