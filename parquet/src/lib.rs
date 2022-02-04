@@ -30,7 +30,6 @@
 //!
 //! 3. [arrow::async_reader] for `async` reading and writing parquet
 //! files to Arrow `RecordBatch`es (requires the `async` feature).
-#![allow(incomplete_features)]
 #![allow(dead_code)]
 #![allow(non_camel_case_types)]
 #![allow(
@@ -39,7 +38,7 @@
     clippy::needless_range_loop,
     clippy::new_without_default,
     clippy::or_fun_call,
-    clippy::too_many_arguments,
+    clippy::too_many_arguments
 )]
 
 /// Defines a module with an experimental public API

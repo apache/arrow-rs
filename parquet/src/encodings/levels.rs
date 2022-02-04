@@ -103,8 +103,7 @@ impl LevelEncoder {
     pub fn put(&mut self, buffer: &[i16]) -> Result<usize> {
         let mut num_encoded = 0;
         match *self {
-            LevelEncoder::Rle(ref mut encoder)
-            | LevelEncoder::RleV2(ref mut encoder) => {
+            LevelEncoder::Rle(ref mut encoder) | LevelEncoder::RleV2(ref mut encoder) => {
                 for value in buffer {
                     if !encoder.put(*value as u64)? {
                         return Err(general_err!("RLE buffer is full"));
