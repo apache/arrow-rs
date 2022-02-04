@@ -595,7 +595,7 @@ fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> B
             let mut builder =
                 BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
             for (start, end) in SlicesIterator::new(&predicate.filter) {
-                builder.append_packed_range(start..end, src)
+                builder.append_packed_range(start + offset..end + offset, src)
             }
             builder.finish()
         }
@@ -603,7 +603,7 @@ fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> B
             let mut builder =
                 BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
             for (start, end) in slices {
-                builder.append_packed_range(*start..*end, src)
+                builder.append_packed_range(*start + offset..*end + offset, src)
             }
             builder.finish()
         }
@@ -1366,39 +1366,61 @@ mod tests {
         for _ in 0..100 {
             let filter_percent = rng.gen_range(0.0..1.0);
             let valid_percent = rng.gen_range(0.0..1.0);
+
             let array_len = rng.gen_range(32..256);
+            let array_offset = rng.gen_range(0..10);
 
             // Construct a predicate
+            let filter_offset = rng.gen_range(0..10);
             let bools: Vec<_> = std::iter::from_fn(|| Some(rng.gen_bool(filter_percent)))
-                .take(array_len)
+                .take(array_len + filter_offset)
                 .collect();
 
             let predicate = BooleanArray::from_iter(bools.iter().cloned().map(Some));
 
+            // Offset predicate
+            let predicate = predicate.slice(filter_offset, array_len);
+            let predicate = predicate.as_any().downcast_ref::<BooleanArray>().unwrap();
+            let bools = &bools[filter_offset..];
+
             // Test i32
-            let values = gen_primitive(array_len, valid_percent);
+            let values = gen_primitive(array_len + array_offset, valid_percent);
             let src = Int32Array::from_iter(values.iter().cloned());
 
-            let filtered = filter(&src, &predicate).unwrap();
+            let src = src.slice(array_offset, array_len);
+            let src = src.as_any().downcast_ref::<Int32Array>().unwrap();
+            let values = &values[array_offset..];
+
+            let filtered = filter(src, predicate).unwrap();
             let array = filtered.as_any().downcast_ref::<Int32Array>().unwrap();
             let actual: Vec<_> = array.iter().collect();
 
-            assert_eq!(actual, filter_rust(values, &bools));
+            assert_eq!(actual, filter_rust(values.iter().cloned(), bools));
 
             // Test string
-            let strings = gen_strings(array_len, valid_percent, 0..20);
+            let strings = gen_strings(array_len + array_offset, valid_percent, 0..20);
             let src = StringArray::from_iter(as_deref(&strings));
 
-            let filtered = filter(&src, &predicate).unwrap();
+            let src = src.slice(array_offset, array_len);
+            let src = src.as_any().downcast_ref::<StringArray>().unwrap();
+
+            let filtered = filter(src, predicate).unwrap();
             let array = filtered.as_any().downcast_ref::<StringArray>().unwrap();
             let actual: Vec<_> = array.iter().collect();
 
-            let expected_strings = filter_rust(as_deref(&strings), &bools);
+            let expected_strings = filter_rust(as_deref(&strings[array_offset..]), bools);
             assert_eq!(actual, expected_strings);
 
             // Test string dictionary
             let src = DictionaryArray::<Int32Type>::from_iter(as_deref(&strings));
-            let filtered = filter(&src, &predicate).unwrap();
+
+            let src = src.slice(array_offset, array_len);
+            let src = src
+                .as_any()
+                .downcast_ref::<DictionaryArray<Int32Type>>()
+                .unwrap();
+
+            let filtered = filter(src, predicate).unwrap();
 
             let array = filtered
                 .as_any()
