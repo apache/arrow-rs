@@ -34,7 +34,6 @@
 #![allow(dead_code)]
 #![allow(non_camel_case_types)]
 #![allow(
-    clippy::cast_ptr_alignment,
     clippy::float_cmp,
     clippy::float_equality_without_abs,
     clippy::from_over_into,
