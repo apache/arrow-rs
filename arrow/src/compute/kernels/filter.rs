@@ -297,7 +297,12 @@ pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
 ) -> Result<RecordBatch> {
-    let filter = FilterBuilder::new(predicate).optimize().build();
+    let mut filter_builder = FilterBuilder::new(predicate);
+    if record_batch.num_columns() > 1 {
+        // Only optimize if filtering more than one column
+        filter_builder = filter_builder.optimize();
+    }
+    let filter = filter_builder.build();
 
     let filtered_arrays = record_batch
         .columns()
