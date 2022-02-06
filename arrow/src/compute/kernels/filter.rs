@@ -1393,14 +1393,15 @@ mod tests {
 
             // Construct a predicate
             let filter_offset = rng.gen_range(0..10);
+            let filter_truncate = rng.gen_range(0..10);
             let bools: Vec<_> = std::iter::from_fn(|| Some(rng.gen_bool(filter_percent)))
-                .take(array_len + filter_offset)
+                .take(array_len + filter_offset - filter_truncate)
                 .collect();
 
             let predicate = BooleanArray::from_iter(bools.iter().cloned().map(Some));
 
             // Offset predicate
-            let predicate = predicate.slice(filter_offset, array_len);
+            let predicate = predicate.slice(filter_offset, array_len - filter_truncate);
             let predicate = predicate.as_any().downcast_ref::<BooleanArray>().unwrap();
             let bools = &bools[filter_offset..];
 
