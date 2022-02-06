@@ -330,15 +330,19 @@ impl FilterBuilder {
         };
 
         let count = filter_count(&filter);
-        // Compute the selectivity of the predicate by dividing the number of true
-        // bits in the predicate by the predicate's total length
-        //
-        // This can then be used as a heuristic for the optimal iteration strategy
-        let selectivity_frac = count as f64 / filter.len() as f64;
-        let strategy = if selectivity_frac > FILTER_SLICES_SELECTIVITY_THRESHOLD {
-            IterationStrategy::SlicesIterator
+        let strategy = if count == filter.len() {
+            IterationStrategy::All
         } else {
-            IterationStrategy::IndexIterator
+            // Compute the selectivity of the predicate by dividing the number of true
+            // bits in the predicate by the predicate's total length
+            //
+            // This can then be used as a heuristic for the optimal iteration strategy
+            let selectivity_frac = count as f64 / filter.len() as f64;
+            if selectivity_frac > FILTER_SLICES_SELECTIVITY_THRESHOLD {
+                IterationStrategy::SlicesIterator
+            } else {
+                IterationStrategy::IndexIterator
+            }
         };
 
         Self {
@@ -381,14 +385,16 @@ impl FilterBuilder {
 /// The iteration strategy used to evaluate [`FilterPredicate`]
 #[derive(Debug)]
 enum IterationStrategy {
-    // A lazily evaluated iterator of ranges
+    /// A lazily evaluated iterator of ranges
     SlicesIterator,
-    // A lazily evaluated iterator of indices
+    /// A lazily evaluated iterator of indices
     IndexIterator,
-    // A precomputed list of indices
+    /// A precomputed list of indices
     Indices(Vec<usize>),
-    // A precomputed array of ranges
+    /// A precomputed array of ranges
     Slices(Vec<(usize, usize)>),
+    /// Select all rows
+    All,
 }
 
 /// A filtering predicate that can be applied to an [`Array`]
@@ -628,6 +634,7 @@ fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> B
             }
             builder.finish()
         }
+        IterationStrategy::All => buffer.clone(),
     }
 }
 
@@ -695,6 +702,9 @@ where
 
             // SAFETY: `Vec::iter` is trusted length
             unsafe { MutableBuffer::from_trusted_len_iter(iter) }
+        }
+        IterationStrategy::All => {
+            return PrimitiveArray::from(data.slice(0, predicate.filter.len()))
         }
     };
 
@@ -771,18 +781,18 @@ where
 
     /// Extends the in-progress array by the ranges in the provided iterator
     fn extend_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>) {
-        for slice in iter {
+        for (start, end) in iter {
             // These can only fail if `array` contains invalid data
-            for idx in slice.0..slice.1 {
+            for idx in start..end {
                 let (_, _, len) = self.get_value_range(idx);
                 self.cur_offset += len;
                 self.dst_offsets.push(self.cur_offset); // push_unchecked?
             }
 
-            let start = self.get_value_offset(slice.0);
-            let end = self.get_value_offset(slice.1);
+            let value_start = self.get_value_offset(start);
+            let value_end = self.get_value_offset(end);
             self.dst_values
-                .extend_from_slice(&self.src_values[start..end]);
+                .extend_from_slice(&self.src_values[value_start..value_end]);
         }
     }
 }
@@ -812,6 +822,9 @@ where
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
         }
         IterationStrategy::Indices(indices) => filter.extend_idx(indices.iter().cloned()),
+        IterationStrategy::All => {
+            return GenericStringArray::from(data.slice(0, predicate.filter.len()))
+        }
     }
 
     let mut builder = ArrayDataBuilder::new(data.data_type().clone())
@@ -845,7 +858,7 @@ where
             filtered_data.len(),
             Some(filtered_data.null_count()),
             filtered_data.null_buffer().cloned(),
-            0,
+            filtered_data.offset(),
             filtered_data.buffers().to_vec(),
             array.data().child_data().to_vec(),
         )
@@ -1384,8 +1397,13 @@ mod tests {
     fn fuzz_filter() {
         let mut rng = thread_rng();
 
-        for _ in 0..100 {
-            let filter_percent = rng.gen_range(0.0..1.0);
+        for i in 0..100 {
+            let filter_percent = match i {
+                0..=4 => 1.,
+                5..=10 => 0.,
+                _ => rng.gen_range(0.0..1.0),
+            };
+
             let valid_percent = rng.gen_range(0.0..1.0);
 
             let array_len = rng.gen_range(32..256);
