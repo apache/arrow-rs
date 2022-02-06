@@ -445,75 +445,46 @@ impl BitWriter {
 /// MAX_VLQ_BYTE_LEN = 5 for i32, and MAX_VLQ_BYTE_LEN = 10 for i64
 pub const MAX_VLQ_BYTE_LEN: usize = 10;
 
-pub struct BitReader {
-    // The byte buffer to read from, passed in by client
+/// A struct storing the state for reading individual bits from a byte array
+struct BitReaderUnaligned {
+    /// The byte buffer to read from, passed in by client
     buffer: ByteBufferPtr,
 
-    // Bytes are memcpy'd from `buffer` and values are read from this variable.
-    // This is faster than reading values byte by byte directly from `buffer`
-    buffered_values: u64,
-
-    //
-    // End                                         Start
-    // |............|B|B|B|B|B|B|B|B|..............|
-    //                   ^          ^
-    //                 bit_offset   byte_offset
-    //
-    // Current byte offset in `buffer`
+    ///
+    /// End                                         Start
+    /// |............|B|B|B|B|B|B|B|B|..............|
+    ///                   ^          ^
+    ///                 bit_offset   byte_offset
+    ///
+    /// Current byte offset in `buffer`
     byte_offset: usize,
 
-    // Current bit offset in `buffered_values`
+    /// Current bit offset in `buffered_values`
     bit_offset: usize,
 
-    // Total number of bytes in `buffer`
-    total_bytes: usize,
+    /// Bytes are memcpy'd from `buffer` and values are read from this variable.
+    /// This is faster than reading values byte by byte directly from `buffer`
+    buffered_values: u64,
 }
 
-/// Utility class to read bit/byte stream. This class can read bits or bytes that are
-/// either byte aligned or not.
-impl BitReader {
-    pub fn new(buffer: ByteBufferPtr) -> Self {
-        let total_bytes = buffer.len();
-        let num_bytes = cmp::min(8, total_bytes);
-        let buffered_values = read_num_bytes!(u64, num_bytes, buffer.as_ref());
-        BitReader {
-            buffer,
-            buffered_values,
-            byte_offset: 0,
-            bit_offset: 0,
-            total_bytes,
-        }
+impl BitReaderUnaligned {
+    fn reload_buffer_values(&mut self) {
+        let bytes_to_read = cmp::min(self.buffer.len() - self.byte_offset, 8);
+        self.buffered_values =
+            read_num_bytes!(u64, bytes_to_read, self.buffer.data()[self.byte_offset..]);
     }
 
-    pub fn reset(&mut self, buffer: ByteBufferPtr) {
-        self.buffer = buffer;
-        self.total_bytes = self.buffer.len();
-        let num_bytes = cmp::min(8, self.total_bytes);
-        self.buffered_values = read_num_bytes!(u64, num_bytes, self.buffer.as_ref());
-        self.byte_offset = 0;
-        self.bit_offset = 0;
-    }
+    fn get<T: FromBytes>(&mut self, bit_width: usize) -> Option<T> {
+        assert!(bit_width <= 64);
+        assert!(bit_width <= size_of::<T>() * 8);
 
-    /// Gets the current byte offset
-    #[inline]
-    pub fn get_byte_offset(&self) -> usize {
-        self.byte_offset + ceil(self.bit_offset as i64, 8) as usize
-    }
-
-    /// Reads a value of type `T` and of size `num_bits`.
-    ///
-    /// Returns `None` if there's not enough data available. `Some` otherwise.
-    pub fn get_value<T: FromBytes>(&mut self, num_bits: usize) -> Option<T> {
-        assert!(num_bits <= 64);
-        assert!(num_bits <= size_of::<T>() * 8);
-
-        if self.byte_offset * 8 + self.bit_offset + num_bits > self.total_bytes * 8 {
+        if self.byte_offset * 8 + self.bit_offset + bit_width > self.buffer.len() * 8 {
             return None;
         }
 
-        let mut v = trailing_bits(self.buffered_values, self.bit_offset + num_bits)
+        let mut v = trailing_bits(self.buffered_values, self.bit_offset + bit_width)
             >> self.bit_offset;
-        self.bit_offset += num_bits;
+        self.bit_offset += bit_width;
 
         if self.bit_offset >= 64 {
             self.byte_offset += 8;
@@ -521,82 +492,260 @@ impl BitReader {
 
             self.reload_buffer_values();
             v |= trailing_bits(self.buffered_values, self.bit_offset)
-                .wrapping_shl((num_bits - self.bit_offset) as u32);
+                .wrapping_shl((bit_width - self.bit_offset) as u32);
         }
 
         // TODO: better to avoid copying here
         Some(from_ne_slice(v.as_bytes()))
     }
 
-    pub fn get_batch<T: FromBytes>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
-        assert!(num_bits <= 32);
-        assert!(num_bits <= size_of::<T>() * 8);
+    /// Gets the current byte offset
+    fn aligned_byte_offset(&self) -> usize {
+        self.byte_offset + ceil(self.bit_offset as i64, 8) as usize
+    }
+}
 
-        let mut values_to_read = batch.len();
-        let needed_bits = num_bits * values_to_read;
-        let remaining_bits = (self.total_bytes - self.byte_offset) * 8 - self.bit_offset;
-        if remaining_bits < needed_bits {
-            values_to_read = remaining_bits / num_bits;
+/// A struct for storing the state for reading whole bytes from a byte stream
+struct BitReaderAligned {
+    /// The byte buffer to read from, passed in by client
+    buffer: ByteBufferPtr,
+    /// The current offset in `buffer`
+    byte_offset: usize,
+}
+
+impl BitReaderAligned {
+    fn get<T: FromBytes>(&mut self, num_bytes: usize) -> Option<T> {
+        if self.byte_offset + num_bytes > self.buffer.len() {
+            return None;
         }
 
-        let mut i = 0;
+        let v = read_num_bytes!(T, num_bytes, self.buffer.data()[self.byte_offset..]);
+        self.byte_offset += num_bytes;
 
-        // First align bit offset to byte offset
-        if self.bit_offset != 0 {
-            while i < values_to_read && self.bit_offset != 0 {
-                batch[i] = self
-                    .get_value(num_bits)
-                    .expect("expected to have more data");
-                i += 1;
+        Some(v)
+    }
+
+    /// Read up to `to_read` values from a packed buffer `batch` with bit width `num_bits`
+    /// in batches of 32, returning the number of values read
+    ///
+    /// # Panics
+    ///
+    /// This function panics if
+    /// * `bit_width` is greater than 32
+    /// * less than `to_read` values in the buffer
+    fn get_batch_x32<T: FromBytes>(
+        &mut self,
+        batch: &mut [T],
+        to_read: usize,
+        bit_width: usize,
+    ) -> usize {
+        assert!(bit_width <= 32);
+
+        let mut values_read = 0;
+        let in_buf = &self.buffer.data()[self.byte_offset..];
+        assert!(in_buf.len() * 8 >= to_read * bit_width);
+
+        let mut in_ptr = in_buf as *const [u8] as *const u8 as *const u32;
+        if size_of::<T>() == 4 {
+            while to_read - values_read >= 32 {
+                let out_ptr = &mut batch[values_read..] as *mut [T] as *mut T as *mut u32;
+                in_ptr = unsafe { unpack32(in_ptr, out_ptr, bit_width) };
+                self.byte_offset += 4 * bit_width;
+                values_read += 32;
             }
-        }
-
-        unsafe {
-            let in_buf = &self.buffer.data()[self.byte_offset..];
-            let mut in_ptr = in_buf as *const [u8] as *const u8 as *const u32;
-            if size_of::<T>() == 4 {
-                while values_to_read - i >= 32 {
-                    let out_ptr = &mut batch[i..] as *mut [T] as *mut T as *mut u32;
-                    in_ptr = unpack32(in_ptr, out_ptr, num_bits);
-                    self.byte_offset += 4 * num_bits;
-                    i += 32;
-                }
-            } else {
-                let mut out_buf = [0u32; 32];
-                let out_ptr = &mut out_buf as &mut [u32] as *mut [u32] as *mut u32;
-                while values_to_read - i >= 32 {
-                    in_ptr = unpack32(in_ptr, out_ptr, num_bits);
-                    self.byte_offset += 4 * num_bits;
-                    for n in 0..32 {
-                        // We need to copy from smaller size to bigger size to avoid
-                        // overwriting other memory regions.
-                        if size_of::<T>() > size_of::<u32>() {
+        } else {
+            let mut out_buf = [0u32; 32];
+            let out_ptr = &mut out_buf as &mut [u32] as *mut [u32] as *mut u32;
+            while to_read - values_read >= 32 {
+                in_ptr = unsafe { unpack32(in_ptr, out_ptr, bit_width) };
+                self.byte_offset += 4 * bit_width;
+                for n in 0..32 {
+                    // We need to copy from smaller size to bigger size to avoid
+                    // overwriting other memory regions.
+                    if size_of::<T>() > size_of::<u32>() {
+                        unsafe {
                             std::ptr::copy_nonoverlapping(
                                 out_buf[n..].as_ptr() as *const u32,
-                                &mut batch[i] as *mut T as *mut u32,
-                                1,
-                            );
-                        } else {
-                            std::ptr::copy_nonoverlapping(
-                                out_buf[n..].as_ptr() as *const T,
-                                &mut batch[i] as *mut T,
+                                &mut batch[values_read] as *mut T as *mut u32,
                                 1,
                             );
                         }
-                        i += 1;
+                    } else {
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(
+                                out_buf[n..].as_ptr() as *const T,
+                                &mut batch[values_read] as *mut T,
+                                1,
+                            );
+                        }
                     }
+                    values_read += 1;
                 }
             }
         }
+        values_read
+    }
+}
 
-        assert!(values_to_read - i < 32);
+/// Combines [`BitReaderAligned`] and [`BitReaderUnaligned`] providing conversions between them
+enum BitReaderState {
+    Unaligned(BitReaderUnaligned),
+    Aligned(BitReaderAligned),
+}
 
-        self.reload_buffer_values();
-        while i < values_to_read {
-            batch[i] = self
-                .get_value(num_bits)
-                .expect("expected to have more data");
-            i += 1;
+impl BitReaderState {
+    fn new(buffer: ByteBufferPtr, byte_offset: usize) -> Self {
+        BitReaderState::Aligned(BitReaderAligned {
+            buffer,
+            byte_offset,
+        })
+    }
+
+    /// Returns the number of remaining bits
+    fn remaining_bits(&self) -> usize {
+        match &self {
+            BitReaderState::Unaligned(s) => {
+                (s.buffer.len() - s.byte_offset) * 8 - s.bit_offset
+            }
+            BitReaderState::Aligned(s) => (s.buffer.len() - s.byte_offset) * 8,
+        }
+    }
+
+    /// Returns the current byte offset, rounds up to the nearest whole byte
+    fn get_byte_offset(&self) -> usize {
+        match self {
+            BitReaderState::Unaligned(s) => s.aligned_byte_offset(),
+            BitReaderState::Aligned(s) => s.byte_offset,
+        }
+    }
+
+    /// Converts this to a [`BitReaderAligned`] advancing to the next whole byte
+    fn as_aligned(&mut self) -> &mut BitReaderAligned {
+        match self {
+            BitReaderState::Unaligned(s) => {
+                let offset = s.aligned_byte_offset();
+                *self = BitReaderState::new(s.buffer.clone(), offset);
+
+                match self {
+                    BitReaderState::Aligned(s) => s,
+                    _ => unreachable!(),
+                }
+            }
+            BitReaderState::Aligned(s) => s,
+        }
+    }
+
+    /// Converts this to a [`BitReaderUnaligned`]
+    fn as_unaligned(&mut self) -> &mut BitReaderUnaligned {
+        match self {
+            BitReaderState::Unaligned(s) => s,
+            BitReaderState::Aligned(s) => {
+                let mut scan = BitReaderUnaligned {
+                    buffer: s.buffer.clone(),
+                    byte_offset: s.byte_offset,
+                    bit_offset: 0,
+                    buffered_values: 0,
+                };
+
+                scan.reload_buffer_values();
+                *self = BitReaderState::Unaligned(scan);
+
+                match self {
+                    BitReaderState::Unaligned(s) => s,
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+}
+
+pub struct BitReader {
+    /// The state of the bit reader, can use simpler logic
+    /// when reading aligned data
+    state: BitReaderState,
+}
+
+/// Utility class to read bit/byte stream. This class can read bits or bytes that are
+/// either byte aligned or not.
+impl BitReader {
+    pub fn new(buffer: ByteBufferPtr) -> Self {
+        BitReader {
+            state: BitReaderState::new(buffer, 0),
+        }
+    }
+
+    pub fn reset(&mut self, buffer: ByteBufferPtr) {
+        self.state = BitReaderState::new(buffer, 0)
+    }
+
+    /// Gets the current byte offset, rounding up to the nearest whole byte
+    #[inline]
+    pub fn get_byte_offset(&self) -> usize {
+        self.state.get_byte_offset()
+    }
+
+    /// Reads a value of type `T` and of size `num_bits`.
+    ///
+    /// Returns `None` if there's not enough data available. `Some` otherwise.
+    pub fn get_value<T: FromBytes>(&mut self, num_bits: usize) -> Option<T> {
+        self.state.as_unaligned().get(num_bits)
+    }
+
+    /// Read multiple values from their packed representation
+    ///
+    /// # Panics
+    ///
+    /// This function panics if
+    /// - `bit_width > 32`
+    /// - `bit_width` is larger than the bit-capacity of `T`
+    ///
+    pub fn get_batch<T: FromBytes>(
+        &mut self,
+        batch: &mut [T],
+        bit_width: usize,
+    ) -> usize {
+        assert!(bit_width <= size_of::<T>() * 8);
+
+        let mut values_to_read = batch.len();
+        let needed_bits = bit_width * values_to_read;
+        let remaining_bits = self.state.remaining_bits();
+        if remaining_bits < needed_bits {
+            values_to_read = remaining_bits / bit_width;
+        }
+
+        let mut values_read = 0;
+
+        // First align bit offset to byte offset
+        if let BitReaderState::Unaligned(unaligned) = &mut self.state {
+            while values_to_read != values_read && (unaligned.bit_offset % 8) != 0 {
+                let value = unaligned
+                    .get(bit_width)
+                    .expect("expected to have more data");
+                batch[values_read] = value;
+                values_read += 1;
+            }
+        }
+
+        // Read data in batches of 32 values
+        if values_to_read - values_read >= 32 {
+            let aligned = self.state.as_aligned();
+            values_read += aligned.get_batch_x32(
+                &mut batch[values_read..],
+                values_to_read - values_read,
+                bit_width,
+            );
+        }
+
+        // Read remaining values
+        if values_to_read != values_read {
+            let unaligned = self.state.as_unaligned();
+            while values_to_read != values_read {
+                let value = unaligned
+                    .get(bit_width)
+                    .expect("expected to have more data");
+                batch[values_read] = value;
+                values_read += 1;
+            }
         }
 
         values_to_read
@@ -610,20 +759,7 @@ impl BitReader {
     /// Returns `Some` if there's enough bytes left to form a value of `T`.
     /// Otherwise `None`.
     pub fn get_aligned<T: FromBytes>(&mut self, num_bytes: usize) -> Option<T> {
-        let bytes_read = ceil(self.bit_offset as i64, 8) as usize;
-        if self.byte_offset + bytes_read + num_bytes > self.total_bytes {
-            return None;
-        }
-
-        // Advance byte_offset to next unread byte and read num_bytes
-        self.byte_offset += bytes_read;
-        let v = read_num_bytes!(T, num_bytes, self.buffer.data()[self.byte_offset..]);
-        self.byte_offset += num_bytes;
-
-        // Reset buffered_values
-        self.bit_offset = 0;
-        self.reload_buffer_values();
-        Some(v)
+        self.state.as_aligned().get(num_bytes)
     }
 
     /// Reads a VLQ encoded (in little endian order) int from the stream.
@@ -633,7 +769,9 @@ impl BitReader {
     pub fn get_vlq_int(&mut self) -> Option<i64> {
         let mut shift = 0;
         let mut v: i64 = 0;
-        while let Some(byte) = self.get_aligned::<u8>(1) {
+
+        let aligned = self.state.as_aligned();
+        while let Some(byte) = aligned.get::<u8>(1) {
             v |= ((byte & 0x7F) as i64) << shift;
             shift += 7;
             assert!(
@@ -663,12 +801,6 @@ impl BitReader {
             let u = v as u64;
             (u >> 1) as i64 ^ -((u & 1) as i64)
         })
-    }
-
-    fn reload_buffer_values(&mut self) {
-        let bytes_to_read = cmp::min(self.total_bytes - self.byte_offset, 8);
-        self.buffered_values =
-            read_num_bytes!(u64, bytes_to_read, self.buffer.data()[self.byte_offset..]);
     }
 }
 
