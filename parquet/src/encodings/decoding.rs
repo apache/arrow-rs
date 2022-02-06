@@ -17,6 +17,8 @@
 
 //! Contains all supported decoders for Parquet.
 
+use num::traits::WrappingAdd;
+use num::FromPrimitive;
 use std::{cmp, marker::PhantomData, mem};
 
 use super::rle::RleDecoder;
@@ -27,8 +29,8 @@ use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::{
-    bit_util::{self, BitReader, FromBytes},
-    memory::{ByteBuffer, ByteBufferPtr},
+    bit_util::{self, BitReader},
+    memory::ByteBufferPtr,
 };
 
 pub(crate) mod private {
@@ -431,229 +433,250 @@ pub struct DeltaBitPackDecoder<T: DataType> {
     initialized: bool,
 
     // Header info
-    num_values: usize,
-    num_mini_blocks: i64,
+    // The number of values in each block
+    block_size: usize,
+    /// The number of values in the current page
+    values_left: usize,
+    /// The number of mini-blocks in each block
+    mini_blocks_per_block: usize,
+    /// The number of values in each mini block
     values_per_mini_block: usize,
-    values_current_mini_block: usize,
-    first_value: i64,
-    first_value_read: bool,
 
     // Per block info
-    min_delta: i64,
+    /// The minimum delta in the block
+    min_delta: T::T,
+    /// The byte offset of the end of the current block
+    block_end_offset: usize,
+    /// The index on the current mini block
     mini_block_idx: usize,
-    delta_bit_width: u8,
-    delta_bit_widths: ByteBuffer,
-    deltas_in_mini_block: Vec<T::T>, // eagerly loaded deltas for a mini block
-    use_batch: bool,
+    /// The bit widths of each mini block in the current block
+    mini_block_bit_widths: Vec<u8>,
+    /// The number of values remaining in the current mini block
+    mini_block_remaining: usize,
 
-    current_value: i64,
-
-    _phantom: PhantomData<T>,
+    /// The first value from the block header if not consumed
+    first_value: Option<T::T>,
+    /// The last value to compute offsets from
+    last_value: T::T,
 }
 
-impl<T: DataType> DeltaBitPackDecoder<T> {
+impl<T: DataType> DeltaBitPackDecoder<T>
+where
+    T::T: Default + FromPrimitive + WrappingAdd + Copy,
+{
     /// Creates new delta bit packed decoder.
     pub fn new() -> Self {
         Self {
             bit_reader: BitReader::from(vec![]),
             initialized: false,
-            num_values: 0,
-            num_mini_blocks: 0,
+            block_size: 0,
+            values_left: 0,
+            mini_blocks_per_block: 0,
             values_per_mini_block: 0,
-            values_current_mini_block: 0,
-            first_value: 0,
-            first_value_read: false,
-            min_delta: 0,
+            min_delta: Default::default(),
             mini_block_idx: 0,
-            delta_bit_width: 0,
-            delta_bit_widths: ByteBuffer::new(),
-            deltas_in_mini_block: vec![],
-            use_batch: mem::size_of::<T::T>() == 4,
-            current_value: 0,
-            _phantom: PhantomData,
+            mini_block_bit_widths: vec![],
+            mini_block_remaining: 0,
+            block_end_offset: 0,
+            first_value: None,
+            last_value: Default::default(),
         }
     }
 
-    /// Returns underlying bit reader offset.
+    /// Returns the current offset
     pub fn get_offset(&self) -> usize {
         assert!(self.initialized, "Bit reader is not initialized");
-        self.bit_reader.get_byte_offset()
+        match self.values_left {
+            // If we've exhausted this page report the end of the current block
+            // as we may not have consumed the trailing padding
+            //
+            // The max is necessary to handle pages with no blocks
+            0 => self.bit_reader.get_byte_offset().max(self.block_end_offset),
+            _ => self.bit_reader.get_byte_offset(),
+        }
     }
 
-    /// Initializes new mini block.
+    /// Initializes the next block and the first mini block within it
     #[inline]
-    fn init_block(&mut self) -> Result<()> {
-        self.min_delta = self
+    fn next_block(&mut self) -> Result<()> {
+        let min_delta = self
             .bit_reader
             .get_zigzag_vlq_int()
             .ok_or_else(|| eof_err!("Not enough data to decode 'min_delta'"))?;
 
-        self.delta_bit_widths.clear();
-        for _ in 0..self.num_mini_blocks {
-            let w = self
-                .bit_reader
-                .get_aligned::<u8>(1)
-                .ok_or_else(|| eof_err!("Not enough data to decode 'width'"))?;
-            self.delta_bit_widths.push(w);
+        self.min_delta = T::T::from_i64(min_delta)
+            .ok_or_else(|| general_err!("'min_delta' too large"))?;
+
+        self.mini_block_bit_widths.clear();
+        self.bit_reader.get_aligned_bytes(
+            &mut self.mini_block_bit_widths,
+            self.mini_blocks_per_block as usize,
+        );
+
+        let mut offset = self.bit_reader.get_byte_offset();
+        let mut remaining = self.values_left;
+
+        // Compute the end offset of the current block
+        for b in &mut self.mini_block_bit_widths {
+            if remaining == 0 {
+                // Specification requires handling arbitrary bit widths
+                // for trailing mini blocks
+                *b = 0;
+            }
+            remaining = remaining.saturating_sub(self.values_per_mini_block);
+            offset += *b as usize * self.values_per_mini_block / 8;
+        }
+        self.block_end_offset = offset;
+
+        if self.mini_block_bit_widths.len() != self.mini_blocks_per_block {
+            return Err(eof_err!("insufficient mini block bit widths"));
         }
 
+        self.mini_block_remaining = self.values_per_mini_block;
         self.mini_block_idx = 0;
-        self.delta_bit_width = self.delta_bit_widths.data()[0];
-        self.values_current_mini_block = self.values_per_mini_block;
+
         Ok(())
     }
 
-    /// Loads delta into mini block.
+    /// Initializes the next mini block
     #[inline]
-    fn load_deltas_in_mini_block(&mut self) -> Result<()>
-    where
-        T::T: FromBytes,
-    {
-        if self.use_batch {
-            self.deltas_in_mini_block
-                .resize(self.values_current_mini_block, T::T::default());
-            let loaded = self.bit_reader.get_batch::<T::T>(
-                &mut self.deltas_in_mini_block[..],
-                self.delta_bit_width as usize,
-            );
-            assert!(loaded == self.values_current_mini_block);
+    fn next_mini_block(&mut self) -> Result<()> {
+        if self.mini_block_idx + 1 < self.mini_block_bit_widths.len() {
+            self.mini_block_idx += 1;
+            self.mini_block_remaining = self.values_per_mini_block;
+            Ok(())
         } else {
-            self.deltas_in_mini_block.clear();
-            for _ in 0..self.values_current_mini_block {
-                // TODO: load one batch at a time similar to int32
-                let delta = self
-                    .bit_reader
-                    .get_value::<T::T>(self.delta_bit_width as usize)
-                    .ok_or_else(|| eof_err!("Not enough data to decode 'delta'"))?;
-                self.deltas_in_mini_block.push(delta);
-            }
+            self.next_block()
         }
-
-        Ok(())
     }
 }
 
-impl<T: DataType> Decoder<T> for DeltaBitPackDecoder<T> {
+impl<T: DataType> Decoder<T> for DeltaBitPackDecoder<T>
+where
+    T::T: Default + FromPrimitive + WrappingAdd + Copy,
+{
     // # of total values is derived from encoding
     #[inline]
     fn set_data(&mut self, data: ByteBufferPtr, _index: usize) -> Result<()> {
         self.bit_reader = BitReader::new(data);
         self.initialized = true;
 
-        let block_size = self
+        // Read header information
+        self.block_size = self
             .bit_reader
             .get_vlq_int()
-            .ok_or_else(|| eof_err!("Not enough data to decode 'block_size'"))?;
-        self.num_mini_blocks = self
+            .ok_or_else(|| eof_err!("Not enough data to decode 'block_size'"))?
+            .try_into()
+            .map_err(|_| general_err!("invalid 'block_size'"))?;
+
+        self.mini_blocks_per_block = self
             .bit_reader
             .get_vlq_int()
-            .ok_or_else(|| eof_err!("Not enough data to decode 'num_mini_blocks'"))?;
-        self.num_values = self
+            .ok_or_else(|| eof_err!("Not enough data to decode 'mini_blocks_per_block'"))?
+            .try_into()
+            .map_err(|_| general_err!("invalid 'mini_blocks_per_block'"))?;
+
+        self.values_left = self
             .bit_reader
             .get_vlq_int()
             .ok_or_else(|| eof_err!("Not enough data to decode 'num_values'"))?
-            as usize;
-        self.first_value = self
+            .try_into()
+            .map_err(|_| general_err!("invalid 'num_values'"))?;
+
+        let first_value = self
             .bit_reader
             .get_zigzag_vlq_int()
             .ok_or_else(|| eof_err!("Not enough data to decode 'first_value'"))?;
 
-        // Reset decoding state
-        self.first_value_read = false;
-        self.mini_block_idx = 0;
-        self.delta_bit_widths.clear();
-        self.values_current_mini_block = 0;
+        self.first_value = Some(
+            T::T::from_i64(first_value)
+                .ok_or_else(|| general_err!("first value too large"))?,
+        );
 
-        self.values_per_mini_block = (block_size / self.num_mini_blocks) as usize;
-        assert!(self.values_per_mini_block % 8 == 0);
+        if self.block_size % 128 != 0 {
+            return Err(general_err!(
+                "'block_size' must be a multiple of 128, got {}",
+                self.block_size
+            ));
+        }
+
+        if self.block_size % self.mini_blocks_per_block != 0 {
+            return Err(general_err!(
+                "'block_size' must be a multiple of 'mini_blocks_per_block' got {} and {}",
+                self.block_size, self.mini_blocks_per_block
+            ));
+        }
+
+        // Reset decoding state
+        self.mini_block_idx = 0;
+        self.values_per_mini_block = self.block_size / self.mini_blocks_per_block;
+        self.mini_block_remaining = 0;
+        self.mini_block_bit_widths.clear();
+
+        if self.values_per_mini_block % 32 != 0 {
+            return Err(general_err!(
+                "'values_per_mini_block' must be a multiple of 32 got {}",
+                self.values_per_mini_block
+            ));
+        }
 
         Ok(())
     }
 
     fn get(&mut self, buffer: &mut [T::T]) -> Result<usize> {
         assert!(self.initialized, "Bit reader is not initialized");
-
-        let num_values = cmp::min(buffer.len(), self.num_values);
-        for i in 0..num_values {
-            if !self.first_value_read {
-                self.set_decoded_value(buffer, i, self.first_value);
-                self.current_value = self.first_value;
-                self.first_value_read = true;
-                continue;
-            }
-
-            if self.values_current_mini_block == 0 {
-                self.mini_block_idx += 1;
-                if self.mini_block_idx < self.delta_bit_widths.size() {
-                    self.delta_bit_width =
-                        self.delta_bit_widths.data()[self.mini_block_idx];
-                    self.values_current_mini_block = self.values_per_mini_block;
-                } else {
-                    self.init_block()?;
-                }
-                self.load_deltas_in_mini_block()?;
-            }
-
-            // we decrement values in current mini block, so we need to invert index for
-            // delta
-            let delta = self.get_delta(
-                self.deltas_in_mini_block.len() - self.values_current_mini_block,
-            );
-            // It is OK for deltas to contain "overflowed" values after encoding,
-            // e.g. i64::MAX - i64::MIN, so we use `wrapping_add` to "overflow" again and
-            // restore original value.
-            self.current_value = self.current_value.wrapping_add(self.min_delta);
-            self.current_value = self.current_value.wrapping_add(delta as i64);
-            self.set_decoded_value(buffer, i, self.current_value);
-            self.values_current_mini_block -= 1;
+        if buffer.is_empty() {
+            return Ok(0);
         }
 
-        self.num_values -= num_values;
-        Ok(num_values)
+        let mut read = 0;
+        let to_read = buffer.len().min(self.values_left);
+
+        if let Some(value) = self.first_value.take() {
+            self.last_value = value;
+            buffer[0] = value;
+            read += 1;
+        }
+
+        while read != to_read {
+            if self.mini_block_remaining == 0 {
+                self.next_mini_block()?;
+            }
+
+            let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
+            let batch_to_read = self.mini_block_remaining.min(to_read - read);
+
+            let batch_read = self
+                .bit_reader
+                .get_batch(&mut buffer[read..read + batch_to_read], bit_width);
+
+            // At this point we have read the deltas to `buffer` we now need to offset
+            // these to get back to the original values that were encoded
+            for v in &mut buffer[read..read + batch_read] {
+                // It is OK for deltas to contain "overflowed" values after encoding,
+                // e.g. i64::MAX - i64::MIN, so we use `wrapping_add` to "overflow" again and
+                // restore original value.
+                *v = v
+                    .wrapping_add(&self.min_delta)
+                    .wrapping_add(&self.last_value);
+
+                self.last_value = *v;
+            }
+
+            read += batch_read;
+            self.mini_block_remaining -= batch_read;
+        }
+
+        self.values_left -= to_read;
+        Ok(to_read)
     }
 
     fn values_left(&self) -> usize {
-        self.num_values
+        self.values_left
     }
 
     fn encoding(&self) -> Encoding {
         Encoding::DELTA_BINARY_PACKED
-    }
-}
-
-/// Helper trait to define specific conversions when decoding values
-trait DeltaBitPackDecoderConversion<T: DataType> {
-    /// Sets decoded value based on type `T`.
-    fn get_delta(&self, index: usize) -> i64;
-
-    fn set_decoded_value(&self, buffer: &mut [T::T], index: usize, value: i64);
-}
-
-impl<T: DataType> DeltaBitPackDecoderConversion<T> for DeltaBitPackDecoder<T> {
-    #[inline]
-    fn get_delta(&self, index: usize) -> i64 {
-        ensure_phys_ty!(
-            Type::INT32 | Type::INT64,
-            "DeltaBitPackDecoder only supports Int32Type and Int64Type"
-        );
-        self.deltas_in_mini_block[index].as_i64().unwrap()
-    }
-
-    #[inline]
-    fn set_decoded_value(&self, buffer: &mut [T::T], index: usize, value: i64) {
-        match T::get_physical_type() {
-            Type::INT32 => {
-                let val = buffer[index].as_mut_any().downcast_mut::<i32>().unwrap();
-
-                *val = value as i32;
-            }
-            Type::INT64 => {
-                let val = buffer[index].as_mut_any().downcast_mut::<i64>().unwrap();
-
-                *val = value;
-            }
-            _ => panic!("DeltaBitPackDecoder only supports Int32Type and Int64Type"),
-        };
     }
 }
 

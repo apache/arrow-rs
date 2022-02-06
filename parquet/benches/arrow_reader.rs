@@ -54,17 +54,17 @@ pub fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
 
-fn build_plain_encoded_int32_page_iterator(
+fn build_encoded_int32_page_iterator(
     schema: SchemaDescPtr,
     column_desc: ColumnDescPtr,
     null_density: f32,
+    encoding: Encoding,
 ) -> impl PageIterator + Clone {
     let max_def_level = column_desc.max_def_level();
     let max_rep_level = column_desc.max_rep_level();
     let rep_levels = vec![0; VALUES_PER_PAGE];
     let mut rng = seedable_rng();
     let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
-    let mut int32_value = 0;
     for _i in 0..NUM_ROW_GROUPS {
         let mut column_chunk_pages = Vec::new();
         for _j in 0..PAGES_PER_GROUP {
@@ -78,8 +78,7 @@ fn build_plain_encoded_int32_page_iterator(
                     max_def_level
                 };
                 if def_level == max_def_level {
-                    int32_value += 1;
-                    values.push(int32_value);
+                    values.push(rng.gen_range(0..1000));
                 }
                 def_levels.push(def_level);
             }
@@ -87,7 +86,7 @@ fn build_plain_encoded_int32_page_iterator(
                 DataPageBuilderImpl::new(column_desc.clone(), values.len() as u32, true);
             page_builder.add_rep_levels(max_rep_level, &rep_levels);
             page_builder.add_def_levels(max_def_level, &def_levels);
-            page_builder.add_values::<Int32Type>(Encoding::PLAIN, &values);
+            page_builder.add_values::<Int32Type>(encoding, &values);
             column_chunk_pages.push(page_builder.consume());
         }
         pages.push(column_chunk_pages);
@@ -332,9 +331,7 @@ fn create_complex_object_byte_array_dictionary_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
-    use parquet::arrow::array_reader::{
-        make_byte_array_dictionary_reader, ComplexObjectArrayReader,
-    };
+    use parquet::arrow::array_reader::ComplexObjectArrayReader;
     use parquet::arrow::converter::{Utf8ArrayConverter, Utf8Converter};
     let arrow_type =
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
@@ -367,10 +364,11 @@ fn add_benches(c: &mut Criterion) {
     // =============================
 
     // int32, plain encoded, no NULLs
-    let plain_int32_no_null_data = build_plain_encoded_int32_page_iterator(
+    let plain_int32_no_null_data = build_encoded_int32_page_iterator(
         schema.clone(),
         mandatory_int32_column_desc.clone(),
         0.0,
+        Encoding::PLAIN,
     );
     group.bench_function("read Int32Array, plain encoded, mandatory, no NULLs", |b| {
         b.iter(|| {
@@ -383,10 +381,11 @@ fn add_benches(c: &mut Criterion) {
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
 
-    let plain_int32_no_null_data = build_plain_encoded_int32_page_iterator(
+    let plain_int32_no_null_data = build_encoded_int32_page_iterator(
         schema.clone(),
         optional_int32_column_desc.clone(),
         0.0,
+        Encoding::PLAIN,
     );
     group.bench_function("read Int32Array, plain encoded, optional, no NULLs", |b| {
         b.iter(|| {
@@ -400,13 +399,70 @@ fn add_benches(c: &mut Criterion) {
     });
 
     // int32, plain encoded, half NULLs
-    let plain_int32_half_null_data = build_plain_encoded_int32_page_iterator(
+    let plain_int32_half_null_data = build_encoded_int32_page_iterator(
         schema.clone(),
         optional_int32_column_desc.clone(),
         0.5,
+        Encoding::PLAIN,
     );
     group.bench_function(
         "read Int32Array, plain encoded, optional, half NULLs",
+        |b| {
+            b.iter(|| {
+                let array_reader = create_int32_primitive_array_reader(
+                    plain_int32_half_null_data.clone(),
+                    optional_int32_column_desc.clone(),
+                );
+                count = bench_array_reader(array_reader);
+            });
+            assert_eq!(count, EXPECTED_VALUE_COUNT);
+        },
+    );
+
+    // int32, binary packed, no NULLs
+    let plain_int32_no_null_data = build_encoded_int32_page_iterator(
+        schema.clone(),
+        mandatory_int32_column_desc.clone(),
+        0.0,
+        Encoding::DELTA_BINARY_PACKED,
+    );
+    group.bench_function("read Int32Array, binary packed, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_int32_primitive_array_reader(
+                plain_int32_no_null_data.clone(),
+                mandatory_int32_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let plain_int32_no_null_data = build_encoded_int32_page_iterator(
+        schema.clone(),
+        optional_int32_column_desc.clone(),
+        0.0,
+        Encoding::DELTA_BINARY_PACKED,
+    );
+    group.bench_function("read Int32Array, binary packed, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_int32_primitive_array_reader(
+                plain_int32_no_null_data.clone(),
+                optional_int32_column_desc.clone(),
+            );
+            count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // int32, binary packed, half NULLs
+    let plain_int32_half_null_data = build_encoded_int32_page_iterator(
+        schema.clone(),
+        optional_int32_column_desc.clone(),
+        0.5,
+        Encoding::DELTA_BINARY_PACKED,
+    );
+    group.bench_function(
+        "read Int32Array, binary packed, optional, half NULLs",
         |b| {
             b.iter(|| {
                 let array_reader = create_int32_primitive_array_reader(

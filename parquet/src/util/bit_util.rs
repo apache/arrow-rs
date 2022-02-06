@@ -528,8 +528,14 @@ impl BitReader {
         Some(from_ne_slice(v.as_bytes()))
     }
 
+    /// Read multiple values from their packed representation
+    ///
+    /// # Panics
+    ///
+    /// This function panics if
+    /// - `bit_width` is larger than the bit-capacity of `T`
+    ///
     pub fn get_batch<T: FromBytes>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
-        assert!(num_bits <= 32);
         assert!(num_bits <= size_of::<T>() * 8);
 
         let mut values_to_read = batch.len();
@@ -540,6 +546,17 @@ impl BitReader {
         }
 
         let mut i = 0;
+
+        if num_bits > 32 {
+            // No fast path - read values individually
+            while i < values_to_read {
+                batch[i] = self
+                    .get_value(num_bits)
+                    .expect("expected to have more data");
+                i += 1;
+            }
+            return values_to_read
+        }
 
         // First align bit offset to byte offset
         if self.bit_offset != 0 {
@@ -600,6 +617,26 @@ impl BitReader {
         }
 
         values_to_read
+    }
+
+    /// Reads up to `num_bytes` to `buffer` returning the number of bytes read
+    pub(crate) fn get_aligned_bytes(
+        &mut self,
+        buf: &mut Vec<u8>,
+        num_bytes: usize,
+    ) -> usize {
+        // Align to byte offset
+        self.byte_offset += ceil(self.bit_offset as i64, 8) as usize;
+        self.bit_offset = 0;
+
+        let src = &self.buffer.data()[self.byte_offset..];
+        let to_read = num_bytes.min(src.len());
+        buf.extend_from_slice(&src[..to_read]);
+
+        self.byte_offset += to_read;
+        self.reload_buffer_values();
+
+        to_read
     }
 
     /// Reads a `num_bytes`-sized value from this buffer and return it.
