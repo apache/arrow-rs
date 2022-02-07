@@ -65,7 +65,7 @@ macro_rules! downcast_dict_filter {
 /// slots of a [BooleanArray] are true. Each interval corresponds to a contiguous region of memory
 /// to be "taken" from an array to be filtered.
 ///
-/// This is only performant for the least selective filters that copy across long contiguous runs
+/// This is only performant for filters that copy across long contiguous runs
 #[derive(Debug)]
 pub struct SlicesIterator<'a> {
     iter: UnalignedBitChunkIterator<'a>,
@@ -157,8 +157,8 @@ impl<'a> Iterator for SlicesIterator<'a> {
 
 /// An iterator of `usize` whose index in [`BooleanArray`] is true
 ///
-/// This provides the best performance on all but the least selective predicates (which keep most
-/// / all rows), where the benefits of copying large runs instead favours [`SlicesIterator`]
+/// This provides the best performance on most predicates, apart from those which keep
+/// large runs and therefore favour [`SlicesIterator`]
 struct IndexIterator<'a> {
     current_chunk: u64,
     chunk_offset: i64,
