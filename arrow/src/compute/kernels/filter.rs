@@ -330,20 +330,7 @@ impl FilterBuilder {
         };
 
         let count = filter_count(&filter);
-        let strategy = if count == filter.len() {
-            IterationStrategy::All
-        } else {
-            // Compute the selectivity of the predicate by dividing the number of true
-            // bits in the predicate by the predicate's total length
-            //
-            // This can then be used as a heuristic for the optimal iteration strategy
-            let selectivity_frac = count as f64 / filter.len() as f64;
-            if selectivity_frac > FILTER_SLICES_SELECTIVITY_THRESHOLD {
-                IterationStrategy::SlicesIterator
-            } else {
-                IterationStrategy::IndexIterator
-            }
-        };
+        let strategy = IterationStrategy::default_strategy(filter.len(), count);
 
         Self {
             filter,
@@ -395,6 +382,32 @@ enum IterationStrategy {
     Slices(Vec<(usize, usize)>),
     /// Select all rows
     All,
+    /// Select no rows
+    None,
+}
+
+impl IterationStrategy {
+    /// The default [`IterationStrategy`] for a filter of length `filter_length`
+    /// and selecting `filter_count` rows
+    fn default_strategy(filter_length: usize, filter_count: usize) -> Self {
+        if filter_length == 0 || filter_count == 0 {
+            return IterationStrategy::None;
+        }
+
+        if filter_count == filter_length {
+            return IterationStrategy::All;
+        }
+
+        // Compute the selectivity of the predicate by dividing the number of true
+        // bits in the predicate by the predicate's total length
+        //
+        // This can then be used as a heuristic for the optimal iteration strategy
+        let selectivity_frac = filter_count as f64 / filter_length as f64;
+        if selectivity_frac > FILTER_SLICES_SELECTIVITY_THRESHOLD {
+            return IterationStrategy::SlicesIterator;
+        }
+        IterationStrategy::IndexIterator
+    }
 }
 
 /// A filtering predicate that can be applied to an [`Array`]
@@ -421,16 +434,9 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
         )));
     }
 
-    match predicate.count {
-        0 => {
-            // return empty
-            Ok(new_empty_array(values.data_type()))
-        }
-        len if len == values.len() => {
-            // return all
-            let data = values.data().clone();
-            Ok(make_array(data))
-        }
+    match predicate.strategy {
+        IterationStrategy::None => Ok(new_empty_array(values.data_type())),
+        IterationStrategy::All => Ok(make_array(values.data().slice(0, predicate.count))),
         // actually filter
         _ => match values.data_type() {
             DataType::Boolean => {
@@ -634,7 +640,7 @@ fn filter_bits(buffer: &Buffer, offset: usize, predicate: &FilterPredicate) -> B
             }
             builder.finish()
         }
-        IterationStrategy::All => buffer.clone(),
+        IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
 }
 
@@ -703,9 +709,7 @@ where
             // SAFETY: `Vec::iter` is trusted length
             unsafe { MutableBuffer::from_trusted_len_iter(iter) }
         }
-        IterationStrategy::All => {
-            return PrimitiveArray::from(data.slice(0, predicate.filter.len()))
-        }
+        IterationStrategy::All | IterationStrategy::None => unreachable!(),
     };
 
     let mut builder = ArrayDataBuilder::new(data.data_type().clone())
@@ -822,9 +826,7 @@ where
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
         }
         IterationStrategy::Indices(indices) => filter.extend_idx(indices.iter().cloned()),
-        IterationStrategy::All => {
-            return GenericStringArray::from(data.slice(0, predicate.filter.len()))
-        }
+        IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
 
     let mut builder = ArrayDataBuilder::new(data.data_type().clone())
