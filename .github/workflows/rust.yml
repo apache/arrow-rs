@@ -39,6 +39,9 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
     steps:
+      - name: Install python dev
+        run: |
+          sudo apt install libpython3.9-dev
       - uses: actions/checkout@v2
       - name: Cache Cargo
         uses: actions/cache@v2
@@ -59,6 +62,7 @@ jobs:
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
           rustup component add rustfmt
+
       - name: Build Workspace
         run: |
           export CARGO_HOME="/github/home/.cargo"
