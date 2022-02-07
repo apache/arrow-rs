@@ -73,7 +73,7 @@ pub trait BufferQueue: Sized {
 ///
 /// [scalar]: https://doc.rust-lang.org/book/ch03-02-data-types.html#scalar-types
 ///
-pub trait ScalarValue {}
+pub trait ScalarValue: Copy {}
 impl ScalarValue for bool {}
 impl ScalarValue for u8 {}
 impl ScalarValue for i8 {}
@@ -261,7 +261,7 @@ impl<T: ScalarValue> ValuesBuffer for ScalarBuffer<T> {
             if level_pos <= value_pos {
                 break;
             }
-            slice.swap(value_pos, level_pos)
+            slice[level_pos] = slice[value_pos];
         }
     }
 }
