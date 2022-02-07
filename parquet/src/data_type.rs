@@ -599,6 +599,7 @@ pub(crate) mod private {
         + super::SliceAsBytes
         + PartialOrd
         + Send
+        + crate::encodings::decoding::private::GetDecoder
     {
         /// Encode the value directly from a higher level encoder
         fn encode<W: std::io::Write>(
