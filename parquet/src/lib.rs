@@ -57,6 +57,18 @@ macro_rules! experimental_mod {
     };
 }
 
+macro_rules! experimental_mod_crate {
+    ($module:ident $(, #[$meta:meta])*) => {
+        #[cfg(feature = "experimental")]
+        #[doc(hidden)]
+        $(#[$meta])*
+        pub mod $module;
+        #[cfg(not(feature = "experimental"))]
+        $(#[$meta])*
+        pub(crate) mod $module;
+    };
+}
+
 #[macro_use]
 pub mod errors;
 pub mod basic;
@@ -78,7 +90,7 @@ experimental_mod!(util, #[macro_use]);
 pub mod arrow;
 pub mod column;
 experimental_mod!(compression);
-mod encodings;
+experimental_mod!(encodings);
 pub mod file;
 pub mod record;
 pub mod schema;

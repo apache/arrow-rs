@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "8.0.0"
+version = "9.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
