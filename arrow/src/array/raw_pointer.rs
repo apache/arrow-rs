@@ -17,8 +17,10 @@
 
 use std::ptr::NonNull;
 
-/// This struct is highly `unsafe` and offers the possibility to self-reference a [arrow::Buffer] from [arrow::array::ArrayData].
-/// as a pointer to the beginning of its contents.
+/// This struct is highly `unsafe` and offers the possibility to
+/// self-reference a [crate::buffer::Buffer] from
+/// [crate::array::ArrayData], as a pointer to the beginning of its
+/// contents.
 pub(super) struct RawPtrBox<T> {
     ptr: NonNull<T>,
 }

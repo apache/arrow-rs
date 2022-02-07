@@ -97,7 +97,7 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
     }
 }
 
-/// Reads [`FileMetadata`] from the provided [`Read`] starting at the readers current position
+/// Reads [`ParquetMetaData`] from the provided [`Read`] starting at the readers current position
 pub(crate) fn parse_metadata_buffer<T: Read + ?Sized>(
     metadata_read: &mut T,
 ) -> Result<ParquetMetaData> {

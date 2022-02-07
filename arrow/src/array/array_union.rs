@@ -27,13 +27,17 @@ use std::any::Any;
 
 /// An Array that can represent slots of varying types.
 ///
-/// Each slot in a `UnionArray` can have a value chosen from a number of types.  Each of the
-/// possible types are named like the fields of a [`StructArray`](crate::array::StructArray).
-/// A `UnionArray` can have two possible memory layouts, "dense" or "sparse".  For more information
-/// on please see the [specification](https://arrow.apache.org/docs/format/Columnar.html#union-layout).
+/// Each slot in a [UnionArray] can have a value chosen from a number
+/// of types.  Each of the possible types are named like the fields of
+/// a [`StructArray`](crate::array::StructArray).  A `UnionArray` can
+/// have two possible memory layouts, "dense" or "sparse".  For more
+/// information on please see the
+/// [specification](https://arrow.apache.org/docs/format/Columnar.html#union-layout).
 ///
-/// [`UnionBuilder`]can be used to create  `UnionArray`'s of primitive types.  `UnionArray`'s of nested
-/// types are also supported but not via `UnionBuilder`, see the tests for examples.
+/// [UnionBuilder](crate::array::UnionBuilder) can be used to
+/// create [UnionArray]'s of primitive types. `UnionArray`'s of nested
+/// types are also supported but not via `UnionBuilder`, see the tests
+/// for examples.
 ///
 /// # Examples
 /// ## Create a dense UnionArray `[1, 3.2, 34]`

@@ -312,8 +312,7 @@ pub struct Reader<R: Read> {
     batch_records: Vec<StringRecord>,
     /// datetime format used to parse datetime values, (format understood by chrono)
     ///
-    /// For format refer to chrono docs:
-    /// https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html
+    /// For format refer to [chrono docs](https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html)
     datetime_format: Option<String>,
 }
 
@@ -522,7 +521,8 @@ impl<R: Read> Iterator for Reader<R> {
     }
 }
 
-/// parses a slice of [csv_crate::StringRecord] into a [array::record_batch::RecordBatch].
+/// parses a slice of [csv_crate::StringRecord] into a
+/// [RecordBatch](crate::record_batch::RecordBatch).
 fn parse(
     rows: &[StringRecord],
     fields: &[Field],
@@ -1141,8 +1141,7 @@ impl ReaderBuilder {
     /// Set the datetime fromat used to parse the string to Date64Type
     /// this fromat is used while when the schema wants to parse Date64Type.
     ///
-    /// For format refer to chrono docs:
-    /// https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html
+    /// For format refer to [chrono docs](https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html)
     ///
     pub fn with_datetime_format(mut self, datetime_format: String) -> Self {
         self.datetime_format = Some(datetime_format);

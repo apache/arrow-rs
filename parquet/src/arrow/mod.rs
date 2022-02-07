@@ -17,7 +17,7 @@
 
 //! Provides API for reading/writing Arrow
 //! [RecordBatch](arrow::record_batch::RecordBatch)es and
-//! [Array](arrow::array::Arrays) to/from Parquet Files.
+//! [Array](arrow::array::Array)s to/from Parquet Files.
 //!
 //! [Apache Arrow](http://arrow.apache.org/) is a cross-language development platform for
 //! in-memory data.
