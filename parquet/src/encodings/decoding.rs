@@ -1340,11 +1340,11 @@ mod tests {
         #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[bool]) -> Vec<u8> {
             let mut v = vec![];
-            for i in 0..data.len() {
+            for (i, item) in data.iter().enumerate() {
                 if i % 8 == 0 {
                     v.push(0);
                 }
-                if data[i] {
+                if *item {
                     set_array_bit(&mut v[..], i);
                 }
             }
