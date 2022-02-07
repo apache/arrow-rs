@@ -413,7 +413,8 @@ jobs:
           submodules: true
       - name: Install python dev
         run: |
-          apt install libpython3.9-dev
+          apt update
+          apt install -y libpython3.9-dev
       - name: Cache Cargo
         uses: actions/cache@v2
         with:
