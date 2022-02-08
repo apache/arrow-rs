@@ -312,8 +312,13 @@ where
                 let mut records_read = 0;
                 let mut end_of_last_record = self.num_values;
 
-                for current in self.num_values..self.values_written {
-                    if buf[current] == 0 && current != self.num_values {
+                for (current, item) in buf
+                    .iter()
+                    .enumerate()
+                    .take(self.values_written)
+                    .skip(self.num_values)
+                {
+                    if *item == 0 && current != self.num_values {
                         records_read += 1;
                         end_of_last_record = current;
 

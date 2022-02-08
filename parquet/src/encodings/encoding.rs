@@ -50,9 +50,9 @@ pub trait Encoder<T: DataType> {
         let num_values = values.len();
         let mut buffer = Vec::with_capacity(num_values);
         // TODO: this is pretty inefficient. Revisit in future.
-        for i in 0..num_values {
+        for (i, item) in values.iter().enumerate().take(num_values) {
             if bit_util::get_bit(valid_bits, i) {
-                buffer.push(values[i].clone());
+                buffer.push(item.clone());
             }
         }
         self.put(&buffer[..])?;
@@ -1128,11 +1128,13 @@ mod tests {
         let mut decoder =
             create_test_decoder::<ByteArrayType>(0, Encoding::DELTA_BYTE_ARRAY);
 
-        let mut input = vec![];
-        input.push(ByteArray::from("aa"));
-        input.push(ByteArray::from("aaa"));
-        input.push(ByteArray::from("aa"));
-        input.push(ByteArray::from("aaa"));
+        let input = vec![
+            ByteArray::from("aa"),
+            ByteArray::from("aaa"),
+            ByteArray::from("aa"),
+            ByteArray::from("aaa"),
+        ];
+
         let mut output = vec![ByteArray::default(); input.len()];
 
         let mut result =

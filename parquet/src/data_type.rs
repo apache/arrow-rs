@@ -848,17 +848,12 @@ pub(crate) mod private {
             decoder.start += bytes_to_decode;
 
             let mut pos = 0; // position in byte array
-            for i in 0..num_values {
+            for item in buffer.iter_mut().take(num_values) {
                 let elem0 = byteorder::LittleEndian::read_u32(&bytes[pos..pos + 4]);
                 let elem1 = byteorder::LittleEndian::read_u32(&bytes[pos + 4..pos + 8]);
                 let elem2 = byteorder::LittleEndian::read_u32(&bytes[pos + 8..pos + 12]);
 
-                buffer[i]
-                    .as_mut_any()
-                    .downcast_mut::<Self>()
-                    .unwrap()
-                    .set_data(elem0, elem1, elem2);
-
+                item.set_data(elem0, elem1, elem2);
                 pos += 12;
             }
             decoder.num_values -= num_values;
@@ -1002,16 +997,15 @@ pub(crate) mod private {
                 .as_mut()
                 .expect("set_data should have been called");
             let num_values = std::cmp::min(buffer.len(), decoder.num_values);
-            for i in 0..num_values {
+
+            for item in buffer.iter_mut().take(num_values) {
                 let len = decoder.type_length as usize;
 
                 if data.len() < decoder.start + len {
                     return Err(eof_err!("Not enough bytes to decode"));
                 }
 
-                let val: &mut Self = buffer[i].as_mut_any().downcast_mut().unwrap();
-
-                val.set_data(data.range(decoder.start, len));
+                item.set_data(data.range(decoder.start, len));
                 decoder.start += len;
             }
             decoder.num_values -= num_values;

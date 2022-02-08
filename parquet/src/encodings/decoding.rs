@@ -729,11 +729,11 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
 
                 let data = self.data.as_ref().unwrap();
                 let num_values = cmp::min(buffer.len(), self.num_values);
-                for i in 0..num_values {
+
+                for item in buffer.iter_mut().take(num_values) {
                     let len = self.lengths[self.current_idx] as usize;
 
-                    buffer[i]
-                        .as_mut_any()
+                    item.as_mut_any()
                         .downcast_mut::<ByteArray>()
                         .unwrap()
                         .set_data(data.range(self.offset, len));
@@ -836,7 +836,7 @@ impl<'m, T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
             ty @ Type::BYTE_ARRAY | ty @ Type::FIXED_LEN_BYTE_ARRAY => {
                 let num_values = cmp::min(buffer.len(), self.num_values);
                 let mut v: [ByteArray; 1] = [ByteArray::new(); 1];
-                for i in 0..num_values {
+                for item in buffer.iter_mut().take(num_values) {
                     // Process suffix
                     // TODO: this is awkward - maybe we should add a non-vectorized API?
                     let suffix_decoder = self.suffix_decoder.as_mut().expect("decoder not initialized");
@@ -854,12 +854,12 @@ impl<'m, T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
                     let data = ByteBufferPtr::new(result.clone());
 
                     match ty {
-                        Type::BYTE_ARRAY => buffer[i]
+                        Type::BYTE_ARRAY => item
                             .as_mut_any()
                             .downcast_mut::<ByteArray>()
                             .unwrap()
                             .set_data(data),
-                        Type::FIXED_LEN_BYTE_ARRAY => buffer[i]
+                        Type::FIXED_LEN_BYTE_ARRAY => item
                             .as_mut_any()
                             .downcast_mut::<FixedLenByteArray>()
                             .unwrap()
@@ -1448,11 +1448,11 @@ mod tests {
         #[allow(clippy::wrong_self_convention)]
         fn to_byte_array(data: &[bool]) -> Vec<u8> {
             let mut v = vec![];
-            for i in 0..data.len() {
+            for (i, item) in data.iter().enumerate() {
                 if i % 8 == 0 {
                     v.push(0);
                 }
-                if data[i] {
+                if *item {
                     set_array_bit(&mut v[..], i);
                 }
             }
