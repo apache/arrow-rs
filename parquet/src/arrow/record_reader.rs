@@ -360,8 +360,9 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{BooleanBufferBuilder, Int16BufferBuilder, Int32BufferBuilder};
+    use arrow::array::{Int16BufferBuilder, Int32BufferBuilder};
     use arrow::bitmap::Bitmap;
+    use arrow::buffer::Buffer;
 
     use crate::basic::Encoding;
     use crate::column::page::Page;
@@ -552,15 +553,6 @@ mod tests {
             assert_eq!(7, record_reader.num_values());
         }
 
-        // Verify result record data
-        let mut bb = Int32BufferBuilder::new(7);
-        bb.append_slice(&[0, 7, 0, 6, 3, 0, 8]);
-        let expected_buffer = bb.finish();
-        assert_eq!(
-            expected_buffer,
-            record_reader.consume_record_data().unwrap()
-        );
-
         // Verify result def levels
         let mut bb = Int16BufferBuilder::new(7);
         bb.append_slice(&[1i16, 2i16, 0i16, 2i16, 2i16, 0i16, 2i16]);
@@ -571,13 +563,28 @@ mod tests {
         );
 
         // Verify bitmap
-        let mut bb = BooleanBufferBuilder::new(7);
-        bb.append_slice(&[false, true, false, true, true, false, true]);
-        let expected_bitmap = Bitmap::from(bb.finish());
+        let expected_valid = &[false, true, false, true, true, false, true];
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_bitmap = Bitmap::from(expected_buffer);
         assert_eq!(
             Some(expected_bitmap),
             record_reader.consume_bitmap().unwrap()
         );
+
+        // Verify result record data
+        let actual = record_reader.consume_record_data().unwrap();
+        let actual_values = unsafe { actual.typed_data::<i32>() };
+
+        let expected = &[0, 7, 0, 6, 3, 0, 8];
+        assert_eq!(actual_values.len(), expected.len());
+
+        // Only validate valid values are equal
+        let iter = expected_valid.iter().zip(actual_values).zip(expected);
+        for ((valid, actual), expected) in iter {
+            if *valid {
+                assert_eq!(actual, expected)
+            }
+        }
     }
 
     #[test]
@@ -660,15 +667,6 @@ mod tests {
             assert_eq!(9, record_reader.num_values());
         }
 
-        // Verify result record data
-        let mut bb = Int32BufferBuilder::new(9);
-        bb.append_slice(&[4, 0, 0, 7, 6, 3, 2, 8, 9]);
-        let expected_buffer = bb.finish();
-        assert_eq!(
-            expected_buffer,
-            record_reader.consume_record_data().unwrap()
-        );
-
         // Verify result def levels
         let mut bb = Int16BufferBuilder::new(9);
         bb.append_slice(&[2i16, 0i16, 1i16, 2i16, 2i16, 2i16, 2i16, 2i16, 2i16]);
@@ -679,13 +677,27 @@ mod tests {
         );
 
         // Verify bitmap
-        let mut bb = BooleanBufferBuilder::new(9);
-        bb.append_slice(&[true, false, false, true, true, true, true, true, true]);
-        let expected_bitmap = Bitmap::from(bb.finish());
+        let expected_valid = &[true, false, false, true, true, true, true, true, true];
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_bitmap = Bitmap::from(expected_buffer);
         assert_eq!(
             Some(expected_bitmap),
             record_reader.consume_bitmap().unwrap()
         );
+
+        // Verify result record data
+        let actual = record_reader.consume_record_data().unwrap();
+        let actual_values = unsafe { actual.typed_data::<i32>() };
+        let expected = &[4, 0, 0, 7, 6, 3, 2, 8, 9];
+        assert_eq!(actual_values.len(), expected.len());
+
+        // Only validate valid values are equal
+        let iter = expected_valid.iter().zip(actual_values).zip(expected);
+        for ((valid, actual), expected) in iter {
+            if *valid {
+                assert_eq!(actual, expected)
+            }
+        }
     }
 
     #[test]
