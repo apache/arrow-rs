@@ -59,6 +59,7 @@ jobs:
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
           rustup component add rustfmt
+
       - name: Build Workspace
         run: |
           export CARGO_HOME="/github/home/.cargo"
@@ -107,10 +108,10 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          
+
           # run tests on all workspace members with default feature list
           cargo test
-          
+
           # Switch to arrow crate
           cd arrow
           # re-run tests on arrow crate with additional features
@@ -122,13 +123,13 @@ jobs:
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
           cargo check --no-default-features
-          
+
           # Switch to parquet crate
           cd ../parquet
           # re-run tests on parquet crate with async feature enabled
           cargo test --features=async
           cargo check --no-default-features
-          
+
           # Switch to arrow-flight
           cd ../arrow-flight
           cargo check --no-default-features
@@ -289,7 +290,7 @@ jobs:
           cargo check --benches --workspace
 
   lint:
-    name: Lint
+    name: Lint (cargo fmt)
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -391,6 +392,51 @@ jobs:
           cd arrow
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
+
+  # test doc links still work
+  docs:
+    name: Docs are clean on AMD64 Rust ${{ matrix.rust }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64]
+        rust: [nightly]
+    container:
+      image: ${{ matrix.arch }}/rust
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Install python dev
+        run: |
+          apt update
+          apt install -y libpython3.9-dev
+      - name: Cache Cargo
+        uses: actions/cache@v2
+        with:
+          path: /github/home/.cargo
+          key: cargo-nightly-cache3-
+      - name: Cache Rust dependencies
+        uses: actions/cache@v2
+        with:
+          path: /github/home/target
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install ${{ matrix.rust }}
+          rustup default ${{ matrix.rust }}
+          rustup component add rustfmt
+      - name: Run cargo doc
+        run: |
+          export CARGO_HOME="/github/home/.cargo"
+          export CARGO_TARGET_DIR="/github/home/target"
+          export RUSTDOCFLAGS="-Dwarnings"
+          cargo doc --document-private-items --no-deps --workspace --all-features
+
 
   # test builds with various feature flag combinations outside the main workspace
   default-build:
