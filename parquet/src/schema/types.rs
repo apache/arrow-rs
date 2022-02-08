@@ -1492,9 +1492,7 @@ mod tests {
             .build();
         assert!(f2.is_ok());
 
-        let mut fields = vec![];
-        fields.push(Arc::new(f1.unwrap()));
-        fields.push(Arc::new(f2.unwrap()));
+        let mut fields = vec![Arc::new(f1.unwrap()), Arc::new(f2.unwrap())];
 
         let result = Type::group_type_builder("foo")
             .with_repetition(Repetition::REPEATED)

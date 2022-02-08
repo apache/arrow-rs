@@ -51,8 +51,8 @@ impl Debug for Deallocation {
 /// This structs' API is inspired by the `bytes::Bytes`, but it is not limited to using rust's
 /// global allocator nor u8 alignment.
 ///
-/// In the most common case, this buffer is allocated using [`allocate_aligned`](memory::allocate_aligned)
-/// and deallocated accordingly [`free_aligned`](memory::free_aligned).
+/// In the most common case, this buffer is allocated using [`allocate_aligned`](crate::alloc::allocate_aligned)
+/// and deallocated accordingly [`free_aligned`](crate::alloc::free_aligned).
 /// When the region is allocated by an foreign allocator, [Deallocation::Foreign], this calls the
 /// foreign deallocator to deallocate the region when it is no longer needed.
 pub struct Bytes {

@@ -26,7 +26,7 @@ use crate::{
 impl TryFrom<&FFI_ArrowSchema> for DataType {
     type Error = ArrowError;
 
-    /// See https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings
+    /// See [CDataInterface docs](https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings)
     fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self> {
         let dtype = match c_schema.format() {
             "n" => DataType::Null,
@@ -167,7 +167,7 @@ impl TryFrom<&FFI_ArrowSchema> for Schema {
 impl TryFrom<&DataType> for FFI_ArrowSchema {
     type Error = ArrowError;
 
-    /// See https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings
+    /// See [CDataInterface docs](https://arrow.apache.org/docs/format/CDataInterface.html#data-type-description-format-strings)
     fn try_from(dtype: &DataType) -> Result<Self> {
         let format = match dtype {
             DataType::Null => "n".to_string(),

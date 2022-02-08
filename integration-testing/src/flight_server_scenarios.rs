@@ -27,7 +27,7 @@ pub mod middleware;
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
-pub async fn listen_on(port: &str) -> Result<SocketAddr> {
+pub async fn listen_on(port: u16) -> Result<SocketAddr> {
     let addr: SocketAddr = format!("0.0.0.0:{}", port).parse()?;
 
     let listener = TcpListener::bind(addr).await?;

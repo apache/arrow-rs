@@ -18,7 +18,7 @@
 [package]
 name = "arrow-integration-testing"
 description = "Binaries used in the Arrow integration tests"
-version = "8.0.0"
+version = "9.0.0"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -34,7 +34,7 @@ logging = ["tracing-subscriber"]
 arrow = { path = "../arrow" }
 arrow-flight = { path = "../arrow-flight" }
 async-trait = "0.1.41"
-clap = "2.33"
+clap = { version = "3", features = ["derive", "env"] }
 futures = "0.3"
 hex = "0.4"
 prost = "0.9"

@@ -1708,7 +1708,7 @@ where
                 let simd_result = simd_op(simd_left, simd_right);
 
                 let m = T::mask_to_u64(&simd_result);
-                bitmask |= m << (i / lanes);
+                bitmask |= m << i;
 
                 i += lanes;
             }
@@ -2034,6 +2034,16 @@ macro_rules! typed_compares {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
+///
+/// # Example
+/// ```
+/// use arrow::array::{StringArray, BooleanArray};
+/// use arrow::compute::eq_dyn;
+/// let array1 = StringArray::from(vec![Some("foo"), None, Some("bar")]);
+/// let array2 = StringArray::from(vec![Some("foo"), None, Some("baz")]);
+/// let result = eq_dyn(&array1, &array2).unwrap();
+/// assert_eq!(BooleanArray::from(vec![Some(true), None, Some(false)]), result);
+/// ```
 pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     typed_compares!(left, right, eq_bool, eq, eq_utf8, eq_binary)
 }
@@ -2042,6 +2052,18 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
+///
+/// # Example
+/// ```
+/// use arrow::array::{BinaryArray, BooleanArray};
+/// use arrow::compute::neq_dyn;
+/// let values1: Vec<Option<&[u8]>> = vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36])];
+/// let values2: Vec<Option<&[u8]>> = vec![Some(&[0xfc, 0xa9]), None, Some(&[0x36, 0x00])];
+/// let array1 = BinaryArray::from(values1);
+/// let array2 = BinaryArray::from(values2);
+/// let result = neq_dyn(&array1, &array2).unwrap();
+/// assert_eq!(BooleanArray::from(vec![Some(false), None, Some(true)]), result);
+/// ```
 pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     typed_compares!(left, right, neq_bool, neq, neq_utf8, neq_binary)
 }
@@ -2050,6 +2072,17 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
+///
+/// # Example
+/// ```
+/// use arrow::array::{PrimitiveArray, BooleanArray};
+/// use arrow::datatypes::Int32Type;
+/// use arrow::compute::lt_dyn;
+/// let array1: PrimitiveArray<Int32Type> = PrimitiveArray::from(vec![Some(0), Some(1), Some(2)]);
+/// let array2: PrimitiveArray<Int32Type> = PrimitiveArray::from(vec![Some(1), Some(1), None]);
+/// let result = lt_dyn(&array1, &array2).unwrap();
+/// assert_eq!(BooleanArray::from(vec![Some(true), Some(false), None]), result);
+/// ```
 pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     typed_compares!(left, right, lt_bool, lt, lt_utf8, lt_binary)
 }
@@ -2058,6 +2091,17 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
+///
+/// # Example
+/// ```
+/// use arrow::array::{PrimitiveArray, BooleanArray};
+/// use arrow::datatypes::Date32Type;
+/// use arrow::compute::lt_eq_dyn;
+/// let array1: PrimitiveArray<Date32Type> = vec![Some(12356), Some(13548), Some(-365), Some(365)].into();
+/// let array2: PrimitiveArray<Date32Type> = vec![Some(12355), Some(13548), Some(-364), None].into();
+/// let result = lt_eq_dyn(&array1, &array2).unwrap();
+/// assert_eq!(BooleanArray::from(vec![Some(false), Some(true), Some(true), None]), result);
+/// ```
 pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     typed_compares!(left, right, lt_eq_bool, lt_eq, lt_eq_utf8, lt_eq_binary)
 }
@@ -2066,6 +2110,16 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
+///
+/// # Example
+/// ```
+/// use arrow::array::BooleanArray;
+/// use arrow::compute::gt_dyn;
+/// let array1 = BooleanArray::from(vec![Some(true), Some(false), None]);
+/// let array2 = BooleanArray::from(vec![Some(false), Some(true), None]);
+/// let result = gt_dyn(&array1, &array2).unwrap();
+/// assert_eq!(BooleanArray::from(vec![Some(true), Some(false), None]), result);
+/// ```
 pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     typed_compares!(left, right, gt_bool, gt, gt_utf8, gt_binary)
 }
@@ -2074,6 +2128,16 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 ///
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
+///
+/// # Example
+/// ```
+/// use arrow::array::{BooleanArray, StringArray};
+/// use arrow::compute::gt_eq_dyn;
+/// let array1 = StringArray::from(vec![Some(""), Some("aaa"), None]);
+/// let array2 = StringArray::from(vec![Some(" "), Some("aa"), None]);
+/// let result = gt_eq_dyn(&array1, &array2).unwrap();
+/// assert_eq!(BooleanArray::from(vec![Some(false), Some(true), None]), result);
+/// ```
 pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     typed_compares!(left, right, gt_eq_bool, gt_eq, gt_eq_utf8, gt_eq_binary)
 }
@@ -2378,6 +2442,20 @@ mod tests {
             let b = b.slice(0, b.len());
             let c = $DYN_KERNEL(a.as_ref(), b.as_ref()).unwrap();
             assert_eq!(BooleanArray::from($EXPECTED), c);
+
+            // test with a larger version of the same data to ensure we cover the chunked part of the comparison
+            let mut a = vec![];
+            let mut b = vec![];
+            let mut e = vec![];
+            for _i in 0..10 {
+                a.extend($A_VEC);
+                b.extend($B_VEC);
+                e.extend($EXPECTED);
+            }
+            let a = $ARRAY::from(a);
+            let b = $ARRAY::from(b);
+            let c = $KERNEL(&a, &b).unwrap();
+            assert_eq!(BooleanArray::from(e), c);
         };
     }
 

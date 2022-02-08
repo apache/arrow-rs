@@ -23,37 +23,11 @@
 
 This crate contains the official Native Rust implementation of [Apache Parquet](https://parquet.apache.org/), which is part of the [Apache Arrow](https://arrow.apache.org/) project.
 
-## Example
-
-Example usage of reading data:
-
-```rust
-use std::fs::File;
-use std::path::Path;
-use parquet::file::reader::{FileReader, SerializedFileReader};
-
-let file = File::open(&Path::new("/path/to/file")).unwrap();
-let reader = SerializedFileReader::new(file).unwrap();
-let mut iter = reader.get_row_iter(None).unwrap();
-while let Some(record) = iter.next() {
-    println!("{}", record);
-}
-```
-
-For an example of reading to Arrow arrays, please see [here](https://docs.rs/parquet/latest/parquet/arrow/index.html)
-
-See [crate documentation](https://docs.rs/parquet/latest/parquet/) for the full API.
+See [crate documentation](https://docs.rs/parquet/latest/parquet/) for examples and the full API.
 
 ## Rust Version Compatbility
 
 This crate is tested with the latest stable version of Rust. We do not currrently test against other, older versions of the Rust compiler.
-
-## Supported Parquet Version
-
-- Parquet-format 4.0.0
-
-To update Parquet format to a newer version, check if [parquet-format](https://github.com/sunchao/parquet-format-rs)
-version is available. Then simply update version of `parquet-format` crate in Cargo.toml.
 
 ## Features
 
@@ -63,11 +37,13 @@ version is available. Then simply update version of `parquet-format` crate in Ca
   - [x] Primitive column value readers
   - [x] Row record reader
   - [x] Arrow record reader
+  - [x] Async support (to Arrow)
 - [x] Statistics support
 - [x] Write support
   - [x] Primitive column value writers
   - [ ] Row record writer
   - [x] Arrow record writer
+  - [ ] Async support
 - [ ] Predicate pushdown
 - [x] Parquet format 4.0.0 support
 

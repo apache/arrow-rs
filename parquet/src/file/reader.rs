@@ -43,8 +43,8 @@ pub trait Length {
 /// The ChunkReader trait generates readers of chunks of a source.
 /// For a file system reader, each chunk might contain a clone of File bounded on a given range.
 /// For an object store reader, each read can be mapped to a range request.
-pub trait ChunkReader: Length {
-    type T: Read;
+pub trait ChunkReader: Length + Send + Sync {
+    type T: Read + Send;
     /// get a serialy readeable slice of the current reader
     /// This should fail if the slice exceeds the current bounds
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T>;
@@ -55,7 +55,7 @@ pub trait ChunkReader: Length {
 
 /// Parquet file reader API. With this, user can get metadata information about the
 /// Parquet file, can get reader for each row group, and access record iterator.
-pub trait FileReader {
+pub trait FileReader: Send + Sync {
     /// Get metadata information about this file.
     fn metadata(&self) -> &ParquetMetaData;
 
@@ -76,7 +76,7 @@ pub trait FileReader {
 
 /// Parquet row group reader API. With this, user can get metadata information about the
 /// row group, as well as readers for each individual column chunk.
-pub trait RowGroupReader {
+pub trait RowGroupReader: Send + Sync {
     /// Get metadata information about this row group.
     fn metadata(&self) -> &RowGroupMetaData;
 
@@ -139,7 +139,7 @@ pub trait RowGroupReader {
 /// Implementation of page iterator for parquet file.
 pub struct FilePageIterator {
     column_index: usize,
-    row_group_indices: Box<dyn Iterator<Item = usize>>,
+    row_group_indices: Box<dyn Iterator<Item = usize> + Send>,
     file_reader: Arc<dyn FileReader>,
 }
 
@@ -156,7 +156,7 @@ impl FilePageIterator {
     /// Create page iterator from parquet file reader with only some row groups.
     pub fn with_row_groups(
         column_index: usize,
-        row_group_indices: Box<dyn Iterator<Item = usize>>,
+        row_group_indices: Box<dyn Iterator<Item = usize> + Send>,
         file_reader: Arc<dyn FileReader>,
     ) -> Result<Self> {
         // Check that column_index is valid
