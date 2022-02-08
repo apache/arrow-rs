@@ -15,16 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Borrow;
 use std::convert::{From, TryInto};
 use std::fmt;
 use std::{any::Any, iter::FromIterator};
 
+use super::BooleanBufferBuilder;
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
 };
 use crate::buffer::Buffer;
-use crate::error::ArrowError;
+use crate::datatypes::{
+    validate_decimal_precision, DECIMAL_DEFAULT_SCALE, DECIMAL_MAX_PRECISION,
+    DECIMAL_MAX_SCALE,
+};
+use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
@@ -491,7 +497,7 @@ impl FixedSizeBinaryArray {
     /// # Errors
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
-    pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
+    pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self>
     where
         T: Iterator<Item = Option<U>>,
         U: AsRef<[u8]>,
@@ -502,7 +508,7 @@ impl FixedSizeBinaryArray {
         let mut null_buf = MutableBuffer::from_len_zeroed(0);
         let mut buffer = MutableBuffer::from_len_zeroed(0);
         let mut prepend = 0;
-        iter.try_for_each(|item| -> Result<(), ArrowError> {
+        iter.try_for_each(|item| -> Result<()> {
             // extend null bitmask by one byte per each 8 items
             if byte == 0 {
                 null_buf.push(0u8);
@@ -575,7 +581,7 @@ impl FixedSizeBinaryArray {
     /// # Errors
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
-    pub fn try_from_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
+    pub fn try_from_iter<T, U>(mut iter: T) -> Result<Self>
     where
         T: Iterator<Item = U>,
         U: AsRef<[u8]>,
@@ -583,7 +589,7 @@ impl FixedSizeBinaryArray {
         let mut len = 0;
         let mut size = None;
         let mut buffer = MutableBuffer::from_len_zeroed(0);
-        iter.try_for_each(|item| -> Result<(), ArrowError> {
+        iter.try_for_each(|item| -> Result<()> {
             let slice = item.as_ref();
             if let Some(size) = size {
                 if size != slice.len() {
@@ -690,19 +696,28 @@ impl Array for FixedSizeBinaryArray {
     }
 }
 
-/// A type of `DecimalArray` whose elements are binaries.
+/// `DecimalArray` stores fixed width decimal numbers,
+/// with a fixed precision and scale.
 ///
 /// # Examples
 ///
 /// ```
 ///    use arrow::array::{Array, DecimalArray, DecimalBuilder};
 ///    use arrow::datatypes::DataType;
-///    let mut builder = DecimalBuilder::new(30, 23, 6);
 ///
-///    builder.append_value(8_887_000_000).unwrap();
-///    builder.append_null().unwrap();
-///    builder.append_value(-8_887_000_000).unwrap();
-///    let decimal_array: DecimalArray = builder.finish();
+///    // Create a DecimalArray with the default precision and scale
+///    let decimal_array: DecimalArray = vec![
+///       Some(8_887_000_000),
+///       None,
+///       Some(-8_887_000_000),
+///     ]
+///     .into_iter().collect();
+///
+///    // set precision and scale so values are interpreted
+///    // as `8887.000000`, `Null`, and `-8887.000000`
+///    let decimal_array = decimal_array
+///     .with_precision_and_scale(23, 6)
+///     .unwrap();
 ///
 ///    assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
 ///    assert_eq!(8_887_000_000, decimal_array.value(0));
@@ -816,12 +831,92 @@ impl DecimalArray {
         let array_data = unsafe { builder.build_unchecked() };
         Self::from(array_data)
     }
+
+    /// Creates a [DecimalArray] with default precision and scale,
+    /// based on an iterator of `i128` values without nulls
+    pub fn from_iter_values<I: IntoIterator<Item = i128>>(iter: I) -> Self {
+        let val_buf: Buffer = iter.into_iter().collect();
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                Self::default_type(),
+                val_buf.len() / std::mem::size_of::<i128>(),
+                None,
+                None,
+                0,
+                vec![val_buf],
+                vec![],
+            )
+        };
+        DecimalArray::from(data)
+    }
+
+    /// Return the precision (total digits) that can be stored by this array
     pub fn precision(&self) -> usize {
         self.precision
     }
 
+    /// Return the scale (digits after the decimal) that can be stored by this array
     pub fn scale(&self) -> usize {
         self.scale
+    }
+
+    /// Returns a DecimalArray with the same data as self, with the
+    /// specified precision.
+    ///
+    /// Returns an Error if:
+    /// 1. `precision` is larger than [`DECIMAL_MAX_PRECISION`]
+    /// 2. `scale` is larger than [`DECIMAL_MAX_SCALE`];
+    /// 3. `scale` is > `precision`
+    pub fn with_precision_and_scale(
+        mut self,
+        precision: usize,
+        scale: usize,
+    ) -> Result<Self> {
+        if precision > DECIMAL_MAX_PRECISION {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "precision {} is greater than max {}",
+                precision, DECIMAL_MAX_PRECISION
+            )));
+        }
+        if scale > DECIMAL_MAX_SCALE {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "scale {} is greater than max {}",
+                scale, DECIMAL_MAX_SCALE
+            )));
+        }
+        if scale > precision {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "scale {} is greater than precision {}",
+                scale, precision
+            )));
+        }
+
+        // Ensure that all values are within the requested
+        // precision. For performance, only check if the precision is
+        // decreased
+        if precision < self.precision {
+            for v in self.iter().flatten() {
+                validate_decimal_precision(v, precision)?;
+            }
+        }
+
+        assert_eq!(
+            self.data.data_type(),
+            &DataType::Decimal(self.precision, self.scale)
+        );
+
+        // safety: self.data is valid DataType::Decimal as checked above
+        let new_data_type = DataType::Decimal(precision, scale);
+        self.precision = precision;
+        self.scale = scale;
+        self.data = self.data.with_data_type(new_data_type);
+        Ok(self)
+    }
+
+    /// The default precision and scale used when not specified.
+    pub fn default_type() -> DataType {
+        // Keep maximum precision
+        DataType::Decimal(DECIMAL_MAX_PRECISION, DECIMAL_DEFAULT_SCALE)
     }
 }
 
@@ -845,6 +940,97 @@ impl From<ArrayData> for DecimalArray {
             scale,
             length,
         }
+    }
+}
+
+/// an iterator that returns Some(i128) or None, that can be used on a
+/// DecimalArray
+#[derive(Debug)]
+pub struct DecimalIter<'a> {
+    array: &'a DecimalArray,
+    current: usize,
+    current_end: usize,
+}
+
+impl<'a> DecimalIter<'a> {
+    pub fn new(array: &'a DecimalArray) -> Self {
+        Self {
+            array,
+            current: 0,
+            current_end: array.len(),
+        }
+    }
+}
+
+impl<'a> std::iter::Iterator for DecimalIter<'a> {
+    type Item = Option<i128>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current == self.current_end {
+            None
+        } else {
+            let old = self.current;
+            self.current += 1;
+            // TODO: Improve performance by avoiding bounds check here
+            // (by using adding a `value_unchecked, for example)
+            if self.array.is_null(old) {
+                Some(None)
+            } else {
+                Some(Some(self.array.value(old)))
+            }
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a DecimalArray {
+    type Item = Option<i128>;
+    type IntoIter = DecimalIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        DecimalIter::<'a>::new(self)
+    }
+}
+
+impl<'a> DecimalArray {
+    /// constructs a new iterator
+    pub fn iter(&'a self) -> DecimalIter<'a> {
+        DecimalIter::new(self)
+    }
+}
+
+impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalArray {
+    fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let size_hint = upper.unwrap_or(lower);
+
+        let mut null_buf = BooleanBufferBuilder::new(size_hint);
+
+        let buffer: Buffer = iter
+            .map(|item| {
+                if let Some(a) = item.borrow() {
+                    null_buf.append(true);
+                    *a
+                } else {
+                    null_buf.append(false);
+                    // arbitrary value for NULL
+                    0
+                }
+            })
+            .collect();
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                Self::default_type(),
+                null_buf.len(),
+                None,
+                Some(null_buf.into()),
+                0,
+                vec![buffer],
+                vec![],
+            )
+        };
+        DecimalArray::from(data)
     }
 }
 
@@ -1316,7 +1502,7 @@ mod tests {
         let mut result = decimal_builder.append_value(123456);
         let mut error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: The value of 123456 i128 is not compatible with Decimal(5,3)",
+            "Invalid argument error: 123456 is too large to store in a Decimal of precision 5. Max is 99999",
             error.to_string()
         );
         decimal_builder.append_value(12345).unwrap();
@@ -1327,20 +1513,62 @@ mod tests {
         result = decimal_builder.append_value(100);
         error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: The value of 100 i128 is not compatible with Decimal(2,1)",
+            "Invalid argument error: 100 is too large to store in a Decimal of precision 2. Max is 99",
             error.to_string()
         );
         decimal_builder.append_value(99).unwrap();
         result = decimal_builder.append_value(-100);
         error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: The value of -100 i128 is not compatible with Decimal(2,1)",
+            "Invalid argument error: -100 is too small to store in a Decimal of precision 2. Min is -99",
             error.to_string()
         );
         decimal_builder.append_value(-99).unwrap();
         let arr = decimal_builder.finish();
         assert_eq!("9.9", arr.value_as_string(0));
         assert_eq!("-9.9", arr.value_as_string(1));
+    }
+    #[test]
+    fn test_decimal_from_iter_values() {
+        let array = DecimalArray::from_iter_values(vec![-100, 0, 101].into_iter());
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
+        assert_eq!(-100, array.value(0));
+        assert!(!array.is_null(0));
+        assert_eq!(0, array.value(1));
+        assert!(!array.is_null(1));
+        assert_eq!(101, array.value(2));
+        assert!(!array.is_null(2));
+    }
+
+    #[test]
+    fn test_decimal_from_iter() {
+        let array: DecimalArray = vec![Some(-100), None, Some(101)].into_iter().collect();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
+        assert_eq!(-100, array.value(0));
+        assert!(!array.is_null(0));
+        assert!(array.is_null(1));
+        assert_eq!(101, array.value(2));
+        assert!(!array.is_null(2));
+    }
+
+    #[test]
+    fn test_decimal_iter() {
+        let data = vec![Some(-100), None, Some(101)];
+        let array: DecimalArray = data.clone().into_iter().collect();
+
+        let collected: Vec<_> = array.iter().collect();
+        assert_eq!(data, collected);
+    }
+
+    #[test]
+    fn test_decimal_into_iter() {
+        let data = vec![Some(-100), None, Some(101)];
+        let array: DecimalArray = data.clone().into_iter().collect();
+
+        let collected: Vec<_> = array.iter().collect();
+        assert_eq!(data, collected);
     }
 
     #[test]
@@ -1358,6 +1586,57 @@ mod tests {
         assert_eq!("0.010", arr.value_as_string(4));
         assert_eq!("-0.010", arr.value_as_string(5));
         assert_eq!("0.000", arr.value_as_string(6));
+    }
+
+    #[test]
+    fn test_decimal_array_with_precision_and_scale() {
+        let arr = DecimalArray::from_iter_values([12345, 456, 7890, -123223423432432])
+            .with_precision_and_scale(20, 2)
+            .unwrap();
+
+        assert_eq!(arr.data_type(), &DataType::Decimal(20, 2));
+        assert_eq!(arr.precision(), 20);
+        assert_eq!(arr.scale(), 2);
+
+        let actual: Vec<_> = (0..arr.len()).map(|i| arr.value_as_string(i)).collect();
+        let expected = vec!["123.45", "4.56", "78.90", "-1232234234324.32"];
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "-123223423432432 is too small to store in a Decimal of precision 5. Min is -99999"
+    )]
+    fn test_decimal_array_with_precision_and_scale_out_of_range() {
+        DecimalArray::from_iter_values([12345, 456, 7890, -123223423432432])
+            // precision is too small to hold value
+            .with_precision_and_scale(5, 2)
+            .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "precision 40 is greater than max 38")]
+    fn test_decimal_array_with_precision_and_scale_invalid_precision() {
+        DecimalArray::from_iter_values([12345, 456])
+            .with_precision_and_scale(40, 2)
+            .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "scale 40 is greater than max 38")]
+    fn test_decimal_array_with_precision_and_scale_invalid_scale() {
+        DecimalArray::from_iter_values([12345, 456])
+            .with_precision_and_scale(20, 40)
+            .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "scale 10 is greater than precision 4")]
+    fn test_decimal_array_with_precision_and_scale_invalid_precision_and_scale() {
+        DecimalArray::from_iter_values([12345, 456])
+            .with_precision_and_scale(4, 10)
+            .unwrap();
     }
 
     #[test]
