@@ -2031,10 +2031,10 @@ macro_rules! typed_compares {
 }
 
 macro_rules! typed_dict_cmp {
-    ($LEFT: expr, $RIGHT: expr, $OP_PRIM: ident, $KT: tt) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP_PRIM: expr, $KT: tt) => {{
         match ($LEFT.value_type(), $RIGHT.value_type()) {
             (DataType::Int8, DataType::Int8) => {
-                $OP_PRIM::<$KT, Int8Type>($LEFT, $RIGHT)
+                cmp_dict::<$KT, Int8Type, _>($LEFT, $RIGHT, $OP_PRIM)
             }
             (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                 "Comparing dictionary arrays of value type {} is not yet implemented",
@@ -2050,7 +2050,7 @@ macro_rules! typed_dict_cmp {
 
 macro_rules! typed_dict_compares {
    // Applies `LEFT OP RIGHT` when `LEFT` and `RIGHT` both are `DictionaryArray`
-    ($LEFT: expr, $RIGHT: expr, $OP_PRIM: ident) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP_PRIM: expr) => {{
         match ($LEFT.data_type(), $RIGHT.data_type()) {
             (DataType::Dictionary(left_key_type, _), DataType::Dictionary(right_key_type, _))=> {
                 match (left_key_type.as_ref(), right_key_type.as_ref()) {
@@ -2077,18 +2077,25 @@ macro_rules! typed_dict_compares {
     }};
 }
 
-/// Perform `left == right` operation on two `DictionaryArray`s.
+/// Perform given operation on two `DictionaryArray`s.
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
-pub fn eq_dict<K, T>(
+pub fn cmp_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
+    op: F,
 ) -> Result<BooleanArray>
 where
     K: ArrowNumericType,
     T: ArrowNumericType,
+    F: Fn(T::Native, T::Native) -> bool,
 {
-    assert_eq!(left.keys().len(), right.keys().len());
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length"
+                .to_string(),
+        ));
+    }
 
     let left_values = left
         .values()
@@ -2101,28 +2108,32 @@ where
         .downcast_ref::<PrimitiveArray<T>>()
         .unwrap();
 
-    let mut result = vec![];
+    let result = left
+        .keys()
+        .iter()
+        .zip(right.keys().iter())
+        .map(|(left_key, right_key)| {
+            if left_key.is_none() || right_key.is_none() {
+                None
+            } else {
+                let left_key = left_key
+                    .unwrap()
+                    .to_usize()
+                    .expect("Dictionary index not usize");
+                let right_key = right_key
+                    .unwrap()
+                    .to_usize()
+                    .expect("Dictionary index not usize");
+                unsafe {
+                    let left_value = left_values.value_unchecked(left_key);
+                    let right_value = right_values.value_unchecked(right_key);
+                    Some(op(left_value, right_value))
+                }
+            }
+        })
+        .collect();
 
-    for idx in 0..left.keys().len() {
-        unsafe {
-            let left_key = left
-                .keys()
-                .value_unchecked(idx)
-                .to_usize()
-                .expect("Dictionary index not usize");
-            let left_value = left_values.value_unchecked(left_key);
-            let right_key = right
-                .keys()
-                .value_unchecked(idx)
-                .to_usize()
-                .expect("Dictionary index not usize");
-            let right_value = right_values.value_unchecked(right_key);
-
-            result.push(left_value == right_value);
-        }
-    }
-
-    Ok(BooleanArray::from(result))
+    Ok(result)
 }
 
 /// Perform `left == right` operation on two (dynamic) [`Array`]s.
@@ -2132,7 +2143,7 @@ where
 pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, eq_dict)
+            typed_dict_compares!(left, right, |a, b| a == b)
         }
         _ => typed_compares!(left, right, eq_bool, eq, eq_utf8, eq_binary),
     }
