@@ -2033,6 +2033,9 @@ macro_rules! typed_compares {
 macro_rules! typed_dict_cmp {
     ($LEFT: expr, $RIGHT: expr, $OP: expr, $KT: tt) => {{
         match ($LEFT.value_type(), $RIGHT.value_type()) {
+            (DataType::Boolean, DataType::Boolean) => {
+                cmp_dict_bool::<$KT, _>($LEFT, $RIGHT, $OP)
+            }
             (DataType::Int8, DataType::Int8) => {
                 cmp_dict::<$KT, Int8Type, _>($LEFT, $RIGHT, $OP)
             }
@@ -2068,6 +2071,54 @@ macro_rules! typed_dict_cmp {
             }
             (DataType::LargeBinary, DataType::LargeBinary) => {
                 cmp_dict_binary::<$KT, i64, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+                DataType::Timestamp(TimeUnit::Nanosecond, _),
+            ) => {
+                cmp_dict::<$KT, TimestampNanosecondType, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+                DataType::Timestamp(TimeUnit::Microsecond, _),
+            ) => {
+                cmp_dict::<$KT, TimestampMicrosecondType, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+                DataType::Timestamp(TimeUnit::Millisecond, _),
+            ) => {
+                cmp_dict::<$KT, TimestampMillisecondType, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Timestamp(TimeUnit::Second, _),
+                DataType::Timestamp(TimeUnit::Second, _),
+            ) => {
+                cmp_dict::<$KT, TimestampSecondType, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Date32, DataType::Date32) => {
+                cmp_dict::<$KT, Date32Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Date64, DataType::Date64) => {
+                cmp_dict::<$KT, Date64Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Interval(IntervalUnit::YearMonth),
+                DataType::Interval(IntervalUnit::YearMonth),
+            ) => {
+                cmp_dict::<$KT, IntervalYearMonthType, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Interval(IntervalUnit::DayTime),
+                DataType::Interval(IntervalUnit::DayTime),
+            ) => {
+                cmp_dict::<$KT, IntervalDayTimeType, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Interval(IntervalUnit::MonthDayNano),
+                DataType::Interval(IntervalUnit::MonthDayNano),
+            ) => {
+                cmp_dict::<$KT, IntervalMonthDayNanoType, _>($LEFT, $RIGHT, $OP)
             }
             (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                 "Comparing dictionary arrays of value type {} is not yet implemented",
@@ -2200,6 +2251,20 @@ where
     F: Fn(T::Native, T::Native) -> bool,
 {
     compare_dict_op!(left, right, op, PrimitiveArray<T>)
+}
+
+/// Perform the given operation on two `DictionaryArray`s which value type is
+/// `DataType::Boolean`.
+pub fn cmp_dict_bool<K, F>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+    op: F,
+) -> Result<BooleanArray>
+where
+    K: ArrowNumericType,
+    F: Fn(bool, bool) -> bool,
+{
+    compare_dict_op!(left, right, op, BooleanArray)
 }
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
@@ -4619,10 +4684,7 @@ mod tests {
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![Some(true), Some(false), Some(true)])
-        );
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
     }
 
     #[test]
@@ -4649,7 +4711,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
-            BooleanArray::from(vec![Some(false), Some(true), Some(false)])
+            BooleanArray::from(vec![false, true, false])
         );
     }
 
@@ -4705,7 +4767,70 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
-            BooleanArray::from(vec![Some(true), Some(false), Some(false)])
+            BooleanArray::from(vec![true, false, false])
+        );
+    }
+
+    #[test]
+    fn test_eq_dyn_dictionary_interval_array() {
+        let key_type = DataType::UInt64;
+
+        let value_array = IntervalDayTimeArray::from(vec![1, 6, 10, 2, 3, 5]);
+        let value_data = value_array.data().clone();
+
+        let keys1 = Buffer::from(&[1_u64, 0, 3].to_byte_slice());
+        let keys2 = Buffer::from(&[2_u64, 0, 3].to_byte_slice());
+        let dict_array1: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
+            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
+        );
+        let dict_array2: DictionaryArray<UInt64Type> =
+            UInt64DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
+
+        let result = eq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
+    }
+
+    #[test]
+    fn test_eq_dyn_dictionary_date_array() {
+        let key_type = DataType::UInt64;
+
+        let value_array = Date32Array::from(vec![1, 6, 10, 2, 3, 5]);
+        let value_data = value_array.data().clone();
+
+        let keys1 = Buffer::from(&[1_u64, 0, 3].to_byte_slice());
+        let keys2 = Buffer::from(&[2_u64, 0, 3].to_byte_slice());
+        let dict_array1: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
+            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
+        );
+        let dict_array2: DictionaryArray<UInt64Type> =
+            UInt64DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
+
+        let result = eq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
+    }
+
+    #[test]
+    fn test_eq_dyn_dictionary_bool_array() {
+        let key_type = DataType::UInt64;
+
+        let value_array = BooleanArray::from(vec![true, false]);
+        let value_data = value_array.data().clone();
+
+        let keys1 = Buffer::from(&[1_u64, 1, 1].to_byte_slice());
+        let keys2 = Buffer::from(&[0_u64, 1, 0].to_byte_slice());
+        let dict_array1: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
+            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
+        );
+        let dict_array2: DictionaryArray<UInt64Type> =
+            UInt64DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
+
+        let result = eq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![false, true, false])
         );
     }
 }
