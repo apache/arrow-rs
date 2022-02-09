@@ -4545,10 +4545,10 @@ mod tests {
         let value_type = value_data.data_type().clone();
         let dict_data_type =
             DataType::Dictionary(Box::new(key_type), Box::new(value_type));
-        ArrayData::builder(dict_data_type.clone())
+        ArrayData::builder(dict_data_type)
             .len(3)
-            .add_buffer(keys.clone())
-            .add_child_data(value_data.clone())
+            .add_buffer(keys)
+            .add_child_data(value_data)
             .build()
             .unwrap()
     }
@@ -4570,9 +4570,8 @@ mod tests {
         let dict_array1: DictionaryArray<Int8Type> = Int8DictionaryArray::from(
             get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
         );
-        let dict_array2: DictionaryArray<Int8Type> = Int8DictionaryArray::from(
-            get_dict_arraydata(keys2, key_type.clone(), value_data.clone()),
-        );
+        let dict_array2: DictionaryArray<Int8Type> =
+            Int8DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
@@ -4599,9 +4598,8 @@ mod tests {
         let dict_array1: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
             get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
         );
-        let dict_array2: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
-            get_dict_arraydata(keys2, key_type.clone(), value_data.clone()),
-        );
+        let dict_array2: DictionaryArray<UInt64Type> =
+            UInt64DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
