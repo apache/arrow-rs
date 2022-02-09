@@ -2036,6 +2036,27 @@ macro_rules! typed_dict_cmp {
             (DataType::Int8, DataType::Int8) => {
                 cmp_dict::<$KT, Int8Type, _>($LEFT, $RIGHT, $OP_PRIM)
             }
+            (DataType::Int16, DataType::Int16) => {
+                cmp_dict::<$KT, Int16Type, _>($LEFT, $RIGHT, $OP_PRIM)
+            }
+            (DataType::Int32, DataType::Int32) => {
+                cmp_dict::<$KT, Int32Type, _>($LEFT, $RIGHT, $OP_PRIM)
+            }
+            (DataType::Int64, DataType::Int64) => {
+                cmp_dict::<$KT, Int64Type, _>($LEFT, $RIGHT, $OP_PRIM)
+            }
+            (DataType::UInt8, DataType::UInt8) => {
+                cmp_dict::<$KT, UInt8Type, _>($LEFT, $RIGHT, $OP_PRIM)
+            }
+            (DataType::UInt16, DataType::UInt16) => {
+                cmp_dict::<$KT, UInt16Type, _>($LEFT, $RIGHT, $OP_PRIM)
+            }
+            (DataType::UInt32, DataType::UInt32) => {
+                cmp_dict::<$KT, UInt32Type, _>($LEFT, $RIGHT, $OP_PRIM)
+            }
+            (DataType::UInt64, DataType::UInt64) => {
+                cmp_dict::<$KT, UInt64Type, _>($LEFT, $RIGHT, $OP_PRIM)
+            }
             (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                 "Comparing dictionary arrays of value type {} is not yet implemented",
                 t1
@@ -2058,6 +2079,41 @@ macro_rules! typed_dict_compares {
                         let left = as_dictionary_array::<Int8Type>($LEFT);
                         let right = as_dictionary_array::<Int8Type>($RIGHT);
                         typed_dict_cmp!(left, right, $OP_PRIM, Int8Type)
+                    }
+                    (DataType::Int16, DataType::Int16) => {
+                        let left = as_dictionary_array::<Int16Type>($LEFT);
+                        let right = as_dictionary_array::<Int16Type>($RIGHT);
+                        typed_dict_cmp!(left, right, $OP_PRIM, Int16Type)
+                    }
+                    (DataType::Int32, DataType::Int32) => {
+                        let left = as_dictionary_array::<Int32Type>($LEFT);
+                        let right = as_dictionary_array::<Int32Type>($RIGHT);
+                        typed_dict_cmp!(left, right, $OP_PRIM, Int32Type)
+                    }
+                    (DataType::Int64, DataType::Int64) => {
+                        let left = as_dictionary_array::<Int64Type>($LEFT);
+                        let right = as_dictionary_array::<Int64Type>($RIGHT);
+                        typed_dict_cmp!(left, right, $OP_PRIM, Int64Type)
+                    }
+                    (DataType::UInt8, DataType::UInt8) => {
+                        let left = as_dictionary_array::<UInt8Type>($LEFT);
+                        let right = as_dictionary_array::<UInt8Type>($RIGHT);
+                        typed_dict_cmp!(left, right, $OP_PRIM, UInt8Type)
+                    }
+                    (DataType::UInt16, DataType::UInt16) => {
+                        let left = as_dictionary_array::<UInt16Type>($LEFT);
+                        let right = as_dictionary_array::<UInt16Type>($RIGHT);
+                        typed_dict_cmp!(left, right, $OP_PRIM, UInt16Type)
+                    }
+                    (DataType::UInt32, DataType::UInt32) => {
+                        let left = as_dictionary_array::<UInt32Type>($LEFT);
+                        let right = as_dictionary_array::<UInt32Type>($RIGHT);
+                        typed_dict_cmp!(left, right, $OP_PRIM, UInt32Type)
+                    }
+                    (DataType::UInt64, DataType::UInt64) => {
+                        let left = as_dictionary_array::<UInt64Type>($LEFT);
+                        let right = as_dictionary_array::<UInt64Type>($RIGHT);
+                        typed_dict_cmp!(left, right, $OP_PRIM, UInt64Type)
                     }
                     (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                         "Comparing dictionary arrays of type {} is not yet implemented",
@@ -4409,7 +4465,25 @@ mod tests {
         );
     }
 
-    fn get_dictionary_array(keys: Buffer) -> DictionaryArray<Int8Type> {
+    fn get_dict_arraydata(
+        keys: Buffer,
+        key_type: DataType,
+        value_data: ArrayData,
+    ) -> ArrayData {
+        let value_type = value_data.data_type().clone();
+        let dict_data_type =
+            DataType::Dictionary(Box::new(key_type), Box::new(value_type));
+        ArrayData::builder(dict_data_type.clone())
+            .len(3)
+            .add_buffer(keys.clone())
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_eq_dyn_dictionary_i8_array() {
+        let key_type = DataType::Int8;
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int8)
             .len(8)
@@ -4419,32 +4493,49 @@ mod tests {
             .build()
             .unwrap();
 
-        // Construct a dictionary array from the above two
-        let key_type = DataType::Int8;
-        let value_type = DataType::Int8;
-        let dict_data_type =
-            DataType::Dictionary(Box::new(key_type), Box::new(value_type));
-        let dict_data = ArrayData::builder(dict_data_type.clone())
-            .len(3)
-            .add_buffer(keys.clone())
-            .add_child_data(value_data.clone())
-            .build()
-            .unwrap();
-        Int8DictionaryArray::from(dict_data)
-    }
-
-    #[test]
-    fn test_eq_dyn_dictionary_array() {
         let keys1 = Buffer::from(&[2_i8, 3, 4].to_byte_slice());
         let keys2 = Buffer::from(&[2_i8, 4, 4].to_byte_slice());
-        let dict_array1 = get_dictionary_array(keys1);
-        let dict_array2 = get_dictionary_array(keys2);
+        let dict_array1: DictionaryArray<Int8Type> = Int8DictionaryArray::from(
+            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
+        );
+        let dict_array2: DictionaryArray<Int8Type> = Int8DictionaryArray::from(
+            get_dict_arraydata(keys2, key_type.clone(), value_data.clone()),
+        );
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+        );
+    }
+
+    #[test]
+    fn test_eq_dyn_dictionary_u64_array() {
+        let key_type = DataType::UInt64;
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::UInt64)
+            .len(8)
+            .add_buffer(Buffer::from(
+                &[10_u64, 11, 12, 13, 14, 15, 16, 17].to_byte_slice(),
+            ))
+            .build()
+            .unwrap();
+
+        let keys1 = Buffer::from(&[1_u64, 3, 4].to_byte_slice());
+        let keys2 = Buffer::from(&[2_u64, 3, 5].to_byte_slice());
+        let dict_array1: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
+            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
+        );
+        let dict_array2: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
+            get_dict_arraydata(keys2, key_type.clone(), value_data.clone()),
+        );
+
+        let result = eq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), Some(true), Some(false)])
         );
     }
 }
