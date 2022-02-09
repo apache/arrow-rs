@@ -2031,31 +2031,43 @@ macro_rules! typed_compares {
 }
 
 macro_rules! typed_dict_cmp {
-    ($LEFT: expr, $RIGHT: expr, $OP_PRIM: expr, $KT: tt) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP: expr, $KT: tt) => {{
         match ($LEFT.value_type(), $RIGHT.value_type()) {
             (DataType::Int8, DataType::Int8) => {
-                cmp_dict::<$KT, Int8Type, _>($LEFT, $RIGHT, $OP_PRIM)
+                cmp_dict::<$KT, Int8Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Int16, DataType::Int16) => {
-                cmp_dict::<$KT, Int16Type, _>($LEFT, $RIGHT, $OP_PRIM)
+                cmp_dict::<$KT, Int16Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Int32, DataType::Int32) => {
-                cmp_dict::<$KT, Int32Type, _>($LEFT, $RIGHT, $OP_PRIM)
+                cmp_dict::<$KT, Int32Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Int64, DataType::Int64) => {
-                cmp_dict::<$KT, Int64Type, _>($LEFT, $RIGHT, $OP_PRIM)
+                cmp_dict::<$KT, Int64Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt8, DataType::UInt8) => {
-                cmp_dict::<$KT, UInt8Type, _>($LEFT, $RIGHT, $OP_PRIM)
+                cmp_dict::<$KT, UInt8Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt16, DataType::UInt16) => {
-                cmp_dict::<$KT, UInt16Type, _>($LEFT, $RIGHT, $OP_PRIM)
+                cmp_dict::<$KT, UInt16Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt32, DataType::UInt32) => {
-                cmp_dict::<$KT, UInt32Type, _>($LEFT, $RIGHT, $OP_PRIM)
+                cmp_dict::<$KT, UInt32Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt64, DataType::UInt64) => {
-                cmp_dict::<$KT, UInt64Type, _>($LEFT, $RIGHT, $OP_PRIM)
+                cmp_dict::<$KT, UInt64Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Utf8, DataType::Utf8) => {
+                cmp_dict_utf8::<$KT, i32, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::LargeUtf8, DataType::LargeUtf8) => {
+                cmp_dict_utf8::<$KT, i64, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Binary, DataType::Binary) => {
+               cmp_dict_binary::<$KT, i32, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::LargeBinary, DataType::LargeBinary) => {
+                cmp_dict_binary::<$KT, i64, _>($LEFT, $RIGHT, $OP)
             }
             (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                 "Comparing dictionary arrays of value type {} is not yet implemented",
@@ -2071,49 +2083,49 @@ macro_rules! typed_dict_cmp {
 
 macro_rules! typed_dict_compares {
    // Applies `LEFT OP RIGHT` when `LEFT` and `RIGHT` both are `DictionaryArray`
-    ($LEFT: expr, $RIGHT: expr, $OP_PRIM: expr) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP: expr) => {{
         match ($LEFT.data_type(), $RIGHT.data_type()) {
             (DataType::Dictionary(left_key_type, _), DataType::Dictionary(right_key_type, _))=> {
                 match (left_key_type.as_ref(), right_key_type.as_ref()) {
                     (DataType::Int8, DataType::Int8) => {
                         let left = as_dictionary_array::<Int8Type>($LEFT);
                         let right = as_dictionary_array::<Int8Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP_PRIM, Int8Type)
+                        typed_dict_cmp!(left, right, $OP, Int8Type)
                     }
                     (DataType::Int16, DataType::Int16) => {
                         let left = as_dictionary_array::<Int16Type>($LEFT);
                         let right = as_dictionary_array::<Int16Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP_PRIM, Int16Type)
+                        typed_dict_cmp!(left, right, $OP, Int16Type)
                     }
                     (DataType::Int32, DataType::Int32) => {
                         let left = as_dictionary_array::<Int32Type>($LEFT);
                         let right = as_dictionary_array::<Int32Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP_PRIM, Int32Type)
+                        typed_dict_cmp!(left, right, $OP, Int32Type)
                     }
                     (DataType::Int64, DataType::Int64) => {
                         let left = as_dictionary_array::<Int64Type>($LEFT);
                         let right = as_dictionary_array::<Int64Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP_PRIM, Int64Type)
+                        typed_dict_cmp!(left, right, $OP, Int64Type)
                     }
                     (DataType::UInt8, DataType::UInt8) => {
                         let left = as_dictionary_array::<UInt8Type>($LEFT);
                         let right = as_dictionary_array::<UInt8Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP_PRIM, UInt8Type)
+                        typed_dict_cmp!(left, right, $OP, UInt8Type)
                     }
                     (DataType::UInt16, DataType::UInt16) => {
                         let left = as_dictionary_array::<UInt16Type>($LEFT);
                         let right = as_dictionary_array::<UInt16Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP_PRIM, UInt16Type)
+                        typed_dict_cmp!(left, right, $OP, UInt16Type)
                     }
                     (DataType::UInt32, DataType::UInt32) => {
                         let left = as_dictionary_array::<UInt32Type>($LEFT);
                         let right = as_dictionary_array::<UInt32Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP_PRIM, UInt32Type)
+                        typed_dict_cmp!(left, right, $OP, UInt32Type)
                     }
                     (DataType::UInt64, DataType::UInt64) => {
                         let left = as_dictionary_array::<UInt64Type>($LEFT);
                         let right = as_dictionary_array::<UInt64Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP_PRIM, UInt64Type)
+                        typed_dict_cmp!(left, right, $OP, UInt64Type)
                     }
                     (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                         "Comparing dictionary arrays of type {} is not yet implemented",
@@ -2133,6 +2145,47 @@ macro_rules! typed_dict_compares {
     }};
 }
 
+/// Helper function to perform boolean lambda function on values from two dictionary arrays, this
+/// version does not attempt to use SIMD.
+macro_rules! compare_dict_op {
+    ($left: expr, $right:expr, $op:expr, $value_ty:ty) => {{
+        if $left.len() != $right.len() {
+            return Err(ArrowError::ComputeError(
+                "Cannot perform comparison operation on arrays of different length"
+                    .to_string(),
+            ));
+        }
+        let left_values = $left.values().as_any().downcast_ref::<$value_ty>().unwrap();
+        let right_values = $right
+            .values()
+            .as_any()
+            .downcast_ref::<$value_ty>()
+            .unwrap();
+
+        let result = $left
+            .keys()
+            .iter()
+            .zip($right.keys().iter())
+            .map(|(left_key, right_key)| {
+                if let (Some(left_k), Some(right_k)) = (left_key, right_key) {
+                    let left_key = left_k.to_usize().expect("Dictionary index not usize");
+                    let right_key =
+                        right_k.to_usize().expect("Dictionary index not usize");
+                    unsafe {
+                        let left_value = left_values.value_unchecked(left_key);
+                        let right_value = right_values.value_unchecked(right_key);
+                        Some($op(left_value, right_value))
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(result)
+    }};
+}
+
 /// Perform given operation on two `DictionaryArray`s.
 /// Only when two arrays are of the same type the comparison will happen otherwise it will err
 /// with a casting error.
@@ -2146,44 +2199,35 @@ where
     T: ArrowNumericType,
     F: Fn(T::Native, T::Native) -> bool,
 {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            "Cannot perform comparison operation on arrays of different length"
-                .to_string(),
-        ));
-    }
+    compare_dict_op!(left, right, op, PrimitiveArray<T>)
+}
 
-    let left_values = left
-        .values()
-        .as_any()
-        .downcast_ref::<PrimitiveArray<T>>()
-        .unwrap();
-    let right_values = right
-        .values()
-        .as_any()
-        .downcast_ref::<PrimitiveArray<T>>()
-        .unwrap();
+/// Perform the given operation on two `DictionaryArray`s which value type is
+/// `DataType::Utf8` or `DataType::LargeUtf8`.
+pub fn cmp_dict_utf8<K, OffsetSize: StringOffsetSizeTrait, F>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+    op: F,
+) -> Result<BooleanArray>
+where
+    K: ArrowNumericType,
+    F: Fn(&str, &str) -> bool,
+{
+    compare_dict_op!(left, right, op, GenericStringArray<OffsetSize>)
+}
 
-    let result = left
-        .keys()
-        .iter()
-        .zip(right.keys().iter())
-        .map(|(left_key, right_key)| {
-            if let (Some(left_k), Some(right_k)) = (left_key, right_key) {
-                let left_key = left_k.to_usize().expect("Dictionary index not usize");
-                let right_key = right_k.to_usize().expect("Dictionary index not usize");
-                unsafe {
-                    let left_value = left_values.value_unchecked(left_key);
-                    let right_value = right_values.value_unchecked(right_key);
-                    Some(op(left_value, right_value))
-                }
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    Ok(result)
+/// Perform the given operation on two `DictionaryArray`s which value type is
+/// `DataType::Binary` or `DataType::LargeBinary`.
+pub fn cmp_dict_binary<K, OffsetSize: BinaryOffsetSizeTrait, F>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+    op: F,
+) -> Result<BooleanArray>
+where
+    K: ArrowNumericType,
+    F: Fn(&[u8], &[u8]) -> bool,
+{
+    compare_dict_op!(left, right, op, GenericBinaryArray<OffsetSize>)
 }
 
 /// Perform `left == right` operation on two (dynamic) [`Array`]s.
@@ -4606,6 +4650,28 @@ mod tests {
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), Some(true), Some(false)])
+        );
+    }
+
+    #[test]
+    fn test_eq_dyn_dictionary_utf8_array() {
+        let test1 = vec!["a", "a", "b", "c"];
+        let test2 = vec!["a", "b", "b", "c"];
+
+        let dict_array1: DictionaryArray<Int8Type> = test1
+            .iter()
+            .map(|&x| if x == "b" { None } else { Some(x) })
+            .collect();
+        let dict_array2: DictionaryArray<Int8Type> = test2
+            .iter()
+            .map(|&x| if x == "b" { None } else { Some(x) })
+            .collect();
+
+        let result = eq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), None, None, Some(true)])
         );
     }
 }
