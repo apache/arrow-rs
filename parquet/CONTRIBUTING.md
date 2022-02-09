@@ -59,3 +59,8 @@ Run `cargo bench` for benchmarks.
 
 To build documentation, run `cargo doc --no-deps`.
 To compile and view in the browser, run `cargo doc --no-deps --open`.
+
+## Update Supported Parquet Version
+
+To update Parquet format to a newer version, check if [parquet-format](https://github.com/sunchao/parquet-format-rs)
+version is available. Then simply update version of `parquet-format` crate in Cargo.toml.

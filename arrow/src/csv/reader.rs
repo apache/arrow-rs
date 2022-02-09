@@ -51,7 +51,6 @@ use std::sync::Arc;
 
 use crate::array::{
     ArrayRef, BooleanArray, DecimalBuilder, DictionaryArray, PrimitiveArray, StringArray,
-    MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::datatypes::*;
@@ -312,8 +311,7 @@ pub struct Reader<R: Read> {
     batch_records: Vec<StringRecord>,
     /// datetime format used to parse datetime values, (format understood by chrono)
     ///
-    /// For format refer to chrono docs:
-    /// https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html
+    /// For format refer to [chrono docs](https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html)
     datetime_format: Option<String>,
 }
 
@@ -522,7 +520,8 @@ impl<R: Read> Iterator for Reader<R> {
     }
 }
 
-/// parses a slice of [csv_crate::StringRecord] into a [array::record_batch::RecordBatch].
+/// parses a slice of [csv_crate::StringRecord] into a
+/// [RecordBatch](crate::record_batch::RecordBatch).
 fn parse(
     rows: &[StringRecord],
     fields: &[Field],
@@ -900,15 +899,8 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
         if negative {
             result = result.neg();
         }
-        if result > MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1]
-            || result < MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1]
-        {
-            return Err(ArrowError::ParseError(format!(
-                "parse decimal overflow, the precision {}, the scale {}, the value {}",
-                precision, scale, s
-            )));
-        }
-        Ok(result)
+        validate_decimal_precision(result, precision)
+            .map_err(|e| ArrowError::ParseError(format!("parse decimal overflow: {}", e)))
     } else {
         Err(ArrowError::ParseError(format!(
             "can't parse the string value {} to decimal",
@@ -1141,8 +1133,7 @@ impl ReaderBuilder {
     /// Set the datetime fromat used to parse the string to Date64Type
     /// this fromat is used while when the schema wants to parse Date64Type.
     ///
-    /// For format refer to chrono docs:
-    /// https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html
+    /// For format refer to [chrono docs](https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html)
     ///
     pub fn with_datetime_format(mut self, datetime_format: String) -> Self {
         self.datetime_format = Some(datetime_format);
@@ -1767,8 +1758,15 @@ mod tests {
         let overflow_parse_tests = ["12345678", "12345678.9", "99999999.99"];
         for s in overflow_parse_tests {
             let result = parse_decimal_with_parameter(s, 10, 3);
-            assert_eq!(format!(
-                "Parser error: parse decimal overflow, the precision {}, the scale {}, the value {}", 10,3, s),result.unwrap_err().to_string());
+            let expected = "Parser error: parse decimal overflow";
+            let actual = result.unwrap_err().to_string();
+
+            assert!(
+                actual.contains(&expected),
+                "actual: '{}', expected: '{}'",
+                actual,
+                expected
+            );
         }
     }
 

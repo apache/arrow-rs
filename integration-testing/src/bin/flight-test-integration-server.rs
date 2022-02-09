@@ -15,38 +15,43 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::{App, Arg};
-
 use arrow_integration_testing::flight_server_scenarios;
+use clap::Parser;
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
+
+#[derive(clap::ArgEnum, Debug, Clone)]
+enum Scenario {
+    Middleware,
+    #[clap(name = "auth:basic_proto")]
+    AuthBasicProto,
+}
+
+#[derive(Debug, Parser)]
+#[clap(author, version, about("rust flight-test-integration-server"), long_about = None)]
+struct Args {
+    #[clap(long)]
+    port: u16,
+    #[clap(long, arg_enum)]
+    scenario: Option<Scenario>,
+}
 
 #[tokio::main]
 async fn main() -> Result {
     #[cfg(feature = "logging")]
     tracing_subscriber::fmt::init();
 
-    let matches = App::new("rust flight-test-integration-server")
-        .about("Integration testing server for Flight.")
-        .arg(Arg::with_name("port").long("port").takes_value(true))
-        .arg(
-            Arg::with_name("scenario")
-                .long("scenario")
-                .takes_value(true),
-        )
-        .get_matches();
+    let args = Args::parse();
+    let port = args.port;
 
-    let port = matches.value_of("port").unwrap_or("0");
-
-    match matches.value_of("scenario") {
-        Some("middleware") => {
+    match args.scenario {
+        Some(Scenario::Middleware) => {
             flight_server_scenarios::middleware::scenario_setup(port).await?
         }
-        Some("auth:basic_proto") => {
+        Some(Scenario::AuthBasicProto) => {
             flight_server_scenarios::auth_basic_proto::scenario_setup(port).await?
         }
-        Some(scenario_name) => unimplemented!("Scenario not found: {}", scenario_name),
         None => {
             flight_server_scenarios::integration_test::scenario_setup(port).await?;
         }

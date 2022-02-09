@@ -684,19 +684,20 @@ mod tests {
                     .with_length(12)
                     .with_id(2)
                     .build();
-            let mut struct_fields = Vec::new();
-            struct_fields.push(Arc::new(f1.unwrap()));
-            struct_fields.push(Arc::new(f2.unwrap()));
-            struct_fields.push(Arc::new(f3.unwrap()));
+
+            let mut struct_fields = vec![
+                Arc::new(f1.unwrap()),
+                Arc::new(f2.unwrap()),
+                Arc::new(f3.unwrap()),
+            ];
             let field = Type::group_type_builder("field")
                 .with_repetition(Repetition::OPTIONAL)
                 .with_fields(&mut struct_fields)
                 .with_id(1)
                 .build()
                 .unwrap();
-            let mut fields = Vec::new();
-            fields.push(Arc::new(field));
-            fields.push(Arc::new(f4.unwrap()));
+
+            let mut fields = vec![Arc::new(field), Arc::new(f4.unwrap())];
             let message = Type::group_type_builder("schema")
                 .with_fields(&mut fields)
                 .with_id(2)

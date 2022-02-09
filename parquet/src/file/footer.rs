@@ -78,7 +78,6 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
 
     // build up the reader covering the entire metadata
     let mut default_end_cursor = Cursor::new(default_len_end_buf);
-    let metadata_read: Box<dyn Read>;
     if footer_metadata_len > file_size as usize {
         return Err(general_err!(
             "Invalid Parquet file. Metadata start is less than zero ({})",
@@ -87,16 +86,21 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
     } else if footer_metadata_len < DEFAULT_FOOTER_READ_SIZE {
         // the whole metadata is in the bytes we already read
         default_end_cursor.seek(SeekFrom::End(-(footer_metadata_len as i64)))?;
-        metadata_read = Box::new(default_end_cursor);
+        parse_metadata_buffer(&mut default_end_cursor)
     } else {
         // the end of file read by default is not long enough, read missing bytes
         let complementary_end_read = chunk_reader.get_read(
             file_size - footer_metadata_len as u64,
             FOOTER_SIZE + metadata_len as usize - default_end_len,
         )?;
-        metadata_read = Box::new(complementary_end_read.chain(default_end_cursor));
+        parse_metadata_buffer(&mut complementary_end_read.chain(default_end_cursor))
     }
+}
 
+/// Reads [`ParquetMetaData`] from the provided [`Read`] starting at the readers current position
+pub(crate) fn parse_metadata_buffer<T: Read + ?Sized>(
+    metadata_read: &mut T,
+) -> Result<ParquetMetaData> {
     // TODO: row group filtering
     let mut prot = TCompactInputProtocol::new(metadata_read);
     let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)

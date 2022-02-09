@@ -58,7 +58,7 @@ pub trait BufferQueue: Sized {
     /// This distinction is to allow for implementations that return a default initialized
     /// [BufferQueue::Slice`] which doesn't track capacity and length separately
     ///
-    /// For example, [`TypedBuffer<T>`] returns a default-initialized `&mut [T]`, and does not
+    /// For example, [`BufferQueue`] returns a default-initialized `&mut [T]`, and does not
     /// track how much of this slice is actually written to by the caller. This is still
     /// safe as the slice is default-initialized.
     ///
@@ -73,7 +73,7 @@ pub trait BufferQueue: Sized {
 ///
 /// [scalar]: https://doc.rust-lang.org/book/ch03-02-data-types.html#scalar-types
 ///
-pub trait ScalarValue {}
+pub trait ScalarValue: Copy {}
 impl ScalarValue for bool {}
 impl ScalarValue for u8 {}
 impl ScalarValue for i8 {}
@@ -95,7 +95,8 @@ pub struct ScalarBuffer<T: ScalarValue> {
     len: usize,
 
     /// Placeholder to allow `T` as an invariant generic parameter
-    _phantom: PhantomData<*mut T>,
+    /// without making it !Send
+    _phantom: PhantomData<fn(T) -> T>,
 }
 
 impl<T: ScalarValue> Default for ScalarBuffer<T> {
@@ -260,7 +261,7 @@ impl<T: ScalarValue> ValuesBuffer for ScalarBuffer<T> {
             if level_pos <= value_pos {
                 break;
             }
-            slice.swap(value_pos, level_pos)
+            slice[level_pos] = slice[value_pos];
         }
     }
 }

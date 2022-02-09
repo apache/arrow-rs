@@ -828,55 +828,25 @@ mod tests {
     // Convenient macros to assemble row, list, map, and group.
 
     macro_rules! row {
-        () => {
+        ($($e:tt)*) => {
             {
-                let result = Vec::new();
-                make_row(result)
-            }
-        };
-        ( $( $e:expr ), + ) => {
-            {
-                let mut result = Vec::new();
-                $(
-                    result.push($e);
-                )*
-                    make_row(result)
+                make_row(vec![$($e)*])
             }
         }
     }
 
     macro_rules! list {
-        () => {
+        ($($e:tt)*) => {
             {
-                let result = Vec::new();
-                Field::ListInternal(make_list(result))
-            }
-        };
-        ( $( $e:expr ), + ) => {
-            {
-                let mut result = Vec::new();
-                $(
-                    result.push($e);
-                )*
-                    Field::ListInternal(make_list(result))
+                Field::ListInternal(make_list(vec![$($e)*]))
             }
         }
     }
 
     macro_rules! map {
-        () => {
+        ($($e:tt)*) => {
             {
-                let result = Vec::new();
-                Field::MapInternal(make_map(result))
-            }
-        };
-        ( $( $e:expr ), + ) => {
-            {
-                let mut result = Vec::new();
-                $(
-                    result.push($e);
-                )*
-                    Field::MapInternal(make_map(result))
+                Field::MapInternal(make_map(vec![$($e)*]))
             }
         }
     }

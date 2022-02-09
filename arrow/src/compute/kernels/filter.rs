@@ -17,129 +17,61 @@
 
 //! Defines miscellaneous array kernels.
 
+use crate::array::*;
 use crate::buffer::buffer_bin_and;
 use crate::datatypes::DataType;
 use crate::error::Result;
 use crate::record_batch::RecordBatch;
-use crate::{array::*, util::bit_chunk_iterator::BitChunkIterator};
-use std::iter::Enumerate;
+use crate::util::bit_chunk_iterator::{UnalignedBitChunk, UnalignedBitChunkIterator};
 
 /// Function that can filter arbitrary arrays
 pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
-
-/// Internal state of [SlicesIterator]
-#[derive(Debug, PartialEq)]
-enum State {
-    // it is iterating over bits of a mask (`u64`, steps of size of 1 slot)
-    Bits(u64),
-    // it is iterating over chunks (steps of size of 64 slots)
-    Chunks,
-    // it is iterating over the remaining bits (steps of size of 1 slot)
-    Remainder,
-    // nothing more to iterate.
-    Finish,
-}
 
 /// An iterator of `(usize, usize)` each representing an interval `[start,end[` whose
 /// slots of a [BooleanArray] are true. Each interval corresponds to a contiguous region of memory to be
 /// "taken" from an array to be filtered.
 #[derive(Debug)]
 pub struct SlicesIterator<'a> {
-    iter: Enumerate<BitChunkIterator<'a>>,
-    state: State,
-    filter: &'a BooleanArray,
-    remainder_mask: u64,
-    remainder_len: usize,
-    chunk_len: usize,
+    iter: UnalignedBitChunkIterator<'a>,
     len: usize,
-    start: usize,
-    on_region: bool,
-    current_chunk: usize,
-    current_bit: usize,
+    chunk_end_offset: usize,
+    current_chunk: u64,
 }
 
 impl<'a> SlicesIterator<'a> {
     pub fn new(filter: &'a BooleanArray) -> Self {
         let values = &filter.data_ref().buffers()[0];
-        let chunks = values.bit_chunks(filter.offset(), filter.len());
+        let len = filter.len();
+        let chunk = UnalignedBitChunk::new(values.as_slice(), filter.offset(), len);
+        let mut iter = chunk.iter();
+
+        let chunk_end_offset = 64 - chunk.lead_padding();
+        let current_chunk = iter.next().unwrap_or(0);
 
         Self {
-            iter: chunks.iter().enumerate(),
-            state: State::Chunks,
-            filter,
-            remainder_len: chunks.remainder_len(),
-            chunk_len: chunks.chunk_len(),
-            remainder_mask: chunks.remainder_bits(),
-            len: 0,
-            start: 0,
-            on_region: false,
-            current_chunk: 0,
-            current_bit: 0,
+            iter,
+            len,
+            chunk_end_offset,
+            current_chunk,
         }
     }
 
-    /// Counts the number of set bits in the filter array.
-    fn filter_count(&self) -> usize {
-        let values = self.filter.values();
-        values.count_set_bits_offset(self.filter.offset(), self.filter.len())
-    }
-
-    #[inline]
-    fn current_start(&self) -> usize {
-        self.current_chunk * 64 + self.current_bit
-    }
-
-    #[inline]
-    fn iterate_bits(&mut self, mask: u64, max: usize) -> Option<(usize, usize)> {
-        while self.current_bit < max {
-            if (mask & (1 << self.current_bit)) != 0 {
-                if !self.on_region {
-                    self.start = self.current_start();
-                    self.on_region = true;
-                }
-                self.len += 1;
-            } else if self.on_region {
-                let result = (self.start, self.start + self.len);
-                self.len = 0;
-                self.on_region = false;
-                self.current_bit += 1;
-                return Some(result);
+    /// Returns `Some((chunk_offset, bit_offset))` for the next chunk that has at
+    /// least one bit set, or None if there is no such chunk.
+    ///
+    /// Where `chunk_offset` is the bit offset to the current `usize`d chunk
+    /// and `bit_offset` is the offset of the first `1` bit in that chunk
+    fn advance_to_set_bit(&mut self) -> Option<(usize, u32)> {
+        loop {
+            if self.current_chunk != 0 {
+                // Find the index of the first 1
+                let bit_pos = self.current_chunk.trailing_zeros();
+                return Some((self.chunk_end_offset, bit_pos));
             }
-            self.current_bit += 1;
-        }
-        self.current_bit = 0;
-        None
-    }
 
-    /// iterates over chunks.
-    #[inline]
-    fn iterate_chunks(&mut self) -> Option<(usize, usize)> {
-        while let Some((i, mask)) = self.iter.next() {
-            self.current_chunk = i;
-            if mask == 0 {
-                if self.on_region {
-                    let result = (self.start, self.start + self.len);
-                    self.len = 0;
-                    self.on_region = false;
-                    return Some(result);
-                }
-            } else if mask == 18446744073709551615u64 {
-                // = !0u64
-                if !self.on_region {
-                    self.start = self.current_start();
-                    self.on_region = true;
-                }
-                self.len += 64;
-            } else {
-                // there is a chunk that has a non-trivial mask => iterate over bits.
-                self.state = State::Bits(mask);
-                return None;
-            }
+            self.current_chunk = self.iter.next()?;
+            self.chunk_end_offset += 64;
         }
-        // no more chunks => start iterating over the remainder
-        self.current_chunk = self.chunk_len;
-        self.state = State::Remainder;
-        None
     }
 }
 
@@ -147,44 +79,50 @@ impl<'a> Iterator for SlicesIterator<'a> {
     type Item = (usize, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.state {
-            State::Chunks => {
-                match self.iterate_chunks() {
-                    None => {
-                        // iterating over chunks does not yield any new slice => continue to the next
-                        self.current_bit = 0;
-                        self.next()
-                    }
-                    other => other,
+        // Used as termination condition
+        if self.len == 0 {
+            return None;
+        }
+
+        let (start_chunk, start_bit) = self.advance_to_set_bit()?;
+
+        // Set bits up to start
+        self.current_chunk |= (1 << start_bit) - 1;
+
+        loop {
+            if self.current_chunk != u64::MAX {
+                // Find the index of the first 0
+                let end_bit = self.current_chunk.trailing_ones();
+
+                // Zero out up to end_bit
+                self.current_chunk &= !((1 << end_bit) - 1);
+
+                return Some((
+                    start_chunk + start_bit as usize - 64,
+                    self.chunk_end_offset + end_bit as usize - 64,
+                ));
+            }
+
+            match self.iter.next() {
+                Some(next) => {
+                    self.current_chunk = next;
+                    self.chunk_end_offset += 64;
+                }
+                None => {
+                    return Some((
+                        start_chunk + start_bit as usize - 64,
+                        std::mem::replace(&mut self.len, 0),
+                    ));
                 }
             }
-            State::Bits(mask) => {
-                match self.iterate_bits(mask, 64) {
-                    None => {
-                        // iterating over bits does not yield any new slice => change back
-                        // to chunks and continue to the next
-                        self.state = State::Chunks;
-                        self.next()
-                    }
-                    other => other,
-                }
-            }
-            State::Remainder => {
-                match self.iterate_bits(self.remainder_mask, self.remainder_len) {
-                    None => {
-                        self.state = State::Finish;
-                        if self.on_region {
-                            Some((self.start, self.start + self.len))
-                        } else {
-                            None
-                        }
-                    }
-                    other => other,
-                }
-            }
-            State::Finish => None,
         }
     }
+}
+
+fn filter_count(filter: &BooleanArray) -> usize {
+    filter
+        .values()
+        .count_set_bits_offset(filter.offset(), filter.len())
 }
 
 /// Returns a prepared function optimized to filter multiple arrays.
@@ -194,7 +132,7 @@ impl<'a> Iterator for SlicesIterator<'a> {
 /// Therefore, it is considered undefined behavior to pass `filter` with null values.
 pub fn build_filter(filter: &BooleanArray) -> Result<Filter> {
     let iter = SlicesIterator::new(filter);
-    let filter_count = iter.filter_count();
+    let filter_count = filter_count(filter);
     let chunks = iter.collect::<Vec<_>>();
 
     Ok(Box::new(move |array: &ArrayData| {
@@ -255,8 +193,8 @@ pub fn filter(array: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef> {
         return filter(array, &predicate);
     }
 
-    let iter = SlicesIterator::new(predicate);
-    let filter_count = iter.filter_count();
+    let filter_count = filter_count(predicate);
+
     match filter_count {
         0 => {
             // return empty
@@ -271,7 +209,10 @@ pub fn filter(array: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef> {
             // actually filter
             let mut mutable =
                 MutableArrayData::new(vec![array.data_ref()], false, filter_count);
+
+            let iter = SlicesIterator::new(predicate);
             iter.for_each(|(start, end)| mutable.extend(0, start, end));
+
             let data = mutable.freeze();
             Ok(make_array(data))
         }
@@ -316,6 +257,7 @@ mod tests {
         buffer::Buffer,
         datatypes::{DataType, Field},
     };
+    use rand::prelude::*;
 
     macro_rules! def_temporal_test {
         ($test:ident, $array_type: ident, $data: expr) => {
@@ -614,9 +556,9 @@ mod tests {
     fn test_slice_iterator_bits() {
         let filter_values = (0..64).map(|i| i == 1).collect::<Vec<bool>>();
         let filter = BooleanArray::from(filter_values);
+        let filter_count = filter_count(&filter);
 
         let iter = SlicesIterator::new(&filter);
-        let filter_count = iter.filter_count();
         let chunks = iter.collect::<Vec<_>>();
 
         assert_eq!(chunks, vec![(1, 2)]);
@@ -627,9 +569,9 @@ mod tests {
     fn test_slice_iterator_bits1() {
         let filter_values = (0..64).map(|i| i != 1).collect::<Vec<bool>>();
         let filter = BooleanArray::from(filter_values);
+        let filter_count = filter_count(&filter);
 
         let iter = SlicesIterator::new(&filter);
-        let filter_count = iter.filter_count();
         let chunks = iter.collect::<Vec<_>>();
 
         assert_eq!(chunks, vec![(0, 1), (2, 64)]);
@@ -640,9 +582,9 @@ mod tests {
     fn test_slice_iterator_chunk_and_bits() {
         let filter_values = (0..130).map(|i| i % 62 != 0).collect::<Vec<bool>>();
         let filter = BooleanArray::from(filter_values);
+        let filter_count = filter_count(&filter);
 
         let iter = SlicesIterator::new(&filter);
-        let filter_count = iter.filter_count();
         let chunks = iter.collect::<Vec<_>>();
 
         assert_eq!(chunks, vec![(1, 62), (63, 124), (125, 130)]);
@@ -692,5 +634,90 @@ mod tests {
         assert_eq!(out.len(), 0);
         assert_eq!(out.data_type(), &DataType::Int64);
         Ok(())
+    }
+
+    #[test]
+    fn test_slices() {
+        // takes up 2 u64s
+        let bools = std::iter::repeat(true)
+            .take(10)
+            .chain(std::iter::repeat(false).take(30))
+            .chain(std::iter::repeat(true).take(20))
+            .chain(std::iter::repeat(false).take(17))
+            .chain(std::iter::repeat(true).take(4));
+
+        let bool_array: BooleanArray = bools.map(Some).collect();
+
+        let slices: Vec<_> = SlicesIterator::new(&bool_array).collect();
+        let expected = vec![(0, 10), (40, 60), (77, 81)];
+        assert_eq!(slices, expected);
+
+        // slice with offset and truncated len
+        let len = bool_array.len();
+        let sliced_array = bool_array.slice(7, len - 10);
+        let sliced_array = sliced_array
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        let slices: Vec<_> = SlicesIterator::new(sliced_array).collect();
+        let expected = vec![(0, 3), (33, 53), (70, 71)];
+        assert_eq!(slices, expected);
+    }
+
+    fn test_slices_fuzz(mask_len: usize, offset: usize, truncate: usize) {
+        let mut rng = thread_rng();
+
+        let bools: Vec<bool> = std::iter::from_fn(|| Some(rng.gen()))
+            .take(mask_len)
+            .collect();
+
+        let buffer = Buffer::from_iter(bools.iter().cloned());
+
+        let truncated_length = mask_len - offset - truncate;
+
+        let data = ArrayDataBuilder::new(DataType::Boolean)
+            .len(truncated_length)
+            .offset(offset)
+            .add_buffer(buffer)
+            .build()
+            .unwrap();
+
+        let bool_array = BooleanArray::from(data);
+
+        let bits: Vec<_> = SlicesIterator::new(&bool_array)
+            .flat_map(|(start, end)| start..end)
+            .collect();
+
+        let expected_bits: Vec<_> = bools
+            .iter()
+            .skip(offset)
+            .take(truncated_length)
+            .enumerate()
+            .flat_map(|(idx, v)| v.then(|| idx))
+            .collect();
+
+        assert_eq!(bits, expected_bits);
+    }
+
+    #[test]
+    fn fuzz_test_slices_iterator() {
+        let mut rng = thread_rng();
+
+        for _ in 0..100 {
+            let mask_len = rng.gen_range(0..1024);
+            let max_offset = 64.min(mask_len);
+            let offset = rng.gen::<usize>().checked_rem(max_offset).unwrap_or(0);
+
+            let max_truncate = 128.min(mask_len - offset);
+            let truncate = rng.gen::<usize>().checked_rem(max_truncate).unwrap_or(0);
+
+            test_slices_fuzz(mask_len, offset, truncate);
+        }
+
+        test_slices_fuzz(64, 0, 0);
+        test_slices_fuzz(64, 8, 0);
+        test_slices_fuzz(64, 8, 8);
+        test_slices_fuzz(32, 8, 8);
+        test_slices_fuzz(32, 5, 9);
     }
 }

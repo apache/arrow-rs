@@ -62,7 +62,7 @@ const DEFAULT_DICTIONARY_ENABLED: bool = true;
 const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
 const DEFAULT_STATISTICS_ENABLED: bool = true;
 const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
-const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 128 * 1024 * 1024;
+const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
 const DEFAULT_CREATED_BY: &str = env!("PARQUET_CREATED_BY");
 
 /// Parquet writer version.
@@ -129,7 +129,7 @@ impl WriterProperties {
         self.write_batch_size
     }
 
-    /// Returns max size for a row group.
+    /// Returns maximum number of rows in a row group.
     pub fn max_row_group_size(&self) -> usize {
         self.max_row_group_size
     }
@@ -288,7 +288,7 @@ impl WriterPropertiesBuilder {
         self
     }
 
-    /// Sets max size for a row group.
+    /// Sets maximum number of rows in a row group.
     pub fn set_max_row_group_size(mut self, value: usize) -> Self {
         assert!(value > 0, "Cannot have a 0 max row group size");
         self.max_row_group_size = value;

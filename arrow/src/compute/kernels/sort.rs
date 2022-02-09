@@ -426,8 +426,9 @@ impl Default for SortOptions {
 /// when a limit is present, the sort is pair-comparison based as k-select might be more efficient,
 /// when the limit is absent, binary partition is used to speed up (which is linear).
 ///
-/// TODO maybe partition_validity call can be eliminated in this case and tri-color sort can be used
-/// instead. https://en.wikipedia.org/wiki/Dutch_national_flag_problem
+/// TODO maybe partition_validity call can be eliminated in this case
+/// and [tri-color sort](https://en.wikipedia.org/wiki/Dutch_national_flag_problem)
+/// can be used instead.
 fn sort_boolean(
     values: &ArrayRef,
     value_indices: Vec<u32>,
@@ -848,7 +849,7 @@ where
     }
 }
 
-/// Compare two `Array`s based on the ordering defined in [ord](crate::array::ord).
+/// Compare two `Array`s based on the ordering defined in [build_compare]
 fn cmp_array(a: &dyn Array, b: &dyn Array) -> Ordering {
     let cmp_op = build_compare(a, b).unwrap();
     let length = a.len().max(b.len());

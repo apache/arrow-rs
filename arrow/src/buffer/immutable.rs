@@ -21,7 +21,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::{convert::AsRef, usize};
 
-use crate::util::bit_chunk_iterator::BitChunks;
+use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::{
     bytes::{Bytes, Deallocation},
     datatypes::ArrowNativeType,
@@ -205,11 +205,7 @@ impl Buffer {
     /// Returns the number of 1-bits in this buffer, starting from `offset` with `length` bits
     /// inspected. Note that both `offset` and `length` are measured in bits.
     pub fn count_set_bits_offset(&self, offset: usize, len: usize) -> usize {
-        let chunks = self.bit_chunks(offset, len);
-        let mut count = chunks.iter().map(|c| c.count_ones() as usize).sum();
-        count += chunks.remainder_bits().count_ones() as usize;
-
-        count
+        UnalignedBitChunk::new(self.as_slice(), offset, len).count_ones()
     }
 }
 

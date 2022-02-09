@@ -74,7 +74,7 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
             let mut cells = Vec::new();
             for col in 0..batch.num_columns() {
                 let column = batch.column(col);
-                cells.push(Cell::new(&array_value_to_string(&column, row)?));
+                cells.push(Cell::new(&array_value_to_string(column, row)?));
             }
             table.add_row(cells);
         }
@@ -96,7 +96,7 @@ fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
 
     for col in columns {
         for row in 0..col.len() {
-            let cells = vec![Cell::new(&array_value_to_string(&col, row)?)];
+            let cells = vec![Cell::new(&array_value_to_string(col, row)?)];
             table.add_row(cells);
         }
     }
@@ -320,7 +320,7 @@ mod tests {
         let mut builder = FixedSizeBinaryBuilder::new(3, 3);
 
         builder.append_value(&[1, 2, 3]).unwrap();
-        builder.append_null();
+        builder.append_null().unwrap();
         builder.append_value(&[7, 8, 9]).unwrap();
 
         let array = Arc::new(builder.finish());
@@ -677,7 +677,7 @@ mod tests {
         )?;
 
         let mut buf = String::new();
-        write!(&mut buf, "{}", pretty_format_batches(&[batch])?.to_string()).unwrap();
+        write!(&mut buf, "{}", pretty_format_batches(&[batch])?).unwrap();
 
         let s = vec![
             "+---+-----+",
@@ -689,7 +689,7 @@ mod tests {
             "| d | 100 |",
             "+---+-----+",
         ];
-        let expected = String::from(s.join("\n"));
+        let expected = s.join("\n");
         assert_eq!(expected, buf);
 
         Ok(())

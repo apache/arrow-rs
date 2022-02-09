@@ -325,8 +325,8 @@ pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 /// ```
 pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 ///
-/// A primitive array where each element is of type `TimestampSecondType.`
-/// See also [`Timestamp.`](crate::datatypes::Timestamp)
+/// A primitive array where each element is of type [TimestampSecondType].
+/// See also [`Timestamp`](crate::datatypes::DataType::Timestamp).
 ///
 /// # Example: UTC timestamps post epoch
 /// ```
@@ -465,8 +465,6 @@ pub use self::builder::StringBuilder;
 pub use self::builder::StringDictionaryBuilder;
 pub use self::builder::StructBuilder;
 pub use self::builder::UnionBuilder;
-pub use self::builder::MAX_DECIMAL_FOR_EACH_PRECISION;
-pub use self::builder::MIN_DECIMAL_FOR_EACH_PRECISION;
 
 pub type Int8Builder = PrimitiveBuilder<Int8Type>;
 pub type Int16Builder = PrimitiveBuilder<Int16Type>;

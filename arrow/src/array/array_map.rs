@@ -29,8 +29,8 @@ use crate::error::ArrowError;
 /// A nested array type where each record is a key-value map.
 /// Keys should always be non-null, but values can be null.
 ///
-/// [MapArray] is physically a [ListArray] that has a [StructArray]
-/// with 2 child fields.
+/// [MapArray] is physically a [crate::array::ListArray] that has a
+/// [crate::array::StructArray] with 2 child fields.
 pub struct MapArray {
     data: ArrayData,
     values: ArrayRef,
