@@ -1799,7 +1799,7 @@ where
                     let simd_result = simd_op(simd_left, simd_right);
 
                     let m = T::mask_to_u64(&simd_result);
-                    bitmask |= m << (i / lanes);
+                    bitmask |= m << i;
 
                     i += lanes;
                 }
@@ -2478,6 +2478,18 @@ mod tests {
             let a = Int64Array::from($A_VEC);
             let c = $KERNEL(&a, $B).unwrap();
             assert_eq!(BooleanArray::from($EXPECTED), c);
+
+            // test with a larger version of the same data to ensure we cover the chunked part of the comparison
+            let mut a = vec![];
+            let mut e = vec![];
+            for _i in 0..10 {
+                a.extend($A_VEC);
+                e.extend($EXPECTED);
+            }
+            let a = Int64Array::from(a);
+            let c = $KERNEL(&a, $B).unwrap();
+            assert_eq!(BooleanArray::from(e), c);
+
         };
     }
 
