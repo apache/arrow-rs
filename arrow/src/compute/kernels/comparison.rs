@@ -2170,18 +2170,16 @@ where
         .zip(right.keys().iter())
         .map(|(left_key, right_key)| {
             if let (Some(left_k), Some(right_k)) = (left_key, right_key) {
-                let left_key = left_k
-                    .to_usize()
-                    .expect("Dictionary index not usize");
-                let right_key = right_k
-                    .to_usize()
-                    .expect("Dictionary index not usize");
+                let left_key = left_k.to_usize().expect("Dictionary index not usize");
+                let right_key = right_k.to_usize().expect("Dictionary index not usize");
                 unsafe {
                     let left_value = left_values.value_unchecked(left_key);
                     let right_value = right_values.value_unchecked(right_key);
                     Some(op(left_value, right_value))
                 }
-            } else { None }
+            } else {
+                None
+            }
         })
         .collect();
 
