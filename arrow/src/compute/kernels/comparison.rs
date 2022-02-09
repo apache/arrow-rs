@@ -4674,4 +4674,38 @@ mod tests {
             BooleanArray::from(vec![Some(true), None, None, Some(true)])
         );
     }
+
+    #[test]
+    fn test_eq_dyn_dictionary_binary_array() {
+        let key_type = DataType::UInt64;
+
+        // Construct a value array
+        let values: [u8; 12] = [
+            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
+        ];
+        let offsets: [i32; 4] = [0, 5, 5, 12];
+
+        // Array data: ["hello", "", "parquet"]
+        let value_data = ArrayData::builder(DataType::Binary)
+            .len(3)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_buffer(Buffer::from_slice_ref(&values))
+            .build()
+            .unwrap();
+
+        let keys1 = Buffer::from(&[0_u64, 1, 2].to_byte_slice());
+        let keys2 = Buffer::from(&[0_u64, 2, 1].to_byte_slice());
+        let dict_array1: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
+            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
+        );
+        let dict_array2: DictionaryArray<UInt64Type> =
+            UInt64DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
+
+        let result = eq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(true), Some(false), Some(false)])
+        );
+    }
 }
