@@ -27,7 +27,7 @@ $ cd ~/arrow-rs/conbench/
 $ conda create -y -n conbench python=3.9
 $ conda activate conbench
 (conbench) $ pip install -r requirements.txt
-(conbench) $ conbench arrow-rs --src-dir=/Users/diana/workspace/arrow-rs
+(conbench) $ conbench arrow-rs
 ```
 
 ## Example output
