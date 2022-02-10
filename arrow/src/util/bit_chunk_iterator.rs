@@ -466,9 +466,6 @@ mod tests {
     #[test]
     #[allow(clippy::assertions_on_constants)]
     fn test_unaligned_bit_chunk_iterator() {
-        // This test exploits the fact Buffer is at least 64-byte aligned
-        assert!(ALIGNMENT > 64);
-
         let buffer = Buffer::from(&[0xFF; 5]);
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 40);
 
