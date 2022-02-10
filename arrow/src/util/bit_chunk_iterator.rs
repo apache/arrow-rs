@@ -362,7 +362,6 @@ impl ExactSizeIterator for BitChunkIterator<'_> {
 mod tests {
     use rand::prelude::*;
 
-    use crate::alloc::ALIGNMENT;
     use crate::buffer::Buffer;
     use crate::util::bit_chunk_iterator::UnalignedBitChunk;
 
@@ -517,6 +516,13 @@ mod tests {
         assert_eq!(unaligned.suffix(), None);
 
         let buffer = Buffer::from(&[0xFF; 14]);
+
+        // Verify buffer alignment
+        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>()};
+        assert_eq!(prefix.len(), 0);
+        assert_eq!(aligned.len(), 1);
+        assert_eq!(suffix.len(), 6);
+
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 112);
 
         assert!(unaligned.chunks().is_empty()); // Less than 128 elements
@@ -526,6 +532,13 @@ mod tests {
         assert_eq!(unaligned.suffix(), Some((1 << 48) - 1));
 
         let buffer = Buffer::from(&[0xFF; 16]);
+
+        // Verify buffer alignment
+        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>()};
+        assert_eq!(prefix.len(), 0);
+        assert_eq!(aligned.len(), 2);
+        assert_eq!(suffix.len(), 0);
+
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 128);
 
         assert_eq!(unaligned.prefix(), Some(u64::MAX));
@@ -533,6 +546,13 @@ mod tests {
         assert!(unaligned.chunks().is_empty()); // Exactly 128 elements
 
         let buffer = Buffer::from(&[0xFF; 64]);
+
+        // Verify buffer alignment
+        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>()};
+        assert_eq!(prefix.len(), 0);
+        assert_eq!(aligned.len(), 8);
+        assert_eq!(suffix.len(), 0);
+
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 512);
 
         // Buffer is completely aligned and larger than 128 elements -> all in chunks array
@@ -543,6 +563,13 @@ mod tests {
         assert_eq!(unaligned.trailing_padding(), 0);
 
         let buffer = buffer.slice(1); // Offset buffer 1 byte off 64-bit alignment
+
+        // Verify buffer alignment
+        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>()};
+        assert_eq!(prefix.len(), 7);
+        assert_eq!(aligned.len(), 7);
+        assert_eq!(suffix.len(), 0);
+
         let unaligned = UnalignedBitChunk::new(buffer.as_slice(), 0, 504);
 
         // Need a prefix with 1 byte of lead padding to bring the buffer into alignment
