@@ -21,8 +21,8 @@ use std::iter::IntoIterator;
 use std::{convert::From, iter::FromIterator};
 
 use super::{
-    make_array, Array, ArrayData, ArrayRef, PrimitiveArray, PrimitiveBuilder,
-    StringArray, StringBuilder, StringDictionaryBuilder,
+    make_array, Array, ArrayData, ArrayRef, DictionaryIter, PrimitiveArray,
+    PrimitiveBuilder, StringArray, StringBuilder, StringDictionaryBuilder,
 };
 use crate::datatypes::ArrowNativeType;
 use crate::datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType, DataType};
@@ -252,6 +252,13 @@ impl<T: ArrowPrimitiveType> fmt::Debug for DictionaryArray<T> {
     }
 }
 
+impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
+    /// constructs a new iterator
+    pub fn iter<T: ArrowPrimitiveType>(&'a self) -> DictionaryIter<'a, K, T> {
+        DictionaryIter::<'a, K, T>::new(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -421,5 +428,39 @@ mod tests {
             .data()
             .validate_full()
             .expect("All null array has valid array data");
+    }
+
+    #[test]
+    fn test_dictionary_iter() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int8)
+            .len(8)
+            .add_buffer(Buffer::from(
+                &[10_i8, 11, 12, 13, 14, 15, 16, 17].to_byte_slice(),
+            ))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        let keys = Buffer::from(&[2_i16, 3, 4].to_byte_slice());
+
+        // Construct a dictionary array from the above two
+        let key_type = DataType::Int16;
+        let value_type = DataType::Int8;
+        let dict_data_type =
+            DataType::Dictionary(Box::new(key_type), Box::new(value_type));
+        let dict_data = ArrayData::builder(dict_data_type.clone())
+            .len(3)
+            .add_buffer(keys.clone())
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap();
+        let dict_array = Int16DictionaryArray::from(dict_data);
+
+        let mut iter = dict_array.iter::<Int8Type>();
+        assert_eq!(12, iter.next().unwrap().unwrap());
+        assert_eq!(13, iter.next().unwrap().unwrap());
+        assert_eq!(14, iter.next().unwrap().unwrap());
+        assert!(iter.next().is_none());
     }
 }
