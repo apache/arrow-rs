@@ -2030,6 +2030,7 @@ macro_rules! typed_compares {
     }};
 }
 
+/// Applies $OP to $LEFT and $RIGHT which are two dictionaries which have (the same) key type $KT
 macro_rules! typed_dict_cmp {
     ($LEFT: expr, $RIGHT: expr, $OP: expr, $KT: tt) => {{
         match ($LEFT.value_type(), $RIGHT.value_type()) {
@@ -2059,6 +2060,12 @@ macro_rules! typed_dict_cmp {
             }
             (DataType::UInt64, DataType::UInt64) => {
                 cmp_dict::<$KT, UInt64Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Float32, DataType::Float32) => {
+                cmp_dict::<$KT, Float32Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (DataType::Float64, DataType::Float64) => {
+                cmp_dict::<$KT, Float64Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Utf8, DataType::Utf8) => {
                 cmp_dict_utf8::<$KT, i32, _>($LEFT, $RIGHT, $OP)
@@ -2197,7 +2204,7 @@ macro_rules! typed_dict_compares {
 }
 
 /// Helper function to perform boolean lambda function on values from two dictionary arrays, this
-/// version does not attempt to use SIMD.
+/// version does not attempt to use SIMD explicitly (though the compiler may auto vectorize)
 macro_rules! compare_dict_op {
     ($left: expr, $right:expr, $op:expr, $value_ty:ty) => {{
         if $left.len() != $right.len() {
@@ -2238,8 +2245,7 @@ macro_rules! compare_dict_op {
 }
 
 /// Perform given operation on two `DictionaryArray`s.
-/// Only when two arrays are of the same type the comparison will happen otherwise it will err
-/// with a casting error.
+/// Returns an error if the two arrays have different value type
 pub fn cmp_dict<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
