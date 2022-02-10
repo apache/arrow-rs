@@ -25,6 +25,7 @@ use arrow::array::*;
 use arrow::csv;
 use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
+use std::env;
 use std::fs::File;
 use std::sync::Arc;
 
@@ -56,7 +57,8 @@ fn criterion_benchmark(c: &mut Criterion) {
             vec![Arc::new(c1), Arc::new(c2), Arc::new(c3), Arc::new(c4)],
         )
         .unwrap();
-        let file = File::create("target/bench_write_csv.csv").unwrap();
+        let path = env::temp_dir().join("bench_write_csv.csv");
+        let file = File::create(path).unwrap();
         let mut writer = csv::Writer::new(file);
         let batches = vec![&b, &b, &b, &b, &b, &b, &b, &b, &b, &b, &b];
 
