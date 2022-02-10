@@ -87,7 +87,7 @@ pub struct DictionaryArray<K: ArrowPrimitiveType> {
 
 impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
     /// Attempt to create a new DictionaryArray with a specified keys
-    /// (dictionary) and values (indexes into that dictionary)
+    /// (indexes into the dictionary) and values (dictionary)
     /// array. Returns an error if there are any keys that are outside
     /// of the dictionary array.
     pub fn try_new(keys: &PrimitiveArray<K>, values: &dyn Array) -> Result<Self> {
