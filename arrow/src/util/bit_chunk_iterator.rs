@@ -518,7 +518,7 @@ mod tests {
         let buffer = Buffer::from(&[0xFF; 14]);
 
         // Verify buffer alignment
-        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>()};
+        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>() };
         assert_eq!(prefix.len(), 0);
         assert_eq!(aligned.len(), 1);
         assert_eq!(suffix.len(), 6);
@@ -534,7 +534,7 @@ mod tests {
         let buffer = Buffer::from(&[0xFF; 16]);
 
         // Verify buffer alignment
-        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>()};
+        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>() };
         assert_eq!(prefix.len(), 0);
         assert_eq!(aligned.len(), 2);
         assert_eq!(suffix.len(), 0);
@@ -548,7 +548,7 @@ mod tests {
         let buffer = Buffer::from(&[0xFF; 64]);
 
         // Verify buffer alignment
-        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>()};
+        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>() };
         assert_eq!(prefix.len(), 0);
         assert_eq!(aligned.len(), 8);
         assert_eq!(suffix.len(), 0);
@@ -565,7 +565,7 @@ mod tests {
         let buffer = buffer.slice(1); // Offset buffer 1 byte off 64-bit alignment
 
         // Verify buffer alignment
-        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>()};
+        let (prefix, aligned, suffix) = unsafe { buffer.as_slice().align_to::<u64>() };
         assert_eq!(prefix.len(), 7);
         assert_eq!(aligned.len(), 7);
         assert_eq!(suffix.len(), 0);
