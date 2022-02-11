@@ -38,7 +38,7 @@
 //!
 //! let file = File::open("test/data/basic.json").unwrap();
 //!
-//! let mut json = json::Reader::new(BufReader::new(file), Arc::new(schema), 1024, None);
+//! let mut json = json::Reader::new(BufReader::new(file), Arc::new(schema), 1024, None, None);
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 
@@ -55,6 +55,7 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
 use crate::util::bit_util;
+use crate::util::reader_parser::Parser;
 use crate::{array::*, buffer::Buffer};
 
 #[derive(Debug, Clone)]
@@ -563,7 +564,7 @@ where
 ///     BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
 /// let inferred_schema = infer_json_schema(&mut reader, None).unwrap();
 /// let batch_size = 1024;
-/// let decoder = Decoder::new(Arc::new(inferred_schema), batch_size, None);
+/// let decoder = Decoder::new(Arc::new(inferred_schema), batch_size, None, None);
 ///
 /// // seek back to start so that the original file is usable again
 /// reader.seek(SeekFrom::Start(0)).unwrap();
@@ -580,6 +581,8 @@ pub struct Decoder {
     projection: Option<Vec<String>>,
     /// Batch size (number of records to load each time)
     batch_size: usize,
+    /// optional HashMap of column names to its format strings
+    format_strings: Option<HashMap<String, String>>,
 }
 
 impl Decoder {
@@ -589,11 +592,13 @@ impl Decoder {
         schema: SchemaRef,
         batch_size: usize,
         projection: Option<Vec<String>>,
+        format_strings: Option<HashMap<String, String>>,
     ) -> Self {
         Self {
             schema,
             projection,
             batch_size,
+            format_strings,
         }
     }
 
@@ -941,6 +946,29 @@ impl Decoder {
         ))
     }
 
+    fn build_primitive_array_using_format_string<T>(
+        &self,
+        rows: &[Value],
+        col_name: &str,
+        format_string: &str,
+    ) -> Result<ArrayRef>
+    where
+        T: ArrowNumericType + Parser,
+        T: Parser,
+    {
+        Ok(Arc::new(
+            rows.iter()
+                .map(|row| {
+                    row.get(&col_name).and_then(|value| {
+                        value
+                            .as_str()
+                            .and_then(|value| T::parse_formatted(value, format_string))
+                    })
+                })
+                .collect::<PrimitiveArray<T>>(),
+        ))
+    }
+
     /// Build a nested GenericListArray from a list of unnested `Value`s
     fn build_nested_list_array<OffsetSize: OffsetSizeTrait>(
         &self,
@@ -1122,6 +1150,10 @@ impl Decoder {
             .iter()
             .filter(|field| projection.is_empty() || projection.contains(field.name()))
             .map(|field| {
+                let format_string = self
+                    .format_strings
+                    .as_ref()
+                    .and_then(|fmts| fmts.get(field.name()));
                 match field.data_type() {
                     DataType::Null => {
                         Ok(Arc::new(NullArray::new(rows.len())) as ArrayRef)
@@ -1180,12 +1212,24 @@ impl Decoder {
                                 field.name(),
                             ),
                     },
-                    DataType::Date64 => {
-                        self.build_primitive_array::<Date64Type>(rows, field.name())
-                    }
-                    DataType::Date32 => {
-                        self.build_primitive_array::<Date32Type>(rows, field.name())
-                    }
+                    DataType::Date64 => match format_string {
+                        Some(format_string) => self
+                            .build_primitive_array_using_format_string::<Date64Type>(
+                                rows,
+                                field.name(),
+                                format_string.as_str(),
+                            ),
+                        _ => self.build_primitive_array::<Date64Type>(rows, field.name()),
+                    },
+                    DataType::Date32 => match format_string {
+                        Some(format_string) => self
+                            .build_primitive_array_using_format_string::<Date32Type>(
+                                rows,
+                                field.name(),
+                                format_string.as_str(),
+                            ),
+                        _ => self.build_primitive_array::<Date32Type>(rows, field.name()),
+                    },
                     DataType::Time64(unit) => match unit {
                         TimeUnit::Microsecond => self
                             .build_primitive_array::<Time64MicrosecondType>(
@@ -1540,8 +1584,15 @@ impl<R: Read> Reader<R> {
         schema: SchemaRef,
         batch_size: usize,
         projection: Option<Vec<String>>,
+        format_strings: Option<HashMap<String, String>>,
     ) -> Self {
-        Self::from_buf_reader(BufReader::new(reader), schema, batch_size, projection)
+        Self::from_buf_reader(
+            BufReader::new(reader),
+            schema,
+            batch_size,
+            projection,
+            format_strings,
+        )
     }
 
     /// Create a new JSON Reader from a `BufReader<R: Read>`
@@ -1552,10 +1603,11 @@ impl<R: Read> Reader<R> {
         schema: SchemaRef,
         batch_size: usize,
         projection: Option<Vec<String>>,
+        format_strings: Option<HashMap<String, String>>,
     ) -> Self {
         Self {
             reader,
-            decoder: Decoder::new(schema, batch_size, projection),
+            decoder: Decoder::new(schema, batch_size, projection, format_strings),
         }
     }
 
@@ -1591,6 +1643,8 @@ pub struct ReaderBuilder {
     batch_size: usize,
     /// Optional projection for which columns to load (zero-based column indices)
     projection: Option<Vec<String>>,
+    /// optional HashMap of column names to its format strings
+    format_strings: Option<HashMap<String, String>>,
 }
 
 impl Default for ReaderBuilder {
@@ -1600,6 +1654,7 @@ impl Default for ReaderBuilder {
             max_records: None,
             batch_size: 1024,
             projection: None,
+            format_strings: None,
         }
     }
 }
@@ -1658,6 +1713,15 @@ impl ReaderBuilder {
         self
     }
 
+    /// Set the decoder's format Strings param
+    pub fn with_format_strings(
+        mut self,
+        format_strings: HashMap<String, String>,
+    ) -> Self {
+        self.format_strings = Some(format_strings);
+        self
+    }
+
     /// Create a new `Reader` from the `ReaderBuilder`
     pub fn build<R>(self, source: R) -> Result<Reader<R>>
     where
@@ -1679,6 +1743,7 @@ impl ReaderBuilder {
             schema,
             self.batch_size,
             self.projection,
+            self.format_strings,
         ))
     }
 }
@@ -1711,7 +1776,7 @@ mod tests {
             .unwrap();
         let batch = reader.next().unwrap().unwrap();
 
-        assert_eq!(4, batch.num_columns());
+        assert_eq!(5, batch.num_columns());
         assert_eq!(12, batch.num_rows());
 
         let schema = reader.schema();
@@ -1834,6 +1899,7 @@ mod tests {
             Arc::new(schema.clone()),
             1024,
             None,
+            None,
         );
         let reader_schema = reader.schema();
         assert_eq!(reader_schema, Arc::new(schema));
@@ -1871,6 +1937,39 @@ mod tests {
     }
 
     #[test]
+    fn test_json_format_strings_for_date() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("e", DataType::Date32, false)]));
+        let e = schema.column_with_name("e").unwrap();
+        assert_eq!(&DataType::Date32, e.1.data_type());
+        let mut fmts = HashMap::new();
+        let date_format = "%Y-%m-%d".to_string();
+        fmts.insert("e".to_string(), date_format.clone());
+
+        let mut reader: Reader<File> = Reader::new(
+            File::open("test/data/basic.json").unwrap(),
+            schema.clone(),
+            1024,
+            None,
+            Some(fmts),
+        );
+        let reader_schema = reader.schema();
+        assert_eq!(reader_schema, schema);
+        let batch = reader.next().unwrap().unwrap();
+
+        let ee = batch
+            .column(e.0)
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .unwrap();
+        let dt = Date32Type::parse_formatted("1970-1-2", &date_format).unwrap();
+        assert_eq!(dt, ee.value(0));
+        let dt = Date32Type::parse_formatted("1969-12-31", &date_format).unwrap();
+        assert_eq!(dt, ee.value(1));
+        assert!(!ee.is_valid(2));
+    }
+
+    #[test]
     fn test_json_basic_schema_projection() {
         // We test implicit and explicit projection:
         // Implicit: omitting fields from a schema
@@ -1886,6 +1985,7 @@ mod tests {
             Arc::new(schema),
             1024,
             Some(vec!["a".to_string(), "c".to_string()]),
+            None,
         );
         let reader_schema = reader.schema();
         let expected_schema = Arc::new(Schema::new(vec![
@@ -2052,7 +2152,8 @@ mod tests {
         file.seek(SeekFrom::Start(0)).unwrap();
 
         let reader = BufReader::new(GzDecoder::new(&file));
-        let mut reader = Reader::from_buf_reader(reader, Arc::new(schema), 64, None);
+        let mut reader =
+            Reader::from_buf_reader(reader, Arc::new(schema), 64, None, None);
         let batch_gz = reader.next().unwrap().unwrap();
 
         for batch in vec![batch, batch_gz] {
@@ -3093,7 +3194,7 @@ mod tests {
             true,
         )]);
 
-        let decoder = Decoder::new(Arc::new(schema), 1024, None);
+        let decoder = Decoder::new(Arc::new(schema), 1024, None, None);
         let batch = decoder
             .next_batch(
                 &mut vec![
@@ -3128,7 +3229,7 @@ mod tests {
             true,
         )]);
 
-        let decoder = Decoder::new(Arc::new(schema), 1024, None);
+        let decoder = Decoder::new(Arc::new(schema), 1024, None, None);
         let batch = decoder
             .next_batch(
                 // NOTE: total struct element count needs to be greater than
@@ -3157,7 +3258,7 @@ mod tests {
     #[test]
     fn test_json_read_binary_structs() {
         let schema = Schema::new(vec![Field::new("c1", DataType::Binary, true)]);
-        let decoder = Decoder::new(Arc::new(schema), 1024, None);
+        let decoder = Decoder::new(Arc::new(schema), 1024, None, None);
         let batch = decoder
             .next_batch(
                 &mut vec![
@@ -3200,7 +3301,7 @@ mod tests {
         let mut sum_a = 0;
         for batch in reader {
             let batch = batch.unwrap();
-            assert_eq!(4, batch.num_columns());
+            assert_eq!(5, batch.num_columns());
             sum_num_rows += batch.num_rows();
             num_batches += 1;
             let batch_schema = batch.schema();
