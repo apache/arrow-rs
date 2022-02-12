@@ -1269,7 +1269,7 @@ mod tests {
                     .as_any()
                     .downcast_ref::<Float64Array>()
                     .unwrap();
-                assert!(57.653484 - lat.value(0) < f64::EPSILON);
+                assert_eq!(57.653484, lat.value(0));
 
                 // access data from a string array (ListArray<u8>)
                 let city = batch
@@ -1400,7 +1400,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(57.653484 - lat.value(0) < f64::EPSILON);
+        assert_eq!(57.653484, lat.value(0));
 
         // access data from a string array (ListArray<u8>)
         let city = batch
@@ -1438,7 +1438,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(57.653484 - lat.value(0) < f64::EPSILON);
+        assert_eq!(57.653484, lat.value(0));
 
         // access data from a string array (ListArray<u8>)
         let city = batch
