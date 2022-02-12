@@ -619,7 +619,7 @@ impl BitReader {
         values_to_read
     }
 
-    /// Reads up to `num_bytes` to `buffer` returning the number of bytes read
+    /// Reads up to `num_bytes` to `buf` returning the number of bytes read
     pub(crate) fn get_aligned_bytes(
         &mut self,
         buf: &mut Vec<u8>,

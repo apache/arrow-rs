@@ -433,9 +433,10 @@ pub struct DeltaBitPackDecoder<T: DataType> {
     initialized: bool,
 
     // Header info
-    // The number of values in each block
+
+    /// The number of values in each block
     block_size: usize,
-    /// The number of values in the current page
+    /// The number of values that remain to be read in the current page
     values_left: usize,
     /// The number of mini-blocks in each block
     mini_blocks_per_block: usize,
@@ -443,6 +444,7 @@ pub struct DeltaBitPackDecoder<T: DataType> {
     values_per_mini_block: usize,
 
     // Per block info
+
     /// The minimum delta in the block
     min_delta: T::T,
     /// The byte offset of the end of the current block
@@ -490,7 +492,8 @@ where
             // If we've exhausted this page report the end of the current block
             // as we may not have consumed the trailing padding
             //
-            // The max is necessary to handle pages with no blocks
+            // The max is necessary to handle pages which don't contain more than
+            // one value and therefore have no blocks, but still contain a page header
             0 => self.bit_reader.get_byte_offset().max(self.block_end_offset),
             _ => self.bit_reader.get_byte_offset(),
         }
@@ -579,9 +582,9 @@ where
         self.values_left = self
             .bit_reader
             .get_vlq_int()
-            .ok_or_else(|| eof_err!("Not enough data to decode 'num_values'"))?
+            .ok_or_else(|| eof_err!("Not enough data to decode 'values_left'"))?
             .try_into()
-            .map_err(|_| general_err!("invalid 'num_values'"))?;
+            .map_err(|_| general_err!("invalid 'values_left'"))?;
 
         let first_value = self
             .bit_reader
