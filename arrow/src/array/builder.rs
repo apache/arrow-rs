@@ -3700,12 +3700,14 @@ mod tests {
 
     #[test]
     fn test_struct_array_builder_from_schema() {
-        let mut fields = Vec::new();
-        fields.push(Field::new("f1", DataType::Float32, false));
-        fields.push(Field::new("f2", DataType::Utf8, false));
-        let mut sub_fields = Vec::new();
-        sub_fields.push(Field::new("g1", DataType::Int32, false));
-        sub_fields.push(Field::new("g2", DataType::Boolean, false));
+        let mut fields = vec![
+            Field::new("f1", DataType::Float32, false),
+            Field::new("f2", DataType::Utf8, false),
+        ];
+        let sub_fields = vec![
+            Field::new("g1", DataType::Int32, false),
+            Field::new("g2", DataType::Boolean, false),
+        ];
         let struct_type = DataType::Struct(sub_fields);
         fields.push(Field::new("f3", struct_type, false));
 
@@ -3721,8 +3723,7 @@ mod tests {
         expected = "Data type List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }) is not currently supported"
     )]
     fn test_struct_array_builder_from_schema_unsupported_type() {
-        let mut fields = Vec::new();
-        fields.push(Field::new("f1", DataType::Int16, false));
+        let mut fields = vec![Field::new("f1", DataType::Int16, false)];
         let list_type =
             DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
         fields.push(Field::new("f2", list_type, false));
