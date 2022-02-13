@@ -349,6 +349,10 @@ pub struct ColumnChunkMetaData {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    offset_index_offset: Option<i64>,
+    offset_index_length: Option<i32>,
+    column_index_offset: Option<i64>,
+    column_index_length: Option<i32>,
 }
 
 /// Represents common operations for a column chunk.
@@ -462,6 +466,46 @@ impl ColumnChunkMetaData {
         self.statistics.as_ref()
     }
 
+    /// Returns `true` if this column chunk contains an offset index offset, `false` otherwise.
+    pub fn has_offset_index_offset(&self) -> bool {
+        self.offset_index_offset.is_some()
+    }
+
+    /// Returns the offset for the offset index.
+    pub fn offset_index_offset(&self) -> Option<i64> {
+        self.offset_index_offset
+    }
+
+    /// Returns `true` if this column chunk contains a offset index offset, `false` otherwise.
+    pub fn has_offset_index_length(&self) -> bool {
+        self.offset_index_length.is_some()
+    }
+
+    /// Returns the offset for the offset index length.
+    pub fn offset_index_length(&self) -> Option<i32> {
+        self.offset_index_length
+    }
+
+    /// Returns `true` if this column chunk contains a column index offset, `false` otherwise.
+    pub fn has_column_index_offset(&self) -> bool {
+        self.column_index_offset.is_some()
+    }
+
+    /// Returns the offset for the column index.
+    pub fn column_index_offset(&self) -> Option<i64> {
+        self.column_index_offset
+    }
+
+    /// Returns `true` if this column chunk contains a column index offset, `false` otherwise.
+    pub fn has_column_index_length(&self) -> bool {
+        self.column_index_length.is_some()
+    }
+
+    /// Returns the offset for the column index length.
+    pub fn column_index_length(&self) -> Option<i32> {
+        self.column_index_length
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(column_descr: ColumnDescPtr, cc: ColumnChunk) -> Result<Self> {
         if cc.meta_data.is_none() {
@@ -485,6 +529,10 @@ impl ColumnChunkMetaData {
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
+        let offset_index_offset = cc.offset_index_offset;
+        let offset_index_length = cc.offset_index_length;
+        let column_index_offset = cc.column_index_offset;
+        let column_index_length = cc.column_index_length;
         let result = ColumnChunkMetaData {
             column_type,
             column_path,
@@ -500,6 +548,10 @@ impl ColumnChunkMetaData {
             index_page_offset,
             dictionary_page_offset,
             statistics,
+            offset_index_offset,
+            offset_index_length,
+            column_index_offset,
+            column_index_length,
         };
         Ok(result)
     }
@@ -527,10 +579,10 @@ impl ColumnChunkMetaData {
             file_path: self.file_path().map(|s| s.to_owned()),
             file_offset: self.file_offset,
             meta_data: Some(column_metadata),
-            offset_index_offset: None,
-            offset_index_length: None,
-            column_index_offset: None,
-            column_index_length: None,
+            offset_index_offset: self.offset_index_offset,
+            offset_index_length: self.offset_index_length,
+            column_index_offset: self.column_index_offset,
+            column_index_length: self.column_index_length,
             crypto_metadata: None,
             encrypted_column_metadata: None,
         }
@@ -551,6 +603,10 @@ pub struct ColumnChunkMetaDataBuilder {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    offset_index_offset: Option<i64>,
+    offset_index_length: Option<i32>,
+    column_index_offset: Option<i64>,
+    column_index_length: Option<i32>,
 }
 
 impl ColumnChunkMetaDataBuilder {
@@ -569,6 +625,10 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: None,
             dictionary_page_offset: None,
             statistics: None,
+            offset_index_offset: None,
+            offset_index_length: None,
+            column_index_offset: None,
+            column_index_length: None,
         }
     }
 
@@ -638,6 +698,30 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Sets optional offset index offset in bytes.
+    pub fn set_offset_index_offset(mut self, value: Option<i64>) -> Self {
+        self.offset_index_offset = value;
+        self
+    }
+
+    /// Sets optional offset index length in bytes.
+    pub fn set_offset_index_length(mut self, value: Option<i32>) -> Self {
+        self.offset_index_length = value;
+        self
+    }
+
+    /// Sets optional column index offset in bytes.
+    pub fn set_column_index_offset(mut self, value: Option<i64>) -> Self {
+        self.column_index_offset = value;
+        self
+    }
+
+    /// Sets optional column index length in bytes.
+    pub fn set_column_index_length(mut self, value: Option<i32>) -> Self {
+        self.column_index_length = value;
+        self
+    }
+
     /// Builds column chunk metadata.
     pub fn build(self) -> Result<ColumnChunkMetaData> {
         Ok(ColumnChunkMetaData {
@@ -655,6 +739,10 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: self.index_page_offset,
             dictionary_page_offset: self.dictionary_page_offset,
             statistics: self.statistics,
+            offset_index_offset: self.offset_index_offset,
+            offset_index_length: self.offset_index_length,
+            column_index_offset: self.column_index_offset,
+            column_index_length: self.column_index_length,
         })
     }
 }
@@ -717,6 +805,10 @@ mod tests {
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)
             .set_dictionary_page_offset(Some(5000))
+            .set_offset_index_offset(Some(6000))
+            .set_offset_index_length(Some(100))
+            .set_column_index_offset(Some(7000))
+            .set_column_index_length(Some(100))
             .build()
             .unwrap();
 

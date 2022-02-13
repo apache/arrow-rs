@@ -163,6 +163,26 @@ fn print_column_chunk_metadata(
         Some(stats) => stats.to_string(),
     };
     writeln!(out, "statistics: {}", statistics_str);
+    let offset_index_offset_str = match cc_metadata.offset_index_offset() {
+        None => "N/A".to_owned(),
+        Some(dpo) => dpo.to_string(),
+    };
+    writeln!(out, "offset index offset: {}", offset_index_offset_str);
+    let offset_index_length_str = match cc_metadata.offset_index_length() {
+        None => "N/A".to_owned(),
+        Some(dpo) => dpo.to_string(),
+    };
+    writeln!(out, "offset index length: {}", offset_index_length_str);
+    let column_index_offset_str = match cc_metadata.column_index_offset() {
+        None => "N/A".to_owned(),
+        Some(dpo) => dpo.to_string(),
+    };
+    writeln!(out, "column index offset: {}", column_index_offset_str);
+    let column_index_length_str = match cc_metadata.column_index_length() {
+        None => "N/A".to_owned(),
+        Some(dpo) => dpo.to_string(),
+    };
+    writeln!(out, "column index length: {}", column_index_length_str);
     writeln!(out);
 }
 
