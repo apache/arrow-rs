@@ -767,12 +767,12 @@ mod tests {
         let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
 
         let row_group_metadata = file_reader.metadata.row_group(0);
-        let col1_metadata = row_group_metadata.column(0);
-        let col2_metadata = row_group_metadata.column(1);
+        let col0_metadata = row_group_metadata.column(0);
+        let col1_metadata = row_group_metadata.column(1);
 
         // test optional bloom filter offset
-        assert_eq!(col1_metadata.bloom_filter_offset().unwrap(), 7283);
-        assert_eq!(col2_metadata.bloom_filter_offset().unwrap(), 1055877);
+        assert_eq!(col0_metadata.bloom_filter_offset().unwrap(), 7283);
+        assert_eq!(col1_metadata.bloom_filter_offset().unwrap(), 1055877);
     }
 
     #[test]
