@@ -761,6 +761,21 @@ mod tests {
     }
 
     #[test]
+    fn test_file_reader_optional_metadata() {
+        // file with optional metadata: bloom filters, column index and offset index.
+        let file = get_test_file("data_index_bloom.parquet");
+        let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        let col1_metadata = row_group_metadata.column(0);
+        let col2_metadata = row_group_metadata.column(1);
+
+        // test optional bloom filter offset
+        assert_eq!(col1_metadata.bloom_filter_offset().unwrap(), 7283);
+        assert_eq!(col2_metadata.bloom_filter_offset().unwrap(), 1055877);
+    }
+
+    #[test]
     fn test_file_reader_filter_row_groups() -> Result<()> {
         let test_file = get_test_file("alltypes_plain.parquet");
         let mut reader = SerializedFileReader::new(test_file)?;
