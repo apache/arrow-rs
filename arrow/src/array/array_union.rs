@@ -603,16 +603,17 @@ mod tests {
         let type_id_buffer = Buffer::from_slice_ref(&type_ids);
         let value_offsets_buffer = Buffer::from_slice_ref(&value_offsets);
 
-        let mut children: Vec<(Field, Arc<dyn Array>)> = Vec::new();
-        children.push((
-            Field::new("A", DataType::Utf8, false),
-            Arc::new(string_array),
-        ));
-        children.push((Field::new("B", DataType::Int32, false), Arc::new(int_array)));
-        children.push((
-            Field::new("C", DataType::Float64, false),
-            Arc::new(float_array),
-        ));
+        let children: Vec<(Field, Arc<dyn Array>)> = vec![
+            (
+                Field::new("A", DataType::Utf8, false),
+                Arc::new(string_array),
+            ),
+            (Field::new("B", DataType::Int32, false), Arc::new(int_array)),
+            (
+                Field::new("C", DataType::Float64, false),
+                Arc::new(float_array),
+            ),
+        ];
         let array = UnionArray::try_new(
             type_id_buffer,
             Some(value_offsets_buffer),

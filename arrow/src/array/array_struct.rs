@@ -436,9 +436,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let mut field_types = vec![];
-        field_types.push(Field::new("a", DataType::Boolean, false));
-        field_types.push(Field::new("b", DataType::Int32, false));
+        let field_types = vec![
+            Field::new("a", DataType::Boolean, false),
+            Field::new("b", DataType::Int32, false),
+        ];
         let struct_array_data = ArrayData::builder(DataType::Struct(field_types))
             .len(5)
             .add_child_data(boolean_data.clone())
