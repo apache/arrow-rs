@@ -464,7 +464,7 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns `true` if this column chunk contains a bloom filter offset, `false` otherwise.
-    pub fn has_bloom_filter_offset(&self) -> bool {
+    pub fn has_bloom_filter(&self) -> bool {
         self.bloom_filter_offset.is_some()
     }
 
