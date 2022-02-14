@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::datatypes::{ArrowNativeType, ArrowPrimitiveType};
+use crate::datatypes::ArrowPrimitiveType;
 
 use super::{
-    Array, ArrayRef, BinaryOffsetSizeTrait, BooleanArray, DictionaryArray,
-    GenericBinaryArray, GenericListArray, GenericStringArray, OffsetSizeTrait,
-    PrimitiveArray, StringOffsetSizeTrait,
+    Array, ArrayRef, BinaryOffsetSizeTrait, BooleanArray, GenericBinaryArray,
+    GenericListArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
+    StringOffsetSizeTrait,
 };
 
 /// an iterator that returns Some(T) or None, that can be used on any PrimitiveArray
@@ -400,109 +400,6 @@ impl<'a, S: OffsetSizeTrait> std::iter::DoubleEndedIterator
 /// all arrays have known size.
 impl<'a, S: OffsetSizeTrait> std::iter::ExactSizeIterator
     for GenericListArrayIter<'a, S>
-{
-}
-
-/// an iterator that returns Some(T) or None, that can be used on any DictionaryArray
-// Note: This implementation is based on std's [Vec]s' [IntoIter].
-#[derive(Debug)]
-pub struct DictionaryIter<'a, K: ArrowPrimitiveType, T: ArrowPrimitiveType> {
-    array: &'a DictionaryArray<K>,
-    values: &'a PrimitiveArray<T>,
-    current: usize,
-    current_end: usize,
-}
-
-impl<'a, K: ArrowPrimitiveType, T: ArrowPrimitiveType> DictionaryIter<'a, K, T> {
-    /// create a new iterator
-    pub fn new(array: &'a DictionaryArray<K>) -> Self {
-        DictionaryIter::<K, T> {
-            array,
-            values: array
-                .values()
-                .as_any()
-                .downcast_ref::<PrimitiveArray<T>>()
-                .unwrap(),
-            current: 0,
-            current_end: array.len(),
-        }
-    }
-}
-
-impl<'a, K: ArrowPrimitiveType, T: ArrowPrimitiveType> std::iter::Iterator
-    for DictionaryIter<'a, K, T>
-{
-    type Item = Option<T::Native>;
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current == self.current_end {
-            None
-        } else if self.array.keys().is_null(self.current) {
-            self.current += 1;
-            Some(None)
-        } else {
-            let old = self.current;
-            self.current += 1;
-            // Safety:
-            // we just checked bounds in `self.current_end == self.current`
-            // this is safe on the premise that this struct is initialized with
-            // current = array.len()
-            // and that current_end is ever only decremented
-
-            unsafe {
-                let key = self
-                    .array
-                    .keys()
-                    .value_unchecked(old)
-                    .to_usize()
-                    .expect("Dictionary index not usize");
-                Some(Some(self.values.value_unchecked(key)))
-            }
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (
-            self.array.len() - self.current,
-            Some(self.array.len() - self.current),
-        )
-    }
-}
-
-impl<'a, K: ArrowPrimitiveType, T: ArrowPrimitiveType> std::iter::DoubleEndedIterator
-    for DictionaryIter<'a, K, T>
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.current_end == self.current {
-            None
-        } else {
-            self.current_end -= 1;
-            Some(if self.array.keys().is_null(self.current_end) {
-                None
-            } else {
-                // Safety:
-                // we just checked bounds in `self.current_end == self.current`
-                // this is safe on the premise that this struct is initialized with
-                // current = array.len()
-                // and that current_end is ever only decremented
-                unsafe {
-                    let key = self
-                        .array
-                        .keys()
-                        .value_unchecked(self.current_end)
-                        .to_usize()
-                        .expect("Dictionary index not usize");
-                    Some(self.values.value_unchecked(key))
-                }
-            })
-        }
-    }
-}
-
-/// all arrays have known size.
-impl<'a, K: ArrowPrimitiveType, T: ArrowPrimitiveType> std::iter::ExactSizeIterator
-    for DictionaryIter<'a, K, T>
 {
 }
 

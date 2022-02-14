@@ -21,8 +21,8 @@ use std::iter::IntoIterator;
 use std::{convert::From, iter::FromIterator};
 
 use super::{
-    make_array, Array, ArrayData, ArrayRef, DictionaryIter, PrimitiveArray,
-    PrimitiveBuilder, StringArray, StringBuilder, StringDictionaryBuilder,
+    make_array, Array, ArrayData, ArrayRef, PrimitiveArray, PrimitiveBuilder,
+    StringArray, StringBuilder, StringDictionaryBuilder,
 };
 use crate::datatypes::ArrowNativeType;
 use crate::datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType, DataType};
@@ -105,9 +105,16 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         self.keys.is_empty()
     }
 
-    // Currently exists for compatibility purposes with Arrow IPC.
+    /// Currently exists for compatibility purposes with Arrow IPC.
     pub fn is_ordered(&self) -> bool {
         self.is_ordered
+    }
+
+    /// Return an iterator over the keys (indexes into the dictionary)
+    pub fn keys_iter(&self) -> impl Iterator<Item = Option<usize>> + '_ {
+        self.keys
+            .iter()
+            .map(|key| key.map(|k| k.to_usize().expect("Dictionary index not usize")))
     }
 }
 
@@ -252,17 +259,11 @@ impl<T: ArrowPrimitiveType> fmt::Debug for DictionaryArray<T> {
     }
 }
 
-impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
-    /// constructs a new iterator
-    pub fn iter<T: ArrowPrimitiveType>(&'a self) -> DictionaryIter<'a, K, T> {
-        DictionaryIter::<'a, K, T>::new(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use crate::array::Int8Array;
     use crate::{
         array::Int16Array,
         datatypes::{Int32Type, Int8Type, UInt32Type, UInt8Type},
@@ -449,15 +450,27 @@ mod tests {
         let value_type = DataType::Int8;
         let dict_data_type =
             DataType::Dictionary(Box::new(key_type), Box::new(value_type));
-        let dict_data = ArrayData::builder(dict_data_type.clone())
+        let dict_data = ArrayData::builder(dict_data_type)
             .len(3)
-            .add_buffer(keys.clone())
-            .add_child_data(value_data.clone())
+            .add_buffer(keys)
+            .add_child_data(value_data)
             .build()
             .unwrap();
         let dict_array = Int16DictionaryArray::from(dict_data);
 
-        let mut iter = dict_array.iter::<Int8Type>();
+        let mut key_iter = dict_array.keys_iter();
+        assert_eq!(2, key_iter.next().unwrap().unwrap());
+        assert_eq!(3, key_iter.next().unwrap().unwrap());
+        assert_eq!(4, key_iter.next().unwrap().unwrap());
+        assert!(key_iter.next().is_none());
+
+        let mut iter = dict_array
+            .values()
+            .as_any()
+            .downcast_ref::<Int8Array>()
+            .unwrap()
+            .take_iter(dict_array.keys_iter());
+
         assert_eq!(12, iter.next().unwrap().unwrap());
         assert_eq!(13, iter.next().unwrap().unwrap());
         assert_eq!(14, iter.next().unwrap().unwrap());
