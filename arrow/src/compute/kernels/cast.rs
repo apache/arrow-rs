@@ -2357,11 +2357,11 @@ mod tests {
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Float64).unwrap();
         let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
-        assert!(5.0 - c.value(0) < f64::EPSILON);
-        assert!(6.0 - c.value(1) < f64::EPSILON);
-        assert!(7.0 - c.value(2) < f64::EPSILON);
-        assert!(8.0 - c.value(3) < f64::EPSILON);
-        assert!(9.0 - c.value(4) < f64::EPSILON);
+        assert_eq!(5.0, c.value(0));
+        assert_eq!(6.0, c.value(1));
+        assert_eq!(7.0, c.value(2));
+        assert_eq!(8.0, c.value(3));
+        assert_eq!(9.0, c.value(4));
     }
 
     #[test]
@@ -2483,10 +2483,10 @@ mod tests {
         let values = arr.values();
         let c = values.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(1, c.null_count());
-        assert!(7.0 - c.value(0) < f64::EPSILON);
-        assert!(8.0 - c.value(1) < f64::EPSILON);
+        assert_eq!(7.0, c.value(0));
+        assert_eq!(8.0, c.value(1));
         assert!(!c.is_valid(2));
-        assert!(10.0 - c.value(3) < f64::EPSILON);
+        assert_eq!(10.0, c.value(3));
     }
 
     #[test]
@@ -2535,8 +2535,8 @@ mod tests {
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Float64).unwrap();
         let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
-        assert!(1.0 - c.value(0) < f64::EPSILON);
-        assert!(0.0 - c.value(1) < f64::EPSILON);
+        assert_eq!(1.0, c.value(0));
+        assert_eq!(0.0, c.value(1));
         assert!(!c.is_valid(2));
     }
 

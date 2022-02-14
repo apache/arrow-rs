@@ -1750,8 +1750,8 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(2.0 - bb.value(0) < f64::EPSILON);
-        assert!(-3.5 - bb.value(1) < f64::EPSILON);
+        assert_eq!(2.0, bb.value(0));
+        assert_eq!(-3.5, bb.value(1));
         let cc = batch
             .column(c.0)
             .as_any()
@@ -1873,8 +1873,8 @@ mod tests {
             .as_any()
             .downcast_ref::<Float32Array>()
             .unwrap();
-        assert!(2.0 - bb.value(0) < f32::EPSILON);
-        assert!(-3.5 - bb.value(1) < f32::EPSILON);
+        assert_eq!(2.0, bb.value(0));
+        assert_eq!(-3.5, bb.value(1));
     }
 
     #[test]
@@ -1962,8 +1962,8 @@ mod tests {
         let bb = bb.values();
         let bb = bb.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(9, bb.len());
-        assert!(2.0 - bb.value(0) < f64::EPSILON);
-        assert!(-6.1 - bb.value(5) < f64::EPSILON);
+        assert_eq!(2.0, bb.value(0));
+        assert_eq!(-6.1, bb.value(5));
         assert!(!bb.is_valid(7));
 
         let cc = batch
@@ -2094,7 +2094,7 @@ mod tests {
             let bb = bb.values();
             let bb = bb.as_any().downcast_ref::<Float64Array>().unwrap();
             assert_eq!(10, bb.len());
-            assert!(4.0 - bb.value(9) < f64::EPSILON);
+            assert_eq!(4.0, bb.value(9));
 
             let cc = batch
                 .column(c.0)
