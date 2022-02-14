@@ -131,7 +131,6 @@
 #![allow(non_camel_case_types)]
 #![deny(clippy::redundant_clone)]
 #![allow(
-    clippy::type_complexity,
     // upper_case_acronyms lint was introduced in Rust 1.51.
     // It is triggered in the ffi module, and ipc::gen, which we have no control over
     clippy::upper_case_acronyms,

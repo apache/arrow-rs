@@ -507,7 +507,9 @@ mod tests {
         assert_eq!(equal(rhs, lhs), expected, "\n{:?}\n{:?}", rhs, lhs);
     }
 
-    fn binary_cases() -> Vec<(Vec<Option<String>>, Vec<Option<String>>, bool)> {
+    type OptionString = Option<String>;
+
+    fn binary_cases() -> Vec<(Vec<OptionString>, Vec<OptionString>, bool)> {
         let base = vec![
             Some("hello".to_owned()),
             None,
