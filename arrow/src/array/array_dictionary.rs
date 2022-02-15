@@ -476,4 +476,25 @@ mod tests {
         assert_eq!(14, iter.next().unwrap().unwrap());
         assert!(iter.next().is_none());
     }
+
+    #[test]
+    fn test_dictionary_iter_with_null() {
+        let test = vec![Some("a"), None, Some("b"), None, None, Some("a")];
+        let array: DictionaryArray<Int32Type> = test.into_iter().collect();
+
+        let mut iter = array
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .take_iter(array.keys_iter());
+
+        assert_eq!("a", iter.next().unwrap().unwrap());
+        assert!(iter.next().unwrap().is_none());
+        assert_eq!("b", iter.next().unwrap().unwrap());
+        assert!(iter.next().unwrap().is_none());
+        assert!(iter.next().unwrap().is_none());
+        assert_eq!("a", iter.next().unwrap().unwrap());
+        assert!(iter.next().is_none());
+    }
 }

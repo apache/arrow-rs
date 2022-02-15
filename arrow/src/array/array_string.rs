@@ -172,6 +172,14 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
         let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
     }
+
+    /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
+    pub fn take_iter<'a>(
+        &'a self,
+        indexes: impl Iterator<Item = Option<usize>> + 'a,
+    ) -> impl Iterator<Item = Option<&str>> + 'a {
+        indexes.map(|opt_index| opt_index.map(|index| self.value(index)))
+    }
 }
 
 impl<'a, Ptr, OffsetSize: StringOffsetSizeTrait> FromIterator<&'a Option<Ptr>>
