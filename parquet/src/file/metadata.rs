@@ -500,12 +500,12 @@ impl ColumnChunkMetaData {
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
         let encoding_stats = match col_metadata.encoding_stats {
-            Some(encodings) => encodings
-                .iter()
-                .map(|p_encoding_stats| {
-                    page_encoding_stats::from_thrift(p_encoding_stats)
-                })
-                .collect(),
+            Some(encodings) => Some(
+                encodings
+                    .iter()
+                    .map(|v| page_encoding_stats::from_thrift(v))
+                    .collect(),
+            ),
             None => None,
         };
 
@@ -531,6 +531,15 @@ impl ColumnChunkMetaData {
 
     /// Method to convert to Thrift.
     pub fn to_thrift(&self) -> ColumnChunk {
+        let page_encoding_stats = match self.encoding_stats.as_ref() {
+            Some(vec) => Some(
+                vec.iter()
+                    .map(|v| page_encoding_stats::to_thrift(&v))
+                    .collect(),
+            ),
+            None => None,
+        };
+
         let column_metadata = ColumnMetaData {
             type_: self.column_type.into(),
             encodings: self.encodings().iter().map(|&v| v.into()).collect(),
@@ -544,7 +553,7 @@ impl ColumnChunkMetaData {
             index_page_offset: self.index_page_offset,
             dictionary_page_offset: self.dictionary_page_offset,
             statistics: statistics::to_thrift(self.statistics.as_ref()),
-            encoding_stats: None,
+            encoding_stats: page_encoding_stats,
             bloom_filter_offset: None,
         };
 

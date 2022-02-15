@@ -769,11 +769,8 @@ mod tests {
 
         // test page encoding stats
         assert!(col_metadata.has_page_encoding_stats());
-        let page_encoding_stats = col_metadata
-            .page_encoding_stats()
-            .unwrap()
-            .get(0)
-            .unwrap();
+        let page_encoding_stats =
+            col_metadata.page_encoding_stats().unwrap().get(0).unwrap();
 
         assert_eq!(page_encoding_stats.page_type, basic::PageType::DATA_PAGE);
         assert_eq!(page_encoding_stats.encoding, Encoding::PLAIN);
