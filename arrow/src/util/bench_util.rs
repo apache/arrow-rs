@@ -110,6 +110,29 @@ pub fn create_string_array<Offset: StringOffsetSizeTrait>(
         .collect()
 }
 
+/// Creates an random (but fixed-seeded) array of a given size and null density
+/// consisting of random 4 character alphanumeric strings
+pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
+    size: usize,
+    null_density: f32,
+) -> DictionaryArray<K> {
+    let rng = &mut seedable_rng();
+
+    let data: Vec<_> = (0..size)
+        .map(|_| {
+            if rng.gen::<f32>() < null_density {
+                None
+            } else {
+                let value = rng.sample_iter(&Alphanumeric).take(4).collect();
+                let value = String::from_utf8(value).unwrap();
+                Some(value)
+            }
+        })
+        .collect();
+
+    data.iter().map(|x| x.as_deref()).collect()
+}
+
 /// Creates an random (but fixed-seeded) binary array of a given size and null density
 pub fn create_binary_array<Offset: BinaryOffsetSizeTrait>(
     size: usize,

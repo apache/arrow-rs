@@ -2116,7 +2116,8 @@ mod tests {
         let array = Arc::new(input_decimal_array) as ArrayRef;
         let result = cast(&array, &DataType::Decimal(2, 2));
         assert!(result.is_err());
-        assert_eq!("Invalid argument error: The value of 12345600 i128 is not compatible with Decimal(2,2)".to_string(), result.unwrap_err().to_string());
+        assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal of precision 2. Max is 99",
+                   result.unwrap_err().to_string());
     }
 
     #[test]
@@ -2297,7 +2298,7 @@ mod tests {
         let array = Arc::new(array) as ArrayRef;
         let casted_array = cast(&array, &DataType::Decimal(3, 1));
         assert!(casted_array.is_err());
-        assert_eq!("Invalid argument error: The value of 1000 i128 is not compatible with Decimal(3,1)", casted_array.unwrap_err().to_string());
+        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal of precision 3. Max is 999", casted_array.unwrap_err().to_string());
 
         // test f32 to decimal type
         let array = Float32Array::from(vec![
@@ -2356,11 +2357,11 @@ mod tests {
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Float64).unwrap();
         let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
-        assert!(5.0 - c.value(0) < f64::EPSILON);
-        assert!(6.0 - c.value(1) < f64::EPSILON);
-        assert!(7.0 - c.value(2) < f64::EPSILON);
-        assert!(8.0 - c.value(3) < f64::EPSILON);
-        assert!(9.0 - c.value(4) < f64::EPSILON);
+        assert_eq!(5.0, c.value(0));
+        assert_eq!(6.0, c.value(1));
+        assert_eq!(7.0, c.value(2));
+        assert_eq!(8.0, c.value(3));
+        assert_eq!(9.0, c.value(4));
     }
 
     #[test]
@@ -2482,10 +2483,10 @@ mod tests {
         let values = arr.values();
         let c = values.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(1, c.null_count());
-        assert!(7.0 - c.value(0) < f64::EPSILON);
-        assert!(8.0 - c.value(1) < f64::EPSILON);
+        assert_eq!(7.0, c.value(0));
+        assert_eq!(8.0, c.value(1));
         assert!(!c.is_valid(2));
-        assert!(10.0 - c.value(3) < f64::EPSILON);
+        assert_eq!(10.0, c.value(3));
     }
 
     #[test]
@@ -2534,8 +2535,8 @@ mod tests {
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Float64).unwrap();
         let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
-        assert!(1.0 - c.value(0) < f64::EPSILON);
-        assert!(0.0 - c.value(1) < f64::EPSILON);
+        assert_eq!(1.0, c.value(0));
+        assert_eq!(0.0, c.value(1));
         assert!(!c.is_valid(2));
     }
 

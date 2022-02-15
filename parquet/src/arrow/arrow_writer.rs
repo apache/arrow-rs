@@ -901,13 +901,13 @@ mod tests {
         let decimal_field = Field::new("a", DataType::Decimal(5, 2), false);
         let schema = Schema::new(vec![decimal_field]);
 
-        let mut dec_builder = DecimalBuilder::new(4, 5, 2);
-        dec_builder.append_value(10_000).unwrap();
-        dec_builder.append_value(50_000).unwrap();
-        dec_builder.append_value(0).unwrap();
-        dec_builder.append_value(-100).unwrap();
+        let decimal_values = vec![10_000, 50_000, 0, -100]
+            .into_iter()
+            .map(Some)
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(5, 2)
+            .unwrap();
 
-        let decimal_values = dec_builder.finish();
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(decimal_values)])
                 .unwrap();
