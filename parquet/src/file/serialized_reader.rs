@@ -400,6 +400,7 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::basic;
     use crate::basic::ColumnOrder;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
@@ -758,6 +759,25 @@ mod tests {
             metadata.get(2).unwrap().value,
             Some("foo.baz.Foobaz$Event".to_owned())
         );
+    }
+
+    #[test]
+    fn test_file_reader_optional_metadata() {
+        let file = get_test_file("data_index_bloom.parquet");
+        let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
+        let col_metadata = file_reader.metadata.row_group(0).column(0);
+
+        // test page encoding stats
+        assert!(col_metadata.has_page_encoding_stats());
+        let page_encoding_stats = col_metadata
+            .page_encoding_stats()
+            .unwrap()
+            .get(0)
+            .unwrap();
+
+        assert_eq!(page_encoding_stats.page_type, basic::PageType::DATA_PAGE);
+        assert_eq!(page_encoding_stats.encoding, Encoding::PLAIN);
+        assert_eq!(page_encoding_stats.count, 1);
     }
 
     #[test]

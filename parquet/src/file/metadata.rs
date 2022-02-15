@@ -39,6 +39,8 @@ use parquet_format::{ColumnChunk, ColumnMetaData, RowGroup};
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 use crate::errors::{ParquetError, Result};
+use crate::file::page_encoding_stats;
+use crate::file::page_encoding_stats::PageEncodingStats;
 use crate::file::statistics::{self, Statistics};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
@@ -349,6 +351,7 @@ pub struct ColumnChunkMetaData {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    encoding_stats: Option<Vec<PageEncodingStats>>,
 }
 
 /// Represents common operations for a column chunk.
@@ -462,6 +465,17 @@ impl ColumnChunkMetaData {
         self.statistics.as_ref()
     }
 
+    /// Returns `true` if this column chunk contains page encoding stats, `false` otherwise.
+    pub fn has_page_encoding_stats(&self) -> bool {
+        self.encoding_stats.is_some()
+    }
+
+    /// Returns the offset for the page encoding stats,
+    /// or `None` if no page encoding stats are available.
+    pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
+        self.encoding_stats.as_ref()
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(column_descr: ColumnDescPtr, cc: ColumnChunk) -> Result<Self> {
         if cc.meta_data.is_none() {
@@ -485,6 +499,16 @@ impl ColumnChunkMetaData {
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
+        let encoding_stats = match col_metadata.encoding_stats {
+            Some(encodings) => encodings
+                .iter()
+                .map(|p_encoding_stats| {
+                    page_encoding_stats::from_thrift(p_encoding_stats)
+                })
+                .collect(),
+            None => None,
+        };
+
         let result = ColumnChunkMetaData {
             column_type,
             column_path,
@@ -500,6 +524,7 @@ impl ColumnChunkMetaData {
             index_page_offset,
             dictionary_page_offset,
             statistics,
+            encoding_stats,
         };
         Ok(result)
     }
@@ -551,6 +576,7 @@ pub struct ColumnChunkMetaDataBuilder {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    encoding_stats: Option<Vec<PageEncodingStats>>,
 }
 
 impl ColumnChunkMetaDataBuilder {
@@ -569,6 +595,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: None,
             dictionary_page_offset: None,
             statistics: None,
+            encoding_stats: None,
         }
     }
 
@@ -638,6 +665,12 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Sets page encoding stats for this column chunk.
+    pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
+        self.encoding_stats = Some(value);
+        self
+    }
+
     /// Builds column chunk metadata.
     pub fn build(self) -> Result<ColumnChunkMetaData> {
         Ok(ColumnChunkMetaData {
@@ -655,6 +688,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: self.index_page_offset,
             dictionary_page_offset: self.dictionary_page_offset,
             statistics: self.statistics,
+            encoding_stats: self.encoding_stats,
         })
     }
 }

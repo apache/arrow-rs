@@ -97,6 +97,7 @@
 //! ```
 pub mod footer;
 pub mod metadata;
+mod page_encoding_stats;
 pub mod properties;
 pub mod reader;
 pub mod serialized_reader;
