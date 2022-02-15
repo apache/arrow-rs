@@ -161,9 +161,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<T::Native>> + 'a {
-        indexes.map(|opt_index| {
-            opt_index.map(|index| unsafe { self.value_unchecked(index) })
-        })
+        indexes.map(|opt_index| opt_index.map(|index| self.value(index)))
     }
 }
 
