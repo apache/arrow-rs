@@ -702,7 +702,7 @@ impl Array for FixedSizeBinaryArray {
 /// # Examples
 ///
 /// ```
-///    use arrow::array::{Array, DecimalArray, DecimalBuilder};
+///    use arrow::array::{Array, DecimalArray};
 ///    use arrow::datatypes::DataType;
 ///
 ///    // Create a DecimalArray with the default precision and scale
@@ -940,6 +940,12 @@ impl From<ArrayData> for DecimalArray {
             scale,
             length,
         }
+    }
+}
+
+impl From<DecimalArray> for ArrayData {
+    fn from(array: DecimalArray) -> Self {
+        array.data
     }
 }
 
@@ -1573,11 +1579,12 @@ mod tests {
 
     #[test]
     fn test_decimal_array_value_as_string() {
-        let mut decimal_builder = DecimalBuilder::new(7, 6, 3);
-        for value in [123450, -123450, 100, -100, 10, -10, 0] {
-            decimal_builder.append_value(value).unwrap();
-        }
-        let arr = decimal_builder.finish();
+        let arr = [123450, -123450, 100, -100, 10, -10, 0]
+            .into_iter()
+            .map(Some)
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(6, 3)
+            .unwrap();
 
         assert_eq!("123.450", arr.value_as_string(0));
         assert_eq!("-123.450", arr.value_as_string(1));
@@ -1641,14 +1648,12 @@ mod tests {
 
     #[test]
     fn test_decimal_array_fmt_debug() {
-        let values: Vec<i128> = vec![8887000000, -8887000000];
-        let mut decimal_builder = DecimalBuilder::new(3, 23, 6);
+        let arr = [Some(8887000000), Some(-8887000000), None]
+            .iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(23, 6)
+            .unwrap();
 
-        values.iter().for_each(|&value| {
-            decimal_builder.append_value(value).unwrap();
-        });
-        decimal_builder.append_null().unwrap();
-        let arr = decimal_builder.finish();
         assert_eq!(
             "DecimalArray<23, 6>\n[\n  8887.000000,\n  -8887.000000,\n  null,\n]",
             format!("{:?}", arr)

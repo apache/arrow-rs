@@ -311,9 +311,9 @@ mod tests {
 
     use crate::array::{
         array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryOffsetSizeTrait,
-        BooleanArray, DecimalBuilder, FixedSizeBinaryBuilder, FixedSizeListBuilder,
-        GenericBinaryArray, Int32Builder, ListBuilder, NullArray, PrimitiveBuilder,
-        StringArray, StringDictionaryBuilder, StringOffsetSizeTrait, StructArray,
+        BooleanArray, FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray,
+        Int32Builder, ListBuilder, NullArray, PrimitiveBuilder, StringArray,
+        StringDictionaryBuilder, StringOffsetSizeTrait, StructArray,
     };
     use crate::array::{GenericStringArray, Int32Array};
     use crate::buffer::Buffer;
@@ -818,16 +818,11 @@ mod tests {
     }
 
     fn create_decimal_array(data: &[Option<i128>]) -> ArrayData {
-        let mut builder = DecimalBuilder::new(20, 23, 6);
-
-        for d in data {
-            if let Some(v) = d {
-                builder.append_value(*v).unwrap();
-            } else {
-                builder.append_null().unwrap();
-            }
-        }
-        builder.finish().data().clone()
+        data.iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(23, 6)
+            .unwrap()
+            .into()
     }
 
     #[test]

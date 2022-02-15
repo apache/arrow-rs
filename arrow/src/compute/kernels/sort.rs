@@ -1107,16 +1107,10 @@ mod tests {
     use std::sync::Arc;
 
     fn create_decimal_array(data: &[Option<i128>]) -> DecimalArray {
-        let mut builder = DecimalBuilder::new(20, 23, 6);
-
-        for d in data {
-            if let Some(v) = d {
-                builder.append_value(*v).unwrap();
-            } else {
-                builder.append_null().unwrap();
-            }
-        }
-        builder.finish()
+        data.iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(23, 6)
+            .unwrap()
     }
 
     fn test_sort_to_indices_decimal_array(
