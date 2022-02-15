@@ -188,7 +188,9 @@ mod tests {
             })
     }
 
-    fn length_null_cases() -> Vec<(Vec<Option<&'static str>>, usize, Vec<Option<i32>>)> {
+    type OptionStr = Option<&'static str>;
+
+    fn length_null_cases() -> Vec<(Vec<OptionStr>, usize, Vec<Option<i32>>)> {
         vec![(
             vec![Some("one"), None, Some("three"), Some("four")],
             4,
@@ -310,8 +312,7 @@ mod tests {
             })
     }
 
-    fn bit_length_null_cases() -> Vec<(Vec<Option<&'static str>>, usize, Vec<Option<i32>>)>
-    {
+    fn bit_length_null_cases() -> Vec<(Vec<OptionStr>, usize, Vec<Option<i32>>)> {
         vec![(
             vec![Some("one"), None, Some("three"), Some("four")],
             4,
