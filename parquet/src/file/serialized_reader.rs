@@ -763,7 +763,7 @@ mod tests {
 
     #[test]
     fn test_file_reader_optional_metadata() {
-        let file = get_test_file("data_index_bloom.parquet");
+        let file = get_test_file("data_index_bloom_encoding_stats.parquet");
         let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
         let col_metadata = file_reader.metadata.row_group(0).column(0);
 
