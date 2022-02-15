@@ -296,17 +296,17 @@ where
 /// * the arrays have different lengths
 /// * there is an element where both left and right values are valid and the right value is `0`
 #[cfg(feature = "simd")]
-fn simd_checked_divide_op<T, SIMD_OP, SCALAR_OP>(
+fn simd_checked_divide_op<T, SI, SC>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-    simd_op: SIMD_OP,
-    scalar_op: SCALAR_OP,
+    simd_op: SI,
+    scalar_op: SC,
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
     T::Native: One + Zero,
-    SIMD_OP: Fn(Option<u64>, T::Simd, T::Simd) -> Result<T::Simd>,
-    SCALAR_OP: Fn(T::Native, T::Native) -> T::Native,
+    SI: Fn(Option<u64>, T::Simd, T::Simd) -> Result<T::Simd>,
+    SC: Fn(T::Native, T::Native) -> T::Native,
 {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(

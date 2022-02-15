@@ -247,7 +247,7 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
+          cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
 
   check_benches:
     name: Check Benchmarks (but don't run them)
