@@ -762,25 +762,22 @@ mod tests {
 
     #[test]
     fn test_file_reader_optional_metadata() {
-        // file with optional metadata: bloom filters, column index and offset index.
-        let file = get_test_file("data_index_bloom.parquet");
+        // file with optional metadata: bloom filters, encoding stats, column index and offset index.
+        let file = get_test_file("data_index_bloom_encoding_stats.parquet");
         let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
 
         let row_group_metadata = file_reader.metadata.row_group(0);
         let col0_metadata = row_group_metadata.column(0);
-        let col1_metadata = row_group_metadata.column(1);
+
+        assert!(col0_metadata.has_column_index());
 
         // test optional column index offset
-        assert_eq!(col0_metadata.column_index_offset().unwrap(), 7209);
-        assert_eq!(col0_metadata.column_index_length().unwrap(), 27);
-        assert_eq!(col1_metadata.column_index_offset().unwrap(), 7236);
-        assert_eq!(col1_metadata.column_index_length().unwrap(), 23);
+        assert_eq!(col0_metadata.column_index_offset().unwrap(), 156);
+        assert_eq!(col0_metadata.column_index_length().unwrap(), 25);
 
         // test optional offset index offset
-        assert_eq!(col0_metadata.offset_index_offset().unwrap(), 7259);
-        assert_eq!(col0_metadata.offset_index_length().unwrap(), 12);
-        assert_eq!(col1_metadata.offset_index_offset().unwrap(), 7271);
-        assert_eq!(col1_metadata.offset_index_length().unwrap(), 12);
+        assert_eq!(col0_metadata.offset_index_offset().unwrap(), 181);
+        assert_eq!(col0_metadata.offset_index_length().unwrap(), 11);
     }
 
     #[test]

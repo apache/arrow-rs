@@ -466,29 +466,10 @@ impl ColumnChunkMetaData {
         self.statistics.as_ref()
     }
 
-    /// Returns `true` if this column chunk contains an offset index offset, `false` otherwise.
-    pub fn has_offset_index_offset(&self) -> bool {
-        self.offset_index_offset.is_some()
-    }
-
-    /// Returns the offset for the offset index.
-    pub fn offset_index_offset(&self) -> Option<i64> {
-        self.offset_index_offset
-    }
-
-    /// Returns `true` if this column chunk contains a offset index offset, `false` otherwise.
-    pub fn has_offset_index_length(&self) -> bool {
-        self.offset_index_length.is_some()
-    }
-
-    /// Returns the offset for the offset index length.
-    pub fn offset_index_length(&self) -> Option<i32> {
-        self.offset_index_length
-    }
-
-    /// Returns `true` if this column chunk contains a column index offset, `false` otherwise.
-    pub fn has_column_index_offset(&self) -> bool {
-        self.column_index_offset.is_some()
+    /// Returns `true` if this column chunk contains a column index, `false` otherwise.
+    pub fn has_column_index(&self) -> bool {
+        self.column_index_offset.is_some() && self.column_index_length.is_some() &&
+            self.offset_index_offset.is_some() && self.offset_index_length.is_some()
     }
 
     /// Returns the offset for the column index.
@@ -496,14 +477,19 @@ impl ColumnChunkMetaData {
         self.column_index_offset
     }
 
-    /// Returns `true` if this column chunk contains a column index offset, `false` otherwise.
-    pub fn has_column_index_length(&self) -> bool {
-        self.column_index_length.is_some()
-    }
-
     /// Returns the offset for the column index length.
     pub fn column_index_length(&self) -> Option<i32> {
         self.column_index_length
+    }
+
+    /// Returns the offset for the offset index.
+    pub fn offset_index_offset(&self) -> Option<i64> {
+        self.offset_index_offset
+    }
+
+    /// Returns the offset for the offset index length.
+    pub fn offset_index_length(&self) -> Option<i32> {
+        self.offset_index_length
     }
 
     /// Method to convert from Thrift.
