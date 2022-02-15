@@ -16,7 +16,6 @@
 // under the License.
 
 use std::any::Any;
-use std::borrow::Borrow;
 use std::convert::From;
 use std::fmt;
 use std::iter::{FromIterator, IntoIterator};
@@ -33,6 +32,8 @@ use crate::{
     buffer::{Buffer, MutableBuffer},
     util::trusted_len_unzip,
 };
+
+use half::f16;
 
 /// Number of seconds in a day
 const SECONDS_IN_DAY: i64 = 86_400;
@@ -330,8 +331,55 @@ impl<'a, T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 }
 
-impl<T: ArrowPrimitiveType, Ptr: Borrow<Option<<T as ArrowPrimitiveType>::Native>>>
-    FromIterator<Ptr> for PrimitiveArray<T>
+#[derive(Debug)]
+pub struct ArrowPrimitiveTypeNative<T: ArrowPrimitiveType> {
+    pub native: Option<T::Native>,
+}
+
+macro_rules! def_into_for_primitive {
+    ( $ty:ident, $tt:tt) => {
+        impl Into<ArrowPrimitiveTypeNative<$ty>> for $tt {
+            fn into(self) -> ArrowPrimitiveTypeNative<$ty> {
+                ArrowPrimitiveTypeNative { native: Some(self) }
+            }
+        }
+    };
+}
+
+def_into_for_primitive!(Int8Type, i8);
+def_into_for_primitive!(Int16Type, i16);
+def_into_for_primitive!(Int32Type, i32);
+def_into_for_primitive!(Int64Type, i64);
+def_into_for_primitive!(UInt8Type, u8);
+def_into_for_primitive!(UInt16Type, u16);
+def_into_for_primitive!(UInt32Type, u32);
+def_into_for_primitive!(UInt64Type, u64);
+def_into_for_primitive!(Float16Type, f16);
+def_into_for_primitive!(Float32Type, f32);
+def_into_for_primitive!(Float64Type, f64);
+
+impl<T: ArrowPrimitiveType> Into<ArrowPrimitiveTypeNative<T>>
+    for Option<<T as ArrowPrimitiveType>::Native>
+{
+    fn into(self) -> ArrowPrimitiveTypeNative<T> {
+        ArrowPrimitiveTypeNative {
+            native: self.clone(),
+        }
+    }
+}
+
+impl<T: ArrowPrimitiveType> Into<ArrowPrimitiveTypeNative<T>>
+    for &Option<<T as ArrowPrimitiveType>::Native>
+{
+    fn into(self) -> ArrowPrimitiveTypeNative<T> {
+        ArrowPrimitiveTypeNative {
+            native: self.clone(),
+        }
+    }
+}
+
+impl<'a, T: ArrowPrimitiveType, Ptr: Into<ArrowPrimitiveTypeNative<T>>> FromIterator<Ptr>
+    for PrimitiveArray<T>
 {
     fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
         let iter = iter.into_iter();
@@ -341,9 +389,9 @@ impl<T: ArrowPrimitiveType, Ptr: Borrow<Option<<T as ArrowPrimitiveType>::Native
 
         let buffer: Buffer = iter
             .map(|item| {
-                if let Some(a) = item.borrow() {
+                if let Some(a) = item.into().native {
                     null_buf.append(true);
-                    *a
+                    a
                 } else {
                     null_buf.append(false);
                     // this ensures that null items on the buffer are not arbitrary.
@@ -520,6 +568,7 @@ mod tests {
     use std::thread;
 
     use crate::buffer::Buffer;
+    use crate::compute::eq_dyn;
     use crate::datatypes::DataType;
 
     #[test]
@@ -987,5 +1036,17 @@ mod tests {
 
         assert!(ret.is_ok());
         assert_eq!(8, ret.ok().unwrap());
+    }
+
+    #[test]
+    fn test_primitive_array_creation() {
+        let array1: Int8Array = [10_i8, 11, 12, 13, 14].into_iter().collect();
+        let array2: Int8Array = [10_i8, 11, 12, 13, 14].into_iter().map(Some).collect();
+
+        let result = eq_dyn(&array1, &array2);
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![true, true, true, true, true])
+        );
     }
 }
