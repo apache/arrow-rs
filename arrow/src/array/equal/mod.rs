@@ -20,7 +20,7 @@
 //! depend on dynamic casting of `Array`.
 
 use super::{
-    Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
+    Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray, DictionaryArray,
     FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
     GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
     StringOffsetSizeTrait, StructArray,
@@ -77,6 +77,12 @@ impl PartialEq for NullArray {
 
 impl<T: ArrowPrimitiveType> PartialEq for PrimitiveArray<T> {
     fn eq(&self, other: &PrimitiveArray<T>) -> bool {
+        equal(self.data(), other.data())
+    }
+}
+
+impl<K: ArrowPrimitiveType> PartialEq for DictionaryArray<K> {
+    fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
 }

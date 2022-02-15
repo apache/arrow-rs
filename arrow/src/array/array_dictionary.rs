@@ -26,6 +26,7 @@ use super::{
 };
 use crate::datatypes::ArrowNativeType;
 use crate::datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType, DataType};
+use crate::error::Result;
 
 /// A dictionary array where each element is a single value indexed by an integer key.
 /// This is mostly used to represent strings or a limited set of primitive types as integers,
@@ -50,15 +51,31 @@ use crate::datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType, DataType};
 /// let array : DictionaryArray<Int8Type> = test.into_iter().collect();
 /// assert_eq!(array.keys(), &Int8Array::from(vec![0, 0, 1, 2]));
 /// ```
+///
+/// Example from existing arrays:
+///
+/// ```
+/// use arrow::array::{DictionaryArray, Int8Array, StringArray};
+/// use arrow::datatypes::Int8Type;
+/// // You can form your own DictionaryArray by providing the
+/// // values (dictionary) and keys (indexes into the dictionary):
+/// let values = StringArray::from_iter_values(["a", "b", "c"]);
+/// let keys = Int8Array::from_iter_values([0, 0, 1, 2]);
+/// let array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+/// let expected: DictionaryArray::<Int8Type> = vec!["a", "a", "b", "c"]
+///    .into_iter()
+///    .collect();
+/// assert_eq!(&array, &expected);
+/// ```
 pub struct DictionaryArray<K: ArrowPrimitiveType> {
     /// Data of this dictionary. Note that this is _not_ compatible with the C Data interface,
     /// as, in the current implementation, `values` below are the first child of this struct.
     data: ArrayData,
 
-    /// The keys of this dictionary. These are constructed from the buffer and null bitmap
-    /// of `data`.
-    /// Also, note that these do not correspond to the true values of this array. Rather, they map
-    /// to the real values.
+    /// The keys of this dictionary. These are constructed from the
+    /// buffer and null bitmap of `data`.  Also, note that these do
+    /// not correspond to the true values of this array. Rather, they
+    /// map to the real values.
     keys: PrimitiveArray<K>,
 
     /// Array of dictionary values (can by any DataType).
@@ -69,6 +86,27 @@ pub struct DictionaryArray<K: ArrowPrimitiveType> {
 }
 
 impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
+    /// Attempt to create a new DictionaryArray with a specified keys
+    /// (indexes into the dictionary) and values (dictionary)
+    /// array. Returns an error if there are any keys that are outside
+    /// of the dictionary array.
+    pub fn try_new(keys: &PrimitiveArray<K>, values: &dyn Array) -> Result<Self> {
+        let dict_data_type = DataType::Dictionary(
+            Box::new(keys.data_type().clone()),
+            Box::new(values.data_type().clone()),
+        );
+
+        // Note: This does more work than necessary by rebuilding /
+        // revalidating all the data
+        let data = ArrayData::builder(dict_data_type)
+            .len(keys.len())
+            .add_buffer(keys.data().buffers()[0].clone())
+            .add_child_data(values.data().clone())
+            .build()?;
+
+        Ok(data.into())
+    }
+
     /// Return an array view of the keys of this dictionary as a PrimitiveArray.
     pub fn keys(&self) -> &PrimitiveArray<K> {
         &self.keys
@@ -257,12 +295,12 @@ mod tests {
     use super::*;
 
     use crate::{
-        array::Int16Array,
-        datatypes::{Int32Type, Int8Type, UInt32Type, UInt8Type},
-    };
-    use crate::{
         array::Int16DictionaryArray, array::PrimitiveDictionaryBuilder,
         datatypes::DataType,
+    };
+    use crate::{
+        array::{Int16Array, Int32Array},
+        datatypes::{Int32Type, Int8Type, UInt32Type, UInt8Type},
     };
     use crate::{buffer::Buffer, datatypes::ToByteSlice};
 
@@ -421,5 +459,42 @@ mod tests {
             .data()
             .validate_full()
             .expect("All null array has valid array data");
+    }
+
+    #[test]
+    fn test_try_new() {
+        let values: StringArray = [Some("foo"), Some("bar"), Some("baz")]
+            .into_iter()
+            .collect();
+        let keys: Int32Array = [Some(0), Some(2), None, Some(1)].into_iter().collect();
+
+        let array = DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+        assert_eq!(array.keys().data_type(), &DataType::Int32);
+        assert_eq!(array.values().data_type(), &DataType::Utf8);
+        assert_eq!(
+            "DictionaryArray {keys: PrimitiveArray<Int32>\n[\n  0,\n  2,\n  0,\n  1,\n] values: StringArray\n[\n  \"foo\",\n  \"bar\",\n  \"baz\",\n]}\n",
+            format!("{:?}", array)
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Value at position 1 out of bounds: 3 (should be in [0, 1])"
+    )]
+    fn test_try_new_index_too_large() {
+        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+        // dictionary only has 2 values, so offset 3 is out of bounds
+        let keys: Int32Array = [Some(0), Some(3)].into_iter().collect();
+        DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Value at position 0 out of bounds: -100 (should be in [0, 1])"
+    )]
+    fn test_try_new_index_too_small() {
+        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+        let keys: Int32Array = [Some(-100)].into_iter().collect();
+        DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
     }
 }

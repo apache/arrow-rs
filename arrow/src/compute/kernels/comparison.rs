@@ -2699,7 +2699,6 @@ mod tests {
 
     use super::*;
     use crate::datatypes::Int8Type;
-    use crate::datatypes::ToByteSlice;
     use crate::{array::Int32Array, array::Int64Array, datatypes::Field};
 
     /// Evaluate `KERNEL` with two vectors as inputs and assert against the expected output.
@@ -4664,41 +4663,15 @@ mod tests {
         );
     }
 
-    fn get_dict_arraydata(
-        keys: Buffer,
-        key_type: DataType,
-        value_data: ArrayData,
-    ) -> ArrayData {
-        let value_type = value_data.data_type().clone();
-        let dict_data_type =
-            DataType::Dictionary(Box::new(key_type), Box::new(value_type));
-        ArrayData::builder(dict_data_type)
-            .len(3)
-            .add_buffer(keys)
-            .add_child_data(value_data)
-            .build()
-            .unwrap()
-    }
-
     #[test]
     fn test_eq_dyn_dictionary_i8_array() {
-        let key_type = DataType::Int8;
         // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int8)
-            .len(8)
-            .add_buffer(Buffer::from(
-                &[10_i8, 11, 12, 13, 14, 15, 16, 17].to_byte_slice(),
-            ))
-            .build()
-            .unwrap();
+        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
 
-        let keys1 = Buffer::from(&[2_i8, 3, 4].to_byte_slice());
-        let keys2 = Buffer::from(&[2_i8, 4, 4].to_byte_slice());
-        let dict_array1: DictionaryArray<Int8Type> = Int8DictionaryArray::from(
-            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
-        );
-        let dict_array2: DictionaryArray<Int8Type> =
-            Int8DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
+        let keys1 = Int8Array::from_iter_values([2_i8, 3, 4]);
+        let keys2 = Int8Array::from_iter_values([2_i8, 4, 4]);
+        let dict_array1 = DictionaryArray::try_new(&keys1, &values).unwrap();
+        let dict_array2 = DictionaryArray::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
@@ -4707,23 +4680,14 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_dictionary_u64_array() {
-        let key_type = DataType::UInt64;
-        // Construct a value array
-        let value_data = ArrayData::builder(DataType::UInt64)
-            .len(8)
-            .add_buffer(Buffer::from(
-                &[10_u64, 11, 12, 13, 14, 15, 16, 17].to_byte_slice(),
-            ))
-            .build()
-            .unwrap();
+        let values = UInt64Array::from_iter_values([10_u64, 11, 12, 13, 14, 15, 16, 17]);
 
-        let keys1 = Buffer::from(&[1_u64, 3, 4].to_byte_slice());
-        let keys2 = Buffer::from(&[2_u64, 3, 5].to_byte_slice());
-        let dict_array1: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
-            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
-        );
-        let dict_array2: DictionaryArray<UInt64Type> =
-            UInt64DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
+        let keys1 = UInt64Array::from_iter_values([1_u64, 3, 4]);
+        let keys2 = UInt64Array::from_iter_values([2_u64, 3, 5]);
+        let dict_array1 =
+            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
+        let dict_array2 =
+            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
@@ -4757,29 +4721,17 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_dictionary_binary_array() {
-        let key_type = DataType::UInt64;
+        let values: BinaryArray = ["hello", "", "parquet"]
+            .into_iter()
+            .map(|b| Some(b.as_bytes()))
+            .collect();
 
-        // Construct a value array
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
-        let offsets: [i32; 4] = [0, 5, 5, 12];
-
-        // Array data: ["hello", "", "parquet"]
-        let value_data = ArrayData::builder(DataType::Binary)
-            .len(3)
-            .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_buffer(Buffer::from_slice_ref(&values))
-            .build()
-            .unwrap();
-
-        let keys1 = Buffer::from(&[0_u64, 1, 2].to_byte_slice());
-        let keys2 = Buffer::from(&[0_u64, 2, 1].to_byte_slice());
-        let dict_array1: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
-            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
-        );
-        let dict_array2: DictionaryArray<UInt64Type> =
-            UInt64DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
+        let keys1 = UInt64Array::from_iter_values([0_u64, 1, 2]);
+        let keys2 = UInt64Array::from_iter_values([0_u64, 2, 1]);
+        let dict_array1 =
+            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
+        let dict_array2 =
+            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
@@ -4791,18 +4743,14 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_dictionary_interval_array() {
-        let key_type = DataType::UInt64;
+        let values = IntervalDayTimeArray::from(vec![1, 6, 10, 2, 3, 5]);
 
-        let value_array = IntervalDayTimeArray::from(vec![1, 6, 10, 2, 3, 5]);
-        let value_data = value_array.data().clone();
-
-        let keys1 = Buffer::from(&[1_u64, 0, 3].to_byte_slice());
-        let keys2 = Buffer::from(&[2_u64, 0, 3].to_byte_slice());
-        let dict_array1: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
-            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
-        );
-        let dict_array2: DictionaryArray<UInt64Type> =
-            UInt64DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
+        let keys1 = UInt64Array::from_iter_values([1_u64, 0, 3]);
+        let keys2 = UInt64Array::from_iter_values([2_u64, 0, 3]);
+        let dict_array1 =
+            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
+        let dict_array2 =
+            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
@@ -4811,18 +4759,14 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_dictionary_date_array() {
-        let key_type = DataType::UInt64;
+        let values = Date32Array::from(vec![1, 6, 10, 2, 3, 5]);
 
-        let value_array = Date32Array::from(vec![1, 6, 10, 2, 3, 5]);
-        let value_data = value_array.data().clone();
-
-        let keys1 = Buffer::from(&[1_u64, 0, 3].to_byte_slice());
-        let keys2 = Buffer::from(&[2_u64, 0, 3].to_byte_slice());
-        let dict_array1: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
-            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
-        );
-        let dict_array2: DictionaryArray<UInt64Type> =
-            UInt64DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
+        let keys1 = UInt64Array::from_iter_values([1_u64, 0, 3]);
+        let keys2 = UInt64Array::from_iter_values([2_u64, 0, 3]);
+        let dict_array1 =
+            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
+        let dict_array2 =
+            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
@@ -4831,18 +4775,14 @@ mod tests {
 
     #[test]
     fn test_eq_dyn_dictionary_bool_array() {
-        let key_type = DataType::UInt64;
+        let values = BooleanArray::from(vec![true, false]);
 
-        let value_array = BooleanArray::from(vec![true, false]);
-        let value_data = value_array.data().clone();
-
-        let keys1 = Buffer::from(&[1_u64, 1, 1].to_byte_slice());
-        let keys2 = Buffer::from(&[0_u64, 1, 0].to_byte_slice());
-        let dict_array1: DictionaryArray<UInt64Type> = UInt64DictionaryArray::from(
-            get_dict_arraydata(keys1, key_type.clone(), value_data.clone()),
-        );
-        let dict_array2: DictionaryArray<UInt64Type> =
-            UInt64DictionaryArray::from(get_dict_arraydata(keys2, key_type, value_data));
+        let keys1 = UInt64Array::from_iter_values([1_u64, 1, 1]);
+        let keys2 = UInt64Array::from_iter_values([0_u64, 1, 0]);
+        let dict_array1 =
+            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
+        let dict_array2 =
+            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
