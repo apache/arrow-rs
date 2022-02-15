@@ -349,6 +349,7 @@ pub struct ColumnChunkMetaData {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    bloom_filter_offset: Option<i64>,
 }
 
 /// Represents common operations for a column chunk.
@@ -462,6 +463,16 @@ impl ColumnChunkMetaData {
         self.statistics.as_ref()
     }
 
+    /// Returns `true` if this column chunk contains a bloom filter offset, `false` otherwise.
+    pub fn has_bloom_filter(&self) -> bool {
+        self.bloom_filter_offset.is_some()
+    }
+
+    /// Returns the offset for the bloom filter.
+    pub fn bloom_filter_offset(&self) -> Option<i64> {
+        self.bloom_filter_offset
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(column_descr: ColumnDescPtr, cc: ColumnChunk) -> Result<Self> {
         if cc.meta_data.is_none() {
@@ -485,6 +496,7 @@ impl ColumnChunkMetaData {
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
+        let bloom_filter_offset = col_metadata.bloom_filter_offset;
         let result = ColumnChunkMetaData {
             column_type,
             column_path,
@@ -500,6 +512,7 @@ impl ColumnChunkMetaData {
             index_page_offset,
             dictionary_page_offset,
             statistics,
+            bloom_filter_offset,
         };
         Ok(result)
     }
@@ -551,6 +564,7 @@ pub struct ColumnChunkMetaDataBuilder {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    bloom_filter_offset: Option<i64>,
 }
 
 impl ColumnChunkMetaDataBuilder {
@@ -569,6 +583,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: None,
             dictionary_page_offset: None,
             statistics: None,
+            bloom_filter_offset: None,
         }
     }
 
@@ -638,6 +653,12 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Sets optional bloom filter offset in bytes.
+    pub fn set_bloom_filter_offset(mut self, value: Option<i64>) -> Self {
+        self.bloom_filter_offset = value;
+        self
+    }
+
     /// Builds column chunk metadata.
     pub fn build(self) -> Result<ColumnChunkMetaData> {
         Ok(ColumnChunkMetaData {
@@ -655,6 +676,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: self.index_page_offset,
             dictionary_page_offset: self.dictionary_page_offset,
             statistics: self.statistics,
+            bloom_filter_offset: self.bloom_filter_offset,
         })
     }
 }

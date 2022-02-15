@@ -39,6 +39,7 @@ flate2 = { version = "1.0", optional = true }
 lz4 = { version = "1.23", optional = true }
 zstd = { version = "0.10", optional = true }
 chrono = { version = "0.4", default-features = false }
+num = "0.4"
 num-bigint = "0.4"
 arrow = { path = "../arrow", version = "9.0.2", optional = true, default-features = false, features = ["ipc"] }
 base64 = { version = "0.13", optional = true }

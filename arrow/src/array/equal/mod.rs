@@ -20,7 +20,7 @@
 //! depend on dynamic casting of `Array`.
 
 use super::{
-    Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
+    Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray, DictionaryArray,
     FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
     GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
     StringOffsetSizeTrait, StructArray,
@@ -77,6 +77,12 @@ impl PartialEq for NullArray {
 
 impl<T: ArrowPrimitiveType> PartialEq for PrimitiveArray<T> {
     fn eq(&self, other: &PrimitiveArray<T>) -> bool {
+        equal(self.data(), other.data())
+    }
+}
+
+impl<K: ArrowPrimitiveType> PartialEq for DictionaryArray<K> {
+    fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
 }
@@ -507,7 +513,9 @@ mod tests {
         assert_eq!(equal(rhs, lhs), expected, "\n{:?}\n{:?}", rhs, lhs);
     }
 
-    fn binary_cases() -> Vec<(Vec<Option<String>>, Vec<Option<String>>, bool)> {
+    type OptionString = Option<String>;
+
+    fn binary_cases() -> Vec<(Vec<OptionString>, Vec<OptionString>, bool)> {
         let base = vec![
             Some("hello".to_owned()),
             None,
