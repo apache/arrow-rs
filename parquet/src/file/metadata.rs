@@ -334,7 +334,7 @@ impl RowGroupMetaDataBuilder {
 }
 
 /// Metadata for a column chunk.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ColumnChunkMetaData {
     column_type: Type,
     column_path: ColumnPath,
@@ -726,6 +726,7 @@ impl ColumnChunkMetaDataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::basic::{PageType, Encoding}; // todo see if we can remove
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
@@ -781,17 +782,15 @@ mod tests {
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)
             .set_dictionary_page_offset(Some(5000))
+            .set_page_encoding_stats(vec![PageEncodingStats{ page_type: PageType::DATA_PAGE, encoding: Encoding::PLAIN, count: 3}])
             .build()
             .unwrap();
 
-        let col_chunk_exp = col_metadata.to_thrift();
-
         let col_chunk_res =
-            ColumnChunkMetaData::from_thrift(column_descr, col_chunk_exp.clone())
-                .unwrap()
-                .to_thrift();
+            ColumnChunkMetaData::from_thrift(column_descr, col_metadata.to_thrift())
+                .unwrap();
 
-        assert_eq!(col_chunk_res, col_chunk_exp);
+        assert_eq!(col_chunk_res, col_metadata);
     }
 
     #[test]
