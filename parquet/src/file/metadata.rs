@@ -479,8 +479,10 @@ impl ColumnChunkMetaData {
 
     /// Returns `true` if this column chunk contains a column index, `false` otherwise.
     pub fn has_column_index(&self) -> bool {
-        self.column_index_offset.is_some() && self.column_index_length.is_some() &&
-            self.offset_index_offset.is_some() && self.offset_index_length.is_some()
+        self.column_index_offset.is_some()
+            && self.column_index_length.is_some()
+            && self.offset_index_offset.is_some()
+            && self.offset_index_length.is_some()
     }
 
     /// Returns the offset for the column index.
