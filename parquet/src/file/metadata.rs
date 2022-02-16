@@ -350,8 +350,8 @@ pub struct ColumnChunkMetaData {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
-    bloom_filter_offset: Option<i64>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
+    bloom_filter_offset: Option<i64>,
 }
 
 /// Represents common operations for a column chunk.
@@ -465,16 +465,6 @@ impl ColumnChunkMetaData {
         self.statistics.as_ref()
     }
 
-    /// Returns `true` if this column chunk contains a bloom filter offset, `false` otherwise.
-    pub fn has_bloom_filter(&self) -> bool {
-        self.bloom_filter_offset.is_some()
-    }
-
-    /// Returns the offset for the bloom filter.
-    pub fn bloom_filter_offset(&self) -> Option<i64> {
-        self.bloom_filter_offset
-    }
-
     /// Returns `true` if this column chunk contains page encoding stats, `false` otherwise.
     pub fn has_page_encoding_stats(&self) -> bool {
         self.encoding_stats.is_some()
@@ -484,6 +474,16 @@ impl ColumnChunkMetaData {
     /// or `None` if no page encoding stats are available.
     pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
         self.encoding_stats.as_ref()
+    }
+
+    /// Returns `true` if this column chunk contains a bloom filter offset, `false` otherwise.
+    pub fn has_bloom_filter(&self) -> bool {
+        self.bloom_filter_offset.is_some()
+    }
+
+    /// Returns the offset for the bloom filter.
+    pub fn bloom_filter_offset(&self) -> Option<i64> {
+        self.bloom_filter_offset
     }
 
     /// Method to convert from Thrift.
@@ -509,7 +509,6 @@ impl ColumnChunkMetaData {
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
-        let bloom_filter_offset = col_metadata.bloom_filter_offset;
         let encoding_stats = match col_metadata.encoding_stats {
             Some(encodings) => Some(
                 encodings
@@ -519,6 +518,7 @@ impl ColumnChunkMetaData {
             ),
             None => None,
         };
+        let bloom_filter_offset = col_metadata.bloom_filter_offset;
 
         let result = ColumnChunkMetaData {
             column_type,
@@ -535,8 +535,8 @@ impl ColumnChunkMetaData {
             index_page_offset,
             dictionary_page_offset,
             statistics,
-            bloom_filter_offset,
             encoding_stats,
+            bloom_filter_offset,
         };
         Ok(result)
     }
@@ -566,7 +566,7 @@ impl ColumnChunkMetaData {
             dictionary_page_offset: self.dictionary_page_offset,
             statistics: statistics::to_thrift(self.statistics.as_ref()),
             encoding_stats: page_encoding_stats,
-            bloom_filter_offset: None,
+            bloom_filter_offset: None, // todo verify
         };
 
         ColumnChunk {
@@ -597,8 +597,8 @@ pub struct ColumnChunkMetaDataBuilder {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
-    bloom_filter_offset: Option<i64>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
+    bloom_filter_offset: Option<i64>,
 }
 
 impl ColumnChunkMetaDataBuilder {
@@ -617,8 +617,8 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: None,
             dictionary_page_offset: None,
             statistics: None,
-            bloom_filter_offset: None,
             encoding_stats: None,
+            bloom_filter_offset: None,
         }
     }
 
@@ -688,15 +688,15 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
-    /// Sets optional bloom filter offset in bytes.
-    pub fn set_bloom_filter_offset(mut self, value: Option<i64>) -> Self {
-        self.bloom_filter_offset = value;
-        self
-    }
-
     /// Sets page encoding stats for this column chunk.
     pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
         self.encoding_stats = Some(value);
+        self
+    }
+
+    /// Sets optional bloom filter offset in bytes.
+    pub fn set_bloom_filter_offset(mut self, value: Option<i64>) -> Self {
+        self.bloom_filter_offset = value;
         self
     }
 
@@ -717,8 +717,8 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: self.index_page_offset,
             dictionary_page_offset: self.dictionary_page_offset,
             statistics: self.statistics,
-            bloom_filter_offset: self.bloom_filter_offset,
             encoding_stats: self.encoding_stats,
+            bloom_filter_offset: self.bloom_filter_offset,
         })
     }
 }
@@ -787,6 +787,7 @@ mod tests {
                 encoding: Encoding::PLAIN,
                 count: 3,
             }])
+            .set_bloom_filter_offset(Some(6000))
             .build()
             .unwrap();
 

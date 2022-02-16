@@ -143,9 +143,16 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         self.keys.is_empty()
     }
 
-    // Currently exists for compatibility purposes with Arrow IPC.
+    /// Currently exists for compatibility purposes with Arrow IPC.
     pub fn is_ordered(&self) -> bool {
         self.is_ordered
+    }
+
+    /// Return an iterator over the keys (indexes into the dictionary)
+    pub fn keys_iter(&self) -> impl Iterator<Item = Option<usize>> + '_ {
+        self.keys
+            .iter()
+            .map(|key| key.map(|k| k.to_usize().expect("Dictionary index not usize")))
     }
 }
 
@@ -294,6 +301,7 @@ impl<T: ArrowPrimitiveType> fmt::Debug for DictionaryArray<T> {
 mod tests {
     use super::*;
 
+    use crate::array::Int8Array;
     use crate::{
         array::Int16DictionaryArray, array::PrimitiveDictionaryBuilder,
         datatypes::DataType,
@@ -462,6 +470,72 @@ mod tests {
     }
 
     #[test]
+    fn test_dictionary_iter() {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int8)
+            .len(8)
+            .add_buffer(Buffer::from(
+                &[10_i8, 11, 12, 13, 14, 15, 16, 17].to_byte_slice(),
+            ))
+            .build()
+            .unwrap();
+
+        // Construct a buffer for value offsets, for the nested array:
+        let keys = Buffer::from(&[2_i16, 3, 4].to_byte_slice());
+
+        // Construct a dictionary array from the above two
+        let key_type = DataType::Int16;
+        let value_type = DataType::Int8;
+        let dict_data_type =
+            DataType::Dictionary(Box::new(key_type), Box::new(value_type));
+        let dict_data = ArrayData::builder(dict_data_type)
+            .len(3)
+            .add_buffer(keys)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+        let dict_array = Int16DictionaryArray::from(dict_data);
+
+        let mut key_iter = dict_array.keys_iter();
+        assert_eq!(2, key_iter.next().unwrap().unwrap());
+        assert_eq!(3, key_iter.next().unwrap().unwrap());
+        assert_eq!(4, key_iter.next().unwrap().unwrap());
+        assert!(key_iter.next().is_none());
+
+        let mut iter = dict_array
+            .values()
+            .as_any()
+            .downcast_ref::<Int8Array>()
+            .unwrap()
+            .take_iter(dict_array.keys_iter());
+
+        assert_eq!(12, iter.next().unwrap().unwrap());
+        assert_eq!(13, iter.next().unwrap().unwrap());
+        assert_eq!(14, iter.next().unwrap().unwrap());
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_dictionary_iter_with_null() {
+        let test = vec![Some("a"), None, Some("b"), None, None, Some("a")];
+        let array: DictionaryArray<Int32Type> = test.into_iter().collect();
+
+        let mut iter = array
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .take_iter(array.keys_iter());
+
+        assert_eq!("a", iter.next().unwrap().unwrap());
+        assert!(iter.next().unwrap().is_none());
+        assert_eq!("b", iter.next().unwrap().unwrap());
+        assert!(iter.next().unwrap().is_none());
+        assert!(iter.next().unwrap().is_none());
+        assert_eq!("a", iter.next().unwrap().unwrap());
+        assert!(iter.next().is_none());
+    }
+
     fn test_try_new() {
         let values: StringArray = [Some("foo"), Some("bar"), Some("baz")]
             .into_iter()
