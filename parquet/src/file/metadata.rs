@@ -39,8 +39,7 @@ use parquet_format::{ColumnChunk, ColumnMetaData, RowGroup};
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 use crate::errors::{ParquetError, Result};
-use crate::file::page_encoding_stats;
-use crate::file::page_encoding_stats::PageEncodingStats;
+use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::statistics::{self, Statistics};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
@@ -351,6 +350,7 @@ pub struct ColumnChunkMetaData {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    bloom_filter_offset: Option<i64>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
 }
 
@@ -465,6 +465,16 @@ impl ColumnChunkMetaData {
         self.statistics.as_ref()
     }
 
+    /// Returns `true` if this column chunk contains a bloom filter offset, `false` otherwise.
+    pub fn has_bloom_filter(&self) -> bool {
+        self.bloom_filter_offset.is_some()
+    }
+
+    /// Returns the offset for the bloom filter.
+    pub fn bloom_filter_offset(&self) -> Option<i64> {
+        self.bloom_filter_offset
+    }
+
     /// Returns `true` if this column chunk contains page encoding stats, `false` otherwise.
     pub fn has_page_encoding_stats(&self) -> bool {
         self.encoding_stats.is_some()
@@ -499,6 +509,7 @@ impl ColumnChunkMetaData {
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
+        let bloom_filter_offset = col_metadata.bloom_filter_offset;
         let encoding_stats = match col_metadata.encoding_stats {
             Some(encodings) => Some(
                 encodings
@@ -524,6 +535,7 @@ impl ColumnChunkMetaData {
             index_page_offset,
             dictionary_page_offset,
             statistics,
+            bloom_filter_offset,
             encoding_stats,
         };
         Ok(result)
@@ -585,6 +597,7 @@ pub struct ColumnChunkMetaDataBuilder {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    bloom_filter_offset: Option<i64>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
 }
 
@@ -604,6 +617,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: None,
             dictionary_page_offset: None,
             statistics: None,
+            bloom_filter_offset: None,
             encoding_stats: None,
         }
     }
@@ -674,6 +688,12 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Sets optional bloom filter offset in bytes.
+    pub fn set_bloom_filter_offset(mut self, value: Option<i64>) -> Self {
+        self.bloom_filter_offset = value;
+        self
+    }
+
     /// Sets page encoding stats for this column chunk.
     pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
         self.encoding_stats = Some(value);
@@ -697,6 +717,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: self.index_page_offset,
             dictionary_page_offset: self.dictionary_page_offset,
             statistics: self.statistics,
+            bloom_filter_offset: self.bloom_filter_offset,
             encoding_stats: self.encoding_stats,
         })
     }

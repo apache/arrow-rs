@@ -19,9 +19,9 @@
 
 # Changelog
 
-## [9.0.0](https://github.com/apache/arrow-rs/tree/9.0.0) (2022-02-04)
+## [9.0.2](https://github.com/apache/arrow-rs/tree/9.0.2) (2022-02-09)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/8.0.0...9.0.0)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/8.0.0...9.0.2)
 
 **Breaking changes:**
 
@@ -83,7 +83,8 @@
 - Faster bitmask iteration [\#1228](https://github.com/apache/arrow-rs/pull/1228) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - Add non utf8 values into the test cases of BinaryArray comparison [\#1220](https://github.com/apache/arrow-rs/pull/1220) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
 - Update DECIMAL\_RE to allow scientific notation in auto inferred schemas [\#1216](https://github.com/apache/arrow-rs/pull/1216) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([pjmore](https://github.com/pjmore))
-
+- Fix simd comparison kernels [\#1286](https://github.com/apache/arrow-rs/pull/1286) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jhorstmann](https://github.com/jhorstmann))
+- Fix bitmask creation also for simd comparisons with scalar [\#1290](https://github.com/apache/arrow-rs/pull/1290) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jhorstmann](https://github.com/jhorstmann))
 
 ## [8.0.0](https://github.com/apache/arrow-rs/tree/8.0.0) (2022-01-20)
 
