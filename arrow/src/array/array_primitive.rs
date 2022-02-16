@@ -155,6 +155,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
         };
         PrimitiveArray::from(data)
     }
+
+    /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
+    pub fn take_iter<'a>(
+        &'a self,
+        indexes: impl Iterator<Item = Option<usize>> + 'a,
+    ) -> impl Iterator<Item = Option<T::Native>> + 'a {
+        indexes.map(|opt_index| opt_index.map(|index| self.value(index)))
+    }
 }
 
 impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
