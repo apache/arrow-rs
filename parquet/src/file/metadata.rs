@@ -816,6 +816,10 @@ mod tests {
             .set_data_page_offset(4000)
             .set_dictionary_page_offset(Some(5000))
             .set_bloom_filter_offset(Some(6000))
+            .set_offset_index_offset(Some(7000))
+            .set_offset_index_length(Some(25))
+            .set_column_index_offset(Some(8000))
+            .set_column_index_length(Some(25))
             .build()
             .unwrap();
 
