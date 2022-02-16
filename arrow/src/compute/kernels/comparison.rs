@@ -1655,16 +1655,16 @@ where
 /// Helper function to perform boolean lambda function on values from two arrays using
 /// SIMD.
 #[cfg(feature = "simd")]
-fn simd_compare_op<T, SIMD_OP, SCALAR_OP>(
+fn simd_compare_op<T, SI, SC>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-    simd_op: SIMD_OP,
-    scalar_op: SCALAR_OP,
+    simd_op: SI,
+    scalar_op: SC,
 ) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
-    SIMD_OP: Fn(T::Simd, T::Simd) -> T::SimdMask,
-    SCALAR_OP: Fn(T::Native, T::Native) -> bool,
+    SI: Fn(T::Simd, T::Simd) -> T::SimdMask,
+    SC: Fn(T::Native, T::Native) -> bool,
 {
     use std::borrow::BorrowMut;
 
@@ -1755,16 +1755,16 @@ where
 /// Helper function to perform boolean lambda function on values from an array and a scalar value using
 /// SIMD.
 #[cfg(feature = "simd")]
-fn simd_compare_op_scalar<T, SIMD_OP, SCALAR_OP>(
+fn simd_compare_op_scalar<T, SI, SC>(
     left: &PrimitiveArray<T>,
     right: T::Native,
-    simd_op: SIMD_OP,
-    scalar_op: SCALAR_OP,
+    simd_op: SI,
+    scalar_op: SC,
 ) -> Result<BooleanArray>
 where
     T: ArrowNumericType,
-    SIMD_OP: Fn(T::Simd, T::Simd) -> T::SimdMask,
-    SCALAR_OP: Fn(T::Native, T::Native) -> bool,
+    SI: Fn(T::Simd, T::Simd) -> T::SimdMask,
+    SC: Fn(T::Native, T::Native) -> bool,
 {
     use std::borrow::BorrowMut;
 

@@ -352,6 +352,10 @@ pub struct ColumnChunkMetaData {
     statistics: Option<Statistics>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
     bloom_filter_offset: Option<i64>,
+    offset_index_offset: Option<i64>,
+    offset_index_length: Option<i32>,
+    column_index_offset: Option<i64>,
+    column_index_length: Option<i32>,
 }
 
 /// Represents common operations for a column chunk.
@@ -486,6 +490,34 @@ impl ColumnChunkMetaData {
         self.bloom_filter_offset
     }
 
+    /// Returns `true` if this column chunk contains a column index, `false` otherwise.
+    pub fn has_column_index(&self) -> bool {
+        self.column_index_offset.is_some()
+            && self.column_index_length.is_some()
+            && self.offset_index_offset.is_some()
+            && self.offset_index_length.is_some()
+    }
+
+    /// Returns the offset for the column index.
+    pub fn column_index_offset(&self) -> Option<i64> {
+        self.column_index_offset
+    }
+
+    /// Returns the offset for the column index length.
+    pub fn column_index_length(&self) -> Option<i32> {
+        self.column_index_length
+    }
+
+    /// Returns the offset for the offset index.
+    pub fn offset_index_offset(&self) -> Option<i64> {
+        self.offset_index_offset
+    }
+
+    /// Returns the offset for the offset index length.
+    pub fn offset_index_length(&self) -> Option<i32> {
+        self.offset_index_length
+    }
+
     /// Method to convert from Thrift.
     pub fn from_thrift(column_descr: ColumnDescPtr, cc: ColumnChunk) -> Result<Self> {
         if cc.meta_data.is_none() {
@@ -519,6 +551,10 @@ impl ColumnChunkMetaData {
             None => None,
         };
         let bloom_filter_offset = col_metadata.bloom_filter_offset;
+        let offset_index_offset = cc.offset_index_offset;
+        let offset_index_length = cc.offset_index_length;
+        let column_index_offset = cc.column_index_offset;
+        let column_index_length = cc.column_index_length;
 
         let result = ColumnChunkMetaData {
             column_type,
@@ -537,6 +573,10 @@ impl ColumnChunkMetaData {
             statistics,
             encoding_stats,
             bloom_filter_offset,
+            offset_index_offset,
+            offset_index_length,
+            column_index_offset,
+            column_index_length,
         };
         Ok(result)
     }
@@ -573,10 +613,10 @@ impl ColumnChunkMetaData {
             file_path: self.file_path().map(|s| s.to_owned()),
             file_offset: self.file_offset,
             meta_data: Some(column_metadata),
-            offset_index_offset: None,
-            offset_index_length: None,
-            column_index_offset: None,
-            column_index_length: None,
+            offset_index_offset: self.offset_index_offset,
+            offset_index_length: self.offset_index_length,
+            column_index_offset: self.column_index_offset,
+            column_index_length: self.column_index_length,
             crypto_metadata: None,
             encrypted_column_metadata: None,
         }
@@ -599,6 +639,10 @@ pub struct ColumnChunkMetaDataBuilder {
     statistics: Option<Statistics>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
     bloom_filter_offset: Option<i64>,
+    offset_index_offset: Option<i64>,
+    offset_index_length: Option<i32>,
+    column_index_offset: Option<i64>,
+    column_index_length: Option<i32>,
 }
 
 impl ColumnChunkMetaDataBuilder {
@@ -619,6 +663,10 @@ impl ColumnChunkMetaDataBuilder {
             statistics: None,
             encoding_stats: None,
             bloom_filter_offset: None,
+            offset_index_offset: None,
+            offset_index_length: None,
+            column_index_offset: None,
+            column_index_length: None,
         }
     }
 
@@ -700,6 +748,30 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Sets optional offset index offset in bytes.
+    pub fn set_offset_index_offset(mut self, value: Option<i64>) -> Self {
+        self.offset_index_offset = value;
+        self
+    }
+
+    /// Sets optional offset index length in bytes.
+    pub fn set_offset_index_length(mut self, value: Option<i32>) -> Self {
+        self.offset_index_length = value;
+        self
+    }
+
+    /// Sets optional column index offset in bytes.
+    pub fn set_column_index_offset(mut self, value: Option<i64>) -> Self {
+        self.column_index_offset = value;
+        self
+    }
+
+    /// Sets optional column index length in bytes.
+    pub fn set_column_index_length(mut self, value: Option<i32>) -> Self {
+        self.column_index_length = value;
+        self
+    }
+
     /// Builds column chunk metadata.
     pub fn build(self) -> Result<ColumnChunkMetaData> {
         Ok(ColumnChunkMetaData {
@@ -719,6 +791,10 @@ impl ColumnChunkMetaDataBuilder {
             statistics: self.statistics,
             encoding_stats: self.encoding_stats,
             bloom_filter_offset: self.bloom_filter_offset,
+            offset_index_offset: self.offset_index_offset,
+            offset_index_length: self.offset_index_length,
+            column_index_offset: self.column_index_offset,
+            column_index_length: self.column_index_length,
         })
     }
 }
@@ -795,6 +871,10 @@ mod tests {
                 },
             ])
             .set_bloom_filter_offset(Some(6000))
+            .set_offset_index_offset(Some(7000))
+            .set_offset_index_length(Some(25))
+            .set_column_index_offset(Some(8000))
+            .set_column_index_length(Some(25))
             .build()
             .unwrap();
 

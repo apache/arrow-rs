@@ -400,8 +400,7 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic;
-    use crate::basic::ColumnOrder;
+    use crate::basic::{self, ColumnOrder};
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::{get_test_file, get_test_path};
@@ -781,6 +780,15 @@ mod tests {
         assert_eq!(page_encoding_stats.page_type, basic::PageType::DATA_PAGE);
         assert_eq!(page_encoding_stats.encoding, Encoding::PLAIN);
         assert_eq!(page_encoding_stats.count, 1);
+
+        // test optional column index offset
+        assert!(col0_metadata.has_column_index());
+        assert_eq!(col0_metadata.column_index_offset().unwrap(), 156);
+        assert_eq!(col0_metadata.column_index_length().unwrap(), 25);
+
+        // test optional offset index offset
+        assert_eq!(col0_metadata.offset_index_offset().unwrap(), 181);
+        assert_eq!(col0_metadata.offset_index_length().unwrap(), 11);
     }
 
     #[test]
