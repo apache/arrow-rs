@@ -127,7 +127,6 @@
 #![cfg_attr(feature = "avx512", feature(stdsimd))]
 #![cfg_attr(feature = "avx512", feature(repr_simd))]
 #![cfg_attr(feature = "avx512", feature(avx512_target_feature))]
-#![allow(dead_code)]
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
 

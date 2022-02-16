@@ -911,6 +911,7 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
 
 // Parse the string format decimal value to i128 format without checking the precision and scale.
 // Like "125.12" to 12512_i128.
+#[cfg(test)]
 fn parse_decimal(s: &str) -> Result<i128> {
     if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
@@ -1055,6 +1056,7 @@ pub struct ReaderBuilder {
     /// The default batch size when using the `ReaderBuilder` is 1024 records
     batch_size: usize,
     /// The bounds over which to scan the reader. `None` starts from 0 and runs until EOF.
+    #[allow(dead_code)]
     bounds: Bounds,
     /// Optional projection for which columns to load (zero-based column indices)
     projection: Option<Vec<usize>>,

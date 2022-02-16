@@ -1751,6 +1751,7 @@ impl Default for MapFieldNames {
     }
 }
 
+#[allow(dead_code)]
 impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     pub fn new(
         field_names: Option<MapFieldNames>,

@@ -536,6 +536,7 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
+    #[test]
     fn test_try_new() {
         let values: StringArray = [Some("foo"), Some("bar"), Some("baz")]
             .into_iter()

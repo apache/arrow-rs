@@ -361,6 +361,7 @@ unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
 }
 
 struct ArrayPrivateData {
+    #[allow(dead_code)]
     buffers: Vec<Option<Buffer>>,
     buffers_ptr: Box<[*const c_void]>,
     children: Box<[*mut FFI_ArrowArray]>,

@@ -203,6 +203,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
 ///
 /// `buffer_index` is used in error messages to identify which buffer
 /// had the invalid index
+#[allow(dead_code)]
 fn ensure_size(
     data_type: &DataType,
     min_size: usize,
@@ -1354,6 +1355,7 @@ enum BufferSpec {
     BitMap,
     /// Buffer is always null. Unused currently in Rust implementation,
     /// (used in C++ for Union type)
+    #[allow(dead_code)]
     AlwaysNull,
 }
 

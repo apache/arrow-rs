@@ -62,6 +62,7 @@ pub(super) fn combine_option_bitmap(
 ///
 /// This function is useful when implementing operations on higher level arrays.
 #[allow(clippy::unnecessary_wraps)]
+#[allow(dead_code)]
 pub(super) fn compare_option_bitmap(
     left_data: &ArrayData,
     right_data: &ArrayData,
@@ -343,6 +344,7 @@ pub(super) mod tests {
         GenericListArray::<S>::from(list_data)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn build_fixed_size_list<T>(
         data: Vec<Option<Vec<T::Native>>>,
         length: <Int32Type as ArrowPrimitiveType>::Native,

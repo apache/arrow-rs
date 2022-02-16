@@ -4281,7 +4281,7 @@ mod tests {
                     Arc::new(Int32Array::from(vec![42, 28, 19, 31])),
                 ),
             ])),
-            //Arc::new(make_union_array()),
+            Arc::new(make_union_array()),
             Arc::new(NullArray::new(10)),
             Arc::new(StringArray::from(vec!["foo", "bar"])),
             Arc::new(LargeStringArray::from(vec!["foo", "bar"])),
