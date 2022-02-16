@@ -59,8 +59,8 @@ pub fn to_thrift(encoding_stats: &PageEncodingStats) -> TPageEncodingStats {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::basic::{Encoding, PageType};
-    use crate::file::page_encoding_stats::{from_thrift, to_thrift, PageEncodingStats};
 
     #[test]
     fn test_page_encoding_stats_from_thrift() {
@@ -70,7 +70,6 @@ mod tests {
             count: 1,
         };
 
-        let thrift_stats = to_thrift(&stats);
-        assert_eq!(from_thrift(&thrift_stats), stats);
+        assert_eq!(from_thrift(&to_thrift(&stats)), stats);
     }
 }

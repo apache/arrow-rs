@@ -726,7 +726,7 @@ impl ColumnChunkMetaDataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic::{PageType, Encoding}; // todo see if we can remove
+    use crate::basic::{Encoding, PageType};
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
@@ -782,7 +782,11 @@ mod tests {
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)
             .set_dictionary_page_offset(Some(5000))
-            .set_page_encoding_stats(vec![PageEncodingStats{ page_type: PageType::DATA_PAGE, encoding: Encoding::PLAIN, count: 3}])
+            .set_page_encoding_stats(vec![PageEncodingStats {
+                page_type: PageType::DATA_PAGE,
+                encoding: Encoding::PLAIN,
+                count: 3,
+            }])
             .build()
             .unwrap();
 
