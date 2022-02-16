@@ -735,14 +735,14 @@ impl Decoder {
     }
 
     #[inline(always)]
-    fn list_array_string_array_builder<DICT_TY>(
+    fn list_array_string_array_builder<DT>(
         &self,
         data_type: &DataType,
         col_name: &str,
         rows: &[Value],
     ) -> Result<ArrayRef>
     where
-        DICT_TY: ArrowPrimitiveType + ArrowDictionaryKeyType,
+        DT: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
         let mut builder: Box<dyn ArrayBuilder> = match data_type {
             DataType::Utf8 => {
@@ -751,7 +751,7 @@ impl Decoder {
             }
             DataType::Dictionary(_, _) => {
                 let values_builder =
-                    self.build_string_dictionary_builder::<DICT_TY>(rows.len() * 5)?;
+                    self.build_string_dictionary_builder::<DT>(rows.len() * 5)?;
                 Box::new(ListBuilder::new(values_builder))
             }
             e => {
@@ -813,7 +813,7 @@ impl Decoder {
                         builder.append(true)?;
                     }
                     DataType::Dictionary(_, _) => {
-                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<DICT_TY>>>().ok_or_else(||ArrowError::JsonError(
+                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<DT>>>().ok_or_else(||ArrowError::JsonError(
                             "Cast failed for ListBuilder<StringDictionaryBuilder> during nested data parsing".to_string(),
                         ))?;
                         for val in vals {
