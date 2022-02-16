@@ -26,10 +26,10 @@ use std::vec::Vec;
 
 use arrow::array::{
     new_empty_array, Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryArray,
-    BinaryBuilder, BooleanArray, BooleanBufferBuilder, BooleanBuilder, DecimalBuilder,
+    BinaryBuilder, BooleanArray, BooleanBufferBuilder, BooleanBuilder,
     FixedSizeBinaryArray, FixedSizeBinaryBuilder, GenericListArray, Int16BufferBuilder,
     Int32Array, Int64Array, MapArray, OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder,
-    StringArray, StringBuilder, StructArray,
+    StringArray, StringBuilder, StructArray, DecimalArray,
 };
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::{
@@ -429,26 +429,20 @@ where
                 arrow::compute::cast(&a, &target_type)?
             }
             ArrowType::Decimal(p, s) => {
-                let mut builder = DecimalBuilder::new(array.len(), p, s);
-                match array.data_type() {
-                    ArrowType::Int32 => {
-                        let values = array.as_any().downcast_ref::<Int32Array>().unwrap();
-                        for maybe_value in values.iter() {
-                            match maybe_value {
-                                Some(value) => builder.append_value(value as i128)?,
-                                None => builder.append_null()?,
-                            }
-                        }
-                    }
-                    ArrowType::Int64 => {
-                        let values = array.as_any().downcast_ref::<Int64Array>().unwrap();
-                        for maybe_value in values.iter() {
-                            match maybe_value {
-                                Some(value) => builder.append_value(value as i128)?,
-                                None => builder.append_null()?,
-                            }
-                        }
-                    }
+                let array = match array.data_type() {
+                    ArrowType::Int32 => array.as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.map(|v| v.into()))
+                        .collect::<DecimalArray>(),
+
+                    ArrowType::Int64 => array.as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.map(|v| v.into()))
+                        .collect::<DecimalArray>(),
                     _ => {
                         return Err(ArrowError(format!(
                             "Cannot convert {:?} to decimal",
@@ -456,7 +450,9 @@ where
                         )))
                     }
                 }
-                Arc::new(builder.finish()) as ArrayRef
+                .with_precision_and_scale(p, s)?;
+
+                Arc::new(array) as ArrayRef
             }
             _ => arrow::compute::cast(&array, &target_type)?,
         };

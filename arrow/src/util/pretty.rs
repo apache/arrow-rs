@@ -119,7 +119,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::array::{DecimalBuilder, FixedSizeListBuilder, Int32Array};
+    use crate::array::{DecimalArray, FixedSizeListBuilder, Int32Array};
     use std::fmt::Write;
     use std::sync::Arc;
 
@@ -517,17 +517,16 @@ mod tests {
 
     #[test]
     fn test_decimal_display() -> Result<()> {
-        let capacity = 10;
         let precision = 10;
         let scale = 2;
 
-        let mut builder = DecimalBuilder::new(capacity, precision, scale);
-        builder.append_value(101).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(200).unwrap();
-        builder.append_value(3040).unwrap();
+        let array = [Some(101), None, Some(200), Some(3040)]
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(precision, scale)
+            .unwrap();
 
-        let dm = Arc::new(builder.finish()) as ArrayRef;
+        let dm = Arc::new(array) as ArrayRef;
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f",
@@ -558,17 +557,16 @@ mod tests {
 
     #[test]
     fn test_decimal_display_zero_scale() -> Result<()> {
-        let capacity = 10;
         let precision = 5;
         let scale = 0;
 
-        let mut builder = DecimalBuilder::new(capacity, precision, scale);
-        builder.append_value(101).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(200).unwrap();
-        builder.append_value(3040).unwrap();
+        let array = [Some(101), None, Some(200), Some(3040)]
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(precision, scale)
+            .unwrap();
 
-        let dm = Arc::new(builder.finish()) as ArrayRef;
+        let dm = Arc::new(array) as ArrayRef;
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f",

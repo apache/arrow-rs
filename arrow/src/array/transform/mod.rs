@@ -670,7 +670,7 @@ mod tests {
 
     use super::*;
 
-    use crate::array::{DecimalArray, DecimalBuilder};
+    use crate::array::DecimalArray;
     use crate::{
         array::{
             Array, ArrayData, ArrayRef, BooleanArray, DictionaryArray,
@@ -691,18 +691,11 @@ mod tests {
         precision: usize,
         scale: usize,
     ) -> DecimalArray {
-        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
-        for value in array {
-            match value {
-                None => {
-                    decimal_builder.append_null().unwrap();
-                }
-                Some(v) => {
-                    decimal_builder.append_value(*v).unwrap();
-                }
-            }
-        }
-        decimal_builder.finish()
+        array
+            .iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(precision, scale)
+            .unwrap()
     }
 
     #[test]

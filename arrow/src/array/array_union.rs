@@ -603,16 +603,17 @@ mod tests {
         let type_id_buffer = Buffer::from_slice_ref(&type_ids);
         let value_offsets_buffer = Buffer::from_slice_ref(&value_offsets);
 
-        let mut children: Vec<(Field, Arc<dyn Array>)> = Vec::new();
-        children.push((
-            Field::new("A", DataType::Utf8, false),
-            Arc::new(string_array),
-        ));
-        children.push((Field::new("B", DataType::Int32, false), Arc::new(int_array)));
-        children.push((
-            Field::new("C", DataType::Float64, false),
-            Arc::new(float_array),
-        ));
+        let children: Vec<(Field, Arc<dyn Array>)> = vec![
+            (
+                Field::new("A", DataType::Utf8, false),
+                Arc::new(string_array),
+            ),
+            (Field::new("B", DataType::Int32, false), Arc::new(int_array)),
+            (
+                Field::new("C", DataType::Float64, false),
+                Arc::new(float_array),
+            ),
+        ];
         let array = UnionArray::try_new(
             type_id_buffer,
             Some(value_offsets_buffer),
@@ -665,7 +666,7 @@ mod tests {
             .downcast_ref::<Float64Array>()
             .unwrap()
             .value(0);
-        assert!(10.0 - value < f64::EPSILON);
+        assert_eq!(10.0, value);
 
         let slot = array.value(4);
         let value = slot
@@ -770,7 +771,7 @@ mod tests {
                     let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
-                    assert!(value - 3_f64 < f64::EPSILON);
+                    assert_eq!(value, 3_f64);
                 }
                 2 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -782,7 +783,7 @@ mod tests {
                     let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
-                    assert!(5_f64 - value < f64::EPSILON);
+                    assert_eq!(5_f64, value);
                 }
                 4 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -834,7 +835,7 @@ mod tests {
                     assert!(!union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
-                    assert!(value - 3_f64 < f64::EPSILON);
+                    assert_eq!(value, 3_f64);
                 }
                 3 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -871,7 +872,7 @@ mod tests {
                     assert!(!new_union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
-                    assert!(value - 3_f64 < f64::EPSILON);
+                    assert_eq!(value, 3_f64);
                 }
                 2 => assert!(new_union.is_null(i)),
                 3 => {

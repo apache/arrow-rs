@@ -349,6 +349,7 @@ pub struct ColumnChunkMetaData {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    bloom_filter_offset: Option<i64>,
     offset_index_offset: Option<i64>,
     offset_index_length: Option<i32>,
     column_index_offset: Option<i64>,
@@ -466,6 +467,16 @@ impl ColumnChunkMetaData {
         self.statistics.as_ref()
     }
 
+    /// Returns `true` if this column chunk contains a bloom filter offset, `false` otherwise.
+    pub fn has_bloom_filter(&self) -> bool {
+        self.bloom_filter_offset.is_some()
+    }
+
+    /// Returns the offset for the bloom filter.
+    pub fn bloom_filter_offset(&self) -> Option<i64> {
+        self.bloom_filter_offset
+    }
+
     /// Returns `true` if this column chunk contains a column index, `false` otherwise.
     pub fn has_column_index(&self) -> bool {
         self.column_index_offset.is_some() && self.column_index_length.is_some() &&
@@ -515,6 +526,7 @@ impl ColumnChunkMetaData {
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
+        let bloom_filter_offset = col_metadata.bloom_filter_offset;
         let offset_index_offset = cc.offset_index_offset;
         let offset_index_length = cc.offset_index_length;
         let column_index_offset = cc.column_index_offset;
@@ -534,6 +546,7 @@ impl ColumnChunkMetaData {
             index_page_offset,
             dictionary_page_offset,
             statistics,
+            bloom_filter_offset,
             offset_index_offset,
             offset_index_length,
             column_index_offset,
@@ -589,6 +602,7 @@ pub struct ColumnChunkMetaDataBuilder {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    bloom_filter_offset: Option<i64>,
     offset_index_offset: Option<i64>,
     offset_index_length: Option<i32>,
     column_index_offset: Option<i64>,
@@ -611,6 +625,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: None,
             dictionary_page_offset: None,
             statistics: None,
+            bloom_filter_offset: None,
             offset_index_offset: None,
             offset_index_length: None,
             column_index_offset: None,
@@ -684,6 +699,12 @@ impl ColumnChunkMetaDataBuilder {
         self
     }
 
+    /// Sets optional bloom filter offset in bytes.
+    pub fn set_bloom_filter_offset(mut self, value: Option<i64>) -> Self {
+        self.bloom_filter_offset = value;
+        self
+    }
+
     /// Sets optional offset index offset in bytes.
     pub fn set_offset_index_offset(mut self, value: Option<i64>) -> Self {
         self.offset_index_offset = value;
@@ -725,6 +746,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: self.index_page_offset,
             dictionary_page_offset: self.dictionary_page_offset,
             statistics: self.statistics,
+            bloom_filter_offset: self.bloom_filter_offset,
             offset_index_offset: self.offset_index_offset,
             offset_index_length: self.offset_index_length,
             column_index_offset: self.column_index_offset,
@@ -791,10 +813,6 @@ mod tests {
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)
             .set_dictionary_page_offset(Some(5000))
-            .set_offset_index_offset(Some(6000))
-            .set_offset_index_length(Some(100))
-            .set_column_index_offset(Some(7000))
-            .set_column_index_length(Some(100))
             .build()
             .unwrap();
 

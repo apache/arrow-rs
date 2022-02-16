@@ -769,9 +769,11 @@ mod tests {
         let row_group_metadata = file_reader.metadata.row_group(0);
         let col0_metadata = row_group_metadata.column(0);
 
-        assert!(col0_metadata.has_column_index());
+        // test optional bloom filter offset
+        assert_eq!(col0_metadata.bloom_filter_offset().unwrap(), 192);
 
         // test optional column index offset
+        assert!(col0_metadata.has_column_index());
         assert_eq!(col0_metadata.column_index_offset().unwrap(), 156);
         assert_eq!(col0_metadata.column_index_length().unwrap(), 25);
 
