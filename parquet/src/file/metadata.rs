@@ -566,7 +566,7 @@ impl ColumnChunkMetaData {
             dictionary_page_offset: self.dictionary_page_offset,
             statistics: statistics::to_thrift(self.statistics.as_ref()),
             encoding_stats: page_encoding_stats,
-            bloom_filter_offset: None, // todo verify
+            bloom_filter_offset: self.bloom_filter_offset,
         };
 
         ColumnChunk {
@@ -782,11 +782,18 @@ mod tests {
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)
             .set_dictionary_page_offset(Some(5000))
-            .set_page_encoding_stats(vec![PageEncodingStats {
-                page_type: PageType::DATA_PAGE,
-                encoding: Encoding::PLAIN,
-                count: 3,
-            }])
+            .set_page_encoding_stats(vec![
+                PageEncodingStats {
+                    page_type: PageType::DATA_PAGE,
+                    encoding: Encoding::PLAIN,
+                    count: 3,
+                },
+                PageEncodingStats {
+                    page_type: PageType::DATA_PAGE,
+                    encoding: Encoding::RLE,
+                    count: 5,
+                },
+            ])
             .set_bloom_filter_offset(Some(6000))
             .build()
             .unwrap();
