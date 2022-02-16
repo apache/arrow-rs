@@ -744,7 +744,8 @@ mod tests {
             .unwrap();
 
         let col_chunk_res =
-            ColumnChunkMetaData::from_thrift(column_descr, col_metadata.to_thrift()).unwrap();
+            ColumnChunkMetaData::from_thrift(column_descr, col_metadata.to_thrift())
+                .unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
