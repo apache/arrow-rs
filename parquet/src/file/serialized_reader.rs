@@ -771,6 +771,15 @@ mod tests {
 
         // test optional bloom filter offset
         assert_eq!(col0_metadata.bloom_filter_offset().unwrap(), 192);
+
+        // test optional column index offset
+        assert!(col0_metadata.has_column_index());
+        assert_eq!(col0_metadata.column_index_offset().unwrap(), 156);
+        assert_eq!(col0_metadata.column_index_length().unwrap(), 25);
+
+        // test optional offset index offset
+        assert_eq!(col0_metadata.offset_index_offset().unwrap(), 181);
+        assert_eq!(col0_metadata.offset_index_length().unwrap(), 11);
     }
 
     #[test]
