@@ -4856,4 +4856,71 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
     }
+
+    #[test]
+    fn test_lt_dyn_gt_dyn_dictionary_i8_array() {
+        // Construct a value array
+        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+
+        let keys1 = Int8Array::from_iter_values([3_i8, 4, 4]);
+        let keys2 = Int8Array::from_iter_values([4_i8, 3, 4]);
+        let dict_array1 = DictionaryArray::try_new(&keys1, &values).unwrap();
+        let dict_array2 = DictionaryArray::try_new(&keys2, &values).unwrap();
+
+        let result = lt_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![true, false, false])
+        );
+
+        let result = lt_eq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
+
+        let result = gt_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![false, true, false])
+        );
+
+        let result = gt_eq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
+    }
+
+    #[test]
+    fn test_lt_dyn_gt_dyn_dictionary_bool_array() {
+        let values = BooleanArray::from(vec![true, false]);
+
+        let keys1 = UInt64Array::from_iter_values([1_u64, 1, 0]);
+        let keys2 = UInt64Array::from_iter_values([0_u64, 1, 1]);
+        let dict_array1 =
+            DictionaryArray::<UInt64Type>::try_new(&keys1, &values).unwrap();
+        let dict_array2 =
+            DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
+
+        let result = lt_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![true, false, false])
+        );
+
+        let result = lt_eq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, true, false]));
+
+        let result = gt_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![false, false, true])
+        );
+
+        let result = gt_eq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
+    }
 }
