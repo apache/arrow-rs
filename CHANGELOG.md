@@ -19,9 +19,9 @@
 
 # Changelog
 
-## [10.0.0](https://github.com/apache/arrow-rs/tree/10.0.0) (2022-02-16)
+## [9.1.0](https://github.com/apache/arrow-rs/tree/9.1.0) (2022-02-18)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/9.0.2...10.0.0)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/9.0.2...9.1.0)
 
 **Implemented enhancements:**
 
