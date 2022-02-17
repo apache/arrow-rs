@@ -56,7 +56,7 @@
 - Expose bloom filter metadata offset [\#1308](https://github.com/apache/arrow-rs/issues/1308)
 - Improve ergonomics to construct `DictionaryArrays` from `Key` and `Value` arrays [\#1299](https://github.com/apache/arrow-rs/issues/1299)
 - Make it easier to iterate over `DictionaryArray` [\#1295](https://github.com/apache/arrow-rs/issues/1295) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Don't Interwine Bit and Byte Aligned Operations in `BitReader` [\#1282](https://github.com/apache/arrow-rs/issues/1282)
+- (WON'T FIX) Don't Interwine Bit and Byte Aligned Operations in `BitReader` [\#1282](https://github.com/apache/arrow-rs/issues/1282)
 - how to create arrow::array from streamReader [\#1278](https://github.com/apache/arrow-rs/issues/1278)
 - Remove scientific notation when converting floats to strings. [\#983](https://github.com/apache/arrow-rs/issues/983)
 
