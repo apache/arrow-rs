@@ -140,6 +140,7 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits 
 /// assert_eq!(Int32Array::from(vec![2, 3, 1, 2, 3]), new_array);
 /// ```
 pub struct MutableArrayData<'a> {
+    #[allow(dead_code)]
     arrays: Vec<&'a ArrayData>,
     // The attributes in [_MutableArrayData] cannot be in [MutableArrayData] due to
     // mutability invariants (interior mutability):

@@ -97,6 +97,7 @@ pub struct Writer<W: Write> {
     /// The object to write to
     writer: csv_crate::Writer<W>,
     /// Column delimiter. Defaults to `b','`
+    #[allow(dead_code)]
     delimiter: u8,
     /// Whether file should be written with headers. Defaults to `true`
     has_headers: bool,
@@ -107,6 +108,7 @@ pub struct Writer<W: Write> {
     /// The timestamp format for timestamp arrays
     timestamp_format: String,
     /// The timestamp format for timestamp (with timezone) arrays
+    #[allow(dead_code)]
     timestamp_tz_format: String,
     /// The time format for time arrays
     time_format: String,
