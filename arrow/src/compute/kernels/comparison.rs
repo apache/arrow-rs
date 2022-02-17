@@ -2318,7 +2318,7 @@ where
 pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a == b, |a, b| !(a ^ b))
+            typed_dict_compares!(left, right, |a, b| a == b, |a, b| a == b)
         }
         _ => typed_compares!(left, right, eq_bool, eq, eq_utf8, eq_binary),
     }
@@ -2343,7 +2343,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a != b, |a, b| (a ^ b))
+            typed_dict_compares!(left, right, |a, b| a != b, |a, b| a != b)
         }
         _ => typed_compares!(left, right, neq_bool, neq, neq_utf8, neq_binary),
     }
@@ -2367,7 +2367,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a < b, |a, b| (!a) & b)
+            typed_dict_compares!(left, right, |a, b| a < b, |a, b| a < b)
         }
         _ => typed_compares!(left, right, lt_bool, lt, lt_utf8, lt_binary),
     }
@@ -2391,7 +2391,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a <= b, |a, b| !(a & (!b)))
+            typed_dict_compares!(left, right, |a, b| a <= b, |a, b| a <= b)
         }
         _ => typed_compares!(left, right, lt_eq_bool, lt_eq, lt_eq_utf8, lt_eq_binary),
     }
@@ -2414,7 +2414,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a > b, |a, b| a & (!b))
+            typed_dict_compares!(left, right, |a, b| a > b, |a, b| a > b)
         }
         _ => typed_compares!(left, right, gt_bool, gt, gt_utf8, gt_binary),
     }
@@ -2437,7 +2437,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a >= b, |a, b| !((!a) & b))
+            typed_dict_compares!(left, right, |a, b| a >= b, |a, b| a >= b)
         }
         _ => typed_compares!(left, right, gt_eq_bool, gt_eq, gt_eq_utf8, gt_eq_binary),
     }
@@ -4699,11 +4699,9 @@ mod tests {
         let dict_array2 = DictionaryArray::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
 
         let result = neq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![false, true, false])
@@ -4722,14 +4720,12 @@ mod tests {
             DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![false, true, false])
         );
 
         let result = neq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
     }
 
@@ -4748,14 +4744,12 @@ mod tests {
             .collect();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(true)])
         );
 
         let result = neq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![Some(false), None, None, Some(false)])
@@ -4777,14 +4771,12 @@ mod tests {
             DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![true, false, false])
         );
 
         let result = neq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
     }
 
@@ -4800,11 +4792,9 @@ mod tests {
             DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
 
         let result = neq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![true, false, false])
@@ -4823,11 +4813,9 @@ mod tests {
             DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
 
         let result = neq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![true, false, false])
@@ -4846,14 +4834,12 @@ mod tests {
             DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
 
         let result = eq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![false, true, false])
         );
 
         let result = neq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
     }
 
@@ -4868,25 +4854,21 @@ mod tests {
         let dict_array2 = DictionaryArray::try_new(&keys2, &values).unwrap();
 
         let result = lt_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![true, false, false])
         );
 
         let result = lt_eq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
 
         let result = gt_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![false, true, false])
         );
 
         let result = gt_eq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
     }
 
@@ -4902,25 +4884,21 @@ mod tests {
             DictionaryArray::<UInt64Type>::try_new(&keys2, &values).unwrap();
 
         let result = lt_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![true, false, false])
         );
 
         let result = lt_eq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, true, false]));
 
         let result = gt_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![false, false, true])
         );
 
         let result = gt_eq_dyn(&dict_array1, &dict_array2);
-        assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
     }
 }
