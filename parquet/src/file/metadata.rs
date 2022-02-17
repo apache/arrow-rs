@@ -541,15 +541,10 @@ impl ColumnChunkMetaData {
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics);
-        let encoding_stats = match col_metadata.encoding_stats {
-            Some(encodings) => Some(
-                encodings
-                    .iter()
-                    .map(|v| page_encoding_stats::from_thrift(v))
-                    .collect(),
-            ),
-            None => None,
-        };
+        let encoding_stats = col_metadata
+            .encoding_stats
+            .as_ref()
+            .map(|vec| vec.iter().map(page_encoding_stats::from_thrift).collect());
         let bloom_filter_offset = col_metadata.bloom_filter_offset;
         let offset_index_offset = cc.offset_index_offset;
         let offset_index_length = cc.offset_index_length;
@@ -583,15 +578,6 @@ impl ColumnChunkMetaData {
 
     /// Method to convert to Thrift.
     pub fn to_thrift(&self) -> ColumnChunk {
-        let page_encoding_stats = match self.encoding_stats.as_ref() {
-            Some(vec) => Some(
-                vec.iter()
-                    .map(|v| page_encoding_stats::to_thrift(&v))
-                    .collect(),
-            ),
-            None => None,
-        };
-
         let column_metadata = ColumnMetaData {
             type_: self.column_type.into(),
             encodings: self.encodings().iter().map(|&v| v.into()).collect(),
@@ -605,7 +591,10 @@ impl ColumnChunkMetaData {
             index_page_offset: self.index_page_offset,
             dictionary_page_offset: self.dictionary_page_offset,
             statistics: statistics::to_thrift(self.statistics.as_ref()),
-            encoding_stats: page_encoding_stats,
+            encoding_stats: self
+                .encoding_stats
+                .as_ref()
+                .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
         };
 
