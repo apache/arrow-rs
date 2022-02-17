@@ -2341,7 +2341,12 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// assert_eq!(BooleanArray::from(vec![Some(false), None, Some(true)]), result);
 /// ```
 pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, neq_bool, neq, neq_utf8, neq_binary)
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_compares!(left, right, |a, b| a != b)
+        }
+        _ => typed_compares!(left, right, neq_bool, neq, neq_utf8, neq_binary)
+    }
 }
 
 /// Perform `left < right` operation on two (dynamic) [`Array`]s.
@@ -2360,7 +2365,12 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// assert_eq!(BooleanArray::from(vec![Some(true), Some(false), None]), result);
 /// ```
 pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, lt_bool, lt, lt_utf8, lt_binary)
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_compares!(left, right, |a, b| a < b)
+        }
+        _ => typed_compares!(left, right, lt_bool, lt, lt_utf8, lt_binary)
+    }
 }
 
 /// Perform `left <= right` operation on two (dynamic) [`Array`]s.
@@ -2379,7 +2389,12 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// assert_eq!(BooleanArray::from(vec![Some(false), Some(true), Some(true), None]), result);
 /// ```
 pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, lt_eq_bool, lt_eq, lt_eq_utf8, lt_eq_binary)
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_compares!(left, right, |a, b| a <= b)
+        }
+        _ => typed_compares!(left, right, lt_eq_bool, lt_eq, lt_eq_utf8, lt_eq_binary)
+    }
 }
 
 /// Perform `left > right` operation on two (dynamic) [`Array`]s.
@@ -2397,7 +2412,12 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// assert_eq!(BooleanArray::from(vec![Some(true), Some(false), None]), result);
 /// ```
 pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, gt_bool, gt, gt_utf8, gt_binary)
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_compares!(left, right, |a, b| a > b)
+        }
+        _ => typed_compares!(left, right, gt_bool, gt, gt_utf8, gt_binary)
+    }
 }
 
 /// Perform `left >= right` operation on two (dynamic) [`Array`]s.
@@ -2415,7 +2435,12 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// assert_eq!(BooleanArray::from(vec![Some(false), Some(true), None]), result);
 /// ```
 pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    typed_compares!(left, right, gt_eq_bool, gt_eq, gt_eq_utf8, gt_eq_binary)
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_compares!(left, right, |a, b| a >= b)
+        }
+        _ => typed_compares!(left, right, gt_eq_bool, gt_eq, gt_eq_utf8, gt_eq_binary)
+    }
 }
 
 /// Perform `left == right` operation on two [`PrimitiveArray`]s.
@@ -4664,7 +4689,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eq_dyn_dictionary_i8_array() {
+    fn test_eq_dyn_neq_dyn_dictionary_i8_array() {
         // Construct a value array
         let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
 
@@ -4676,10 +4701,14 @@ mod tests {
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
+
+        let result = neq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, false]));
     }
 
     #[test]
-    fn test_eq_dyn_dictionary_u64_array() {
+    fn test_eq_dyn_neq_dyn_dictionary_u64_array() {
         let values = UInt64Array::from_iter_values([10_u64, 11, 12, 13, 14, 15, 16, 17]);
 
         let keys1 = UInt64Array::from_iter_values([1_u64, 3, 4]);
@@ -4695,10 +4724,17 @@ mod tests {
             result.unwrap(),
             BooleanArray::from(vec![false, true, false])
         );
+
+        let result = neq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![true, false, true])
+        );
     }
 
     #[test]
-    fn test_eq_dyn_dictionary_utf8_array() {
+    fn test_eq_dyn_neq_dyn_dictionary_utf8_array() {
         let test1 = vec!["a", "a", "b", "c"];
         let test2 = vec!["a", "b", "b", "c"];
 
@@ -4717,10 +4753,17 @@ mod tests {
             result.unwrap(),
             BooleanArray::from(vec![Some(true), None, None, Some(true)])
         );
+
+        let result = neq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![Some(false), None, None, Some(false)])
+        );
     }
 
     #[test]
-    fn test_eq_dyn_dictionary_binary_array() {
+    fn test_eq_dyn_neq_dyn_dictionary_binary_array() {
         let values: BinaryArray = ["hello", "", "parquet"]
             .into_iter()
             .map(|b| Some(b.as_bytes()))
@@ -4739,10 +4782,17 @@ mod tests {
             result.unwrap(),
             BooleanArray::from(vec![true, false, false])
         );
+
+        let result = neq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![false, true, true])
+        );
     }
 
     #[test]
-    fn test_eq_dyn_dictionary_interval_array() {
+    fn test_eq_dyn_neq_dyn_dictionary_interval_array() {
         let values = IntervalDayTimeArray::from(vec![1, 6, 10, 2, 3, 5]);
 
         let keys1 = UInt64Array::from_iter_values([1_u64, 0, 3]);
@@ -4755,10 +4805,14 @@ mod tests {
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
+
+        let result = neq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, false]));
     }
 
     #[test]
-    fn test_eq_dyn_dictionary_date_array() {
+    fn test_eq_dyn_neq_dyn_dictionary_date_array() {
         let values = Date32Array::from(vec![1, 6, 10, 2, 3, 5]);
 
         let keys1 = UInt64Array::from_iter_values([1_u64, 0, 3]);
@@ -4771,10 +4825,14 @@ mod tests {
         let result = eq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
+
+        let result = neq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, false]));
     }
 
     #[test]
-    fn test_eq_dyn_dictionary_bool_array() {
+    fn test_eq_dyn_neq_dyn_dictionary_bool_array() {
         let values = BooleanArray::from(vec![true, false]);
 
         let keys1 = UInt64Array::from_iter_values([1_u64, 1, 1]);
@@ -4789,6 +4847,13 @@ mod tests {
         assert_eq!(
             result.unwrap(),
             BooleanArray::from(vec![false, true, false])
+        );
+
+        let result = neq_dyn(&dict_array1, &dict_array2);
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![true, false, true])
         );
     }
 }
