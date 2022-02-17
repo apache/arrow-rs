@@ -2345,7 +2345,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a != b, |a, b| (a ^ b))
         }
-        _ => typed_compares!(left, right, neq_bool, neq, neq_utf8, neq_binary)
+        _ => typed_compares!(left, right, neq_bool, neq, neq_utf8, neq_binary),
     }
 }
 
@@ -2369,7 +2369,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a < b, |a, b| (!a) & b)
         }
-        _ => typed_compares!(left, right, lt_bool, lt, lt_utf8, lt_binary)
+        _ => typed_compares!(left, right, lt_bool, lt, lt_utf8, lt_binary),
     }
 }
 
@@ -2393,7 +2393,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a <= b, |a, b| !(a & (!b)))
         }
-        _ => typed_compares!(left, right, lt_eq_bool, lt_eq, lt_eq_utf8, lt_eq_binary)
+        _ => typed_compares!(left, right, lt_eq_bool, lt_eq, lt_eq_utf8, lt_eq_binary),
     }
 }
 
@@ -2416,7 +2416,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a > b, |a, b| a & (!b))
         }
-        _ => typed_compares!(left, right, gt_bool, gt, gt_utf8, gt_binary)
+        _ => typed_compares!(left, right, gt_bool, gt, gt_utf8, gt_binary),
     }
 }
 
@@ -2439,7 +2439,7 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a >= b, |a, b| !((!a) & b))
         }
-        _ => typed_compares!(left, right, gt_eq_bool, gt_eq, gt_eq_utf8, gt_eq_binary)
+        _ => typed_compares!(left, right, gt_eq_bool, gt_eq, gt_eq_utf8, gt_eq_binary),
     }
 }
 
@@ -4704,7 +4704,10 @@ mod tests {
 
         let result = neq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, false]));
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![false, true, false])
+        );
     }
 
     #[test]
@@ -4727,10 +4730,7 @@ mod tests {
 
         let result = neq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![true, false, true])
-        );
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
     }
 
     #[test]
@@ -4785,10 +4785,7 @@ mod tests {
 
         let result = neq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![false, true, true])
-        );
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![false, true, true]));
     }
 
     #[test]
@@ -4808,7 +4805,10 @@ mod tests {
 
         let result = neq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, false]));
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![true, false, false])
+        );
     }
 
     #[test]
@@ -4828,7 +4828,10 @@ mod tests {
 
         let result = neq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, false]));
+        assert_eq!(
+            result.unwrap(),
+            BooleanArray::from(vec![true, false, false])
+        );
     }
 
     #[test]
@@ -4851,9 +4854,6 @@ mod tests {
 
         let result = neq_dyn(&dict_array1, &dict_array2);
         assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap(),
-            BooleanArray::from(vec![true, false, true])
-        );
+        assert_eq!(result.unwrap(), BooleanArray::from(vec![true, false, true]));
     }
 }
