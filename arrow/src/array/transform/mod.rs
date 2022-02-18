@@ -613,11 +613,18 @@ impl<'a> MutableArrayData<'a> {
             extend_nulls,
         }
     }
-
-    /// Extends this [MutableArrayData] with elements from the bounded [ArrayData] at `start`
-    /// and for a size of `len`.
+ 
+    /// Extends this array with a chunk of its source arrays
+    /// 
+    /// # Arguments
+    /// * `index` - the index of array that you what to copy values from
+    /// * `start` - the start index of the chunk (inclusive)
+    /// * `end` - the end index of the chunk (exclusive)
+    /// 
     /// # Panic
-    /// This function panics if the range is out of bounds, i.e. if `start + len >= array.len()`.
+    /// This function panics if there is an invalid index,
+    /// i.e. `index` >= the number of source arrays
+    /// or `end` > the length of the `index`th array
     pub fn extend(&mut self, index: usize, start: usize, end: usize) {
         let len = end - start;
         (self.extend_null_bits[index])(&mut self.data, start, len);
