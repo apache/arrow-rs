@@ -613,14 +613,14 @@ impl<'a> MutableArrayData<'a> {
             extend_nulls,
         }
     }
- 
+
     /// Extends this array with a chunk of its source arrays
-    /// 
+    ///
     /// # Arguments
     /// * `index` - the index of array that you what to copy values from
     /// * `start` - the start index of the chunk (inclusive)
     /// * `end` - the end index of the chunk (exclusive)
-    /// 
+    ///
     /// # Panic
     /// This function panics if there is an invalid index,
     /// i.e. `index` >= the number of source arrays
