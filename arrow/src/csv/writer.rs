@@ -96,9 +96,6 @@ where
 pub struct Writer<W: Write> {
     /// The object to write to
     writer: csv_crate::Writer<W>,
-    /// Column delimiter. Defaults to `b','`
-    #[allow(dead_code)]
-    delimiter: u8,
     /// Whether file should be written with headers. Defaults to `true`
     has_headers: bool,
     /// The date format for date arrays
@@ -124,7 +121,6 @@ impl<W: Write> Writer<W> {
         let writer = builder.delimiter(delimiter).from_writer(writer);
         Writer {
             writer,
-            delimiter,
             has_headers: true,
             date_format: DEFAULT_DATE_FORMAT.to_string(),
             datetime_format: DEFAULT_TIMESTAMP_FORMAT.to_string(),
@@ -475,7 +471,6 @@ impl WriterBuilder {
         let writer = builder.delimiter(delimiter).from_writer(writer);
         Writer {
             writer,
-            delimiter,
             has_headers: self.has_headers,
             date_format: self
                 .date_format
