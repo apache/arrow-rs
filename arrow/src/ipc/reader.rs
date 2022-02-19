@@ -1266,7 +1266,19 @@ mod tests {
                     .value(0)
                     != 0.0
             );
-        })
+        });
+
+        let file = File::open("target/debug/testdata/float.stream").unwrap();
+
+        // Read with projection
+        let reader = StreamReader::try_new(file, Some(vec![0, 3])).unwrap();
+
+        reader.for_each(|batch| {
+            let batch = batch.unwrap();
+            assert_eq!(batch.schema().fields().len(), 2);
+            assert_eq!(batch.schema().fields()[0].data_type(), &DataType::Float32);
+            assert_eq!(batch.schema().fields()[1].data_type(), &DataType::Int32);
+        });
     }
 
     fn roundtrip_ipc(rb: &RecordBatch) -> RecordBatch {
