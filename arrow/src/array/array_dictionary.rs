@@ -302,6 +302,7 @@ mod tests {
     use super::*;
 
     use crate::array::Int8Array;
+    use crate::datatypes::Int16Type;
     use crate::{
         array::Int16DictionaryArray, array::PrimitiveDictionaryBuilder,
         datatypes::DataType,
@@ -472,29 +473,11 @@ mod tests {
     #[test]
     fn test_dictionary_iter() {
         // Construct a value array
-        let value_data = ArrayData::builder(DataType::Int8)
-            .len(8)
-            .add_buffer(Buffer::from(
-                &[10_i8, 11, 12, 13, 14, 15, 16, 17].to_byte_slice(),
-            ))
-            .build()
-            .unwrap();
-
-        // Construct a buffer for value offsets, for the nested array:
-        let keys = Buffer::from(&[2_i16, 3, 4].to_byte_slice());
+        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+        let keys = Int16Array::from_iter_values([2_i16, 3, 4]);
 
         // Construct a dictionary array from the above two
-        let key_type = DataType::Int16;
-        let value_type = DataType::Int8;
-        let dict_data_type =
-            DataType::Dictionary(Box::new(key_type), Box::new(value_type));
-        let dict_data = ArrayData::builder(dict_data_type)
-            .len(3)
-            .add_buffer(keys)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        let dict_array = Int16DictionaryArray::from(dict_data);
+        let dict_array = DictionaryArray::<Int16Type>::try_new(&keys, &values).unwrap();
 
         let mut key_iter = dict_array.keys_iter();
         assert_eq!(2, key_iter.next().unwrap().unwrap());
