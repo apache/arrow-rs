@@ -19,6 +19,70 @@
 
 # Changelog
 
+## [9.1.0](https://github.com/apache/arrow-rs/tree/9.1.0) (2022-02-19)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/9.0.2...9.1.0)
+
+**Implemented enhancements:**
+
+- Exposing page encoding stats [\#1321](https://github.com/apache/arrow-rs/issues/1321)
+- Improve filter performance by special casing high and low selectivity predicates [\#1288](https://github.com/apache/arrow-rs/issues/1288) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Speed up  `DeltaBitPackDecoder` [\#1281](https://github.com/apache/arrow-rs/issues/1281) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Fix all clippy lints in arrow crate [\#1255](https://github.com/apache/arrow-rs/issues/1255) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Expose page encoding `ColumnChunkMetadata` [\#1322](https://github.com/apache/arrow-rs/pull/1322) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([shanisolomon](https://github.com/shanisolomon))
+- Expose column index and offset index in `ColumnChunkMetadata` [\#1318](https://github.com/apache/arrow-rs/pull/1318) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([shanisolomon](https://github.com/shanisolomon))
+- Expose bloom filter offset in `ColumnChunkMetadata` [\#1309](https://github.com/apache/arrow-rs/pull/1309) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([shanisolomon](https://github.com/shanisolomon))
+- Add `DictionaryArray::try_new()` to create dictionaries from pre existing arrays [\#1300](https://github.com/apache/arrow-rs/pull/1300) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Add `DictionaryArray::keys_iter`, and `take_iter` for other array types [\#1296](https://github.com/apache/arrow-rs/pull/1296) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Make `rle` decoder public under `experimental` feature [\#1271](https://github.com/apache/arrow-rs/pull/1271) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([zeevm](https://github.com/zeevm))
+- Add `DictionaryArray` support in `eq_dyn` kernel [\#1263](https://github.com/apache/arrow-rs/pull/1263) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+
+**Fixed bugs:**
+
+- `len` is not a parameter of `MutableArrayData::extend` [\#1316](https://github.com/apache/arrow-rs/issues/1316)
+- module `data_type` is private in Rust Parquet 8.0.0 [\#1302](https://github.com/apache/arrow-rs/issues/1302) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Test failure: bit\_chunk\_iterator [\#1294](https://github.com/apache/arrow-rs/issues/1294)
+- csv\_writer benchmark fails with "no such file or directory" [\#1292](https://github.com/apache/arrow-rs/issues/1292)
+
+**Documentation updates:**
+
+- Fix warnings in `cargo doc` [\#1268](https://github.com/apache/arrow-rs/pull/1268) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+
+**Performance improvements:**
+
+- Vectorize DeltaBitPackDecoder, up to 5x faster decoding [\#1284](https://github.com/apache/arrow-rs/pull/1284) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Skip zero-ing primitive nulls [\#1280](https://github.com/apache/arrow-rs/pull/1280) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Add specialized filter kernels in `compute` module \(up to 10x faster\) [\#1248](https://github.com/apache/arrow-rs/pull/1248) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+
+**Closed issues:**
+
+- Expose column and offset index metadata offset [\#1317](https://github.com/apache/arrow-rs/issues/1317)
+- Expose bloom filter metadata offset [\#1308](https://github.com/apache/arrow-rs/issues/1308)
+- Improve ergonomics to construct `DictionaryArrays` from `Key` and `Value` arrays [\#1299](https://github.com/apache/arrow-rs/issues/1299)
+- Make it easier to iterate over `DictionaryArray` [\#1295](https://github.com/apache/arrow-rs/issues/1295) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- (WON'T FIX) Don't Interwine Bit and Byte Aligned Operations in `BitReader` [\#1282](https://github.com/apache/arrow-rs/issues/1282)
+- how to create arrow::array from streamReader [\#1278](https://github.com/apache/arrow-rs/issues/1278)
+- Remove scientific notation when converting floats to strings. [\#983](https://github.com/apache/arrow-rs/issues/983)
+
+**Merged pull requests:**
+
+- Update the document of function `MutableArrayData::extend` [\#1336](https://github.com/apache/arrow-rs/pull/1336) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Fix clippy lint `dead_code` [\#1324](https://github.com/apache/arrow-rs/pull/1324) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gsserge](https://github.com/gsserge))
+- fix test bug and ensure that bloom filter metadata is serialized in `to_thrift` [\#1320](https://github.com/apache/arrow-rs/pull/1320) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([shanisolomon](https://github.com/shanisolomon))
+- Enable more clippy lints in arrow  [\#1315](https://github.com/apache/arrow-rs/pull/1315) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gsserge](https://github.com/gsserge))
+- Fix clippy lint `clippy::type_complexity` [\#1310](https://github.com/apache/arrow-rs/pull/1310) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gsserge](https://github.com/gsserge))
+- Fix clippy lint `clippy::float_equality_without_abs` [\#1305](https://github.com/apache/arrow-rs/pull/1305) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gsserge](https://github.com/gsserge))
+- Fix clippy `clippy::vec_init_then_push` lint [\#1303](https://github.com/apache/arrow-rs/pull/1303) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gsserge](https://github.com/gsserge))
+- Fix failing csv\_writer bench [\#1293](https://github.com/apache/arrow-rs/pull/1293) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([andygrove](https://github.com/andygrove))
+- Changes for 9.0.2  [\#1291](https://github.com/apache/arrow-rs/pull/1291) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([alamb](https://github.com/alamb))
+- Fix bitmask creation also for simd comparisons with scalar [\#1290](https://github.com/apache/arrow-rs/pull/1290) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jhorstmann](https://github.com/jhorstmann))
+- Fix simd comparison kernels [\#1286](https://github.com/apache/arrow-rs/pull/1286) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jhorstmann](https://github.com/jhorstmann))
+- Restrict Decoder to compatible types \(\#1276\) [\#1277](https://github.com/apache/arrow-rs/pull/1277) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Fix some clippy lints in parquet crate, rename `LevelEncoder` variants to conform to Rust standards [\#1273](https://github.com/apache/arrow-rs/pull/1273) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([HaoYang670](https://github.com/HaoYang670))
+- Use new DecimalArray creation API in arrow crate [\#1249](https://github.com/apache/arrow-rs/pull/1249) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Improve `DecimalArray` API ergonomics: add `iter()`, `FromIterator`, `with_precision_and_scale` [\#1223](https://github.com/apache/arrow-rs/pull/1223) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+
+
 ## [9.0.2](https://github.com/apache/arrow-rs/tree/9.0.2) (2022-02-09)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/8.0.0...9.0.2)
@@ -788,6 +852,5 @@
 - This is a test issue [\#11](https://github.com/apache/arrow-rs/issues/11)
 
 For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md)
-
 
 \* *This Changelog was automatically generated by [github_changelog_generator](https://github.com/github-changelog-generator/github-changelog-generator)*
