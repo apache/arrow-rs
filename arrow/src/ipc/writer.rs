@@ -881,7 +881,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}.arrow_file", "arrow"))
                     .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
             while let Some(Ok(read_batch)) = reader.next() {
                 read_batch
                     .columns()
@@ -929,7 +929,7 @@ mod tests {
 
         {
             let file = File::open(&file_name).unwrap();
-            let reader = FileReader::try_new(file).unwrap();
+            let reader = FileReader::try_new(file, None).unwrap();
             reader.for_each(|maybe_batch| {
                 maybe_batch
                     .unwrap()
@@ -999,7 +999,7 @@ mod tests {
             ))
             .unwrap();
 
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read and rewrite the file to a temp location
             {
@@ -1020,7 +1020,7 @@ mod tests {
                 version, path
             ))
             .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1051,7 +1051,7 @@ mod tests {
             ))
             .unwrap();
 
-            let reader = StreamReader::try_new(file).unwrap();
+            let reader = StreamReader::try_new(file, None).unwrap();
 
             // read and rewrite the stream to a temp location
             {
@@ -1070,7 +1070,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
                     .unwrap();
-            let mut reader = StreamReader::try_new(file).unwrap();
+            let mut reader = StreamReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1108,7 +1108,7 @@ mod tests {
             ))
             .unwrap();
 
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read and rewrite the file to a temp location
             {
@@ -1134,7 +1134,7 @@ mod tests {
                 version, path
             ))
             .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1172,7 +1172,7 @@ mod tests {
             ))
             .unwrap();
 
-            let reader = StreamReader::try_new(file).unwrap();
+            let reader = StreamReader::try_new(file, None).unwrap();
 
             // read and rewrite the stream to a temp location
             {
@@ -1195,7 +1195,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
                     .unwrap();
-            let mut reader = StreamReader::try_new(file).unwrap();
+            let mut reader = StreamReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
