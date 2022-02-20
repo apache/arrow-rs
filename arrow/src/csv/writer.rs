@@ -456,6 +456,12 @@ impl WriterBuilder {
         self
     }
 
+    /// Set the CSV file's datetime format
+    pub fn with_datetime_format(mut self, format: String) -> Self {
+        self.datetime_format = Some(format);
+        self
+    }
+
     /// Set the CSV file's time format
     pub fn with_time_format(mut self, format: String) -> Self {
         self.time_format = Some(format);
