@@ -773,7 +773,6 @@ mod tests {
         assert_eq!(col0_metadata.bloom_filter_offset().unwrap(), 192);
 
         // test page encoding stats
-        assert!(col0_metadata.has_page_encoding_stats());
         let page_encoding_stats =
             col0_metadata.page_encoding_stats().unwrap().get(0).unwrap();
 
@@ -782,7 +781,6 @@ mod tests {
         assert_eq!(page_encoding_stats.count, 1);
 
         // test optional column index offset
-        assert!(col0_metadata.has_column_index());
         assert_eq!(col0_metadata.column_index_offset().unwrap(), 156);
         assert_eq!(col0_metadata.column_index_length().unwrap(), 25);
 
