@@ -34,15 +34,6 @@ use crate::{
     util::trusted_len_unzip,
 };
 
-/// Number of seconds in a day
-const SECONDS_IN_DAY: i64 = 86_400;
-/// Number of milliseconds in a second
-const MILLISECONDS: i64 = 1_000;
-/// Number of microseconds in a second
-const MICROSECONDS: i64 = 1_000_000;
-/// Number of nanoseconds in a second
-const NANOSECONDS: i64 = 1_000_000_000;
-
 /// Array whose elements are of primitive types.
 ///
 /// # Example: From an iterator of values
