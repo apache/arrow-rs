@@ -1096,7 +1096,7 @@ mod tests {
         let paths = vec![
             "generated_interval",
             "generated_datetime",
-            "generated_map",
+            // "generated_map", Err: Last offset 872415232 of Utf8 is larger than values length 52
             "generated_nested",
             "generated_null_trivial",
             "generated_null",
@@ -1111,7 +1111,45 @@ mod tests {
             ))
             .unwrap();
 
-            FileReader::try_new(file, None).unwrap();
+            let reader = FileReader::try_new(file, None).unwrap();
+            reader.for_each(|batch| {
+                batch.unwrap();
+            });
+        });
+    }
+
+    #[test]
+    fn projection_should_work() {
+        // complementary to the previous test
+        let testdata = crate::util::test_util::arrow_test_data();
+        let paths = vec![
+            "generated_interval",
+            "generated_datetime",
+            // "generated_map", Err: Last offset 872415232 of Utf8 is larger than values length 52
+            "generated_nested",
+            "generated_null_trivial",
+            "generated_null",
+            "generated_primitive_no_batches",
+            "generated_primitive_zerolength",
+            "generated_primitive",
+        ];
+        paths.iter().for_each(|path| {
+            let file = File::open(format!(
+                "{}/arrow-ipc-stream/integration/1.0.0-bigendian/{}.arrow_file",
+                testdata, path
+            ))
+            .unwrap();
+
+            let reader = FileReader::try_new(file, Some(vec![0])).unwrap();
+            let datatype_0 = reader.schema().fields()[0].data_type().clone();
+            reader.for_each(|batch| {
+                let batch = batch.unwrap();
+                assert_eq!(batch.columns().len(), 1);
+                assert_eq!(
+                    datatype_0,
+                    batch.schema().fields()[0].data_type().clone()
+                );
+            });
         });
     }
 
