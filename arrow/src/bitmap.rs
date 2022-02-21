@@ -35,13 +35,8 @@ pub struct Bitmap {
 
 impl Bitmap {
     pub fn new(num_bits: usize) -> Self {
-        let num_bytes = num_bits / 8 + if num_bits % 8 > 0 { 1 } else { 0 };
-        let r = num_bytes % 64;
-        let len = if r == 0 {
-            num_bytes
-        } else {
-            num_bytes + 64 - r
-        };
+        let num_bytes = bit_util::ceil(num_bits, 8);
+        let len = bit_util::round_upto_multiple_of_64(num_bytes);
         Bitmap {
             bits: Buffer::from(&vec![0xFF; len]),
         }
