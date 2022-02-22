@@ -459,6 +459,7 @@ pub use self::builder::LargeBinaryBuilder;
 pub use self::builder::LargeListBuilder;
 pub use self::builder::LargeStringBuilder;
 pub use self::builder::ListBuilder;
+pub use self::builder::MapBuilder;
 pub use self::builder::PrimitiveBuilder;
 pub use self::builder::PrimitiveDictionaryBuilder;
 pub use self::builder::StringBuilder;
