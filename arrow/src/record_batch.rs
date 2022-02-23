@@ -135,31 +135,31 @@ impl RecordBatch {
             ));
         }
 
-        // check for all columns match the schema
-        // This is a bit repetitive, but it is better to check the condition outside the loop
-        if options.match_field_names {
-            for (i, column) in columns.iter().enumerate() {
-                if column.data_type() != schema.field(i).data_type() {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "column types must match schema types, expected {:?} but found {:?} at column index {}",
-                        schema.field(i).data_type(),
-                        column.data_type(),
-                        i)));
-                }
+        // function for comparing schema
+        let compare_type = if options.match_field_names {
+            |(_, (col_type, field_type)): &(usize, (&DataType, &DataType))| {
+                col_type != field_type
             }
         } else {
-            for (i, column) in columns.iter().enumerate() {
-                if !column
-                    .data_type()
-                    .equals_datatype(schema.field(i).data_type())
-                {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "column types must match schema types, expected {:?} but found {:?} at column index {}",
-                        schema.field(i).data_type(),
-                        column.data_type(),
-                        i)));
-                }
+            |(_, (col_type, field_type)): &(usize, (&DataType, &DataType))| {
+                !col_type.equals_datatype(field_type)
             }
+        };
+
+        // check that all columns match the schema
+        let not_match = columns
+            .iter()
+            .map(|c| c.data_type())
+            .zip(schema.fields().iter().map(|f| f.data_type()))
+            .enumerate()
+            .find(compare_type);
+
+        if let Some((i, (col_type, field_type))) = not_match {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "column types must match schema types, expected {:?} but found {:?} at column index {}",
+                field_type,
+                col_type,
+                i)));
         }
 
         Ok(())
