@@ -135,8 +135,9 @@ impl RecordBatch {
             ));
         }
 
-        // function for comparing schema
-        let compare_type = if options.match_field_names {
+        // function for comparing column type and field type
+        // return true if 2 types are not matched
+        let type_not_match = if options.match_field_names {
             |(_, (col_type, field_type)): &(usize, (&DataType, &DataType))| {
                 col_type != field_type
             }
@@ -149,10 +150,10 @@ impl RecordBatch {
         // check that all columns match the schema
         let not_match = columns
             .iter()
-            .map(|c| c.data_type())
-            .zip(schema.fields().iter().map(|f| f.data_type()))
+            .zip(schema.fields().iter())
+            .map(|(col, field)| (col.data_type(), field.data_type()))
             .enumerate()
-            .find(compare_type);
+            .find(type_not_match);
 
         if let Some((i, (col_type, field_type))) = not_match {
             return Err(ArrowError::InvalidArgumentError(format!(
