@@ -1271,11 +1271,7 @@ impl Decoder {
                             .iter()
                             .enumerate()
                             .map(|(i, row)| {
-                                (
-                                    i,
-                                    row.as_object()
-                                        .and_then(|v| v.get(field.name())),
-                                )
+                                (i, row.as_object().and_then(|v| v.get(field.name())))
                             })
                             .map(|(i, v)| match v {
                                 // we want the field as an object, if it's not, we treat as null

@@ -713,8 +713,8 @@ impl LevelInfo {
             DataType::List(_) | DataType::Map(_, _) => {
                 let offsets = unsafe { array.data().buffers()[0].typed_data::<i32>() };
                 let offsets = offsets
-                    .to_vec()
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .skip(array.offset() + offset)
                     .take(len + 1)
                     .map(|v| v as i64)
