@@ -267,7 +267,7 @@ where
         let re = if let Some(ref regex) = map.get(pat) {
             regex
         } else {
-            let re_pattern = escape(pat).replace("%", ".*").replace("_", ".");
+            let re_pattern = escape(pat).replace('%', ".*").replace('_', ".");
             let re = op(&re_pattern)?;
             map.insert(pat, re);
             map.get(pat).unwrap()
@@ -364,7 +364,7 @@ pub fn like_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             }
         }
     } else {
-        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
+        let re_pattern = escape(right).replace('%', ".*").replace('_', ".");
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -440,7 +440,7 @@ pub fn nlike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             result.append(!left.value(i).ends_with(&right[1..]));
         }
     } else {
-        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
+        let re_pattern = escape(right).replace('%', ".*").replace('_', ".");
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -521,7 +521,7 @@ pub fn ilike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             );
         }
     } else {
-        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
+        let re_pattern = escape(right).replace('%', ".*").replace('_', ".");
         let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from ILIKE pattern: {}",

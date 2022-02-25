@@ -553,7 +553,7 @@ pub(crate) fn get_fb_field_type<'a>(
             }
         }
         Timestamp(unit, tz) => {
-            let tz = tz.clone().unwrap_or_else(String::new);
+            let tz = tz.clone().unwrap_or_default();
             let tz_str = fbb.create_string(tz.as_str());
             let mut builder = ipc::TimestampBuilder::new(fbb);
             let time_unit = match unit {
