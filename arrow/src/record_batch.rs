@@ -597,7 +597,7 @@ mod tests {
         let a = Int64Array::from(vec![1, 2, 3, 4, 5]);
 
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]);
-        assert!(!batch.is_ok());
+        assert!(batch.is_err());
     }
 
     #[test]
@@ -658,7 +658,7 @@ mod tests {
 
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]);
-        assert!(!batch.is_ok());
+        assert!(batch.is_err());
     }
 
     #[test]

@@ -108,10 +108,12 @@ impl StructArray {
 
 impl From<ArrayData> for StructArray {
     fn from(data: ArrayData) -> Self {
-        let mut boxed_fields = vec![];
-        for cd in data.child_data() {
-            boxed_fields.push(make_array(cd.clone()));
-        }
+        let boxed_fields = data
+            .child_data()
+            .iter()
+            .map(|cd| make_array(cd.clone()))
+            .collect();
+
         Self { data, boxed_fields }
     }
 }

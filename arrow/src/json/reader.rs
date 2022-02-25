@@ -645,7 +645,7 @@ impl Decoder {
         }
 
         let rows = &rows[..];
-        let projection = self.projection.clone().unwrap_or_else(Vec::new);
+        let projection = self.projection.clone().unwrap_or_default();
         let arrays = self.build_struct_array(rows, self.schema.fields(), &projection);
 
         let projected_fields: Vec<Field> = if projection.is_empty() {
@@ -653,8 +653,7 @@ impl Decoder {
         } else {
             projection
                 .iter()
-                .map(|name| self.schema.column_with_name(name))
-                .flatten()
+                .filter_map(|name| self.schema.column_with_name(name))
                 .map(|(_, field)| field.clone())
                 .collect()
         };
@@ -1272,12 +1271,7 @@ impl Decoder {
                             .iter()
                             .enumerate()
                             .map(|(i, row)| {
-                                (
-                                    i,
-                                    row.as_object()
-                                        .map(|v| v.get(field.name()))
-                                        .flatten(),
-                                )
+                                (i, row.as_object().and_then(|v| v.get(field.name())))
                             })
                             .map(|(i, v)| match v {
                                 // we want the field as an object, if it's not, we treat as null
@@ -1351,8 +1345,7 @@ impl Decoder {
         let value_map_iter = rows.iter().map(|value| {
             value
                 .get(field_name)
-                .map(|v| v.as_object().map(|map| (map, map.len() as i32)))
-                .flatten()
+                .and_then(|v| v.as_object().map(|map| (map, map.len() as i32)))
         });
         let rows_len = rows.len();
         let mut list_offsets = Vec::with_capacity(rows_len + 1);
