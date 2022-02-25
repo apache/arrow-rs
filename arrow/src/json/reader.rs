@@ -653,8 +653,7 @@ impl Decoder {
         } else {
             projection
                 .iter()
-                .map(|name| self.schema.column_with_name(name))
-                .flatten()
+                .filter_map(|name| self.schema.column_with_name(name))
                 .map(|(_, field)| field.clone())
                 .collect()
         };
