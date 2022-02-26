@@ -107,7 +107,7 @@ bitflags! {
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FFI_ArrowSchema {
     format: *const c_char,
     name: *const c_char,
@@ -316,7 +316,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FFI_ArrowArray {
     pub(crate) length: i64,
     pub(crate) null_count: i64,
@@ -361,6 +361,7 @@ unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
 }
 
 struct ArrayPrivateData {
+    #[allow(dead_code)]
     buffers: Vec<Option<Buffer>>,
     buffers_ptr: Box<[*const c_void]>,
     children: Box<[*mut FFI_ArrowArray]>,
@@ -720,9 +721,11 @@ impl ArrowArray {
                     .to_string(),
             ));
         };
+        let ffi_array = (*array).clone();
+        let ffi_schema = (*schema).clone();
         Ok(Self {
-            array: Arc::from_raw(array as *mut FFI_ArrowArray),
-            schema: Arc::from_raw(schema as *mut FFI_ArrowSchema),
+            array: Arc::new(ffi_array),
+            schema: Arc::new(ffi_schema),
         })
     }
 
@@ -760,8 +763,8 @@ mod tests {
     use super::*;
     use crate::array::{
         make_array, Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
-        DecimalBuilder, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, OffsetSizeTrait, StringOffsetSizeTrait, Time32MillisecondArray,
+        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array,
+        OffsetSizeTrait, StringOffsetSizeTrait, Time32MillisecondArray,
         TimestampMillisecondArray,
     };
     use crate::compute::kernels;
@@ -794,11 +797,11 @@ mod tests {
     #[test]
     fn test_decimal_round_trip() -> Result<()> {
         // create an array natively
-        let mut builder = DecimalBuilder::new(5, 6, 2);
-        builder.append_value(12345_i128).unwrap();
-        builder.append_value(-12345_i128).unwrap();
-        builder.append_null().unwrap();
-        let original_array = builder.finish();
+        let original_array = [Some(12345_i128), Some(-12345_i128), None]
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(6, 2)
+            .unwrap();
 
         // export it
         let array = ArrowArray::try_from(original_array.data().clone())?;

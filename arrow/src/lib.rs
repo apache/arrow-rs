@@ -127,17 +127,7 @@
 #![cfg_attr(feature = "avx512", feature(stdsimd))]
 #![cfg_attr(feature = "avx512", feature(repr_simd))]
 #![cfg_attr(feature = "avx512", feature(avx512_target_feature))]
-#![allow(dead_code)]
-#![allow(non_camel_case_types)]
 #![deny(clippy::redundant_clone)]
-#![allow(
-    // introduced to ignore lint errors when upgrading from 2020-04-22 to 2020-11-14
-    clippy::float_equality_without_abs,
-    clippy::type_complexity,
-    // upper_case_acronyms lint was introduced in Rust 1.51.
-    // It is triggered in the ffi module, and ipc::gen, which we have no control over
-    clippy::upper_case_acronyms,
-)]
 #![warn(missing_debug_implementations)]
 
 pub mod alloc;

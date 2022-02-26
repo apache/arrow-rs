@@ -122,6 +122,14 @@ impl BooleanArray {
         // `i < self.len()
         unsafe { self.value_unchecked(i) }
     }
+
+    /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
+    pub fn take_iter<'a>(
+        &'a self,
+        indexes: impl Iterator<Item = Option<usize>> + 'a,
+    ) -> impl Iterator<Item = Option<bool>> + 'a {
+        indexes.map(|opt_index| opt_index.map(|index| self.value(index)))
+    }
 }
 
 impl Array for BooleanArray {

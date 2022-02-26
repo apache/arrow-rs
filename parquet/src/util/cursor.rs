@@ -210,7 +210,7 @@ mod tests {
         let mut target = vec![];
         let cursor_res = cursor.read_to_end(&mut target);
         println!("{:?}", cursor_res);
-        assert!(!cursor_res.is_err(), "reading error");
+        assert!(cursor_res.is_ok(), "reading error");
         assert_eq!((end_included - start) as usize + 1, cursor_res.unwrap());
         assert_eq!((start..=end_included).collect::<Vec<_>>(), target);
     }

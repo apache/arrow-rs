@@ -400,7 +400,7 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic::ColumnOrder;
+    use crate::basic::{self, ColumnOrder};
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::{get_test_file, get_test_path};
@@ -758,6 +758,35 @@ mod tests {
             metadata.get(2).unwrap().value,
             Some("foo.baz.Foobaz$Event".to_owned())
         );
+    }
+
+    #[test]
+    fn test_file_reader_optional_metadata() {
+        // file with optional metadata: bloom filters, encoding stats, column index and offset index.
+        let file = get_test_file("data_index_bloom_encoding_stats.parquet");
+        let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        let col0_metadata = row_group_metadata.column(0);
+
+        // test optional bloom filter offset
+        assert_eq!(col0_metadata.bloom_filter_offset().unwrap(), 192);
+
+        // test page encoding stats
+        let page_encoding_stats =
+            col0_metadata.page_encoding_stats().unwrap().get(0).unwrap();
+
+        assert_eq!(page_encoding_stats.page_type, basic::PageType::DATA_PAGE);
+        assert_eq!(page_encoding_stats.encoding, Encoding::PLAIN);
+        assert_eq!(page_encoding_stats.count, 1);
+
+        // test optional column index offset
+        assert_eq!(col0_metadata.column_index_offset().unwrap(), 156);
+        assert_eq!(col0_metadata.column_index_length().unwrap(), 25);
+
+        // test optional offset index offset
+        assert_eq!(col0_metadata.offset_index_offset().unwrap(), 181);
+        assert_eq!(col0_metadata.offset_index_length().unwrap(), 11);
     }
 
     #[test]

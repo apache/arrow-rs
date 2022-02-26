@@ -27,6 +27,7 @@ pub mod writer;
 #[allow(clippy::extra_unused_lifetimes)]
 #[allow(clippy::redundant_static_lifetimes)]
 #[allow(clippy::redundant_field_names)]
+#[allow(non_camel_case_types)]
 pub mod gen;
 
 pub use self::gen::File::*;

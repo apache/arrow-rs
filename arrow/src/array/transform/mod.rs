@@ -140,6 +140,7 @@ fn build_extend_null_bits(array: &ArrayData, use_nulls: bool) -> ExtendNullBits 
 /// assert_eq!(Int32Array::from(vec![2, 3, 1, 2, 3]), new_array);
 /// ```
 pub struct MutableArrayData<'a> {
+    #[allow(dead_code)]
     arrays: Vec<&'a ArrayData>,
     // The attributes in [_MutableArrayData] cannot be in [MutableArrayData] due to
     // mutability invariants (interior mutability):
@@ -613,10 +614,17 @@ impl<'a> MutableArrayData<'a> {
         }
     }
 
-    /// Extends this [MutableArrayData] with elements from the bounded [ArrayData] at `start`
-    /// and for a size of `len`.
+    /// Extends this array with a chunk of its source arrays
+    ///
+    /// # Arguments
+    /// * `index` - the index of array that you what to copy values from
+    /// * `start` - the start index of the chunk (inclusive)
+    /// * `end` - the end index of the chunk (exclusive)
+    ///
     /// # Panic
-    /// This function panics if the range is out of bounds, i.e. if `start + len >= array.len()`.
+    /// This function panics if there is an invalid index,
+    /// i.e. `index` >= the number of source arrays
+    /// or `end` > the length of the `index`th array
     pub fn extend(&mut self, index: usize, start: usize, end: usize) {
         let len = end - start;
         (self.extend_null_bits[index])(&mut self.data, start, len);
@@ -670,7 +678,7 @@ mod tests {
 
     use super::*;
 
-    use crate::array::{DecimalArray, DecimalBuilder};
+    use crate::array::DecimalArray;
     use crate::{
         array::{
             Array, ArrayData, ArrayRef, BooleanArray, DictionaryArray,
@@ -691,18 +699,11 @@ mod tests {
         precision: usize,
         scale: usize,
     ) -> DecimalArray {
-        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
-        for value in array {
-            match value {
-                None => {
-                    decimal_builder.append_null().unwrap();
-                }
-                Some(v) => {
-                    decimal_builder.append_value(*v).unwrap();
-                }
-            }
-        }
-        decimal_builder.finish()
+        array
+            .iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(precision, scale)
+            .unwrap()
     }
 
     #[test]

@@ -534,8 +534,6 @@ pub struct StreamWriter<W: Write> {
     writer: BufWriter<W>,
     /// IPC write options
     write_options: IpcWriteOptions,
-    /// A reference to the schema, used in validating record batches
-    schema: Schema,
     /// Whether the writer footer has been written, and the writer is finished
     finished: bool,
     /// Keeps track of dictionaries that have been written
@@ -564,7 +562,6 @@ impl<W: Write> StreamWriter<W> {
         Ok(Self {
             writer,
             write_options,
-            schema: schema.clone(),
             finished: false,
             dictionary_tracker: DictionaryTracker::new(false),
             data_gen,

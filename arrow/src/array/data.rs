@@ -198,28 +198,6 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
     }
 }
 
-/// Ensures that at least `min_size` elements of type `data_type` can
-/// be stored in a buffer of `buffer_size`.
-///
-/// `buffer_index` is used in error messages to identify which buffer
-/// had the invalid index
-fn ensure_size(
-    data_type: &DataType,
-    min_size: usize,
-    buffer_size: usize,
-    buffer_index: usize,
-) -> Result<()> {
-    // if min_size is zero, may not have buffers (e.g. NullArray)
-    if min_size > 0 && buffer_size < min_size {
-        Err(ArrowError::InvalidArgumentError(format!(
-            "Need at least {} bytes in buffers[{}] in array of type {:?}, but got {}",
-            buffer_size, buffer_index, data_type, min_size
-        )))
-    } else {
-        Ok(())
-    }
-}
-
 /// Maps 2 [`MutableBuffer`]s into a vector of [Buffer]s whose size depends on `data_type`.
 #[inline]
 pub(crate) fn into_buffers(
@@ -1354,6 +1332,7 @@ enum BufferSpec {
     BitMap,
     /// Buffer is always null. Unused currently in Rust implementation,
     /// (used in C++ for Union type)
+    #[allow(dead_code)]
     AlwaysNull,
 }
 

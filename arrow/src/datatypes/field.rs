@@ -118,7 +118,7 @@ impl Field {
         let mut collected_fields = vec![self];
         match &self.data_type {
             DataType::Struct(fields) | DataType::Union(fields, _) => {
-                collected_fields.extend(fields.iter().map(|f| f.fields()).flatten())
+                collected_fields.extend(fields.iter().flat_map(|f| f.fields()))
             }
             DataType::List(field)
             | DataType::LargeList(field)

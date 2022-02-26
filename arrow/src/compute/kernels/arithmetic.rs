@@ -296,17 +296,17 @@ where
 /// * the arrays have different lengths
 /// * there is an element where both left and right values are valid and the right value is `0`
 #[cfg(feature = "simd")]
-fn simd_checked_divide_op<T, SIMD_OP, SCALAR_OP>(
+fn simd_checked_divide_op<T, SI, SC>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
-    simd_op: SIMD_OP,
-    scalar_op: SCALAR_OP,
+    simd_op: SI,
+    scalar_op: SC,
 ) -> Result<PrimitiveArray<T>>
 where
     T: ArrowNumericType,
     T::Native: One + Zero,
-    SIMD_OP: Fn(Option<u64>, T::Simd, T::Simd) -> Result<T::Simd>,
-    SCALAR_OP: Fn(T::Native, T::Native) -> T::Native,
+    SI: Fn(Option<u64>, T::Simd, T::Simd) -> Result<T::Simd>,
+    SC: Fn(T::Native, T::Native) -> T::Native,
 {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
@@ -1020,9 +1020,9 @@ mod tests {
         let a = Float64Array::from(vec![15.0, 15.0, 8.0]);
         let b = Float64Array::from(vec![5.0, 6.0, 8.0]);
         let c = divide(&a, &b).unwrap();
-        assert!(3.0 - c.value(0) < f64::EPSILON);
-        assert!(2.5 - c.value(1) < f64::EPSILON);
-        assert!(1.0 - c.value(2) < f64::EPSILON);
+        assert_eq!(3.0, c.value(0));
+        assert_eq!(2.5, c.value(1));
+        assert_eq!(1.0, c.value(2));
     }
 
     #[test]

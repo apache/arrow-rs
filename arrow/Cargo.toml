@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "9.0.2"
+version = "9.1.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -50,7 +50,7 @@ lazy_static = "1.4"
 packed_simd = { version = "0.3", optional = true, package = "packed_simd_2" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = {version = "0.6", optional = true}
-flatbuffers = { version = "=2.0.0", optional = true }
+flatbuffers = { version = "=2.1.0", optional = true }
 hex = "0.4"
 comfy-table = { version = "5.0", optional = true, default-features = false }
 pyo3 = { version = "0.15", optional = true }

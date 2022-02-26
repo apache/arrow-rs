@@ -20,7 +20,7 @@
 //! depend on dynamic casting of `Array`.
 
 use super::{
-    Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
+    Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray, DictionaryArray,
     FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
     GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
     StringOffsetSizeTrait, StructArray,
@@ -77,6 +77,12 @@ impl PartialEq for NullArray {
 
 impl<T: ArrowPrimitiveType> PartialEq for PrimitiveArray<T> {
     fn eq(&self, other: &PrimitiveArray<T>) -> bool {
+        equal(self.data(), other.data())
+    }
+}
+
+impl<K: ArrowPrimitiveType> PartialEq for DictionaryArray<K> {
+    fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
 }
@@ -305,9 +311,9 @@ mod tests {
 
     use crate::array::{
         array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryOffsetSizeTrait,
-        BooleanArray, DecimalBuilder, FixedSizeBinaryBuilder, FixedSizeListBuilder,
-        GenericBinaryArray, Int32Builder, ListBuilder, NullArray, PrimitiveBuilder,
-        StringArray, StringDictionaryBuilder, StringOffsetSizeTrait, StructArray,
+        BooleanArray, FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray,
+        Int32Builder, ListBuilder, NullArray, PrimitiveBuilder, StringArray,
+        StringDictionaryBuilder, StringOffsetSizeTrait, StructArray,
     };
     use crate::array::{GenericStringArray, Int32Array};
     use crate::buffer::Buffer;
@@ -507,7 +513,9 @@ mod tests {
         assert_eq!(equal(rhs, lhs), expected, "\n{:?}\n{:?}", rhs, lhs);
     }
 
-    fn binary_cases() -> Vec<(Vec<Option<String>>, Vec<Option<String>>, bool)> {
+    type OptionString = Option<String>;
+
+    fn binary_cases() -> Vec<(Vec<OptionString>, Vec<OptionString>, bool)> {
         let base = vec![
             Some("hello".to_owned()),
             None,
@@ -810,16 +818,11 @@ mod tests {
     }
 
     fn create_decimal_array(data: &[Option<i128>]) -> ArrayData {
-        let mut builder = DecimalBuilder::new(20, 23, 6);
-
-        for d in data {
-            if let Some(v) = d {
-                builder.append_value(*v).unwrap();
-            } else {
-                builder.append_null().unwrap();
-            }
-        }
-        builder.finish().data().clone()
+        data.iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(23, 6)
+            .unwrap()
+            .into()
     }
 
     #[test]

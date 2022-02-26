@@ -35,15 +35,6 @@ use crate::{
 
 use half::f16;
 
-/// Number of seconds in a day
-const SECONDS_IN_DAY: i64 = 86_400;
-/// Number of milliseconds in a second
-const MILLISECONDS: i64 = 1_000;
-/// Number of microseconds in a second
-const MICROSECONDS: i64 = 1_000_000;
-/// Number of nanoseconds in a second
-const NANOSECONDS: i64 = 1_000_000_000;
-
 /// Array whose elements are of primitive types.
 ///
 /// # Example: From an iterator of values
@@ -155,6 +146,14 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
             )
         };
         PrimitiveArray::from(data)
+    }
+
+    /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
+    pub fn take_iter<'a>(
+        &'a self,
+        indexes: impl Iterator<Item = Option<usize>> + 'a,
+    ) -> impl Iterator<Item = Option<T::Native>> + 'a {
+        indexes.map(|opt_index| opt_index.map(|index| self.value(index)))
     }
 }
 

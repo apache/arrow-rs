@@ -645,7 +645,7 @@ impl Decoder {
         }
 
         let rows = &rows[..];
-        let projection = self.projection.clone().unwrap_or_else(Vec::new);
+        let projection = self.projection.clone().unwrap_or_default();
         let arrays = self.build_struct_array(rows, self.schema.fields(), &projection);
 
         let projected_fields: Vec<Field> = if projection.is_empty() {
@@ -653,8 +653,7 @@ impl Decoder {
         } else {
             projection
                 .iter()
-                .map(|name| self.schema.column_with_name(name))
-                .flatten()
+                .filter_map(|name| self.schema.column_with_name(name))
                 .map(|(_, field)| field.clone())
                 .collect()
         };
@@ -735,14 +734,14 @@ impl Decoder {
     }
 
     #[inline(always)]
-    fn list_array_string_array_builder<DICT_TY>(
+    fn list_array_string_array_builder<DT>(
         &self,
         data_type: &DataType,
         col_name: &str,
         rows: &[Value],
     ) -> Result<ArrayRef>
     where
-        DICT_TY: ArrowPrimitiveType + ArrowDictionaryKeyType,
+        DT: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
         let mut builder: Box<dyn ArrayBuilder> = match data_type {
             DataType::Utf8 => {
@@ -751,7 +750,7 @@ impl Decoder {
             }
             DataType::Dictionary(_, _) => {
                 let values_builder =
-                    self.build_string_dictionary_builder::<DICT_TY>(rows.len() * 5)?;
+                    self.build_string_dictionary_builder::<DT>(rows.len() * 5)?;
                 Box::new(ListBuilder::new(values_builder))
             }
             e => {
@@ -813,7 +812,7 @@ impl Decoder {
                         builder.append(true)?;
                     }
                     DataType::Dictionary(_, _) => {
-                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<DICT_TY>>>().ok_or_else(||ArrowError::JsonError(
+                        let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<DT>>>().ok_or_else(||ArrowError::JsonError(
                             "Cast failed for ListBuilder<StringDictionaryBuilder> during nested data parsing".to_string(),
                         ))?;
                         for val in vals {
@@ -1272,12 +1271,7 @@ impl Decoder {
                             .iter()
                             .enumerate()
                             .map(|(i, row)| {
-                                (
-                                    i,
-                                    row.as_object()
-                                        .map(|v| v.get(field.name()))
-                                        .flatten(),
-                                )
+                                (i, row.as_object().and_then(|v| v.get(field.name())))
                             })
                             .map(|(i, v)| match v {
                                 // we want the field as an object, if it's not, we treat as null
@@ -1351,8 +1345,7 @@ impl Decoder {
         let value_map_iter = rows.iter().map(|value| {
             value
                 .get(field_name)
-                .map(|v| v.as_object().map(|map| (map, map.len() as i32)))
-                .flatten()
+                .and_then(|v| v.as_object().map(|map| (map, map.len() as i32)))
         });
         let rows_len = rows.len();
         let mut list_offsets = Vec::with_capacity(rows_len + 1);
@@ -1750,8 +1743,8 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(2.0 - bb.value(0) < f64::EPSILON);
-        assert!(-3.5 - bb.value(1) < f64::EPSILON);
+        assert_eq!(2.0, bb.value(0));
+        assert_eq!(-3.5, bb.value(1));
         let cc = batch
             .column(c.0)
             .as_any()
@@ -1873,8 +1866,8 @@ mod tests {
             .as_any()
             .downcast_ref::<Float32Array>()
             .unwrap();
-        assert!(2.0 - bb.value(0) < f32::EPSILON);
-        assert!(-3.5 - bb.value(1) < f32::EPSILON);
+        assert_eq!(2.0, bb.value(0));
+        assert_eq!(-3.5, bb.value(1));
     }
 
     #[test]
@@ -1962,8 +1955,8 @@ mod tests {
         let bb = bb.values();
         let bb = bb.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(9, bb.len());
-        assert!(2.0 - bb.value(0) < f64::EPSILON);
-        assert!(-6.1 - bb.value(5) < f64::EPSILON);
+        assert_eq!(2.0, bb.value(0));
+        assert_eq!(-6.1, bb.value(5));
         assert!(!bb.is_valid(7));
 
         let cc = batch
@@ -2094,7 +2087,7 @@ mod tests {
             let bb = bb.values();
             let bb = bb.as_any().downcast_ref::<Float64Array>().unwrap();
             assert_eq!(10, bb.len());
-            assert!(4.0 - bb.value(9) < f64::EPSILON);
+            assert_eq!(4.0, bb.value(9));
 
             let cc = batch
                 .column(c.0)

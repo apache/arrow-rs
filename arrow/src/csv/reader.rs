@@ -911,6 +911,7 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
 
 // Parse the string format decimal value to i128 format without checking the precision and scale.
 // Like "125.12" to 12512_i128.
+#[cfg(test)]
 fn parse_decimal(s: &str) -> Result<i128> {
     if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
@@ -1175,6 +1176,13 @@ impl ReaderBuilder {
         self
     }
 
+    /// Set the bounds over which to scan the reader.
+    /// `start` and `end` are line numbers.
+    pub fn with_bounds(mut self, start: usize, end: usize) -> Self {
+        self.bounds = Some((start, end));
+        self
+    }
+
     /// Set the reader's column projection
     pub fn with_projection(mut self, projection: Vec<usize>) -> Self {
         self.projection = Some(projection);
@@ -1216,7 +1224,7 @@ impl ReaderBuilder {
             schema,
             self.has_header,
             self.batch_size,
-            None,
+            self.bounds,
             self.projection.clone(),
             self.datetime_format,
         ))
@@ -1269,7 +1277,7 @@ mod tests {
                     .as_any()
                     .downcast_ref::<Float64Array>()
                     .unwrap();
-                assert!(57.653484 - lat.value(0) < f64::EPSILON);
+                assert_eq!(57.653484, lat.value(0));
 
                 // access data from a string array (ListArray<u8>)
                 let city = batch
@@ -1400,7 +1408,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(57.653484 - lat.value(0) < f64::EPSILON);
+        assert_eq!(57.653484, lat.value(0));
 
         // access data from a string array (ListArray<u8>)
         let city = batch
@@ -1438,7 +1446,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(57.653484 - lat.value(0) < f64::EPSILON);
+        assert_eq!(57.653484, lat.value(0));
 
         // access data from a string array (ListArray<u8>)
         let city = batch
@@ -1448,6 +1456,30 @@ mod tests {
             .unwrap();
 
         assert_eq!("Aberdeen, Aberdeen City, UK", city.value(13));
+    }
+
+    #[test]
+    fn test_csv_builder_with_bounds() {
+        let file = File::open("test/data/uk_cities.csv").unwrap();
+
+        // Set the bounds to the lines 0, 1 and 2.
+        let mut csv = ReaderBuilder::new().with_bounds(0, 2).build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+
+        // access data from a string array (ListArray<u8>)
+        let city = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        // The value on line 0 is within the bounds
+        assert_eq!("Elgin, Scotland, the UK", city.value(0));
+
+        // The value on line 13 is outside of the bounds. Therefore
+        // the call to .value() will panic.
+        let result = std::panic::catch_unwind(|| city.value(13));
+        assert!(result.is_err());
     }
 
     #[test]

@@ -15,16 +15,27 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "defeault-features"
-description = "Models a user application of arrow that uses default features of arrow"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.57"
+import conbench.runner
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+import _criterion
 
-[dependencies]
-arrow = { path = "../../../../arrow", version = "9.1.0" }
 
-[workspace]
+@conbench.runner.register_benchmark
+class TestBenchmark(conbench.runner.Benchmark):
+    name = "test"
+
+    def run(self, **kwargs):
+        yield self.conbench.benchmark(
+            self._f(),
+            self.name,
+            options=kwargs,
+        )
+
+    def _f(self):
+        return lambda: 1 + 1
+
+
+@conbench.runner.register_benchmark
+class CargoBenchmarks(_criterion.CriterionBenchmark):
+    name = "arrow-rs"
+    description = "Run Arrow Rust micro benchmarks."
