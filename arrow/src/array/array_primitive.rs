@@ -335,45 +335,43 @@ pub struct ArrowPrimitiveTypeNative<T: ArrowPrimitiveType> {
     pub native: Option<T::Native>,
 }
 
-macro_rules! def_into_for_primitive {
+macro_rules! def_from_for_primitive {
     ( $ty:ident, $tt:tt) => {
-        impl Into<ArrowPrimitiveTypeNative<$ty>> for $tt {
-            fn into(self) -> ArrowPrimitiveTypeNative<$ty> {
-                ArrowPrimitiveTypeNative { native: Some(self) }
+        impl From<$tt> for ArrowPrimitiveTypeNative<$ty> {
+            fn from(value: $tt) -> Self {
+                ArrowPrimitiveTypeNative {
+                    native: Some(value),
+                }
             }
         }
     };
 }
 
-def_into_for_primitive!(Int8Type, i8);
-def_into_for_primitive!(Int16Type, i16);
-def_into_for_primitive!(Int32Type, i32);
-def_into_for_primitive!(Int64Type, i64);
-def_into_for_primitive!(UInt8Type, u8);
-def_into_for_primitive!(UInt16Type, u16);
-def_into_for_primitive!(UInt32Type, u32);
-def_into_for_primitive!(UInt64Type, u64);
-def_into_for_primitive!(Float16Type, f16);
-def_into_for_primitive!(Float32Type, f32);
-def_into_for_primitive!(Float64Type, f64);
+def_from_for_primitive!(Int8Type, i8);
+def_from_for_primitive!(Int16Type, i16);
+def_from_for_primitive!(Int32Type, i32);
+def_from_for_primitive!(Int64Type, i64);
+def_from_for_primitive!(UInt8Type, u8);
+def_from_for_primitive!(UInt16Type, u16);
+def_from_for_primitive!(UInt32Type, u32);
+def_from_for_primitive!(UInt64Type, u64);
+def_from_for_primitive!(Float16Type, f16);
+def_from_for_primitive!(Float32Type, f32);
+def_from_for_primitive!(Float64Type, f64);
 
-impl<T: ArrowPrimitiveType> Into<ArrowPrimitiveTypeNative<T>>
-    for Option<<T as ArrowPrimitiveType>::Native>
+impl<T: ArrowPrimitiveType> From<Option<<T as ArrowPrimitiveType>::Native>>
+    for ArrowPrimitiveTypeNative<T>
 {
-    fn into(self) -> ArrowPrimitiveTypeNative<T> {
-        ArrowPrimitiveTypeNative {
-            native: self.clone(),
-        }
+    fn from(value: Option<<T as ArrowPrimitiveType>::Native>) -> Self {
+        ArrowPrimitiveTypeNative { native: value }
     }
 }
 
-impl<T: ArrowPrimitiveType> Into<ArrowPrimitiveTypeNative<T>>
-    for &Option<<T as ArrowPrimitiveType>::Native>
+impl<T: ArrowPrimitiveType> From<&Option<<T as ArrowPrimitiveType>::Native>>
+    for ArrowPrimitiveTypeNative<T>
 {
-    fn into(self) -> ArrowPrimitiveTypeNative<T> {
-        ArrowPrimitiveTypeNative {
-            native: self.clone(),
-        }
+    fn from(value: &Option<<T as ArrowPrimitiveType>::Native>) -> Self {
+        ArrowPrimitiveTypeNative { native: *value }
     }
 }
 
