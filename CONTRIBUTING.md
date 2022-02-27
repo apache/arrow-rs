@@ -19,6 +19,18 @@
 
 ## Developer's guide to Arrow Rust
 
+### Setting Up Your Build Environment
+
+Install the Rust tool chain:
+
+https://www.rust-lang.org/tools/install
+
+Also, make sure your Rust tool chain is up-to-date, because we always use the latest stable version of Rust to test this project. 
+
+```bash
+rustup update stable
+```
+
 ### How to compile
 
 This is a standard cargo project with workspaces. To build it, you need to have `rust` and `cargo`:
