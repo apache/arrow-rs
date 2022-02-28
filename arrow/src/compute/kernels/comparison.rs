@@ -2363,6 +2363,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// let result = lt_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(true), Some(false), None]), result);
 /// ```
+#[allow(clippy::bool_comparison)]
 pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
@@ -2410,6 +2411,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 /// let result = gt_dyn(&array1, &array2).unwrap();
 /// assert_eq!(BooleanArray::from(vec![Some(true), Some(false), None]), result);
 /// ```
+#[allow(clippy::bool_comparison)]
 pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
