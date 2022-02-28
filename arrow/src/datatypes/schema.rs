@@ -184,7 +184,7 @@ impl Schema {
     /// Returns a vector with references to all fields (including nested fields)
     #[inline]
     pub(crate) fn all_fields(&self) -> Vec<&Field> {
-        self.fields.iter().map(|f| f.fields()).flatten().collect()
+        self.fields.iter().flat_map(|f| f.fields()).collect()
     }
 
     /// Returns an immutable reference of a specific `Field` instance selected using an
@@ -203,8 +203,7 @@ impl Schema {
     pub fn fields_with_dict_id(&self, dict_id: i64) -> Vec<&Field> {
         self.fields
             .iter()
-            .map(|f| f.fields_with_dict_id(dict_id))
-            .flatten()
+            .flat_map(|f| f.fields_with_dict_id(dict_id))
             .collect()
     }
 

@@ -165,6 +165,13 @@ pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>> {
                 None => Value::Null,
             })
             .collect()),
+        DataType::LargeUtf8 => Ok(as_largestring_array(array)
+            .iter()
+            .map(|maybe_value| match maybe_value {
+                Some(v) => v.into(),
+                None => Value::Null,
+            })
+            .collect()),
         DataType::Int8 => primitive_array_to_json::<Int8Type>(array),
         DataType::Int16 => primitive_array_to_json::<Int16Type>(array),
         DataType::Int32 => primitive_array_to_json::<Int32Type>(array),
@@ -296,6 +303,15 @@ fn set_column_for_json_rows(
         }
         DataType::Utf8 => {
             set_column_by_array_type!(as_string_array, col_name, rows, array, row_count);
+        }
+        DataType::LargeUtf8 => {
+            set_column_by_array_type!(
+                as_largestring_array,
+                col_name,
+                rows,
+                array,
+                row_count
+            );
         }
         DataType::Date32 => {
             set_temporal_column_by_array_type!(
@@ -748,6 +764,37 @@ mod tests {
 {"c1":3,"c2":"c"}
 {"c2":"d"}
 {"c1":5}
+"#
+        );
+    }
+
+    #[test]
+    fn write_large_utf8() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::LargeUtf8, true),
+        ]);
+
+        let a = StringArray::from(vec![Some("a"), None, Some("c"), Some("d"), None]);
+        let b = LargeStringArray::from(vec![Some("a"), Some("b"), None, Some("d"), None]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
+                .unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[batch]).unwrap();
+        }
+
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            r#"{"c1":"a","c2":"a"}
+{"c2":"b"}
+{"c1":"c"}
+{"c1":"d","c2":"d"}
+{}
 "#
         );
     }
