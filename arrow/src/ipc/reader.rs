@@ -604,7 +604,7 @@ pub struct FileReader<R: Read + Seek> {
     /// Metadata version
     metadata_version: ipc::MetadataVersion,
 
-    /// Optional projection
+    /// Optional projection and projected_schema
     projection: Option<(Vec<usize>, Schema)>,
 }
 
