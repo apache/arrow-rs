@@ -50,7 +50,7 @@ lazy_static = "1.4"
 packed_simd = { version = "0.3", optional = true, package = "packed_simd_2" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = {version = "0.6", optional = true}
-flatbuffers = { version = "=2.1.0", optional = true }
+flatbuffers = { version = "=2.1.1", optional = true }
 hex = "0.4"
 comfy-table = { version = "5.0", optional = true, default-features = false }
 pyo3 = { version = "0.15", optional = true }
