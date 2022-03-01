@@ -40,6 +40,20 @@ macro_rules! extract_component_from_array {
             }
         }
     };
+    ($array:ident, $builder:ident, $extract_fn1:ident, $extract_fn2:ident, $using:ident) => {
+        for i in 0..$array.len() {
+            if $array.is_null(i) {
+                $builder.append_null()?;
+            } else {
+                match $array.$using(i) {
+                    Some(dt) => {
+                        $builder.append_value(dt.$extract_fn1().$extract_fn2() as i32)?
+                    }
+                    None => $builder.append_null()?,
+                }
+            }
+        }
+    };
     ($array:ident, $builder:ident, $extract_fn:ident, $using:ident, $tz:ident, $parsed:ident) => {
         if ($tz.starts_with('+') || $tz.starts_with('-')) && !$tz.contains(':') {
             return_compute_error_with!(
@@ -197,6 +211,24 @@ where
     Ok(b.finish())
 }
 
+/// Extracts the week of a given temporal array as an array of integers
+pub fn week<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::new(array.len());
+
+    match array.data_type() {
+        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
+            extract_component_from_array!(array, b, iso_week, week, value_as_datetime)
+        }
+        dt => return_compute_error_with!("week does not support", dt),
+    }
+
+    Ok(b.finish())
+}
+
 /// Extracts the seconds of a given temporal array as an array of integers
 pub fn second<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
@@ -332,6 +364,39 @@ mod tests {
         assert_eq!(57, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(44, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date32_week() {
+        let a: PrimitiveArray<Date32Type> = vec![Some(0), None, Some(7)].into();
+
+        let b = week(&a).unwrap();
+        assert_eq!(1, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(2, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_week() {
+        // 1646116175000 -> 2022.03.01 , 1641171600000 -> 2022.01.03
+        let a: PrimitiveArray<Date64Type> =
+            vec![Some(1646116175000), None, Some(1641171600000)].into();
+
+        let b = week(&a).unwrap();
+        assert_eq!(9, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(1, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_micro_week() {
+        let a: TimestampMicrosecondArray =
+            vec![Some(1612025847000000), None, Some(1722015847000000)].into();
+
+        let b = week(&a).unwrap();
+        assert_eq!(4, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(30, b.value(2));
     }
 
     #[test]
