@@ -32,11 +32,12 @@ fn is_nan<T: ArrowNativeType + PartialOrd + Copy>(a: T) -> bool {
     !(a == a)
 }
 
-/// Helper macro to perform min/max of strings
-fn min_max_string<T: StringOffsetSizeTrait, F: Fn(&str, &str) -> bool>(
-    array: &GenericStringArray<T>,
-    cmp: F,
-) -> Option<&str> {
+/// Helper function to perform min/max of strings
+fn min_max_string<T, F>(array: &GenericStringArray<T>, cmp: F) -> Option<&str>
+where
+    T: StringOffsetSizeTrait,
+    F: Fn(&str, &str) -> bool,
+{
     let null_count = array.null_count();
 
     if null_count == array.len() {
