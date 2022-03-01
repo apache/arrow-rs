@@ -41,11 +41,15 @@ fn min_max_string<T: StringOffsetSizeTrait, F: Fn(&str, &str) -> bool>(
 
     if null_count == array.len() {
         None
+    } else if null_count == 0 {
+        (0..array.len())
+            .map(|i| array.value(i))
+            .reduce(|acc, item| if cmp(acc, item) { item } else { acc })
     } else {
         array
-        .iter()
-        .flatten()
-        .reduce(|acc, item| {if cmp(acc, item) {item} else {acc}})
+            .iter()
+            .flatten()
+            .reduce(|acc, item| if cmp(acc, item) { item } else { acc })
     }
 }
 
