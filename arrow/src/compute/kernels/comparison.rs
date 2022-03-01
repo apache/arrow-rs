@@ -267,7 +267,7 @@ where
         let re = if let Some(ref regex) = map.get(pat) {
             regex
         } else {
-            let re_pattern = escape(pat).replace("%", ".*").replace("_", ".");
+            let re_pattern = escape(pat).replace('%', ".*").replace('_', ".");
             let re = op(&re_pattern)?;
             map.insert(pat, re);
             map.get(pat).unwrap()
@@ -364,7 +364,7 @@ pub fn like_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             }
         }
     } else {
-        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
+        let re_pattern = escape(right).replace('%', ".*").replace('_', ".");
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -440,7 +440,7 @@ pub fn nlike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             result.append(!left.value(i).ends_with(&right[1..]));
         }
     } else {
-        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
+        let re_pattern = escape(right).replace('%', ".*").replace('_', ".");
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -521,7 +521,7 @@ pub fn ilike_utf8_scalar<OffsetSize: StringOffsetSizeTrait>(
             );
         }
     } else {
-        let re_pattern = escape(right).replace("%", ".*").replace("_", ".");
+        let re_pattern = escape(right).replace('%', ".*").replace('_', ".");
         let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from ILIKE pattern: {}",
@@ -2213,27 +2213,26 @@ macro_rules! compare_dict_op {
                     .to_string(),
             ));
         }
-        let left_values = $left.values().as_any().downcast_ref::<$value_ty>().unwrap();
-        let right_values = $right
+
+        let left_iter = $left
             .values()
             .as_any()
             .downcast_ref::<$value_ty>()
-            .unwrap();
+            .unwrap()
+            .take_iter($left.keys_iter());
 
-        let result = $left
-            .keys()
-            .iter()
-            .zip($right.keys().iter())
-            .map(|(left_key, right_key)| {
-                if let (Some(left_k), Some(right_k)) = (left_key, right_key) {
-                    let left_key = left_k.to_usize().expect("Dictionary index not usize");
-                    let right_key =
-                        right_k.to_usize().expect("Dictionary index not usize");
-                    unsafe {
-                        let left_value = left_values.value_unchecked(left_key);
-                        let right_value = right_values.value_unchecked(right_key);
-                        Some($op(left_value, right_value))
-                    }
+        let right_iter = $right
+            .values()
+            .as_any()
+            .downcast_ref::<$value_ty>()
+            .unwrap()
+            .take_iter($right.keys_iter());
+
+        let result = left_iter
+            .zip(right_iter)
+            .map(|(left_value, right_value)| {
+                if let (Some(left), Some(right)) = (left_value, right_value) {
+                    Some($op(left, right))
                 } else {
                     None
                 }

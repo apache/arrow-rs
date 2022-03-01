@@ -119,8 +119,7 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
 
         (0..rd_buf.len())
             .position(|i| rd_buf.value(i) == value)
-            .map(K::Native::from_usize)
-            .flatten()
+            .and_then(K::Native::from_usize)
     }
 
     /// Returns a reference to the dictionary values array

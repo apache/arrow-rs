@@ -1769,14 +1769,13 @@ impl<'a> ArrayReaderBuilder {
                 // get the optional timezone information from arrow type
                 let timezone = arrow_type
                     .as_ref()
-                    .map(|data_type| {
+                    .and_then(|data_type| {
                         if let ArrowType::Timestamp(_, tz) = data_type {
                             tz.clone()
                         } else {
                             None
                         }
-                    })
-                    .flatten();
+                    });
                 let converter = Int96Converter::new(Int96ArrayConverter { timezone });
                 Ok(Box::new(ComplexObjectArrayReader::<
                     Int96Type,
