@@ -379,13 +379,20 @@ mod tests {
     #[test]
     fn test_temporal_array_date64_week() {
         // 1646116175000 -> 2022.03.01 , 1641171600000 -> 2022.01.03
-        let a: PrimitiveArray<Date64Type> =
-            vec![Some(1646116175000), None, Some(1641171600000)].into();
+        // 1640998800000 -> 2022.01.01
+        let a: PrimitiveArray<Date64Type> = vec![
+            Some(1646116175000),
+            None,
+            Some(1641171600000),
+            Some(1640998800000),
+        ]
+        .into();
 
         let b = week(&a).unwrap();
         assert_eq!(9, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(1, b.value(2));
+        assert_eq!(52, b.value(3));
     }
 
     #[test]
