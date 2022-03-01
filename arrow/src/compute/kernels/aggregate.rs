@@ -40,31 +40,13 @@ fn min_max_string<T: StringOffsetSizeTrait, F: Fn(&str, &str) -> bool>(
     let null_count = array.null_count();
 
     if null_count == array.len() {
-        return None;
-    }
-    let data = array.data();
-    let mut n;
-    if null_count == 0 {
-        n = array.value(0);
-        for i in 1..data.len() {
-            let item = array.value(i);
-            if cmp(n, item) {
-                n = item;
-            }
-        }
+        None
     } else {
-        n = "";
-        let mut has_value = false;
-
-        for i in 0..data.len() {
-            let item = array.value(i);
-            if data.is_valid(i) && (!has_value || cmp(n, item)) {
-                has_value = true;
-                n = item;
-            }
-        }
+        array
+        .iter()
+        .flatten()
+        .reduce(|acc, item| {if cmp(acc, item) {item} else {acc}})
     }
-    Some(n)
 }
 
 /// Returns the minimum value in the array, according to the natural order.
