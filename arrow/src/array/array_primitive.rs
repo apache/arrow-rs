@@ -156,6 +156,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
+    /// # Safety
+    ///
+    /// caller must ensure that the offsets in the iterator are less than the array len()
     pub unsafe fn take_iter_unchecked<'a>(
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
