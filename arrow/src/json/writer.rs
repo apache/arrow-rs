@@ -699,6 +699,7 @@ where
         Ok(())
     }
 
+    /// Convert the `RecordBatch` into JSON rows, and write them to the output
     pub fn write(&mut self, batch: RecordBatch) -> Result<()> {
         for row in record_batches_to_json_rows(&[batch])? {
             self.write_row(&Value::Object(row))?;
