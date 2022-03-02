@@ -87,14 +87,8 @@ const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 impl Parser for Date32Type {
     fn parse(string: &str) -> Option<i32> {
         use chrono::Datelike;
-
-        match Self::DATA_TYPE {
-            DataType::Date32 => {
-                let date = string.parse::<chrono::NaiveDate>().ok()?;
-                Self::Native::from_i32(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
-            }
-            _ => None,
-        }
+        let date = string.parse::<chrono::NaiveDate>().ok()?;
+        Self::Native::from_i32(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<i32> {
@@ -106,45 +100,33 @@ impl Parser for Date32Type {
 
 impl Parser for Date64Type {
     fn parse(string: &str) -> Option<i64> {
-        match Self::DATA_TYPE {
-            DataType::Date64 => {
-                let date_time = string.parse::<chrono::NaiveDateTime>().ok()?;
-                Self::Native::from_i64(date_time.timestamp_millis())
-            }
-            _ => None,
-        }
+        let date_time = string.parse::<chrono::NaiveDateTime>().ok()?;
+        Self::Native::from_i64(date_time.timestamp_millis())
     }
 
     fn parse_formatted(string: &str, format: &str) -> Option<i64> {
-        match Self::DATA_TYPE {
-            DataType::Date64 => {
-                use chrono::format::Fixed;
-                use chrono::format::StrftimeItems;
-                let fmt = StrftimeItems::new(format);
-                let has_zone = fmt.into_iter().any(|item| match item {
-                    chrono::format::Item::Fixed(fixed_item) => matches!(
-                        fixed_item,
-                        Fixed::RFC2822
-                            | Fixed::RFC3339
-                            | Fixed::TimezoneName
-                            | Fixed::TimezoneOffsetColon
-                            | Fixed::TimezoneOffsetColonZ
-                            | Fixed::TimezoneOffset
-                            | Fixed::TimezoneOffsetZ
-                    ),
-                    _ => false,
-                });
-                if has_zone {
-                    let date_time =
-                        chrono::DateTime::parse_from_str(string, format).ok()?;
-                    Self::Native::from_i64(date_time.timestamp_millis())
-                } else {
-                    let date_time =
-                        chrono::NaiveDateTime::parse_from_str(string, format).ok()?;
-                    Self::Native::from_i64(date_time.timestamp_millis())
-                }
-            }
-            _ => None,
+        use chrono::format::Fixed;
+        use chrono::format::StrftimeItems;
+        let fmt = StrftimeItems::new(format);
+        let has_zone = fmt.into_iter().any(|item| match item {
+            chrono::format::Item::Fixed(fixed_item) => matches!(
+                fixed_item,
+                Fixed::RFC2822
+                    | Fixed::RFC3339
+                    | Fixed::TimezoneName
+                    | Fixed::TimezoneOffsetColon
+                    | Fixed::TimezoneOffsetColonZ
+                    | Fixed::TimezoneOffset
+                    | Fixed::TimezoneOffsetZ
+            ),
+            _ => false,
+        });
+        if has_zone {
+            let date_time = chrono::DateTime::parse_from_str(string, format).ok()?;
+            Self::Native::from_i64(date_time.timestamp_millis())
+        } else {
+            let date_time = chrono::NaiveDateTime::parse_from_str(string, format).ok()?;
+            Self::Native::from_i64(date_time.timestamp_millis())
         }
     }
 }
