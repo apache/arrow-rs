@@ -27,8 +27,8 @@ use std::{
 
 use libc::{EINVAL, EIO, ENOMEM, ENOSYS};
 
+use crate::array::Array;
 use crate::array::StructArray;
-use crate::array::{Array, ArrayRef};
 use crate::datatypes::{Schema, SchemaRef};
 use crate::error::ArrowError;
 use crate::error::Result;
@@ -269,10 +269,17 @@ struct ArrowArrayStreamReader {
 }
 
 impl ArrowArrayStreamReader {
+    #[allow(dead_code)]
     pub fn new(stream: FFI_ArrowArrayStream) -> Self {
         Self {
             stream: Arc::new(stream),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Self {
+        let stream = unsafe { Arc::new((*raw_stream).clone()) };
+        Self { stream }
     }
 }
 
@@ -333,13 +340,9 @@ impl Iterator for ArrowArrayStreamReader {
                 return Some(Err(data.err().unwrap()));
             }
 
-            let record_batch =
-                RecordBatch::try_new(schema_ref, vec![ArrayRef::from(data.unwrap())]);
+            let record_batch = RecordBatch::from(&StructArray::from(data.unwrap()));
 
-            if record_batch.is_err() {
-                return Some(Err(record_batch.err().unwrap()));
-            }
-            Some(Ok(record_batch.unwrap()))
+            Some(Ok(record_batch))
         } else {
             let last_error = get_stream_last_error(self);
             let err = ArrowError::CStreamInterface(last_error.unwrap());
@@ -427,9 +430,34 @@ mod tests {
             .unwrap()
         };
 
+        let record_batch = RecordBatch::from(&StructArray::from(array));
+
         let file = get_array_testdata();
         let mut reader = Box::new(FileReader::try_new(file).unwrap());
         let expected_batch = reader.next().unwrap().unwrap();
-        assert_eq!(array.len(), expected_batch.num_rows());
+        assert_eq!(record_batch, expected_batch);
+    }
+
+    #[test]
+    fn test_import_stream() {
+        let file = get_array_testdata();
+        let reader = Box::new(FileReader::try_new(file).unwrap());
+        let expected_schema = reader.schema();
+
+        let stream = Box::new(FFI_ArrowArrayStream::new(reader));
+        let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
+
+        let mut stream_reader = ArrowArrayStreamReader::from_raw(stream_ptr);
+
+        let schema = stream_reader.schema();
+        assert_eq!(schema, expected_schema);
+
+        let batch = stream_reader.next().unwrap().unwrap();
+
+        let file = get_array_testdata();
+        let mut reader = Box::new(FileReader::try_new(file).unwrap());
+        let expected_batch = reader.next().unwrap().unwrap();
+
+        assert_eq!(batch, expected_batch);
     }
 }
