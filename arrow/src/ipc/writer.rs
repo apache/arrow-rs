@@ -36,7 +36,7 @@ use crate::util::bit_util;
 use ipc::CONTINUATION_MARKER;
 
 /// IPC write options used to control the behaviour of the writer
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IpcWriteOptions {
     /// Write padding after memory buffers to this multiple of bytes.
     /// Generally 8 or 64, defaults to 8
