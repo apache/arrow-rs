@@ -96,6 +96,12 @@ impl Parser for Date32Type {
             _ => None,
         }
     }
+
+    fn parse_formatted(string: &str, format: &str) -> Option<i32> {
+        use chrono::Datelike;
+        let date = chrono::NaiveDate::parse_from_str(string, format).ok()?;
+        Self::Native::from_i32(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
+    }
 }
 
 impl Parser for Date64Type {
