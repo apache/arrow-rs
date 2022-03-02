@@ -40,6 +40,8 @@ pub enum ArrowError {
     ParquetError(String),
     /// Error during import or export to/from the C Data Interface
     CDataInterface(String),
+    /// Error during import or export to/from the C Stream Interface
+    CStreamInterface(String),
     DictionaryKeyOverflowError,
 }
 
@@ -121,6 +123,9 @@ impl Display for ArrowError {
             }
             ArrowError::CDataInterface(desc) => {
                 write!(f, "C Data interface error: {}", desc)
+            }
+            ArrowError::CStreamInterface(desc) => {
+                write!(f, "C Stream interface error: {}", desc)
             }
             ArrowError::DictionaryKeyOverflowError => {
                 write!(f, "Dictionary key bigger than the key type")

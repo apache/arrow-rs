@@ -646,8 +646,8 @@ pub trait ArrowArrayRef {
 /// Furthermore, this struct assumes that the incoming data agrees with the C data interface.
 #[derive(Debug)]
 pub struct ArrowArray {
-    array: Arc<FFI_ArrowArray>,
-    schema: Arc<FFI_ArrowSchema>,
+    pub(crate) array: Arc<FFI_ArrowArray>,
+    pub(crate) schema: Arc<FFI_ArrowSchema>,
 }
 
 #[derive(Debug)]
