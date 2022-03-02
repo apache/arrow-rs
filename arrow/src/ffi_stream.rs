@@ -83,7 +83,7 @@ unsafe extern "C" fn release_stream(stream: *mut FFI_ArrowArrayStream) {
 
 struct StreamPrivateData {
     batch_reader: Box<dyn RecordBatchReader>,
-    last_error: Box<String>,
+    last_error: String,
 }
 
 // The callback used to get array schema
@@ -122,7 +122,7 @@ impl FFI_ArrowArrayStream {
     pub fn new(batch_reader: Box<dyn RecordBatchReader>) -> Self {
         let private_data = Box::new(StreamPrivateData {
             batch_reader,
-            last_error: Box::new(String::new()),
+            last_error: String::new(),
         });
 
         Self {
@@ -148,6 +148,10 @@ impl FFI_ArrowArrayStream {
         Arc::into_raw(this)
     }
 
+    /// Get `FFI_ArrowArrayStream` from raw pointer
+    /// # Safety
+    /// Assumes that the pointer represents valid C Stream Interfaces, both in memory
+    /// representation and lifetime via the `release` mechanism.
     pub unsafe fn from_raw(
         ptr: *const FFI_ArrowArrayStream,
     ) -> Arc<FFI_ArrowArrayStream> {
@@ -195,7 +199,7 @@ impl ExportedArrayStream {
                 0
             }
             Err(ref err) => {
-                private_data.last_error = Box::new(err.to_string());
+                private_data.last_error = err.to_string();
                 get_error_code(err)
             }
         };
@@ -218,8 +222,8 @@ impl ExportedArrayStream {
         let ret_code = match reader.next() {
             None => 0,
             Some(next_batch) => {
-                if next_batch.is_ok() {
-                    let struct_array = StructArray::from(next_batch.unwrap());
+                if let Ok(batch) = next_batch {
+                    let struct_array = StructArray::from(batch);
                     let mut array = FFI_ArrowArray::new(struct_array.data());
 
                     unsafe {
@@ -239,7 +243,7 @@ impl ExportedArrayStream {
                     0
                 } else {
                     let err = &next_batch.unwrap_err();
-                    private_data.last_error = Box::new(err.to_string());
+                    private_data.last_error = err.to_string();
                     get_error_code(err)
                 }
             }
@@ -249,7 +253,7 @@ impl ExportedArrayStream {
         ret_code
     }
 
-    pub fn get_last_error(&self) -> Box<String> {
+    pub fn get_last_error(&self) -> String {
         self.get_private_data().last_error
     }
 }
@@ -285,9 +289,7 @@ impl ArrowArrayStreamReader {
 
 /// Get the last error from `ArrowArrayStreamReader`
 fn get_stream_last_error(stream_reader: &ArrowArrayStreamReader) -> Option<String> {
-    if stream_reader.stream.get_last_error.is_none() {
-        return None;
-    }
+    stream_reader.stream.get_last_error?;
 
     let stream_ptr =
         Arc::into_raw(stream_reader.stream.clone()) as *mut FFI_ArrowArrayStream;
@@ -298,10 +300,10 @@ fn get_stream_last_error(stream_reader: &ArrowArrayStreamReader) -> Option<Strin
         CString::from_raw(c_str).into_string()
     };
 
-    if error_str.is_ok() {
-        Some(error_str.unwrap())
+    if let Err(err) = error_str {
+       Some(err.to_string())
     } else {
-        Some(error_str.unwrap_err().to_string())
+        Some(error_str.unwrap())
     }
 }
 
@@ -309,9 +311,7 @@ impl Iterator for ArrowArrayStreamReader {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.stream.get_next.is_none() {
-            return None;
-        }
+        self.stream.get_next?;
 
         let stream_ptr = Arc::into_raw(self.stream.clone()) as *mut FFI_ArrowArrayStream;
 
