@@ -397,6 +397,8 @@ mod tests {
 
     #[test]
     fn test_temporal_array_timestamp_micro_week() {
+        //1612025847000000 -> 2021.1.30
+        //1722015847000000 -> 2024.7.27
         let a: TimestampMicrosecondArray =
             vec![Some(1612025847000000), None, Some(1722015847000000)].into();
 
