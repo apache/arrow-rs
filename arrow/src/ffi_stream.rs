@@ -301,7 +301,7 @@ fn get_stream_last_error(stream_reader: &ArrowArrayStreamReader) -> Option<Strin
     };
 
     if let Err(err) = error_str {
-       Some(err.to_string())
+        Some(err.to_string())
     } else {
         Some(error_str.unwrap())
     }
