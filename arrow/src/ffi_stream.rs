@@ -25,8 +25,6 @@ use std::{
     sync::Arc,
 };
 
-use libc::{EINVAL, EIO, ENOMEM, ENOSYS};
-
 use crate::array::Array;
 use crate::array::StructArray;
 use crate::datatypes::{Schema, SchemaRef};
@@ -34,6 +32,11 @@ use crate::error::ArrowError;
 use crate::error::Result;
 use crate::ffi::*;
 use crate::record_batch::{RecordBatch, RecordBatchReader};
+
+const ENOMEM: i32 = 12;
+const EIO: i32 = 5;
+const EINVAL: i32 = 22;
+const ENOSYS: i32 = 78;
 
 /// ABI-compatible struct for `ArrayStream` from C Stream Interface
 /// This interface is experimental
