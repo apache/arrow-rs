@@ -428,19 +428,9 @@ impl ColumnChunkMetaData {
         self.data_page_offset
     }
 
-    /// Returns `true` if this column chunk contains a index page, `false` otherwise.
-    pub fn has_index_page(&self) -> bool {
-        self.index_page_offset.is_some()
-    }
-
     /// Returns the offset for the index page.
     pub fn index_page_offset(&self) -> Option<i64> {
         self.index_page_offset
-    }
-
-    /// Returns `true` if this column chunk contains a dictionary page, `false` otherwise.
-    pub fn has_dictionary_page(&self) -> bool {
-        self.dictionary_page_offset.is_some()
     }
 
     /// Returns the offset for the dictionary page, if any.
@@ -450,10 +440,9 @@ impl ColumnChunkMetaData {
 
     /// Returns the offset and length in bytes of the column chunk within the file
     pub fn byte_range(&self) -> (u64, u64) {
-        let col_start = if self.has_dictionary_page() {
-            self.dictionary_page_offset().unwrap()
-        } else {
-            self.data_page_offset()
+        let col_start = match self.dictionary_page_offset() {
+            Some(dictionary_page_offset) => dictionary_page_offset,
+            None => self.data_page_offset(),
         };
         let col_len = self.compressed_size();
         assert!(
