@@ -2214,6 +2214,9 @@ macro_rules! compare_dict_op {
             ));
         }
 
+        // Safety justification: Since the inputs are valid Arrow arrays, all values are
+        // valid indexes into the dictionary (which is verified during construction)
+
         let left_iter = unsafe {
             $left
                 .values()
