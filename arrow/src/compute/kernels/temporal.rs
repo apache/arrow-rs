@@ -326,9 +326,9 @@ mod tests {
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
         let b = month(&a).unwrap();
-        assert_eq!(01, b.value(0));
+        assert_eq!(1, b.value(0));
         assert!(!b.is_valid(1));
-        assert_eq!(02, b.value(2));
+        assert_eq!(2, b.value(2));
     }
 
     #[test]
@@ -336,9 +336,9 @@ mod tests {
         let a: PrimitiveArray<Date32Type> = vec![Some(1), None, Some(31)].into();
 
         let b = month(&a).unwrap();
-        assert_eq!(01, b.value(0));
+        assert_eq!(1, b.value(0));
         assert!(!b.is_valid(1));
-        assert_eq!(02, b.value(2));
+        assert_eq!(2, b.value(2));
     }
 
     #[test]
