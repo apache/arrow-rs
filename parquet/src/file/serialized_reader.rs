@@ -138,23 +138,49 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
         })
     }
 
-    /// Filters row group metadata to only those row groups,
-    /// for which the predicate function returns true
+    /// Filter row groups by metadata that match the predicate criteria and row group's midpoint
+    /// are within the `[start, end)` range (if the range is provided).
     pub fn filter_row_groups(
         &mut self,
         predicate: &dyn Fn(&RowGroupMetaData, usize) -> bool,
+        range: Option<(i64, i64)>,
     ) {
         let mut filtered_row_groups = Vec::<RowGroupMetaData>::new();
-        for (i, row_group_metadata) in self.metadata.row_groups().iter().enumerate() {
-            if predicate(row_group_metadata, i) {
-                filtered_row_groups.push(row_group_metadata.clone());
+        if let Some(range) = range {
+            for (i, row_group_metadata) in self.metadata.row_groups().iter().enumerate() {
+                let mid = get_midpoint_offset(row_group_metadata);
+                if mid >= range.1 {
+                    break;
+                }
+                if mid >= range.0 && predicate(row_group_metadata, i) {
+                    filtered_row_groups.push(row_group_metadata.clone());
+                }
+            }
+        } else {
+            for (i, row_group_metadata) in self.metadata.row_groups().iter().enumerate() {
+                if predicate(row_group_metadata, i) {
+                    filtered_row_groups.push(row_group_metadata.clone());
+                }
             }
         }
+        
         self.metadata = ParquetMetaData::new(
             self.metadata.file_metadata().clone(),
             filtered_row_groups,
         );
     }
+}
+
+/// Get midpoint offset for a row group
+fn get_midpoint_offset(meta: &RowGroupMetaData) -> i64 {
+    let col = meta.column(0);
+    let mut offset = col.data_page_offset();
+    if let Some(dic_offset) = col.dictionary_page_offset() {
+        if offset > dic_offset {
+            offset = dic_offset
+        }
+    };
+    offset + meta.compressed_size() / 2
 }
 
 impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
@@ -801,7 +827,41 @@ mod tests {
         assert_eq!(metadata.num_row_groups(), 1);
 
         // test filtering out all row groups
-        reader.filter_row_groups(&|_, _| false);
+        reader.filter_row_groups(&|_, _| false, None);
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_reader_filter_row_groups_by_including_range() -> Result<()> {
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let mut reader = SerializedFileReader::new(test_file)?;
+
+        // test initial number of row groups
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        let mid = get_midpoint_offset(metadata.row_group(0));
+        reader.filter_row_groups(&|_, _| true, Some((0, mid + 1)));
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_reader_filter_row_groups_by_non_including_range() -> Result<()> {
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let mut reader = SerializedFileReader::new(test_file)?;
+
+        // test initial number of row groups
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        let mid = get_midpoint_offset(metadata.row_group(0));
+        reader.filter_row_groups(&|_, _| true, Some((0, mid)));
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
 
