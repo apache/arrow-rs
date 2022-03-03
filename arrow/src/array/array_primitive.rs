@@ -330,16 +330,20 @@ impl<'a, T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 }
 
+/// This struct is used as an adapter when creating `PrimitiveArray` from an iterator.
+/// `FromIterator` for `PrimitiveArray` takes an iterator where the elements can be `into`
+/// this struct. So once implementing `From` or `Into` trait for a type, an iterator of
+/// the type can be collected to `PrimitiveArray`.
 #[derive(Debug)]
-pub struct ArrowPrimitiveTypeNative<T: ArrowPrimitiveType> {
+pub struct NativeAdapter<T: ArrowPrimitiveType> {
     pub native: Option<T::Native>,
 }
 
 macro_rules! def_from_for_primitive {
     ( $ty:ident, $tt:tt) => {
-        impl From<$tt> for ArrowPrimitiveTypeNative<$ty> {
+        impl From<$tt> for NativeAdapter<$ty> {
             fn from(value: $tt) -> Self {
-                ArrowPrimitiveTypeNative {
+                NativeAdapter {
                     native: Some(value),
                 }
             }
@@ -360,22 +364,22 @@ def_from_for_primitive!(Float32Type, f32);
 def_from_for_primitive!(Float64Type, f64);
 
 impl<T: ArrowPrimitiveType> From<Option<<T as ArrowPrimitiveType>::Native>>
-    for ArrowPrimitiveTypeNative<T>
+    for NativeAdapter<T>
 {
     fn from(value: Option<<T as ArrowPrimitiveType>::Native>) -> Self {
-        ArrowPrimitiveTypeNative { native: value }
+        NativeAdapter { native: value }
     }
 }
 
 impl<T: ArrowPrimitiveType> From<&Option<<T as ArrowPrimitiveType>::Native>>
-    for ArrowPrimitiveTypeNative<T>
+    for NativeAdapter<T>
 {
     fn from(value: &Option<<T as ArrowPrimitiveType>::Native>) -> Self {
-        ArrowPrimitiveTypeNative { native: *value }
+        NativeAdapter { native: *value }
     }
 }
 
-impl<'a, T: ArrowPrimitiveType, Ptr: Into<ArrowPrimitiveTypeNative<T>>> FromIterator<Ptr>
+impl<'a, T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr>
     for PrimitiveArray<T>
 {
     fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
