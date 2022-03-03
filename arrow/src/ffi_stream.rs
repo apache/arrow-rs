@@ -41,30 +41,26 @@ const ENOSYS: i32 = 78;
 /// ABI-compatible struct for `ArrayStream` from C Stream Interface
 /// This interface is experimental
 /// See <https://arrow.apache.org/docs/format/CStreamInterface.html#structure-definitions>
+/// This was created by bindgen
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct FFI_ArrowArrayStream {
-    // Callbacks providing stream functionality
-    get_schema: Option<
+    pub get_schema: Option<
         unsafe extern "C" fn(
             arg1: *mut FFI_ArrowArrayStream,
-            arg2: *mut FFI_ArrowSchema,
+            out: *mut FFI_ArrowSchema,
         ) -> c_int,
     >,
-    get_next: Option<
+    pub get_next: Option<
         unsafe extern "C" fn(
             arg1: *mut FFI_ArrowArrayStream,
-            arg2: *mut FFI_ArrowArray,
+            out: *mut FFI_ArrowArray,
         ) -> c_int,
     >,
-    get_last_error:
+    pub get_last_error:
         Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream) -> *const c_char>,
-
-    // Release callback
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream)>,
-
-    // Opaque producer-specific data
-    private_data: *mut c_void,
+    pub release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArrayStream)>,
+    pub private_data: *mut c_void,
 }
 
 // callback used to drop [FFI_ArrowArrayStream] when it is exported.
