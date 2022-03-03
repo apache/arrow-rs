@@ -381,6 +381,25 @@ mod tests {
     }
 
     #[test]
+    fn test_temporal_array_timestamp_month_with_timezone() {
+        use std::sync::Arc;
+
+        // 24 * 60 * 60 = 8640
+        let a = Arc::new(TimestampSecondArray::from_vec(
+            vec![86400 * 31],
+            Some("+00:00".to_string()),
+        ));
+        let b = month(&a).unwrap();
+        assert_eq!(2, b.value(0));
+        let a = Arc::new(TimestampSecondArray::from_vec(
+            vec![86400 *31],
+            Some("-10:00".to_string()),
+        ));
+        let b = month(&a).unwrap();
+        assert_eq!(1, b.value(0));
+    }
+
+    #[test]
     fn test_temporal_array_timestamp_day_with_timezone() {
         use std::sync::Arc;
 
