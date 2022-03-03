@@ -392,7 +392,7 @@ mod tests {
         let b = month(&a).unwrap();
         assert_eq!(2, b.value(0));
         let a = Arc::new(TimestampSecondArray::from_vec(
-            vec![86400 *31],
+            vec![86400 * 31],
             Some("-10:00".to_string()),
         ));
         let b = month(&a).unwrap();
