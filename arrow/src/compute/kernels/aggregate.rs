@@ -44,7 +44,7 @@ where
         None
     } else if null_count == 0 {
         // JUSTIFICATION
-        //  Benefit:  ~10% speedup
+        //  Benefit:  ~8% speedup
         //  Soundness: `i` is always within the array bounds
         (0..array.len())
             .map(|i| unsafe { array.value_unchecked(i) })
