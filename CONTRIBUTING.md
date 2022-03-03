@@ -27,7 +27,6 @@ We welcome and encourage contributions of all kinds, such as:
 
 In addition to submitting new PRs, we have a healthy tradition of community members helping review each other's PRs. Doing so is a great way to help the community as well as get more familiar with Rust and the relevant codebases.
 
-
 ## Developer's guide to Arrow Rust
 
 ### Setting Up Your Build Environment
