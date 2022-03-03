@@ -19,6 +19,76 @@
 
 # Changelog
 
+## [10.0.0](https://github.com/apache/arrow-rs/tree/10.0.0) (2022-03-03)
+
+[Full Changelog](https://github.com/apache/arrow-rs/compare/9.1.0...10.0.0)
+
+**Breaking changes:**
+
+- Remove existing has\_ methods for optional fields in `ColumnChunkMetaData` [\#1346](https://github.com/apache/arrow-rs/pull/1346) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([shanisolomon](https://github.com/shanisolomon))
+- Remove redundant `has_` methods in `ColumnChunkMetaData` [\#1345](https://github.com/apache/arrow-rs/pull/1345) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([shanisolomon](https://github.com/shanisolomon))
+
+**Implemented enhancements:**
+
+- Add clone to `IpcWriteOptions` [\#1381](https://github.com/apache/arrow-rs/issues/1381)
+- filter kernel should work with `MapArray`s [\#1378](https://github.com/apache/arrow-rs/issues/1378)
+- Add extract week in temporal.rs [\#1375](https://github.com/apache/arrow-rs/issues/1375)
+- Improve performance of `min` and `max` aggregation kernels without nulls [\#1373](https://github.com/apache/arrow-rs/issues/1373)
+- Improve performance of `compare_dict_op` [\#1371](https://github.com/apache/arrow-rs/issues/1371) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Remind developers to update Rust to the latest version. [\#1366](https://github.com/apache/arrow-rs/issues/1366)
+- arrow::array::builder::MapBuilder is private [\#1354](https://github.com/apache/arrow-rs/issues/1354)
+- Remove redundant has\_ methods for optional column metadata fields [\#1344](https://github.com/apache/arrow-rs/issues/1344)
+- Add `write` method to JsonWriter [\#1340](https://github.com/apache/arrow-rs/issues/1340) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+-  Use DictionaryArray's iterator in `compare_dict_op` [\#1329](https://github.com/apache/arrow-rs/issues/1329)
+- Add  `as_decimal_array(arr: &dyn Array) -> &DecimalArray` [\#1312](https://github.com/apache/arrow-rs/issues/1312) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Release arrow ~10.0.0~ 9.1.0 [\#1304](https://github.com/apache/arrow-rs/issues/1304)
+- More ergonomic / idiomatic primitive array creation from iterators [\#1298](https://github.com/apache/arrow-rs/issues/1298)
+- Implement DictionaryArray support in `eq_dyn`, `neq_dyn`, `lt_dyn`, `lt_eq_dyn`, `gt_dyn`, `gt_eq_dyn` [\#1201](https://github.com/apache/arrow-rs/issues/1201) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+
+**Fixed bugs:**
+
+- `cargo clippy` fails on the `master` branch [\#1362](https://github.com/apache/arrow-rs/issues/1362)
+- LargeUtf8 unsupported in json writer [\#1357](https://github.com/apache/arrow-rs/issues/1357)
+- Refactor `StructArray::from` [\#1351](https://github.com/apache/arrow-rs/issues/1351)
+- Refactor `RecordBatch::validate_new_batch` [\#1350](https://github.com/apache/arrow-rs/issues/1350)
+- Refactor the code of `Bitmap::new` [\#1337](https://github.com/apache/arrow-rs/issues/1337)
+- `ArrowArray::try_from_raw` should not assume the pointers are from Arc [\#1333](https://github.com/apache/arrow-rs/issues/1333)
+- Fix csv Writer::new to accept delimiter and make WriterBuilder::build use it   [\#1328](https://github.com/apache/arrow-rs/issues/1328) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Make bounds configurable via builder when reading csv [\#1327](https://github.com/apache/arrow-rs/issues/1327) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- csv impl WriterBuilder has no with\_datetime\_format\(\) [\#1272](https://github.com/apache/arrow-rs/issues/1272)
+
+**Closed issues:**
+
+- Consider removing redundant has\_XXX metadata functions in `ColumnChunkMetadata` [\#1332](https://github.com/apache/arrow-rs/issues/1332)
+
+**Merged pull requests:**
+
+- Add write method to Json Writer [\#1383](https://github.com/apache/arrow-rs/pull/1383) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([matthewmturner](https://github.com/matthewmturner))
+- Derive `Clone` for  `IpcWriteOptions` [\#1382](https://github.com/apache/arrow-rs/pull/1382) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([matthewmturner](https://github.com/matthewmturner))
+- feat: support maps in MutableArrayData [\#1379](https://github.com/apache/arrow-rs/pull/1379) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([helgikrs](https://github.com/helgikrs))
+- Support extract `week` in temporal.rs [\#1376](https://github.com/apache/arrow-rs/pull/1376) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Ted-Jiang](https://github.com/Ted-Jiang))
+- Speed up the function `min_max_string` [\#1374](https://github.com/apache/arrow-rs/pull/1374) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Improve performance if dictionary kernels, add benchmark and add `take_iter_unchecked` [\#1372](https://github.com/apache/arrow-rs/pull/1372) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Update pyo3 requirement from 0.15 to 0.16 [\#1369](https://github.com/apache/arrow-rs/pull/1369) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([dependabot[bot]](https://github.com/apps/dependabot))
+- Update contributing guide [\#1368](https://github.com/apache/arrow-rs/pull/1368) ([HaoYang670](https://github.com/HaoYang670))
+- Allow primitive array creation from iterators of PrimitiveTypes \(as well as `Option`\) [\#1367](https://github.com/apache/arrow-rs/pull/1367) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Update flatbuffers requirement from =2.1.0 to =2.1.1 [\#1364](https://github.com/apache/arrow-rs/pull/1364) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([dependabot[bot]](https://github.com/apps/dependabot))
+- Fix clippy lints [\#1363](https://github.com/apache/arrow-rs/pull/1363) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Refactor `RecordBatch::validate_new_batch` [\#1361](https://github.com/apache/arrow-rs/pull/1361) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Refactor `StructArray::from` [\#1360](https://github.com/apache/arrow-rs/pull/1360) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Update flatbuffers requirement from =2.0.0 to =2.1.0 [\#1359](https://github.com/apache/arrow-rs/pull/1359) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([dependabot[bot]](https://github.com/apps/dependabot))
+- fix: add LargeUtf8 support in json writer [\#1358](https://github.com/apache/arrow-rs/pull/1358) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tiphaineruy](https://github.com/tiphaineruy))
+- Add `as_decimal_array` function [\#1356](https://github.com/apache/arrow-rs/pull/1356) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([liukun4515](https://github.com/liukun4515))
+- Publicly export arrow::array::MapBuilder [\#1355](https://github.com/apache/arrow-rs/pull/1355) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tjwilson90](https://github.com/tjwilson90))
+- Add with\_datetime\_format to csv WriterBuilder [\#1347](https://github.com/apache/arrow-rs/pull/1347) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gsserge](https://github.com/gsserge))
+- Refactor `Bitmap::new` [\#1343](https://github.com/apache/arrow-rs/pull/1343) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Remove delimiter from csv Writer [\#1342](https://github.com/apache/arrow-rs/pull/1342) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gsserge](https://github.com/gsserge))
+- Make bounds configurable in csv ReaderBuilder [\#1341](https://github.com/apache/arrow-rs/pull/1341) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([gsserge](https://github.com/gsserge))
+- `ArrowArray::try_from_raw` should not assume the pointers are from Arc [\#1334](https://github.com/apache/arrow-rs/pull/1334) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Use DictionaryArray's iterator in `compare_dict_op` [\#1330](https://github.com/apache/arrow-rs/pull/1330) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Implement DictionaryArray support in neq\_dyn, lt\_dyn, lt\_eq\_dyn, gt\_dyn, gt\_eq\_dyn [\#1326](https://github.com/apache/arrow-rs/pull/1326) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Arrow Rust + Conbench Integration [\#1289](https://github.com/apache/arrow-rs/pull/1289) ([dianaclarke](https://github.com/dianaclarke))
+
 ## [9.1.0](https://github.com/apache/arrow-rs/tree/9.1.0) (2022-02-19)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/9.0.2...9.1.0)
