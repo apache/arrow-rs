@@ -43,8 +43,11 @@ where
     if null_count == array.len() {
         None
     } else if null_count == 0 {
+        // JUSTIFICATION
+        //  Benefit:  ~10% speedup
+        //  Soundness: `i` is always within the array bounds
         (0..array.len())
-            .map(|i| array.value(i))
+            .map(|i| unsafe { array.value_unchecked(i) })
             .reduce(|acc, item| if cmp(acc, item) { item } else { acc })
     } else {
         array
