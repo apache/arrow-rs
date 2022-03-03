@@ -2214,19 +2214,26 @@ macro_rules! compare_dict_op {
             ));
         }
 
-        let left_iter = $left
-            .values()
-            .as_any()
-            .downcast_ref::<$value_ty>()
-            .unwrap()
-            .take_iter($left.keys_iter());
+        // Safety justification: Since the inputs are valid Arrow arrays, all values are
+        // valid indexes into the dictionary (which is verified during construction)
 
-        let right_iter = $right
-            .values()
-            .as_any()
-            .downcast_ref::<$value_ty>()
-            .unwrap()
-            .take_iter($right.keys_iter());
+        let left_iter = unsafe {
+            $left
+                .values()
+                .as_any()
+                .downcast_ref::<$value_ty>()
+                .unwrap()
+                .take_iter_unchecked($left.keys_iter())
+        };
+
+        let right_iter = unsafe {
+            $right
+                .values()
+                .as_any()
+                .downcast_ref::<$value_ty>()
+                .unwrap()
+                .take_iter_unchecked($right.keys_iter())
+        };
 
         let result = left_iter
             .zip(right_iter)
