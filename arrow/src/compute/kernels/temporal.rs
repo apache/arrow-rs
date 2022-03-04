@@ -183,6 +183,62 @@ where
     Ok(b.finish())
 }
 
+/// Extracts the month of a given temporal array as an array of integers
+pub fn month<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::new(array.len());
+    match array.data_type() {
+        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
+            extract_component_from_array!(array, b, month, value_as_datetime)
+        }
+        &DataType::Timestamp(_, Some(ref tz)) => {
+            let mut scratch = Parsed::new();
+            extract_component_from_array!(
+                array,
+                b,
+                month,
+                value_as_datetime_with_tz,
+                tz,
+                scratch
+            )
+        }
+        dt => return_compute_error_with!("month does not support", dt),
+    }
+
+    Ok(b.finish())
+}
+
+/// Extracts the day of a given temporal array as an array of integers
+pub fn day<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::new(array.len());
+    match array.data_type() {
+        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
+            extract_component_from_array!(array, b, day, value_as_datetime)
+        }
+        &DataType::Timestamp(_, Some(ref tz)) => {
+            let mut scratch = Parsed::new();
+            extract_component_from_array!(
+                array,
+                b,
+                day,
+                value_as_datetime_with_tz,
+                tz,
+                scratch
+            )
+        }
+        dt => return_compute_error_with!("day does not support", dt),
+    }
+
+    Ok(b.finish())
+}
+
 /// Extracts the minutes of a given temporal array as an array of integers
 pub fn minute<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
@@ -331,6 +387,90 @@ mod tests {
         assert_eq!(2011, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2012, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_month() {
+        //1514764800000 -> 2018-01-01
+        //1550636625000 -> 2019-02-20
+        let a: PrimitiveArray<Date64Type> =
+            vec![Some(1514764800000), None, Some(1550636625000)].into();
+
+        let b = month(&a).unwrap();
+        assert_eq!(1, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(2, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date32_month() {
+        let a: PrimitiveArray<Date32Type> = vec![Some(1), None, Some(31)].into();
+
+        let b = month(&a).unwrap();
+        assert_eq!(1, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(2, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_month_with_timezone() {
+        use std::sync::Arc;
+
+        // 24 * 60 * 60 = 8640
+        let a = Arc::new(TimestampSecondArray::from_vec(
+            vec![86400 * 31],
+            Some("+00:00".to_string()),
+        ));
+        let b = month(&a).unwrap();
+        assert_eq!(2, b.value(0));
+        let a = Arc::new(TimestampSecondArray::from_vec(
+            vec![86400 * 31],
+            Some("-10:00".to_string()),
+        ));
+        let b = month(&a).unwrap();
+        assert_eq!(1, b.value(0));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_day_with_timezone() {
+        use std::sync::Arc;
+
+        // 24 * 60 * 60 = 8640
+        let a = Arc::new(TimestampSecondArray::from_vec(
+            vec![86400],
+            Some("+00:00".to_string()),
+        ));
+        let b = day(&a).unwrap();
+        assert_eq!(2, b.value(0));
+        let a = Arc::new(TimestampSecondArray::from_vec(
+            vec![86400],
+            Some("-10:00".to_string()),
+        ));
+        let b = day(&a).unwrap();
+        assert_eq!(1, b.value(0));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_day() {
+        //1514764800000 -> 2018-01-01
+        //1550636625000 -> 2019-02-20
+        let a: PrimitiveArray<Date64Type> =
+            vec![Some(1514764800000), None, Some(1550636625000)].into();
+
+        let b = day(&a).unwrap();
+        assert_eq!(1, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(20, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date32_day() {
+        let a: PrimitiveArray<Date32Type> = vec![Some(0), None, Some(31)].into();
+
+        let b = day(&a).unwrap();
+        assert_eq!(1, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(1, b.value(2));
     }
 
     #[test]
