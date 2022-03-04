@@ -20,7 +20,7 @@ use crate::datatypes::*;
 
 /// Specialized parsing implementations
 /// used by csv and json reader
-pub trait Parser: ArrowPrimitiveType {
+pub(crate) trait Parser: ArrowPrimitiveType {
     fn parse(string: &str) -> Option<Self::Native> {
         string.parse::<Self::Native>().ok()
     }
