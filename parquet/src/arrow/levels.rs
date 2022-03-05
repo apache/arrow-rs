@@ -757,7 +757,10 @@ impl LevelInfo {
 
     /// Given a level's information, calculate the offsets required to index an array correctly.
     pub(crate) fn filter_array_indices(&self) -> Vec<usize> {
-        if !matches!(self.level_type, LevelType::Primitive(_)) {
+        if !matches!(
+            self.level_type,
+            LevelType::Primitive(_) | LevelType::List(_)
+        ) {
             panic!(
                 "Cannot filter indices on a non-primitive array, found {:?}",
                 self.level_type

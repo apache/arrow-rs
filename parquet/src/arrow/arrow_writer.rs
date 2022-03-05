@@ -1264,11 +1264,43 @@ mod tests {
         let values = Arc::new(Int32Array::from(vec![None; SMALL_SIZE]));
         one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
     }
+
     #[test]
     fn null_single_column() {
         let values = Arc::new(NullArray::new(SMALL_SIZE));
         one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
         // null arrays are always nullable, a test with non-nullable nulls fails
+    }
+
+    #[test]
+    fn null_list_single_column() {
+        let null_field = Field::new("item", DataType::Null, true);
+        let list_field =
+            Field::new("emptylist", DataType::List(Box::new(null_field)), true);
+
+        let schema = Schema::new(vec![list_field]);
+
+        // Build a ListArray[NullArray(0)]
+        let a_values = NullArray::new(SMALL_SIZE);
+        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 0].to_byte_slice());
+        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+            "item",
+            DataType::Null,
+            true,
+        ))))
+        .len(1)
+        .add_buffer(a_value_offsets)
+        .null_bit_buffer(Buffer::from(vec![0b00011011]))
+        .add_child_data(a_values.data().clone())
+        .build()
+        .unwrap();
+
+        let a = ListArray::from(a_list_data);
+        // let values = Arc::new(a);
+        // one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+        roundtrip(batch, None);
     }
 
     #[test]
