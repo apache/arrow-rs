@@ -24,7 +24,7 @@ extern crate arrow;
 use arrow::compute::*;
 use arrow::datatypes::{ArrowNumericType, IntervalMonthDayNanoType};
 use arrow::util::bench_util::*;
-use arrow::{array::*, datatypes::Float32Type};
+use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
 
 fn bench_eq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
 where
@@ -129,6 +129,18 @@ fn bench_regexp_is_match_utf8_scalar(arr_a: &StringArray, value_b: &str) {
         criterion::black_box(arr_a),
         criterion::black_box(value_b),
         None,
+    )
+    .unwrap();
+}
+
+fn bench_dict_eq<T>(arr_a: &DictionaryArray<T>, arr_b: &DictionaryArray<T>)
+where
+    T: ArrowNumericType,
+{
+    cmp_dict_utf8::<T, i32, _>(
+        criterion::black_box(arr_a),
+        criterion::black_box(arr_b),
+        |a, b| a == b,
     )
     .unwrap();
 }
@@ -248,6 +260,13 @@ fn add_benchmark(c: &mut Criterion) {
 
     c.bench_function("egexp_matches_utf8 scalar ends with", |b| {
         b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "xx$"))
+    });
+
+    let dict_arr_a = create_string_dict_array::<Int32Type>(size, 0.0);
+    let dict_arr_b = create_string_dict_array::<Int32Type>(size, 0.0);
+
+    c.bench_function("dict eq string", |b| {
+        b.iter(|| bench_dict_eq(&dict_arr_a, &dict_arr_b))
     });
 }
 

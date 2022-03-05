@@ -71,9 +71,14 @@ Note that when reviewing the change log, rather than editing the
 `CHANGELOG.md`, it is preferred to update the issues and their labels
 (e.g. add `invalid` label to exclude them from release notes)
 
+Merge this PR to `master` prior to the next step.
+
 ## Prepare release candidate tarball
 
-(Note you need to be a committer to run these scripts as they upload to the apache svn distribution servers)
+After you have merged the updates to the `CHANGELOG` and version,
+create a release candidate using the following steps. Note you need to
+be a committer to run these scripts as they upload to the apache `svn`
+distribution servers.
 
 ### Create git tag for the release:
 
