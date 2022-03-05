@@ -37,7 +37,7 @@ struct Args {
     #[clap(
         short,
         long,
-        help = "path to the descriptor file, only used when scenario is not provided"
+        help = "path to the descriptor file, only used when scenario is not provided. See https://arrow.apache.org/docs/format/Integration.html#json-test-data-format"
     )]
     path: Option<String>,
     #[clap(long, arg_enum)]
