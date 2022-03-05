@@ -131,13 +131,13 @@ pub struct SerializedFileReader<R: ChunkReader> {
 /// For the predicates that are added to the builder,
 /// they will be chained using 'AND' to filter the row groups.
 pub struct ReadOptionsBuilder {
-    predicate: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
+    predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
 }
 
 impl ReadOptionsBuilder {
     /// New builder
     pub fn new() -> Self {
-        ReadOptionsBuilder { predicate: vec![] }
+        ReadOptionsBuilder { predicates: vec![] }
     }
 
     /// Add a predicate on row group metadata to the reading option,
@@ -146,7 +146,7 @@ impl ReadOptionsBuilder {
         mut self,
         predicate: Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>,
     ) -> Self {
-        self.predicate.push(predicate);
+        self.predicates.push(predicate);
         self
     }
 
@@ -157,14 +157,14 @@ impl ReadOptionsBuilder {
             let mid = get_midpoint_offset(rg);
             mid >= start && mid < end
         };
-        self.predicate.push(Box::new(predicate));
+        self.predicates.push(Box::new(predicate));
         self
     }
 
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         ReadOptions {
-            predicate: self.predicate,
+            predicates: self.predicates,
         }
     }
 }
@@ -174,7 +174,7 @@ impl ReadOptionsBuilder {
 /// Currently, only predicates on row group metadata are supported.
 /// All predicates will be chained using 'AND' to filter the row groups.
 pub struct ReadOptions {
-    predicate: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
+    predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -192,18 +192,28 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Returns error if Parquet file does not exist or is corrupt.
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
         let metadata = footer::parse_metadata(&chunk_reader)?;
-        let mut row_groups = metadata.row_groups().to_vec();
-        for mut predicate in options.predicate {
-            row_groups = row_groups
-                .into_iter()
-                .enumerate()
-                .filter(|(i, rg_meta)| predicate(rg_meta, *i))
-                .map(|(_, rg_meta)| rg_meta)
-                .collect::<Vec<_>>();
+        let mut predicates = options.predicates;
+        let row_groups = metadata.row_groups().to_vec();
+        let mut filtered_row_groups = Vec::<RowGroupMetaData>::new();
+        for (i, rg_meta) in row_groups.into_iter().enumerate() {
+            let mut keep = true;
+            for predicate in &mut predicates {
+                if !predicate(&rg_meta, i) {
+                    keep = false;
+                    break;
+                }
+            }
+            if keep {
+                filtered_row_groups.push(rg_meta);
+            }
         }
+
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
-            metadata: ParquetMetaData::new(metadata.file_metadata().clone(), row_groups),
+            metadata: ParquetMetaData::new(
+                metadata.file_metadata().clone(),
+                filtered_row_groups,
+            ),
         })
     }
 }
