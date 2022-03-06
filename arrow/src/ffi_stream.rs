@@ -322,9 +322,7 @@ impl Iterator for ArrowArrayStreamReader {
         let ffi_array = unsafe { Arc::from_raw(array_ptr) };
 
         // The end of stream has been reached
-        if ffi_array.release.is_none() {
-            return None;
-        }
+        ffi_array.release?;
 
         let schema_ref = self.schema();
         let schema = FFI_ArrowSchema::try_from(schema_ref.as_ref());
