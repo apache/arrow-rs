@@ -185,7 +185,8 @@ async fn consume_flight_location(
     let mut location = location;
     // The other Flight implementations use the `grpc+tcp` scheme, but the Rust http libs
     // don't recognize this as valid.
-    location.uri = location.uri.replace("grpc+tcp://", "grpc://");
+    // more details: https://github.com/apache/arrow-rs/issues/1398
+    location.uri = location.uri.replace("grpc+tcp://", "http://");
 
     let mut client = FlightServiceClient::connect(location.uri).await?;
     let resp = client.do_get(ticket).await?;
