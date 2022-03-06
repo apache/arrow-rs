@@ -321,6 +321,11 @@ impl Iterator for ArrowArrayStreamReader {
 
         let ffi_array = unsafe { Arc::from_raw(array_ptr) };
 
+        // The end of stream has been reached
+        if ffi_array.release.is_none() {
+            return None;
+        }
+
         let schema_ref = self.schema();
         let schema = FFI_ArrowSchema::try_from(schema_ref.as_ref());
 
@@ -378,85 +383,135 @@ impl RecordBatchReader for ArrowArrayStreamReader {
 mod tests {
     use super::*;
 
-    use std::fs::File;
+    use crate::array::Int32Array;
+    use crate::datatypes::{Field, Schema};
 
-    use crate::datatypes::Schema;
-    use crate::ipc::reader::FileReader;
-
-    fn get_array_testdata() -> File {
-        let testdata = crate::util::test_util::arrow_test_data();
-        let version = "0.14.1";
-        File::open(format!(
-            "{}/arrow-ipc-stream/integration/{}/generated_decimal.arrow_file",
-            testdata, version
-        ))
-        .unwrap()
+    struct TestRecordBatchReader {
+        schema: SchemaRef,
+        iter: Box<dyn Iterator<Item = Result<RecordBatch>>>,
     }
 
-    #[test]
-    fn test_export_stream() {
-        let file = get_array_testdata();
-        let reader = Box::new(FileReader::try_new(file).unwrap());
-        let expected_schema = reader.schema();
+    impl TestRecordBatchReader {
+        pub fn new(
+            schema: SchemaRef,
+            iter: Box<dyn Iterator<Item = Result<RecordBatch>>>,
+        ) -> Box<TestRecordBatchReader> {
+            Box::new(TestRecordBatchReader { schema, iter })
+        }
+    }
 
-        let stream = Box::new(FFI_ArrowArrayStream::new(reader));
-        let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
+    impl Iterator for TestRecordBatchReader {
+        type Item = Result<RecordBatch>;
 
-        let empty_schema = Box::new(FFI_ArrowSchema::empty());
-        let schema_ptr = Box::into_raw(empty_schema) as *mut FFI_ArrowSchema;
+        fn next(&mut self) -> Option<Self::Item> {
+            self.iter.next()
+        }
+    }
 
+    impl RecordBatchReader for TestRecordBatchReader {
+        fn schema(&self) -> SchemaRef {
+            self.schema.clone()
+        }
+    }
+
+    fn _test_round_trip_export(arrays: Vec<Arc<dyn Array>>) -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", arrays[0].data_type().clone(), true),
+            Field::new("b", arrays[1].data_type().clone(), true),
+            Field::new("c", arrays[2].data_type().clone(), true),
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
+        let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
+
+        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+
+        // Export a `RecordBatchReader` through `FFI_ArrowArrayStream`
+        let stream = Arc::new(FFI_ArrowArrayStream::new(reader));
+        let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
+
+        let empty_schema = Arc::new(FFI_ArrowSchema::empty());
+        let schema_ptr = Arc::into_raw(empty_schema) as *mut FFI_ArrowSchema;
+
+        // Get schema from `FFI_ArrowArrayStream`
         let ret_code = unsafe { get_schema(stream_ptr, schema_ptr) };
         assert_eq!(ret_code, 0);
 
-        let ffi_schema = unsafe { Box::from_raw(schema_ptr) };
+        let ffi_schema = unsafe { Arc::from_raw(schema_ptr) };
 
-        let schema = Schema::try_from(ffi_schema.as_ref()).unwrap();
-        assert_eq!(&schema, expected_schema.as_ref());
+        let exported_schema = Schema::try_from(ffi_schema.as_ref()).unwrap();
+        assert_eq!(&exported_schema, schema.as_ref());
 
-        let empty_array = Box::new(FFI_ArrowArray::empty());
-        let array_ptr = Box::into_raw(empty_array) as *mut FFI_ArrowArray;
+        // Get array from `FFI_ArrowArrayStream`
+        let mut produced_batches = vec![];
+        loop {
+            let empty_array = Arc::new(FFI_ArrowArray::empty());
+            let array_ptr = Arc::into_raw(empty_array.clone()) as *mut FFI_ArrowArray;
 
-        let ret_code = unsafe { get_next(stream_ptr, array_ptr) };
-        assert_eq!(ret_code, 0);
+            let ret_code = unsafe { get_next(stream_ptr, array_ptr) };
+            assert_eq!(ret_code, 0);
 
-        let array = unsafe {
-            ArrowArray::try_from_raw(
-                array_ptr,
-                Box::into_raw(ffi_schema) as *mut FFI_ArrowSchema,
-            )
-            .unwrap()
+            // The end of stream has been reached
+            let ffi_array = unsafe { Arc::from_raw(array_ptr) };
+            if ffi_array.release.is_none() {
+                break;
+            }
+
+            let array = ArrowArray {
+                array: ffi_array,
+                schema: ffi_schema.clone(),
+            }
             .to_data()
-            .unwrap()
-        };
+            .unwrap();
 
-        let record_batch = RecordBatch::from(&StructArray::from(array));
+            let record_batch = RecordBatch::from(&StructArray::from(array));
+            produced_batches.push(record_batch);
+        }
 
-        let file = get_array_testdata();
-        let mut reader = Box::new(FileReader::try_new(file).unwrap());
-        let expected_batch = reader.next().unwrap().unwrap();
-        assert_eq!(record_batch, expected_batch);
+        assert_eq!(produced_batches, vec![batch.clone(), batch.clone()]);
+        Ok(())
+    }
+
+    fn _test_round_trip_import(arrays: Vec<Arc<dyn Array>>) -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", arrays[0].data_type().clone(), true),
+            Field::new("b", arrays[1].data_type().clone(), true),
+            Field::new("c", arrays[2].data_type().clone(), true),
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
+        let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
+
+        let reader = TestRecordBatchReader::new(schema.clone(), iter);
+
+        // Import a `RecordBatchReader` through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
+        let stream = Arc::new(FFI_ArrowArrayStream::new(reader));
+        let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
+        let mut stream_reader = ArrowArrayStreamReader::from_raw(stream_ptr);
+
+        let imported_schema = stream_reader.schema();
+        assert_eq!(imported_schema, schema);
+
+        let mut produced_batches = vec![];
+        while let Some(batch) = stream_reader.next() {
+            produced_batches.push(batch.unwrap());
+        }
+
+        assert_eq!(produced_batches, vec![batch.clone(), batch.clone()]);
+        Ok(())
     }
 
     #[test]
-    fn test_import_stream() {
-        let file = get_array_testdata();
-        let reader = Box::new(FileReader::try_new(file).unwrap());
-        let expected_schema = reader.schema();
+    fn test_stream_round_trip_export() -> Result<()> {
+        let array = Int32Array::from(vec![Some(2), None, Some(1), None]);
+        let array: Arc<dyn Array> = Arc::new(array);
 
-        let stream = Box::new(FFI_ArrowArrayStream::new(reader));
-        let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
+        _test_round_trip_export(vec![array.clone(), array.clone(), array])
+    }
 
-        let mut stream_reader = ArrowArrayStreamReader::from_raw(stream_ptr);
+    #[test]
+    fn test_stream_round_trip_import() -> Result<()> {
+        let array = Int32Array::from(vec![Some(2), None, Some(1), None]);
+        let array: Arc<dyn Array> = Arc::new(array);
 
-        let schema = stream_reader.schema();
-        assert_eq!(schema, expected_schema);
-
-        let batch = stream_reader.next().unwrap().unwrap();
-
-        let file = get_array_testdata();
-        let mut reader = Box::new(FileReader::try_new(file).unwrap());
-        let expected_batch = reader.next().unwrap().unwrap();
-
-        assert_eq!(batch, expected_batch);
+        _test_round_trip_import(vec![array.clone(), array.clone(), array])
     }
 }
