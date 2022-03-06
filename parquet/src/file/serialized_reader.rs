@@ -150,7 +150,8 @@ impl ReadOptionsBuilder {
         self
     }
 
-    /// Add a range predicate on filtering row groups if their midpoints are within the range
+    /// Add a range predicate on filtering row groups if their midpoints are within
+    /// the Closed-Open range `[start..end)	{x | start <= x < end}`
     pub fn with_range(mut self, start: i64, end: i64) -> Self {
         assert!(start < end);
         let predicate = move |rg: &RowGroupMetaData, _: usize| {
