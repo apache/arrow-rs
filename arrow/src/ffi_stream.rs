@@ -349,7 +349,7 @@ impl Iterator for ArrowArrayStreamReader {
             Some(Ok(record_batch))
         } else {
             let last_error = get_stream_last_error(self);
-            let err = ArrowError::CStreamInterface(last_error.unwrap());
+            let err = ArrowError::CDataInterface(last_error.unwrap());
             Some(Err(err))
         }
     }
