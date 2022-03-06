@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "9.1.0"
+version = "10.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -53,7 +53,7 @@ chrono-tz = {version = "0.6", optional = true}
 flatbuffers = { version = "=2.1.1", optional = true }
 hex = "0.4"
 comfy-table = { version = "5.0", optional = true, default-features = false }
-pyo3 = { version = "0.15", optional = true }
+pyo3 = { version = "0.16", optional = true }
 lexical-core = "^0.8"
 multiversion = "0.6.1"
 bitflags = "1.2.1"

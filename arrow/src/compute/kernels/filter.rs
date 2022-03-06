@@ -1484,4 +1484,41 @@ mod tests {
             assert_eq!(actual, expected_strings);
         }
     }
+
+    #[test]
+    fn test_filter_map() {
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(16), Int64Builder::new(4));
+        // [{"key1": 1}, {"key2": 2, "key3": 3}, null, {"key1": 1}
+        builder.keys().append_value("key1").unwrap();
+        builder.values().append_value(1).unwrap();
+        builder.append(true).unwrap();
+        builder.keys().append_value("key2").unwrap();
+        builder.keys().append_value("key3").unwrap();
+        builder.values().append_value(2).unwrap();
+        builder.values().append_value(3).unwrap();
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+        builder.keys().append_value("key1").unwrap();
+        builder.values().append_value(1).unwrap();
+        builder.append(true).unwrap();
+        let maparray = Arc::new(builder.finish()) as ArrayRef;
+
+        let indices = vec![Some(true), Some(false), Some(false), Some(true)]
+            .into_iter()
+            .collect::<BooleanArray>();
+        let got = filter(&maparray, &indices).unwrap();
+
+        let mut builder =
+            MapBuilder::new(None, StringBuilder::new(8), Int64Builder::new(2));
+        builder.keys().append_value("key1").unwrap();
+        builder.values().append_value(1).unwrap();
+        builder.append(true).unwrap();
+        builder.keys().append_value("key1").unwrap();
+        builder.values().append_value(1).unwrap();
+        builder.append(true).unwrap();
+        let expected = Arc::new(builder.finish()) as ArrayRef;
+
+        assert_eq!(&expected, &got);
+    }
 }

@@ -18,7 +18,7 @@
 [package]
 name = "arrow-flight"
 description = "Apache Arrow Flight"
-version = "9.1.0"
+version = "10.0.0"
 edition = "2021"
 rust-version = "1.57"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -27,7 +27,7 @@ repository = "https://github.com/apache/arrow-rs"
 license = "Apache-2.0"
 
 [dependencies]
-arrow = { path = "../arrow", version = "9.1.0" }
+arrow = { path = "../arrow", version = "10.0.0" }
 base64 = "0.13"
 tonic = "0.6"
 bytes = "1"
@@ -43,7 +43,3 @@ tonic-build = "0.6"
 # Pin specific version of the tonic-build dependencies to avoid auto-generated
 # (and checked in) arrow.flight.protocol.rs from changing
 proc-macro2 = ">1.0.30"
-
-#[lib]
-#name = "flight"
-#path = "src/lib.rs"
