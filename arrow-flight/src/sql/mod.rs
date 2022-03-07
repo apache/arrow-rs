@@ -114,7 +114,7 @@ prost_message_ext!(
 );
 
 /// ProstAnyExt are useful utility methods for prost_types::Any
-/// The API design is inspired by https://github.com/stepancheg/rust-protobuf/blob/master/protobuf/src/well_known_types_util/any.rs
+/// The API design is inspired by [rust-protobuf](https://github.com/stepancheg/rust-protobuf/blob/master/protobuf/src/well_known_types_util/any.rs)
 pub trait ProstAnyExt {
     /// Check if `Any` contains a message of given type.
     fn is<M: ProstMessageExt>(&self) -> bool;
