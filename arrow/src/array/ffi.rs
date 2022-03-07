@@ -45,6 +45,7 @@ impl TryFrom<ArrayData> for ffi::ArrowArray {
 
 #[cfg(test)]
 mod tests {
+    use crate::array::{DictionaryArray, Int32Array, StringArray};
     use crate::error::Result;
     use crate::{
         array::{
@@ -124,6 +125,16 @@ mod tests {
                 Arc::new(UInt32Array::from(vec![42, 28, 19, 31])),
             ),
         ]);
+        let data = array.data();
+        test_round_trip(data)
+    }
+
+    #[test]
+    fn test_dictionary() -> Result<()> {
+        let values = StringArray::from(vec!["foo", "bar", "zoo"]);
+        let keys = Int32Array::from(vec![0, 1, 2, 2, 1, 0, 1, 2, 1, 2]);
+        let array = DictionaryArray::try_new(&keys, &values)?;
+
         let data = array.data();
         test_round_trip(data)
     }
