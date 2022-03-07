@@ -465,7 +465,7 @@ mod tests {
             produced_batches.push(record_batch);
         }
 
-        assert_eq!(produced_batches, vec![batch.clone(), batch.clone()]);
+        assert_eq!(produced_batches, vec![batch.clone(), batch]);
         Ok(())
     }
 
@@ -480,20 +480,20 @@ mod tests {
 
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
 
-        // Import a `RecordBatchReader` through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
+        // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
         let stream = Arc::new(FFI_ArrowArrayStream::new(reader));
         let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
-        let mut stream_reader = ArrowArrayStreamReader::from_raw(stream_ptr);
+        let stream_reader = ArrowArrayStreamReader::from_raw(stream_ptr);
 
         let imported_schema = stream_reader.schema();
         assert_eq!(imported_schema, schema);
 
         let mut produced_batches = vec![];
-        while let Some(batch) = stream_reader.next() {
+        for batch in stream_reader {
             produced_batches.push(batch.unwrap());
         }
 
-        assert_eq!(produced_batches, vec![batch.clone(), batch.clone()]);
+        assert_eq!(produced_batches, vec![batch.clone(), batch]);
         Ok(())
     }
 
