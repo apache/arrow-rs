@@ -18,7 +18,7 @@
 use std::pin::Pin;
 
 use futures::Stream;
-use protobuf::Message;
+use prost::Message;
 use tonic::{Request, Response, Status, Streaming};
 
 use super::{
@@ -32,158 +32,204 @@ use super::{
     CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
     CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
     CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementUpdate, TicketStatementQuery,
+    CommandStatementUpdate, ProstAnyExt, SqlInfo, TicketStatementQuery,
 };
 
-use lazy_static::lazy_static;
-lazy_static! {
-    static ref CREATE_PREPARED_STATEMENT_ACTION_TYPE: ActionType = ActionType {
-        r#type: "CreatePreparedStatement".into(),
-        description: "Creates a reusable prepared statement resource on the server.\n
-                Request Message: ActionCreatePreparedStatementRequest\n
-                Response Message: ActionCreatePreparedStatementResult"
-            .into(),
-    };
-    static ref CLOSE_PREPARED_STATEMENT_ACTION_TYPE: ActionType = ActionType {
-        r#type: "ClosePreparedStatement".into(),
-        description: "Closes a reusable prepared statement resource on the server.\n
-                Request Message: ActionClosePreparedStatementRequest\n
-                Response Message: N/A"
-            .into(),
-    };
-}
+static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
+static CLOSE_PREPARED_STATEMENT: &str = "ClosePreparedStatement";
 
+/// Implements FlightSqlService to handle the flight sql protocol
 #[tonic::async_trait]
 pub trait FlightSqlService:
     std::marker::Sync + std::marker::Send + std::marker::Sized + FlightService + 'static
 {
+    /// When impl FlightSqlService, you can always set FlightService to Self
     type FlightService: FlightService;
 
-    // get_flight_info
+    /// Get a FlightInfo for executing a SQL query.
     async fn get_flight_info_statement(
         &self,
         query: CommandStatementQuery,
         request: FlightDescriptor,
     ) -> Result<Response<FlightInfo>, Status>;
+
+    /// Get a FlightInfo for executing an already created prepared statement.
     async fn get_flight_info_prepared_statement(
         &self,
         query: CommandPreparedStatementQuery,
         request: FlightDescriptor,
     ) -> Result<Response<FlightInfo>, Status>;
+
+    /// Get a FlightInfo for listing catalogs.
     async fn get_flight_info_catalogs(
         &self,
         query: CommandGetCatalogs,
         request: FlightDescriptor,
     ) -> Result<Response<FlightInfo>, Status>;
+
+    /// Get a FlightInfo for listing schemas.
     async fn get_flight_info_schemas(
         &self,
         query: CommandGetDbSchemas,
         request: FlightDescriptor,
     ) -> Result<Response<FlightInfo>, Status>;
+
+    /// Get a FlightInfo for listing tables.
     async fn get_flight_info_tables(
         &self,
         query: CommandGetTables,
         request: FlightDescriptor,
     ) -> Result<Response<FlightInfo>, Status>;
+
+    /// Get a FlightInfo to extract information about the table types.
     async fn get_flight_info_table_types(
         &self,
         query: CommandGetTableTypes,
         request: FlightDescriptor,
     ) -> Result<Response<FlightInfo>, Status>;
+
+    /// Get a FlightInfo for retrieving other information (See SqlInfo).
     async fn get_flight_info_sql_info(
         &self,
         query: CommandGetSqlInfo,
         request: FlightDescriptor,
     ) -> Result<Response<FlightInfo>, Status>;
+
+    /// Get a FlightInfo to extract information about primary and foreign keys.
     async fn get_flight_info_primary_keys(
         &self,
         query: CommandGetPrimaryKeys,
         request: FlightDescriptor,
     ) -> Result<Response<FlightInfo>, Status>;
+
+    /// Get a FlightInfo to extract information about exported keys.
     async fn get_flight_info_exported_keys(
         &self,
         query: CommandGetExportedKeys,
         request: FlightDescriptor,
     ) -> Result<Response<FlightInfo>, Status>;
+
+    /// Get a FlightInfo to extract information about imported keys.
     async fn get_flight_info_imported_keys(
         &self,
         query: CommandGetImportedKeys,
         request: FlightDescriptor,
     ) -> Result<Response<FlightInfo>, Status>;
+
+    /// Get a FlightInfo to extract information about cross reference.
     async fn get_flight_info_cross_reference(
         &self,
         query: CommandGetCrossReference,
         request: FlightDescriptor,
     ) -> Result<Response<FlightInfo>, Status>;
+
     // do_get
+
+    /// Get a FlightInfo for executing an already created prepared statement.
     async fn do_get_statement(
         &self,
         ticket: TicketStatementQuery,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
+    /// Get a FlightDataStream containing the prepared statement query results.
     async fn do_get_prepared_statement(
         &self,
         query: CommandPreparedStatementQuery,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
+    /// Get a FlightDataStream containing the list of catalogs.
     async fn do_get_catalogs(
         &self,
         query: CommandGetCatalogs,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
+    /// Get a FlightDataStream containing the list of schemas.
     async fn do_get_schemas(
         &self,
         query: CommandGetDbSchemas,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
+    /// Get a FlightDataStream containing the list of tables.
     async fn do_get_tables(
         &self,
         query: CommandGetTables,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
+    /// Get a FlightDataStream containing the data related to the table types.
     async fn do_get_table_types(
         &self,
         query: CommandGetTableTypes,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
+    /// Get a FlightDataStream containing the list of SqlInfo results.
     async fn do_get_sql_info(
         &self,
         query: CommandGetSqlInfo,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
+    /// Get a FlightDataStream containing the data related to the primary and foreign keys.
     async fn do_get_primary_keys(
         &self,
         query: CommandGetPrimaryKeys,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
+    /// Get a FlightDataStream containing the data related to the exported keys.
     async fn do_get_exported_keys(
         &self,
         query: CommandGetExportedKeys,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
+    /// Get a FlightDataStream containing the data related to the imported keys.
     async fn do_get_imported_keys(
         &self,
         query: CommandGetImportedKeys,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
+    /// Get a FlightDataStream containing the data related to the cross reference.
     async fn do_get_cross_reference(
         &self,
         query: CommandGetCrossReference,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
+
     // do_put
+
+    /// Execute an update SQL statement.
     async fn do_put_statement_update(
         &self,
         ticket: CommandStatementUpdate,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status>;
+
+    /// Bind parameters to given prepared statement.
     async fn do_put_prepared_statement_query(
         &self,
         query: CommandPreparedStatementQuery,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status>;
+
+    /// Execute an update SQL prepared statement.
     async fn do_put_prepared_statement_update(
         &self,
         query: CommandPreparedStatementUpdate,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status>;
+
     // do_action
+
+    /// Create a prepared statement from given SQL statement.
     async fn do_action_create_prepared_statement(
         &self,
         query: ActionCreatePreparedStatementRequest,
     ) -> Result<Response<<Self as FlightService>::DoActionStream>, Status>;
+
+    /// Close a prepared statement.
     async fn do_action_close_prepared_statement(
         &self,
         query: ActionClosePreparedStatementRequest,
     ) -> Result<Response<<Self as FlightService>::DoActionStream>, Status>;
+
+    /// Register a new SqlInfo result, making it available when calling GetSqlInfo.
+    async fn register_sql_info(&self, id: i32, result: &SqlInfo);
 }
 
+/// Implements the lower level interface to handle FlightSQL
 #[tonic::async_trait]
 impl<T: 'static> FlightService for T
 where
@@ -230,72 +276,103 @@ where
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let request = request.into_inner();
-        let any: protobuf::well_known_types::Any =
-            protobuf::Message::parse_from_bytes(&request.cmd)
-                .map_err(|_| Status::invalid_argument("Unable to parse command"))?;
+        let any: prost_types::Any = prost::Message::decode(&*request.cmd)
+            .map_err(|_| Status::invalid_argument("Unable to parse command"))?;
 
         if any.is::<CommandStatementQuery>() {
             return self
-                .get_flight_info_statement(any.unpack().unwrap().unwrap(), request)
+                .get_flight_info_statement(
+                    any.unpack::<CommandStatementQuery>().unwrap().unwrap(),
+                    request,
+                )
                 .await;
         }
         if any.is::<CommandPreparedStatementQuery>() {
             return self
                 .get_flight_info_prepared_statement(
-                    any.unpack().unwrap().unwrap(),
+                    any.unpack::<CommandPreparedStatementQuery>()
+                        .unwrap()
+                        .unwrap(),
                     request,
                 )
                 .await;
         }
         if any.is::<CommandGetCatalogs>() {
             return self
-                .get_flight_info_catalogs(any.unpack().unwrap().unwrap(), request)
+                .get_flight_info_catalogs(
+                    any.unpack::<CommandGetCatalogs>().unwrap().unwrap(),
+                    request,
+                )
                 .await;
         }
         if any.is::<CommandGetDbSchemas>() {
             return self
-                .get_flight_info_schemas(any.unpack().unwrap().unwrap(), request)
+                .get_flight_info_schemas(
+                    any.unpack::<CommandGetDbSchemas>().unwrap().unwrap(),
+                    request,
+                )
                 .await;
         }
         if any.is::<CommandGetTables>() {
             return self
-                .get_flight_info_tables(any.unpack().unwrap().unwrap(), request)
+                .get_flight_info_tables(
+                    any.unpack::<CommandGetTables>().unwrap().unwrap(),
+                    request,
+                )
                 .await;
         }
         if any.is::<CommandGetTableTypes>() {
             return self
-                .get_flight_info_table_types(any.unpack().unwrap().unwrap(), request)
+                .get_flight_info_table_types(
+                    any.unpack::<CommandGetTableTypes>().unwrap().unwrap(),
+                    request,
+                )
                 .await;
         }
         if any.is::<CommandGetSqlInfo>() {
             return self
-                .get_flight_info_sql_info(any.unpack().unwrap().unwrap(), request)
+                .get_flight_info_sql_info(
+                    any.unpack::<CommandGetSqlInfo>().unwrap().unwrap(),
+                    request,
+                )
                 .await;
         }
         if any.is::<CommandGetPrimaryKeys>() {
             return self
-                .get_flight_info_primary_keys(any.unpack().unwrap().unwrap(), request)
+                .get_flight_info_primary_keys(
+                    any.unpack::<CommandGetPrimaryKeys>().unwrap().unwrap(),
+                    request,
+                )
                 .await;
         }
         if any.is::<CommandGetExportedKeys>() {
             return self
-                .get_flight_info_exported_keys(any.unpack().unwrap().unwrap(), request)
+                .get_flight_info_exported_keys(
+                    any.unpack::<CommandGetExportedKeys>().unwrap().unwrap(),
+                    request,
+                )
                 .await;
         }
         if any.is::<CommandGetImportedKeys>() {
             return self
-                .get_flight_info_imported_keys(any.unpack().unwrap().unwrap(), request)
+                .get_flight_info_imported_keys(
+                    any.unpack::<CommandGetImportedKeys>().unwrap().unwrap(),
+                    request,
+                )
                 .await;
         }
         if any.is::<CommandGetCrossReference>() {
             return self
-                .get_flight_info_cross_reference(any.unpack().unwrap().unwrap(), request)
+                .get_flight_info_cross_reference(
+                    any.unpack::<CommandGetCrossReference>().unwrap().unwrap(),
+                    request,
+                )
                 .await;
         }
 
         Err(Status::unimplemented(format!(
             "get_flight_info: The defined request is invalid: {:?}",
-            String::from_utf8(any.write_to_bytes().unwrap()).unwrap()
+            String::from_utf8(any.encode_to_vec()).unwrap()
         )))
     }
 
@@ -311,53 +388,76 @@ where
         _request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
         let request = _request.into_inner();
-        let any: protobuf::well_known_types::Any =
-            protobuf::Message::parse_from_bytes(&request.ticket)
-                .map_err(|_| Status::invalid_argument("Unable to parse ticket."))?;
+        let any: prost_types::Any = prost::Message::decode(&*request.ticket)
+            .map_err(|_| Status::invalid_argument("Unable to parse command"))?;
 
         if any.is::<TicketStatementQuery>() {
-            return self.do_get_statement(any.unpack().unwrap().unwrap()).await;
+            return self
+                .do_get_statement(any.unpack::<TicketStatementQuery>().unwrap().unwrap())
+                .await;
         }
         if any.is::<CommandPreparedStatementQuery>() {
             return self
-                .do_get_prepared_statement(any.unpack().unwrap().unwrap())
+                .do_get_prepared_statement(
+                    any.unpack::<CommandPreparedStatementQuery>()
+                        .unwrap()
+                        .unwrap(),
+                )
                 .await;
         }
         if any.is::<CommandGetCatalogs>() {
-            return self.do_get_catalogs(any.unpack().unwrap().unwrap()).await;
+            return self
+                .do_get_catalogs(any.unpack::<CommandGetCatalogs>().unwrap().unwrap())
+                .await;
         }
         if any.is::<CommandGetDbSchemas>() {
-            return self.do_get_schemas(any.unpack().unwrap().unwrap()).await;
+            return self
+                .do_get_schemas(any.unpack::<CommandGetDbSchemas>().unwrap().unwrap())
+                .await;
         }
         if any.is::<CommandGetTables>() {
-            return self.do_get_tables(any.unpack().unwrap().unwrap()).await;
+            return self
+                .do_get_tables(any.unpack::<CommandGetTables>().unwrap().unwrap())
+                .await;
         }
         if any.is::<CommandGetTableTypes>() {
             return self
-                .do_get_table_types(any.unpack().unwrap().unwrap())
+                .do_get_table_types(
+                    any.unpack::<CommandGetTableTypes>().unwrap().unwrap(),
+                )
                 .await;
         }
         if any.is::<CommandGetSqlInfo>() {
-            return self.do_get_sql_info(any.unpack().unwrap().unwrap()).await;
+            return self
+                .do_get_sql_info(any.unpack::<CommandGetSqlInfo>().unwrap().unwrap())
+                .await;
         }
         if any.is::<CommandGetPrimaryKeys>() {
             return self
-                .do_get_primary_keys(any.unpack().unwrap().unwrap())
+                .do_get_primary_keys(
+                    any.unpack::<CommandGetPrimaryKeys>().unwrap().unwrap(),
+                )
                 .await;
         }
         if any.is::<CommandGetExportedKeys>() {
             return self
-                .do_get_exported_keys(any.unpack().unwrap().unwrap())
+                .do_get_exported_keys(
+                    any.unpack::<CommandGetExportedKeys>().unwrap().unwrap(),
+                )
                 .await;
         }
         if any.is::<CommandGetImportedKeys>() {
             return self
-                .do_get_imported_keys(any.unpack().unwrap().unwrap())
+                .do_get_imported_keys(
+                    any.unpack::<CommandGetImportedKeys>().unwrap().unwrap(),
+                )
                 .await;
         }
         if any.is::<CommandGetCrossReference>() {
             return self
-                .do_get_cross_reference(any.unpack().unwrap().unwrap())
+                .do_get_cross_reference(
+                    any.unpack::<CommandGetCrossReference>().unwrap().unwrap(),
+                )
                 .await;
         }
 
@@ -372,29 +472,38 @@ where
         _request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
         let request = _request.into_inner().message().await?.unwrap();
-        let any: protobuf::well_known_types::Any =
-            protobuf::Message::parse_from_bytes(&request.flight_descriptor.unwrap().cmd)
-                .map_err(|_| Status::invalid_argument("Unable to parse command."))?;
-
+        let any: prost_types::Any =
+            prost::Message::decode(&*request.flight_descriptor.unwrap().cmd)
+                .map_err(|_| Status::invalid_argument("Unable to parse command"))?;
         if any.is::<CommandStatementUpdate>() {
             return self
-                .do_put_statement_update(any.unpack().unwrap().unwrap())
+                .do_put_statement_update(
+                    any.unpack::<CommandStatementUpdate>().unwrap().unwrap(),
+                )
                 .await;
         }
         if any.is::<CommandPreparedStatementQuery>() {
             return self
-                .do_put_prepared_statement_query(any.unpack().unwrap().unwrap())
+                .do_put_prepared_statement_query(
+                    any.unpack::<CommandPreparedStatementQuery>()
+                        .unwrap()
+                        .unwrap(),
+                )
                 .await;
         }
         if any.is::<CommandPreparedStatementUpdate>() {
             return self
-                .do_put_prepared_statement_update(any.unpack().unwrap().unwrap())
+                .do_put_prepared_statement_update(
+                    any.unpack::<CommandPreparedStatementUpdate>()
+                        .unwrap()
+                        .unwrap(),
+                )
                 .await;
         }
 
         Err(Status::unimplemented(format!(
             "do_put: The defined request is invalid: {:?}",
-            String::from_utf8(any.write_to_bytes().unwrap()).unwrap()
+            String::from_utf8(any.encode_to_vec()).unwrap()
         )))
     }
 
@@ -402,12 +511,28 @@ where
         &self,
         _request: Request<Empty>,
     ) -> Result<Response<Self::ListActionsStream>, Status> {
-        let _actions = [
-            CREATE_PREPARED_STATEMENT_ACTION_TYPE.clone(),
-            CLOSE_PREPARED_STATEMENT_ACTION_TYPE.clone(),
+        let create_prepared_statement_action_type = ActionType {
+            r#type: CREATE_PREPARED_STATEMENT.to_string(),
+            description: "Creates a reusable prepared statement resource on the server.\n
+                Request Message: ActionCreatePreparedStatementRequest\n
+                Response Message: ActionCreatePreparedStatementResult"
+                .into(),
+        };
+        let close_prepared_statement_action_type = ActionType {
+            r#type: CLOSE_PREPARED_STATEMENT.to_string(),
+            description: "Closes a reusable prepared statement resource on the server.\n
+                Request Message: ActionClosePreparedStatementRequest\n
+                Response Message: N/A"
+                .into(),
+        };
+        let _actions: Vec<Result<ActionType, Status>> = vec![
+            Ok(create_prepared_statement_action_type),
+            Ok(close_prepared_statement_action_type),
         ];
-        // TODO: return
-        Err(Status::ok(""))
+        // TODO: not sure why it's not work
+        // let output = futures::stream::iter(actions);
+        // Ok(Response::new(Box::pin(output) as Self::ListActionsStream))
+        Err(Status::unimplemented("Not yet implemented"))
     }
 
     async fn do_action(
@@ -416,26 +541,24 @@ where
     ) -> Result<Response<Self::DoActionStream>, Status> {
         let request = _request.into_inner();
 
-        if request.r#type == CREATE_PREPARED_STATEMENT_ACTION_TYPE.r#type {
-            let any: protobuf::well_known_types::Any =
-                protobuf::Message::parse_from_bytes(&request.body)
-                    .map_err(|_| Status::invalid_argument("Unable to parse action."))?;
+        if request.r#type == CREATE_PREPARED_STATEMENT {
+            let any: prost_types::Any = prost::Message::decode(&*request.body)
+                .map_err(|_| Status::invalid_argument("Unable to parse command"))?;
 
             let cmd: ActionCreatePreparedStatementRequest = any
-                .unpack()
+                .unpack::<ActionCreatePreparedStatementRequest>()
                 .map_err(|err| Status::invalid_argument(err.to_string()))?
                 .ok_or(Status::invalid_argument(
                     "Unable to unpack ActionCreatePreparedStatementRequest.",
                 ))?;
             return self.do_action_create_prepared_statement(cmd).await;
         }
-        if request.r#type == CLOSE_PREPARED_STATEMENT_ACTION_TYPE.r#type {
-            let any: protobuf::well_known_types::Any =
-                protobuf::Message::parse_from_bytes(&request.body)
-                    .map_err(|_| Status::invalid_argument("Unable to parse action."))?;
+        if request.r#type == CLOSE_PREPARED_STATEMENT {
+            let any: prost_types::Any = prost::Message::decode(&*request.body)
+                .map_err(|_| Status::invalid_argument("Unable to parse command"))?;
 
             let cmd: ActionClosePreparedStatementRequest = any
-                .unpack()
+                .unpack::<ActionClosePreparedStatementRequest>()
                 .map_err(|err| Status::invalid_argument(err.to_string()))?
                 .ok_or(Status::invalid_argument(
                     "Unable to unpack CloseCreatePreparedStatementRequest.",

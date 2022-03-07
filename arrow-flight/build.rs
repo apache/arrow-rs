@@ -17,7 +17,7 @@
 
 use std::{
     env,
-    fs::{File, OpenOptions},
+    fs::OpenOptions,
     io::{Read, Write},
     path::Path,
 };
@@ -49,6 +49,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         file.write_all(buffer.as_bytes())?;
     }
 
+    // override the build location, in order to check in the changes to proto files
+    env::set_var("OUT_DIR", "src/sql");
     // The current working directory can vary depending on how the project is being
     // built or released so we build an absolute path to the proto file
     let path = Path::new("../format/FlightSql.proto");
@@ -56,31 +58,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // avoid rerunning build if the file has not changed
         println!("cargo:rerun-if-changed=../format/FlightSql.proto");
 
-        // https://docs.rs/protoc-rust/2.27.1/protoc_rust/
-        protoc_rust::Codegen::new()
-            .out_dir("src/sql")
-            .input(path)
-            .include("../format")
-            .run()
-            .expect("Running protoc failed.");
-        // Work around
-        // https://github.com/stepancheg/rust-protobuf/issues/117
-        // https://github.com/rust-lang/rust/issues/18810.
-        // We open the file, add 'mod proto { }' around the contents and write it back. This allows us
-        // to include! the file in lib.rs and have a proper proto module.
-        // https://github.com/cartographer-project/point_cloud_viewer/blob/bb73289523/build.rs
-        let proto_path = Path::new("src/sql/FlightSql.rs");
-        let mut contents = String::new();
-        File::open(&proto_path)
-            .unwrap()
-            .read_to_string(&mut contents)
-            .unwrap();
-        let new_contents = format!("pub mod proto {{\n{}\n}}", contents);
-
-        File::create(&proto_path)
-            .unwrap()
-            .write_all(new_contents.as_bytes())
-            .unwrap();
+        tonic_build::compile_protos("../format/FlightSql.proto")?;
+        // read file contents to string
+        let mut file = OpenOptions::new()
+            .read(true)
+            .open("src/sql/arrow.flight.protocol.sql.rs")?;
+        let mut buffer = String::new();
+        file.read_to_string(&mut buffer)?;
+        // append warning that file was auto-generate
+        let mut file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open("src/sql/arrow.flight.protocol.sql.rs")?;
+        file.write_all("// This file was automatically generated through the build.rs script, and should not be edited.\n\n".as_bytes())?;
+        file.write_all(buffer.as_bytes())?;
     }
 
     // As the proto file is checked in, the build should not fail if the file is not found
