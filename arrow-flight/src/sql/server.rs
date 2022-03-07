@@ -548,9 +548,11 @@ where
             let cmd: ActionCreatePreparedStatementRequest = any
                 .unpack::<ActionCreatePreparedStatementRequest>()
                 .map_err(|err| Status::invalid_argument(err.to_string()))?
-                .ok_or_else(|| Status::invalid_argument(
-                    "Unable to unpack ActionCreatePreparedStatementRequest.",
-                ))?;
+                .ok_or_else(|| {
+                    Status::invalid_argument(
+                        "Unable to unpack ActionCreatePreparedStatementRequest.",
+                    )
+                })?;
             return self.do_action_create_prepared_statement(cmd).await;
         }
         if request.r#type == CLOSE_PREPARED_STATEMENT {
@@ -560,9 +562,11 @@ where
             let cmd: ActionClosePreparedStatementRequest = any
                 .unpack::<ActionClosePreparedStatementRequest>()
                 .map_err(|err| Status::invalid_argument(err.to_string()))?
-                .ok_or_else(|| Status::invalid_argument(
-                    "Unable to unpack CloseCreatePreparedStatementRequest.",
-                ))?;
+                .ok_or_else(|| {
+                    Status::invalid_argument(
+                        "Unable to unpack CloseCreatePreparedStatementRequest.",
+                    )
+                })?;
             return self.do_action_close_prepared_statement(cmd).await;
         }
 
