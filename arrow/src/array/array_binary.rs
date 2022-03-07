@@ -1689,6 +1689,16 @@ mod tests {
     }
 
     #[test]
+    fn test_all_none_fixed_size_binary_array_from_sparse_iter() {
+        let none_option: Option<[u8; 32]> = None;
+        let input_arg = vec![none_option, none_option, none_option];
+        let arr =
+            FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+        assert_eq!(0, arr.value_length());
+        assert_eq!(3, arr.len())
+    }
+
+    #[test]
     fn test_fixed_size_binary_array_from_sparse_iter() {
         let input_arg = vec![
             None,
