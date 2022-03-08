@@ -43,7 +43,7 @@
 //! // consumed and used by something else...
 //!
 //! // import it
-//! let stream_reader = ArrowArrayStreamReader::from_raw(stream_ptr).unwrap();
+//! let stream_reader = unsafe { ArrowArrayStreamReader::from_raw(stream_ptr).unwrap() };
 //! let imported_schema = stream_reader.schema();
 //!
 //! let mut produced_batches = vec![];
@@ -330,17 +330,16 @@ fn get_stream_schema(stream_ptr: *mut FFI_ArrowArrayStream) -> Result<SchemaRef>
         let schema = Schema::try_from(ffi_schema.as_ref()).unwrap();
         Ok(Arc::new(schema))
     } else {
-        Err(ArrowError::CDataInterface(
-            format!(
-                "Cannot get schema from input stream. Error code: {:?}",
-                ret_code
-            )
-            .to_string(),
-        ))
+        Err(ArrowError::CDataInterface(format!(
+            "Cannot get schema from input stream. Error code: {:?}",
+            ret_code
+        )))
     }
 }
 
 impl ArrowArrayStreamReader {
+    /// Creates a new `ArrowArrayStreamReader` from a `FFI_ArrowArrayStream`.
+    /// This is used to import from the C Stream Interface.
     #[allow(dead_code)]
     pub fn try_new(stream: FFI_ArrowArrayStream) -> Result<Self> {
         if stream.release.is_none() {
@@ -359,10 +358,14 @@ impl ArrowArrayStreamReader {
         })
     }
 
-    #[allow(dead_code)]
-    pub fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
+    /// Creates a new `ArrowArrayStreamReader` from a raw pointer of `FFI_ArrowArrayStream`.
+    ///
+    /// # Safety
+    /// This function dereferences a raw pointer of `FFI_ArrowArrayStream`.
+    /// Assumes that the pointer represents valid C Stream Interfaces.
+    pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
         let schema = get_stream_schema(raw_stream)?;
-        let stream = unsafe { Arc::new((*raw_stream).clone()) };
+        let stream = Arc::new((*raw_stream).clone());
         Ok(Self { stream, schema })
     }
 
@@ -544,7 +547,8 @@ mod tests {
         // Import through `FFI_ArrowArrayStream` as `ArrowArrayStreamReader`
         let stream = Arc::new(FFI_ArrowArrayStream::new(reader));
         let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
-        let stream_reader = ArrowArrayStreamReader::from_raw(stream_ptr).unwrap();
+        let stream_reader =
+            unsafe { ArrowArrayStreamReader::from_raw(stream_ptr).unwrap() };
 
         let imported_schema = stream_reader.schema();
         assert_eq!(imported_schema, schema);
