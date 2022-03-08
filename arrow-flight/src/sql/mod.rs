@@ -167,4 +167,17 @@ mod tests {
             "type.googleapis.com/arrow.flight.protocol.sql.CommandStatementQuery"
         );
     }
+
+    #[test]
+    fn test_prost_any_pack_unpack() -> ArrowResult<()> {
+        let query = CommandStatementQuery {
+            query: "select 1".to_string(),
+        };
+        let any = prost_types::Any::pack(&query)?;
+        assert!(any.is::<CommandStatementQuery>());
+        let unpack_query: CommandStatementQuery =
+            any.unpack::<CommandStatementQuery>()?.unwrap();
+        assert_eq!(query, unpack_query);
+        Ok(())
+    }
 }
