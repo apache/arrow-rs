@@ -38,7 +38,7 @@
 //!
 //! // export it
 //! let stream = Arc::new(FFI_ArrowArrayStream::new(reader));
-//! let stream_ptr = FFI_ArrowArrayStream::to_raw(stream)?;
+//! let stream_ptr = FFI_ArrowArrayStream::to_raw(stream) as *mut FFI_ArrowArrayStream;
 //!
 //! // consumed and used by something else...
 //!
