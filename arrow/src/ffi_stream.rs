@@ -24,7 +24,7 @@
 //! The second interface is used to import `FFI_ArrowArrayStream` as Rust implementation `RecordBatch` reader.
 //! This is handled by `ArrowArrayStreamReader`.
 //!
-//! ```no_run
+//! ```ignore
 //! # use std::fs::File;
 //! # use std::sync::Arc;
 //! # use arrow::error::Result;
