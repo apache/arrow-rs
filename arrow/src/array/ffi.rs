@@ -131,8 +131,19 @@ mod tests {
 
     #[test]
     fn test_dictionary() -> Result<()> {
-        let values = StringArray::from(vec!["foo", "bar", "zoo"]);
-        let keys = Int32Array::from(vec![0, 1, 2, 2, 1, 0, 1, 2, 1, 2]);
+        let values = StringArray::from(vec![Some("foo"), Some("bar"), None]);
+        let keys = Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            None,
+            Some(1),
+            Some(1),
+            None,
+            Some(1),
+            Some(2),
+            Some(1),
+            None,
+        ]);
         let array = DictionaryArray::try_new(&keys, &values)?;
 
         let data = array.data();

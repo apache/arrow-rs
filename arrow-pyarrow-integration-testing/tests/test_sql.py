@@ -261,7 +261,7 @@ def test_dictionary_python():
     """
     Python -> Rust -> Python
     """
-    a = pa.array(["a", "b", "a"], type=pa.dictionary(pa.int8(), pa.string()))
+    a = pa.array(["a", None, "b", None, "a"], type=pa.dictionary(pa.int8(), pa.string()))
     b = rust.round_trip_array(a)
     assert a == b
     del a

@@ -552,6 +552,7 @@ pub trait ArrowArrayRef {
         if let Some(d) = self.dictionary() {
             // For dictionary type there should only be a single child, so we don't need to worry if
             // there are other children added above.
+            assert!(child_data.is_empty());
             child_data.push(d.to_data()?);
         }
 
@@ -595,9 +596,10 @@ pub trait ArrowArrayRef {
     // to fetch offset buffer's len to build the second buffer.
     fn buffer_len(&self, i: usize) -> Result<usize> {
         // Special handling for dictionary type as we only care about the key type in the case.
-        let data_type = match &self.data_type()? {
-            DataType::Dictionary(key_data_type, _) => key_data_type.as_ref().clone(),
-            dt => dt.clone(),
+        let t = self.data_type()?;
+        let data_type = match &t {
+            DataType::Dictionary(key_data_type, _) => key_data_type.as_ref(),
+            dt => dt,
         };
 
         // Inner type is not important for buffer length.
@@ -609,7 +611,7 @@ pub trait ArrowArrayRef {
             | (DataType::List(_), 1)
             | (DataType::LargeList(_), 1) => {
                 // the len of the offset buffer (buffer 1) equals length + 1
-                let bits = bit_width(&data_type, i)?;
+                let bits = bit_width(data_type, i)?;
                 debug_assert_eq!(bits % 8, 0);
                 (self.array().length as usize + 1) * (bits / 8)
             }
@@ -641,7 +643,7 @@ pub trait ArrowArrayRef {
             }
             // buffer len of primitive types
             _ => {
-                let bits = bit_width(&data_type, i)?;
+                let bits = bit_width(data_type, i)?;
                 bit_util::ceil(self.array().length as usize * bits, 8)
             }
         })
