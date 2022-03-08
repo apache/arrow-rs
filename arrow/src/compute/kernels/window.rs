@@ -51,7 +51,7 @@ use num::{abs, clamp};
 /// let expected: Int32Array = vec![Some(1), None, Some(4)].into();
 /// assert_eq!(res.as_ref(), &expected);
 ///
-/// // shift array 3 element tot he right
+/// // shift array 3 element to the right
 /// let res = shift(&a, 3).unwrap();
 /// let expected: Int32Array = vec![None, None, None].into();
 /// assert_eq!(res.as_ref(), &expected);
