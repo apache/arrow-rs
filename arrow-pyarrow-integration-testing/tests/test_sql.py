@@ -79,6 +79,7 @@ _supported_pyarrow_types = [
             pa.field("c", pa.string()),
         ]
     ),
+    pa.dictionary(pa.int8(), pa.string()),
 ]
 
 _unsupported_pyarrow_types = [
@@ -121,14 +122,6 @@ def test_type_roundtrip(pyarrow_type):
 def test_type_roundtrip_raises(pyarrow_type):
     with pytest.raises(pa.ArrowException):
         rust.round_trip_type(pyarrow_type)
-
-
-def test_dictionary_type_roundtrip():
-    # the dictionary type conversion is incomplete
-    pyarrow_type = pa.dictionary(pa.int32(), pa.string())
-    ty = rust.round_trip_type(pyarrow_type)
-    assert ty == pa.int32()
-
 
 @pytest.mark.parametrize('pyarrow_type', _supported_pyarrow_types, ids=str)
 def test_field_roundtrip(pyarrow_type):
@@ -259,6 +252,16 @@ def test_decimal_python():
         None
     ]
     a = pa.array(data, pa.decimal128(6, 2))
+    b = rust.round_trip_array(a)
+    assert a == b
+    del a
+    del b
+
+def test_dictionary_python():
+    """
+    Python -> Rust -> Python
+    """
+    a = pa.array(["a", "b", "a"], type=pa.dictionary(pa.int8(), pa.string()))
     b = rust.round_trip_array(a)
     assert a == b
     del a
