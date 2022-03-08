@@ -24,7 +24,7 @@
 //! The second interface is used to import `FFI_ArrowArrayStream` as Rust implementation `RecordBatch` reader.
 //! This is handled by `ArrowArrayStreamReader`.
 //!
-//! ```rust
+//! ```no_run
 //! # use std::fs::File;
 //! # use std::sync::Arc;
 //! # use arrow::error::Result;
@@ -32,7 +32,7 @@
 //! # use arrow::ipc::reader::FileReader;
 //! # use arrow::record_batch::RecordBatchReader;
 //! # fn main() -> Result<()> {
-//! // create an record batch reader natively//!
+//! // create an record batch reader natively
 //! let file = File::open("arrow_file").unwrap();
 //! let reader = Box::new(FileReader::try_new(file).unwrap());
 //!
