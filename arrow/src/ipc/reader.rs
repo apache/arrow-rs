@@ -696,18 +696,13 @@ impl<R: Read + Seek> FileReader<R> {
                 }
             };
         }
-
-        let projection = projection.map(|projection| {
-            let fields = projection
-                .iter()
-                .map(|x| schema.fields[*x].clone())
-                .collect();
-            let schema = Schema {
-                fields,
-                metadata: schema.metadata.clone(),
-            };
-            (projection, schema)
-        });
+        let projection = match projection {
+            Some(projection_indices) => {
+                let schema = schema.project(&projection_indices)?;
+                Some((projection_indices, schema))
+            }
+            _ => None,
+        };
 
         Ok(Self {
             reader,
@@ -888,17 +883,13 @@ impl<R: Read> StreamReader<R> {
         // Create an array of optional dictionary value arrays, one per field.
         let dictionaries_by_field = vec![None; schema.fields().len()];
 
-        let projection = projection.map(|projection| {
-            let fields = projection
-                .iter()
-                .map(|x| schema.fields[*x].clone())
-                .collect();
-            let schema = Schema {
-                fields,
-                metadata: schema.metadata.clone(),
-            };
-            (projection, schema)
-        });
+        let projection = match projection {
+            Some(projection_indices) => {
+                let schema = schema.project(&projection_indices)?;
+                Some((projection_indices, schema))
+            }
+            _ => None,
+        };
         Ok(Self {
             reader,
             schema: Arc::new(schema),
