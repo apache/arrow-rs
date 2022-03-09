@@ -26,7 +26,7 @@ authors = ["Apache Arrow <dev@arrow.apache.org>"]
 keywords = [ "parquet" ]
 edition = "2021"
 publish = false
-rust-version = "1.57"
+rust-version = "1.59"
 
 [dependencies]
 parquet = { path = "../parquet", version = "10.0.0" }
