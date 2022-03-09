@@ -61,10 +61,7 @@ pub use gen::UpdateDeleteRules;
 pub mod server;
 
 /// ProstMessageExt are useful utility methods for prost::Message types
-pub trait ProstMessageExt {
-    /// Item is the return value of prost_type::Any::unpack()
-    type Item: prost::Message + Default;
-
+pub trait ProstMessageExt: prost::Message + Default {
     /// type_url for this Message
     fn type_url() -> &'static str;
 
@@ -76,7 +73,6 @@ macro_rules! prost_message_ext {
     ($($name:ty,)*) => {
         $(
             impl ProstMessageExt for $name {
-                type Item = $name;
                 fn type_url() -> &'static str {
                     concat!("type.googleapis.com/arrow.flight.protocol.sql.", stringify!($name))
                 }
@@ -126,7 +122,7 @@ pub trait ProstAnyExt {
     ///
     /// * `Ok(None)` when message type mismatch
     /// * `Err` when parse failed
-    fn unpack<M: ProstMessageExt>(&self) -> ArrowResult<Option<M::Item>>;
+    fn unpack<M: ProstMessageExt>(&self) -> ArrowResult<Option<M>>;
 
     /// Pack any message into `prost_types::Any` value.
     fn pack<M: ProstMessageExt>(message: &M) -> ArrowResult<prost_types::Any>;
@@ -137,7 +133,7 @@ impl ProstAnyExt for prost_types::Any {
         M::type_url() == self.type_url
     }
 
-    fn unpack<M: ProstMessageExt>(&self) -> ArrowResult<Option<M::Item>> {
+    fn unpack<M: ProstMessageExt>(&self) -> ArrowResult<Option<M>> {
         if !self.is::<M>() {
             return Ok(None);
         }
@@ -175,8 +171,7 @@ mod tests {
         };
         let any = prost_types::Any::pack(&query)?;
         assert!(any.is::<CommandStatementQuery>());
-        let unpack_query: CommandStatementQuery =
-            any.unpack::<CommandStatementQuery>()?.unwrap();
+        let unpack_query: CommandStatementQuery = any.unpack()?.unwrap();
         assert_eq!(query, unpack_query);
         Ok(())
     }

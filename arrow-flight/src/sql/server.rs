@@ -276,7 +276,7 @@ where
         if any.is::<CommandStatementQuery>() {
             return self
                 .get_flight_info_statement(
-                    any.unpack::<CommandStatementQuery>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                     request,
@@ -286,7 +286,7 @@ where
         if any.is::<CommandPreparedStatementQuery>() {
             return self
                 .get_flight_info_prepared_statement(
-                    any.unpack::<CommandPreparedStatementQuery>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                     request,
@@ -296,7 +296,7 @@ where
         if any.is::<CommandGetCatalogs>() {
             return self
                 .get_flight_info_catalogs(
-                    any.unpack::<CommandGetCatalogs>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                     request,
@@ -306,7 +306,7 @@ where
         if any.is::<CommandGetDbSchemas>() {
             return self
                 .get_flight_info_schemas(
-                    any.unpack::<CommandGetDbSchemas>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                     request,
@@ -316,7 +316,7 @@ where
         if any.is::<CommandGetTables>() {
             return self
                 .get_flight_info_tables(
-                    any.unpack::<CommandGetTables>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                     request,
@@ -326,7 +326,7 @@ where
         if any.is::<CommandGetTableTypes>() {
             return self
                 .get_flight_info_table_types(
-                    any.unpack::<CommandGetTableTypes>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                     request,
@@ -336,7 +336,7 @@ where
         if any.is::<CommandGetSqlInfo>() {
             return self
                 .get_flight_info_sql_info(
-                    any.unpack::<CommandGetSqlInfo>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                     request,
@@ -346,7 +346,7 @@ where
         if any.is::<CommandGetPrimaryKeys>() {
             return self
                 .get_flight_info_primary_keys(
-                    any.unpack::<CommandGetPrimaryKeys>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                     request,
@@ -356,7 +356,7 @@ where
         if any.is::<CommandGetExportedKeys>() {
             return self
                 .get_flight_info_exported_keys(
-                    any.unpack::<CommandGetExportedKeys>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                     request,
@@ -366,7 +366,7 @@ where
         if any.is::<CommandGetImportedKeys>() {
             return self
                 .get_flight_info_imported_keys(
-                    any.unpack::<CommandGetImportedKeys>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                     request,
@@ -376,7 +376,7 @@ where
         if any.is::<CommandGetCrossReference>() {
             return self
                 .get_flight_info_cross_reference(
-                    any.unpack::<CommandGetCrossReference>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                     request,
@@ -408,7 +408,7 @@ where
         if any.is::<TicketStatementQuery>() {
             return self
                 .do_get_statement(
-                    any.unpack::<TicketStatementQuery>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -417,7 +417,7 @@ where
         if any.is::<CommandPreparedStatementQuery>() {
             return self
                 .do_get_prepared_statement(
-                    any.unpack::<CommandPreparedStatementQuery>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -426,7 +426,7 @@ where
         if any.is::<CommandGetCatalogs>() {
             return self
                 .do_get_catalogs(
-                    any.unpack::<CommandGetCatalogs>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -435,7 +435,7 @@ where
         if any.is::<CommandGetDbSchemas>() {
             return self
                 .do_get_schemas(
-                    any.unpack::<CommandGetDbSchemas>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -444,7 +444,7 @@ where
         if any.is::<CommandGetTables>() {
             return self
                 .do_get_tables(
-                    any.unpack::<CommandGetTables>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -453,7 +453,7 @@ where
         if any.is::<CommandGetTableTypes>() {
             return self
                 .do_get_table_types(
-                    any.unpack::<CommandGetTableTypes>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -462,7 +462,7 @@ where
         if any.is::<CommandGetSqlInfo>() {
             return self
                 .do_get_sql_info(
-                    any.unpack::<CommandGetSqlInfo>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -471,7 +471,7 @@ where
         if any.is::<CommandGetPrimaryKeys>() {
             return self
                 .do_get_primary_keys(
-                    any.unpack::<CommandGetPrimaryKeys>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -480,7 +480,7 @@ where
         if any.is::<CommandGetExportedKeys>() {
             return self
                 .do_get_exported_keys(
-                    any.unpack::<CommandGetExportedKeys>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -489,7 +489,7 @@ where
         if any.is::<CommandGetImportedKeys>() {
             return self
                 .do_get_imported_keys(
-                    any.unpack::<CommandGetImportedKeys>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -498,7 +498,7 @@ where
         if any.is::<CommandGetCrossReference>() {
             return self
                 .do_get_cross_reference(
-                    any.unpack::<CommandGetCrossReference>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -522,7 +522,7 @@ where
         if any.is::<CommandStatementUpdate>() {
             return self
                 .do_put_statement_update(
-                    any.unpack::<CommandStatementUpdate>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -531,7 +531,7 @@ where
         if any.is::<CommandPreparedStatementQuery>() {
             return self
                 .do_put_prepared_statement_query(
-                    any.unpack::<CommandPreparedStatementQuery>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -540,7 +540,7 @@ where
         if any.is::<CommandPreparedStatementUpdate>() {
             return self
                 .do_put_prepared_statement_update(
-                    any.unpack::<CommandPreparedStatementUpdate>()
+                    any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
@@ -590,7 +590,7 @@ where
                 prost::Message::decode(&*request.body).map_err(decode_error_to_status)?;
 
             let cmd: ActionCreatePreparedStatementRequest = any
-                .unpack::<ActionCreatePreparedStatementRequest>()
+                .unpack()
                 .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
                     Status::invalid_argument(
@@ -604,7 +604,7 @@ where
                 prost::Message::decode(&*request.body).map_err(decode_error_to_status)?;
 
             let cmd: ActionClosePreparedStatementRequest = any
-                .unpack::<ActionClosePreparedStatementRequest>()
+                .unpack()
                 .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
                     Status::invalid_argument(
