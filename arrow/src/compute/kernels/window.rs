@@ -23,7 +23,8 @@ use crate::{
     array::{make_array, new_null_array},
     compute::concat,
 };
-use num::{abs, clamp};
+use num::abs;
+use num::traits::clamp_min;
 
 /// Shifts array by defined number of items (to left or right)
 /// A positive value for `offset` shifts the array to the right
@@ -63,7 +64,7 @@ pub fn shift(array: &dyn Array, offset: i64) -> Result<ArrayRef> {
     } else if offset == i64::MIN || abs(offset) >= value_len {
         Ok(new_null_array(array.data_type(), array.len()))
     } else {
-        let slice_offset = clamp(-offset, 0, value_len) as usize;
+        let slice_offset = clamp_min(-offset, 0) as usize;
         let length = array.len() - abs(offset) as usize;
         let slice = array.slice(slice_offset, length);
 
