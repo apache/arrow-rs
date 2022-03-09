@@ -41,7 +41,7 @@ static CLOSE_PREPARED_STATEMENT: &str = "ClosePreparedStatement";
 /// Implements FlightSqlService to handle the flight sql protocol
 #[tonic::async_trait]
 pub trait FlightSqlService:
-    std::marker::Sync + std::marker::Send + std::marker::Sized + FlightService + 'static
+    std::marker::Sync + std::marker::Send + std::marker::Sized + 'static
 {
     /// When impl FlightSqlService, you can always set FlightService to Self
     type FlightService: FlightService;
@@ -276,13 +276,15 @@ where
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let request = request.into_inner();
-        let any: prost_types::Any = prost::Message::decode(&*request.cmd)
-            .map_err(|_| Status::invalid_argument("Unable to parse command"))?;
+        let any: prost_types::Any =
+            prost::Message::decode(&*request.cmd).map_err(decode_error_to_status)?;
 
         if any.is::<CommandStatementQuery>() {
             return self
                 .get_flight_info_statement(
-                    any.unpack::<CommandStatementQuery>().unwrap().unwrap(),
+                    any.unpack::<CommandStatementQuery>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                     request,
                 )
                 .await;
@@ -291,8 +293,8 @@ where
             return self
                 .get_flight_info_prepared_statement(
                     any.unpack::<CommandPreparedStatementQuery>()
-                        .unwrap()
-                        .unwrap(),
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                     request,
                 )
                 .await;
@@ -300,7 +302,9 @@ where
         if any.is::<CommandGetCatalogs>() {
             return self
                 .get_flight_info_catalogs(
-                    any.unpack::<CommandGetCatalogs>().unwrap().unwrap(),
+                    any.unpack::<CommandGetCatalogs>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                     request,
                 )
                 .await;
@@ -308,7 +312,9 @@ where
         if any.is::<CommandGetDbSchemas>() {
             return self
                 .get_flight_info_schemas(
-                    any.unpack::<CommandGetDbSchemas>().unwrap().unwrap(),
+                    any.unpack::<CommandGetDbSchemas>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                     request,
                 )
                 .await;
@@ -316,7 +322,9 @@ where
         if any.is::<CommandGetTables>() {
             return self
                 .get_flight_info_tables(
-                    any.unpack::<CommandGetTables>().unwrap().unwrap(),
+                    any.unpack::<CommandGetTables>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                     request,
                 )
                 .await;
@@ -324,7 +332,9 @@ where
         if any.is::<CommandGetTableTypes>() {
             return self
                 .get_flight_info_table_types(
-                    any.unpack::<CommandGetTableTypes>().unwrap().unwrap(),
+                    any.unpack::<CommandGetTableTypes>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                     request,
                 )
                 .await;
@@ -332,7 +342,9 @@ where
         if any.is::<CommandGetSqlInfo>() {
             return self
                 .get_flight_info_sql_info(
-                    any.unpack::<CommandGetSqlInfo>().unwrap().unwrap(),
+                    any.unpack::<CommandGetSqlInfo>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                     request,
                 )
                 .await;
@@ -340,7 +352,9 @@ where
         if any.is::<CommandGetPrimaryKeys>() {
             return self
                 .get_flight_info_primary_keys(
-                    any.unpack::<CommandGetPrimaryKeys>().unwrap().unwrap(),
+                    any.unpack::<CommandGetPrimaryKeys>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                     request,
                 )
                 .await;
@@ -348,7 +362,9 @@ where
         if any.is::<CommandGetExportedKeys>() {
             return self
                 .get_flight_info_exported_keys(
-                    any.unpack::<CommandGetExportedKeys>().unwrap().unwrap(),
+                    any.unpack::<CommandGetExportedKeys>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                     request,
                 )
                 .await;
@@ -356,7 +372,9 @@ where
         if any.is::<CommandGetImportedKeys>() {
             return self
                 .get_flight_info_imported_keys(
-                    any.unpack::<CommandGetImportedKeys>().unwrap().unwrap(),
+                    any.unpack::<CommandGetImportedKeys>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                     request,
                 )
                 .await;
@@ -364,7 +382,9 @@ where
         if any.is::<CommandGetCrossReference>() {
             return self
                 .get_flight_info_cross_reference(
-                    any.unpack::<CommandGetCrossReference>().unwrap().unwrap(),
+                    any.unpack::<CommandGetCrossReference>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                     request,
                 )
                 .await;
@@ -388,75 +408,105 @@ where
         _request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
         let request = _request.into_inner();
-        let any: prost_types::Any = prost::Message::decode(&*request.ticket)
-            .map_err(|_| Status::invalid_argument("Unable to parse command"))?;
+        let any: prost_types::Any =
+            prost::Message::decode(&*request.ticket).map_err(decode_error_to_status)?;
 
         if any.is::<TicketStatementQuery>() {
             return self
-                .do_get_statement(any.unpack::<TicketStatementQuery>().unwrap().unwrap())
+                .do_get_statement(
+                    any.unpack::<TicketStatementQuery>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
+                )
                 .await;
         }
         if any.is::<CommandPreparedStatementQuery>() {
             return self
                 .do_get_prepared_statement(
                     any.unpack::<CommandPreparedStatementQuery>()
-                        .unwrap()
-                        .unwrap(),
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                 )
                 .await;
         }
         if any.is::<CommandGetCatalogs>() {
             return self
-                .do_get_catalogs(any.unpack::<CommandGetCatalogs>().unwrap().unwrap())
+                .do_get_catalogs(
+                    any.unpack::<CommandGetCatalogs>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
+                )
                 .await;
         }
         if any.is::<CommandGetDbSchemas>() {
             return self
-                .do_get_schemas(any.unpack::<CommandGetDbSchemas>().unwrap().unwrap())
+                .do_get_schemas(
+                    any.unpack::<CommandGetDbSchemas>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
+                )
                 .await;
         }
         if any.is::<CommandGetTables>() {
             return self
-                .do_get_tables(any.unpack::<CommandGetTables>().unwrap().unwrap())
+                .do_get_tables(
+                    any.unpack::<CommandGetTables>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
+                )
                 .await;
         }
         if any.is::<CommandGetTableTypes>() {
             return self
                 .do_get_table_types(
-                    any.unpack::<CommandGetTableTypes>().unwrap().unwrap(),
+                    any.unpack::<CommandGetTableTypes>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                 )
                 .await;
         }
         if any.is::<CommandGetSqlInfo>() {
             return self
-                .do_get_sql_info(any.unpack::<CommandGetSqlInfo>().unwrap().unwrap())
+                .do_get_sql_info(
+                    any.unpack::<CommandGetSqlInfo>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
+                )
                 .await;
         }
         if any.is::<CommandGetPrimaryKeys>() {
             return self
                 .do_get_primary_keys(
-                    any.unpack::<CommandGetPrimaryKeys>().unwrap().unwrap(),
+                    any.unpack::<CommandGetPrimaryKeys>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                 )
                 .await;
         }
         if any.is::<CommandGetExportedKeys>() {
             return self
                 .do_get_exported_keys(
-                    any.unpack::<CommandGetExportedKeys>().unwrap().unwrap(),
+                    any.unpack::<CommandGetExportedKeys>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                 )
                 .await;
         }
         if any.is::<CommandGetImportedKeys>() {
             return self
                 .do_get_imported_keys(
-                    any.unpack::<CommandGetImportedKeys>().unwrap().unwrap(),
+                    any.unpack::<CommandGetImportedKeys>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                 )
                 .await;
         }
         if any.is::<CommandGetCrossReference>() {
             return self
                 .do_get_cross_reference(
-                    any.unpack::<CommandGetCrossReference>().unwrap().unwrap(),
+                    any.unpack::<CommandGetCrossReference>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                 )
                 .await;
         }
@@ -474,11 +524,13 @@ where
         let request = _request.into_inner().message().await?.unwrap();
         let any: prost_types::Any =
             prost::Message::decode(&*request.flight_descriptor.unwrap().cmd)
-                .map_err(|_| Status::invalid_argument("Unable to parse command"))?;
+                .map_err(decode_error_to_status)?;
         if any.is::<CommandStatementUpdate>() {
             return self
                 .do_put_statement_update(
-                    any.unpack::<CommandStatementUpdate>().unwrap().unwrap(),
+                    any.unpack::<CommandStatementUpdate>()
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                 )
                 .await;
         }
@@ -486,8 +538,8 @@ where
             return self
                 .do_put_prepared_statement_query(
                     any.unpack::<CommandPreparedStatementQuery>()
-                        .unwrap()
-                        .unwrap(),
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                 )
                 .await;
         }
@@ -495,8 +547,8 @@ where
             return self
                 .do_put_prepared_statement_update(
                     any.unpack::<CommandPreparedStatementUpdate>()
-                        .unwrap()
-                        .unwrap(),
+                        .map_err(arrow_error_to_status)?
+                        .expect("unreachable"),
                 )
                 .await;
         }
@@ -525,14 +577,12 @@ where
                 Response Message: N/A"
                 .into(),
         };
-        let _actions: Vec<Result<ActionType, Status>> = vec![
+        let actions: Vec<Result<ActionType, Status>> = vec![
             Ok(create_prepared_statement_action_type),
             Ok(close_prepared_statement_action_type),
         ];
-        // TODO: not sure why it's not work
-        // let output = futures::stream::iter(actions);
-        // Ok(Response::new(Box::pin(output) as Self::ListActionsStream))
-        Err(Status::unimplemented("Not yet implemented"))
+        let output = futures::stream::iter(actions);
+        Ok(Response::new(Box::pin(output) as Self::ListActionsStream))
     }
 
     async fn do_action(
@@ -542,12 +592,12 @@ where
         let request = _request.into_inner();
 
         if request.r#type == CREATE_PREPARED_STATEMENT {
-            let any: prost_types::Any = prost::Message::decode(&*request.body)
-                .map_err(|_| Status::invalid_argument("Unable to parse command"))?;
+            let any: prost_types::Any =
+                prost::Message::decode(&*request.body).map_err(decode_error_to_status)?;
 
             let cmd: ActionCreatePreparedStatementRequest = any
                 .unpack::<ActionCreatePreparedStatementRequest>()
-                .map_err(|err| Status::invalid_argument(err.to_string()))?
+                .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
                     Status::invalid_argument(
                         "Unable to unpack ActionCreatePreparedStatementRequest.",
@@ -556,12 +606,12 @@ where
             return self.do_action_create_prepared_statement(cmd).await;
         }
         if request.r#type == CLOSE_PREPARED_STATEMENT {
-            let any: prost_types::Any = prost::Message::decode(&*request.body)
-                .map_err(|_| Status::invalid_argument("Unable to parse command"))?;
+            let any: prost_types::Any =
+                prost::Message::decode(&*request.body).map_err(decode_error_to_status)?;
 
             let cmd: ActionClosePreparedStatementRequest = any
                 .unpack::<ActionClosePreparedStatementRequest>()
-                .map_err(|err| Status::invalid_argument(err.to_string()))?
+                .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
                     Status::invalid_argument(
                         "Unable to unpack CloseCreatePreparedStatementRequest.",
@@ -582,4 +632,12 @@ where
     ) -> Result<Response<Self::DoExchangeStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
+}
+
+fn decode_error_to_status(err: prost::DecodeError) -> tonic::Status {
+    tonic::Status::invalid_argument(format!("{:?}", err))
+}
+
+fn arrow_error_to_status(err: arrow::error::ArrowError) -> tonic::Status {
+    tonic::Status::internal(format!("{:?}", err))
 }
