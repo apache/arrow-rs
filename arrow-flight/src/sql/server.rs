@@ -233,29 +233,23 @@ pub trait FlightSqlService:
 #[tonic::async_trait]
 impl<T: 'static> FlightService for T
 where
-    T: FlightSqlService + std::marker::Sync + std::marker::Send,
+    T: FlightSqlService + std::marker::Send,
 {
-    type HandshakeStream = Pin<
-        Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + Sync + 'static>,
-    >;
+    type HandshakeStream =
+        Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send + 'static>>;
     type ListFlightsStream =
-        Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + Sync + 'static>>;
+        Pin<Box<dyn Stream<Item = Result<FlightInfo, Status>> + Send + 'static>>;
     type DoGetStream =
-        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + Sync + 'static>>;
+        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
     type DoPutStream =
-        Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + Sync + 'static>>;
+        Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + 'static>>;
     type DoActionStream = Pin<
-        Box<
-            dyn Stream<Item = Result<super::super::Result, Status>>
-                + Send
-                + Sync
-                + 'static,
-        >,
+        Box<dyn Stream<Item = Result<super::super::Result, Status>> + Send + 'static>,
     >;
     type ListActionsStream =
-        Pin<Box<dyn Stream<Item = Result<ActionType, Status>> + Send + Sync + 'static>>;
+        Pin<Box<dyn Stream<Item = Result<ActionType, Status>> + Send + 'static>>;
     type DoExchangeStream =
-        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + Sync + 'static>>;
+        Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send + 'static>>;
 
     async fn handshake(
         &self,
