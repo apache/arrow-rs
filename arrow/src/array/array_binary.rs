@@ -209,6 +209,17 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     ) -> impl Iterator<Item = Option<&[u8]>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value(index)))
     }
+
+    /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
+    /// # Safety
+    ///
+    /// caller must ensure that the offsets in the iterator are less than the array len()
+    pub unsafe fn take_iter_unchecked<'a>(
+        &'a self,
+        indexes: impl Iterator<Item = Option<usize>> + 'a,
+    ) -> impl Iterator<Item = Option<&[u8]>> + 'a {
+        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
+    }
 }
 
 impl<'a, T: BinaryOffsetSizeTrait> GenericBinaryArray<T> {
@@ -1674,6 +1685,16 @@ mod tests {
         let arr = FixedSizeBinaryArray::try_from_iter(input_arg.into_iter()).unwrap();
 
         assert_eq!(2, arr.value_length());
+        assert_eq!(3, arr.len())
+    }
+
+    #[test]
+    fn test_all_none_fixed_size_binary_array_from_sparse_iter() {
+        let none_option: Option<[u8; 32]> = None;
+        let input_arg = vec![none_option, none_option, none_option];
+        let arr =
+            FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+        assert_eq!(0, arr.value_length());
         assert_eq!(3, arr.len())
     }
 

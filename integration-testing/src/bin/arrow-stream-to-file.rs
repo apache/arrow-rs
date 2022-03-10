@@ -22,7 +22,7 @@ use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::FileWriter;
 
 fn main() -> Result<()> {
-    let mut arrow_stream_reader = StreamReader::try_new(io::stdin())?;
+    let mut arrow_stream_reader = StreamReader::try_new(io::stdin(), None)?;
     let schema = arrow_stream_reader.schema();
 
     let mut writer = FileWriter::try_new(io::stdout(), &schema)?;

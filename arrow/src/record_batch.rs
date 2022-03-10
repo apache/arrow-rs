@@ -126,45 +126,41 @@ impl RecordBatch {
                 schema.fields().len(),
             )));
         }
-        // check that all columns have the same row count, and match the schema
-        let len = columns[0].data().len();
 
-        // This is a bit repetitive, but it is better to check the condition outside the loop
-        if options.match_field_names {
-            for (i, column) in columns.iter().enumerate() {
-                if column.len() != len {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "all columns in a record batch must have the same length"
-                            .to_string(),
-                    ));
-                }
-                if column.data_type() != schema.field(i).data_type() {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "column types must match schema types, expected {:?} but found {:?} at column index {}",
-                        schema.field(i).data_type(),
-                        column.data_type(),
-                        i)));
-                }
+        // check that all columns have the same row count
+        let row_count = columns[0].data().len();
+        if columns.iter().any(|c| c.len() != row_count) {
+            return Err(ArrowError::InvalidArgumentError(
+                "all columns in a record batch must have the same length".to_string(),
+            ));
+        }
+
+        // function for comparing column type and field type
+        // return true if 2 types are not matched
+        let type_not_match = if options.match_field_names {
+            |(_, (col_type, field_type)): &(usize, (&DataType, &DataType))| {
+                col_type != field_type
             }
         } else {
-            for (i, column) in columns.iter().enumerate() {
-                if column.len() != len {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "all columns in a record batch must have the same length"
-                            .to_string(),
-                    ));
-                }
-                if !column
-                    .data_type()
-                    .equals_datatype(schema.field(i).data_type())
-                {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "column types must match schema types, expected {:?} but found {:?} at column index {}",
-                        schema.field(i).data_type(),
-                        column.data_type(),
-                        i)));
-                }
+            |(_, (col_type, field_type)): &(usize, (&DataType, &DataType))| {
+                !col_type.equals_datatype(field_type)
             }
+        };
+
+        // check that all columns match the schema
+        let not_match = columns
+            .iter()
+            .zip(schema.fields().iter())
+            .map(|(col, field)| (col.data_type(), field.data_type()))
+            .enumerate()
+            .find(type_not_match);
+
+        if let Some((i, (col_type, field_type))) = not_match {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "column types must match schema types, expected {:?} but found {:?} at column index {}",
+                field_type,
+                col_type,
+                i)));
         }
 
         Ok(())
@@ -601,7 +597,7 @@ mod tests {
         let a = Int64Array::from(vec![1, 2, 3, 4, 5]);
 
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]);
-        assert!(!batch.is_ok());
+        assert!(batch.is_err());
     }
 
     #[test]
@@ -662,7 +658,7 @@ mod tests {
 
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]);
-        assert!(!batch.is_ok());
+        assert!(batch.is_err());
     }
 
     #[test]

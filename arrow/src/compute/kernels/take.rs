@@ -600,8 +600,7 @@ where
 
     let null_count = values.null_count();
 
-    let nulls;
-    if null_count == 0 {
+    let nulls = if null_count == 0 {
         (0..data_len).try_for_each::<_, Result<()>>(|i| {
             let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
                 ArrowError::ComputeError("Cast to usize failed".to_string())
@@ -614,7 +613,7 @@ where
             Ok(())
         })?;
 
-        nulls = indices.data_ref().null_buffer().cloned();
+        indices.data_ref().null_buffer().cloned()
     } else {
         let mut null_buf = MutableBuffer::new(num_byte).with_bitset(num_byte, true);
         let null_slice = null_buf.as_slice_mut();
@@ -633,7 +632,7 @@ where
             Ok(())
         })?;
 
-        nulls = match indices.data_ref().null_buffer() {
+        match indices.data_ref().null_buffer() {
             Some(buffer) => Some(buffer_bin_and(
                 buffer,
                 indices.offset(),
@@ -642,8 +641,8 @@ where
                 indices.len(),
             )),
             None => Some(null_buf.into()),
-        };
-    }
+        }
+    };
 
     let data = unsafe {
         ArrayData::new_unchecked(

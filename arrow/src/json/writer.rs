@@ -699,6 +699,14 @@ where
         Ok(())
     }
 
+    /// Convert the `RecordBatch` into JSON rows, and write them to the output
+    pub fn write(&mut self, batch: RecordBatch) -> Result<()> {
+        for row in record_batches_to_json_rows(&[batch])? {
+            self.write_row(&Value::Object(row))?;
+        }
+        Ok(())
+    }
+
     /// Convert the [`RecordBatch`] into JSON rows, and write them to the output
     pub fn write_batches(&mut self, batches: &[RecordBatch]) -> Result<()> {
         for row in record_batches_to_json_rows(batches)? {
@@ -1457,5 +1465,36 @@ mod tests {
 {"map":{}}
 "#
         );
+    }
+
+    #[test]
+    fn test_write_single_batch() {
+        let test_file = "test/data/basic.json";
+        let builder = ReaderBuilder::new()
+            .infer_schema(None)
+            .with_batch_size(1024);
+        let mut reader: Reader<File> = builder
+            .build::<File>(File::open(test_file).unwrap())
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write(batch).unwrap();
+        }
+
+        let result = String::from_utf8(buf).unwrap();
+        let expected = read_to_string(test_file).unwrap();
+        for (r, e) in result.lines().zip(expected.lines()) {
+            let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
+            // remove null value from object to make comparision consistent:
+            if let Value::Object(obj) = expected_json {
+                expected_json = Value::Object(
+                    obj.into_iter().filter(|(_, v)| *v != Value::Null).collect(),
+                );
+            }
+            assert_eq!(serde_json::from_str::<Value>(r).unwrap(), expected_json,);
+        }
     }
 }

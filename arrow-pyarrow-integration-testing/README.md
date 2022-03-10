@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Arrow c integration
+# Arrow + PyArrow integration testing
 
 This is a Rust crate that tests compatibility between Rust's Arrow implementation and PyArrow.
 
