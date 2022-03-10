@@ -323,8 +323,9 @@ impl MutableBuffer {
         let additional = std::mem::size_of::<T>();
         self.reserve(additional);
         unsafe {
-            let dst = self.data.as_ptr().add(self.len) as *mut T;
-            std::ptr::write(dst, item);
+            let src = item.to_byte_slice().as_ptr();
+            let dst = self.data.as_ptr().add(self.len);
+            std::ptr::copy_nonoverlapping(src, dst, additional);
         }
         self.len += additional;
     }
@@ -335,8 +336,9 @@ impl MutableBuffer {
     #[inline]
     pub unsafe fn push_unchecked<T: ToByteSlice>(&mut self, item: T) {
         let additional = std::mem::size_of::<T>();
-        let dst = self.data.as_ptr().add(self.len) as *mut T;
-        std::ptr::write(dst, item);
+        let src = item.to_byte_slice().as_ptr();
+        let dst = self.data.as_ptr().add(self.len);
+        std::ptr::copy_nonoverlapping(src, dst, additional);
         self.len += additional;
     }
 
@@ -390,14 +392,15 @@ impl MutableBuffer {
 
         // this is necessary because of https://github.com/rust-lang/rust/issues/32155
         let mut len = SetLenOnDrop::new(&mut self.len);
-        let mut dst = unsafe { self.data.as_ptr().add(len.local_len) as *mut T };
+        let mut dst = unsafe { self.data.as_ptr().add(len.local_len) };
         let capacity = self.capacity;
 
         while len.local_len + size <= capacity {
             if let Some(item) = iterator.next() {
                 unsafe {
-                    std::ptr::write(dst, item);
-                    dst = dst.add(1);
+                    let src = item.to_byte_slice().as_ptr();
+                    std::ptr::copy_nonoverlapping(src, dst, size);
+                    dst = dst.add(size);
                 }
                 len.local_len += size;
             } else {
@@ -708,6 +711,46 @@ mod tests {
             &[1u8, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0],
             buf.as_slice()
         );
+    }
+
+    #[test]
+    fn mutable_extend_from_iter_unaligned_u64() {
+        let mut buf = MutableBuffer::new(16);
+        buf.push(1_u8);
+        buf.extend([1_u64]);
+        dbg!(&buf.as_slice());
+        assert_eq!(9, buf.len());
+        assert_eq!(&[1u8, 1u8, 0, 0, 0, 0, 0, 0, 0], buf.as_slice());
+    }
+
+    #[test]
+    fn mutable_extend_from_slice_unaligned_u64() {
+        let mut buf = MutableBuffer::new(16);
+        buf.extend_from_slice(&[1_u8]);
+        buf.extend_from_slice(&[1_u64]);
+        dbg!(&buf.as_slice());
+        assert_eq!(9, buf.len());
+        assert_eq!(&[1u8, 1u8, 0, 0, 0, 0, 0, 0, 0], buf.as_slice());
+    }
+
+    #[test]
+    fn mutable_push_unaligned_u64() {
+        let mut buf = MutableBuffer::new(16);
+        buf.push(1_u8);
+        buf.push(1_u64);
+        assert_eq!(9, buf.len());
+        assert_eq!(&[1u8, 1u8, 0, 0, 0, 0, 0, 0, 0], buf.as_slice());
+    }
+
+    #[test]
+    fn mutable_push_unchecked_unaligned_u64() {
+        let mut buf = MutableBuffer::new(16);
+        unsafe {
+            buf.push_unchecked(1_u8);
+            buf.push_unchecked(1_u64);
+        }
+        assert_eq!(9, buf.len());
+        assert_eq!(&[1u8, 1u8, 0, 0, 0, 0, 0, 0, 0], buf.as_slice());
     }
 
     #[test]
