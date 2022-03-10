@@ -125,7 +125,7 @@ pub trait FlightSqlService:
 
     // do_get
 
-    /// Get a FlightInfo for executing an already created prepared statement.
+    /// Get a FlightDataStream containing the query results.
     async fn do_get_statement(
         &self,
         ticket: TicketStatementQuery,
@@ -608,7 +608,7 @@ where
                 .map_err(arrow_error_to_status)?
                 .ok_or_else(|| {
                     Status::invalid_argument(
-                        "Unable to unpack CloseCreatePreparedStatementRequest.",
+                        "Unable to unpack ActionClosePreparedStatementRequest.",
                     )
                 })?;
             return self.do_action_close_prepared_statement(cmd).await;
