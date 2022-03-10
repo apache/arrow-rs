@@ -52,3 +52,7 @@ proc-macro2 = ">1.0.30"
 #[lib]
 #name = "flight"
 #path = "src/lib.rs"
+
+[[example]]
+name = "flight_sql_server"
+required-features = ["flight-sql"]
