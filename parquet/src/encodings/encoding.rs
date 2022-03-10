@@ -617,7 +617,11 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             self.values_in_block -= n;
         }
 
-        assert_eq!(self.values_in_block, 0);
+        assert_eq!(
+            self.values_in_block, 0,
+            "Expected 0 values in block, found {}",
+            self.values_in_block
+        );
         Ok(())
     }
 }
