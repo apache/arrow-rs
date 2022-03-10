@@ -344,7 +344,7 @@ jobs:
           rustup toolchain install stable
           rustup default stable
           cargo install --version 0.18.2 cargo-tarpaulin
-          cargo tarpaulin --all --all-features --out Xml
+          cargo tarpaulin --all --out Xml
       - name: Report coverage
         continue-on-error: true
         run: bash <(curl -s https://codecov.io/bash)
