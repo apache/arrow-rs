@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_flight::sql::SqlInfo;
+use arrow_flight::FlightData;
+use arrow_flight::sql::{SqlInfo, ActionCreatePreparedStatementResult};
 use tonic::transport::Server;
-use tonic::{Response, Status};
+use tonic::{Response, Status, Streaming};
 
 use arrow_flight::{
     flight_service_server::FlightService,
@@ -190,33 +191,35 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
-    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
+    ) -> Result<i64, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
+        _request: Streaming<FlightData>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_put_prepared_statement_update(
         &self,
         _query: CommandPreparedStatementUpdate,
-    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
+        _request: Streaming<FlightData>,
+    ) -> Result<i64, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     // do_action
     async fn do_action_create_prepared_statement(
         &self,
         _query: ActionCreatePreparedStatementRequest,
-    ) -> Result<Response<<Self as FlightService>::DoActionStream>, Status> {
+    ) -> Result<ActionCreatePreparedStatementResult, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_action_close_prepared_statement(
         &self,
         _query: ActionClosePreparedStatementRequest,
-    ) -> Result<Response<<Self as FlightService>::DoActionStream>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+    ) {
+        unimplemented!("Not yet implemented")
     }
 
     async fn register_sql_info(&self, _id: i32, _result: &SqlInfo) {}

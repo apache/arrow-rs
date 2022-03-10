@@ -28,11 +28,12 @@ use super::{
         PutResult, SchemaResult, Ticket,
     },
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-    CommandGetCatalogs, CommandGetCrossReference, CommandGetDbSchemas,
-    CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
-    CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
+    ActionCreatePreparedStatementResult, CommandGetCatalogs, CommandGetCrossReference,
+    CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
     CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementUpdate, ProstAnyExt, SqlInfo, TicketStatementQuery,
+    CommandStatementUpdate, DoPutUpdateResult, ProstAnyExt, ProstMessageExt, SqlInfo,
+    TicketStatementQuery,
 };
 
 static CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
@@ -197,19 +198,21 @@ pub trait FlightSqlService:
     async fn do_put_statement_update(
         &self,
         ticket: CommandStatementUpdate,
-    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status>;
+    ) -> Result<i64, Status>;
 
     /// Bind parameters to given prepared statement.
     async fn do_put_prepared_statement_query(
         &self,
         query: CommandPreparedStatementQuery,
+        request: Streaming<FlightData>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status>;
 
     /// Execute an update SQL prepared statement.
     async fn do_put_prepared_statement_update(
         &self,
         query: CommandPreparedStatementUpdate,
-    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status>;
+        request: Streaming<FlightData>,
+    ) -> Result<i64, Status>;
 
     // do_action
 
@@ -217,13 +220,13 @@ pub trait FlightSqlService:
     async fn do_action_create_prepared_statement(
         &self,
         query: ActionCreatePreparedStatementRequest,
-    ) -> Result<Response<<Self as FlightService>::DoActionStream>, Status>;
+    ) -> Result<ActionCreatePreparedStatementResult, Status>;
 
     /// Close a prepared statement.
     async fn do_action_close_prepared_statement(
         &self,
         query: ActionClosePreparedStatementRequest,
-    ) -> Result<Response<<Self as FlightService>::DoActionStream>, Status>;
+    );
 
     /// Register a new SqlInfo result, making it available when calling GetSqlInfo.
     async fn register_sql_info(&self, id: i32, result: &SqlInfo);
@@ -399,9 +402,9 @@ where
 
     async fn do_get(
         &self,
-        _request: Request<Ticket>,
+        request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
-        let request = _request.into_inner();
+        let request = request.into_inner();
         let any: prost_types::Any =
             prost::Message::decode(&*request.ticket).map_err(decode_error_to_status)?;
 
@@ -513,20 +516,26 @@ where
 
     async fn do_put(
         &self,
-        _request: Request<Streaming<FlightData>>,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        let request = _request.into_inner().message().await?.unwrap();
+        let mut request = request.into_inner();
+        let cmd = request.message().await?.unwrap();
         let any: prost_types::Any =
-            prost::Message::decode(&*request.flight_descriptor.unwrap().cmd)
+            prost::Message::decode(&*cmd.flight_descriptor.unwrap().cmd)
                 .map_err(decode_error_to_status)?;
         if any.is::<CommandStatementUpdate>() {
-            return self
+            let record_count = self
                 .do_put_statement_update(
                     any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
                 )
-                .await;
+                .await?;
+            let result = DoPutUpdateResult { record_count };
+            let output = futures::stream::iter(vec![Ok(super::super::gen::PutResult {
+                app_metadata: result.as_any().encode_to_vec(),
+            })]);
+            return Ok(Response::new(Box::pin(output)));
         }
         if any.is::<CommandPreparedStatementQuery>() {
             return self
@@ -534,20 +543,27 @@ where
                     any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
+                    request,
                 )
                 .await;
         }
         if any.is::<CommandPreparedStatementUpdate>() {
-            return self
+            let record_count = self
                 .do_put_prepared_statement_update(
                     any.unpack()
                         .map_err(arrow_error_to_status)?
                         .expect("unreachable"),
+                    request,
                 )
-                .await;
+                .await?;
+            let result = DoPutUpdateResult { record_count };
+            let output = futures::stream::iter(vec![Ok(super::super::gen::PutResult {
+                app_metadata: result.as_any().encode_to_vec(),
+            })]);
+            return Ok(Response::new(Box::pin(output)));
         }
 
-        Err(Status::unimplemented(format!(
+        Err(Status::invalid_argument(format!(
             "do_put: The defined request is invalid: {:?}",
             String::from_utf8(any.encode_to_vec()).unwrap()
         )))
@@ -581,9 +597,9 @@ where
 
     async fn do_action(
         &self,
-        _request: Request<Action>,
+        request: Request<Action>,
     ) -> Result<Response<Self::DoActionStream>, Status> {
-        let request = _request.into_inner();
+        let request = request.into_inner();
 
         if request.r#type == CREATE_PREPARED_STATEMENT {
             let any: prost_types::Any =
@@ -597,7 +613,11 @@ where
                         "Unable to unpack ActionCreatePreparedStatementRequest.",
                     )
                 })?;
-            return self.do_action_create_prepared_statement(cmd).await;
+            let stmt = self.do_action_create_prepared_statement(cmd).await?;
+            let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
+                body: stmt.as_any().encode_to_vec(),
+            })]);
+            return Ok(Response::new(Box::pin(output)));
         }
         if request.r#type == CLOSE_PREPARED_STATEMENT {
             let any: prost_types::Any =
@@ -611,10 +631,11 @@ where
                         "Unable to unpack ActionClosePreparedStatementRequest.",
                     )
                 })?;
-            return self.do_action_close_prepared_statement(cmd).await;
+            self.do_action_close_prepared_statement(cmd).await;
+            return Ok(Response::new(Box::pin(futures::stream::empty())));
         }
 
-        Err(Status::unimplemented(format!(
+        Err(Status::invalid_argument(format!(
             "do_action: The defined request is invalid: {:?}",
             request.r#type
         )))
