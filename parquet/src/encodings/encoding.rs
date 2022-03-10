@@ -565,7 +565,7 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             return Ok(());
         }
 
-        let mut min_delta = i64::max_value();
+        let mut min_delta = i64::MAX;
         for i in 0..self.values_in_block {
             min_delta = cmp::min(min_delta, self.deltas[i]);
         }
@@ -581,6 +581,13 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             // values left
             let n = cmp::min(self.mini_block_size, self.values_in_block);
             if n == 0 {
+                // Decoders should be agnostic to the padding value, we therefore use 0xFF
+                // when running tests. However, not all implementations may handle this correctly
+                // so pad with 0 when not running tests
+                let pad_value = cfg!(test).then(|| 0xFF).unwrap_or(0);
+                for j in i..self.num_mini_blocks {
+                    self.bit_writer.write_at(offset + j, pad_value);
+                }
                 break;
             }
 
@@ -610,11 +617,7 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             self.values_in_block -= n;
         }
 
-        assert!(
-            self.values_in_block == 0,
-            "Expected 0 values in block, found {}",
-            self.values_in_block
-        );
+        assert_eq!(self.values_in_block, 0);
         Ok(())
     }
 }
