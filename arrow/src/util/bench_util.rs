@@ -98,7 +98,7 @@ pub fn create_string_array<Offset: StringOffsetSizeTrait>(
     create_string_array_with_len(size, null_density, 4)
 }
 
-/// Creates an random (but fixed-seeded) array of a given size, null density and length of string
+/// Creates a random (but fixed-seeded) array of a given size, null density and length
 pub fn create_string_array_with_len<Offset: StringOffsetSizeTrait>(
     size: usize,
     null_density: f32,
