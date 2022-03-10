@@ -132,6 +132,7 @@ jobs:
 
           # Switch to arrow-flight
           cd ../arrow-flight
+          cargo test --features=flight-sql
           cargo check --no-default-features
 
   # test the --features "simd" of the arrow crate. This requires nightly.
@@ -343,7 +344,7 @@ jobs:
           rustup toolchain install stable
           rustup default stable
           cargo install --version 0.18.2 cargo-tarpaulin
-          cargo tarpaulin --all --out Xml
+          cargo tarpaulin --all --all-features --out Xml
       - name: Report coverage
         continue-on-error: true
         run: bash <(curl -s https://codecov.io/bash)
