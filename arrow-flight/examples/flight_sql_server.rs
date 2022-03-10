@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_flight::sql::{ActionCreatePreparedStatementResult, SqlInfo};
 use arrow_flight::FlightData;
-use arrow_flight::sql::{SqlInfo, ActionCreatePreparedStatementResult};
 use tonic::transport::Server;
 use tonic::{Response, Status, Streaming};
 
