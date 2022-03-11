@@ -132,7 +132,7 @@ jobs:
 
           # Switch to arrow-flight
           cd ../arrow-flight
-          cargo test --features=flight-sql
+          cargo test --features=flight-sql-experimental
           cargo check --no-default-features
 
   # test the --features "simd" of the arrow crate. This requires nightly.

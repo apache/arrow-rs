@@ -67,7 +67,7 @@ pub use gen::Ticket;
 
 pub mod utils;
 
-#[cfg(feature = "flight-sql")]
+#[cfg(feature = "flight-sql-experimental")]
 pub mod sql;
 
 use flight_descriptor::DescriptorType;

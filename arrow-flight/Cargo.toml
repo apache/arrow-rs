@@ -51,4 +51,4 @@ proc-macro2 = ">1.0.30"
 
 [[example]]
 name = "flight_sql_server"
-required-features = ["flight-sql"]
+required-features = ["flight-sql-experimental"]
