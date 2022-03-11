@@ -433,6 +433,7 @@ pub struct DeltaBitPackDecoder<T: DataType> {
     initialized: bool,
 
     // Header info
+
     /// The number of values in each block
     block_size: usize,
     /// The number of values that remain to be read in the current page
@@ -443,6 +444,7 @@ pub struct DeltaBitPackDecoder<T: DataType> {
     values_per_mini_block: usize,
 
     // Per block info
+
     /// The minimum delta in the block
     min_delta: T::T,
     /// The byte offset of the end of the current block
