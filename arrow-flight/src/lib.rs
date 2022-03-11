@@ -67,6 +67,9 @@ pub use gen::Ticket;
 
 pub mod utils;
 
+#[cfg(feature = "flight-sql-experimental")]
+pub mod sql;
+
 use flight_descriptor::DescriptorType;
 
 /// SchemaAsIpc represents a pairing of a `Schema` with IpcWriteOptions
