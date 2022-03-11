@@ -385,9 +385,9 @@ impl MutableBuffer {
         &mut self,
         mut iterator: I,
     ) {
-        let size = std::mem::size_of::<T>();
+        let item_size = std::mem::size_of::<T>();
         let (lower, _) = iterator.size_hint();
-        let additional = lower * size;
+        let additional = lower * item_size;
         self.reserve(additional);
 
         // this is necessary because of https://github.com/rust-lang/rust/issues/32155
@@ -395,14 +395,14 @@ impl MutableBuffer {
         let mut dst = unsafe { self.data.as_ptr().add(len.local_len) };
         let capacity = self.capacity;
 
-        while len.local_len + size <= capacity {
+        while len.local_len + item_size <= capacity {
             if let Some(item) = iterator.next() {
                 unsafe {
                     let src = item.to_byte_slice().as_ptr();
-                    std::ptr::copy_nonoverlapping(src, dst, size);
-                    dst = dst.add(size);
+                    std::ptr::copy_nonoverlapping(src, dst, item_size);
+                    dst = dst.add(item_size);
                 }
-                len.local_len += size;
+                len.local_len += item_size;
             } else {
                 break;
             }
@@ -433,21 +433,23 @@ impl MutableBuffer {
     pub unsafe fn from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
         iterator: I,
     ) -> Self {
+        let item_size = std::mem::size_of::<T>();
         let (_, upper) = iterator.size_hint();
         let upper = upper.expect("from_trusted_len_iter requires an upper limit");
-        let len = upper * std::mem::size_of::<T>();
+        let len = upper * item_size;
 
         let mut buffer = MutableBuffer::new(len);
 
-        let mut dst = buffer.data.as_ptr() as *mut T;
+        let mut dst = buffer.data.as_ptr();
         for item in iterator {
             // note how there is no reserve here (compared with `extend_from_iter`)
-            std::ptr::write(dst, item);
-            dst = dst.add(1);
+            let src = item.to_byte_slice().as_ptr();
+            std::ptr::copy_nonoverlapping(src, dst, item_size);
+            dst = dst.add(item_size);
         }
         assert_eq!(
-            dst.offset_from(buffer.data.as_ptr() as *mut T) as usize,
-            upper,
+            dst.offset_from(buffer.data.as_ptr()) as usize,
+            len,
             "Trusted iterator length was not accurately reported"
         );
         buffer.len = len;
@@ -524,34 +526,31 @@ impl MutableBuffer {
     >(
         iterator: I,
     ) -> std::result::Result<Self, E> {
+        let item_size = std::mem::size_of::<T>();
         let (_, upper) = iterator.size_hint();
         let upper = upper.expect("try_from_trusted_len_iter requires an upper limit");
-        let len = upper * std::mem::size_of::<T>();
+        let len = upper * item_size;
 
         let mut buffer = MutableBuffer::new(len);
 
-        let mut dst = buffer.data.as_ptr() as *mut T;
+        let mut dst = buffer.data.as_ptr();
         for item in iterator {
             // note how there is no reserve here (compared with `extend_from_iter`)
-            std::ptr::write(dst, item?);
-            dst = dst.add(1);
+            let src = item?.to_byte_slice().as_ptr();
+            std::ptr::copy_nonoverlapping(src, dst, item_size);
+            dst = dst.add(item_size);
         }
         // try_from_trusted_len_iter is instantiated a lot, so we extract part of it into a less
         // generic method to reduce compile time
-        unsafe fn finalize_buffer<T>(
-            dst: *mut T,
-            buffer: &mut MutableBuffer,
-            upper: usize,
-            len: usize,
-        ) {
+        unsafe fn finalize_buffer(dst: *mut u8, buffer: &mut MutableBuffer, len: usize) {
             assert_eq!(
-                dst.offset_from(buffer.data.as_ptr() as *mut T) as usize,
-                upper,
+                dst.offset_from(buffer.data.as_ptr()) as usize,
+                len,
                 "Trusted iterator length was not accurately reported"
             );
             buffer.len = len;
         }
-        finalize_buffer(dst, &mut buffer, upper, len);
+        finalize_buffer(dst, &mut buffer, len);
         Ok(buffer)
     }
 }
@@ -718,7 +717,6 @@ mod tests {
         let mut buf = MutableBuffer::new(16);
         buf.push(1_u8);
         buf.extend([1_u64]);
-        dbg!(&buf.as_slice());
         assert_eq!(9, buf.len());
         assert_eq!(&[1u8, 1u8, 0, 0, 0, 0, 0, 0, 0], buf.as_slice());
     }
@@ -728,7 +726,6 @@ mod tests {
         let mut buf = MutableBuffer::new(16);
         buf.extend_from_slice(&[1_u8]);
         buf.extend_from_slice(&[1_u64]);
-        dbg!(&buf.as_slice());
         assert_eq!(9, buf.len());
         assert_eq!(&[1u8, 1u8, 0, 0, 0, 0, 0, 0, 0], buf.as_slice());
     }
