@@ -105,9 +105,11 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
 
         match keys.data().null_buffer() {
             Some(buffer) if keys.data().null_count() > 0 => {
-                data = data.null_bit_buffer(buffer.clone());
+                data = data
+                    .null_bit_buffer(buffer.clone())
+                    .null_count(keys.data().null_count());
             }
-            _ => {}
+            _ => data = data.null_count(0),
         }
 
         Ok(data.build()?.into())
@@ -535,14 +537,16 @@ mod tests {
         assert_eq!(array.keys().data_type(), &DataType::Int32);
         assert_eq!(array.values().data_type(), &DataType::Utf8);
 
-        assert!(array.keys.is_valid(0));
-        assert!(array.keys.is_valid(1));
-        assert!(array.keys.is_null(2));
-        assert!(array.keys.is_valid(3));
+        assert_eq!(array.data().null_count(), 1);
 
-        assert_eq!(array.keys.value(0), 0);
-        assert_eq!(array.keys.value(1), 2);
-        assert_eq!(array.keys.value(3), 1);
+        assert!(array.keys().is_valid(0));
+        assert!(array.keys().is_valid(1));
+        assert!(array.keys().is_null(2));
+        assert!(array.keys().is_valid(3));
+
+        assert_eq!(array.keys().value(0), 0);
+        assert_eq!(array.keys().value(1), 2);
+        assert_eq!(array.keys().value(3), 1);
 
         assert_eq!(
             "DictionaryArray {keys: PrimitiveArray<Int32>\n[\n  0,\n  2,\n  null,\n  1,\n] values: StringArray\n[\n  \"foo\",\n  \"bar\",\n  \"baz\",\n]}\n",
