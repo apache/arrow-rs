@@ -303,8 +303,11 @@ impl MutableBuffer {
         let additional = len * std::mem::size_of::<T>();
         self.reserve(additional);
         unsafe {
-            let dst = self.data.as_ptr().add(self.len);
+            // this assumes that `[ToByteSlice]` can be copied directly
+            // without calling `to_byte_slice` for each element,
+            // which is correct for all ArrowNativeType implementations.
             let src = items.as_ptr() as *const u8;
+            let dst = self.data.as_ptr().add(self.len);
             std::ptr::copy_nonoverlapping(src, dst, additional)
         }
         self.len += additional;
