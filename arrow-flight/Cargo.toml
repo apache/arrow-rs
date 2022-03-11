@@ -39,7 +39,7 @@ futures = { version = "0.3", default-features = false, features = ["alloc"]}
 
 [features]
 default = []
-flight-sql = ["prost-types"]
+flight-sql-experimental = ["prost-types"]
 
 [dev-dependencies]
 
