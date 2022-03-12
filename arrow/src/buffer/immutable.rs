@@ -25,7 +25,6 @@ use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::{
     bytes::{Bytes, Deallocation},
     datatypes::ArrowNativeType,
-    ffi,
 };
 
 use super::ops::bitwise_unary_op_helper;
@@ -95,9 +94,8 @@ impl Buffer {
     pub unsafe fn from_unowned(
         ptr: NonNull<u8>,
         len: usize,
-        data: Arc<ffi::FFI_ArrowArray>,
     ) -> Self {
-        Buffer::build_with_arguments(ptr, len, Deallocation::Foreign(data))
+        Buffer::build_with_arguments(ptr, len, Deallocation::Foreign)
     }
 
     /// Auxiliary method to create a new Buffer

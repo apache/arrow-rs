@@ -107,7 +107,7 @@ bitflags! {
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FFI_ArrowSchema {
     format: *const c_char,
     name: *const c_char,
@@ -316,7 +316,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FFI_ArrowArray {
     pub(crate) length: i64,
     pub(crate) null_count: i64,
@@ -463,7 +463,6 @@ impl FFI_ArrowArray {
 /// # Safety
 /// This function assumes that `ceil(self.length * bits, 8)` is the size of the buffer
 unsafe fn create_buffer(
-    owner: Arc<FFI_ArrowArray>,
     array: &FFI_ArrowArray,
     index: usize,
     len: usize,
@@ -476,15 +475,15 @@ unsafe fn create_buffer(
     assert!(index < array.n_buffers as usize);
     let ptr = *buffers.add(index);
 
-    NonNull::new(ptr as *mut u8).map(|ptr| Buffer::from_unowned(ptr, len, owner))
+    NonNull::new(ptr as *mut u8).map(|ptr| Buffer::from_unowned(ptr, len))
 }
 
-fn create_child(
-    owner: Arc<FFI_ArrowArray>,
-    array: &FFI_ArrowArray,
-    schema: &FFI_ArrowSchema,
+fn create_child<'a>(
+    owner: Arc<&'a FFI_ArrowArray>,
+    array: &'a FFI_ArrowArray,
+    schema: &'a FFI_ArrowSchema,
     index: usize,
-) -> ArrowArrayChild<'static> {
+) -> ArrowArrayChild<'a> {
     assert!(index < array.n_children as usize);
     assert!(!array.children.is_null());
     assert!(!array.children.is_null());
@@ -539,7 +538,7 @@ pub trait ArrowArrayRef {
 
                 let len = self.buffer_len(index)?;
 
-                unsafe { create_buffer(self.owner().clone(), self.array(), index, len) }
+                unsafe { create_buffer(self.array(), index, len) }
                     .ok_or_else(|| {
                         ArrowError::CDataInterface(format!(
                             "The external buffer at position {} is null.",
@@ -611,14 +610,14 @@ pub trait ArrowArrayRef {
         // similar to `self.buffer_len(0)`, but without `Result`.
         let buffer_len = bit_util::ceil(self.array().length as usize, 8);
 
-        unsafe { create_buffer(self.owner().clone(), self.array(), 0, buffer_len) }
+        unsafe { create_buffer(self.array(), 0, buffer_len) }
     }
 
     fn child(&self, index: usize) -> ArrowArrayChild {
         create_child(self.owner().clone(), self.array(), self.schema(), index)
     }
 
-    fn owner(&self) -> &Arc<FFI_ArrowArray>;
+    fn owner(&self) -> Arc<&FFI_ArrowArray>;
     fn array(&self) -> &FFI_ArrowArray;
     fn schema(&self) -> &FFI_ArrowSchema;
     fn data_type(&self) -> Result<DataType>;
@@ -646,15 +645,15 @@ pub trait ArrowArrayRef {
 /// Furthermore, this struct assumes that the incoming data agrees with the C data interface.
 #[derive(Debug)]
 pub struct ArrowArray {
-    array: Arc<FFI_ArrowArray>,
-    schema: Arc<FFI_ArrowSchema>,
+    array: Box<FFI_ArrowArray>,
+    schema: Box<FFI_ArrowSchema>,
 }
 
 #[derive(Debug)]
 pub struct ArrowArrayChild<'a> {
     array: &'a FFI_ArrowArray,
     schema: &'a FFI_ArrowSchema,
-    owner: Arc<FFI_ArrowArray>,
+    owner: Arc<&'a FFI_ArrowArray>,
 }
 
 impl ArrowArrayRef for ArrowArray {
@@ -671,8 +670,8 @@ impl ArrowArrayRef for ArrowArray {
         self.schema.as_ref()
     }
 
-    fn owner(&self) -> &Arc<FFI_ArrowArray> {
-        &self.array
+    fn owner(&self) -> Arc<&FFI_ArrowArray> {
+        Arc::new(self.array.as_ref())
     }
 }
 
@@ -690,8 +689,8 @@ impl<'a> ArrowArrayRef for ArrowArrayChild<'a> {
         self.schema
     }
 
-    fn owner(&self) -> &Arc<FFI_ArrowArray> {
-        &self.owner
+    fn owner(&self) -> Arc<&FFI_ArrowArray> {
+        Arc::new(self.owner.as_ref())
     }
 }
 
@@ -701,8 +700,8 @@ impl ArrowArray {
     /// See safety of [ArrowArray]
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn try_new(data: ArrayData) -> Result<Self> {
-        let array = Arc::new(FFI_ArrowArray::new(&data));
-        let schema = Arc::new(FFI_ArrowSchema::try_from(data.data_type())?);
+        let array = Box::new(FFI_ArrowArray::new(&data));
+        let schema = Box::new(FFI_ArrowSchema::try_from(data.data_type())?);
         Ok(ArrowArray { array, schema })
     }
 
@@ -721,11 +720,9 @@ impl ArrowArray {
                     .to_string(),
             ));
         };
-        let ffi_array = (*array).clone();
-        let ffi_schema = (*schema).clone();
         Ok(Self {
-            array: Arc::new(ffi_array),
-            schema: Arc::new(ffi_schema),
+            array: Box::from_raw(array as *mut FFI_ArrowArray),
+            schema: Box::from_raw(schema as *mut FFI_ArrowSchema),
         })
     }
 
@@ -733,14 +730,14 @@ impl ArrowArray {
     /// # Safety
     /// See safety of [ArrowArray]
     pub unsafe fn empty() -> Self {
-        let schema = Arc::new(FFI_ArrowSchema::empty());
-        let array = Arc::new(FFI_ArrowArray::empty());
+        let schema = Box::new(FFI_ArrowSchema::empty());
+        let array = Box::new(FFI_ArrowArray::empty());
         ArrowArray { array, schema }
     }
 
     /// exports [ArrowArray] to the C Data Interface
     pub fn into_raw(this: ArrowArray) -> (*const FFI_ArrowArray, *const FFI_ArrowSchema) {
-        (Arc::into_raw(this.array), Arc::into_raw(this.schema))
+        (Box::into_raw(this.array), Box::into_raw(this.schema))
     }
 }
 
@@ -748,7 +745,7 @@ impl<'a> ArrowArrayChild<'a> {
     fn from_raw(
         array: &'a FFI_ArrowArray,
         schema: &'a FFI_ArrowSchema,
-        owner: Arc<FFI_ArrowArray>,
+        owner: Arc<&'a FFI_ArrowArray>,
     ) -> Self {
         Self {
             array,

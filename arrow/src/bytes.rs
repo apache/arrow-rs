@@ -21,17 +21,16 @@
 
 use core::slice;
 use std::ptr::NonNull;
-use std::sync::Arc;
 use std::{fmt::Debug, fmt::Formatter};
 
-use crate::{alloc, ffi};
+use crate::alloc;
 
 /// Mode of deallocating memory regions
 pub enum Deallocation {
     /// Native deallocation, using Rust deallocator with Arrow-specific memory alignment
     Native(usize),
     /// Foreign interface, via a callback
-    Foreign(Arc<ffi::FFI_ArrowArray>),
+    Foreign,
 }
 
 impl Debug for Deallocation {
@@ -40,7 +39,7 @@ impl Debug for Deallocation {
             Deallocation::Native(capacity) => {
                 write!(f, "Deallocation::Native {{ capacity: {} }}", capacity)
             }
-            Deallocation::Foreign(_) => {
+            Deallocation::Foreign => {
                 write!(f, "Deallocation::Foreign {{ capacity: unknown }}")
             }
         }
@@ -116,7 +115,7 @@ impl Bytes {
             Deallocation::Native(capacity) => capacity,
             // we cannot determine this in general,
             // and thus we state that this is externally-owned memory
-            Deallocation::Foreign(_) => 0,
+            Deallocation::Foreign => 0,
         }
     }
 }
@@ -129,7 +128,7 @@ impl Drop for Bytes {
                 unsafe { alloc::free_aligned::<u8>(self.ptr, *capacity) };
             }
             // foreign interface knows how to deallocate itself.
-            Deallocation::Foreign(_) => (),
+            Deallocation::Foreign => (),
         }
     }
 }
