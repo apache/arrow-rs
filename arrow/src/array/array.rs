@@ -629,7 +629,9 @@ pub unsafe fn make_array_from_raw(
     schema: *const ffi::FFI_ArrowSchema,
 ) -> Result<ArrayRef> {
     let array = ffi::ArrowArray::try_from_raw(array, schema)?;
-    let data = ArrayData::try_from(array)?;
+    let data = ArrayData::try_from(&array)?;
+    // Avoid dropping the `Box` pointers and trigger the `release` mechanism.
+    let _ = ffi::ArrowArray::into_raw(array);
     Ok(make_array(data))
 }
 // Helper function for printing potentially long arrays.

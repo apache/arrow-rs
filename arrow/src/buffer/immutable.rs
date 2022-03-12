@@ -85,7 +85,6 @@ impl Buffer {
     ///
     /// * `ptr` - Pointer to raw parts
     /// * `len` - Length of raw parts in **bytes**
-    /// * `data` - An [ffi::FFI_ArrowArray] with the data
     ///
     /// # Safety
     ///

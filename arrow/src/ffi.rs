@@ -116,7 +116,7 @@ pub struct FFI_ArrowSchema {
     n_children: i64,
     children: *mut *mut FFI_ArrowSchema,
     dictionary: *mut FFI_ArrowSchema,
-    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
+    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
     private_data: *mut c_void,
 }
 
@@ -326,7 +326,7 @@ pub struct FFI_ArrowArray {
     pub(crate) buffers: *mut *const c_void,
     children: *mut *mut FFI_ArrowArray,
     dictionary: *mut FFI_ArrowArray,
-    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
     // When exported, this MUST contain everything that is owned by this array.
     // for example, any buffer pointed to in `buffers` must be here, as well
     // as the `buffers` pointer itself.
