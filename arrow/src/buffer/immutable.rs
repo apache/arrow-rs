@@ -90,10 +90,7 @@ impl Buffer {
     ///
     /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
     /// bytes and that the foreign deallocator frees the region.
-    pub unsafe fn from_unowned(
-        ptr: NonNull<u8>,
-        len: usize,
-    ) -> Self {
+    pub unsafe fn from_unowned(ptr: NonNull<u8>, len: usize) -> Self {
         Buffer::build_with_arguments(ptr, len, Deallocation::Foreign)
     }
 

@@ -538,13 +538,12 @@ pub trait ArrowArrayRef {
 
                 let len = self.buffer_len(index)?;
 
-                unsafe { create_buffer(self.array(), index, len) }
-                    .ok_or_else(|| {
-                        ArrowError::CDataInterface(format!(
-                            "The external buffer at position {} is null.",
-                            index - 1
-                        ))
-                    })
+                unsafe { create_buffer(self.array(), index, len) }.ok_or_else(|| {
+                    ArrowError::CDataInterface(format!(
+                        "The external buffer at position {} is null.",
+                        index - 1
+                    ))
+                })
             })
             .collect()
     }
