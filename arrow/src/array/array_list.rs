@@ -342,6 +342,7 @@ pub type LargeListArray = GenericListArray<i64>;
 
 /// A list array where each element is a fixed-size sequence of values with the same
 /// type whose maximum length is represented by a i32.
+///
 /// # Example
 ///
 /// ```
