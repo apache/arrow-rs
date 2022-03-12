@@ -1137,6 +1137,27 @@ mod tests {
     }
 
     #[test]
+    fn test_clone_array_segfault_on_drop() -> Result<()> {
+        // Construct a value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
+        // export it
+        let ffi_array = FFI_ArrowArray::new(&value_data);
+
+        {
+            let _ = ffi_array.clone();
+        }
+
+        // Segfault on drop
+
+        Ok(())
+    }
+
+    #[test]
     fn test_dictionary() -> Result<()> {
         // create an array natively
         let values = vec!["a", "aaa", "aaa"];
