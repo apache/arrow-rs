@@ -479,7 +479,7 @@ unsafe fn create_buffer(
 }
 
 fn create_child<'a>(
-    owner: Arc<&'a FFI_ArrowArray>,
+    owner: &'a FFI_ArrowArray,
     array: &'a FFI_ArrowArray,
     schema: &'a FFI_ArrowSchema,
     index: usize,
@@ -614,7 +614,7 @@ pub trait ArrowArrayRef {
     }
 
     fn child(&self, index: usize) -> ArrowArrayChild {
-        create_child(self.owner().clone(), self.array(), self.schema(), index)
+        create_child(&self.owner(), self.array(), self.schema(), index)
     }
 
     fn owner(&self) -> Arc<&FFI_ArrowArray>;
@@ -653,7 +653,7 @@ pub struct ArrowArray {
 pub struct ArrowArrayChild<'a> {
     array: &'a FFI_ArrowArray,
     schema: &'a FFI_ArrowSchema,
-    owner: Arc<&'a FFI_ArrowArray>,
+    owner: &'a FFI_ArrowArray,
 }
 
 impl ArrowArrayRef for ArrowArray {
@@ -690,7 +690,7 @@ impl<'a> ArrowArrayRef for ArrowArrayChild<'a> {
     }
 
     fn owner(&self) -> Arc<&FFI_ArrowArray> {
-        Arc::new(self.owner.as_ref())
+        Arc::new(self.owner)
     }
 }
 
@@ -745,7 +745,7 @@ impl<'a> ArrowArrayChild<'a> {
     fn from_raw(
         array: &'a FFI_ArrowArray,
         schema: &'a FFI_ArrowSchema,
-        owner: Arc<&'a FFI_ArrowArray>,
+        owner: &'a FFI_ArrowArray,
     ) -> Self {
         Self {
             array,
@@ -777,7 +777,7 @@ mod tests {
         let array = ArrowArray::try_from(array.data().clone())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = ArrayData::try_from(&array)?;
         let array = make_array(data);
 
         // perform some operation
@@ -804,7 +804,7 @@ mod tests {
         let array = ArrowArray::try_from(original_array.data().clone())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = ArrayData::try_from(&array)?;
         let array = make_array(data);
 
         // perform some operation
@@ -827,7 +827,7 @@ mod tests {
         let array = ArrowArray::try_from(array.data().clone())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = ArrayData::try_from(&array)?;
         let array = make_array(data);
 
         // perform some operation
@@ -899,7 +899,7 @@ mod tests {
         let array = ArrowArray::try_from(array.data().clone())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = ArrayData::try_from(&array)?;
         let array = make_array(data);
 
         // downcast
@@ -939,7 +939,7 @@ mod tests {
         let array = ArrowArray::try_from(array.data().clone())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = ArrayData::try_from(&array)?;
         let array = make_array(data);
 
         // perform some operation
@@ -984,7 +984,7 @@ mod tests {
         let array = ArrowArray::try_from(array.data().clone())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = ArrayData::try_from(&array)?;
         let array = make_array(data);
 
         // perform some operation
@@ -1010,7 +1010,7 @@ mod tests {
         let array = ArrowArray::try_from(array.data().clone())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = ArrayData::try_from(&array)?;
         let array = make_array(data);
 
         // perform some operation
@@ -1046,7 +1046,7 @@ mod tests {
         let array = ArrowArray::try_from(array.data().clone())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = ArrayData::try_from(&array)?;
         let array = make_array(data);
 
         // perform some operation

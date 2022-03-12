@@ -68,7 +68,7 @@ mod tests {
         // simulate an external consumer by being the consumer
         let d1 = unsafe { ArrowArray::try_from_raw(array, schema) }?;
 
-        let result = &ArrayData::try_from(d1)?;
+        let result = &ArrayData::try_from(&d1)?;
 
         assert_eq!(result, expected);
         Ok(())
