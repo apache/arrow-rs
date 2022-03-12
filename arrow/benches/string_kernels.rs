@@ -15,20 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::io;
+#[macro_use]
+extern crate criterion;
+use criterion::Criterion;
 
-use arrow::error::Result;
-use arrow::ipc::reader::StreamReader;
-use arrow::ipc::writer::FileWriter;
+extern crate arrow;
 
-fn main() -> Result<()> {
-    let mut arrow_stream_reader = StreamReader::try_new(io::stdin(), None)?;
-    let schema = arrow_stream_reader.schema();
+use arrow::array::*;
+use arrow::compute::kernels::substring::substring;
+use arrow::util::bench_util::*;
 
-    let mut writer = FileWriter::try_new(io::stdout(), &schema)?;
-
-    arrow_stream_reader.try_for_each(|batch| writer.write(&batch?))?;
-    writer.finish()?;
-
-    Ok(())
+fn bench_substring(arr: &StringArray, start: i64, length: usize) {
+    substring(criterion::black_box(arr), start, &Some(length as u64)).unwrap();
 }
+
+fn add_benchmark(c: &mut Criterion) {
+    let size = 65536;
+    let str_len = 1000;
+
+    let arr_string = create_string_array_with_len::<i32>(size, 0.0, str_len);
+    let start = 0;
+
+    c.bench_function("substring", |b| {
+        b.iter(|| bench_substring(&arr_string, start, str_len))
+    });
+}
+
+criterion_group!(benches, add_benchmark);
+criterion_main!(benches);
