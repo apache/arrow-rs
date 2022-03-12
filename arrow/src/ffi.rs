@@ -673,7 +673,7 @@ pub trait ArrowArrayRef {
                 Some(ArrowArrayChild::from_raw(
                     &*self.array().dictionary,
                     &*self.schema().dictionary,
-                    self.owner().clone(),
+                    &self.owner(),
                 ))
             } else {
                 None
@@ -1142,7 +1142,7 @@ mod tests {
         let array = ArrowArray::try_from(dict_array.data().clone())?;
 
         // (simulate consumer) import it
-        let data = ArrayData::try_from(array)?;
+        let data = ArrayData::try_from(&array)?;
         let array = make_array(data);
 
         // perform some operation
