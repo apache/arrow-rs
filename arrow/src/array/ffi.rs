@@ -31,7 +31,15 @@ impl TryFrom<ffi::ArrowArray> for ArrayData {
     type Error = ArrowError;
 
     fn try_from(value: ffi::ArrowArray) -> Result<Self> {
-        value.to_data()
+        let array = value.to_data();
+        // FFI_ArrowArray and FFI_ArowSchema are Box pointer in ArrowArray.
+        // Once we obtain the data from it, we don't want it to call release.
+        let (ffi_array, ffi_schema) = ffi::ArrowArray::into_raw(value);
+        unsafe {
+            (*(ffi_array as *mut ffi::FFI_ArrowArray)).release = None;
+            (*(ffi_schema as *mut ffi::FFI_ArrowSchema)).release = None;
+        }
+        array
     }
 }
 
