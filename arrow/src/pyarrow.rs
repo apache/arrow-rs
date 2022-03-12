@@ -126,7 +126,7 @@ impl PyArrowConvert for ArrayData {
 
         let ffi_array =
             unsafe { ffi::ArrowArray::try_from_raw(array_pointer, schema_pointer)? };
-        let data = ArrayData::try_from(ffi_array)?;
+        let data = ArrayData::try_from(&ffi_array)?;
 
         Ok(data)
     }
