@@ -1533,9 +1533,9 @@ mod tests {
             Box::new(Field::new("item", DataType::Int32, false)),
             3,
         );
-        let list_data = ArrayData::builder(list_data_type.clone())
+        let list_data = ArrayData::builder(list_data_type)
             .len(3)
-            .add_child_data(value_data.clone())
+            .add_child_data(value_data)
             .build()
             .unwrap();
         let array = FixedSizeListArray::from(list_data);
@@ -1594,7 +1594,7 @@ mod tests {
         );
         let list_data = ArrayData::builder(list_data_type)
             .len(5)
-            .add_child_data(value_data.clone())
+            .add_child_data(value_data)
             .null_bit_buffer(Buffer::from(null_bits))
             .build()
             .unwrap();
