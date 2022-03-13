@@ -1521,4 +1521,102 @@ mod tests {
 
         assert_eq!(&expected, &got);
     }
+
+    #[test]
+    fn test_filter_fixed_size_list_arrays() {
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(9)
+            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8]))
+            .build()
+            .unwrap();
+        let list_data_type = DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::Int32, false)),
+            3,
+        );
+        let list_data = ArrayData::builder(list_data_type.clone())
+            .len(3)
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap();
+        let array = FixedSizeListArray::from(list_data);
+
+        let filter_array = BooleanArray::from(vec![true, false, false]);
+
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+
+        assert_eq!(filtered.len(), 1);
+
+        let list = filtered.value(0);
+        assert_eq!(
+            &[0, 1, 2],
+            list.as_any().downcast_ref::<Int32Array>().unwrap().values()
+        );
+
+        let filter_array = BooleanArray::from(vec![true, false, true]);
+
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+
+        assert_eq!(filtered.len(), 2);
+
+        let list = filtered.value(0);
+        assert_eq!(
+            &[0, 1, 2],
+            list.as_any().downcast_ref::<Int32Array>().unwrap().values()
+        );
+        let list = filtered.value(1);
+        assert_eq!(
+            &[6, 7, 8],
+            list.as_any().downcast_ref::<Int32Array>().unwrap().values()
+        );
+    }
+
+    #[test]
+    fn test_filter_fixed_size_list_arrays_with_null() {
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(10)
+            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .build()
+            .unwrap();
+
+        // Set null buts for the nested array:
+        //  [[0, 1], null, null, [6, 7], [8, 9]]
+        // 01011001 00000001
+        let mut null_bits: [u8; 1] = [0; 1];
+        bit_util::set_bit(&mut null_bits, 0);
+        bit_util::set_bit(&mut null_bits, 3);
+        bit_util::set_bit(&mut null_bits, 4);
+
+        let list_data_type = DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::Int32, false)),
+            2,
+        );
+        let list_data = ArrayData::builder(list_data_type)
+            .len(5)
+            .add_child_data(value_data.clone())
+            .null_bit_buffer(Buffer::from(null_bits))
+            .build()
+            .unwrap();
+        let array = FixedSizeListArray::from(list_data);
+
+        let filter_array = BooleanArray::from(vec![true, true, false, true, false]);
+
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+
+        assert_eq!(filtered.len(), 3);
+
+        let list = filtered.value(0);
+        assert_eq!(
+            &[0, 1],
+            list.as_any().downcast_ref::<Int32Array>().unwrap().values()
+        );
+        assert!(filtered.is_null(1));
+        let list = filtered.value(2);
+        assert_eq!(
+            &[6, 7],
+            list.as_any().downcast_ref::<Int32Array>().unwrap().values()
+        );
+    }
 }
