@@ -52,7 +52,7 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend {
                         mutable
                             .child_data
                             .iter_mut()
-                            .for_each(|child| child.extend_nulls(1 * size))
+                            .for_each(|child| child.extend_nulls(size))
                     }
                 })
             },
