@@ -106,6 +106,11 @@ bitflags! {
 /// ABI-compatible struct for `ArrowSchema` from C Data Interface
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
+///
+/// Although this struct supports `Clone` but it is important to make sure
+/// only one struct has the `release` callback after cloning. Otherwise
+/// double-dropping can cause memory error.
+///
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct FFI_ArrowSchema {
@@ -116,7 +121,7 @@ pub struct FFI_ArrowSchema {
     n_children: i64,
     children: *mut *mut FFI_ArrowSchema,
     dictionary: *mut FFI_ArrowSchema,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
+    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
     private_data: *mut c_void,
 }
 
@@ -335,6 +340,11 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
 /// ABI-compatible struct for ArrowArray from C Data Interface
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
+///
+/// Although this struct supports `Clone` but it is important to make sure
+/// only one struct has the `release` callback after cloning. Otherwise
+/// double-dropping can cause memory error.
+///
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct FFI_ArrowArray {
@@ -346,7 +356,7 @@ pub struct FFI_ArrowArray {
     pub(crate) buffers: *mut *const c_void,
     children: *mut *mut FFI_ArrowArray,
     dictionary: *mut FFI_ArrowArray,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
     // When exported, this MUST contain everything that is owned by this array.
     // for example, any buffer pointed to in `buffers` must be here, as well
     // as the `buffers` pointer itself.
@@ -783,6 +793,11 @@ impl ArrowArray {
         };
         let ffi_array = (*array).clone();
         let ffi_schema = (*schema).clone();
+
+        // Clean up `release` of source structs
+        (*(array as *mut FFI_ArrowArray)).release = None;
+        (*(schema as *mut FFI_ArrowSchema)).release = None;
+
         Ok(Self {
             array: Arc::new(ffi_array),
             schema: Arc::new(ffi_schema),
