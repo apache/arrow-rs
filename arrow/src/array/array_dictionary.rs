@@ -112,7 +112,11 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
             _ => data = data.null_count(0),
         }
 
-        Ok(data.build()?.into())
+        let array = unsafe { data.build_unchecked() };
+
+        array.validate_dictionary_offest()?;
+
+        Ok(array.into())
     }
 
     /// Return an array view of the keys of this dictionary as a PrimitiveArray.

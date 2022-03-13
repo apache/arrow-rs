@@ -926,8 +926,8 @@ impl ArrayData {
     ///
     /// 1. Null count is correct
     /// 2. All offsets are valid
-    /// 3. All String data is  valid UTF-8
-    /// 3. All dictionary offsets are valid
+    /// 3. All String data is valid UTF-8
+    /// 4. All dictionary offsets are valid
     ///
     /// Does not (yet) check
     /// 1. Union type_ids are valid see [#85](https://github.com/apache/arrow-rs/issues/85)
@@ -949,53 +949,7 @@ impl ArrayData {
             )));
         }
 
-        match &self.data_type {
-            DataType::Utf8 => {
-                self.validate_utf8::<i32>()?;
-            }
-            DataType::LargeUtf8 => {
-                self.validate_utf8::<i64>()?;
-            }
-            DataType::Binary => {
-                self.validate_offsets_full::<i32>(self.buffers[1].len())?;
-            }
-            DataType::LargeBinary => {
-                self.validate_offsets_full::<i64>(self.buffers[1].len())?;
-            }
-            DataType::List(_) | DataType::Map(_, _) => {
-                let child = &self.child_data[0];
-                self.validate_offsets_full::<i32>(child.len + child.offset)?;
-            }
-            DataType::LargeList(_) => {
-                let child = &self.child_data[0];
-                self.validate_offsets_full::<i64>(child.len + child.offset)?;
-            }
-            DataType::Union(_, _) => {
-                // Validate Union Array as part of implementing new Union semantics
-                // See comments in `ArrayData::validate()`
-                // https://github.com/apache/arrow-rs/issues/85
-                //
-                // TODO file follow on ticket for full union validation
-            }
-            DataType::Dictionary(key_type, _value_type) => {
-                let dictionary_length: i64 = self.child_data[0].len.try_into().unwrap();
-                let max_value = dictionary_length - 1;
-                match key_type.as_ref() {
-                    DataType::UInt8 => self.check_bounds::<u8>(max_value)?,
-                    DataType::UInt16 => self.check_bounds::<u16>(max_value)?,
-                    DataType::UInt32 => self.check_bounds::<u32>(max_value)?,
-                    DataType::UInt64 => self.check_bounds::<u64>(max_value)?,
-                    DataType::Int8 => self.check_bounds::<i8>(max_value)?,
-                    DataType::Int16 => self.check_bounds::<i16>(max_value)?,
-                    DataType::Int32 => self.check_bounds::<i32>(max_value)?,
-                    DataType::Int64 => self.check_bounds::<i64>(max_value)?,
-                    _ => unreachable!(),
-                }
-            }
-            _ => {
-                // No extra validation check required for other types
-            }
-        };
+        self.validate_dictionary_offest()?;
 
         // validate all children recursively
         self.child_data
@@ -1011,6 +965,52 @@ impl ArrayData {
             })?;
 
         Ok(())
+    }
+
+    pub fn validate_dictionary_offest(&self) -> Result<()> {
+        match &self.data_type {
+            DataType::Utf8 => self.validate_utf8::<i32>(),
+            DataType::LargeUtf8 => self.validate_utf8::<i64>(),
+            DataType::Binary => self.validate_offsets_full::<i32>(self.buffers[1].len()),
+            DataType::LargeBinary => {
+                self.validate_offsets_full::<i64>(self.buffers[1].len())
+            }
+            DataType::List(_) | DataType::Map(_, _) => {
+                let child = &self.child_data[0];
+                self.validate_offsets_full::<i32>(child.len + child.offset)
+            }
+            DataType::LargeList(_) => {
+                let child = &self.child_data[0];
+                self.validate_offsets_full::<i64>(child.len + child.offset)
+            }
+            DataType::Union(_, _) => {
+                // Validate Union Array as part of implementing new Union semantics
+                // See comments in `ArrayData::validate()`
+                // https://github.com/apache/arrow-rs/issues/85
+                //
+                // TODO file follow on ticket for full union validation
+                Ok(())
+            }
+            DataType::Dictionary(key_type, _value_type) => {
+                let dictionary_length: i64 = self.child_data[0].len.try_into().unwrap();
+                let max_value = dictionary_length - 1;
+                match key_type.as_ref() {
+                    DataType::UInt8 => self.check_bounds::<u8>(max_value),
+                    DataType::UInt16 => self.check_bounds::<u16>(max_value),
+                    DataType::UInt32 => self.check_bounds::<u32>(max_value),
+                    DataType::UInt64 => self.check_bounds::<u64>(max_value),
+                    DataType::Int8 => self.check_bounds::<i8>(max_value),
+                    DataType::Int16 => self.check_bounds::<i16>(max_value),
+                    DataType::Int32 => self.check_bounds::<i32>(max_value),
+                    DataType::Int64 => self.check_bounds::<i64>(max_value),
+                    _ => unreachable!(),
+                }
+            }
+            _ => {
+                // No extra validation check required for other types
+                Ok(())
+            }
+        }
     }
 
     /// Calls the `validate(item_index, range)` function for each of
