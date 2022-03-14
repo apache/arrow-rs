@@ -553,6 +553,22 @@ fn array_from_json(
                 ))),
             }
         }
+        DataType::Decimal(precision, scale) => {
+            let mut b = DecimalBuilder::new(json_col.count, *precision, *scale);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i128>().unwrap()),
+                    _ => b.append_null(),
+                }?;
+            }
+            Ok(Arc::new(b.finish()))
+        }
         t => Err(ArrowError::JsonError(format!(
             "data type {:?} not supported",
             t
