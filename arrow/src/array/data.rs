@@ -916,8 +916,6 @@ impl ArrayData {
     /// 3. All String data is  valid UTF-8
     /// 3. All dictionary offsets are valid
     ///
-    /// Does not (yet) check
-    /// 1. Union type_ids are valid see [#85](https://github.com/apache/arrow-rs/issues/85)
     /// Note calls `validate()` internally
     pub fn validate_full(&self) -> Result<()> {
         // Check all buffer sizes prior to looking at them more deeply in this function
@@ -957,12 +955,16 @@ impl ArrayData {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i64>(child.len + child.offset)?;
             }
-            DataType::Union(_, _) => {
-                // Validate Union Array as part of implementing new Union semantics
-                // See comments in `ArrayData::validate()`
-                // https://github.com/apache/arrow-rs/issues/85
-                //
-                // TODO file follow on ticket for full union validation
+            DataType::Union(_fields, mode) => {
+                match mode {
+                    UnionMode::Sparse => {
+                        // typeids should all be valid
+                        self.validate_offsets_full::<i8>(self.child_data.len())?;
+                    }
+                    UnionMode::Dense => {
+                        self.validate_dense_union_full()?;
+                    }
+                }
             }
             DataType::Dictionary(key_type, _value_type) => {
                 let dictionary_length: i64 = self.child_data[0].len.try_into().unwrap();
@@ -1098,7 +1100,7 @@ impl ArrayData {
         )
     }
 
-    /// Ensures that all offsets in `buffers[0]` into `buffers[1]` are
+    /// Ensures that all values in `buffers[0]` are
     /// between `0` and `offset_limit`
     fn validate_offsets_full<T>(&self, offset_limit: usize) -> Result<()>
     where
@@ -1115,6 +1117,44 @@ impl ArrayData {
                 Ok(())
             },
         )
+    }
+
+    /// Ensures that for each union element, the offset is correct for
+    /// the corresponding child array
+    fn validate_dense_union_full(&self) -> Result<()> {
+        // safety justification is that the size of the buffers was validated in self.validate()
+        let type_ids = self.typed_offsets::<i8>(&self.buffers[0])?;
+        let offsets = self.typed_offsets::<i32>(&self.buffers[1])?;
+
+        type_ids.iter().enumerate().try_for_each(|(i, &type_id)| {
+            // this will panic if out of bounds. Could make a nicer error message
+            let type_id: usize = type_id
+                .try_into()
+                .map_err(|_| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Offset invariant failure: Could not convert type id {} to usize in slot {}",
+                        type_id, i))
+                })?;
+
+            let num_children = self.child_data[type_id].len();
+            let child_offset: usize = offsets[i]
+                .try_into()
+                .map_err(|_| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Offset invariant failure: Could not convert offset {} at position {} to usize",
+                        offsets[i], i))
+                })?;
+
+
+            if child_offset >= num_children {
+                Err(ArrowError::InvalidArgumentError(format!(
+                    "Value at position {} out of bounds: {} (child array {} length is {})",
+                    i, child_offset, type_id, num_children
+                )))
+            } else {
+                Ok(())
+            }
+        })
     }
 
     /// Validates that each value in self.buffers (typed as T)
