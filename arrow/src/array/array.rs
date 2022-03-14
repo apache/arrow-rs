@@ -624,6 +624,19 @@ fn new_null_sized_array<T: ArrowPrimitiveType>(
 /// # Safety
 /// Assumes that these pointers represent valid C Data Interfaces, both in memory
 /// representation and lifetime via the `release` mechanism.
+pub unsafe fn make_array_from_box(
+    array: *const ffi::FFI_ArrowArray,
+    schema: *const ffi::FFI_ArrowSchema,
+) -> Result<ArrayRef> {
+    let array = Arc::into_raw(Arc::from(Box::from_raw(array as *mut _)));
+    let schema = Arc::into_raw(Arc::from(Box::from_raw(schema as *mut _)));
+    make_array_from_raw(array, schema)
+}
+
+/// Creates a new array from two FFI pointers. Used to import arrays from the C Data Interface
+/// # Safety
+/// Assumes that these pointers represent valid C Data Interfaces, both in memory
+/// representation and lifetime via the `release` mechanism.
 pub unsafe fn make_array_from_raw(
     array: *const ffi::FFI_ArrowArray,
     schema: *const ffi::FFI_ArrowSchema,
