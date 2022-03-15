@@ -28,7 +28,7 @@ use arrow::array::{
     new_empty_array, Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryArray,
     BinaryBuilder, BooleanArray, BooleanBufferBuilder, BooleanBuilder,
     FixedSizeBinaryArray, FixedSizeBinaryBuilder, GenericListArray, Int16BufferBuilder,
-    Int32Array, Int64Array, MapArray, OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder,
+    Int32Array, Int64Array, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder,
     StringArray, StringBuilder, StructArray, DecimalArray,
 };
 use arrow::buffer::{Buffer, MutableBuffer};
@@ -885,6 +885,9 @@ fn remove_indices(
                 Ok(Arc::new(StructArray::from((new_columns, valid.finish()))))
             }
         }
+        ArrowType::Null => {
+            Ok(Arc::new(NullArray::new(arr.len() - indices.len())))
+        }
         _ => Err(ParquetError::General(format!(
             "ListArray of type List({:?}) is not supported by array_reader",
             item_type
@@ -924,7 +927,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             && (rep_levels.len() == next_batch_array.len()))
         {
             return Err(ArrowError(
-                "Expected item_reader def_levels and rep_levels to be same length as batch".to_string(),
+                format!("Expected item_reader def_levels {} and rep_levels {} to be same length as batch {}", def_levels.len(), rep_levels.len(), next_batch_array.len()),
             ));
         }
 
@@ -964,7 +967,10 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
                 cur_offset += OffsetSize::one();
             }
         });
-        offsets.push(cur_offset);
+
+        if !cur_offset.is_zero() {
+            offsets.push(cur_offset);
+        }
 
         let num_bytes = bit_util::ceil(offsets.len(), 8);
         // TODO: A useful optimization is to use the null count to fill with
@@ -1984,12 +1990,14 @@ impl<'a> ArrayReaderBuilder {
                     field = self.arrow_schema.field_with_name(part).ok();
                 } else if let Some(f) = field {
                     if let ArrowType::Struct(fields) = f.data_type() {
-                        field = fields.iter().find(|f| f.name() == part)
+                        field = fields.iter().find(|f| f.name() == part);
+                    } else if let ArrowType::List(list_field) = f.data_type() {
+                        field = Some(list_field.as_ref());
                     } else {
-                        field = None
+                        field = None;
                     }
                 } else {
-                    field = None
+                    field = None;
                 }
             }
             field

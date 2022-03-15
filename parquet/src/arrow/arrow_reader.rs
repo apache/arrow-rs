@@ -1210,4 +1210,19 @@ mod tests {
         assert_eq!(get_dict(&batches[3]), get_dict(&batches[4]));
         assert_eq!(get_dict(&batches[4]), get_dict(&batches[5]));
     }
+
+    #[test]
+    fn test_read_null_list() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/null_list.parquet", testdata);
+        let parquet_file_reader =
+            SerializedFileReader::try_from(File::open(&path).unwrap()).unwrap();
+        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(parquet_file_reader));
+        let mut record_batch_reader = arrow_reader
+            .get_record_reader(60)
+            .expect("Failed to read into array!");
+
+        let batch = record_batch_reader.next();
+        assert!(batch.is_none());
+    }
 }
