@@ -228,6 +228,20 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
                 IntervalUnit::DayTime => true,
                 IntervalUnit::MonthDayNano => false, // Native type is i128
             }
+        },
+        (Int32, Interval(to_type)) => {
+            match to_type{
+                IntervalUnit::YearMonth => true,
+                IntervalUnit::DayTime => false,
+                IntervalUnit::MonthDayNano => false,
+            }
+        },
+        (Int64, Interval(to_type)) => {
+            match to_type{
+                IntervalUnit::YearMonth => false,
+                IntervalUnit::DayTime => true,
+                IntervalUnit::MonthDayNano => false,
+            }
         }
         (_, _) => false,
     }
@@ -1133,7 +1147,7 @@ pub fn cast_with_options(
         },
         (Int32, Interval(to_type)) => match to_type {
             IntervalUnit::YearMonth => {
-                cast_array_data::<Int32Type>(array, Interval(to_type.clone()))
+                cast_array_data::<IntervalYearMonthType>(array, Interval(to_type.clone()))
             }
             _ => Err(ArrowError::CastError(format!(
                 "Casting from {:?} to {:?} not supported",
