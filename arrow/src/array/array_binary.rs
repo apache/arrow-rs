@@ -473,6 +473,18 @@ impl FixedSizeBinaryArray {
         }
     }
 
+    /// Returns the element at index `i` as a byte slice.
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
+        let offset = i.checked_add(self.data.offset()).unwrap();
+        let pos = self.value_offset_at(offset);
+        std::slice::from_raw_parts(
+            self.value_data.as_ptr().offset(pos as isize),
+            (self.value_offset_at(offset + 1) - pos) as usize,
+        )
+    }
+
     /// Returns the offset for the element at index `i`.
     ///
     /// Note this doesn't do any bound checking, for performance reason.

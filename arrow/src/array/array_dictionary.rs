@@ -98,13 +98,21 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
 
         // Note: This does more work than necessary by rebuilding /
         // revalidating all the data
-        let data = ArrayData::builder(dict_data_type)
+        let mut data = ArrayData::builder(dict_data_type)
             .len(keys.len())
             .add_buffer(keys.data().buffers()[0].clone())
-            .add_child_data(values.data().clone())
-            .build()?;
+            .add_child_data(values.data().clone());
 
-        Ok(data.into())
+        match keys.data().null_buffer() {
+            Some(buffer) if keys.data().null_count() > 0 => {
+                data = data
+                    .null_bit_buffer(buffer.clone())
+                    .null_count(keys.data().null_count());
+            }
+            _ => data = data.null_count(0),
+        }
+
+        Ok(data.build()?.into())
     }
 
     /// Return an array view of the keys of this dictionary as a PrimitiveArray.
@@ -528,8 +536,20 @@ mod tests {
         let array = DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
         assert_eq!(array.keys().data_type(), &DataType::Int32);
         assert_eq!(array.values().data_type(), &DataType::Utf8);
+
+        assert_eq!(array.data().null_count(), 1);
+
+        assert!(array.keys().is_valid(0));
+        assert!(array.keys().is_valid(1));
+        assert!(array.keys().is_null(2));
+        assert!(array.keys().is_valid(3));
+
+        assert_eq!(array.keys().value(0), 0);
+        assert_eq!(array.keys().value(1), 2);
+        assert_eq!(array.keys().value(3), 1);
+
         assert_eq!(
-            "DictionaryArray {keys: PrimitiveArray<Int32>\n[\n  0,\n  2,\n  0,\n  1,\n] values: StringArray\n[\n  \"foo\",\n  \"bar\",\n  \"baz\",\n]}\n",
+            "DictionaryArray {keys: PrimitiveArray<Int32>\n[\n  0,\n  2,\n  null,\n  1,\n] values: StringArray\n[\n  \"foo\",\n  \"bar\",\n  \"baz\",\n]}\n",
             format!("{:?}", array)
         );
     }

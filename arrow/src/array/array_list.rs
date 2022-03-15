@@ -343,6 +343,37 @@ pub type LargeListArray = GenericListArray<i64>;
 /// A list array where each element is a fixed-size sequence of values with the same
 /// type whose maximum length is represented by a i32.
 ///
+/// # Example
+///
+/// ```
+/// # use arrow::array::{Array, ArrayData, FixedSizeListArray, Int32Array};
+/// # use arrow::datatypes::{DataType, Field};
+/// # use arrow::buffer::Buffer;
+/// // Construct a value array
+/// let value_data = ArrayData::builder(DataType::Int32)
+///     .len(9)
+///     .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8]))
+///     .build()
+///     .unwrap();
+/// let list_data_type = DataType::FixedSizeList(
+///     Box::new(Field::new("item", DataType::Int32, false)),
+///     3,
+/// );
+/// let list_data = ArrayData::builder(list_data_type.clone())
+///     .len(3)
+///     .add_child_data(value_data.clone())
+///     .build()
+///     .unwrap();
+/// let list_array = FixedSizeListArray::from(list_data);
+/// let list0 = list_array.value(0);
+/// let list1 = list_array.value(1);
+/// let list2 = list_array.value(2);
+///
+/// assert_eq!( &[0, 1, 2], list0.as_any().downcast_ref::<Int32Array>().unwrap().values());
+/// assert_eq!( &[3, 4, 5], list1.as_any().downcast_ref::<Int32Array>().unwrap().values());
+/// assert_eq!( &[6, 7, 8], list2.as_any().downcast_ref::<Int32Array>().unwrap().values());
+/// ```
+///
 /// For non generic lists, you may wish to consider using
 /// [crate::array::FixedSizeBinaryArray]
 pub struct FixedSizeListArray {

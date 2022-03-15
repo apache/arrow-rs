@@ -601,6 +601,19 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_binary_array() {
+        let a_input_arg = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
+        let a = FixedSizeBinaryArray::try_from_iter(a_input_arg.into_iter()).unwrap();
+        let a = a.data();
+
+        let b_input_arg = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
+        let b = FixedSizeBinaryArray::try_from_iter(b_input_arg.into_iter()).unwrap();
+        let b = b.data();
+
+        test_equal(a, b, true);
+    }
+
+    #[test]
     fn test_string_offset() {
         let a = StringArray::from(vec![Some("a"), None, Some("b")]);
         let a = a.data();
