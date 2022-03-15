@@ -281,30 +281,25 @@ impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericListArray<OffsetSize> {
 /// # Example
 ///
 /// ```
-///     # use arrow::array::{Array, ListArray, Int32Array};
-///     # use arrow::datatypes::{DataType, Int32Type};
-///     let data = vec![
-///        Some(vec![Some(0), Some(1), Some(2)]),
-///        None,
-///        Some(vec![Some(3), None, Some(5), Some(19)]),
-///        Some(vec![Some(6), Some(7)]),
-///     ];
-///     let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-///     assert_eq!(DataType::Int32, list_array.value_type());
-///     assert_eq!(4, list_array.len());
-///     assert_eq!(1, list_array.null_count());
-///     assert_eq!(3, list_array.value_length(0));
-///     assert_eq!(0, list_array.value_length(1));
-///     assert_eq!(4, list_array.value_length(2));
-///     assert_eq!(
-///         19,
-///         list_array
-///         .value(2)
-///         .as_any()
-///         .downcast_ref::<Int32Array>()
-///         .unwrap()
-///         .value(3)
-///     )
+/// # use arrow::array::{Array, ListArray, Int32Array};
+/// # use arrow::datatypes::{DataType, Int32Type};
+/// let data = vec![
+///    Some(vec![]),
+///    None,
+///    Some(vec![Some(3), None, Some(5), Some(19)]),
+///    Some(vec![Some(6), Some(7)]),
+/// ];
+/// let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+///
+/// assert_eq!(false, list_array.is_valid(1));
+///
+/// let list0 = list_array.value(0);
+/// let list2 = list_array.value(2);
+/// let list3 = list_array.value(3);
+///
+/// assert_eq!(&[] as &[i32], list0.as_any().downcast_ref::<Int32Array>().unwrap().values());
+/// assert_eq!(false, list2.as_any().downcast_ref::<Int32Array>().unwrap().is_valid(1));
+/// assert_eq!(&[6, 7], list3.as_any().downcast_ref::<Int32Array>().unwrap().values());
 /// ```
 pub type ListArray = GenericListArray<i32>;
 
@@ -313,30 +308,25 @@ pub type ListArray = GenericListArray<i32>;
 /// # Example
 ///
 /// ```
-///     # use arrow::array::{Array, LargeListArray, Int64Array};
-///     # use arrow::datatypes::{DataType, Int64Type};
-///     let data = vec![
-///        Some(vec![Some(0), Some(1), Some(2)]),
-///        None,
-///        Some(vec![Some(3), None, Some(5), Some(19)]),
-///        Some(vec![Some(6), Some(7)]),
-///     ];
-///     let list_array = LargeListArray::from_iter_primitive::<Int64Type, _, _>(data);
-///     assert_eq!(DataType::Int64, list_array.value_type());
-///     assert_eq!(4, list_array.len());
-///     assert_eq!(1, list_array.null_count());
-///     assert_eq!(3, list_array.value_length(0));
-///     assert_eq!(0, list_array.value_length(1));
-///     assert_eq!(4, list_array.value_length(2));
-///     assert_eq!(
-///         19,
-///         list_array
-///         .value(2)
-///         .as_any()
-///         .downcast_ref::<Int64Array>()
-///         .unwrap()
-///         .value(3)
-///     )
+/// # use arrow::array::{Array, LargeListArray, Int32Array};
+/// # use arrow::datatypes::{DataType, Int32Type};
+/// let data = vec![
+///    Some(vec![]),
+///    None,
+///    Some(vec![Some(3), None, Some(5), Some(19)]),
+///    Some(vec![Some(6), Some(7)]),
+/// ];
+/// let list_array = LargeListArray::from_iter_primitive::<Int32Type, _, _>(data);
+///
+/// assert_eq!(false, list_array.is_valid(1));
+///
+/// let list0 = list_array.value(0);
+/// let list2 = list_array.value(2);
+/// let list3 = list_array.value(3);
+///
+/// assert_eq!(&[] as &[i32], list0.as_any().downcast_ref::<Int32Array>().unwrap().values());
+/// assert_eq!(false, list2.as_any().downcast_ref::<Int32Array>().unwrap().is_valid(1));
+/// assert_eq!(&[6, 7], list3.as_any().downcast_ref::<Int32Array>().unwrap().values());
 /// ```
 pub type LargeListArray = GenericListArray<i64>;
 
