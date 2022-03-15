@@ -1131,6 +1131,24 @@ pub fn cast_with_options(
                 from_type, to_type,
             ))),
         },
+        (Int32, Interval(to_type)) => match to_type {
+            IntervalUnit::YearMonth => {
+                cast_array_data::<Int32Type>(array, Interval(to_type.clone()))
+            }
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from {:?} to {:?} not supported",
+                from_type, to_type,
+            ))),
+        },
+        (Int64, Interval(to_type)) => match to_type {
+            IntervalUnit::DayTime => {
+                cast_array_data::<IntervalDayTimeType>(array, Interval(to_type.clone()))
+            }
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from {:?} to {:?} not supported",
+                from_type, to_type,
+            ))),
+        },
         (_, _) => Err(ArrowError::CastError(format!(
             "Casting from {:?} to {:?} not supported",
             from_type, to_type,
