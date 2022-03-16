@@ -107,7 +107,7 @@ bitflags! {
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FFI_ArrowSchema {
     format: *const c_char,
     name: *const c_char,
@@ -336,7 +336,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FFI_ArrowArray {
     pub(crate) length: i64,
     pub(crate) null_count: i64,
@@ -781,11 +781,19 @@ impl ArrowArray {
                     .to_string(),
             ));
         };
-        let ffi_array = (*array).clone();
-        let ffi_schema = (*schema).clone();
+
+        let array_mut = array as *mut FFI_ArrowArray;
+        let schema_mut = schema as *mut FFI_ArrowSchema;
+
+        let array_data = std::ptr::replace(array_mut, FFI_ArrowArray::empty());
+        let schema_data = std::ptr::replace(schema_mut, FFI_ArrowSchema::empty());
+
+        std::ptr::drop_in_place(array_mut);
+        std::ptr::drop_in_place(schema_mut);
+
         Ok(Self {
-            array: Arc::new(ffi_array),
-            schema: Arc::new(ffi_schema),
+            array: Arc::new(array_data),
+            schema: Arc::new(schema_data),
         })
     }
 
