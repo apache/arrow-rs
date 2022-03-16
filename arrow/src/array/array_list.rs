@@ -49,7 +49,10 @@ impl OffsetSizeTrait for i64 {
     }
 }
 
-/// Generic struct for a primitive Array
+/// Generic struct for a variable-size list array.
+///
+/// Columnar format in Apache Arrow:
+/// <https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout>
 ///
 /// For non generic lists, you may wish to consider using [`ListArray`] or [`LargeListArray`]`
 pub struct GenericListArray<OffsetSize> {
