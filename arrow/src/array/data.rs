@@ -215,7 +215,7 @@ pub(crate) fn into_buffers(
     buffer2: MutableBuffer,
 ) -> Vec<Buffer> {
     match data_type {
-        DataType::Null | DataType::Struct(_) => vec![],
+        DataType::Null | DataType::Struct(_) | DataType::FixedSizeList(_, _) => vec![],
         DataType::Utf8
         | DataType::Binary
         | DataType::LargeUtf8
