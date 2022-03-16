@@ -194,7 +194,16 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
         ],
-        DataType::Union(_, _) => unimplemented!(),
+        DataType::Union(_, mode) => {
+            let type_ids = MutableBuffer::new(capacity * mem::size_of::<i8>());
+            match mode {
+                UnionMode::Sparse => [type_ids, empty_buffer],
+                UnionMode::Dense => {
+                    let offsets = MutableBuffer::new(capacity * mem::size_of::<i32>());
+                    [type_ids, offsets]
+                }
+            }
+        }
     }
 }
 
@@ -210,7 +219,8 @@ pub(crate) fn into_buffers(
         DataType::Utf8
         | DataType::Binary
         | DataType::LargeUtf8
-        | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
+        | DataType::LargeBinary
+        | DataType::Union(_, _) => vec![buffer1.into(), buffer2.into()],
         _ => vec![buffer1.into()],
     }
 }
@@ -559,7 +569,10 @@ impl ArrayData {
             DataType::Map(field, _) => {
                 vec![Self::new_empty(field.data_type())]
             }
-            DataType::Union(_, _) => unimplemented!(),
+            DataType::Union(fields, _) => fields
+                .iter()
+                .map(|field| Self::new_empty(field.data_type()))
+                .collect(),
             DataType::Dictionary(_, data_type) => {
                 vec![Self::new_empty(data_type)]
             }

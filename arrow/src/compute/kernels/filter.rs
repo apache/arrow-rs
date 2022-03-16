@@ -1619,4 +1619,143 @@ mod tests {
             list.as_any().downcast_ref::<Int32Array>().unwrap().values()
         );
     }
+
+    fn test_filter_union_array(array: UnionArray) {
+        let filter_array = BooleanArray::from(vec![true, false, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(1);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
+
+        let filter_array = BooleanArray::from(vec![true, false, true]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(2);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
+
+        let filter_array = BooleanArray::from(vec![true, true, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(2);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
+    }
+
+    #[test]
+    fn test_filter_union_array_dense() {
+        let mut builder = UnionBuilder::new_dense(3);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let array = builder.build().unwrap();
+
+        test_filter_union_array(array);
+    }
+
+    #[test]
+    fn test_filter_union_array_dense_with_nulls() {
+        let mut builder = UnionBuilder::new_dense(4);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let array = builder.build().unwrap();
+
+        let filter_array = BooleanArray::from(vec![true, false, true, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(1);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append_null().unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
+    }
+
+    #[test]
+    fn test_filter_union_array_sparse() {
+        let mut builder = UnionBuilder::new_sparse(3);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let array = builder.build().unwrap();
+
+        test_filter_union_array(array);
+    }
+
+    #[test]
+    fn test_filter_union_array_sparse_with_nulls() {
+        let mut builder = UnionBuilder::new_sparse(4);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let array = builder.build().unwrap();
+
+        let filter_array = BooleanArray::from(vec![true, false, true, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(1);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append_null().unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
+    }
+
+    fn compare_union_arrays(union1: &UnionArray, union2: &UnionArray) {
+        assert_eq!(union1.len(), union2.len());
+
+        for i in 0..union1.len() {
+            let type_id = union1.type_id(i);
+
+            let slot1 = union1.value(i);
+            let slot2 = union2.value(i);
+
+            assert_eq!(union1.is_null(i), union2.is_null(i));
+
+            if !union1.is_null(i) && !union2.is_null(i) {
+                match type_id {
+                    0 => {
+                        let slot1 = slot1.as_any().downcast_ref::<Int32Array>().unwrap();
+                        assert_eq!(slot1.len(), 1);
+                        let value1 = slot1.value(0);
+
+                        let slot2 = slot2.as_any().downcast_ref::<Int32Array>().unwrap();
+                        assert_eq!(slot2.len(), 1);
+                        let value2 = slot2.value(0);
+                        assert_eq!(value1, value2);
+                    }
+                    1 => {
+                        let slot1 =
+                            slot1.as_any().downcast_ref::<Float64Array>().unwrap();
+                        assert_eq!(slot1.len(), 1);
+                        let value1 = slot1.value(0);
+
+                        let slot2 =
+                            slot2.as_any().downcast_ref::<Float64Array>().unwrap();
+                        assert_eq!(slot2.len(), 1);
+                        let value2 = slot2.value(0);
+                        assert_eq!(value1, value2);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
 }

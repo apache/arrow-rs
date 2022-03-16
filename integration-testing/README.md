@@ -61,7 +61,6 @@ cd arrow/cpp
 mkdir build
 cd  build
 cmake  -DARROW_BUILD_INTEGRATION=ON -DARROW_FLIGHT=ON --preset ninja-debug-minimal ..
-cd ..
 ninja
 ```
 
