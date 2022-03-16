@@ -769,6 +769,9 @@ impl ArrowArray {
     /// creates a new [ArrowArray] from two pointers. Used to import from the C Data Interface.
     /// # Safety
     /// See safety of [ArrowArray]
+    /// Note that this function will copy the content pointed by the raw pointers. Considering
+    /// the raw pointers can be from `Arc::into_raw` or other raw pointers, users must be responsible
+    /// on managing the allocation of the structs by themselves.
     /// # Error
     /// Errors if any of the pointers is null
     pub unsafe fn try_from_raw(
@@ -787,9 +790,6 @@ impl ArrowArray {
 
         let array_data = std::ptr::replace(array_mut, FFI_ArrowArray::empty());
         let schema_data = std::ptr::replace(schema_mut, FFI_ArrowSchema::empty());
-
-        std::ptr::drop_in_place(array_mut);
-        std::ptr::drop_in_place(schema_mut);
 
         Ok(Self {
             array: Arc::new(array_data),
