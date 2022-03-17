@@ -141,7 +141,7 @@ unsafe extern "C" fn get_next(
 
 // The callback used to get the error from last operation on the `FFI_ArrowArrayStream`
 unsafe extern "C" fn get_last_error(stream: *mut FFI_ArrowArrayStream) -> *const c_char {
-    let ffi_stream = ExportedArrayStream { stream };
+    let mut ffi_stream = ExportedArrayStream { stream };
     let last_error = ffi_stream.get_last_error();
     CString::new(last_error.as_str()).unwrap().into_raw()
 }
@@ -204,11 +204,11 @@ struct ExportedArrayStream {
 }
 
 impl ExportedArrayStream {
-    fn get_private_data(&self) -> &mut StreamPrivateData {
+    fn get_private_data(&mut self) -> &mut StreamPrivateData {
         unsafe { &mut *((*self.stream).private_data as *mut StreamPrivateData) }
     }
 
-    pub fn get_schema(&self, out: *mut FFI_ArrowSchema) -> i32 {
+    pub fn get_schema(&mut self, out: *mut FFI_ArrowSchema) -> i32 {
         unsafe {
             match (*out).release {
                 None => (),
@@ -221,7 +221,7 @@ impl ExportedArrayStream {
 
         let schema = FFI_ArrowSchema::try_from(reader.schema().as_ref());
 
-        let ret_code = match schema {
+        match schema {
             Ok(mut schema) => {
                 unsafe {
                     (*out).format = schema.format;
@@ -241,12 +241,10 @@ impl ExportedArrayStream {
                 private_data.last_error = err.to_string();
                 get_error_code(err)
             }
-        };
-
-        ret_code
+        }
     }
 
-    pub fn get_next(&self, out: *mut FFI_ArrowArray) -> i32 {
+    pub fn get_next(&mut self, out: *mut FFI_ArrowArray) -> i32 {
         unsafe {
             match (*out).release {
                 None => (),
@@ -290,7 +288,7 @@ impl ExportedArrayStream {
         ret_code
     }
 
-    pub fn get_last_error(&self) -> &String {
+    pub fn get_last_error(&mut self) -> &String {
         &self.get_private_data().last_error
     }
 }
