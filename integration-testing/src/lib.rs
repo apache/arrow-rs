@@ -202,6 +202,39 @@ fn array_from_json(
                         Value::String(s) => {
                             s.parse().expect("Unable to parse string as i64")
                         }
+                        Value::Object(ref map)
+                            if map.contains_key("days")
+                                && map.contains_key("milliseconds") =>
+                        {
+                            match field.data_type() {
+                                DataType::Interval(IntervalUnit::DayTime) => {
+                                    let days = map.get("days").unwrap();
+                                    let milliseconds = map.get("milliseconds").unwrap();
+
+                                    match (days, milliseconds) {
+                                        (Value::Number(d), Value::Number(m)) => {
+                                            let mut bytes = [0_u8; 8];
+                                            let m = (m.as_i64().unwrap() as i32)
+                                                .to_le_bytes();
+                                            let d = (d.as_i64().unwrap() as i32)
+                                                .to_le_bytes();
+
+                                            let c = [d, m].concat();
+                                            bytes.copy_from_slice(c.as_slice());
+                                            i64::from_le_bytes(bytes)
+                                        }
+                                        _ => panic!(
+                                            "Unable to parse {:?} as interval daytime",
+                                            value
+                                        ),
+                                    }
+                                }
+                                _ => panic!(
+                                    "Unable to parse {:?} as interval daytime",
+                                    value
+                                ),
+                            }
+                        }
                         _ => panic!("Unable to parse {:?} as number", value),
                     }),
                     _ => b.append_null(),
