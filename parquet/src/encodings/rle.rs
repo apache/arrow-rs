@@ -419,6 +419,13 @@ impl RleDecoder {
                     &mut buffer[values_read..values_read + num_values],
                     self.bit_width as usize,
                 );
+                if num_values == 0 {
+                    // some writers are putting less values that could fit in the bit packed run
+                    // in such a case bit_packed_left is unreliable as it represents max possible values left
+                    // to avoid infinite loop we need to return so the caller could check if all expected values were read already.
+                    self.bit_packed_left = 0;
+                    continue;
+                }
                 self.bit_packed_left -= num_values as u32;
                 values_read += num_values;
             } else if !self.reload() {
