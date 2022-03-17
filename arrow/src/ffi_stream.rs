@@ -81,7 +81,7 @@ const ENOSYS: i32 = 78;
 /// See <https://arrow.apache.org/docs/format/CStreamInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FFI_ArrowArrayStream {
     pub get_schema: Option<
         unsafe extern "C" fn(
@@ -141,7 +141,8 @@ unsafe extern "C" fn get_next(
 
 // The callback used to get the error from last operation on the `FFI_ArrowArrayStream`
 unsafe extern "C" fn get_last_error(stream: *mut FFI_ArrowArrayStream) -> *const c_char {
-    let last_error = ExportedArrayStream { stream }.get_last_error();
+    let ffi_stream = ExportedArrayStream { stream };
+    let last_error = ffi_stream.get_last_error();
     CString::new(last_error.as_str()).unwrap().into_raw()
 }
 
@@ -182,20 +183,19 @@ impl FFI_ArrowArrayStream {
         }
     }
 
-    /// Gets a raw pointer of `FFI_ArrowArrayStream`
-    pub fn to_raw(this: Arc<FFI_ArrowArrayStream>) -> *const FFI_ArrowArrayStream {
-        Arc::into_raw(this)
-    }
-
     /// Gets `FFI_ArrowArrayStream` from raw pointer
     /// # Safety
     /// Assumes that the pointer represents valid C Stream Interfaces, both in memory
     /// representation and lifetime via the `release` mechanism.
+    /// This function copies the content from the raw pointer and cleans it up to prevent
+    /// double-dropping.
     pub unsafe fn from_raw(
         ptr: *const FFI_ArrowArrayStream,
     ) -> Arc<FFI_ArrowArrayStream> {
-        let ffi_stream = (*ptr).clone();
-        Arc::new(ffi_stream)
+        let stream_mut = ptr as *mut FFI_ArrowArrayStream;
+        let stream_data = std::ptr::replace(stream_mut, FFI_ArrowArrayStream::empty());
+
+        Arc::new(stream_data)
     }
 }
 
@@ -204,8 +204,8 @@ struct ExportedArrayStream {
 }
 
 impl ExportedArrayStream {
-    fn get_private_data(&self) -> Box<StreamPrivateData> {
-        unsafe { Box::from_raw((*self.stream).private_data as *mut StreamPrivateData) }
+    fn get_private_data(&self) -> &mut StreamPrivateData {
+        unsafe { &mut *((*self.stream).private_data as *mut StreamPrivateData) }
     }
 
     pub fn get_schema(&self, out: *mut FFI_ArrowSchema) -> i32 {
@@ -243,7 +243,6 @@ impl ExportedArrayStream {
             }
         };
 
-        Box::into_raw(private_data);
         ret_code
     }
 
@@ -288,12 +287,11 @@ impl ExportedArrayStream {
             }
         };
 
-        Box::into_raw(private_data);
         ret_code
     }
 
-    pub fn get_last_error(&self) -> String {
-        self.get_private_data().last_error
+    pub fn get_last_error(&self) -> &String {
+        &self.get_private_data().last_error
     }
 }
 
@@ -363,9 +361,14 @@ impl ArrowArrayStreamReader {
     /// # Safety
     /// This function dereferences a raw pointer of `FFI_ArrowArrayStream`.
     /// Assumes that the pointer represents valid C Stream Interfaces.
+    /// This function copies the content from the raw pointer and cleans up it to prevent
+    /// double-dropping
     pub unsafe fn from_raw(raw_stream: *mut FFI_ArrowArrayStream) -> Result<Self> {
         let schema = get_stream_schema(raw_stream)?;
-        let stream = Arc::new((*raw_stream).clone());
+
+        let stream_data = std::ptr::replace(raw_stream, FFI_ArrowArrayStream::empty());
+
+        let stream = Arc::new(stream_data);
         Ok(Self { stream, schema })
     }
 
