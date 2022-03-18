@@ -425,7 +425,7 @@ impl FFI_ArrowArray {
     /// # Safety
     /// This method releases `buffers`. Consumers of this struct *must* call `release` before
     /// releasing this struct, or contents in `buffers` leak.
-    fn new(data: &ArrayData) -> Self {
+    pub(crate) fn new(data: &ArrayData) -> Self {
         // * insert the null buffer at the start
         // * make all others `Option<Buffer>`.
         let buffers = iter::once(data.null_buffer().cloned())

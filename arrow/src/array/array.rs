@@ -646,22 +646,12 @@ pub unsafe fn export_array_into_raw(
     out_array: *mut ffi::FFI_ArrowArray,
     out_schema: *mut ffi::FFI_ArrowSchema,
 ) -> Result<()> {
-    let (array, schema) = src.to_raw()?;
+    let data = src.data();
+    let array = ffi::FFI_ArrowArray::new(data);
+    let schema = ffi::FFI_ArrowSchema::try_from(data.data_type())?;
 
-    std::ptr::copy_nonoverlapping(array, out_array, 1);
-    std::ptr::copy_nonoverlapping(schema, out_schema, 1);
-
-    // Clean up the structs to avoid double-dropping
-    let empty_array = Box::into_raw(Box::new(ffi::FFI_ArrowArray::empty()));
-    let empty_schema = Box::into_raw(Box::new(ffi::FFI_ArrowSchema::empty()));
-    std::ptr::copy_nonoverlapping(empty_array, array as *mut ffi::FFI_ArrowArray, 1);
-    std::ptr::copy_nonoverlapping(empty_schema, schema as *mut ffi::FFI_ArrowSchema, 1);
-
-    // Drop Box and Arc pointers
-    Box::from_raw(empty_array);
-    Box::from_raw(empty_schema);
-    Arc::from_raw(array);
-    Arc::from_raw(schema);
+    std::ptr::write_unaligned(out_array, array);
+    std::ptr::write_unaligned(out_schema, schema);
 
     Ok(())
 }
