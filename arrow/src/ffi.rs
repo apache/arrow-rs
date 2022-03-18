@@ -1213,7 +1213,7 @@ mod tests {
         let out_schema_ptr = Box::into_raw(out_schema);
 
         unsafe {
-            export_array_into_raw(array, out_array_ptr, out_schema_ptr);
+            export_array_into_raw(array, out_array_ptr, out_schema_ptr)?;
         }
 
         // (simulate consumer) import it
