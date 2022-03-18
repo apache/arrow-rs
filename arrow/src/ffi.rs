@@ -817,33 +817,27 @@ impl ArrowArray {
     /// This function copies the content of two FFI structs [FFI_ArrowArray] and [FFI_ArrowSchema] in
     /// this [ArrowArray] to the location pointed by the raw pointers. Usually the raw pointers are
     /// provided by the array data consumer.
-    pub fn export_into_raw(
+    pub unsafe fn export_into_raw(
         this: ArrowArray,
         out_array: *mut FFI_ArrowArray,
         out_schema: *mut FFI_ArrowSchema,
     ) {
         let array = Arc::into_raw(this.array);
         let schema = Arc::into_raw(this.schema);
-        unsafe {
-            std::ptr::copy_nonoverlapping(array, out_array, 1);
-            std::ptr::copy_nonoverlapping(schema, out_schema, 1);
+        std::ptr::copy_nonoverlapping(array, out_array, 1);
+        std::ptr::copy_nonoverlapping(schema, out_schema, 1);
 
-            // Clean up the structs to avoid double-dropping
-            let empty_array = Box::into_raw(Box::new(FFI_ArrowArray::empty()));
-            let empty_schema = Box::into_raw(Box::new(FFI_ArrowSchema::empty()));
-            std::ptr::copy_nonoverlapping(empty_array, array as *mut FFI_ArrowArray, 1);
-            std::ptr::copy_nonoverlapping(
-                empty_schema,
-                schema as *mut FFI_ArrowSchema,
-                1,
-            );
+        // Clean up the structs to avoid double-dropping
+        let empty_array = Box::into_raw(Box::new(FFI_ArrowArray::empty()));
+        let empty_schema = Box::into_raw(Box::new(FFI_ArrowSchema::empty()));
+        std::ptr::copy_nonoverlapping(empty_array, array as *mut FFI_ArrowArray, 1);
+        std::ptr::copy_nonoverlapping(empty_schema, schema as *mut FFI_ArrowSchema, 1);
 
-            // Drop Box and Arc pointers
-            Box::from_raw(empty_array);
-            Box::from_raw(empty_schema);
-            Arc::from_raw(array);
-            Arc::from_raw(schema);
-        }
+        // Drop Box and Arc pointers
+        Box::from_raw(empty_array);
+        Box::from_raw(empty_schema);
+        Arc::from_raw(array);
+        Arc::from_raw(schema);
     }
 }
 
@@ -1219,7 +1213,9 @@ mod tests {
         let out_array_ptr = Box::into_raw(out_array);
         let out_schema_ptr = Box::into_raw(out_schema);
 
-        ArrowArray::export_into_raw(arrow_array, out_array_ptr, out_schema_ptr);
+        unsafe {
+            ArrowArray::export_into_raw(arrow_array, out_array_ptr, out_schema_ptr);
+        }
 
         // (simulate consumer) import it
         unsafe {
