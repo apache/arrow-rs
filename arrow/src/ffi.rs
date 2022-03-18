@@ -26,9 +26,10 @@
 //!
 //! ```rust
 //! # use std::sync::Arc;
-//! # use arrow::array::{Int32Array, Array, ArrayData, make_array_from_raw};
+//! # use arrow::array::{Int32Array, Array, ArrayData, export_array_into_raw, make_array, make_array_from_raw};
 //! # use arrow::error::{Result, ArrowError};
 //! # use arrow::compute::kernels::arithmetic;
+//! # use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 //! # use std::convert::TryFrom;
 //! # fn main() -> Result<()> {
 //! // create an array natively
@@ -51,7 +52,35 @@
 //! // verify
 //! assert_eq!(array, Int32Array::from(vec![Some(2), None, Some(6)]));
 //!
+//! // Simulate if raw pointers are provided by consumer
+//! let array = make_array(Int32Array::from(vec![Some(1), None, Some(3)]).data().clone());
+//!
+//! let out_array = Box::new(FFI_ArrowArray::empty());
+//! let out_schema = Box::new(FFI_ArrowSchema::empty());
+//! let out_array_ptr = Box::into_raw(out_array);
+//! let out_schema_ptr = Box::into_raw(out_schema);
+//!
+//! // export array into raw pointers from consumer
+//! unsafe { export_array_into_raw(array, out_array_ptr, out_schema_ptr)?; };
+//!
+//! // import it
+//! let array = unsafe { make_array_from_raw(out_array_ptr, out_schema_ptr)? };
+//!
+//! // perform some operation
+//! let array = array.as_any().downcast_ref::<Int32Array>().ok_or(
+//!     ArrowError::ParseError("Expects an int32".to_string()),
+//! )?;
+//! let array = arithmetic::add(&array, &array)?;
+//!
+//! // verify
+//! assert_eq!(array, Int32Array::from(vec![Some(2), None, Some(6)]));
+//!
 //! // (drop/release)
+//! unsafe {
+//!     Box::from_raw(out_array_ptr);
+//!     Box::from_raw(out_schema_ptr);
+//! }
+//!
 //! Ok(())
 //! }
 //! ```
@@ -810,35 +839,6 @@ impl ArrowArray {
     pub fn into_raw(this: ArrowArray) -> (*const FFI_ArrowArray, *const FFI_ArrowSchema) {
         (Arc::into_raw(this.array), Arc::into_raw(this.schema))
     }
-
-    /// exports [ArrowArray] to raw pointers of the C Data Interface provided by the consumer.
-    /// # Safety
-    /// See safety of [ArrowArray]
-    /// This function copies the content of two FFI structs [FFI_ArrowArray] and [FFI_ArrowSchema] in
-    /// this [ArrowArray] to the location pointed by the raw pointers. Usually the raw pointers are
-    /// provided by the array data consumer.
-    pub unsafe fn export_into_raw(
-        this: ArrowArray,
-        out_array: *mut FFI_ArrowArray,
-        out_schema: *mut FFI_ArrowSchema,
-    ) {
-        let array = Arc::into_raw(this.array);
-        let schema = Arc::into_raw(this.schema);
-        std::ptr::copy_nonoverlapping(array, out_array, 1);
-        std::ptr::copy_nonoverlapping(schema, out_schema, 1);
-
-        // Clean up the structs to avoid double-dropping
-        let empty_array = Box::into_raw(Box::new(FFI_ArrowArray::empty()));
-        let empty_schema = Box::into_raw(Box::new(FFI_ArrowSchema::empty()));
-        std::ptr::copy_nonoverlapping(empty_array, array as *mut FFI_ArrowArray, 1);
-        std::ptr::copy_nonoverlapping(empty_schema, schema as *mut FFI_ArrowSchema, 1);
-
-        // Drop Box and Arc pointers
-        Box::from_raw(empty_array);
-        Box::from_raw(empty_schema);
-        Arc::from_raw(array);
-        Arc::from_raw(schema);
-    }
 }
 
 impl<'a> ArrowArrayChild<'a> {
@@ -859,10 +859,10 @@ impl<'a> ArrowArrayChild<'a> {
 mod tests {
     use super::*;
     use crate::array::{
-        make_array, Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
-        DictionaryArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, OffsetSizeTrait, StringOffsetSizeTrait, Time32MillisecondArray,
-        TimestampMillisecondArray,
+        export_array_into_raw, make_array, Array, ArrayData, BinaryOffsetSizeTrait,
+        BooleanArray, DecimalArray, DictionaryArray, GenericBinaryArray,
+        GenericListArray, GenericStringArray, Int32Array, OffsetSizeTrait,
+        StringOffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
@@ -1203,9 +1203,8 @@ mod tests {
     }
 
     #[test]
-    fn test_export_into_raw() -> Result<()> {
-        let array = Int32Array::from(vec![1, 2, 3]);
-        let arrow_array = ArrowArray::try_from(array.data().clone())?;
+    fn test_export_array_into_raw() -> Result<()> {
+        let array = make_array(Int32Array::from(vec![1, 2, 3]).data().clone());
 
         // Assume two raw pointers provided by the consumer
         let out_array = Box::new(FFI_ArrowArray::empty());
@@ -1214,7 +1213,7 @@ mod tests {
         let out_schema_ptr = Box::into_raw(out_schema);
 
         unsafe {
-            ArrowArray::export_into_raw(arrow_array, out_array_ptr, out_schema_ptr);
+            export_array_into_raw(array, out_array_ptr, out_schema_ptr);
         }
 
         // (simulate consumer) import it
