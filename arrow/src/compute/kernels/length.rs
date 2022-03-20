@@ -116,7 +116,7 @@ where
 
 /// Returns an array of Int32/Int64 denoting the number of bytes in each string in the array.
 ///
-/// * this only accepts StringArray/Utf8 and LargeString/LargeUtf8
+/// * this only accepts StringArray/Utf8, LargeString/LargeUtf8, BinaryArray and LargeBinaryArray
 /// * length of null is null.
 /// * length is in number of bytes
 pub fn length(array: &dyn Array) -> Result<ArrayRef> {
@@ -283,14 +283,16 @@ mod tests {
 
     #[test]
     fn length_null_binary() -> Result<()> {
-        let value: Vec<Option<&[u8]>> = vec![Some(b"zero"), None, Some(&[0xff, 0xf8]), Some(b"three")];
+        let value: Vec<Option<&[u8]>> =
+            vec![Some(b"zero"), None, Some(&[0xff, 0xf8]), Some(b"three")];
         let result: Vec<Option<i32>> = vec![Some(4), None, Some(2), Some(5)];
         length_binary_helper!(i32, Int32Array, length, value, result)
     }
 
     #[test]
     fn length_null_large_binary() -> Result<()> {
-        let value: Vec<Option<&[u8]>> = vec![Some(&[0xff, 0xf8]), None, Some(b"two"), Some(b"three")];
+        let value: Vec<Option<&[u8]>> =
+            vec![Some(&[0xff, 0xf8]), None, Some(b"two"), Some(b"three")];
         let result: Vec<Option<i64>> = vec![Some(2), None, Some(3), Some(5)];
         length_binary_helper!(i64, Int64Array, length, value, result)
     }
@@ -446,7 +448,7 @@ mod tests {
     fn bit_length_null_binary() -> Result<()> {
         let value: Vec<Option<&[u8]>> =
             vec![Some(b"one"), None, Some(b"three"), Some(&[0xff, 0xf8])];
-        let expected = vec![Some(24), None, Some(40), Some(16)];
+        let expected: Vec<Option<i32>> = vec![Some(24), None, Some(40), Some(16)];
         length_binary_helper!(i32, Int32Array, bit_length, value, expected)
     }
 
