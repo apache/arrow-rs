@@ -222,15 +222,15 @@ mod tests {
 
     #[test]
     fn length_test_binary() -> Result<()> {
-        let value: Vec<&[u8]> = vec![b"1", b"22", b"333"];
-        let result: Vec<i32> = vec![1, 2, 3];
+        let value: Vec<&[u8]> = vec![b"zero", b"one", &[0xff, 0xf8]];
+        let result: Vec<i32> = vec![4, 3, 2];
         length_binary_helper!(i32, Int32Array, length, value, result)
     }
 
     #[test]
     fn length_test_large_binary() -> Result<()> {
-        let value: Vec<&[u8]> = vec![b"1", b"22", b"333"];
-        let result: Vec<i64> = vec![1, 2, 3];
+        let value: Vec<&[u8]> = vec![b"zero", &[0xff, 0xf8], b"two"];
+        let result: Vec<i64> = vec![4, 2, 3];
         length_binary_helper!(i64, Int64Array, length, value, result)
     }
 
@@ -283,15 +283,15 @@ mod tests {
 
     #[test]
     fn length_null_binary() -> Result<()> {
-        let value: Vec<Option<&[u8]>> = vec![Some(b"1"), None, Some(b"22"), Some(b"333")];
-        let result: Vec<Option<i32>> = vec![Some(1), None, Some(2), Some(3)];
+        let value: Vec<Option<&[u8]>> = vec![Some(b"zero"), None, Some(&[0xff, 0xf8]), Some(b"three")];
+        let result: Vec<Option<i32>> = vec![Some(4), None, Some(2), Some(5)];
         length_binary_helper!(i32, Int32Array, length, value, result)
     }
 
     #[test]
     fn length_null_large_binary() -> Result<()> {
-        let value: Vec<Option<&[u8]>> = vec![Some(b"1"), None, Some(b"22"), Some(b"333")];
-        let result: Vec<Option<i64>> = vec![Some(1), None, Some(2), Some(3)];
+        let value: Vec<Option<&[u8]>> = vec![Some(&[0xff, 0xf8]), None, Some(b"two"), Some(b"three")];
+        let result: Vec<Option<i64>> = vec![Some(2), None, Some(3), Some(5)];
         length_binary_helper!(i64, Int64Array, length, value, result)
     }
 
@@ -320,13 +320,13 @@ mod tests {
     #[test]
     fn binary_length_offsets() -> Result<()> {
         let value: Vec<Option<&[u8]>> =
-            vec![Some(b"hello"), Some(b" "), Some(b"world"), None];
+            vec![Some(b"hello"), Some(b" "), Some(&[0xff, 0xf8]), None];
         let a = BinaryArray::from(value);
         let b = a.slice(1, 3);
         let result = length(b.as_ref())?;
         let result: &Int32Array = as_primitive_array(&result);
 
-        let expected = Int32Array::from(vec![Some(1), Some(5), None]);
+        let expected = Int32Array::from(vec![Some(1), Some(2), None]);
         assert_eq!(&expected, result);
 
         Ok(())
@@ -385,15 +385,15 @@ mod tests {
 
     #[test]
     fn bit_length_binary() -> Result<()> {
-        let value: Vec<&[u8]> = vec![b"one", b"three", b"four"];
-        let expected: Vec<i32> = vec![24, 40, 32];
+        let value: Vec<&[u8]> = vec![b"one", &[0xff, 0xf8], b"three"];
+        let expected: Vec<i32> = vec![24, 16, 40];
         length_binary_helper!(i32, Int32Array, bit_length, value, expected)
     }
 
     #[test]
     fn bit_length_large_binary() -> Result<()> {
-        let value: Vec<&[u8]> = vec![b"one", b"three", b"four"];
-        let expected: Vec<i64> = vec![24, 40, 32];
+        let value: Vec<&[u8]> = vec![b"zero", b" ", &[0xff, 0xf8]];
+        let expected: Vec<i64> = vec![32, 8, 16];
         length_binary_helper!(i64, Int64Array, bit_length, value, expected)
     }
 
@@ -445,16 +445,16 @@ mod tests {
     #[test]
     fn bit_length_null_binary() -> Result<()> {
         let value: Vec<Option<&[u8]>> =
-            vec![Some(b"one"), None, Some(b"three"), Some(b"four")];
-        let expected = vec![Some(24), None, Some(40), Some(32)];
+            vec![Some(b"one"), None, Some(b"three"), Some(&[0xff, 0xf8])];
+        let expected = vec![Some(24), None, Some(40), Some(16)];
         length_binary_helper!(i32, Int32Array, bit_length, value, expected)
     }
 
     #[test]
     fn bit_length_null_large_binary() -> Result<()> {
         let value: Vec<Option<&[u8]>> =
-            vec![Some(b"one"), None, Some(b"three"), Some(b"four")];
-        let expected: Vec<Option<i64>> = vec![Some(24), None, Some(40), Some(32)];
+            vec![Some(b"one"), None, Some(&[0xff, 0xf8]), Some(b"four")];
+        let expected: Vec<Option<i64>> = vec![Some(24), None, Some(16), Some(32)];
         length_binary_helper!(i64, Int64Array, bit_length, value, expected)
     }
 
@@ -483,13 +483,13 @@ mod tests {
     #[test]
     fn bit_length_offsets_binary() -> Result<()> {
         let value: Vec<Option<&[u8]>> =
-            vec![Some(b"hello"), Some(b" "), Some(b"world"), None];
+            vec![Some(b"hello"), Some(&[]), Some(b"world"), None];
         let a = BinaryArray::from(value);
         let b = a.slice(1, 3);
         let result = bit_length(b.as_ref())?;
         let result: &Int32Array = as_primitive_array(&result);
 
-        let expected = Int32Array::from(vec![Some(8), Some(40), None]);
+        let expected = Int32Array::from(vec![Some(0), Some(40), None]);
         assert_eq!(&expected, result);
 
         Ok(())
