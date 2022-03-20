@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines kernel for length of a string array
+//! Defines kernel for length of string arrays and binary arrays
 
 use crate::{
     array::*,
@@ -27,47 +27,54 @@ use crate::{
     error::{ArrowError, Result},
 };
 
-fn unary_offsets_string<O, F>(
-    array: &GenericStringArray<O>,
-    data_type: DataType,
-    op: F,
+macro_rules! unary_offsets {
+    ($array: expr, $data_type: expr, $op: expr) => {{
+        // note: offsets are stored as u8, but they can be interpreted as OffsetSize
+        let offsets = &$array.data_ref().buffers()[0];
+        // this is a 30% improvement over iterating over u8s and building OffsetSize, which
+        // justifies the usage of `unsafe`.
+        let slice: &[O] = &unsafe { offsets.typed_data::<O>() }[$array.offset()..];
+
+        let lengths = slice.windows(2).map(|offset| $op(offset[1] - offset[0]));
+
+        // JUSTIFICATION
+        //  Benefit
+        //      ~60% speedup
+        //  Soundness
+        //      `values` come from a slice iterator with a known size.
+        let buffer = unsafe { Buffer::from_trusted_len_iter(lengths) };
+
+        let null_bit_buffer = $array
+            .data_ref()
+            .null_buffer()
+            .map(|b| b.bit_slice($array.offset(), $array.len()));
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                $data_type,
+                $array.len(),
+                None,
+                null_bit_buffer,
+                0,
+                vec![buffer],
+                vec![],
+            )
+        };
+        make_array(data)
+    }};
+}
+
+fn octet_length_binary<O: BinaryOffsetSizeTrait, T: ArrowPrimitiveType>(
+    array: &dyn Array,
 ) -> ArrayRef
 where
-    O: StringOffsetSizeTrait + ArrowNativeType,
-    F: Fn(O) -> O,
+    T::Native: BinaryOffsetSizeTrait,
 {
-    // note: offsets are stored as u8, but they can be interpreted as OffsetSize
-    let offsets = &array.data_ref().buffers()[0];
-    // this is a 30% improvement over iterating over u8s and building OffsetSize, which
-    // justifies the usage of `unsafe`.
-    let slice: &[O] = &unsafe { offsets.typed_data::<O>() }[array.offset()..];
-
-    let lengths = slice.windows(2).map(|offset| op(offset[1] - offset[0]));
-
-    // JUSTIFICATION
-    //  Benefit
-    //      ~60% speedup
-    //  Soundness
-    //      `values` come from a slice iterator with a known size.
-    let buffer = unsafe { Buffer::from_trusted_len_iter(lengths) };
-
-    let null_bit_buffer = array
-        .data_ref()
-        .null_buffer()
-        .map(|b| b.bit_slice(array.offset(), array.len()));
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            data_type,
-            array.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![buffer],
-            vec![],
-        )
-    };
-    make_array(data)
+    let array = array
+        .as_any()
+        .downcast_ref::<GenericBinaryArray<O>>()
+        .unwrap();
+    unary_offsets!(array, T::DATA_TYPE, |x| x)
 }
 
 fn octet_length<O: StringOffsetSizeTrait, T: ArrowPrimitiveType>(
@@ -80,7 +87,21 @@ where
         .as_any()
         .downcast_ref::<GenericStringArray<O>>()
         .unwrap();
-    unary_offsets_string::<O, _>(array, T::DATA_TYPE, |x| x)
+    unary_offsets!(array, T::DATA_TYPE, |x| x)
+}
+
+fn bit_length_impl_binary<O: BinaryOffsetSizeTrait, T: ArrowPrimitiveType>(
+    array: &dyn Array,
+) -> ArrayRef
+where
+    T::Native: BinaryOffsetSizeTrait,
+{
+    let array = array
+        .as_any()
+        .downcast_ref::<GenericBinaryArray<O>>()
+        .unwrap();
+    let bits_in_bytes = O::from_usize(8).unwrap();
+    unary_offsets!(array, T::DATA_TYPE, |x| x * bits_in_bytes)
 }
 
 fn bit_length_impl<O: StringOffsetSizeTrait, T: ArrowPrimitiveType>(
@@ -94,7 +115,7 @@ where
         .downcast_ref::<GenericStringArray<O>>()
         .unwrap();
     let bits_in_bytes = O::from_usize(8).unwrap();
-    unary_offsets_string::<O, _>(array, T::DATA_TYPE, |x| x * bits_in_bytes)
+    unary_offsets!(array, T::DATA_TYPE, |x| x * bits_in_bytes)
 }
 
 /// Returns an array of Int32/Int64 denoting the number of bytes in each string in the array.
@@ -106,6 +127,8 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::Utf8 => Ok(octet_length::<i32, Int32Type>(array)),
         DataType::LargeUtf8 => Ok(octet_length::<i64, Int64Type>(array)),
+        DataType::Binary => Ok(octet_length_binary::<i32, Int32Type>(array)),
+        DataType::LargeBinary => Ok(octet_length_binary::<i64, Int64Type>(array)),
         _ => Err(ArrowError::ComputeError(format!(
             "length not supported for {:?}",
             array.data_type()
@@ -122,6 +145,8 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::Utf8 => Ok(bit_length_impl::<i32, Int32Type>(array)),
         DataType::LargeUtf8 => Ok(bit_length_impl::<i64, Int64Type>(array)),
+        DataType::Binary => Ok(bit_length_impl_binary::<i32, Int32Type>(array)),
+        DataType::LargeBinary => Ok(bit_length_impl_binary::<i64, Int64Type>(array)),
         _ => Err(ArrowError::ComputeError(format!(
             "bit_length not supported for {:?}",
             array.data_type()
