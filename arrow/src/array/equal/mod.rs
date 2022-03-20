@@ -40,12 +40,14 @@ mod list;
 mod null;
 mod primitive;
 mod structure;
+mod union;
 mod utils;
 mod variable_size;
 
 // these methods assume the same type, len and null count.
 // For this reason, they are not exposed and are instead used
 // to build the generic functions below (`equal_range` and `equal`).
+use crate::array::equal::union::union_equal;
 use boolean::boolean_equal;
 use decimal::decimal_equal;
 use dictionary::dictionary_equal;
@@ -232,7 +234,9 @@ fn equal_values(
         DataType::Struct(_) => {
             struct_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
         }
-        DataType::Union(_, _) => unimplemented!("See ARROW-8576"),
+        DataType::Union(_, _) => {
+            union_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
+        }
         DataType::Dictionary(data_type, _) => match data_type.as_ref() {
             DataType::Int8 => dictionary_equal::<i8>(
                 lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
