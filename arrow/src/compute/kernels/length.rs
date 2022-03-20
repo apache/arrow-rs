@@ -17,11 +17,7 @@
 
 //! Defines kernel for length of string arrays and binary arrays
 
-use crate::{
-    array::*,
-    buffer::Buffer,
-    datatypes::{ArrowNativeType, ArrowPrimitiveType},
-};
+use crate::{array::*, buffer::Buffer, datatypes::ArrowPrimitiveType};
 use crate::{
     datatypes::{DataType, Int32Type, Int64Type},
     error::{ArrowError, Result},
@@ -138,7 +134,7 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef> {
 
 /// Returns an array of Int32/Int64 denoting the number of bits in each string in the array.
 ///
-/// * this only accepts StringArray/Utf8 and LargeString/LargeUtf8
+/// * this only accepts StringArray/Utf8, LargeString/LargeUtf8, BinaryArray and LargeBinaryArray
 /// * bit_length of null is null.
 /// * bit_length is in number of bits
 pub fn bit_length(array: &dyn Array) -> Result<ArrayRef> {
@@ -158,11 +154,11 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef> {
 mod tests {
     use super::*;
 
-    fn length_cases() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
-        fn double_vec<T: Clone>(v: Vec<T>) -> Vec<T> {
-            [&v[..], &v[..]].concat()
-        }
+    fn double_vec<T: Clone>(v: Vec<T>) -> Vec<T> {
+        [&v[..], &v[..]].concat()
+    }
 
+    fn length_cases_string() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
         let mut values = vec!["one", "on", "o", ""];
         let mut expected = vec![3, 2, 1, 0];
@@ -179,10 +175,21 @@ mod tests {
         ]
     }
 
+    macro_rules! length_binary_helper {
+        ($offset_ty: ty, $result_ty: ty, $kernel: ident, $value: expr, $expected: expr) => {{
+            let array = GenericBinaryArray::<$offset_ty>::from($value);
+            let result = $kernel(&array)?;
+            let result = result.as_any().downcast_ref::<$result_ty>().unwrap();
+            let expected: $result_ty = $expected.into();
+            assert_eq!(expected.data(), result.data());
+            Ok(())
+        }};
+    }
+
     #[test]
     #[cfg_attr(miri, ignore)] // running forever
     fn length_test_string() -> Result<()> {
-        length_cases()
+        length_cases_string()
             .into_iter()
             .try_for_each(|(input, len, expected)| {
                 let array = StringArray::from(input);
@@ -199,7 +206,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)] // running forever
     fn length_test_large_string() -> Result<()> {
-        length_cases()
+        length_cases_string()
             .into_iter()
             .try_for_each(|(input, len, expected)| {
                 let array = LargeStringArray::from(input);
@@ -213,9 +220,23 @@ mod tests {
             })
     }
 
+    #[test]
+    fn length_test_binary() -> Result<()> {
+        let value: Vec<&[u8]> = vec![b"1", b"22", b"333"];
+        let result: Vec<i32> = vec![1, 2, 3];
+        length_binary_helper!(i32, Int32Array, length, value, result)
+    }
+
+    #[test]
+    fn length_test_large_binary() -> Result<()> {
+        let value: Vec<&[u8]> = vec![b"1", b"22", b"333"];
+        let result: Vec<i64> = vec![1, 2, 3];
+        length_binary_helper!(i64, Int64Array, length, value, result)
+    }
+
     type OptionStr = Option<&'static str>;
 
-    fn length_null_cases() -> Vec<(Vec<OptionStr>, usize, Vec<Option<i32>>)> {
+    fn length_null_cases_string() -> Vec<(Vec<OptionStr>, usize, Vec<Option<i32>>)> {
         vec![(
             vec![Some("one"), None, Some("three"), Some("four")],
             4,
@@ -225,7 +246,7 @@ mod tests {
 
     #[test]
     fn length_null_string() -> Result<()> {
-        length_null_cases()
+        length_null_cases_string()
             .into_iter()
             .try_for_each(|(input, len, expected)| {
                 let array = StringArray::from(input);
@@ -241,7 +262,7 @@ mod tests {
 
     #[test]
     fn length_null_large_string() -> Result<()> {
-        length_null_cases()
+        length_null_cases_string()
             .into_iter()
             .try_for_each(|(input, len, expected)| {
                 let array = LargeStringArray::from(input);
@@ -258,6 +279,20 @@ mod tests {
                 assert_eq!(expected.data(), result.data());
                 Ok(())
             })
+    }
+
+    #[test]
+    fn length_null_binary() -> Result<()> {
+        let value: Vec<Option<&[u8]>> = vec![Some(b"1"), None, Some(b"22"), Some(b"333")];
+        let result: Vec<Option<i32>> = vec![Some(1), None, Some(2), Some(3)];
+        length_binary_helper!(i32, Int32Array, length, value, result)
+    }
+
+    #[test]
+    fn length_null_large_binary() -> Result<()> {
+        let value: Vec<Option<&[u8]>> = vec![Some(b"1"), None, Some(b"22"), Some(b"333")];
+        let result: Vec<Option<i64>> = vec![Some(1), None, Some(2), Some(3)];
+        length_binary_helper!(i64, Int64Array, length, value, result)
     }
 
     /// Tests that length is not valid for u64.
@@ -282,11 +317,22 @@ mod tests {
         Ok(())
     }
 
-    fn bit_length_cases() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
-        fn double_vec<T: Clone>(v: Vec<T>) -> Vec<T> {
-            [&v[..], &v[..]].concat()
-        }
+    #[test]
+    fn binary_length_offsets() -> Result<()> {
+        let value: Vec<Option<&[u8]>> =
+            vec![Some(b"hello"), Some(b" "), Some(b"world"), None];
+        let a = BinaryArray::from(value);
+        let b = a.slice(1, 3);
+        let result = length(b.as_ref())?;
+        let result: &Int32Array = as_primitive_array(&result);
 
+        let expected = Int32Array::from(vec![Some(1), Some(5), None]);
+        assert_eq!(&expected, result);
+
+        Ok(())
+    }
+
+    fn bit_length_cases() -> Vec<(Vec<&'static str>, usize, Vec<i32>)> {
         // a large array
         let mut values = vec!["one", "on", "o", ""];
         let mut expected = vec![24, 16, 8, 0];
@@ -337,6 +383,20 @@ mod tests {
             })
     }
 
+    #[test]
+    fn bit_length_binary() -> Result<()> {
+        let value: Vec<&[u8]> = vec![b"one", b"three", b"four"];
+        let expected: Vec<i32> = vec![24, 40, 32];
+        length_binary_helper!(i32, Int32Array, bit_length, value, expected)
+    }
+
+    #[test]
+    fn bit_length_large_binary() -> Result<()> {
+        let value: Vec<&[u8]> = vec![b"one", b"three", b"four"];
+        let expected: Vec<i64> = vec![24, 40, 32];
+        length_binary_helper!(i64, Int64Array, bit_length, value, expected)
+    }
+
     fn bit_length_null_cases() -> Vec<(Vec<OptionStr>, usize, Vec<Option<i32>>)> {
         vec![(
             vec![Some("one"), None, Some("three"), Some("four")],
@@ -382,6 +442,22 @@ mod tests {
             })
     }
 
+    #[test]
+    fn bit_length_null_binary() -> Result<()> {
+        let value: Vec<Option<&[u8]>> =
+            vec![Some(b"one"), None, Some(b"three"), Some(b"four")];
+        let expected = vec![Some(24), None, Some(40), Some(32)];
+        length_binary_helper!(i32, Int32Array, bit_length, value, expected)
+    }
+
+    #[test]
+    fn bit_length_null_large_binary() -> Result<()> {
+        let value: Vec<Option<&[u8]>> =
+            vec![Some(b"one"), None, Some(b"three"), Some(b"four")];
+        let expected: Vec<Option<i64>> = vec![Some(24), None, Some(40), Some(32)];
+        length_binary_helper!(i64, Int64Array, bit_length, value, expected)
+    }
+
     /// Tests that bit_length is not valid for u64.
     #[test]
     fn bit_length_wrong_type() {
@@ -392,8 +468,23 @@ mod tests {
 
     /// Tests with an offset
     #[test]
-    fn bit_length_offsets() -> Result<()> {
+    fn bit_length_offsets_string() -> Result<()> {
         let a = StringArray::from(vec![Some("hello"), Some(" "), Some("world"), None]);
+        let b = a.slice(1, 3);
+        let result = bit_length(b.as_ref())?;
+        let result: &Int32Array = as_primitive_array(&result);
+
+        let expected = Int32Array::from(vec![Some(8), Some(40), None]);
+        assert_eq!(&expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn bit_length_offsets_binary() -> Result<()> {
+        let value: Vec<Option<&[u8]>> =
+            vec![Some(b"hello"), Some(b" "), Some(b"world"), None];
+        let a = BinaryArray::from(value);
         let b = a.slice(1, 3);
         let result = bit_length(b.as_ref())?;
         let result: &Int32Array = as_primitive_array(&result);
