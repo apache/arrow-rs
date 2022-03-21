@@ -26,25 +26,20 @@ use super::{
 
 // Checks if corresponding slots in two UnionArrays are same data types
 fn equal_types(
-    lhs_fields: &Vec<Field>,
-    rhs_fields: &Vec<Field>,
+    lhs_fields: &[Field],
+    rhs_fields: &[Field],
     lhs_type_ids: &[i8],
     rhs_type_ids: &[i8],
 ) -> bool {
     let lhs_slots_types = lhs_type_ids
-        .into_iter()
-        .map(|type_id| lhs_fields.get(*type_id as usize).unwrap().data_type())
-        .collect::<Vec<_>>();
+        .iter()
+        .map(|type_id| lhs_fields.get(*type_id as usize).unwrap().data_type());
 
     let rhs_slots_types = rhs_type_ids
-        .into_iter()
-        .map(|type_id| rhs_fields.get(*type_id as usize).unwrap().data_type())
-        .collect::<Vec<_>>();
+        .iter()
+        .map(|type_id| rhs_fields.get(*type_id as usize).unwrap().data_type());
 
-    lhs_slots_types
-        .into_iter()
-        .zip(rhs_slots_types.into_iter())
-        .all(|(l, r)| l == r)
+    lhs_slots_types.zip(rhs_slots_types).all(|(l, r)| l == r)
 }
 
 fn equal_dense(
@@ -55,11 +50,11 @@ fn equal_dense(
     lhs_offsets: &[i32],
     rhs_offsets: &[i32],
 ) -> bool {
-    let offsets = lhs_offsets.into_iter().zip(rhs_offsets.into_iter());
+    let offsets = lhs_offsets.iter().zip(rhs_offsets.iter());
 
     lhs_type_ids
-        .into_iter()
-        .zip(rhs_type_ids.into_iter())
+        .iter()
+        .zip(rhs_type_ids.iter())
         .zip(offsets)
         .all(|((l_type_id, r_type_id), (l_offset, r_offset))| {
             let lhs_values = &lhs.child_data()[*l_type_id as usize];
@@ -77,6 +72,7 @@ fn equal_dense(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn equal_sparse(
     lhs: &ArrayData,
     rhs: &ArrayData,
@@ -88,8 +84,8 @@ fn equal_sparse(
     rhs_start: usize,
 ) -> bool {
     lhs_type_ids
-        .into_iter()
-        .zip(rhs_type_ids.into_iter())
+        .iter()
+        .zip(rhs_type_ids.iter())
         .enumerate()
         .all(|(index, (l_type_id, r_type_id))| {
             let lhs_values = &lhs.child_data()[*l_type_id as usize];
