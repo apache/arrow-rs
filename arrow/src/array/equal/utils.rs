@@ -168,41 +168,6 @@ pub(super) fn child_logical_null_buffer(
             });
             Some(buffer.into())
         }
-        DataType::Union(_, _) => {
-            unimplemented!("Logical equality not yet implemented for union arrays")
-        }
-        DataType::Dictionary(_, _) => {
-            unimplemented!("Logical equality not yet implemented for nested dictionaries")
-        }
-        data_type => panic!("Data type {:?} is not a supported nested type", data_type),
-    }
-}
-
-/// Computes the logical validity bitmap of the array data using the
-/// parent's array data. The parent should be a union.
-///
-/// Parent data is passed along with the parent's logical bitmap, as
-/// nested arrays could have a logical bitmap different to the physical
-/// one on the `ArrayData`.
-pub(super) fn child_logical_null_buffer_for_union(
-    parent_data: &ArrayData,
-    logical_null_buffer: Option<&Buffer>,
-    child_data: &ArrayData,
-    type_id: i8,
-) -> Option<Buffer> {
-    let parent_len = parent_data.len();
-    let parent_bitmap = logical_null_buffer
-        .cloned()
-        .map(Bitmap::from)
-        .unwrap_or_else(|| {
-            let ceil = bit_util::ceil(parent_len, 8);
-            Bitmap::from(Buffer::from(vec![0b11111111; ceil]))
-        });
-    let self_null_bitmap = child_data.null_bitmap().clone().unwrap_or_else(|| {
-        let ceil = bit_util::ceil(child_data.len(), 8);
-        Bitmap::from(Buffer::from(vec![0b11111111; ceil]))
-    });
-    match parent_data.data_type() {
         DataType::Union(_, mode) => {
             match mode {
                 UnionMode::Sparse => {
@@ -227,31 +192,16 @@ pub(super) fn child_logical_null_buffer_for_union(
                 }
                 UnionMode::Dense => {
                     // We don't keep bitmap in child data of Dense UnionArray
-                    let parent_type_ids = parent_data.buffer::<i8>(0);
-                    let parent_offsets = parent_data.buffer::<i32>(1);
-
-                    let array_offset = parent_data.offset();
-                    let child_len = parent_type_ids
-                        .into_iter()
-                        .filter(|t| **t == type_id)
-                        .collect::<Vec<_>>()
-                        .len();
-                    let mut buffer = MutableBuffer::new_null(child_len);
-                    let null_slice = buffer.as_slice_mut();
-                    let mut child_offset = parent_offsets[0] as usize;
-                    (0..parent_len).for_each(|index| {
-                        if parent_type_ids[index] == type_id {
-                            if parent_bitmap.is_set(index + array_offset) {
-                                bit_util::set_bit(null_slice, child_offset);
-                            }
-                            child_offset += 1;
-                        }
-                    });
-                    Some(buffer.into())
+                    unimplemented!(
+                        "Logical equality not yet implemented for dense union arrays"
+                    )
                 }
             }
         }
-        data_type => panic!("Data type {:?} is not union type", data_type),
+        DataType::Dictionary(_, _) => {
+            unimplemented!("Logical equality not yet implemented for nested dictionaries")
+        }
+        data_type => panic!("Data type {:?} is not a supported nested type", data_type),
     }
 }
 
