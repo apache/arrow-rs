@@ -27,6 +27,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::Array;
 
 use super::levels::LevelInfo;
+use super::parquet_to_arrow_schema;
 use super::schema::{
     add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
     decimal_length_from_precision,
@@ -34,7 +35,9 @@ use super::schema::{
 
 use crate::column::writer::ColumnWriter;
 use crate::errors::{ParquetError, Result};
+use crate::file::footer::parse_metadata;
 use crate::file::properties::WriterProperties;
+use crate::file::reader::ChunkReader;
 use crate::{
     data_type::*,
     file::writer::{FileWriter, ParquetWriter, RowGroupWriter, SerializedFileWriter},
@@ -195,6 +198,43 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
         self.flush_completed()?;
         self.flush_row_group(self.buffered_rows)?;
         self.writer.close()
+    }
+}
+
+impl<W: 'static + ParquetWriter> ArrowWriter<W> {
+    /// Try to create a new Arrow writer to append data to an existing parquet file without read the entiery file.
+    pub fn from_chunk<R: ChunkReader>(
+        chunk: R,
+        writer: W,
+        props: Option<WriterProperties>,
+    ) -> Result<Self> {
+        let parquet_metadata = parse_metadata(&chunk)?;
+        let file_metadata = parquet_metadata.file_metadata();
+        let arrow_schema = parquet_to_arrow_schema(
+            file_metadata.schema_descr(),
+            file_metadata.key_value_metadata(),
+        )?;
+        let schema = arrow_to_parquet_schema(&arrow_schema)?;
+
+        let mut props = props.unwrap_or_else(|| WriterProperties::builder().build());
+        let max_row_group_size = props.max_row_group_size();
+
+        add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
+
+        let file_writer = SerializedFileWriter::from_chunk(
+            chunk,
+            writer,
+            schema.root_schema_ptr(),
+            Arc::new(props),
+        )?;
+
+        Ok(Self {
+            writer: file_writer,
+            buffer: vec![Default::default(); arrow_schema.fields().len()],
+            buffered_rows: 0,
+            arrow_schema: Arc::new(arrow_schema),
+            max_row_group_size,
+        })
     }
 }
 
@@ -699,6 +739,7 @@ mod tests {
 
     use crate::arrow::{ArrowReader, ParquetFileArrowReader};
     use crate::file::metadata::ParquetMetaData;
+    use crate::file::serialized_reader::SliceableCursor;
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
         statistics::Statistics,
@@ -760,6 +801,74 @@ mod tests {
             .next()
             .expect("No batch found")
             .expect("Unable to get batch");
+
+        assert_eq!(expected_batch.schema(), actual_batch.schema());
+        assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
+        assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
+        for i in 0..expected_batch.num_columns() {
+            let expected_data = expected_batch.column(i).data().clone();
+            let actual_data = actual_batch.column(i).data().clone();
+
+            assert_eq!(expected_data, actual_data);
+        }
+    }
+
+    #[test]
+    fn arrow_writer_append_data_to_existing_file() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int64, true),
+        ]));
+
+        let a = Int32Array::from(vec![1]);
+        let b = Int64Array::from(vec![Some(1)]);
+
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(a), Arc::new(b)]).unwrap();
+        let output_cursor = InMemoryWriteableCursor::default();
+
+        {
+            let mut writer =
+                ArrowWriter::try_new(output_cursor.clone(), schema.clone(), None)
+                    .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+
+        // Append new data to the chunk cursor
+        let chunk_cursor = SliceableCursor::new(output_cursor.into_inner().unwrap());
+
+        let a = Int32Array::from(vec![2]);
+        let b = Int64Array::from(vec![None]);
+
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(a), Arc::new(b)]).unwrap();
+
+        let output_cursor = InMemoryWriteableCursor::default();
+        {
+            let mut writer =
+                ArrowWriter::from_chunk(chunk_cursor, output_cursor.clone(), None)
+                    .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+        }
+
+        // Check if the chunk cursor contains the old and new data
+        let chunk_cursor = SliceableCursor::new(output_cursor.into_inner().unwrap());
+        let reader = SerializedFileReader::new(chunk_cursor).unwrap();
+        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
+        let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
+
+        let actual_batch = record_batch_reader
+            .next()
+            .expect("No batch found")
+            .expect("Unable to get batch");
+
+        let a = Int32Array::from(vec![1, 2]);
+        let b = Int64Array::from(vec![Some(1), None]);
+
+        let expected_batch =
+            RecordBatch::try_new(schema, vec![Arc::new(a), Arc::new(b)]).unwrap();
 
         assert_eq!(expected_batch.schema(), actual_batch.schema());
         assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());

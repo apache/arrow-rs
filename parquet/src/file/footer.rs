@@ -97,6 +97,48 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
     }
 }
 
+/// Layout of Parquet file
+/// +---------------------------+-----+---+
+/// |      Rest of file         |  B  | A |
+/// +---------------------------+-----+---+
+/// where A: parquet footer, B: parquet metadata.
+///
+/// Return A & B length
+pub fn parse_footer_metadata_len<R: ChunkReader>(chunk_reader: &R) -> Result<usize> {
+    // check file is large enough to hold footer
+    let file_size = chunk_reader.len();
+    if file_size < (FOOTER_SIZE as u64) {
+        return Err(general_err!(
+            "Invalid Parquet file. Size is smaller than footer"
+        ));
+    }
+
+    // read and cache up to DEFAULT_FOOTER_READ_SIZE bytes from the end and process the footer
+    let default_end_len = min(DEFAULT_FOOTER_READ_SIZE, chunk_reader.len() as usize);
+    let mut default_end_reader = chunk_reader
+        .get_read(chunk_reader.len() - default_end_len as u64, default_end_len)?;
+    let mut default_len_end_buf = vec![0; default_end_len];
+    default_end_reader.read_exact(&mut default_len_end_buf)?;
+
+    // check this is indeed a parquet file
+    if default_len_end_buf[default_end_len - 4..] != PARQUET_MAGIC {
+        return Err(general_err!("Invalid Parquet file. Corrupt footer"));
+    }
+
+    // get the metadata length from the footer
+    let metadata_len = LittleEndian::read_i32(
+        &default_len_end_buf[default_end_len - 8..default_end_len - 4],
+    ) as i64;
+    if metadata_len < 0 {
+        return Err(general_err!(
+            "Invalid Parquet file. Metadata length is less than zero ({})",
+            metadata_len
+        ));
+    }
+
+    Ok(FOOTER_SIZE + metadata_len as usize)
+}
+
 /// Reads [`ParquetMetaData`] from the provided [`Read`] starting at the readers current position
 pub(crate) fn parse_metadata_buffer<T: Read + ?Sized>(
     metadata_read: &mut T,

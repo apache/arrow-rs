@@ -19,7 +19,7 @@
 //! using row group writers and column writers respectively.
 
 use std::{
-    io::{Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom, Write},
     sync::Arc,
 };
 
@@ -45,6 +45,11 @@ pub use crate::util::io::TryClone;
 
 // Exposed publically for convenience of writing Parquet to a buffer of bytes
 pub use crate::util::cursor::InMemoryWriteableCursor;
+
+use super::{
+    footer::{parse_footer_metadata_len, parse_metadata},
+    reader::ChunkReader,
+};
 
 // ----------------------------------------------------------------------
 // APIs for file & row group writers
@@ -154,6 +159,48 @@ impl<W: ParquetWriter> SerializedFileWriter<W> {
             props: properties,
             total_num_rows: 0,
             row_groups: Vec::new(),
+            previous_writer_closed: true,
+            is_closed: false,
+        })
+    }
+
+    /// Create new file writer from chunk file
+    pub fn from_chunk<R: ChunkReader>(
+        chunk: R,
+        mut buf: W,
+        schema: TypePtr,
+        properties: WriterPropertiesPtr,
+    ) -> Result<Self> {
+        if 0 == chunk.len() {
+            return Err(general_err!(
+                "Invalid Parquet for the last chunk. The last chunk is empty"
+            ));
+        }
+
+        let parquet_metadata = parse_metadata(&chunk)?;
+        let footer_metadata_len = parse_footer_metadata_len(&chunk)?;
+        let total_num_rows = parquet_metadata.file_metadata().num_rows();
+        let row_groups = parquet_metadata
+            .row_groups()
+            .iter()
+            .cloned()
+            .map(Arc::new)
+            .collect::<Vec<RowGroupMetaDataPtr>>();
+
+        let mut chunk_without_footer =
+            vec![0; chunk.len() as usize - footer_metadata_len];
+        let mut chunk_reader = chunk.get_read(0, chunk.len() as usize)?;
+        chunk_reader.read_exact(&mut chunk_without_footer)?;
+
+        buf.write_all(&chunk_without_footer)?;
+
+        Ok(Self {
+            buf,
+            schema: schema.clone(),
+            descr: Arc::new(SchemaDescriptor::new(schema)),
+            props: properties,
+            total_num_rows,
+            row_groups,
             previous_writer_closed: true,
             is_closed: false,
         })
@@ -544,6 +591,7 @@ mod tests {
     use crate::basic::{Compression, Encoding, IntType, LogicalType, Repetition, Type};
     use crate::column::page::PageReader;
     use crate::compression::{create_codec, Codec};
+    use crate::file::serialized_reader::SliceableCursor;
     use crate::file::{
         properties::{WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
@@ -688,6 +736,89 @@ mod tests {
 
         let reader = SerializedFileReader::new(file).unwrap();
         assert_eq!(reader.get_row_iter(None).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn test_file_writer_from_chunk_data() {
+        let data = vec![vec![1, 2, 3, 4, 5], vec![1]];
+        let schema = Arc::new(
+            types::Type::group_type_builder("schema")
+                .with_fields(&mut vec![Arc::new(
+                    types::Type::primitive_type_builder("col1", Type::INT32)
+                        .with_repetition(Repetition::REQUIRED)
+                        .build()
+                        .unwrap(),
+                )])
+                .build()
+                .unwrap(),
+        );
+        let props = Arc::new(WriterProperties::builder().build());
+        let output_cursor = InMemoryWriteableCursor::default();
+
+        {
+            let mut writer = SerializedFileWriter::new(
+                output_cursor.clone(),
+                schema.clone(),
+                props.clone(),
+            )
+            .unwrap();
+
+            for subset in &data {
+                let mut row_group_writer = writer.next_row_group().unwrap();
+                let col_writer = row_group_writer.next_column().unwrap();
+                if let Some(mut writer) = col_writer {
+                    match writer {
+                        ColumnWriter::Int32ColumnWriter(ref mut typed) => {
+                            typed.write_batch(&subset[..], None, None).unwrap();
+                        }
+                        _ => {
+                            unimplemented!();
+                        }
+                    }
+                    row_group_writer.close_column(writer).unwrap();
+                }
+                writer.close_row_group(row_group_writer).unwrap();
+            }
+
+            writer.close().unwrap();
+        }
+
+        let chunk_cursor = SliceableCursor::new(output_cursor.into_inner().unwrap());
+        let output_cursor = InMemoryWriteableCursor::default();
+
+        {
+            let mut writer = SerializedFileWriter::from_chunk(
+                chunk_cursor,
+                output_cursor.clone(),
+                schema,
+                props,
+            )
+            .unwrap();
+
+            for subset in &data {
+                let mut row_group_writer = writer.next_row_group().unwrap();
+                let col_writer = row_group_writer.next_column().unwrap();
+                if let Some(mut writer) = col_writer {
+                    match writer {
+                        ColumnWriter::Int32ColumnWriter(ref mut typed) => {
+                            typed.write_batch(&subset[..], None, None).unwrap();
+                        }
+                        _ => {
+                            unimplemented!();
+                        }
+                    }
+                    row_group_writer.close_column(writer).unwrap();
+                }
+                writer.close_row_group(row_group_writer).unwrap();
+            }
+
+            writer.close().unwrap();
+        }
+
+        let chunk_cursor = SliceableCursor::new(output_cursor.into_inner().unwrap());
+        let reader = assert_send(SerializedFileReader::new(chunk_cursor).unwrap());
+
+        assert_eq!(reader.num_row_groups(), data.len() * 2);
     }
 
     #[test]
