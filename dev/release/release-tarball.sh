@@ -32,6 +32,9 @@
 set -e
 set -u
 
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
+
 if [ "$#" -ne 2 ]; then
   echo "Usage: $0 <version> <rc-num>"
   echo "ex. $0 4.1.0 2"
@@ -68,5 +71,9 @@ svn ci -m "Apache Arrow Rust ${version}" ${tmp_dir}/release
 echo "Clean up"
 rm -rf ${tmp_dir}
 
-echo "Success! The release is available here:"
+echo "Success!"
+echo "The release is available here:"
 echo "  https://dist.apache.org/repos/dist/release/arrow/${release_version}"
+
+echo "Clean up old versions from svn"
+(cd "${SOURCE_TOP_DIR}" && ./dev/release/remove-old-releases.sh)
