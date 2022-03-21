@@ -17,13 +17,13 @@
 
 use crate::datatypes::Field;
 use crate::{
-    array::data::count_nulls, array::ArrayData, buffer::Buffer, datatypes::DataType,
-    datatypes::UnionMode, util::bit_util::get_bit,
+    array::ArrayData, buffer::Buffer, datatypes::DataType, datatypes::UnionMode,
 };
-use std::any::Any;
-use std::collections::HashSet;
 
-use super::{equal_range, utils::child_logical_null_buffer};
+use super::{
+    equal_range, equal_values, utils::child_logical_null_buffer_for_union,
+    utils::equal_nulls,
+};
 
 // Checks if corresponding slots in two UnionArrays are same data types
 fn equal_types(
@@ -35,12 +35,12 @@ fn equal_types(
     let lhs_slots_types = lhs_type_ids
         .into_iter()
         .map(|type_id| lhs_fields.get(*type_id as usize).unwrap().data_type())
-        .collect_vec();
+        .collect::<Vec<_>>();
 
     let rhs_slots_types = rhs_type_ids
         .into_iter()
         .map(|type_id| rhs_fields.get(*type_id as usize).unwrap().data_type())
-        .collect_vec();
+        .collect::<Vec<_>>();
 
     lhs_slots_types
         .into_iter()
@@ -48,7 +48,8 @@ fn equal_types(
         .all(|(l, r)| l == r)
 }
 
-fn equal_dense(
+// Assumes lhs is "Dense" UnionArray and rhs is "Sparse" UnionArray
+fn equal_dense_sparse(
     lhs: &ArrayData,
     rhs: &ArrayData,
     lhs_nulls: Option<&Buffer>,
@@ -56,31 +57,61 @@ fn equal_dense(
     lhs_type_ids: &[i8],
     rhs_type_ids: &[i8],
     lhs_offsets: &[i32],
-    rhs_offsets: &[i32],
-    lhs_start: usize,
     rhs_start: usize,
-    len: usize,
 ) -> bool {
-    let offsets = lhs_offsets.into_iter().zip(rhs_offsets.into_iter());
-
-
-    lhs_type_ids.into_iter().zip(rhs_type_ids.into_iter()).zip(offsets).all(
-        |((l_type_id, r_type_id), (l_offset, r_offset))| {
+    lhs_type_ids
+        .into_iter()
+        .zip(rhs_type_ids.into_iter())
+        .enumerate()
+        .all(|(index, (l_type_id, r_type_id))| {
             let lhs_values = &lhs.child_data()[*l_type_id as usize];
             let rhs_values = &rhs.child_data()[*r_type_id as usize];
 
-            let lhs_pos = lhs_start + *l_offset;
-            let rhs_pos = rhs_start + *r_offset;
+            let l_offset = lhs_offsets[index];
 
-            // if both struct and child had no null buffers,
-            let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos + lhs.offset());
-            let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos + rhs.offset());
+            let e_value = equal_range(
+                lhs_values,
+                rhs_values,
+                None,
+                None,
+                l_offset as usize,
+                rhs_start + index,
+                1,
+            );
 
-            lhs_is_null
-                || (lhs_is_null == rhs_is_null)
-                && equal_values(lhs, rhs, lhs_nulls, rhs_nulls, lhs_pos, rhs_pos, 1)
-        },
-    )
+            println!("e_value: {:?} ", e_value);
+            e_value
+        })
+}
+
+fn equal_dense(
+    lhs: &ArrayData,
+    rhs: &ArrayData,
+    lhs_type_ids: &[i8],
+    rhs_type_ids: &[i8],
+    lhs_offsets: &[i32],
+    rhs_offsets: &[i32],
+) -> bool {
+    let offsets = lhs_offsets.into_iter().zip(rhs_offsets.into_iter());
+
+    lhs_type_ids
+        .into_iter()
+        .zip(rhs_type_ids.into_iter())
+        .zip(offsets)
+        .all(|((l_type_id, r_type_id), (l_offset, r_offset))| {
+            let lhs_values = &lhs.child_data()[*l_type_id as usize];
+            let rhs_values = &rhs.child_data()[*r_type_id as usize];
+
+            equal_range(
+                lhs_values,
+                rhs_values,
+                None,
+                None,
+                *l_offset as usize,
+                *r_offset as usize,
+                1,
+            )
+        })
 }
 
 fn equal_sparse(
@@ -92,39 +123,33 @@ fn equal_sparse(
     rhs_type_ids: &[i8],
     lhs_start: usize,
     rhs_start: usize,
-    len: usize,
 ) -> bool {
-    let mut visited_type_ids: HashSet<i8> = HashSet::new();
+    lhs_type_ids
+        .into_iter()
+        .zip(rhs_type_ids.into_iter())
+        .enumerate()
+        .all(|(index, (l_type_id, r_type_id))| {
+            let lhs_values = &lhs.child_data()[*l_type_id as usize];
+            let rhs_values = &rhs.child_data()[*r_type_id as usize];
 
-    lhs_type_ids.into_iter().zip(rhs_type_ids.into_iter()).all(
-        |(l_type_id, r_type_id)| {
-            if visited_type_ids.len() < lhs.child_data().len() {
-                let lhs_values = &lhs.child_data()[*l_type_id as usize];
-                let rhs_values = &rhs.child_data()[*r_type_id as usize];
+            // merge the null data
+            let lhs_merged_nulls = child_logical_null_buffer_for_union(
+                lhs, lhs_nulls, lhs_values, *l_type_id,
+            );
+            let rhs_merged_nulls = child_logical_null_buffer_for_union(
+                rhs, rhs_nulls, rhs_values, *r_type_id,
+            );
 
-                // merge the null data
-                let lhs_merged_nulls =
-                    child_logical_null_buffer(lhs, lhs_nulls, lhs_values);
-                let rhs_merged_nulls =
-                    child_logical_null_buffer(rhs, rhs_nulls, rhs_values);
-                let comp_result = equal_range(
-                    lhs_values,
-                    rhs_values,
-                    lhs_merged_nulls.as_ref(),
-                    rhs_merged_nulls.as_ref(),
-                    lhs_start,
-                    rhs_start,
-                    len,
-                );
-
-                visited_type_ids.insert(*l_type_id);
-
-                comp_result
-            } else {
-                true
-            }
-        },
-    )
+            equal_range(
+                lhs_values,
+                rhs_values,
+                lhs_merged_nulls.as_ref(),
+                rhs_merged_nulls.as_ref(),
+                lhs_start + index,
+                rhs_start + index,
+                1,
+            )
+        })
 }
 
 pub(super) fn union_equal(
@@ -139,54 +164,97 @@ pub(super) fn union_equal(
     let lhs_type_ids = lhs.buffer::<i8>(0);
     let rhs_type_ids = rhs.buffer::<i8>(0);
 
-    let lhs_offsets = lhs.buffer::<i32>(1);
-    let rhs_offsets = rhs.buffer::<i32>(1);
-
-    let lhs_null_count = count_nulls(lhs_nulls, lhs_start, len);
-    let rhs_null_count = count_nulls(rhs_nulls, rhs_start, len);
-
     match (lhs.data_type(), rhs.data_type()) {
         (
             DataType::Union(lhs_fields, UnionMode::Dense),
             DataType::Union(rhs_fields, UnionMode::Dense),
         ) => {
+            let lhs_offsets = lhs.buffer::<i32>(1);
+            let rhs_offsets = rhs.buffer::<i32>(1);
+
+            let lhs_type_id_range = &lhs_type_ids[lhs_start..lhs_start + len];
+            let rhs_type_id_range = &rhs_type_ids[rhs_start..rhs_start + len];
+
+            let lhs_offsets_range = &lhs_offsets[lhs_start..lhs_start + len];
+            let rhs_offsets_range = &rhs_offsets[rhs_start..rhs_start + len];
+
+            // nullness is kept in the parent UnionArray, so we compare its nulls here
             equal_types(lhs_fields, rhs_fields, lhs_type_ids, rhs_type_ids)
+                && equal_nulls(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
                 && equal_dense(
                     lhs,
                     rhs,
-                    lhs_nulls,
-                    rhs_nulls,
-                    lhs_type_ids,
-                    rhs_type_ids,
-                    lhs_offsets,
-                    rhs_offsets
-                    lhs_start,
-                    rhs_start,
-                    len,
+                    lhs_type_id_range,
+                    rhs_type_id_range,
+                    lhs_offsets_range,
+                    rhs_offsets_range,
                 )
         }
         (
             DataType::Union(lhs_fields, UnionMode::Sparse),
             DataType::Union(rhs_fields, UnionMode::Sparse),
         ) => {
+            let lhs_type_id_range = &lhs_type_ids[lhs_start..lhs_start + len];
+            let rhs_type_id_range = &rhs_type_ids[rhs_start..rhs_start + len];
+
             equal_types(lhs_fields, rhs_fields, lhs_type_ids, rhs_type_ids)
                 && equal_sparse(
                     lhs,
                     rhs,
                     lhs_nulls,
                     rhs_nulls,
-                    lhs_type_ids,
-                    rhs_type_ids,
+                    lhs_type_id_range,
+                    rhs_type_id_range,
                     lhs_start,
                     rhs_start,
-                    len,
                 )
         }
-        (DataType::Union(lhs_fields, _), DataType::Union(rhs_fields, _)) => {
+        (
+            DataType::Union(lhs_fields, UnionMode::Dense),
+            DataType::Union(rhs_fields, UnionMode::Sparse),
+        ) => {
+            let lhs_offsets = lhs.buffer::<i32>(1);
+
+            let lhs_type_id_range = &lhs_type_ids[lhs_start..lhs_start + len];
+            let rhs_type_id_range = &rhs_type_ids[rhs_start..rhs_start + len];
+
+            let lhs_offsets_range = &lhs_offsets[lhs_start..lhs_start + len];
+
             equal_types(lhs_fields, rhs_fields, lhs_type_ids, rhs_type_ids)
+                && equal_dense_sparse(
+                    lhs,
+                    rhs,
+                    lhs_nulls,
+                    rhs_nulls,
+                    lhs_type_id_range,
+                    rhs_type_id_range,
+                    lhs_offsets_range,
+                    rhs_start,
+                )
+        }
+        (
+            DataType::Union(lhs_fields, UnionMode::Sparse),
+            DataType::Union(rhs_fields, UnionMode::Dense),
+        ) => {
+            let rhs_offsets = rhs.buffer::<i32>(1);
+
+            let lhs_type_id_range = &lhs_type_ids[lhs_start..lhs_start + len];
+            let rhs_type_id_range = &rhs_type_ids[rhs_start..rhs_start + len];
+
+            let rhs_offsets_range = &rhs_offsets[rhs_start..rhs_start + len];
+
+            equal_types(lhs_fields, rhs_fields, lhs_type_ids, rhs_type_ids)
+                && equal_dense_sparse(
+                    rhs,
+                    lhs,
+                    rhs_nulls,
+                    lhs_nulls,
+                    rhs_type_id_range,
+                    lhs_type_id_range,
+                    rhs_offsets_range,
+                    lhs_start,
+                )
         }
         _ => unreachable!(),
     }
-
-    true
 }

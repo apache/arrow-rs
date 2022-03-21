@@ -18,7 +18,7 @@
 use crate::array::{data::count_nulls, ArrayData, OffsetSizeTrait};
 use crate::bitmap::Bitmap;
 use crate::buffer::{Buffer, MutableBuffer};
-use crate::datatypes::DataType;
+use crate::datatypes::{DataType, UnionMode};
 use crate::util::bit_util;
 
 // whether bits along the positions are equal
@@ -66,7 +66,14 @@ pub(super) fn equal_nulls(
 
 #[inline]
 pub(super) fn base_equal(lhs: &ArrayData, rhs: &ArrayData) -> bool {
-    lhs.data_type() == rhs.data_type() && lhs.len() == rhs.len()
+    let equal_type = match (lhs.data_type(), rhs.data_type()) {
+        (DataType::Union(l_fields, l_mode), DataType::Union(r_fields, r_mode)) => {
+            // Defer field datatype check to `union_equal`
+            l_fields.len() == r_fields.len() && l_mode == r_mode
+        }
+        (l_data_type, r_data_type) => l_data_type == r_data_type,
+    };
+    equal_type && lhs.len() == rhs.len()
 }
 
 // whether the two memory regions are equal
@@ -168,6 +175,83 @@ pub(super) fn child_logical_null_buffer(
             unimplemented!("Logical equality not yet implemented for nested dictionaries")
         }
         data_type => panic!("Data type {:?} is not a supported nested type", data_type),
+    }
+}
+
+/// Computes the logical validity bitmap of the array data using the
+/// parent's array data. The parent should be a union.
+///
+/// Parent data is passed along with the parent's logical bitmap, as
+/// nested arrays could have a logical bitmap different to the physical
+/// one on the `ArrayData`.
+pub(super) fn child_logical_null_buffer_for_union(
+    parent_data: &ArrayData,
+    logical_null_buffer: Option<&Buffer>,
+    child_data: &ArrayData,
+    type_id: i8,
+) -> Option<Buffer> {
+    let parent_len = parent_data.len();
+    let parent_bitmap = logical_null_buffer
+        .cloned()
+        .map(Bitmap::from)
+        .unwrap_or_else(|| {
+            let ceil = bit_util::ceil(parent_len, 8);
+            Bitmap::from(Buffer::from(vec![0b11111111; ceil]))
+        });
+    let self_null_bitmap = child_data.null_bitmap().clone().unwrap_or_else(|| {
+        let ceil = bit_util::ceil(child_data.len(), 8);
+        Bitmap::from(Buffer::from(vec![0b11111111; ceil]))
+    });
+    match parent_data.data_type() {
+        DataType::Union(_, mode) => {
+            match mode {
+                UnionMode::Sparse => {
+                    // See the logic of `DataType::Struct` in `child_logical_null_buffer`.
+                    let result = &parent_bitmap & &self_null_bitmap;
+                    if let Ok(bitmap) = result {
+                        return Some(bitmap.bits);
+                    }
+
+                    // slow path
+                    let array_offset = parent_data.offset();
+                    let mut buffer = MutableBuffer::new_null(parent_len);
+                    let null_slice = buffer.as_slice_mut();
+                    (0..parent_len).for_each(|index| {
+                        if parent_bitmap.is_set(index + array_offset)
+                            && self_null_bitmap.is_set(index + array_offset)
+                        {
+                            bit_util::set_bit(null_slice, index);
+                        }
+                    });
+                    Some(buffer.into())
+                }
+                UnionMode::Dense => {
+                    // We don't keep bitmap in child data of Dense UnionArray
+                    let parent_type_ids = parent_data.buffer::<i8>(0);
+                    let parent_offsets = parent_data.buffer::<i32>(1);
+
+                    let array_offset = parent_data.offset();
+                    let child_len = parent_type_ids
+                        .into_iter()
+                        .filter(|t| **t == type_id)
+                        .collect::<Vec<_>>()
+                        .len();
+                    let mut buffer = MutableBuffer::new_null(child_len);
+                    let null_slice = buffer.as_slice_mut();
+                    let mut child_offset = parent_offsets[0] as usize;
+                    (0..parent_len).for_each(|index| {
+                        if parent_type_ids[index] == type_id {
+                            if parent_bitmap.is_set(index + array_offset) {
+                                bit_util::set_bit(null_slice, child_offset);
+                            }
+                            child_offset += 1;
+                        }
+                    });
+                    Some(buffer.into())
+                }
+            }
+        }
+        data_type => panic!("Data type {:?} is not union type", data_type),
     }
 }
 
