@@ -582,7 +582,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Dictionary values must be integer, but was Float32")]
+    #[should_panic(expected = "Dictionary key type must be integer, but was Float32")]
     fn test_try_wrong_dictionary_key_type() {
         let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
         let keys: Float32Array = [Some(0_f32), None, Some(3_f32)].into_iter().collect();

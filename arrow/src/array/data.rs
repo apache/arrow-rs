@@ -693,7 +693,7 @@ impl ArrayData {
                 // At the moment, constructing a DictionaryArray will also check this
                 if !DataType::is_dictionary_key_type(key_type) {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "Dictionary values must be integer, but was {}",
+                        "Dictionary key type must be integer, but was {}",
                         key_type
                     )));
                 }
@@ -1736,7 +1736,7 @@ mod tests {
 
     // Test creating a dictionary with a non integer type
     #[test]
-    #[should_panic(expected = "Dictionary values must be integer, but was Utf8")]
+    #[should_panic(expected = "Dictionary key type must be integer, but was Utf8")]
     fn test_non_int_dictionary() {
         let i32_buffer = Buffer::from_slice_ref(&[0i32, 2i32]);
         let data_type =
