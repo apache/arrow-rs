@@ -602,6 +602,31 @@ fn array_from_json(
             }
             Ok(Arc::new(b.finish()))
         }
+        DataType::Map(child_field, _) => {
+            let null_buf = create_null_buf(&json_col);
+            let children = json_col.children.clone().unwrap();
+            let child_array = array_from_json(
+                child_field,
+                children.get(0).unwrap().clone(),
+                dictionaries,
+            )?;
+            let offsets: Vec<i32> = json_col
+                .offset
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap() as i32)
+                .collect();
+            let array_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .add_buffer(Buffer::from(&offsets.to_byte_slice()))
+                .add_child_data(child_array.data().clone())
+                .null_bit_buffer(null_buf)
+                .build()
+                .unwrap();
+
+            let array = MapArray::from(array_data);
+            Ok(Arc::new(array))
+        }
         t => Err(ArrowError::JsonError(format!(
             "data type {:?} not supported",
             t
