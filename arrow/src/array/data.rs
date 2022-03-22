@@ -949,7 +949,7 @@ impl ArrayData {
             )));
         }
 
-        self.validate_dictionary_offest()?;
+        self.validate_dictionary_offset()?;
 
         // validate all children recursively
         self.child_data
@@ -967,7 +967,7 @@ impl ArrayData {
         Ok(())
     }
 
-    pub fn validate_dictionary_offest(&self) -> Result<()> {
+    pub fn validate_dictionary_offset(&self) -> Result<()> {
         match &self.data_type {
             DataType::Utf8 => self.validate_utf8::<i32>(),
             DataType::LargeUtf8 => self.validate_utf8::<i64>(),

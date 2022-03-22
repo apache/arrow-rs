@@ -114,7 +114,7 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
 
         let array = unsafe { data.build_unchecked() };
 
-        array.validate_dictionary_offest()?;
+        array.validate_dictionary_offset()?;
 
         Ok(array.into())
     }
