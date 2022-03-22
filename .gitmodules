@@ -3,5 +3,4 @@
 	url = https://github.com/apache/arrow-testing
 [submodule "parquet-testing"]
 	path = parquet-testing
-	url = git@github.com:novemberkilo/parquet-testing
-	branch = topic/null-list-reader
+	url = https://github.com/apache/parquet-testing.git

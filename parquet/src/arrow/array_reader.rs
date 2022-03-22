@@ -26,10 +26,10 @@ use std::vec::Vec;
 
 use arrow::array::{
     new_empty_array, Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryArray,
-    BinaryBuilder, BooleanArray, BooleanBufferBuilder, BooleanBuilder,
+    BinaryBuilder, BooleanArray, BooleanBufferBuilder, BooleanBuilder, DecimalArray,
     FixedSizeBinaryArray, FixedSizeBinaryBuilder, GenericListArray, Int16BufferBuilder,
-    Int32Array, Int64Array, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, PrimitiveBuilder,
-    StringArray, StringBuilder, StructArray, DecimalArray,
+    Int32Array, Int64Array, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
+    PrimitiveBuilder, StringArray, StringBuilder, StructArray,
 };
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::{
@@ -430,14 +430,16 @@ where
             }
             ArrowType::Decimal(p, s) => {
                 let array = match array.data_type() {
-                    ArrowType::Int32 => array.as_any()
+                    ArrowType::Int32 => array
+                        .as_any()
                         .downcast_ref::<Int32Array>()
                         .unwrap()
                         .iter()
                         .map(|v| v.map(|v| v.into()))
                         .collect::<DecimalArray>(),
 
-                    ArrowType::Int64 => array.as_any()
+                    ArrowType::Int64 => array
+                        .as_any()
                         .downcast_ref::<Int64Array>()
                         .unwrap()
                         .iter()
@@ -885,9 +887,7 @@ fn remove_indices(
                 Ok(Arc::new(StructArray::from((new_columns, valid.finish()))))
             }
         }
-        ArrowType::Null => {
-            Ok(Arc::new(NullArray::new(arr.len() - indices.len())))
-        }
+        ArrowType::Null => Ok(Arc::new(NullArray::new(arr.len()))),
         _ => Err(ParquetError::General(format!(
             "ListArray of type List({:?}) is not supported by array_reader",
             item_type
@@ -968,9 +968,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             }
         });
 
-        if !cur_offset.is_zero() {
-            offsets.push(cur_offset);
-        }
+        offsets.push(cur_offset);
 
         let num_bytes = bit_util::ceil(offsets.len(), 8);
         // TODO: A useful optimization is to use the null count to fill with
@@ -1773,15 +1771,13 @@ impl<'a> ArrayReaderBuilder {
             )),
             PhysicalType::INT96 => {
                 // get the optional timezone information from arrow type
-                let timezone = arrow_type
-                    .as_ref()
-                    .and_then(|data_type| {
-                        if let ArrowType::Timestamp(_, tz) = data_type {
-                            tz.clone()
-                        } else {
-                            None
-                        }
-                    });
+                let timezone = arrow_type.as_ref().and_then(|data_type| {
+                    if let ArrowType::Timestamp(_, tz) = data_type {
+                        tz.clone()
+                    } else {
+                        None
+                    }
+                });
                 let converter = Int96Converter::new(Int96ArrayConverter { timezone });
                 Ok(Box::new(ComplexObjectArrayReader::<
                     Int96Type,
@@ -1989,12 +1985,12 @@ impl<'a> ArrayReaderBuilder {
                 if i == 1 {
                     field = self.arrow_schema.field_with_name(part).ok();
                 } else if let Some(f) = field {
-                    if let ArrowType::Struct(fields) = f.data_type() {
-                        field = fields.iter().find(|f| f.name() == part);
-                    } else if let ArrowType::List(list_field) = f.data_type() {
-                        field = Some(list_field.as_ref());
-                    } else {
-                        field = None;
+                    match f.data_type() {
+                        ArrowType::Struct(fields) => {
+                            field = fields.iter().find(|f| f.name() == part)
+                        }
+                        ArrowType::List(list_field) => field = Some(list_field.as_ref()),
+                        _ => field = None,
                     }
                 } else {
                     field = None;

@@ -1222,7 +1222,20 @@ mod tests {
             .get_record_reader(60)
             .expect("Failed to read into array!");
 
-        let batch = record_batch_reader.next();
-        assert!(batch.is_none());
+        let batch = record_batch_reader.next().unwrap().unwrap();
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.column(0).len(), 1);
+
+        let list = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list.is_valid(0), true);
+
+        let val = list.value(0);
+        assert_eq!(val.len(), 0);
     }
 }
