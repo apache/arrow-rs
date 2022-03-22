@@ -66,7 +66,25 @@ pub(super) fn equal_nulls(
 
 #[inline]
 pub(super) fn base_equal(lhs: &ArrayData, rhs: &ArrayData) -> bool {
-    lhs.data_type() == rhs.data_type() && lhs.len() == rhs.len()
+    let equal_type = match (lhs.data_type(), rhs.data_type()) {
+        (DataType::Map(l_field, l_sorted), DataType::Map(r_field, r_sorted)) => {
+            let field_equal = match (l_field.data_type(), r_field.data_type()) {
+                (DataType::Struct(l_fields), DataType::Struct(r_fields))
+                    if l_fields.len() == 2 && r_fields.len() == 2 =>
+                {
+                    // We don't enforce the equality of field names
+                    l_fields.get(0).unwrap().data_type()
+                        == r_fields.get(0).unwrap().data_type()
+                        && l_fields.get(1).unwrap().data_type()
+                            == r_fields.get(1).unwrap().data_type()
+                }
+                _ => panic!("Map type should have 2 fields Struct in its field"),
+            };
+            field_equal && l_sorted == r_sorted
+        }
+        (l_data_type, r_data_type) => l_data_type == r_data_type,
+    };
+    equal_type && lhs.len() == rhs.len()
 }
 
 // whether the two memory regions are equal
