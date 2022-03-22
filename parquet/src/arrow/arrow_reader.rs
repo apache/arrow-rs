@@ -1233,7 +1233,7 @@ mod tests {
             .downcast_ref::<ListArray>()
             .unwrap();
         assert_eq!(list.len(), 1);
-        assert_eq!(list.is_valid(0), true);
+        assert!(list.is_valid(0));
 
         let val = list.value(0);
         assert_eq!(val.len(), 0);
