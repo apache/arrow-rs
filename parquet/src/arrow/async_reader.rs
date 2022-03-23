@@ -76,15 +76,18 @@
 
 use std::collections::VecDeque;
 use std::fmt::Formatter;
-use std::io::{Cursor, SeekFrom};
+use std::fs::File;
+use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use byteorder::{ByteOrder, LittleEndian};
+use async_trait::async_trait;
+use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::Stream;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
+use parquet_format::PageType;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -93,14 +96,87 @@ use crate::arrow::array_reader::{build_array_reader, RowGroupCollection};
 use crate::arrow::arrow_reader::ParquetRecordBatchReader;
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::basic::Compression;
-use crate::column::page::{PageIterator, PageReader};
+use crate::column::page::{Page, PageIterator, PageReader};
+use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::parse_metadata_buffer;
 use crate::file::metadata::ParquetMetaData;
-use crate::file::reader::SerializedPageReader;
+use crate::file::serialized_reader::{decode_page, read_page_header};
 use crate::file::PARQUET_MAGIC;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 use crate::util::memory::ByteBufferPtr;
+
+#[async_trait]
+pub trait Storage: Send + Unpin + 'static {
+    async fn read_footer(&mut self) -> Result<ByteBufferPtr>;
+
+    async fn prefetch(&mut self, ranges: Vec<Range<usize>>) -> Result<()>;
+
+    async fn read(&mut self, ranges: Vec<Range<usize>>) -> Result<Vec<ByteBufferPtr>>;
+}
+
+pub struct FileStorage {
+    file: Option<File>,
+}
+impl FileStorage {
+    pub fn new(file: File) -> Self {
+        Self { file: Some(file) }
+    }
+
+    pub async fn asyncify<F, T>(&mut self, f: F) -> Result<T>
+    where
+        F: FnOnce(&mut File) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let mut file = self.file.take().expect("FileStorage poisoned");
+        let (file, result) = tokio::task::spawn_blocking(move || {
+            let result = f(&mut file);
+            (file, result)
+        })
+        .await
+        .expect("background task panicked");
+
+        self.file = Some(file);
+        result
+    }
+}
+
+#[async_trait]
+impl Storage for FileStorage {
+    async fn read_footer(&mut self) -> Result<ByteBufferPtr> {
+        self.asyncify(|file| {
+            file.seek(SeekFrom::End(-8))?;
+            let metadata_len = file.read_u32::<LittleEndian>()?;
+
+            file.seek(SeekFrom::End(-(metadata_len as i64) - 8))?;
+
+            let mut buffer = vec![0; metadata_len as usize + 8];
+            file.read_exact(buffer.as_mut())?;
+
+            Ok(ByteBufferPtr::new(buffer))
+        })
+        .await
+    }
+
+    async fn prefetch(&mut self, _ranges: Vec<Range<usize>>) -> Result<()> {
+        Ok(())
+    }
+
+    async fn read(&mut self, ranges: Vec<Range<usize>>) -> Result<Vec<ByteBufferPtr>> {
+        self.asyncify(|file| {
+            ranges
+                .into_iter()
+                .map(|range| {
+                    file.seek(SeekFrom::Start(range.start as u64))?;
+                    let mut buffer = vec![0; range.end - range.start];
+                    file.read_exact(buffer.as_mut())?;
+                    Ok(ByteBufferPtr::new(buffer))
+                })
+                .collect()
+        })
+        .await
+    }
+}
 
 /// A builder used to construct a [`ParquetRecordBatchStream`] for a parquet file
 ///
@@ -122,10 +198,11 @@ pub struct ParquetRecordBatchStreamBuilder<T> {
     projection: Option<Vec<usize>>,
 }
 
-impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
+impl<T: Storage> ParquetRecordBatchStreamBuilder<T> {
     /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
     pub async fn new(mut input: T) -> Result<Self> {
-        let metadata = Arc::new(read_footer(&mut input).await?);
+        let footer = input.read_footer().await?;
+        let metadata = Arc::new(decode_footer(footer.as_ref())?);
 
         let schema = Arc::new(parquet_to_arrow_schema(
             metadata.file_metadata().schema_descr(),
@@ -174,7 +251,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
     }
 
     /// Build a new [`ParquetRecordBatchStream`]
-    pub fn build(self) -> Result<ParquetRecordBatchStream<T>> {
+    pub async fn build(mut self) -> Result<ParquetRecordBatchStream<T>> {
         let num_columns = self.schema.fields().len();
         let num_row_groups = self.metadata.row_groups().len();
 
@@ -192,7 +269,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
             None => (0..num_columns).collect::<Vec<_>>(),
         };
 
-        let row_groups = match self.row_groups {
+        let row_groups: VecDeque<_> = match self.row_groups {
             Some(row_groups) => {
                 if let Some(col) = row_groups.iter().find(|x| **x >= num_row_groups) {
                     return Err(general_err!(
@@ -205,6 +282,17 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
             }
             None => (0..self.metadata.row_groups().len()).collect(),
         };
+
+        let mut ranges = Vec::with_capacity(row_groups.len() * columns.len());
+        for row_group_idx in &row_groups {
+            let row_group_metadata = self.metadata.row_group(*row_group_idx);
+            for column in &columns {
+                let (start, length) = row_group_metadata.column(*column).byte_range();
+                ranges.push(start as usize..(start + length) as usize)
+            }
+        }
+
+        self.input.prefetch(ranges).await?;
 
         Ok(ParquetRecordBatchStream {
             row_groups,
@@ -277,9 +365,7 @@ impl<T> ParquetRecordBatchStream<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncSeek + Unpin + Send + 'static> Stream
-    for ParquetRecordBatchStream<T>
-{
+impl<T: Storage + Send + 'static> Stream for ParquetRecordBatchStream<T> {
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -323,22 +409,25 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send + 'static> Stream
                             let mut column_chunks =
                                 vec![None; row_group_metadata.columns().len()];
 
-                            for column_idx in columns.iter() {
+                            let ranges: Vec<_> = columns
+                                .iter()
+                                .map(|idx| {
+                                    let (start, length) =
+                                        row_group_metadata.column(*idx).byte_range();
+                                    start as usize..(start + length) as usize
+                                })
+                                .collect();
+
+                            let buffers = input.read(ranges).await?;
+                            for (column_idx, data) in columns.iter().zip(buffers) {
                                 let column = row_group_metadata.column(*column_idx);
-                                let (start, length) = column.byte_range();
-                                let end = start + length;
-
-                                input.seek(SeekFrom::Start(start)).await?;
-
-                                let mut buffer = vec![0_u8; (end - start) as usize];
-                                input.read_exact(buffer.as_mut_slice()).await?;
 
                                 column_chunks[*column_idx] = Some(InMemoryColumnChunk {
                                     num_values: column.num_values(),
                                     compression: column.compression(),
                                     physical_type: column.column_type(),
-                                    data: ByteBufferPtr::new(buffer),
-                                });
+                                    data,
+                                })
                             }
 
                             Ok((
@@ -388,34 +477,35 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send + 'static> Stream
     }
 }
 
-async fn read_footer<T: AsyncRead + AsyncSeek + Unpin>(
-    input: &mut T,
-) -> Result<ParquetMetaData> {
-    input.seek(SeekFrom::End(-8)).await?;
+fn decode_footer(buf: &[u8]) -> Result<ParquetMetaData> {
+    if buf.len() < 8 {
+        return Err(general_err!("Invalid Parquet footer. Too few bytes"));
+    }
 
-    let mut buf = [0_u8; 8];
-    input.read_exact(&mut buf).await?;
-
-    if buf[4..] != PARQUET_MAGIC {
+    if buf[buf.len() - 4..] != PARQUET_MAGIC {
         return Err(general_err!("Invalid Parquet file. Corrupt footer"));
     }
 
-    let metadata_len = LittleEndian::read_i32(&buf[..4]) as i64;
-    if metadata_len < 0 {
-        return Err(general_err!(
+    let metadata_len = LittleEndian::read_i32(&buf[buf.len() - 8..]);
+    let metadata_len: usize = metadata_len.try_into().map_err(|_| {
+        general_err!(
             "Invalid Parquet file. Metadata length is less than zero ({})",
             metadata_len
+        )
+    })?;
+
+    if buf.len() != metadata_len + 8 {
+        return Err(general_err!(
+            "Incorrect number of footer bytes, expected {} got {}",
+            metadata_len + 8,
+            buf.len()
         ));
     }
 
-    input.seek(SeekFrom::End(-8 - metadata_len)).await?;
-
-    let mut buf = Vec::with_capacity(metadata_len as usize + 8);
-    input.read_to_end(&mut buf).await?;
-
-    parse_metadata_buffer(&mut Cursor::new(buf))
+    parse_metadata_buffer(&mut Cursor::new(&buf[..buf.len() - 8]))
 }
 
+/// An in-memory collection of column chunks
 struct InMemoryRowGroup {
     schema: SchemaDescPtr,
     column_chunks: Vec<Option<InMemoryColumnChunk>>,
@@ -427,16 +517,18 @@ impl RowGroupCollection for InMemoryRowGroup {
     }
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
-        let page_reader = self.column_chunks[i].as_ref().unwrap().pages();
+        let chunk = self.column_chunks[i].clone().unwrap();
+        let page_reader = InMemoryColumnChunkReader::new(chunk)?;
 
         Ok(Box::new(ColumnChunkIterator {
             schema: self.schema.clone(),
             column_schema: self.schema.columns()[i].clone(),
-            reader: Some(page_reader),
+            reader: Some(Ok(Box::new(page_reader))),
         }))
     }
 }
 
+/// Data for a single column chunk
 #[derive(Clone)]
 struct InMemoryColumnChunk {
     num_values: i64,
@@ -445,19 +537,79 @@ struct InMemoryColumnChunk {
     data: ByteBufferPtr,
 }
 
-impl InMemoryColumnChunk {
-    fn pages(&self) -> Result<Box<dyn PageReader>> {
-        let page_reader = SerializedPageReader::new(
-            Cursor::new(self.data.clone()),
-            self.num_values,
-            self.compression,
-            self.physical_type,
-        )?;
+/// A serialized implementation for Parquet [`PageReader`].
+struct InMemoryColumnChunkReader {
+    chunk: InMemoryColumnChunk,
+    decompressor: Option<Box<dyn Codec>>,
+    offset: usize,
+    seen_num_values: i64,
+}
 
-        Ok(Box::new(page_reader))
+impl InMemoryColumnChunkReader {
+    /// Creates a new serialized page reader from file source.
+    pub fn new(chunk: InMemoryColumnChunk) -> Result<Self> {
+        let decompressor = create_codec(chunk.compression)?;
+        let result = Self {
+            chunk,
+            decompressor,
+            offset: 0,
+            seen_num_values: 0,
+        };
+        Ok(result)
     }
 }
 
+impl Iterator for InMemoryColumnChunkReader {
+    type Item = Result<Page>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.get_next_page().transpose()
+    }
+}
+
+impl PageReader for InMemoryColumnChunkReader {
+    fn get_next_page(&mut self) -> Result<Option<Page>> {
+        while self.seen_num_values < self.chunk.num_values {
+            let mut cursor = Cursor::new(&self.chunk.data.as_ref()[self.offset..]);
+            let page_header = read_page_header(&mut cursor)?;
+            self.offset += std::io::Seek::stream_position(&mut cursor).unwrap() as usize;
+
+            let compressed_size = page_header.compressed_page_size as usize;
+            let buffer = self.chunk.data.range(self.offset, compressed_size);
+            self.offset += compressed_size;
+
+            let result = match page_header.type_ {
+                PageType::DataPage | PageType::DataPageV2 => {
+                    let decoded = decode_page(
+                        page_header,
+                        buffer,
+                        self.chunk.physical_type,
+                        self.decompressor.as_mut(),
+                    )?;
+                    self.seen_num_values += decoded.num_values() as i64;
+                    decoded
+                }
+                PageType::DictionaryPage => decode_page(
+                    page_header,
+                    buffer,
+                    self.chunk.physical_type,
+                    self.decompressor.as_mut(),
+                )?,
+                _ => {
+                    // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                    continue;
+                }
+            };
+
+            return Ok(Some(result));
+        }
+
+        // We are at the end of this column chunk and no more page left. Return None.
+        Ok(None)
+    }
+}
+
+/// Implements [`PageIterator`] for a single column chunk, yielding a single [`PageReader`]
 struct ColumnChunkIterator {
     schema: SchemaDescPtr,
     column_schema: ColumnDescPtr,

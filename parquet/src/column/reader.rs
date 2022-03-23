@@ -344,7 +344,7 @@ where
                                     rep_level_encoding,
                                     buf.start_from(offset),
                                 )?;
-                                offset = level_data.end();
+                                offset = level_data.end() - buf.start();
 
                                 let decoder =
                                     R::new(max_rep_level, rep_level_encoding, level_data);
@@ -359,7 +359,7 @@ where
                                     def_level_encoding,
                                     buf.start_from(offset),
                                 )?;
-                                offset = level_data.end();
+                                offset = level_data.end() - buf.start();
 
                                 let decoder =
                                     D::new(max_def_level, def_level_encoding, level_data);

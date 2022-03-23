@@ -111,9 +111,10 @@ mod snappy_codec {
             output_buf: &mut Vec<u8>,
         ) -> Result<usize> {
             let len = decompress_len(input_buf)?;
-            output_buf.resize(len, 0);
+            let offset = output_buf.len();
+            output_buf.resize(offset + len, 0);
             self.decoder
-                .decompress(input_buf, output_buf)
+                .decompress(input_buf, &mut output_buf[offset..])
                 .map_err(|e| e.into())
         }
 
