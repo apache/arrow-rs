@@ -762,12 +762,11 @@ impl LevelInfo {
             LevelType::Primitive(_) | LevelType::List(_)
         ) {
             panic!(
-                "Cannot filter indices on a non-primitive array, found {:?}",
+                "Can only filter indices on primitive arrays or list arrays, found {:?}",
                 self.level_type
             );
         }
 
-        // happy path if not dealing with lists
         if self.repetition.is_none() {
             return self
                 .definition
@@ -1821,5 +1820,23 @@ mod tests {
 
         // filter_array_indices should return the same indices in this case.
         assert_eq!(level1.filter_array_indices(), level2.filter_array_indices());
+    }
+
+    #[test]
+    fn test_filter_indices_for_lists() {
+        let level = LevelInfo {
+            definition: vec![3, 3, 3, 1, 3, 3, 3],
+            repetition: Some(vec![0, 1, 1, 0, 0, 1, 1]),
+            array_offsets: vec![0, 3, 3, 6],
+            array_mask: vec![true, true, true, false, true, true, true],
+            max_definition: 3,
+            level_type: LevelType::List(true),
+            offset: 0,
+            length: 6,
+        };
+
+        let expected = vec![0, 1, 2, 3, 4, 5];
+        let filter = level.filter_array_indices();
+        assert_eq!(expected, filter);
     }
 }
