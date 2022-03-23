@@ -1296,8 +1296,6 @@ mod tests {
         .unwrap();
 
         let a = ListArray::from(a_list_data);
-        // let values = Arc::new(a);
-        // one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
 
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
         roundtrip(batch, None);
