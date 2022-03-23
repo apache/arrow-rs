@@ -318,9 +318,10 @@ where
     }
 }
 
-/// An array where each element is a byte whose maximum length is represented by a i32.
+/// An array where each element contains 0 or more bytes.
+/// The byte length of each element is represented by an i32.
 ///
-/// Examples
+/// # Examples
 ///
 /// Create a BinaryArray from a vector of byte slices.
 ///
@@ -357,8 +358,10 @@ where
 ///
 pub type BinaryArray = GenericBinaryArray<i32>;
 
-/// An array where each element is a byte whose maximum length is represented by a i64.
-/// Examples
+/// An array where each element contains 0 or more bytes.
+/// The byte length of each element is represented by an i64.
+///
+/// # Examples
 ///
 /// Create a LargeBinaryArray from a vector of byte slices.
 ///
@@ -471,6 +474,18 @@ impl FixedSizeBinaryArray {
                 (self.value_offset_at(offset + 1) - pos) as usize,
             )
         }
+    }
+
+    /// Returns the element at index `i` as a byte slice.
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
+        let offset = i.checked_add(self.data.offset()).unwrap();
+        let pos = self.value_offset_at(offset);
+        std::slice::from_raw_parts(
+            self.value_data.as_ptr().offset(pos as isize),
+            (self.value_offset_at(offset + 1) - pos) as usize,
+        )
     }
 
     /// Returns the offset for the element at index `i`.
@@ -1685,6 +1700,16 @@ mod tests {
         let arr = FixedSizeBinaryArray::try_from_iter(input_arg.into_iter()).unwrap();
 
         assert_eq!(2, arr.value_length());
+        assert_eq!(3, arr.len())
+    }
+
+    #[test]
+    fn test_all_none_fixed_size_binary_array_from_sparse_iter() {
+        let none_option: Option<[u8; 32]> = None;
+        let input_arg = vec![none_option, none_option, none_option];
+        let arr =
+            FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+        assert_eq!(0, arr.value_length());
         assert_eq!(3, arr.len())
     }
 

@@ -24,8 +24,9 @@ use super::{
     make_array, Array, ArrayData, ArrayRef, PrimitiveArray, PrimitiveBuilder,
     StringArray, StringBuilder, StringDictionaryBuilder,
 };
-use crate::datatypes::ArrowNativeType;
-use crate::datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType, DataType};
+use crate::datatypes::{
+    ArrowDictionaryKeyType, ArrowNativeType, ArrowPrimitiveType, DataType,
+};
 use crate::error::Result;
 
 /// A dictionary array where each element is a single value indexed by an integer key.
@@ -96,15 +97,30 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
             Box::new(values.data_type().clone()),
         );
 
-        // Note: This does more work than necessary by rebuilding /
-        // revalidating all the data
-        let data = ArrayData::builder(dict_data_type)
+        // Note: This use the ArrayDataBuilder::build_unchecked and afterwards
+        // call the new function which only validates that the keys are in bounds.
+        let mut data = ArrayData::builder(dict_data_type)
             .len(keys.len())
             .add_buffer(keys.data().buffers()[0].clone())
-            .add_child_data(values.data().clone())
-            .build()?;
+            .add_child_data(values.data().clone());
 
-        Ok(data.into())
+        match keys.data().null_buffer() {
+            Some(buffer) if keys.data().null_count() > 0 => {
+                data = data
+                    .null_bit_buffer(buffer.clone())
+                    .null_count(keys.data().null_count());
+            }
+            _ => data = data.null_count(0),
+        }
+
+        // Safety: `validate` ensures key type is correct, and
+        //  `validate_dictionary_offset` ensures all offsets are within range
+        let array = unsafe { data.build_unchecked() };
+
+        array.validate()?;
+        array.validate_dictionary_offset()?;
+
+        Ok(array.into())
     }
 
     /// Return an array view of the keys of this dictionary as a PrimitiveArray.
@@ -300,8 +316,8 @@ impl<T: ArrowPrimitiveType> fmt::Debug for DictionaryArray<T> {
 mod tests {
     use super::*;
 
-    use crate::array::Int8Array;
-    use crate::datatypes::Int16Type;
+    use crate::array::{Float32Array, Int8Array};
+    use crate::datatypes::{Float32Type, Int16Type};
     use crate::{
         array::Int16DictionaryArray, array::PrimitiveDictionaryBuilder,
         datatypes::DataType,
@@ -528,8 +544,20 @@ mod tests {
         let array = DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
         assert_eq!(array.keys().data_type(), &DataType::Int32);
         assert_eq!(array.values().data_type(), &DataType::Utf8);
+
+        assert_eq!(array.data().null_count(), 1);
+
+        assert!(array.keys().is_valid(0));
+        assert!(array.keys().is_valid(1));
+        assert!(array.keys().is_null(2));
+        assert!(array.keys().is_valid(3));
+
+        assert_eq!(array.keys().value(0), 0);
+        assert_eq!(array.keys().value(1), 2);
+        assert_eq!(array.keys().value(3), 1);
+
         assert_eq!(
-            "DictionaryArray {keys: PrimitiveArray<Int32>\n[\n  0,\n  2,\n  0,\n  1,\n] values: StringArray\n[\n  \"foo\",\n  \"bar\",\n  \"baz\",\n]}\n",
+            "DictionaryArray {keys: PrimitiveArray<Int32>\n[\n  0,\n  2,\n  null,\n  1,\n] values: StringArray\n[\n  \"foo\",\n  \"bar\",\n  \"baz\",\n]}\n",
             format!("{:?}", array)
         );
     }
@@ -553,5 +581,13 @@ mod tests {
         let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
         let keys: Int32Array = [Some(-100)].into_iter().collect();
         DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Dictionary key type must be integer, but was Float32")]
+    fn test_try_wrong_dictionary_key_type() {
+        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+        let keys: Float32Array = [Some(0_f32), None, Some(3_f32)].into_iter().collect();
+        DictionaryArray::<Float32Type>::try_new(&keys, &values).unwrap();
     }
 }

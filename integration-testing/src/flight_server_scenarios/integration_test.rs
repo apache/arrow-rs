@@ -295,6 +295,7 @@ async fn record_batch_from_message(
         ipc_batch,
         schema_ref,
         dictionaries_by_field,
+        None,
     );
 
     arrow_batch_result.map_err(|e| {
