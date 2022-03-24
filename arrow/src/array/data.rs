@@ -1124,9 +1124,9 @@ impl ArrayData {
         )
     }
 
-    /// Returns an iterator over validated (i, type_id) function for
-    /// each element i in the `UnionArray`, returning Err if the
-    /// type_id is
+    /// Returns an iterator over validated Result<(i, type_id)> for
+    /// each element i in the `UnionArray`, returning an Err if the
+    /// type_id is invalid
     fn for_each_valid_type_id(
         &self,
     ) -> impl Iterator<Item = Result<(usize, usize)>> + '_ {
@@ -1162,7 +1162,7 @@ impl ArrayData {
     fn validate_sparse_union_full(&self) -> Result<()> {
         self.for_each_valid_type_id().try_for_each(|r| {
             // No additional validation is needed other than the
-            // type_id is within range, which is done during the iterator
+            // type_id is within range, which is done by the iterator
             r?;
             Ok(())
         })
