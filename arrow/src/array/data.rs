@@ -1127,9 +1127,9 @@ impl ArrayData {
     /// Returns an iterator over validated (i, type_id) function for
     /// each element i in the `UnionArray`, returning Err if the
     /// type_id is
-    fn for_each_valid_type_id<'a>(
-        &'a self,
-    ) -> impl Iterator<Item = Result<(usize, usize)>> + 'a {
+    fn for_each_valid_type_id(
+        &self,
+    ) -> impl Iterator<Item = Result<(usize, usize)>> + '_ {
         assert!(matches!(self.data_type(), DataType::Union(_, _)));
         let buffer = &self.buffers[0];
         let required_len = self.len + self.offset;
