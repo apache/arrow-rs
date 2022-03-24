@@ -1179,6 +1179,7 @@ impl ArrayData {
         // Justification: buffer size was validated above
         let offsets = unsafe { &(buffer.typed_data::<i32>()[self.offset..required_len]) };
 
+        let mut last_offset = None;
         self.for_each_valid_type_id()
             .zip(offsets.iter())
             .try_for_each(|(r, &child_offset)| {
@@ -1192,8 +1193,17 @@ impl ArrayData {
                             child_offset, i))
                     })?;
 
-                let child_len = self.child_data[type_id].len();
+                if let Some(last_offset) = last_offset.as_ref() {
+                    if child_offset < *last_offset {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Offset invariant failure: position {} invalid. {} should be >= {}",
+                            i, child_offset, last_offset,
+                        )));
+                    }
+                }
+                last_offset = Some(child_offset);
 
+                let child_len = self.child_data[type_id].len();
                 if child_offset >= child_len {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "Value at position {} out of bounds: {} (child array {} length is {})",
@@ -1203,35 +1213,6 @@ impl ArrayData {
 
                 Ok(())
             })
-
-        // type_ids.iter().enumerate().try_for_each(|(i, &type_id)| {
-        //     // this will panic if out of bounds. Could make a nicer error message
-        //     let type_id: usize = type_id
-        //         .try_into()
-        //         .map_err(|_| {
-        //             ArrowError::InvalidArgumentError(format!(
-        //                 "Offset invariant failure: Could not convert type id {} to usize in slot {}",
-        //                 type_id, i))
-        //         })?;
-
-        //     let num_children = self.child_data[type_id].len();
-        //     let child_offset: usize = offsets[i]
-        //         .try_into()
-        //         .map_err(|_| {
-        //             ArrowError::InvalidArgumentError(format!(
-        //                 "Offset invariant failure: Could not convert offset {} at position {} to usize",
-        //                 offsets[i], i))
-        //         })?;
-
-        //     if child_offset >= num_children {
-        //         Err(ArrowError::InvalidArgumentError(format!(
-        //             "Value at position {} out of bounds: {} (child array {} length is {})",
-        //             i, child_offset, type_id, num_children
-        //         )))
-        //     } else {
-        //         Ok(())
-        //     }
-        // })
     }
 
     /// Validates that each value in self.buffers (typed as T)
@@ -2710,6 +2691,18 @@ mod tests {
         let type_ids = vec![1i8, 0i8, 0i8, 1i8];
         // child arrays only have 2 and 3 elements each
         let offsets = vec![0i32, 0i32, 10i32, 2i32];
+        run_dense_union_test(type_ids, offsets);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Offset invariant failure: position 2 invalid. 0 should be >= 1"
+    )]
+    fn test_validate_dense_union_non_increasing_offset() {
+        let type_ids = vec![1i8, 0i8, 0i8, 1i8];
+        // Offsets must be non-decreasing:
+        // https://arrow.apache.org/docs/format/Columnar.html#dense-union 👍
+        let offsets = vec![0i32, 0i32, 1i32, 0i32];
         run_dense_union_test(type_ids, offsets);
     }
 
