@@ -632,6 +632,30 @@ pub unsafe fn make_array_from_raw(
     let data = ArrayData::try_from(array)?;
     Ok(make_array(data))
 }
+
+/// Exports an array to raw pointers of the C Data Interface provided by the consumer.
+/// # Safety
+/// Assumes that these pointers represent valid C Data Interfaces, both in memory
+/// representation and lifetime via the `release` mechanism.
+///
+/// This function copies the content of two FFI structs [ffi::FFI_ArrowArray] and
+/// [ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
+/// Usually the raw pointers are provided by the array data consumer.
+pub unsafe fn export_array_into_raw(
+    src: ArrayRef,
+    out_array: *mut ffi::FFI_ArrowArray,
+    out_schema: *mut ffi::FFI_ArrowSchema,
+) -> Result<()> {
+    let data = src.data();
+    let array = ffi::FFI_ArrowArray::new(data);
+    let schema = ffi::FFI_ArrowSchema::try_from(data.data_type())?;
+
+    std::ptr::write_unaligned(out_array, array);
+    std::ptr::write_unaligned(out_schema, schema);
+
+    Ok(())
+}
+
 // Helper function for printing potentially long arrays.
 pub(super) fn print_long_array<A, F>(
     array: &A,

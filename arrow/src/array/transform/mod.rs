@@ -31,10 +31,12 @@ use std::mem;
 
 mod boolean;
 mod fixed_binary;
+mod fixed_size_list;
 mod list;
 mod null;
 mod primitive;
 mod structure;
+mod union;
 mod utils;
 mod variable_size;
 
@@ -272,14 +274,11 @@ fn build_extend(array: &ArrayData) -> Extend {
         DataType::Struct(_) => structure::build_extend(array),
         DataType::FixedSizeBinary(_) => fixed_binary::build_extend(array),
         DataType::Float16 => primitive::build_extend::<f16>(array),
-        /*
-        DataType::FixedSizeList(_, _) => {}
-        DataType::Union(_) => {}
-        */
-        ty => todo!(
-            "Take and filter operations still not supported for this datatype: `{:?}`",
-            ty
-        ),
+        DataType::FixedSizeList(_, _) => fixed_size_list::build_extend(array),
+        DataType::Union(_, mode) => match mode {
+            UnionMode::Sparse => union::build_extend_sparse(array),
+            UnionMode::Dense => union::build_extend_dense(array),
+        },
     }
 }
 
@@ -326,14 +325,11 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         DataType::Struct(_) => structure::extend_nulls,
         DataType::FixedSizeBinary(_) => fixed_binary::extend_nulls,
         DataType::Float16 => primitive::extend_nulls::<f16>,
-        /*
-        DataType::FixedSizeList(_, _) => {}
-        DataType::Union(_) => {}
-        */
-        ty => todo!(
-            "Take and filter operations still not supported for this datatype: `{:?}`",
-            ty
-        ),
+        DataType::FixedSizeList(_, _) => fixed_size_list::extend_nulls,
+        DataType::Union(_, mode) => match mode {
+            UnionMode::Sparse => union::extend_nulls_sparse,
+            UnionMode::Dense => union::extend_nulls_dense,
+        },
     })
 }
 
@@ -522,9 +518,22 @@ impl<'a> MutableArrayData<'a> {
                     })
                     .collect::<Vec<_>>(),
             },
-            ty => {
-                todo!("Take and filter operations still not supported for this datatype: `{:?}`", ty)
+            DataType::FixedSizeList(_, _) => {
+                let childs = arrays
+                    .iter()
+                    .map(|array| &array.child_data()[0])
+                    .collect::<Vec<_>>();
+                vec![MutableArrayData::new(childs, use_nulls, array_capacity)]
             }
+            DataType::Union(fields, _) => (0..fields.len())
+                .map(|i| {
+                    let child_arrays = arrays
+                        .iter()
+                        .map(|array| &array.child_data()[i])
+                        .collect::<Vec<_>>();
+                    MutableArrayData::new(child_arrays, use_nulls, array_capacity)
+                })
+                .collect::<Vec<_>>(),
         };
 
         // Get the dictionary if any, and if it is a concatenation of multiple
