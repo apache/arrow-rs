@@ -1150,8 +1150,8 @@ impl ArrayData {
 
             if type_id >= num_children {
                 return Err(ArrowError::InvalidArgumentError(format!(
-                        "Type invariant failure: type id {} at position {} invalid. Expected between {} and {}",
-                        type_id, i, 0, num_children)));
+                        "Type invariant failure: type id {} at position {} invalid. Expected < {}",
+                        type_id, i, num_children)));
             }
 
             Ok((i, type_id))
@@ -1191,6 +1191,16 @@ impl ArrayData {
                             "Offset invariant failure: Could not convert offset {} at position {} to usize",
                             child_offset, i))
                     })?;
+
+                let child_len = self.child_data[type_id].len();
+
+                if child_offset >= child_len {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Value at position {} out of bounds: {} (child array {} length is {})",
+                        i, child_offset, type_id, child_len
+                    )));
+                }
+
                 Ok(())
             })
 
@@ -2537,7 +2547,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Need at least 3 bytes in buffers[0] in array of type Union"
+        expected = "Need at least 4 bytes in buffers[0] in array of type Union"
     )]
     fn test_validate_sparse_union_too_few_values() {
         // not enough type_ids
@@ -2546,7 +2556,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Type invariant failure: type id 2 at position 1 invalid. Expected between 0 and 2"
+        expected = "Type invariant failure: type id 2 at position 1 invalid. Expected < 2"
     )]
     fn test_validate_sparse_union_bad_type_id() {
         // typeid of 2 is not valid (only 1 and 0)
@@ -2569,7 +2579,7 @@ mod tests {
             .collect::<Int32Array>();
         let field2 = vec![Some(10), Some(20), Some(30), Some(40)]
             .into_iter()
-            .collect::<Int32Array>();
+            .collect::<Int64Array>();
 
         let type_ids = Buffer::from_slice_ref(&type_ids);
 
@@ -2577,7 +2587,7 @@ mod tests {
             DataType::Union(
                 vec![
                     Field::new("field1", DataType::Int32, true),
-                    Field::new("field2", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true),
                 ],
                 UnionMode::Sparse,
             ),
@@ -2642,6 +2652,90 @@ mod tests {
             None,
             None,
             0,
+            vec![type_ids, offsets],
+            vec![field1.data().clone(), field2.data().clone()],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Need at least 4 bytes in buffers[0] in array of type Union"
+    )]
+    fn test_validate_dense_union_too_few_values() {
+        // not enough type_ids
+        let type_ids = vec![0i8, 1i8];
+        let offsets = vec![0i32, 0i32];
+        run_dense_union_test(type_ids, offsets);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Type invariant failure: type id 2 at position 1 invalid. Expected < 2"
+    )]
+    fn test_validate_dense_union_bad_type_id() {
+        // typeid of 2 is not valid (only 1 and 0)
+        let type_ids = vec![0i8, 1i8, 2i8, 1i8];
+        let offsets = vec![0i32, 0i32, 1i32, 2i32];
+        run_dense_union_test(type_ids, offsets);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Type invariant failure: Could not convert type id -1 to usize in slot 1"
+    )]
+    fn test_validate_dense_union_negative_type_id() {
+        // typeid of -1 is clearly not valid (only 1 and 0)
+        let type_ids = vec![1i8, 0i8, -1i8, 1i8];
+        let offsets = vec![0i32, 0i32, 1i32, 2i32];
+        run_dense_union_test(type_ids, offsets);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Offset invariant failure: Could not convert offset -1 at position 1 to usize"
+    )]
+    fn test_validate_dense_union_negative_offset() {
+        let type_ids = vec![1i8, 0i8, 0i8, 1i8];
+        // offset of -1 is clearly not valid (only 1 and 0)
+        let offsets = vec![0i32, 0i32, -1i32, 2i32];
+        run_dense_union_test(type_ids, offsets);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Value at position 1 out of bounds: 10 (child array 0 length is 2"
+    )]
+    fn test_validate_dense_union_invalid_child_offset() {
+        let type_ids = vec![1i8, 0i8, 0i8, 1i8];
+        // child arrays only have 2 and 3 elements each
+        let offsets = vec![0i32, 0i32, 10i32, 2i32];
+        run_dense_union_test(type_ids, offsets);
+    }
+
+    // Creates a 3 element union array with typeids offset at 1
+    fn run_dense_union_test(type_ids: Vec<i8>, offsets: Vec<i32>) {
+        // note children have different lengths
+        let field1 = vec![Some(1), Some(2)].into_iter().collect::<Int32Array>();
+        let field2 = vec![Some(10), Some(20), Some(30)]
+            .into_iter()
+            .collect::<Int64Array>();
+
+        let type_ids = Buffer::from_slice_ref(&type_ids);
+        let offsets = Buffer::from_slice_ref(&offsets);
+
+        ArrayData::try_new(
+            DataType::Union(
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int64, true),
+                ],
+                UnionMode::Dense,
+            ),
+            3, // len 3
+            None,
+            None,
+            1, // offset 1
             vec![type_ids, offsets],
             vec![field1.data().clone(), field2.data().clone()],
         )
