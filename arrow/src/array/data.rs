@@ -981,15 +981,13 @@ impl ArrayData {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i64>(child.len + child.offset)
             }
-            DataType::Union(_, _) => {
+            DataType::Union(_, mode) => {
                 match mode {
                     UnionMode::Sparse => {
                         // typeids should all be valid
-                        self.validate_offsets_full::<i8>(self.child_data.len())?;
+                        self.validate_offsets_full::<i8>(self.child_data.len())
                     }
-                    UnionMode::Dense => {
-                        self.validate_dense_union_full()?;
-                    }
+                    UnionMode::Dense => self.validate_dense_union_full(),
                 }
             }
             DataType::Dictionary(key_type, _value_type) => {
