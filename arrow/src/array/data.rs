@@ -981,15 +981,10 @@ impl ArrayData {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i64>(child.len + child.offset)
             }
-            DataType::Union(_, mode) => {
-                match mode {
-                    UnionMode::Sparse => {
-                        // typeids should all be valid
-                        self.validate_offsets_full::<i8>(self.child_data.len())
-                    }
-                    UnionMode::Dense => self.validate_dense_union_full(),
-                }
-            }
+            DataType::Union(_, mode) => match mode {
+                UnionMode::Sparse => self.validate_sparse_union_full(),
+                UnionMode::Dense => self.validate_dense_union_full(),
+            },
             DataType::Dictionary(key_type, _value_type) => {
                 let dictionary_length: i64 = self.child_data[0].len.try_into().unwrap();
                 let max_value = dictionary_length - 1;
@@ -1129,42 +1124,104 @@ impl ArrayData {
         )
     }
 
-    /// Ensures that for each union element, the offset is correct for
-    /// the corresponding child array
-    fn validate_dense_union_full(&self) -> Result<()> {
-        // safety justification is that the size of the buffers was validated in self.validate()
-        let type_ids = self.typed_offsets::<i8>(&self.buffers[0])?;
-        let offsets = self.typed_offsets::<i32>(&self.buffers[1])?;
+    /// Returns an iterator over validated (i, type_id) function for
+    /// each element i in the `UnionArray`, returning Err if the
+    /// type_id is
+    fn for_each_valid_type_id<'a>(
+        &'a self,
+    ) -> impl Iterator<Item = Result<(usize, usize)>> + 'a {
+        assert!(matches!(self.data_type(), DataType::Union(_, _)));
+        let buffer = &self.buffers[0];
+        let required_len = self.len + self.offset;
+        assert!(buffer.len() / std::mem::size_of::<i8>() >= required_len);
 
-        type_ids.iter().enumerate().try_for_each(|(i, &type_id)| {
-            // this will panic if out of bounds. Could make a nicer error message
+        // Justification: buffer size was validated above
+        let type_ids = unsafe { &(buffer.typed_data::<i8>()[self.offset..required_len]) };
+
+        let num_children = self.child_data.len();
+        type_ids.iter().enumerate().map(move |(i, &type_id)| {
             let type_id: usize = type_id
                 .try_into()
                 .map_err(|_| {
                     ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: Could not convert type id {} to usize in slot {}",
+                        "Type invariant failure: Could not convert type id {} to usize in slot {}",
                         type_id, i))
                 })?;
 
-            let num_children = self.child_data[type_id].len();
-            let child_offset: usize = offsets[i]
-                .try_into()
-                .map_err(|_| {
-                    ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: Could not convert offset {} at position {} to usize",
-                        offsets[i], i))
-                })?;
-
-
-            if child_offset >= num_children {
-                Err(ArrowError::InvalidArgumentError(format!(
-                    "Value at position {} out of bounds: {} (child array {} length is {})",
-                    i, child_offset, type_id, num_children
-                )))
-            } else {
-                Ok(())
+            if type_id >= num_children {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                        "Type invariant failure: type id {} at position {} invalid. Expected between {} and {}",
+                        type_id, i, 0, num_children)));
             }
+
+            Ok((i, type_id))
         })
+    }
+
+    /// Ensures that for each union element, the type_id is valid (between 0..children.len())
+    fn validate_sparse_union_full(&self) -> Result<()> {
+        self.for_each_valid_type_id().try_for_each(|r| {
+            // No additional validation is needed other than the
+            // type_id is within range, which is done during the iterator
+            r?;
+            Ok(())
+        })
+    }
+
+    /// Ensures that for each union element, the offset is correct for
+    /// the corresponding child array
+    fn validate_dense_union_full(&self) -> Result<()> {
+        assert!(matches!(self.data_type(), DataType::Union(_, _)));
+        let buffer = &self.buffers[1];
+        let required_len = self.len + self.offset;
+        assert!(buffer.len() / std::mem::size_of::<i32>() >= required_len);
+
+        // Justification: buffer size was validated above
+        let offsets = unsafe { &(buffer.typed_data::<i32>()[self.offset..required_len]) };
+
+        self.for_each_valid_type_id()
+            .zip(offsets.iter())
+            .try_for_each(|(r, &child_offset)| {
+                let (i, type_id) = r?;
+
+                let child_offset: usize = child_offset
+                    .try_into()
+                    .map_err(|_| {
+                        ArrowError::InvalidArgumentError(format!(
+                            "Offset invariant failure: Could not convert offset {} at position {} to usize",
+                            child_offset, i))
+                    })?;
+                Ok(())
+            })
+
+        // type_ids.iter().enumerate().try_for_each(|(i, &type_id)| {
+        //     // this will panic if out of bounds. Could make a nicer error message
+        //     let type_id: usize = type_id
+        //         .try_into()
+        //         .map_err(|_| {
+        //             ArrowError::InvalidArgumentError(format!(
+        //                 "Offset invariant failure: Could not convert type id {} to usize in slot {}",
+        //                 type_id, i))
+        //         })?;
+
+        //     let num_children = self.child_data[type_id].len();
+        //     let child_offset: usize = offsets[i]
+        //         .try_into()
+        //         .map_err(|_| {
+        //             ArrowError::InvalidArgumentError(format!(
+        //                 "Offset invariant failure: Could not convert offset {} at position {} to usize",
+        //                 offsets[i], i))
+        //         })?;
+
+        //     if child_offset >= num_children {
+        //         Err(ArrowError::InvalidArgumentError(format!(
+        //             "Value at position {} out of bounds: {} (child array {} length is {})",
+        //             i, child_offset, type_id, num_children
+        //         )))
+        //     } else {
+        //         Ok(())
+        //     }
+        // })
     }
 
     /// Validates that each value in self.buffers (typed as T)
@@ -2452,7 +2509,7 @@ mod tests {
     #[should_panic(
         expected = "Sparse union child array #1 has length smaller than expected for union array (1 < 2)"
     )]
-    fn test_validate_union_sparse_different_child_len() {
+    fn test_validate_sparse_union_different_child_len() {
         let field1 = vec![Some(1), Some(2)].into_iter().collect::<Int32Array>();
 
         // field 2 only has 1 item but array should have 2
@@ -2472,6 +2529,62 @@ mod tests {
             None,
             None,
             0,
+            vec![type_ids],
+            vec![field1.data().clone(), field2.data().clone()],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Need at least 3 bytes in buffers[0] in array of type Union"
+    )]
+    fn test_validate_sparse_union_too_few_values() {
+        // not enough type_ids
+        run_sparse_union_test(vec![0i8, 1i8]);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Type invariant failure: type id 2 at position 1 invalid. Expected between 0 and 2"
+    )]
+    fn test_validate_sparse_union_bad_type_id() {
+        // typeid of 2 is not valid (only 1 and 0)
+        run_sparse_union_test(vec![0i8, 1i8, 2i8, 1i8]);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Type invariant failure: Could not convert type id -1 to usize in slot 1"
+    )]
+    fn test_validate_sparse_union_negative_type_id() {
+        // typeid of -1 is clearly not valid (only 1 and 0)
+        run_sparse_union_test(vec![1i8, 0i8, -1i8, 1i8])
+    }
+
+    // Creates a 3 element union array with typeids offset at 1
+    fn run_sparse_union_test(type_ids: Vec<i8>) {
+        let field1 = vec![Some(1), Some(2), Some(3), Some(4)]
+            .into_iter()
+            .collect::<Int32Array>();
+        let field2 = vec![Some(10), Some(20), Some(30), Some(40)]
+            .into_iter()
+            .collect::<Int32Array>();
+
+        let type_ids = Buffer::from_slice_ref(&type_ids);
+
+        ArrayData::try_new(
+            DataType::Union(
+                vec![
+                    Field::new("field1", DataType::Int32, true),
+                    Field::new("field2", DataType::Int32, true),
+                ],
+                UnionMode::Sparse,
+            ),
+            3, // len 3
+            None,
+            None,
+            1, // offset 1
             vec![type_ids],
             vec![field1.data().clone(), field2.data().clone()],
         )
