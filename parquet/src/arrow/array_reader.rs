@@ -225,11 +225,10 @@ where
 
     /// Reads at most `batch_size` records into array.
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        let records_read =
-            read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
+        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
 
         // convert to arrays
-        let array = arrow::array::NullArray::new(records_read);
+        let array = arrow::array::NullArray::new(self.record_reader.num_values());
 
         // save definition and repetition buffers
         self.def_levels_buffer = self.record_reader.consume_def_levels()?;
@@ -887,7 +886,7 @@ fn remove_indices(
                 Ok(Arc::new(StructArray::from((new_columns, valid.finish()))))
             }
         }
-        ArrowType::Null => Ok(Arc::new(NullArray::new(arr.len()))),
+        ArrowType::Null => Ok(Arc::new(NullArray::new(arr.len() - indices.len()))),
         _ => Err(ParquetError::General(format!(
             "ListArray of type List({:?}) is not supported by array_reader",
             item_type
