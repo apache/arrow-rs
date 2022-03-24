@@ -25,11 +25,7 @@ use crate::{
 
 macro_rules! unary_offsets {
     ($array: expr, $data_type: expr, $op: expr) => {{
-        // note: offsets are stored as u8, but they can be interpreted as OffsetSize
-        let offsets = &$array.data_ref().buffers()[0];
-        // this is a 30% improvement over iterating over u8s and building OffsetSize, which
-        // justifies the usage of `unsafe`.
-        let slice: &[O] = &unsafe { offsets.typed_data::<O>() }[$array.offset()..];
+        let slice = $array.value_offsets();
 
         let lengths = slice.windows(2).map(|offset| $op(offset[1] - offset[0]));
 
@@ -114,7 +110,7 @@ where
     unary_offsets!(array, T::DATA_TYPE, |x| x * bits_in_bytes)
 }
 
-/// Returns an array of Int32/Int64 denoting the number of bytes in each string in the array.
+/// Returns an array of Int32/Int64 denoting the number of bytes in each value in the array.
 ///
 /// * this only accepts StringArray/Utf8, LargeString/LargeUtf8, BinaryArray and LargeBinaryArray
 /// * length of null is null.
@@ -132,7 +128,7 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef> {
     }
 }
 
-/// Returns an array of Int32/Int64 denoting the number of bits in each string in the array.
+/// Returns an array of Int32/Int64 denoting the number of bits in each value in the array.
 ///
 /// * this only accepts StringArray/Utf8, LargeString/LargeUtf8, BinaryArray and LargeBinaryArray
 /// * bit_length of null is null.
