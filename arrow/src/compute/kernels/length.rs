@@ -56,10 +56,23 @@ macro_rules! unary_offsets {
     }};
 }
 
-fn octet_length_binary<O: BinaryOffsetSizeTrait, T: ArrowPrimitiveType>(
-    array: &dyn Array,
-) -> ArrayRef
+fn length_list<O, T>(array: &dyn Array) -> ArrayRef
 where
+    O: OffsetSizeTrait,
+    T: ArrowPrimitiveType,
+    T::Native: OffsetSizeTrait,
+{
+    let array = array
+        .as_any()
+        .downcast_ref::<GenericListArray<O>>()
+        .unwrap();
+    unary_offsets!(array, T::DATA_TYPE, |x| x)
+}
+
+fn length_binary<O, T>(array: &dyn Array) -> ArrayRef
+where
+    O: BinaryOffsetSizeTrait,
+    T: ArrowPrimitiveType,
     T::Native: BinaryOffsetSizeTrait,
 {
     let array = array
@@ -69,10 +82,10 @@ where
     unary_offsets!(array, T::DATA_TYPE, |x| x)
 }
 
-fn octet_length<O: StringOffsetSizeTrait, T: ArrowPrimitiveType>(
-    array: &dyn Array,
-) -> ArrayRef
+fn length_string<O, T>(array: &dyn Array) -> ArrayRef
 where
+    O: StringOffsetSizeTrait,
+    T: ArrowPrimitiveType,
     T::Native: StringOffsetSizeTrait,
 {
     let array = array
@@ -82,10 +95,10 @@ where
     unary_offsets!(array, T::DATA_TYPE, |x| x)
 }
 
-fn bit_length_impl_binary<O: BinaryOffsetSizeTrait, T: ArrowPrimitiveType>(
-    array: &dyn Array,
-) -> ArrayRef
+fn bit_length_binary<O, T>(array: &dyn Array) -> ArrayRef
 where
+    O: BinaryOffsetSizeTrait,
+    T: ArrowPrimitiveType,
     T::Native: BinaryOffsetSizeTrait,
 {
     let array = array
@@ -96,10 +109,10 @@ where
     unary_offsets!(array, T::DATA_TYPE, |x| x * bits_in_bytes)
 }
 
-fn bit_length_impl<O: StringOffsetSizeTrait, T: ArrowPrimitiveType>(
-    array: &dyn Array,
-) -> ArrayRef
+fn bit_length_string<O, T>(array: &dyn Array) -> ArrayRef
 where
+    O: StringOffsetSizeTrait,
+    T: ArrowPrimitiveType,
     T::Native: StringOffsetSizeTrait,
 {
     let array = array
@@ -117,10 +130,10 @@ where
 /// * length is in number of bytes
 pub fn length(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type() {
-        DataType::Utf8 => Ok(octet_length::<i32, Int32Type>(array)),
-        DataType::LargeUtf8 => Ok(octet_length::<i64, Int64Type>(array)),
-        DataType::Binary => Ok(octet_length_binary::<i32, Int32Type>(array)),
-        DataType::LargeBinary => Ok(octet_length_binary::<i64, Int64Type>(array)),
+        DataType::Utf8 => Ok(length_string::<i32, Int32Type>(array)),
+        DataType::LargeUtf8 => Ok(length_string::<i64, Int64Type>(array)),
+        DataType::Binary => Ok(length_binary::<i32, Int32Type>(array)),
+        DataType::LargeBinary => Ok(length_binary::<i64, Int64Type>(array)),
         _ => Err(ArrowError::ComputeError(format!(
             "length not supported for {:?}",
             array.data_type()
@@ -135,10 +148,10 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef> {
 /// * bit_length is in number of bits
 pub fn bit_length(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type() {
-        DataType::Utf8 => Ok(bit_length_impl::<i32, Int32Type>(array)),
-        DataType::LargeUtf8 => Ok(bit_length_impl::<i64, Int64Type>(array)),
-        DataType::Binary => Ok(bit_length_impl_binary::<i32, Int32Type>(array)),
-        DataType::LargeBinary => Ok(bit_length_impl_binary::<i64, Int64Type>(array)),
+        DataType::Utf8 => Ok(bit_length_string::<i32, Int32Type>(array)),
+        DataType::LargeUtf8 => Ok(bit_length_string::<i64, Int64Type>(array)),
+        DataType::Binary => Ok(bit_length_binary::<i32, Int32Type>(array)),
+        DataType::LargeBinary => Ok(bit_length_binary::<i64, Int64Type>(array)),
         _ => Err(ArrowError::ComputeError(format!(
             "bit_length not supported for {:?}",
             array.data_type()
