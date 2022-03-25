@@ -123,20 +123,24 @@ where
     unary_offsets!(array, T::DATA_TYPE, |x| x * bits_in_bytes)
 }
 
-/// Returns an array of Int32/Int64 denoting the number of bytes in each value in the array.
+/// Returns an array of Int32/Int64 denoting the length of each value in the array.
+/// For list array, length is the number of elements in each list.
+/// For string array and binary array, length is the number of bytes of each value.
 ///
-/// * this only accepts StringArray/Utf8, LargeString/LargeUtf8, BinaryArray and LargeBinaryArray
+/// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray and BinaryArray/LargeBinaryArray
 /// * length of null is null.
 /// * length is in number of bytes
 pub fn length(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type() {
+        DataType::List(_) => Ok(length_list::<i32, Int32Type>(array)),
+        DataType::LargeList(_) => Ok(length_list::<i64, Int64Type>(array)),
         DataType::Utf8 => Ok(length_string::<i32, Int32Type>(array)),
         DataType::LargeUtf8 => Ok(length_string::<i64, Int64Type>(array)),
         DataType::Binary => Ok(length_binary::<i32, Int32Type>(array)),
         DataType::LargeBinary => Ok(length_binary::<i64, Int64Type>(array)),
-        _ => Err(ArrowError::ComputeError(format!(
+        other => Err(ArrowError::ComputeError(format!(
             "length not supported for {:?}",
-            array.data_type()
+            other
         ))),
     }
 }
