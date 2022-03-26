@@ -129,7 +129,6 @@ where
 ///
 /// * this only accepts ListArray/LargeListArray, StringArray/LargeStringArray and BinaryArray/LargeBinaryArray
 /// * length of null is null.
-/// * length is in number of bytes
 pub fn length(array: &dyn Array) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::List(_) => Ok(length_list::<i32, Int32Type>(array)),
