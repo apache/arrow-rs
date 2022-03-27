@@ -168,40 +168,52 @@ pub(super) fn child_logical_null_buffer(
             });
             Some(buffer.into())
         }
-        DataType::Union(_, mode) => {
-            match mode {
-                UnionMode::Sparse => {
-                    // See the logic of `DataType::Struct` in `child_logical_null_buffer`.
-                    let result = &parent_bitmap & &self_null_bitmap;
-                    if let Ok(bitmap) = result {
-                        return Some(bitmap.bits);
-                    }
-
-                    // slow path
-                    let array_offset = parent_data.offset();
-                    let mut buffer = MutableBuffer::new_null(parent_len);
-                    let null_slice = buffer.as_slice_mut();
-                    (0..parent_len).for_each(|index| {
-                        if parent_bitmap.is_set(index + array_offset)
-                            && self_null_bitmap.is_set(index + array_offset)
-                        {
-                            bit_util::set_bit(null_slice, index);
-                        }
-                    });
-                    Some(buffer.into())
-                }
-                UnionMode::Dense => {
-                    // We don't keep bitmap in child data of Dense UnionArray
-                    unimplemented!(
-                        "Logical equality not yet implemented for dense union arrays"
-                    )
-                }
-            }
-        }
+        DataType::Union(_, mode) => union_child_logical_null_buffer(
+            parent_data,
+            parent_len,
+            &parent_bitmap,
+            &self_null_bitmap,
+            mode,
+        ),
         DataType::Dictionary(_, _) => {
             unimplemented!("Logical equality not yet implemented for nested dictionaries")
         }
         data_type => panic!("Data type {:?} is not a supported nested type", data_type),
+    }
+}
+
+pub(super) fn union_child_logical_null_buffer(
+    parent_data: &ArrayData,
+    parent_len: usize,
+    parent_bitmap: &Bitmap,
+    self_null_bitmap: &Bitmap,
+    mode: &UnionMode,
+) -> Option<Buffer> {
+    match mode {
+        UnionMode::Sparse => {
+            // See the logic of `DataType::Struct` in `child_logical_null_buffer`.
+            let result = parent_bitmap & self_null_bitmap;
+            if let Ok(bitmap) = result {
+                return Some(bitmap.bits);
+            }
+
+            // slow path
+            let array_offset = parent_data.offset();
+            let mut buffer = MutableBuffer::new_null(parent_len);
+            let null_slice = buffer.as_slice_mut();
+            (0..parent_len).for_each(|index| {
+                if parent_bitmap.is_set(index + array_offset)
+                    && self_null_bitmap.is_set(index + array_offset)
+                {
+                    bit_util::set_bit(null_slice, index);
+                }
+            });
+            Some(buffer.into())
+        }
+        UnionMode::Dense => {
+            // We don't keep bitmap in child data of Dense UnionArray
+            unimplemented!("Logical equality not yet implemented for dense union arrays")
+        }
     }
 }
 
