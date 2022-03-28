@@ -20,18 +20,25 @@
 //! Note that this is a low-level functionality of this crate.
 
 use core::slice;
+use std::panic::RefUnwindSafe;
 use std::ptr::NonNull;
 use std::sync::Arc;
 use std::{fmt::Debug, fmt::Formatter};
 
-use crate::{alloc, ffi};
+use crate::alloc;
+
+/// The owner of an allocation, that is not natively allocated.
+/// The trait implementation is responsible for dropping the allocations once no more references exist.
+pub trait Allocation: RefUnwindSafe {}
+
+impl<T: RefUnwindSafe> Allocation for T {}
 
 /// Mode of deallocating memory regions
 pub enum Deallocation {
     /// Native deallocation, using Rust deallocator with Arrow-specific memory alignment
     Native(usize),
     /// Foreign interface, via a callback
-    Foreign(Arc<ffi::FFI_ArrowArray>),
+    Foreign(Arc<dyn Allocation>),
 }
 
 impl Debug for Deallocation {
