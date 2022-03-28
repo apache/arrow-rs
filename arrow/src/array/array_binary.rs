@@ -318,9 +318,10 @@ where
     }
 }
 
-/// An array where each element is a byte whose maximum length is represented by a i32.
+/// An array where each element contains 0 or more bytes.
+/// The byte length of each element is represented by an i32.
 ///
-/// Examples
+/// # Examples
 ///
 /// Create a BinaryArray from a vector of byte slices.
 ///
@@ -357,8 +358,10 @@ where
 ///
 pub type BinaryArray = GenericBinaryArray<i32>;
 
-/// An array where each element is a byte whose maximum length is represented by a i64.
-/// Examples
+/// An array where each element contains 0 or more bytes.
+/// The byte length of each element is represented by an i64.
+///
+/// # Examples
 ///
 /// Create a LargeBinaryArray from a vector of byte slices.
 ///

@@ -200,9 +200,8 @@ impl LevelInfo {
                 );
 
                 match child_array.data_type() {
-                    // TODO: The behaviour of a <list<null>> is untested
-                    DataType::Null => vec![list_level],
-                    DataType::Boolean
+                    DataType::Null
+                    | DataType::Boolean
                     | DataType::Int8
                     | DataType::Int16
                     | DataType::Int32
@@ -677,8 +676,9 @@ impl LevelInfo {
         len: usize,
     ) -> (Vec<i64>, Vec<bool>) {
         match array.data_type() {
-            DataType::Null
-            | DataType::Boolean
+            // A NullArray is entirely nulls, despite not containing a null buffer
+            DataType::Null => ((0..=(len as i64)).collect(), vec![false; len]),
+            DataType::Boolean
             | DataType::Int8
             | DataType::Int16
             | DataType::Int32
