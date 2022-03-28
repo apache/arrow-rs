@@ -724,24 +724,12 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         // If a Parquet schema's only leaf is the list, then n = 0.
 
         // If the list index is at empty definition, the child slot is null
-        let non_null_list_indices: Vec<u32> = def_levels
-            .iter()
-            .enumerate()
-            .filter_map(|(index, def)| {
-                if *def <= self.list_empty_def_level {
-                    None
-                } else {
-                    Some(index as u32)
-                }
-            })
-            .collect();
-        let batch_values = match non_null_list_indices.len() {
-            l if l == def_levels.len() => next_batch_array.clone(),
-            _ => {
-                let indices = UInt32Array::from(non_null_list_indices);
-                take(&*next_batch_array.clone(), &indices, None)?
-            }
-        };
+        let non_null_list_indices =
+            def_levels.iter().enumerate().filter_map(|(index, def)| {
+                (*def > self.list_empty_def_level).then(|| index as u32)
+            });
+        let indices = UInt32Array::from_iter_values(non_null_list_indices);
+        let batch_values = take(&*next_batch_array.clone(), &indices, None)?;
 
         // first item in each list has rep_level = 0, subsequent items have rep_level = 1
         let mut offsets: Vec<OffsetSize> = Vec::new();
