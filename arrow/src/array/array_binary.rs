@@ -1623,7 +1623,7 @@ mod tests {
     #[test]
     fn test_decimal_iter_sized() {
         let data = vec![Some(-100), None, Some(101)];
-        let array: DecimalArray = data.clone().into_iter().collect();
+        let array: DecimalArray = data.into_iter().collect();
         let mut iter = array.into_iter();
 
         // is exact sized
