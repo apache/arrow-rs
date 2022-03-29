@@ -16,9 +16,10 @@
 // under the License.
 
 use super::Buffer;
+use crate::alloc::Deallocation;
 use crate::{
     alloc,
-    bytes::{Bytes, Deallocation},
+    bytes::Bytes,
     datatypes::{ArrowNativeType, ToByteSlice},
     util::bit_util,
 };

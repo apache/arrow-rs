@@ -21,12 +21,9 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::{convert::AsRef, usize};
 
-use crate::bytes::Allocation;
+use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::{
-    bytes::{Bytes, Deallocation},
-    datatypes::ArrowNativeType,
-};
+use crate::{bytes::Bytes, datatypes::ArrowNativeType};
 
 use super::ops::bitwise_unary_op_helper;
 use super::MutableBuffer;
@@ -86,7 +83,7 @@ impl Buffer {
     ///
     /// * `ptr` - Pointer to raw parts
     /// * `len` - Length of raw parts in **bytes**
-    /// * `owner` - A [bytes::Owner] which is responsible for freeing that data
+    /// * `owner` - A [crate::alloc::Allocation] which is responsible for freeing that data
     ///
     /// # Safety
     ///
