@@ -61,11 +61,16 @@ macro_rules! downcast_dict_filter {
     }};
 }
 
-/// An iterator of `(usize, usize)` each representing an interval `[start, end]` whose
-/// slots of a [BooleanArray] are true. Each interval corresponds to a contiguous region of memory
-/// to be "taken" from an array to be filtered.
+/// An iterator of `(usize, usize)` each representing an interval
+/// `[start, end]` whose slots of a [BooleanArray] are true. Each
+/// interval corresponds to a contiguous region of memory to be
+/// "taken" from an array to be filtered.
 ///
-/// This is only performant for filters that copy across long contiguous runs
+/// ## Notes:
+///
+/// 1. Ignores the validity bitmap (ignores nulls)
+///
+/// 2. Only performant for filters that copy across long contiguous runs
 #[derive(Debug)]
 pub struct SlicesIterator<'a> {
     iter: UnalignedBitChunkIterator<'a>,
