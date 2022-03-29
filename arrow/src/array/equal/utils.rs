@@ -66,7 +66,35 @@ pub(super) fn equal_nulls(
 
 #[inline]
 pub(super) fn base_equal(lhs: &ArrayData, rhs: &ArrayData) -> bool {
-    lhs.data_type() == rhs.data_type() && lhs.len() == rhs.len()
+    let equal_type = match (lhs.data_type(), rhs.data_type()) {
+        (DataType::Map(l_field, l_sorted), DataType::Map(r_field, r_sorted)) => {
+            let field_equal = match (l_field.data_type(), r_field.data_type()) {
+                (DataType::Struct(l_fields), DataType::Struct(r_fields))
+                    if l_fields.len() == 2 && r_fields.len() == 2 =>
+                {
+                    let l_key_field = l_fields.get(0).unwrap();
+                    let r_key_field = r_fields.get(0).unwrap();
+                    let l_value_field = l_fields.get(1).unwrap();
+                    let r_value_field = r_fields.get(1).unwrap();
+
+                    // We don't enforce the equality of field names
+                    let data_type_equal = l_key_field.data_type()
+                        == r_key_field.data_type()
+                        && l_value_field.data_type() == r_value_field.data_type();
+                    let nullability_equal = l_key_field.is_nullable()
+                        == r_key_field.is_nullable()
+                        && l_value_field.is_nullable() == r_value_field.is_nullable();
+                    let metadata_equal = l_key_field.metadata() == r_key_field.metadata()
+                        && l_value_field.metadata() == r_value_field.metadata();
+                    data_type_equal && nullability_equal && metadata_equal
+                }
+                _ => panic!("Map type should have 2 fields Struct in its field"),
+            };
+            field_equal && l_sorted == r_sorted
+        }
+        (l_data_type, r_data_type) => l_data_type == r_data_type,
+    };
+    equal_type && lhs.len() == rhs.len()
 }
 
 // whether the two memory regions are equal

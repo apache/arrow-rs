@@ -1514,6 +1514,43 @@ mod tests {
     }
 
     #[test]
+    fn null_list_single_column() {
+        let null_field = Field::new("item", DataType::Null, true);
+        let list_field =
+            Field::new("emptylist", DataType::List(Box::new(null_field)), true);
+
+        let schema = Schema::new(vec![list_field]);
+
+        // Build [[], null, [null, null]]
+        let a_values = NullArray::new(2);
+        let a_value_offsets = arrow::buffer::Buffer::from(&[0, 0, 0, 2].to_byte_slice());
+        let a_list_data = ArrayData::builder(DataType::List(Box::new(Field::new(
+            "item",
+            DataType::Null,
+            true,
+        ))))
+        .len(3)
+        .add_buffer(a_value_offsets)
+        .null_bit_buffer(Buffer::from(vec![0b00000101]))
+        .add_child_data(a_values.data().clone())
+        .build()
+        .unwrap();
+
+        let a = ListArray::from(a_list_data);
+
+        assert!(a.is_valid(0));
+        assert!(!a.is_valid(1));
+        assert!(a.is_valid(2));
+
+        assert_eq!(a.value(0).len(), 0);
+        assert_eq!(a.value(2).len(), 2);
+        assert_eq!(a.value(2).null_count(), 2);
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
+        roundtrip(batch, None);
+    }
+
+    #[test]
     fn list_single_column() {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets =
@@ -1562,6 +1599,25 @@ mod tests {
         let values = Arc::new(a);
 
         one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
+    }
+
+    #[test]
+    fn list_nested_nulls() {
+        use arrow::datatypes::Int32Type;
+        let data = vec![
+            Some(vec![Some(1)]),
+            Some(vec![Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), Some(5), None]),
+            Some(vec![None]),
+            Some(vec![Some(6), Some(7)]),
+        ];
+
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(data.clone());
+        one_column_roundtrip(Arc::new(list), true, Some(SMALL_SIZE / 2));
+
+        let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(data);
+        one_column_roundtrip(Arc::new(list), true, Some(SMALL_SIZE / 2));
     }
 
     #[test]
