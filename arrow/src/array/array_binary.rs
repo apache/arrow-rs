@@ -35,8 +35,8 @@ use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
-/// Like OffsetSizeTrait, but specialized for Binary
-// This allow us to expose a constant datatype for the GenericBinaryArray
+/// Like [`OffsetSizeTrait`], but specialized for Binary.
+/// This allow us to expose a constant datatype for the [`GenericBinaryArray`].
 pub trait BinaryOffsetSizeTrait: OffsetSizeTrait {
     const DATA_TYPE: DataType;
 }
@@ -167,7 +167,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         Self::from(data)
     }
 
-    /// Creates a `GenericBinaryArray` based on an iterator of values without nulls
+    /// Creates a [`GenericBinaryArray`] based on an iterator of values without nulls
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
         Ptr: AsRef<[u8]>,
@@ -214,7 +214,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
     /// # Safety
     ///
-    /// caller must ensure that the offsets in the iterator are less than the array len()
+    /// caller must ensure that the indexes in the iterator are less than the `array.len()`
     pub unsafe fn take_iter_unchecked<'a>(
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
@@ -430,7 +430,7 @@ impl<T: BinaryOffsetSizeTrait> From<GenericListArray<T>> for GenericBinaryArray<
     }
 }
 
-/// A type of `FixedSizeListArray` whose elements are binaries.
+/// An array where each element is a fixed-size sequence of bytes.
 ///
 /// # Examples
 ///
