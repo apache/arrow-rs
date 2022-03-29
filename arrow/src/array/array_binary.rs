@@ -1020,7 +1020,16 @@ impl<'a> std::iter::Iterator for DecimalIter<'a> {
             }
         }
     }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remain = self.array.len() - self.current;
+        (remain, Some(remain))
+    }
 }
+
+/// iterator has have known size.
+impl<'a> std::iter::ExactSizeIterator for DecimalIter<'a> {}
 
 impl<'a> IntoIterator for &'a DecimalArray {
     type Item = Option<i128>;
@@ -1607,8 +1616,28 @@ mod tests {
         let data = vec![Some(-100), None, Some(101)];
         let array: DecimalArray = data.clone().into_iter().collect();
 
-        let collected: Vec<_> = array.iter().collect();
+        let collected: Vec<_> = array.into_iter().collect();
         assert_eq!(data, collected);
+    }
+
+    #[test]
+    fn test_decimal_iter_sized() {
+        let data = vec![Some(-100), None, Some(101)];
+        let array: DecimalArray = data.clone().into_iter().collect();
+        let mut iter = array.into_iter();
+
+        // is exact sized
+        assert_eq!(array.len(), 3);
+
+        // size_hint is reported correctly
+        assert_eq!(iter.size_hint(), (3, Some(3)));
+        iter.next().unwrap();
+        assert_eq!(iter.size_hint(), (2, Some(2)));
+        iter.next().unwrap();
+        iter.next().unwrap();
+        assert_eq!(iter.size_hint(), (0, Some(0)));
+        assert!(iter.next().is_none());
+        assert_eq!(iter.size_hint(), (0, Some(0)));
     }
 
     #[test]
