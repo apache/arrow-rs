@@ -25,6 +25,7 @@ use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
 };
+pub use crate::array::DecimalIter;
 use crate::buffer::Buffer;
 use crate::datatypes::{
     validate_decimal_precision, DECIMAL_DEFAULT_SCALE, DECIMAL_MAX_PRECISION,
@@ -982,54 +983,6 @@ impl From<DecimalArray> for ArrayData {
         array.data
     }
 }
-
-/// an iterator that returns Some(i128) or None, that can be used on a
-/// DecimalArray
-#[derive(Debug)]
-pub struct DecimalIter<'a> {
-    array: &'a DecimalArray,
-    current: usize,
-    current_end: usize,
-}
-
-impl<'a> DecimalIter<'a> {
-    pub fn new(array: &'a DecimalArray) -> Self {
-        Self {
-            array,
-            current: 0,
-            current_end: array.len(),
-        }
-    }
-}
-
-impl<'a> std::iter::Iterator for DecimalIter<'a> {
-    type Item = Option<i128>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current == self.current_end {
-            None
-        } else {
-            let old = self.current;
-            self.current += 1;
-            // TODO: Improve performance by avoiding bounds check here
-            // (by using adding a `value_unchecked, for example)
-            if self.array.is_null(old) {
-                Some(None)
-            } else {
-                Some(Some(self.array.value(old)))
-            }
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remain = self.current_end - self.current;
-        (remain, Some(remain))
-    }
-}
-
-/// iterator has known size.
-impl<'a> std::iter::ExactSizeIterator for DecimalIter<'a> {}
 
 impl<'a> IntoIterator for &'a DecimalArray {
     type Item = Option<i128>;
