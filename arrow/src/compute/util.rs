@@ -36,25 +36,36 @@ pub(super) fn combine_option_bitmap(
     let left_offset_in_bits = left_data.offset();
     let right_offset_in_bits = right_data.offset();
 
-    let left = left_data.null_buffer();
-    let right = right_data.null_buffer();
+    let left_null_buffer = left_data.null_buffer();
+    let right_null_buffer = right_data.null_buffer();
 
-    match left {
-        None => match right {
-            None => Ok(None),
-            Some(r) => Ok(Some(r.bit_slice(right_offset_in_bits, len_in_bits))),
-        },
-        Some(l) => match right {
-            None => Ok(Some(l.bit_slice(left_offset_in_bits, len_in_bits))),
+    Ok(combine_option_buffers(
+        left_null_buffer,
+        left_offset_in_bits,
+        right_null_buffer,
+        right_offset_in_bits,
+        len_in_bits,
+    ))
+}
 
-            Some(r) => Ok(Some(buffer_bin_and(
-                l,
-                left_offset_in_bits,
-                r,
-                right_offset_in_bits,
-                len_in_bits,
-            ))),
-        },
+pub(super) fn combine_option_buffers(
+    left_null_buffer: Option<&Buffer>,
+    left_offset_in_bits: usize,
+    right_null_buffer: Option<&Buffer>,
+    right_offset_in_bits: usize,
+    len_in_bits: usize,
+) -> Option<Buffer> {
+    match (left_null_buffer, right_null_buffer) {
+        (None, None) => None,
+        (None, Some(r)) => Some(r.bit_slice(right_offset_in_bits, len_in_bits)),
+        (Some(l), None) => Some(l.bit_slice(left_offset_in_bits, len_in_bits)),
+        (Some(l), Some(r)) => Some(buffer_bin_and(
+            l,
+            left_offset_in_bits,
+            r,
+            right_offset_in_bits,
+            len_in_bits,
+        )),
     }
 }
 

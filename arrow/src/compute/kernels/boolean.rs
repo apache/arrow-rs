@@ -24,12 +24,14 @@
 
 use std::ops::Not;
 
-use crate::array::{Array, ArrayData, BooleanArray, PrimitiveArray};
+use crate::array::{
+    make_array, Array, ArrayData, ArrayRef, BooleanArray, OffsetSizeTrait, PrimitiveArray,
+};
 use crate::buffer::{
     buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer, MutableBuffer,
 };
-use crate::compute::util::combine_option_bitmap;
-use crate::datatypes::{ArrowNumericType, DataType};
+use crate::compute::util::{combine_option_bitmap, combine_option_buffers};
+use crate::datatypes::{ArrowNumericType, DataType, IntervalUnit};
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util::{ceil, round_upto_multiple_of_64};
 use core::iter;
@@ -575,10 +577,242 @@ where
     Ok(PrimitiveArray::<T>::from(data))
 }
 
+/// Creates a (mostly) zero-copy slice of the given buffers so that they can be combined
+/// in the same array with other buffers that start at offset 0.
+/// The only buffers that need an actual copy are booleans (if they are not byte-aligned)
+/// and list/binary/string offsets because the arrow implementation requires them to start at 0.
+/// This is useful when a kernel calculates a new validity bitmap but wants to reuse other buffers.
+fn slice_buffers(
+    buffers: &[Buffer],
+    offset: usize,
+    len: usize,
+    data_type: &DataType,
+    child_data: &[ArrayData],
+) -> (Vec<Buffer>, Vec<ArrayData>) {
+    use std::mem::size_of;
+
+    if offset == 0 {
+        return (buffers.to_vec(), child_data.to_vec());
+    }
+
+    // we only need to do something special to child data in 2 of the match branches
+    let mut result_child_data = None;
+
+    let result_buffers = match data_type {
+        DataType::Boolean => vec![buffers[0].bit_slice(offset, len)],
+        DataType::Int8 | DataType::UInt8 => {
+            vec![buffers[0].slice(offset * size_of::<u8>())]
+        }
+        DataType::Int16 | DataType::UInt16 | DataType::Float16 => {
+            vec![buffers[0].slice(offset * size_of::<u16>())]
+        }
+        DataType::Int32 | DataType::UInt32 | DataType::Float32 => {
+            vec![buffers[0].slice(offset * size_of::<u32>())]
+        }
+        DataType::Int64 | DataType::UInt64 | DataType::Float64 => {
+            vec![buffers[0].slice(offset * size_of::<u64>())]
+        }
+        DataType::Timestamp(_, _) | DataType::Duration(_) => {
+            vec![buffers[0].slice(offset * size_of::<u64>())]
+        }
+        DataType::Date32 | DataType::Time32(_) => {
+            vec![buffers[0].slice(offset * size_of::<u32>())]
+        }
+        DataType::Date64 | DataType::Time64(_) => {
+            vec![buffers[0].slice(offset * size_of::<u64>())]
+        }
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            vec![buffers[0].slice(offset * size_of::<u32>())]
+        }
+        DataType::Interval(IntervalUnit::DayTime) => {
+            vec![buffers[0].slice(offset * 2 * size_of::<u32>())]
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            vec![buffers[0].slice(offset * (2 * size_of::<u32>() + size_of::<u64>()))]
+        }
+        DataType::Decimal(_, _) => vec![buffers[0].slice(offset * size_of::<i128>())],
+        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
+            DataType::Int8 | DataType::UInt8 => {
+                vec![buffers[0].slice(offset * size_of::<u8>())]
+            }
+            DataType::Int16 | DataType::UInt16 => {
+                vec![buffers[0].slice(offset * size_of::<u16>())]
+            }
+            DataType::Int32 | DataType::UInt32 => {
+                vec![buffers[0].slice(offset * size_of::<u32>())]
+            }
+            DataType::Int64 | DataType::UInt64 => {
+                vec![buffers[0].slice(offset * size_of::<u64>())]
+            }
+            _ => unreachable!(),
+        },
+        DataType::List(_) => {
+            // safe because for List the first buffer is guaranteed to contain i32 offsets
+            let offsets = unsafe { &buffers[0].typed_data()[offset..] };
+            let first_offset = offsets[0] as usize;
+            let last_offset = offsets[len] as usize;
+            let nested_len = last_offset - first_offset;
+
+            // since we calculate a new offset buffer starting from 0 we also have to slice the child data
+            result_child_data = Some(
+                child_data
+                    .iter()
+                    .map(|d| d.slice(first_offset, nested_len))
+                    .collect(),
+            );
+            vec![offset_buffer_slice::<i32>(offsets, len)]
+        }
+        DataType::LargeList(_) => {
+            // safe because for LargeList the first buffer is guaranteed to contain i64 offsets
+            let offsets = unsafe { &buffers[0].typed_data()[offset..] };
+            let first_offset = offsets[0] as usize;
+            let last_offset = offsets[len] as usize;
+            let nested_len = last_offset - first_offset;
+            // since we calculate a new offset buffer starting from 0 we also have to slice the child data
+
+            result_child_data = Some(
+                child_data
+                    .iter()
+                    .map(|d| d.slice(first_offset, nested_len))
+                    .collect(),
+            );
+            vec![offset_buffer_slice::<i64>(offsets, len)]
+        }
+        DataType::Binary | DataType::Utf8 => {
+            // safe because for Binary/Utf8 the first buffer is guaranteed to contain i32 offsets
+            let offsets = unsafe { &buffers[0].typed_data()[offset..] };
+            let first_offset = offsets[0] as usize;
+            vec![
+                offset_buffer_slice::<i32>(offsets, len),
+                buffers[1].slice(first_offset * size_of::<i32>()),
+            ]
+        }
+        DataType::LargeBinary | DataType::LargeUtf8 => {
+            // safe because for LargeBinary/LargeUtf8 the first buffer is guaranteed to contain i64 offsets
+            let offsets = unsafe { &buffers[0].typed_data()[offset..] };
+            let first_offset = offsets[0] as usize;
+            vec![
+                offset_buffer_slice::<i64>(offsets, len),
+                buffers[1].slice(first_offset * size_of::<i64>()),
+            ]
+        }
+        DataType::FixedSizeBinary(size) => {
+            vec![buffers[0].slice(offset * (*size as usize))]
+        }
+        DataType::FixedSizeList(_, _size) => {
+            // TODO: should this actually slice the child arrays?
+            vec![]
+        }
+        DataType::Struct(_) => {
+            // TODO: should this actually slice the child arrays?
+            vec![]
+        }
+        DataType::Union(..) => {
+            // TODO: verify this is actually correct
+            if buffers.len() > 1 {
+                // dense union, type ids and offsets
+                vec![
+                    buffers[0].slice(offset * size_of::<i8>()),
+                    buffers[1].slice(offset * size_of::<u32>()),
+                ]
+            } else {
+                // sparse union with only type ids
+                // should this also slice the child arrays?
+                vec![buffers[0].slice(offset * size_of::<i8>())]
+            }
+        }
+        DataType::Map(_, _) => {
+            // TODO: verify this is actually correct
+            result_child_data =
+                Some(child_data.iter().map(|d| d.slice(offset, len)).collect());
+            vec![]
+        }
+        DataType::Null => vec![],
+    };
+
+    (
+        result_buffers,
+        result_child_data.unwrap_or_else(|| child_data.to_vec()),
+    )
+}
+
+// ListArray::from(ArrayData) expected offsets to always start at 0 so we can't simply make a slice of the buffer,
+// but instead have to calculate a new buffer
+fn offset_buffer_slice<T: OffsetSizeTrait>(
+    original_offsets: &[T],
+    array_len: usize,
+) -> Buffer {
+    // offset buffer has 1 element more than the corresponding data buffer pointing yet another offset for the end of the buffer
+    let len_in_bytes = (array_len + 1) * std::mem::size_of::<T>();
+    let mut offset_buffer =
+        MutableBuffer::new(len_in_bytes).with_bitset(len_in_bytes, false);
+    let offset_slice = unsafe { offset_buffer.typed_data_mut::<T>() };
+    let offset_start = original_offsets[0];
+    offset_slice
+        .iter_mut()
+        .zip(original_offsets.iter())
+        .for_each(|(output, input)| {
+            *output = *input - offset_start;
+        });
+
+    offset_buffer.into()
+}
+
+pub fn nullif_alternative(
+    array: &ArrayRef,
+    condition: &BooleanArray,
+) -> Result<ArrayRef> {
+    if array.len() != condition.len() {
+        return Err(ArrowError::ComputeError(
+            "Inputs to conditional kernels must have the same length".to_string(),
+        ));
+    }
+
+    let condition_buffer = combine_option_buffers(
+        condition.data().buffers().first(),
+        condition.offset(),
+        condition.data().null_buffer(),
+        condition.offset(),
+        condition.len(),
+    )
+    .map(|b| !&b);
+
+    let result_valid_buffer = combine_option_buffers(
+        condition_buffer.as_ref(),
+        0,
+        array.data().null_buffer(),
+        array.offset(),
+        condition.len(),
+    );
+
+    let (result_data_buffers, result_child_data) = slice_buffers(
+        array.data().buffers(),
+        array.offset(),
+        array.len(),
+        array.data_type(),
+        array.data().child_data(),
+    );
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            array.data_type().clone(),
+            condition.len(),
+            None,
+            result_valid_buffer,
+            0,
+            result_data_buffers,
+            result_child_data,
+        )
+    };
+
+    Ok(make_array(data))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::{ArrayRef, Int32Array};
+    use crate::array::{ArrayRef, DictionaryArray, Int32Array, ListArray};
+    use crate::datatypes::{Float64Type, Int32Type};
     use std::sync::Arc;
 
     #[test]
@@ -1139,12 +1373,18 @@ mod tests {
 
     #[test]
     fn test_nullif_int_array() {
-        let a = Int32Array::from(vec![Some(15), None, Some(8), Some(1), Some(9)]);
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(15),
+            None,
+            Some(8),
+            Some(1),
+            Some(9),
+        ]));
         let comp =
             BooleanArray::from(vec![Some(false), None, Some(true), Some(false), None]);
-        let res = nullif(&a, &comp).unwrap();
+        let res = nullif_alternative(&a, &comp).unwrap();
 
-        let expected = Int32Array::from(vec![
+        let expected: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(15),
             None,
             None, // comp true, slot 2 turned into null
@@ -1152,16 +1392,16 @@ mod tests {
             // Even though comp array / right is null, should still pass through original value
             // comp true, slot 2 turned into null
             Some(9),
-        ]);
+        ]));
 
-        assert_eq!(expected, res);
+        assert_eq!(&expected, &res);
     }
 
     #[test]
     fn test_nullif_int_array_offset() {
         let a = Int32Array::from(vec![None, Some(15), Some(8), Some(1), Some(9)]);
         let a = a.slice(1, 3); // Some(15), Some(8), Some(1)
-        let a = a.as_any().downcast_ref::<Int32Array>().unwrap();
+                               // let a = a.as_any().downcast_ref::<Int32Array>().unwrap();
         let comp = BooleanArray::from(vec![
             Some(false),
             Some(false),
@@ -1173,13 +1413,143 @@ mod tests {
         ]);
         let comp = comp.slice(2, 3); // Some(false), None, Some(true)
         let comp = comp.as_any().downcast_ref::<BooleanArray>().unwrap();
-        let res = nullif(a, comp).unwrap();
+        let res = nullif_alternative(&a, comp).unwrap();
 
-        let expected = Int32Array::from(vec![
+        let expected: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(15), // False => keep it
             Some(8),  // None => keep it
             None,     // true => None
-        ]);
+        ]));
         assert_eq!(&expected, &res)
+    }
+
+    #[test]
+    fn test_nullif_dict() {
+        let array = DictionaryArray::<Int32Type>::from_iter(["a", "b", "c"]);
+        let array_ref = Arc::new(array) as ArrayRef;
+        let condition = BooleanArray::from(vec![true, false, true]);
+
+        let result = nullif_alternative(&array_ref, &condition).unwrap();
+        let result = result
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let expected_keys = &[None, Some(1), None]
+            .iter()
+            .collect::<PrimitiveArray<Int32Type>>();
+        let actual_keys = result.keys();
+
+        assert_eq!(expected_keys, actual_keys);
+    }
+
+    #[test]
+    fn test_nullif_dict_sliced() {
+        let array =
+            DictionaryArray::<Int32Type>::from_iter(["a", "b", "c", "b", "c", "b"]);
+        let array_ref = Arc::new(array) as ArrayRef;
+        let array_ref = array_ref.slice(3, 3);
+        let condition = BooleanArray::from(vec![true, true, false]);
+
+        let result = nullif_alternative(&array_ref, &condition).unwrap();
+        let result = result
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let expected_keys = &[None, None, Some(1)]
+            .iter()
+            .collect::<PrimitiveArray<Int32Type>>();
+        let actual_keys = result.keys();
+
+        assert_eq!(expected_keys, actual_keys);
+    }
+
+    #[test]
+    fn test_nullif_dict_cond_sliced() {
+        let array = DictionaryArray::<Int32Type>::from_iter(["a", "b", "c"]);
+        let array_ref = Arc::new(array) as ArrayRef;
+        let condition = BooleanArray::from(vec![true, false, true, true, true, false]);
+        let condition = condition.slice(3, 3);
+        let condition = condition.as_any().downcast_ref::<BooleanArray>().unwrap();
+
+        let result = nullif_alternative(&array_ref, condition).unwrap();
+        let result = result
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+            .unwrap();
+        let expected_keys = &[None, None, Some(2)]
+            .iter()
+            .collect::<PrimitiveArray<Int32Type>>();
+        let actual_keys = result.keys();
+
+        assert_eq!(expected_keys, actual_keys);
+    }
+
+    #[test]
+    fn test_nullif_list() {
+        let array = ListArray::from_iter_primitive::<Float64Type, _, _>(vec![
+            Some(vec![Some(1.0), Some(2.0), Some(3.0)]),
+            None,
+            Some(vec![Some(4.0), None, Some(6.0)]),
+            Some(vec![]),
+            Some(vec![None, Some(8.0), None]),
+        ]);
+        let array_ref = Arc::new(array) as ArrayRef;
+        let condition = BooleanArray::from(vec![true, false, false, false, true]);
+
+        let result = nullif_alternative(&array_ref, &condition).unwrap();
+        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+
+        let expected = ListArray::from_iter_primitive::<Float64Type, _, _>(vec![
+            None,
+            None,
+            Some(vec![Some(4.0), None, Some(6.0)]),
+            Some(vec![]),
+            None,
+        ]);
+        let expected = &expected;
+
+        // simple assert_eq on ListArrays does not work if their offsets are different
+        // see https://github.com/apache/arrow-rs/issues/626
+        assert_eq!(expected.len(), result.len());
+        for i in 0..expected.len() {
+            assert_eq!(expected.is_valid(i), result.is_valid(i));
+            if expected.is_valid(i) {
+                assert_eq!(&expected.value(i), &result.value(i));
+            }
+        }
+    }
+
+    #[test]
+    fn test_nullif_list_sliced() {
+        let array = ListArray::from_iter_primitive::<Float64Type, _, _>(vec![
+            Some(vec![Some(1.0), Some(2.0), Some(3.0)]),
+            None,
+            Some(vec![Some(4.0), None, Some(6.0)]),
+            Some(vec![]),
+            Some(vec![None, Some(8.0), None]),
+        ]);
+        let array_ref = array.slice(1, 4);
+        let condition = BooleanArray::from(vec![false, false, false, true]);
+
+        let result = nullif_alternative(&array_ref, &condition).unwrap();
+        let result = result.as_any().downcast_ref::<ListArray>().unwrap();
+
+        let expected = ListArray::from_iter_primitive::<Float64Type, _, _>(vec![
+            None,
+            Some(vec![Some(4.0), None, Some(6.0)]),
+            Some(vec![]),
+            None,
+        ]);
+        let expected = &expected;
+
+        // simple assert_eq on ListArrays does not work if their offsets are different
+        // see https://github.com/apache/arrow-rs/issues/626
+        assert_eq!(expected.len(), result.len());
+        for i in 0..expected.len() {
+            assert_eq!(expected.is_valid(i), result.is_valid(i));
+            if expected.is_valid(i) {
+                assert_eq!(&expected.value(i), &result.value(i));
+            }
+        }
     }
 }
