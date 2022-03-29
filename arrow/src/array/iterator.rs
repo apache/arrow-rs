@@ -403,8 +403,8 @@ impl<'a, S: OffsetSizeTrait> std::iter::ExactSizeIterator
 {
 }
 
-/// an iterator that returns Some(i128) or None, that can be used on a
-/// DecimalArray
+/// an iterator that returns `Some(i128)` or `None`, that can be used on a
+/// [`DecimalArray`]
 #[derive(Debug)]
 pub struct DecimalIter<'a> {
     array: &'a DecimalArray,
