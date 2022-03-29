@@ -1023,12 +1023,12 @@ impl<'a> std::iter::Iterator for DecimalIter<'a> {
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remain = self.array.len() - self.current;
+        let remain = self.current_end - self.current;
         (remain, Some(remain))
     }
 }
 
-/// iterator has have known size.
+/// iterator has known size.
 impl<'a> std::iter::ExactSizeIterator for DecimalIter<'a> {}
 
 impl<'a> IntoIterator for &'a DecimalArray {
