@@ -2700,7 +2700,7 @@ mod tests {
     fn test_validate_dense_union_non_increasing_offset() {
         let type_ids = vec![1i8, 0i8, 0i8, 1i8];
         // This is ok because the offsets of the different children are increasing
-        // even though the offset of child 1 is decreasing:
+        // even though the offsets overall are decreasing:
         // type_id 0: 0, 0
         // type_id 1: 0, 1
         let offsets = vec![0i32, 0i32, 1i32, 0i32];
