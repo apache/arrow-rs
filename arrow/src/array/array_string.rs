@@ -78,6 +78,50 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
         self.data.buffers()[1].clone()
     }
 
+    /// Returns the number of chars in the string at index.
+    /// # Assumption
+    /// The value stored at `i` must be a valid utf-8 string,
+    /// otherwise you will get an unexpected result.
+    /// # Performance
+    /// This function has `O(n)` time complexity where `n` is the string length.
+    /// If you can make sure that all chars in string are in the range `U+0x0000` ~ `U+0x0080`,
+    /// please use the function [`value_length`](#method.value_length) which has O(1) time complexity.
+    /// # Safety
+    /// Caller is responsible for ensuring that index is within the array bounds.
+    pub unsafe fn num_chars_unchecked(&self, i: usize) -> usize {
+        let start = self.value_offsets().get_unchecked(i).to_usize().unwrap();
+        let end = self
+            .value_offsets()
+            .get_unchecked(i + 1)
+            .to_usize()
+            .unwrap();
+        let chars = &self.data.buffers()[1].as_slice()[start..end];
+
+        let mut char_iter = chars.iter();
+        let mut length: usize = 0;
+        while let Some(prefix) = char_iter.next() {
+            let ones = prefix.leading_ones() as usize;
+            if ones > 0 {
+                char_iter.nth(ones - 2);
+            }
+            length += 1;
+        }
+        length
+    }
+
+    /// Returns the number of chars in the string at index.
+    /// # Assumption
+    /// The value stored at `i` must be a valid utf-8 string,
+    /// otherwise you will get an unexpected result.
+    /// # Performance
+    /// This function has `O(n)` time complexity where `n` is the string length.
+    /// If you can make sure that all chars in string are in the range `U+0x0000` ~ `U+0x0080`,
+    /// please use the function [`value_length`](#method.value_length) which has O(1) time complexity.
+    pub fn num_chars(&self, i: usize) -> usize {
+        assert!(i < self.data.len(), "StringArray out of bounds access");
+        unsafe { self.num_chars_unchecked(i) }
+    }
+
     /// Returns the element at index
     /// # Safety
     /// caller is responsible for ensuring that index is within the array bounds
