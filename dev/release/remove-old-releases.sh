@@ -41,5 +41,5 @@ old_releases=$(
 )
 for old_release_version in $old_releases; do
   echo "Remove old release ${old_release_version}"
-  svn delete ${svn_base}/${old_release_version}
+  svn delete -m "Removing ${old_release_version}" ${svn_base}/${old_release_version}
 done
