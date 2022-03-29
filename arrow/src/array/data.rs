@@ -1179,7 +1179,8 @@ impl ArrayData {
         // Justification: buffer size was validated above
         let offsets = unsafe { &(buffer.typed_data::<i32>()[self.offset..required_len]) };
 
-        let mut last_offset = None;
+        let num_children = self.child_data.len();
+        let mut last_offsets = vec![None; num_children];
         self.for_each_valid_type_id()
             .zip(offsets.iter())
             .try_for_each(|(r, &child_offset)| {
@@ -1193,15 +1194,15 @@ impl ArrayData {
                             child_offset, i))
                     })?;
 
-                if let Some(last_offset) = last_offset.as_ref() {
-                    if child_offset < *last_offset {
+                if let Some(last_offset) = last_offsets[type_id].take() {
+                    if child_offset < last_offset {
                         return Err(ArrowError::InvalidArgumentError(format!(
-                            "Offset invariant failure: position {} invalid. {} should be >= {}",
+                            "Offset invariant failure: position {} invalid for child {} should be >= {}",
                             i, child_offset, last_offset,
                         )));
                     }
                 }
-                last_offset = Some(child_offset);
+                last_offsets[type_id] = Some(child_offset);
 
                 let child_len = self.child_data[type_id].len();
                 if child_offset >= child_len {
@@ -1210,6 +1211,7 @@ impl ArrayData {
                         i, child_offset, type_id, child_len
                     )));
                 }
+
 
                 Ok(())
             })
@@ -2695,13 +2697,26 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "Offset invariant failure: position 2 invalid. 0 should be >= 1"
-    )]
     fn test_validate_dense_union_non_increasing_offset() {
         let type_ids = vec![1i8, 0i8, 0i8, 1i8];
-        // Offsets must be non-decreasing:
+        // This is ok because the offsets of the different children are increasing
+        // even though the offset of child 1 is decreasing:
+        // type_id 0: 0, 0
+        // type_id 1: 0, 1
+        let offsets = vec![0i32, 0i32, 1i32, 0i32];
+        run_dense_union_test(type_ids, offsets);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Offset invariant failure: position 2 invalid for child 0 should be >= 1"
+    )]
+    fn test_validate_dense_union_non_increasing_offset_same_child() {
+        let type_ids = vec![1i8, 0i8, 1i8, 1i8];
         // https://arrow.apache.org/docs/format/Columnar.html#dense-union 👍
+        // Offsets must be non-decreasing for that particular child:
+        // type_id 0: 0, 1, 0 <-- bad
+        // type_id 1: 0
         let offsets = vec![0i32, 0i32, 1i32, 0i32];
         run_dense_union_test(type_ids, offsets);
     }
