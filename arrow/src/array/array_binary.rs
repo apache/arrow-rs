@@ -531,7 +531,18 @@ impl FixedSizeBinaryArray {
     /// # Errors
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
-    pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self>
+    pub fn try_from_sparse_iter<T, U>(iter: T) -> Result<Self>
+    where
+        T: Iterator<Item = Option<U>>,
+        U: AsRef<[u8]>,
+    {
+        Self::try_from_sparse_iter_sized(iter, 0)
+    }
+
+    pub fn try_from_sparse_iter_sized<T, U>(
+        mut iter: T,
+        default_size: usize,
+    ) -> Result<Self>
     where
         T: Iterator<Item = Option<U>>,
         U: AsRef<[u8]>,
@@ -583,7 +594,7 @@ impl FixedSizeBinaryArray {
             ));
         }
 
-        let size = size.unwrap_or(0);
+        let size = size.unwrap_or(default_size);
         let array_data = unsafe {
             ArrayData::new_unchecked(
                 DataType::FixedSizeBinary(size as i32),
