@@ -62,7 +62,7 @@ macro_rules! downcast_dict_filter {
 }
 
 /// An iterator of `(usize, usize)` each representing an interval
-/// `[start, end]` whose slots of a [BooleanArray] are true. Each
+/// `[start, end)` whose slots of a [BooleanArray] are true. Each
 /// interval corresponds to a contiguous region of memory to be
 /// "taken" from an array to be filtered.
 ///
