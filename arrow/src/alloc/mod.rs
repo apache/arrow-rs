@@ -125,28 +125,30 @@ pub unsafe fn reallocate<T: NativeType>(
     })
 }
 
-/// The owner of an allocation, that is not natively allocated.
+/// The owner of an allocation.
 /// The trait implementation is responsible for dropping the allocations once no more references exist.
 pub trait Allocation: RefUnwindSafe {}
 
 impl<T: RefUnwindSafe> Allocation for T {}
 
 /// Mode of deallocating memory regions
-pub enum Deallocation {
-    /// Native deallocation, using Rust deallocator with Arrow-specific memory alignment
-    Native(usize),
-    /// Foreign interface, via a callback
-    Foreign(Arc<dyn Allocation>),
+pub(crate) enum Deallocation {
+    /// An allocation of the given capacity that needs to be deallocated using arrows's cache aligned allocator.
+    /// See [allocate_aligned] and [free_aligned].
+    Arrow(usize),
+    /// An allocation from an external source like the FFI interface or a Rust Vec.
+    /// Deallocation will happen
+    Custom(Arc<dyn Allocation>),
 }
 
 impl Debug for Deallocation {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
-            Deallocation::Native(capacity) => {
-                write!(f, "Deallocation::Native {{ capacity: {} }}", capacity)
+            Deallocation::Arrow(capacity) => {
+                write!(f, "Deallocation::Arrow {{ capacity: {} }}", capacity)
             }
-            Deallocation::Foreign(_) => {
-                write!(f, "Deallocation::Foreign {{ capacity: unknown }}")
+            Deallocation::Custom(_) => {
+                write!(f, "Deallocation::Custom {{ capacity: unknown }}")
             }
         }
     }

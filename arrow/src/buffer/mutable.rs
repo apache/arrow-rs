@@ -267,7 +267,7 @@ impl MutableBuffer {
     #[inline]
     pub(super) fn into_buffer(self) -> Buffer {
         let bytes = unsafe {
-            Bytes::new(self.data, self.len, Deallocation::Native(self.capacity))
+            Bytes::new(self.data, self.len, Deallocation::Arrow(self.capacity))
         };
         std::mem::forget(self);
         Buffer::from_bytes(bytes)

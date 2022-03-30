@@ -22,6 +22,7 @@ use std::sync::Arc;
 use std::{convert::AsRef, usize};
 
 use crate::alloc::{Allocation, Deallocation};
+use crate::ffi::FFI_ArrowArray;
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::{bytes::Bytes, datatypes::ArrowNativeType};
 
@@ -73,7 +74,7 @@ impl Buffer {
     /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
     pub unsafe fn from_raw_parts(ptr: NonNull<u8>, len: usize, capacity: usize) -> Self {
         assert!(len <= capacity);
-        Buffer::build_with_arguments(ptr, len, Deallocation::Native(capacity))
+        Buffer::build_with_arguments(ptr, len, Deallocation::Arrow(capacity))
     }
 
     /// Creates a buffer from an existing memory region (must already be byte-aligned), this
@@ -83,18 +84,41 @@ impl Buffer {
     ///
     /// * `ptr` - Pointer to raw parts
     /// * `len` - Length of raw parts in **bytes**
-    /// * `owner` - A [crate::alloc::Allocation] which is responsible for freeing that data
+    /// * `data` - An [ffi::FFI_ArrowArray] with the data
     ///
     /// # Safety
     ///
     /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
     /// bytes and that the foreign deallocator frees the region.
-    pub unsafe fn from_foreign(
+    #[deprecated(
+        note = "use from_custom_allocation instead which makes it clearer that the allocation is in fact owned"
+    )]
+    pub unsafe fn from_unowned(
+        ptr: NonNull<u8>,
+        len: usize,
+        data: Arc<FFI_ArrowArray>,
+    ) -> Self {
+        Self::from_custom_allocation(ptr, len, data)
+    }
+
+    /// Creates a buffer from an existing memory region. Ownership of the memory is tracked via reference counting
+    /// and the memory will be freed using the `drop` method of [crate::alloc::Allocation] when the reference count reaches zero.
+    ///
+    /// # Arguments
+    ///
+    /// * `ptr` - Pointer to raw parts
+    /// * `len` - Length of raw parts in **bytes**
+    /// * `owner` - A [crate::alloc::Allocation] which is responsible for freeing that data
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe as there is no guarantee that the given pointer is valid for `len` bytes
+    pub unsafe fn from_custom_allocation(
         ptr: NonNull<u8>,
         len: usize,
         owner: Arc<dyn Allocation>,
     ) -> Self {
-        Buffer::build_with_arguments(ptr, len, Deallocation::Foreign(owner))
+        Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner))
     }
 
     /// Auxiliary method to create a new Buffer
@@ -535,7 +559,7 @@ mod tests {
     fn test_from_foreign_vec() {
         let mut vector = vec![1_i32, 2, 3, 4, 5];
         let buffer = unsafe {
-            Buffer::from_foreign(
+            Buffer::from_custom_allocation(
                 NonNull::new_unchecked(vector.as_mut_ptr() as *mut u8),
                 vector.len() * std::mem::size_of::<i32>(),
                 Arc::new(vector),

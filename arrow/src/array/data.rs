@@ -2603,21 +2603,21 @@ mod tests {
         let mut bitmap = vec![0b1110_u8];
 
         let strings_buffer = unsafe {
-            Buffer::from_foreign(
+            Buffer::from_custom_allocation(
                 NonNull::new_unchecked(strings.as_mut_ptr()),
                 strings.len(),
                 Arc::new(strings),
             )
         };
         let offsets_buffer = unsafe {
-            Buffer::from_foreign(
+            Buffer::from_custom_allocation(
                 NonNull::new_unchecked(offsets.as_mut_ptr() as *mut u8),
                 offsets.len() * std::mem::size_of::<i32>(),
                 Arc::new(offsets),
             )
         };
         let null_buffer = unsafe {
-            Buffer::from_foreign(
+            Buffer::from_custom_allocation(
                 NonNull::new_unchecked(bitmap.as_mut_ptr()),
                 bitmap.len(),
                 Arc::new(bitmap),
