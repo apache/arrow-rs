@@ -37,8 +37,8 @@
 //! let reader = Box::new(FileReader::try_new(file).unwrap());
 //!
 //! // export it
-//! let stream = Arc::new(FFI_ArrowArrayStream::empty());
-//! let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
+//! let stream = Box::new(FFI_ArrowArrayStream::empty());
+//! let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
 //! unsafe { export_reader_into_raw(reader, stream_ptr) };
 //!
 //! // consumed and used by something else...
@@ -53,6 +53,9 @@
 //! }
 //!
 //! // (drop/release)
+//! unsafe {
+//!   Box::from_raw(stream_ptr);
+//! }
 //! Ok(())
 //! }
 //! ```
@@ -358,9 +361,7 @@ impl Iterator for ArrowArrayStreamReader {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.stream.get_next.unwrap();
-
-        let stream_ptr = Arc::into_raw(self.stream.clone()) as *mut FFI_ArrowArrayStream;
+        let stream_ptr = Arc::as_ptr(&self.stream) as *mut FFI_ArrowArrayStream;
 
         let empty_array = Arc::new(FFI_ArrowArray::empty());
         let array_ptr = Arc::into_raw(empty_array) as *mut FFI_ArrowArray;
@@ -387,6 +388,8 @@ impl Iterator for ArrowArrayStreamReader {
 
             Some(Ok(record_batch))
         } else {
+            unsafe { Arc::from_raw(array_ptr) };
+
             let last_error = self.get_stream_last_error();
             let err = ArrowError::CDataInterface(last_error.unwrap());
             Some(Err(err))
