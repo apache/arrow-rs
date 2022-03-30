@@ -38,7 +38,7 @@
 //!
 //! // export it
 //! let stream = Arc::new(FFI_ArrowArrayStream::new(reader));
-//! let stream_ptr = FFI_ArrowArrayStream::to_raw(stream) as *mut FFI_ArrowArrayStream;
+//! let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
 //!
 //! // consumed and used by something else...
 //!
@@ -357,7 +357,7 @@ impl Iterator for ArrowArrayStreamReader {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.stream.get_next?;
+        self.stream.get_next.unwrap();
 
         let stream_ptr = Arc::into_raw(self.stream.clone()) as *mut FFI_ArrowArrayStream;
 
