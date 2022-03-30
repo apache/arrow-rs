@@ -27,8 +27,8 @@ use crate::buffer::Buffer;
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
-/// Like OffsetSizeTrait, but specialized for Strings
-// This allow us to expose a constant datatype for the GenericStringArray
+/// Like [`OffsetSizeTrait`], but specialized for Strings.
+/// This allow us to expose a constant datatype for the [`GenericStringArray`].
 pub trait StringOffsetSizeTrait: OffsetSizeTrait {
     const DATA_TYPE: DataType;
 }
@@ -137,7 +137,7 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
         Self::from(array_data)
     }
 
-    /// Creates a `GenericStringArray` based on an iterator of values without nulls
+    /// Creates a [`GenericStringArray`] based on an iterator of values without nulls
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
         Ptr: AsRef<str>,
@@ -184,7 +184,7 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
     /// # Safety
     ///
-    /// caller must ensure that the offsets in the iterator are less than the array len()
+    /// caller must ensure that the indexes in the iterator are less than the `array.len()`
     pub unsafe fn take_iter_unchecked<'a>(
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
@@ -212,7 +212,7 @@ impl<'a, Ptr, OffsetSize: StringOffsetSizeTrait> FromIterator<Option<Ptr>>
 where
     Ptr: AsRef<str>,
 {
-    /// Creates a [`GenericStringArray`] based on an iterator of `Option`s
+    /// Creates a [`GenericStringArray`] based on an iterator of [`Option`]s
     fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
         let iter = iter.into_iter();
         let (_, data_len) = iter.size_hint();
