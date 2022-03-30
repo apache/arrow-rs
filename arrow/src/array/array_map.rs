@@ -504,10 +504,8 @@ mod tests {
         let value_array = Arc::new(UInt32Array::from(vec![0u32, 10, 20])) as ArrayRef;
         let keys_field = Field::new("keys", DataType::Utf8, false);
         let values_field = Field::new("values", DataType::UInt32, false);
-        let struct_array = StructArray::from(vec![
-            (keys_field.clone(), key_array),
-            (values_field.clone(), value_array),
-        ]);
+        let struct_array =
+            StructArray::from(vec![(keys_field, key_array), (values_field, value_array)]);
         assert_eq!(
             struct_array,
             StructArray::from(map_array.value(0).data().clone())
