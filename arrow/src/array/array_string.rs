@@ -78,6 +78,15 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
         self.data.buffers()[1].clone()
     }
 
+    /// Returns the number of `Unicode Scalar Value` in the string at index `i`.
+    /// # Performance
+    /// This function has `O(n)` time complexity where `n` is the string length.
+    /// If you can make sure that all chars in the string are in the range `U+0x0000` ~ `U+0x007F`,
+    /// please use the function [`value_length`](#method.value_length) which has O(1) time complexity.
+    pub fn num_chars(&self, i: usize) -> usize {
+        self.value(i).chars().count()
+    }
+
     /// Returns the element at index
     /// # Safety
     /// caller is responsible for ensuring that index is within the array bounds
@@ -377,9 +386,9 @@ mod tests {
 
     #[test]
     fn test_string_array_from_u8_slice() {
-        let values: Vec<&str> = vec!["hello", "", "parquet"];
+        let values: Vec<&str> = vec!["hello", "", "A£ऀ𖼚𝌆৩ƐZ"];
 
-        // Array data: ["hello", "", "parquet"]
+        // Array data: ["hello", "", "A£ऀ𖼚𝌆৩ƐZ"]
         let string_array = StringArray::from(values);
 
         assert_eq!(3, string_array.len());
@@ -388,10 +397,12 @@ mod tests {
         assert_eq!("hello", unsafe { string_array.value_unchecked(0) });
         assert_eq!("", string_array.value(1));
         assert_eq!("", unsafe { string_array.value_unchecked(1) });
-        assert_eq!("parquet", string_array.value(2));
-        assert_eq!("parquet", unsafe { string_array.value_unchecked(2) });
-        assert_eq!(5, string_array.value_offsets()[2]);
-        assert_eq!(7, string_array.value_length(2));
+        assert_eq!("A£ऀ𖼚𝌆৩ƐZ", string_array.value(2));
+        assert_eq!("A£ऀ𖼚𝌆৩ƐZ", unsafe {
+            string_array.value_unchecked(2)
+        });
+        assert_eq!(20, string_array.value_length(2)); // 1 + 2 + 3 + 4 + 4 + 3 + 2 + 1
+        assert_eq!(8, string_array.num_chars(2));
         for i in 0..3 {
             assert!(string_array.is_valid(i));
             assert!(!string_array.is_null(i));
@@ -407,9 +418,9 @@ mod tests {
 
     #[test]
     fn test_large_string_array_from_u8_slice() {
-        let values: Vec<&str> = vec!["hello", "", "parquet"];
+        let values: Vec<&str> = vec!["hello", "", "A£ऀ𖼚𝌆৩ƐZ"];
 
-        // Array data: ["hello", "", "parquet"]
+        // Array data: ["hello", "", "A£ऀ𖼚𝌆৩ƐZ"]
         let string_array = LargeStringArray::from(values);
 
         assert_eq!(3, string_array.len());
@@ -418,10 +429,13 @@ mod tests {
         assert_eq!("hello", unsafe { string_array.value_unchecked(0) });
         assert_eq!("", string_array.value(1));
         assert_eq!("", unsafe { string_array.value_unchecked(1) });
-        assert_eq!("parquet", string_array.value(2));
-        assert_eq!("parquet", unsafe { string_array.value_unchecked(2) });
+        assert_eq!("A£ऀ𖼚𝌆৩ƐZ", string_array.value(2));
+        assert_eq!("A£ऀ𖼚𝌆৩ƐZ", unsafe {
+            string_array.value_unchecked(2)
+        });
         assert_eq!(5, string_array.value_offsets()[2]);
-        assert_eq!(7, string_array.value_length(2));
+        assert_eq!(20, string_array.value_length(2)); // 1 + 2 + 3 + 4 + 4 + 3 + 2 + 1
+        assert_eq!(8, string_array.num_chars(2));
         for i in 0..3 {
             assert!(string_array.is_valid(i));
             assert!(!string_array.is_null(i));
