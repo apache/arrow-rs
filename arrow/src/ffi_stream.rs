@@ -28,7 +28,7 @@
 //! # use std::fs::File;
 //! # use std::sync::Arc;
 //! # use arrow::error::Result;
-//! # use arrow::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
+//! # use arrow::ffi_stream::{export_reader_into_raw, ArrowArrayStreamReader, FFI_ArrowArrayStream};
 //! # use arrow::ipc::reader::FileReader;
 //! # use arrow::record_batch::RecordBatchReader;
 //! # fn main() -> Result<()> {
@@ -37,8 +37,9 @@
 //! let reader = Box::new(FileReader::try_new(file).unwrap());
 //!
 //! // export it
-//! let stream = Arc::new(FFI_ArrowArrayStream::new(reader));
+//! let stream = Arc::new(FFI_ArrowArrayStream::empty());
 //! let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
+//! unsafe { export_reader_into_raw(reader, stream_ptr) };
 //!
 //! // consumed and used by something else...
 //!
@@ -399,6 +400,20 @@ impl RecordBatchReader for ArrowArrayStreamReader {
     }
 }
 
+/// Exports a record batch reader to raw pointer of the C Stream Interface provided by the consumer.
+///
+/// # Safety
+/// Assumes that the pointer represents valid C Stream Interfaces, both in memory
+/// representation and lifetime via the `release` mechanism.
+pub unsafe fn export_reader_into_raw(
+    reader: Box<dyn RecordBatchReader>,
+    out_stream: *mut FFI_ArrowArrayStream,
+) {
+    let stream = FFI_ArrowArrayStream::new(reader);
+
+    std::ptr::write_unaligned(out_stream, stream);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,8 +461,10 @@ mod tests {
         let reader = TestRecordBatchReader::new(schema.clone(), iter);
 
         // Export a `RecordBatchReader` through `FFI_ArrowArrayStream`
-        let stream = Arc::new(FFI_ArrowArrayStream::new(reader));
+        let stream = Arc::new(FFI_ArrowArrayStream::empty());
         let stream_ptr = Arc::into_raw(stream) as *mut FFI_ArrowArrayStream;
+
+        unsafe { export_reader_into_raw(reader, stream_ptr) };
 
         let empty_schema = Arc::new(FFI_ArrowSchema::empty());
         let schema_ptr = Arc::into_raw(empty_schema) as *mut FFI_ArrowSchema;
