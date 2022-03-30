@@ -342,6 +342,7 @@ impl<T: ArrowNativeType> FromIterator<T> for Buffer {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::thread;
 
     use super::*;
@@ -553,6 +554,12 @@ mod tests {
             4,
             Buffer::from(&[0b01101101, 0b10101010]).count_set_bits_offset(7, 9)
         );
+    }
+
+    #[test]
+    fn test_unwind_safe() {
+        fn assert_unwind_safe<T: RefUnwindSafe + UnwindSafe>() {}
+        assert_unwind_safe::<Buffer>()
     }
 
     #[test]
