@@ -25,6 +25,7 @@ use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
 };
+pub use crate::array::DecimalIter;
 use crate::buffer::Buffer;
 use crate::datatypes::{
     validate_decimal_precision, DECIMAL_DEFAULT_SCALE, DECIMAL_MAX_PRECISION,
@@ -983,45 +984,6 @@ impl From<DecimalArray> for ArrayData {
     }
 }
 
-/// an iterator that returns `Some(i128)` or `None`, that can be used on a
-/// [`DecimalArray`]
-#[derive(Debug)]
-pub struct DecimalIter<'a> {
-    array: &'a DecimalArray,
-    current: usize,
-    current_end: usize,
-}
-
-impl<'a> DecimalIter<'a> {
-    pub fn new(array: &'a DecimalArray) -> Self {
-        Self {
-            array,
-            current: 0,
-            current_end: array.len(),
-        }
-    }
-}
-
-impl<'a> std::iter::Iterator for DecimalIter<'a> {
-    type Item = Option<i128>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current == self.current_end {
-            None
-        } else {
-            let old = self.current;
-            self.current += 1;
-            // TODO: Improve performance by avoiding bounds check here
-            // (by using adding a `value_unchecked, for example)
-            if self.array.is_null(old) {
-                Some(None)
-            } else {
-                Some(Some(self.array.value(old)))
-            }
-        }
-    }
-}
-
 impl<'a> IntoIterator for &'a DecimalArray {
     type Item = Option<i128>;
     type IntoIter = DecimalIter<'a>;
@@ -1607,8 +1569,28 @@ mod tests {
         let data = vec![Some(-100), None, Some(101)];
         let array: DecimalArray = data.clone().into_iter().collect();
 
-        let collected: Vec<_> = array.iter().collect();
+        let collected: Vec<_> = array.into_iter().collect();
         assert_eq!(data, collected);
+    }
+
+    #[test]
+    fn test_decimal_iter_sized() {
+        let data = vec![Some(-100), None, Some(101)];
+        let array: DecimalArray = data.into_iter().collect();
+        let mut iter = array.into_iter();
+
+        // is exact sized
+        assert_eq!(array.len(), 3);
+
+        // size_hint is reported correctly
+        assert_eq!(iter.size_hint(), (3, Some(3)));
+        iter.next().unwrap();
+        assert_eq!(iter.size_hint(), (2, Some(2)));
+        iter.next().unwrap();
+        iter.next().unwrap();
+        assert_eq!(iter.size_hint(), (0, Some(0)));
+        assert!(iter.next().is_none());
+        assert_eq!(iter.size_hint(), (0, Some(0)));
     }
 
     #[test]
