@@ -24,56 +24,65 @@ use crate::{
     error::{ArrowError, Result},
 };
 
-#[allow(clippy::unnecessary_wraps)]
 fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: OffsetSize,
     length: &Option<OffsetSize>,
 ) -> Result<ArrayRef> {
-    // compute current offsets
-    let offsets = array.data_ref().clone().buffers()[0].clone();
-    let offsets: &[OffsetSize] = unsafe { offsets.typed_data::<OffsetSize>() };
-
-    // compute null bitmap (copy)
+    let offsets = array.value_offsets();
     let null_bit_buffer = array.data_ref().null_buffer().cloned();
-
-    // compute values
-    let values = &array.data_ref().buffers()[1];
+    let values = array.value_data();
     let data = values.as_slice();
+    let zero = OffsetSize::zero();
 
-    let mut new_values = MutableBuffer::new(0); // we have no way to estimate how much this will be.
-    let mut new_offsets: Vec<OffsetSize> = Vec::with_capacity(array.len() + 1);
+    let new_starts: Vec<OffsetSize> = if start >= zero {
+        offsets
+            .windows(2)
+            .map(|pair| (pair[0] + start).min(pair[1]))
+            .collect()
+    } else {
+        offsets
+            .windows(2)
+            .map(|pair| (pair[1] + start).max(pair[0]))
+            .collect()
+    };
 
-    let mut length_so_far = OffsetSize::zero();
-    new_offsets.push(length_so_far);
-    (0..array.len()).for_each(|i| {
-        // the length of this entry
-        let length_i: OffsetSize = offsets[i + 1] - offsets[i];
-        // compute where we should start slicing this entry
-        let start = offsets[i]
-            + if start >= OffsetSize::zero() {
-                start
-            } else {
-                length_i + start
-            };
+    let new_length: Vec<OffsetSize> = if let Some(length) = length {
+        offsets[1..]
+            .iter()
+            .zip(new_starts.iter())
+            .map(|(end, start)| *(length.min(&(*end - *start))))
+            .collect()
+    } else {
+        offsets[1..]
+            .iter()
+            .zip(new_starts.iter())
+            .map(|(end, start)| *end - *start)
+            .collect()
+    };
 
-        let start = start.max(offsets[i]).min(offsets[i + 1]);
-        // compute the length of the slice
-        let length: OffsetSize = length
-            .unwrap_or(length_i)
-            // .max(0) is not needed as it is guaranteed
-            .min(offsets[i + 1] - start); // so we do not go beyond this entry
+    let new_offsets: Vec<OffsetSize> = [zero]
+        .iter()
+        .copied()
+        .chain(new_length.iter().scan(zero, |len_so_far, &len| {
+            *len_so_far += len;
+            Some(*len_so_far)
+        }))
+        .collect();
 
-        length_so_far += length;
-
-        new_offsets.push(length_so_far);
-
-        // we need usize for ranges
-        let start = start.to_usize().unwrap();
-        let length = length.to_usize().unwrap();
-
-        new_values.extend_from_slice(&data[start..start + length]);
-    });
+    let new_values = {
+        let mut new_values =
+            MutableBuffer::new(new_offsets.last().unwrap().to_usize().unwrap());
+        new_starts
+            .iter()
+            .zip(new_length.iter())
+            .map(|(start, length)| {
+                (start.to_usize().unwrap(), length.to_usize().unwrap())
+            })
+            .map(|(start, length)| &data[start..start + length])
+            .for_each(|slice| new_values.extend_from_slice(slice));
+        new_values
+    };
 
     let data = unsafe {
         ArrayData::new_unchecked(
