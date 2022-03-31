@@ -25,7 +25,7 @@
 use std::ops::Not;
 
 use crate::array::{
-    make_array, Array, ArrayData, ArrayRef, BooleanArray, OffsetSizeTrait, PrimitiveArray,
+    make_array, Array, ArrayData, ArrayRef, BooleanArray, PrimitiveArray,
 };
 use crate::buffer::{
     buffer_bin_and, buffer_bin_or, buffer_unary_not, Buffer, MutableBuffer,
@@ -656,20 +656,16 @@ fn slice_buffers(
         }
         DataType::Binary | DataType::Utf8 => {
             // safe because for Binary/Utf8 the first buffer is guaranteed to contain i32 offsets
-            let offsets = unsafe { &buffers[0].typed_data()[offset..] };
-            let first_offset = offsets[0] as usize;
             vec![
-                offset_buffer_slice::<i32>(offsets, len),
-                buffers[1].slice(first_offset * size_of::<i32>()),
+                buffers[0].slice(offset * size_of::<i32>()),
+                buffers[1].clone(),
             ]
         }
         DataType::LargeBinary | DataType::LargeUtf8 => {
             // safe because for LargeBinary/LargeUtf8 the first buffer is guaranteed to contain i64 offsets
-            let offsets = unsafe { &buffers[0].typed_data()[offset..] };
-            let first_offset = offsets[0] as usize;
             vec![
-                offset_buffer_slice::<i64>(offsets, len),
-                buffers[1].slice(first_offset * size_of::<i64>()),
+                buffers[0].slice(offset * size_of::<i64>()),
+                buffers[1].clone(),
             ]
         }
         DataType::FixedSizeBinary(size) => {
@@ -710,28 +706,6 @@ fn slice_buffers(
         result_buffers,
         result_child_data.unwrap_or_else(|| child_data.to_vec()),
     )
-}
-
-// ListArray::from(ArrayData) expected offsets to always start at 0 so we can't simply make a slice of the buffer,
-// but instead have to calculate a new buffer
-fn offset_buffer_slice<T: OffsetSizeTrait>(
-    original_offsets: &[T],
-    array_len: usize,
-) -> Buffer {
-    // offset buffer has 1 element more than the corresponding data buffer pointing yet another offset for the end of the buffer
-    let len_in_bytes = (array_len + 1) * std::mem::size_of::<T>();
-    let mut offset_buffer =
-        MutableBuffer::new(len_in_bytes).with_bitset(len_in_bytes, false);
-    let offset_slice = unsafe { offset_buffer.typed_data_mut::<T>() };
-    let offset_start = original_offsets[0];
-    offset_slice
-        .iter_mut()
-        .zip(original_offsets.iter())
-        .for_each(|(output, input)| {
-            *output = *input - offset_start;
-        });
-
-    offset_buffer.into()
 }
 
 pub fn nullif_alternative(
@@ -787,7 +761,7 @@ pub fn nullif_alternative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::{ArrayRef, DictionaryArray, Int32Array, ListArray};
+    use crate::array::{ArrayRef, DictionaryArray, Int32Array, ListArray, StringArray};
     use crate::datatypes::{Float64Type, Int32Type};
     use std::sync::Arc;
 
@@ -1527,5 +1501,34 @@ mod tests {
                 assert_eq!(&expected.value(i), &result.value(i));
             }
         }
+    }
+
+    #[test]
+    fn test_nullif_strings() {
+        let array = StringArray::from(vec!["abc", "", "def", "gh", "ijkl"]);
+        let array_ref = Arc::new(array) as ArrayRef;
+        let condition = BooleanArray::from(vec![true, false, false, false, true]);
+
+        let result = nullif_alternative(&array_ref, &condition).unwrap();
+        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+
+        let expected =
+            StringArray::from(vec![None, Some(""), Some("def"), Some("gh"), None]);
+
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_nullif_strings_sliced() {
+        let array = StringArray::from(vec!["abc", "", "def", "gh", "ijkl"]);
+        let array_ref = array.slice(1, 4);
+        let condition = BooleanArray::from(vec![false, false, false, true]);
+
+        let result = nullif_alternative(&array_ref, &condition).unwrap();
+        let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+
+        let expected = StringArray::from(vec![Some(""), Some("def"), Some("gh"), None]);
+
+        assert_eq!(result, &expected);
     }
 }
