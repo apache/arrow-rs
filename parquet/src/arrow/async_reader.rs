@@ -82,11 +82,13 @@ use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use futures::future::{BoxFuture, FutureExt};
-use futures::stream::Stream;
+use futures::stream::{Peekable, Stream};
+use futures::StreamExt;
 use parquet_format::PageType;
 
 use arrow::datatypes::SchemaRef;
@@ -179,15 +181,26 @@ impl Storage for FileStorage {
 
     async fn read(&mut self, ranges: Vec<Range<usize>>) -> Result<Vec<ByteBufferPtr>> {
         self.asyncify(|file| {
-            ranges
+            let start = Instant::now();
+
+            let result = ranges
                 .into_iter()
                 .map(|range| {
                     file.seek(SeekFrom::Start(range.start as u64))?;
-                    let mut buffer = vec![0; range.end - range.start];
-                    file.read_exact(buffer.as_mut())?;
+                    let len = range.end - range.start;
+
+                    let mut buffer = Vec::with_capacity(len);
+
+                    let mut take = file.try_clone()?.take(len as u64);
+                    take.read_to_end(&mut buffer)?;
+
                     Ok(ByteBufferPtr::new(buffer))
                 })
-                .collect()
+                .collect();
+
+            println!("Read took: {:.4}s", start.elapsed().as_secs_f64());
+
+            result
         })
         .await
     }
@@ -309,187 +322,245 @@ impl<T: Storage> ParquetRecordBatchStreamBuilder<T> {
 
         self.input.prefetch(ranges).await?;
 
-        Ok(ParquetRecordBatchStream {
+        let inner = RowGroupStream {
             row_groups,
             columns: columns.into(),
-            batch_size: self.batch_size,
             metadata: self.metadata,
+            state: RowGroupStreamState::Init(Some(self.input)),
+        }
+        .peekable();
+
+        Ok(ParquetRecordBatchStream {
+            inner,
+            error: false,
+            batch_reader: None,
+            batch_size: self.batch_size,
             schema: self.schema,
-            input: Some(self.input),
-            state: StreamState::Init,
+            last_record: Instant::now(),
+            last_load: Instant::now(),
         })
     }
 }
 
-enum StreamState<T> {
-    /// At the start of a new row group, or the end of the parquet stream
-    Init,
-    /// Decoding a batch
-    Decoding(ParquetRecordBatchReader),
-    /// Reading data from input
-    Reading(BoxFuture<'static, Result<(T, InMemoryRowGroup)>>),
-    /// Error
-    Error,
-}
-
-impl<T> std::fmt::Debug for StreamState<T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StreamState::Init => write!(f, "StreamState::Init"),
-            StreamState::Decoding(_) => write!(f, "StreamState::Decoding"),
-            StreamState::Reading(_) => write!(f, "StreamState::Reading"),
-            StreamState::Error => write!(f, "StreamState::Error"),
-        }
-    }
-}
-
 /// An asynchronous [`Stream`] of [`RecordBatch`] for a parquet file
-pub struct ParquetRecordBatchStream<T> {
-    metadata: Arc<ParquetMetaData>,
-
+pub struct ParquetRecordBatchStream<T: Storage> {
     schema: SchemaRef,
 
     batch_size: usize,
 
-    columns: Arc<[usize]>,
+    error: bool,
 
-    row_groups: VecDeque<usize>,
+    inner: Peekable<RowGroupStream<T>>,
 
-    /// This is an option so it can be moved into a future
-    input: Option<T>,
+    batch_reader: Option<ParquetRecordBatchReader>,
 
-    state: StreamState<T>,
+    last_record: Instant,
+
+    last_load: Instant,
 }
 
-impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
+impl<T: Storage> std::fmt::Debug for ParquetRecordBatchStream<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ParquetRecordBatchStream")
-            .field("metadata", &self.metadata)
             .field("schema", &self.schema)
             .field("batch_size", &self.batch_size)
-            .field("columns", &self.columns)
-            .field("state", &self.state)
             .finish()
     }
 }
 
-impl<T> ParquetRecordBatchStream<T> {
+impl<T: Storage> ParquetRecordBatchStream<T> {
     /// Returns the [`SchemaRef`] for this parquet file
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 }
 
-impl<T: Storage + Send + 'static> Stream for ParquetRecordBatchStream<T> {
+impl<T: Storage> Stream for ParquetRecordBatchStream<T> {
     type Item = Result<RecordBatch>;
 
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
-            match &mut self.state {
-                StreamState::Decoding(batch_reader) => match batch_reader.next() {
+            if self.error {
+                return Poll::Pending;
+            }
+
+            // Always poll inner so it can make progress
+            let inner_pending = Pin::new(&mut self.inner).poll_peek(cx).is_pending();
+
+            // Fetch records from batch reader if any available
+            if let Some(batch_reader) = self.batch_reader.as_mut() {
+                let t = Instant::now();
+                let next = batch_reader.next();
+                let stall = t.duration_since(self.last_record);
+
+                if stall > Duration::from_millis(1) {
+                    println!("outer stall for {:.4}s", stall.as_secs_f64());
+                }
+
+                // TODO: Temporary
+                self.last_record = Instant::now();
+                match next {
                     Some(Ok(batch)) => return Poll::Ready(Some(Ok(batch))),
                     Some(Err(e)) => {
-                        self.state = StreamState::Error;
-                        return Poll::Ready(Some(Err(ParquetError::ArrowError(
-                            e.to_string(),
-                        ))));
+                        self.error = true;
+                        return Poll::Ready(Some(Err(ParquetError::ArrowError(e.to_string()))));
                     }
-                    None => self.state = StreamState::Init,
-                },
-                StreamState::Init => {
-                    let row_group_idx = match self.row_groups.pop_front() {
-                        Some(idx) => idx,
-                        None => return Poll::Ready(None),
-                    };
-
-                    let metadata = self.metadata.clone();
-                    let mut input = match self.input.take() {
-                        Some(input) => input,
-                        None => {
-                            self.state = StreamState::Error;
-                            return Poll::Ready(Some(Err(general_err!(
-                                "input stream lost"
-                            ))));
-                        }
-                    };
-
-                    let columns = Arc::clone(&self.columns);
-
-                    self.state = StreamState::Reading(
-                        async move {
-                            let row_group_metadata = metadata.row_group(row_group_idx);
-                            let mut column_chunks =
-                                vec![None; row_group_metadata.columns().len()];
-
-                            let ranges: Vec<_> = columns
-                                .iter()
-                                .map(|idx| {
-                                    let (start, length) =
-                                        row_group_metadata.column(*idx).byte_range();
-                                    start as usize..(start + length) as usize
-                                })
-                                .collect();
-
-                            let buffers = input.read(ranges).await?;
-                            for (column_idx, data) in columns.iter().zip(buffers) {
-                                let column = row_group_metadata.column(*column_idx);
-
-                                column_chunks[*column_idx] = Some(InMemoryColumnChunk {
-                                    num_values: column.num_values(),
-                                    compression: column.compression(),
-                                    physical_type: column.column_type(),
-                                    data,
-                                })
-                            }
-
-                            Ok((
-                                input,
-                                InMemoryRowGroup {
-                                    schema: metadata.file_metadata().schema_descr_ptr(),
-                                    column_chunks,
-                                },
-                            ))
-                        }
-                        .boxed(),
-                    )
+                    None => {
+                        self.batch_reader = None;
+                        println!("Dropped read in: {}", self.last_record.elapsed().as_secs_f64());
+                    }
                 }
-                StreamState::Reading(f) => {
-                    let result = futures::ready!(f.poll_unpin(cx));
-                    self.state = StreamState::Init;
+            }
 
-                    let row_group: Box<dyn RowGroupCollection> = match result {
-                        Ok((input, row_group)) => {
-                            self.input = Some(input);
-                            Box::new(row_group)
+            println!(
+                "Inner Pending: {}, {:.4}s",
+                inner_pending,
+                self.last_record.elapsed().as_secs_f64()
+            );
+
+            // Batch reader is exhausted, need to wait for inner
+            match inner_pending {
+                true => return Poll::Pending,
+                false => {
+                    let t = Instant::now();
+                    println!(
+                        "inner stall for {:.4}s, last load: {:.4}s",
+                        t.duration_since(self.last_record).as_secs_f64(),
+                        t.duration_since(self.last_load).as_secs_f64()
+                    );
+                    self.last_record = t;
+                    self.last_load = t;
+
+                    match self.inner.poll_next_unpin(cx) {
+                        Poll::Ready(Some(Ok(row_group))) => {
+                            let start = Instant::now();
+
+                            let inner = self.inner.get_ref();
+
+                            let parquet_schema = inner.metadata.file_metadata().schema_descr_ptr();
+
+                            let array_reader = build_array_reader(
+                                parquet_schema,
+                                self.schema.clone(),
+                                inner.columns.iter().cloned(),
+                                Box::new(row_group),
+                            )?;
+
+                            self.batch_reader = Some(
+                                ParquetRecordBatchReader::try_new(self.batch_size, array_reader)
+                                    .expect("reader"),
+                            );
+
+                            println!("Build reader in {:.4}s", start.elapsed().as_secs_f64());
                         }
-                        Err(e) => {
-                            self.state = StreamState::Error;
+                        Poll::Ready(Some(Err(e))) => {
+                            self.error = true;
                             return Poll::Ready(Some(Err(e)));
                         }
-                    };
-
-                    let parquet_schema = self.metadata.file_metadata().schema_descr_ptr();
-
-                    let array_reader = build_array_reader(
-                        parquet_schema,
-                        self.schema.clone(),
-                        self.columns.iter().cloned(),
-                        row_group,
-                    )?;
-
-                    let batch_reader =
-                        ParquetRecordBatchReader::try_new(self.batch_size, array_reader)
-                            .expect("reader");
-
-                    self.state = StreamState::Decoding(batch_reader)
+                        Poll::Ready(None) => return Poll::Ready(None),
+                        Poll::Pending => unreachable!("contents peeked"),
+                    }
                 }
-                StreamState::Error => return Poll::Pending,
             }
         }
     }
+}
+
+/// An asynchronous [`Stream`] of [`InMemoryRowGroup`] for a parquet file
+struct RowGroupStream<T> {
+    metadata: Arc<ParquetMetaData>,
+
+    row_groups: VecDeque<usize>,
+
+    columns: Arc<[usize]>,
+
+    state: RowGroupStreamState<T>,
+}
+
+enum RowGroupStreamState<T> {
+    Init(Option<T>),
+    Fetching(BoxFuture<'static, Result<(T, InMemoryRowGroup)>>),
+    Error,
+}
+
+impl<T: Storage> Stream for RowGroupStream<T> {
+    type Item = Result<InMemoryRowGroup>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        loop {
+            match &mut self.state {
+                RowGroupStreamState::Init(storage) => {
+                    let storage = storage.take().unwrap();
+                    let row_group_idx = match self.row_groups.pop_front() {
+                        Some(row_group_idx) => row_group_idx,
+                        None => return Poll::Ready(None),
+                    };
+
+                    let fut = fetch_next_row_group(
+                        storage,
+                        row_group_idx,
+                        Arc::clone(&self.metadata),
+                        Arc::clone(&self.columns),
+                    )
+                    .boxed();
+
+                    self.state = RowGroupStreamState::Fetching(fut);
+                }
+                RowGroupStreamState::Fetching(fut) => match fut.poll_unpin(cx) {
+                    Poll::Ready(Ok((storage, row_group))) => {
+                        self.state = RowGroupStreamState::Init(Some(storage));
+                        return Poll::Ready(Some(Ok(row_group)));
+                    }
+                    Poll::Ready(Err(e)) => {
+                        self.state = RowGroupStreamState::Error;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    Poll::Pending => return Poll::Pending,
+                },
+                RowGroupStreamState::Error => return Poll::Pending,
+            }
+        }
+    }
+}
+
+async fn fetch_next_row_group<T: Storage>(
+    mut input: T,
+    row_group_idx: usize,
+    metadata: Arc<ParquetMetaData>,
+    columns: Arc<[usize]>,
+) -> Result<(T, InMemoryRowGroup)> {
+    let row_group_metadata = metadata.row_group(row_group_idx);
+    let mut column_chunks = vec![None; row_group_metadata.columns().len()];
+
+    let ranges: Vec<_> = columns
+        .iter()
+        .map(|idx| {
+            let (start, length) = row_group_metadata.column(*idx).byte_range();
+            start as usize..(start + length) as usize
+        })
+        .collect();
+
+    let schema = metadata.file_metadata().schema_descr_ptr();
+
+    let buffers = input.read(ranges).await?;
+    for (column_idx, data) in columns.iter().zip(buffers) {
+        let column = row_group_metadata.column(*column_idx);
+
+        column_chunks[*column_idx] = Some(InMemoryColumnChunk {
+            num_values: column.num_values(),
+            compression: column.compression(),
+            physical_type: column.column_type(),
+            data,
+        })
+    }
+
+    Ok((
+        input,
+        InMemoryRowGroup {
+            schema,
+            column_chunks,
+        },
+    ))
 }
 
 fn decode_footer(buf: &[u8]) -> Result<ParquetMetaData> {
