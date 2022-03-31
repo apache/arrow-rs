@@ -35,6 +35,10 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     let data = values.as_slice();
     let zero = OffsetSize::zero();
 
+    // calculate the start offset for each substring
+    // if `start` >= 0
+    // then, count from the start of each string
+    // else, count from the end of each string
     let new_starts: Vec<OffsetSize> = if start >= zero {
         offsets
             .windows(2)
@@ -47,6 +51,10 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
             .collect()
     };
 
+    // count the length of each substring
+    // if `length` is given
+    // then, use it
+    // else, length is `string[new_start..].len()`
     let new_length: Vec<OffsetSize> = if let Some(length) = length {
         offsets[1..]
             .iter()
@@ -70,6 +78,7 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
         }))
         .collect();
 
+    // concatenate substrings into a buffer
     let new_values = {
         let mut new_values =
             MutableBuffer::new(new_offsets.last().unwrap().to_usize().unwrap());
