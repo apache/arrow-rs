@@ -166,7 +166,7 @@ impl MapArray {
         let keys_data = StringArray::from_iter_values(keys);
 
         let keys_field = Field::new("keys", DataType::Utf8, false);
-        let values_feild = Field::new(
+        let values_field = Field::new(
             "values",
             values.data_type().clone(),
             values.null_count() > 0,
