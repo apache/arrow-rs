@@ -686,7 +686,12 @@ fn slice_buffers(
             vec![]
         }
         DataType::Struct(_) => {
-            // TODO: should this actually slice the child arrays?
+            result_child_data = Some(
+                child_data
+                    .iter()
+                    .map(|d| slice_array_data(d, offset, len))
+                    .collect(),
+            );
             vec![]
         }
         DataType::Union(..) => {
@@ -719,7 +724,8 @@ fn slice_buffers(
 }
 
 fn slice_array_data(data: &ArrayData, offset: usize, len: usize) -> ArrayData {
-    assert!(offset + len < data.len());
+    assert!(offset >= data.offset());
+    assert!((offset - data.offset()) + len <= data.len());
 
     if offset == 0 {
         return data.clone();
@@ -729,7 +735,7 @@ fn slice_array_data(data: &ArrayData, offset: usize, len: usize) -> ArrayData {
 
     let (result_data_buffers, result_child_data) = slice_buffers(
         data.buffers(),
-        data.offset() + offset,
+        offset,
         len,
         data.data_type(),
         data.child_data(),
@@ -802,10 +808,10 @@ pub fn nullif_alternative(
 mod tests {
     use super::*;
     use crate::array::{
-        ArrayRef, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray, Int32Array,
-        ListArray, StringArray,
+        ArrayRef, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray, Int16Array,
+        Int32Array, ListArray, StringArray, StructArray,
     };
-    use crate::datatypes::{Field, Float64Type, Int16Type, Int32Type};
+    use crate::datatypes::{Field, Float64Type, Int32Type};
     use std::sync::Arc;
 
     #[test]
@@ -1427,9 +1433,7 @@ mod tests {
             .as_any()
             .downcast_ref::<DictionaryArray<Int32Type>>()
             .unwrap();
-        let expected_keys = &[None, Some(1), None]
-            .iter()
-            .collect::<PrimitiveArray<Int32Type>>();
+        let expected_keys = &[None, Some(1), None].iter().collect::<Int32Array>();
         let actual_keys = result.keys();
 
         assert_eq!(expected_keys, actual_keys);
@@ -1600,9 +1604,8 @@ mod tests {
 
     #[test]
     fn test_nullif_fixed_size_list_sliced() {
-        let primitives = PrimitiveArray::<Int16Type>::from(vec![
-            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-        ]);
+        let primitives =
+            Int16Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
         let fixed_size_array = make_array(
             ArrayData::try_new(
                 DataType::FixedSizeList(
@@ -1648,5 +1651,63 @@ mod tests {
             .unwrap();
 
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_nullif_struct_sliced() {
+        let array = StructArray::try_from(vec![
+            (
+                "a",
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8])) as ArrayRef,
+            ),
+            (
+                "b",
+                Arc::new(StringArray::from(vec![
+                    "abc", "de", "dghi", "jk", "lm", "nop", "q", "rstu",
+                ])),
+            ),
+        ])
+        .unwrap();
+        let array_ref = array.slice(2, 4);
+
+        let condition = BooleanArray::from(vec![false, true, false, false]);
+
+        let result = nullif_alternative(&array_ref, &condition).unwrap();
+        let result = result.as_any().downcast_ref::<StructArray>().unwrap();
+
+        let expected = StructArray::try_from(vec![
+            (
+                "a",
+                Arc::new(Int32Array::from(vec![Some(3), None, Some(5), Some(6)]))
+                    as ArrayRef,
+            ),
+            (
+                "b",
+                Arc::new(StringArray::from(vec![
+                    Some("dghi"),
+                    None,
+                    Some("lm"),
+                    Some("nop"),
+                ])),
+            ),
+        ])
+        .unwrap();
+
+        // StructArray comparison does not seem to respect validity bitmap of the struct itself
+        // assert_eq!(result, &expected);
+
+        assert!(result.is_valid(0));
+        assert!(!result.is_valid(1));
+        assert!(result.is_valid(2));
+        assert!(result.is_valid(3));
+
+        assert_eq!(
+            result.column(0),
+            &(Arc::new(Int32Array::from(vec![3, 4, 5, 6])) as ArrayRef)
+        );
+        assert_eq!(
+            result.column(1),
+            &(Arc::new(StringArray::from(vec!["dghi", "jk", "lm", "nop"])) as ArrayRef)
+        );
     }
 }
