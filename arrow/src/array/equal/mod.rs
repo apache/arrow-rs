@@ -40,6 +40,7 @@ mod list;
 mod null;
 mod primitive;
 mod structure;
+mod union;
 mod utils;
 mod variable_size;
 
@@ -55,6 +56,7 @@ use list::list_equal;
 use null::null_equal;
 use primitive::primitive_equal;
 use structure::struct_equal;
+use union::union_equal;
 use variable_size::variable_sized_equal;
 
 impl PartialEq for dyn Array {
@@ -232,7 +234,9 @@ fn equal_values(
         DataType::Struct(_) => {
             struct_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
         }
-        DataType::Union(_, _) => unimplemented!("See ARROW-8576"),
+        DataType::Union(_, _) => {
+            union_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
+        }
         DataType::Dictionary(data_type, _) => match data_type.as_ref() {
             DataType::Int8 => dictionary_equal::<i8>(
                 lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
@@ -313,11 +317,11 @@ mod tests {
         array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryOffsetSizeTrait,
         BooleanArray, FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray,
         Int32Builder, ListBuilder, NullArray, PrimitiveBuilder, StringArray,
-        StringDictionaryBuilder, StringOffsetSizeTrait, StructArray,
+        StringDictionaryBuilder, StringOffsetSizeTrait, StructArray, UnionBuilder,
     };
     use crate::array::{GenericStringArray, Int32Array};
     use crate::buffer::Buffer;
-    use crate::datatypes::{Field, Int16Type, ToByteSlice};
+    use crate::datatypes::{Field, Int16Type, Int32Type, ToByteSlice};
 
     use super::*;
 
@@ -1346,5 +1350,99 @@ mod tests {
         // string2 is identical to string1 except that it has no validity buffer since string1 has
         // nulls in it, string1 and string2 are not equal
         test_equal(string1, &string2, false);
+    }
+
+    #[test]
+    fn test_union_equal_dense() {
+        let mut builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union1 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union2 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 5).unwrap();
+        builder.append::<Int32Type>("c", 4).unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union3 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union4 = builder.build().unwrap();
+
+        test_equal(union1.data(), union2.data(), true);
+        test_equal(union1.data(), union3.data(), false);
+        test_equal(union1.data(), union4.data(), false);
+    }
+
+    #[test]
+    fn test_union_equal_sparse() {
+        let mut builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union1 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union2 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 5).unwrap();
+        builder.append::<Int32Type>("c", 4).unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union3 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union4 = builder.build().unwrap();
+
+        test_equal(union1.data(), union2.data(), true);
+        test_equal(union1.data(), union3.data(), false);
+        test_equal(union1.data(), union4.data(), false);
     }
 }
