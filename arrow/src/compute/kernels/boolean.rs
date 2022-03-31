@@ -579,8 +579,7 @@ where
 
 /// Creates a (mostly) zero-copy slice of the given buffers so that they can be combined
 /// in the same array with other buffers that start at offset 0.
-/// The only buffers that need an actual copy are booleans (if they are not byte-aligned)
-/// and list/binary/string offsets because the arrow implementation requires them to start at 0.
+/// The only buffers that need an actual copy are booleans and validity (if they are not byte-aligned).
 /// This is useful when a kernel calculates a new validity bitmap but wants to reuse other buffers.
 fn slice_buffers(
     buffers: &[Buffer],
@@ -671,8 +670,19 @@ fn slice_buffers(
         DataType::FixedSizeBinary(size) => {
             vec![buffers[0].slice(offset * (*size as usize))]
         }
-        DataType::FixedSizeList(_, _size) => {
-            // TODO: should this actually slice the child arrays?
+        DataType::FixedSizeList(_field, size) => {
+            result_child_data = Some(
+                child_data
+                    .iter()
+                    .map(|d| {
+                        slice_array_data(
+                            d,
+                            offset * (*size as usize),
+                            len * (*size as usize),
+                        )
+                    })
+                    .collect(),
+            );
             vec![]
         }
         DataType::Struct(_) => {
@@ -706,6 +716,36 @@ fn slice_buffers(
         result_buffers,
         result_child_data.unwrap_or_else(|| child_data.to_vec()),
     )
+}
+
+fn slice_array_data(data: &ArrayData, offset: usize, len: usize) -> ArrayData {
+    assert!(offset + len < data.len());
+
+    if offset == 0 {
+        return data.clone();
+    }
+
+    let result_valid_buffer = data.null_buffer().map(|b| b.bit_slice(offset, len));
+
+    let (result_data_buffers, result_child_data) = slice_buffers(
+        data.buffers(),
+        data.offset() + offset,
+        len,
+        data.data_type(),
+        data.child_data(),
+    );
+
+    unsafe {
+        ArrayData::new_unchecked(
+            data.data_type().clone(),
+            len,
+            None,
+            result_valid_buffer,
+            0,
+            result_data_buffers,
+            result_child_data,
+        )
+    }
 }
 
 pub fn nullif_alternative(
@@ -761,8 +801,11 @@ pub fn nullif_alternative(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::{ArrayRef, DictionaryArray, Int32Array, ListArray, StringArray};
-    use crate::datatypes::{Float64Type, Int32Type};
+    use crate::array::{
+        ArrayRef, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray, Int32Array,
+        ListArray, StringArray,
+    };
+    use crate::datatypes::{Field, Float64Type, Int16Type, Int32Type};
     use std::sync::Arc;
 
     #[test]
@@ -1530,5 +1573,80 @@ mod tests {
         let expected = StringArray::from(vec![Some(""), Some("def"), Some("gh"), None]);
 
         assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_nullif_fixed_size_binary_sliced() {
+        let array = FixedSizeBinaryArray::try_from_iter(
+            vec![b"abc", b"def", b"ghi", b"jkl"].into_iter(),
+        )
+        .unwrap();
+        let array_ref = array.slice(1, 2);
+        let condition = BooleanArray::from(vec![false, false]);
+
+        let result = nullif_alternative(&array_ref, &condition).unwrap();
+        let result = result
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+
+        let expected = FixedSizeBinaryArray::try_from_sparse_iter(
+            vec![Some(b"def"), Some(b"ghi")].into_iter(),
+        )
+        .unwrap();
+
+        assert_eq!(result, &expected);
+    }
+
+    #[test]
+    fn test_nullif_fixed_size_list_sliced() {
+        let primitives = PrimitiveArray::<Int16Type>::from(vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        ]);
+        let fixed_size_array = make_array(
+            ArrayData::try_new(
+                DataType::FixedSizeList(
+                    Box::new(Field::new("item", primitives.data_type().clone(), true)),
+                    3,
+                ),
+                5,
+                None,
+                None,
+                0,
+                vec![],
+                vec![primitives.data().clone()],
+            )
+            .unwrap(),
+        );
+        let array_ref = fixed_size_array.slice(1, 3);
+        let condition = BooleanArray::from(vec![false, true, false]);
+
+        let result = nullif_alternative(&array_ref, &condition).unwrap();
+        let result = result
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+
+        let expected = make_array(
+            ArrayData::try_new(
+                DataType::FixedSizeList(
+                    Box::new(Field::new("item", primitives.data_type().clone(), true)),
+                    3,
+                ),
+                3,
+                None,
+                Some(MutableBuffer::from_iter(vec![true, false, true]).into()),
+                0,
+                vec![],
+                vec![primitives.slice(3, 9).data().clone()],
+            )
+            .unwrap(),
+        );
+        let expected = expected
+            .as_any()
+            .downcast_ref::<FixedSizeListArray>()
+            .unwrap();
+
+        assert_eq!(result, expected);
     }
 }
