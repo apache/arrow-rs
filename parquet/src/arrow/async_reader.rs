@@ -115,6 +115,21 @@ pub trait Storage: Send + Unpin + 'static {
     async fn read(&mut self, ranges: Vec<Range<usize>>) -> Result<Vec<ByteBufferPtr>>;
 }
 
+#[async_trait]
+impl Storage for Box<dyn Storage> {
+    async fn read_footer(&mut self) -> Result<ByteBufferPtr> {
+        self.as_mut().read_footer().await
+    }
+
+    async fn prefetch(&mut self, ranges: Vec<Range<usize>>) -> Result<()> {
+        self.as_mut().prefetch(ranges).await
+    }
+
+    async fn read(&mut self, ranges: Vec<Range<usize>>) -> Result<Vec<ByteBufferPtr>> {
+        self.as_mut().read(ranges).await
+    }
+}
+
 pub struct FileStorage {
     file: Option<File>,
 }
