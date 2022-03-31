@@ -1675,26 +1675,8 @@ mod tests {
         let result = nullif_alternative(&array_ref, &condition).unwrap();
         let result = result.as_any().downcast_ref::<StructArray>().unwrap();
 
-        let expected = StructArray::try_from(vec![
-            (
-                "a",
-                Arc::new(Int32Array::from(vec![Some(3), None, Some(5), Some(6)]))
-                    as ArrayRef,
-            ),
-            (
-                "b",
-                Arc::new(StringArray::from(vec![
-                    Some("dghi"),
-                    None,
-                    Some("lm"),
-                    Some("nop"),
-                ])),
-            ),
-        ])
-        .unwrap();
-
         // StructArray comparison does not seem to respect validity bitmap of the struct itself
-        // assert_eq!(result, &expected);
+        // so we need to compare the fields separately
 
         assert!(result.is_valid(0));
         assert!(!result.is_valid(1));
