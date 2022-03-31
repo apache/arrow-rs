@@ -648,35 +648,11 @@ fn slice_buffers(
         },
         DataType::List(_) => {
             // safe because for List the first buffer is guaranteed to contain i32 offsets
-            let offsets = unsafe { &buffers[0].typed_data()[offset..] };
-            let first_offset = offsets[0] as usize;
-            let last_offset = offsets[len] as usize;
-            let nested_len = last_offset - first_offset;
-
-            // since we calculate a new offset buffer starting from 0 we also have to slice the child data
-            result_child_data = Some(
-                child_data
-                    .iter()
-                    .map(|d| d.slice(first_offset, nested_len))
-                    .collect(),
-            );
-            vec![offset_buffer_slice::<i32>(offsets, len)]
+            vec![buffers[0].slice(offset * size_of::<i32>())]
         }
         DataType::LargeList(_) => {
             // safe because for LargeList the first buffer is guaranteed to contain i64 offsets
-            let offsets = unsafe { &buffers[0].typed_data()[offset..] };
-            let first_offset = offsets[0] as usize;
-            let last_offset = offsets[len] as usize;
-            let nested_len = last_offset - first_offset;
-            // since we calculate a new offset buffer starting from 0 we also have to slice the child data
-
-            result_child_data = Some(
-                child_data
-                    .iter()
-                    .map(|d| d.slice(first_offset, nested_len))
-                    .collect(),
-            );
-            vec![offset_buffer_slice::<i64>(offsets, len)]
+            vec![buffers[0].slice(offset * size_of::<i64>())]
         }
         DataType::Binary | DataType::Utf8 => {
             // safe because for Binary/Utf8 the first buffer is guaranteed to contain i32 offsets

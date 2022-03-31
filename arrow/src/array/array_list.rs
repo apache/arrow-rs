@@ -241,13 +241,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         let value_offsets = data.buffers()[0].as_ptr();
 
         let value_offsets = unsafe { RawPtrBox::<OffsetSize>::new(value_offsets) };
-        unsafe {
-            if !(*value_offsets.as_ptr().offset(0)).is_zero() {
-                return Err(ArrowError::InvalidArgumentError(String::from(
-                    "offsets do not start at zero",
-                )));
-            }
-        }
         Ok(Self {
             data,
             values,
@@ -1028,6 +1021,41 @@ mod tests {
     }
 
     #[test]
+    fn test_list_array_offsets_need_not_start_at_zero() {
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(8)
+            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
+            .build()
+            .unwrap();
+
+        let value_offsets = Buffer::from_slice_ref(&[2, 2, 5, 7]);
+
+        let list_data_type =
+            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+        let list_data = ArrayData::builder(list_data_type)
+            .len(3)
+            .add_buffer(value_offsets)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+
+        let list_array = make_array(list_data);
+        let list_array = list_array.as_any().downcast_ref::<ListArray>().unwrap();
+
+        assert_eq!(list_array.len(), 3);
+
+        assert!(list_array.value(0).is_empty());
+        assert_eq!(
+            list_array.value(1).as_ref(),
+            &PrimitiveArray::<Int32Type>::from(vec![2, 3, 4])
+        );
+        assert_eq!(
+            list_array.value(2).as_ref(),
+            &PrimitiveArray::<Int32Type>::from(vec![5, 6])
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "assertion failed: (offset + length) <= self.len()")]
     fn test_fixed_size_list_array_index_out_of_bound() {
         // Construct a value array
@@ -1097,28 +1125,6 @@ mod tests {
                 .add_buffer(value_offsets)
                 .build_unchecked()
         };
-        drop(ListArray::from(list_data));
-    }
-
-    #[test]
-    #[should_panic(expected = "offsets do not start at zero")]
-    fn test_list_array_invalid_value_offset_start() {
-        let value_data = ArrayData::builder(DataType::Int32)
-            .len(8)
-            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
-            .build()
-            .unwrap();
-
-        let value_offsets = Buffer::from_slice_ref(&[2, 2, 5, 7]);
-
-        let list_data_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
         drop(ListArray::from(list_data));
     }
 

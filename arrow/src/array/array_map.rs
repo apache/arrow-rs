@@ -139,13 +139,6 @@ impl MapArray {
         let value_offsets = data.buffers()[0].as_ptr();
 
         let value_offsets = unsafe { RawPtrBox::<i32>::new(value_offsets) };
-        unsafe {
-            if (*value_offsets.as_ptr().offset(0)) != 0 {
-                return Err(ArrowError::InvalidArgumentError(String::from(
-                    "offsets do not start at zero",
-                )));
-            }
-        }
         Ok(Self {
             data,
             values,
