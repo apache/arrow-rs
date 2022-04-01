@@ -86,9 +86,10 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
             .iter()
             .zip(new_length.iter())
             .map(|(start, length)| {
-                (start.to_usize().unwrap(), length.to_usize().unwrap())
+                let start = start.to_usize().unwrap();
+                let length = length.to_usize().unwrap();
+                &data[start..start + length]
             })
-            .map(|(start, length)| &data[start..start + length])
             .for_each(|slice| new_values.extend_from_slice(slice));
         new_values
     };
