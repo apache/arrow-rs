@@ -155,6 +155,9 @@ impl FileStorage {
 
         self.file = Some(file);
         result
+
+        // let file = self.file.as_mut().unwrap();
+        // f(file)
     }
 }
 
@@ -181,24 +184,35 @@ impl Storage for FileStorage {
 
     async fn read(&mut self, ranges: Vec<Range<usize>>) -> Result<Vec<ByteBufferPtr>> {
         self.asyncify(|file| {
-            let start = Instant::now();
-
             let result = ranges
                 .into_iter()
                 .map(|range| {
+                    let a = Instant::now();
+
                     file.seek(SeekFrom::Start(range.start as u64))?;
                     let len = range.end - range.start;
 
+                    let b = Instant::now();
+
                     let mut buffer = Vec::with_capacity(len);
+
+                    let c = Instant::now();
 
                     let mut take = file.try_clone()?.take(len as u64);
                     take.read_to_end(&mut buffer)?;
 
+                    let d = Instant::now();
+
+                    println!(
+                        "Seek: {}s, Allocation: {}s, Read: {}s",
+                        b.duration_since(a).as_secs_f64(),
+                        c.duration_since(b).as_secs_f64(),
+                        d.duration_since(c).as_secs_f64()
+                    );
+
                     Ok(ByteBufferPtr::new(buffer))
                 })
                 .collect();
-
-            println!("Read took: {:.4}s", start.elapsed().as_secs_f64());
 
             result
         })
@@ -338,6 +352,9 @@ impl<T: Storage> ParquetRecordBatchStreamBuilder<T> {
             schema: self.schema,
             last_record: Instant::now(),
             last_load: Instant::now(),
+            total_read_duration: Default::default(),
+            max_read_duration: Default::default(),
+            min_read_duration: Default::default(),
         })
     }
 }
@@ -357,6 +374,12 @@ pub struct ParquetRecordBatchStream<T: Storage> {
     last_record: Instant,
 
     last_load: Instant,
+
+    total_read_duration: Duration,
+
+    max_read_duration: Duration,
+
+    min_read_duration: Duration,
 }
 
 impl<T: Storage> std::fmt::Debug for ParquetRecordBatchStream<T> {
@@ -391,6 +414,13 @@ impl<T: Storage> Stream for ParquetRecordBatchStream<T> {
             if let Some(batch_reader) = self.batch_reader.as_mut() {
                 let t = Instant::now();
                 let next = batch_reader.next();
+
+                let read_duration = t.elapsed();
+
+                self.min_read_duration = self.min_read_duration.min(read_duration);
+                self.max_read_duration = self.max_read_duration.max(read_duration);
+                self.total_read_duration = self.total_read_duration + read_duration;
+
                 let stall = t.duration_since(self.last_record);
 
                 if stall > Duration::from_millis(1) {
@@ -407,7 +437,10 @@ impl<T: Storage> Stream for ParquetRecordBatchStream<T> {
                     }
                     None => {
                         self.batch_reader = None;
-                        println!("Dropped read in: {}", self.last_record.elapsed().as_secs_f64());
+                        println!(
+                            "Dropped read in: {}",
+                            self.last_record.elapsed().as_secs_f64()
+                        );
                     }
                 }
             }
@@ -424,12 +457,19 @@ impl<T: Storage> Stream for ParquetRecordBatchStream<T> {
                 false => {
                     let t = Instant::now();
                     println!(
-                        "inner stall for {:.4}s, last load: {:.4}s",
+                        "inner stall for {:.4}s, last load: {:.4}s, total read: {:.4}s, min read: {:.4}s, max read: {:.4}s",
                         t.duration_since(self.last_record).as_secs_f64(),
-                        t.duration_since(self.last_load).as_secs_f64()
+                        t.duration_since(self.last_load).as_secs_f64(),
+                        self.total_read_duration.as_secs_f64(),
+                        self.min_read_duration.as_secs_f64(),
+                        self.max_read_duration.as_secs_f64(),
                     );
                     self.last_record = t;
                     self.last_load = t;
+
+                    self.total_read_duration = Duration::from_secs(0);
+                    self.min_read_duration = Duration::from_secs(0);
+                    self.max_read_duration = Duration::from_secs(0);
 
                     match self.inner.poll_next_unpin(cx) {
                         Poll::Ready(Some(Ok(row_group))) => {
