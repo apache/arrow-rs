@@ -133,10 +133,14 @@ impl Storage for Box<dyn Storage> {
 
 pub struct FileStorage {
     file: Option<File>,
+    spawn_blocking: bool,
 }
 impl FileStorage {
-    pub fn new(file: File) -> Self {
-        Self { file: Some(file) }
+    pub fn new(file: File, spawn_blocking: bool) -> Self {
+        Self {
+            file: Some(file),
+            spawn_blocking,
+        }
     }
 
     pub async fn asyncify<F, T>(&mut self, f: F) -> Result<T>
@@ -144,20 +148,25 @@ impl FileStorage {
         F: FnOnce(&mut File) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        // let mut file = self.file.take().expect("FileStorage poisoned");
-        // let (file, result) = tokio::task::spawn_blocking(move || {
-        //     let result = f(&mut file);
-        //     (file, result)
-        // })
-        // .await
-        // .expect("background task panicked");
-        //
-        // self.file = Some(file);
-        // result
+        match self.spawn_blocking {
+            true => {
+                let mut file = self.file.take().expect("FileStorage poisoned");
+                let (file, result) = tokio::task::spawn_blocking(move || {
+                    let result = f(&mut file);
+                    (file, result)
+                })
+                .await
+                .expect("background task panicked");
 
-        // TODO: Temporary use blocking file IO in tokio worker
-        let file = self.file.as_mut().unwrap();
-        f(file)
+                self.file = Some(file);
+                result
+            }
+            false => {
+                // Use blocking file IO in tokio worker
+                let file = self.file.as_mut().unwrap();
+                f(file)
+            }
+        }
     }
 }
 
