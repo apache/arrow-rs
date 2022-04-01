@@ -51,7 +51,7 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
         } else {
             Box::new(|start: OffsetSize, end: OffsetSize| end - start)
         };
-    
+
     // start and end offsets for each substring
     let mut new_starts_ends: Vec<(OffsetSize, OffsetSize)> =
         Vec::with_capacity(array.len());
