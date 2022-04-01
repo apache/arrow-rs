@@ -35,39 +35,32 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     let data = values.as_slice();
     let zero = OffsetSize::zero();
 
-    // calculate the start offset for each substring
-    // if `start` >= 0
-    // then, count from the start of each string
-    // else, count from the end of each string
-    let new_starts: Vec<OffsetSize> = if start >= zero {
-        offsets
-            .windows(2)
-            .map(|pair| (pair[0] + start).min(pair[1]))
-            .collect()
-    } else {
-        offsets
-            .windows(2)
-            .map(|pair| (pair[1] + start).max(pair[0]))
-            .collect()
-    };
+    let cal_new_start: Box<dyn Fn(OffsetSize, OffsetSize) -> OffsetSize> = 
+        if start >= zero {
+            // count from the start of string
+            Box::new(|old_start: OffsetSize, end: OffsetSize| (old_start + start).min(end))
+        } else {
+            // count from the end of string
+            Box::new(|old_start: OffsetSize, end: OffsetSize| (end + start).max(old_start))
+        };
 
-    // count the length of each substring
-    // if `length` is given
-    // then, use it
-    // else, length is `string[new_start..].len()`
-    let new_length: Vec<OffsetSize> = if let Some(length) = length {
-        offsets[1..]
-            .iter()
-            .zip(new_starts.iter())
-            .map(|(end, start)| *(length.min(&(*end - *start))))
-            .collect()
-    } else {
-        offsets[1..]
-            .iter()
-            .zip(new_starts.iter())
-            .map(|(end, start)| *end - *start)
-            .collect()
-    };
+    let cal_new_length: Box<dyn Fn(OffsetSize, OffsetSize) -> OffsetSize> =
+        if let Some(length) = length {
+            Box::new(|start: OffsetSize, end: OffsetSize| (*length).min(end - start))
+        } else {
+            Box::new(|start: OffsetSize, end: OffsetSize| end - start)
+        };
+
+    let new_starts: Vec<OffsetSize> = offsets
+        .windows(2)
+        .map(|pair| cal_new_start(pair[0], pair[1]))
+        .collect();
+
+    let new_length: Vec<OffsetSize> = offsets[1..]
+        .iter()
+        .zip(new_starts.iter())
+        .map(|(end, start)| cal_new_length(*start, *end))
+        .collect();
 
     let new_offsets: Vec<OffsetSize> = [zero]
         .iter()
