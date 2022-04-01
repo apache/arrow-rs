@@ -152,9 +152,10 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             )?;
 
             if cur_type.get_basic_info().repetition() == Repetition::REPEATED {
-                Err(ArrowError(
-                    "Reading repeated field is not supported yet!".to_string(),
-                ))
+                Err(ArrowError(format!(
+                    "Reading repeated field ({:?}) is not supported yet!",
+                    cur_type.name()
+                )))
             } else {
                 Ok(Some(reader))
             }
@@ -189,9 +190,10 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             if cur_type.get_basic_info().has_repetition()
                 && cur_type.get_basic_info().repetition() == Repetition::REPEATED
             {
-                Err(ArrowError(
-                    "Reading repeated field is not supported yet!".to_string(),
-                ))
+                Err(ArrowError(format!(
+                    "Reading repeated field ({:?}) is not supported yet!",
+                    cur_type.name(),
+                )))
             } else {
                 Ok(Some(reader))
             }
@@ -698,7 +700,12 @@ impl<'a> ArrayReaderBuilder {
                         ArrowType::Struct(fields) => {
                             field = fields.iter().find(|f| f.name() == part)
                         }
-                        ArrowType::List(list_field) => field = Some(list_field.as_ref()),
+                        ArrowType::List(list_field) => match list_field.data_type() {
+                            ArrowType::Struct(fields) => {
+                                field = fields.iter().find(|f| f.name() == part)
+                            }
+                            _ => field = Some(list_field.as_ref()),
+                        },
                         _ => field = None,
                     }
                 } else {
@@ -710,14 +717,13 @@ impl<'a> ArrayReaderBuilder {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use super::*;
     use crate::arrow::parquet_to_arrow_schema;
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::util::test_common::get_test_file;
-    use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn test_create_array_reader() {
@@ -730,7 +736,7 @@ mod tests {
             file_metadata.schema_descr(),
             file_metadata.key_value_metadata(),
         )
-            .unwrap();
+        .unwrap();
 
         let array_reader = build_array_reader(
             file_reader.metadata().file_metadata().schema_descr_ptr(),
@@ -738,7 +744,7 @@ mod tests {
             vec![0usize].into_iter(),
             Box::new(file_reader),
         )
-            .unwrap();
+        .unwrap();
 
         // Create arrow types
         let arrow_type = ArrowType::Struct(vec![Field::new(
