@@ -82,7 +82,6 @@ use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
@@ -145,19 +144,20 @@ impl FileStorage {
         F: FnOnce(&mut File) -> Result<T> + Send + 'static,
         T: Send + 'static,
     {
-        let mut file = self.file.take().expect("FileStorage poisoned");
-        let (file, result) = tokio::task::spawn_blocking(move || {
-            let result = f(&mut file);
-            (file, result)
-        })
-        .await
-        .expect("background task panicked");
+        // let mut file = self.file.take().expect("FileStorage poisoned");
+        // let (file, result) = tokio::task::spawn_blocking(move || {
+        //     let result = f(&mut file);
+        //     (file, result)
+        // })
+        // .await
+        // .expect("background task panicked");
+        //
+        // self.file = Some(file);
+        // result
 
-        self.file = Some(file);
-        result
-
-        // let file = self.file.as_mut().unwrap();
-        // f(file)
+        // TODO: Temporary use blocking file IO in tokio worker
+        let file = self.file.as_mut().unwrap();
+        f(file)
     }
 }
 
@@ -187,28 +187,12 @@ impl Storage for FileStorage {
             let result = ranges
                 .into_iter()
                 .map(|range| {
-                    let a = Instant::now();
-
                     file.seek(SeekFrom::Start(range.start as u64))?;
                     let len = range.end - range.start;
 
-                    let b = Instant::now();
-
                     let mut buffer = Vec::with_capacity(len);
-
-                    let c = Instant::now();
-
                     let mut take = file.try_clone()?.take(len as u64);
                     take.read_to_end(&mut buffer)?;
-
-                    let d = Instant::now();
-
-                    println!(
-                        "Seek: {}s, Allocation: {}s, Read: {}s",
-                        b.duration_since(a).as_secs_f64(),
-                        c.duration_since(b).as_secs_f64(),
-                        d.duration_since(c).as_secs_f64()
-                    );
 
                     Ok(ByteBufferPtr::new(buffer))
                 })
@@ -350,11 +334,6 @@ impl<T: Storage> ParquetRecordBatchStreamBuilder<T> {
             batch_reader: None,
             batch_size: self.batch_size,
             schema: self.schema,
-            last_record: Instant::now(),
-            last_load: Instant::now(),
-            total_read_duration: Default::default(),
-            max_read_duration: Default::default(),
-            min_read_duration: Default::default(),
         })
     }
 }
@@ -370,16 +349,6 @@ pub struct ParquetRecordBatchStream<T: Storage> {
     inner: Peekable<RowGroupStream<T>>,
 
     batch_reader: Option<ParquetRecordBatchReader>,
-
-    last_record: Instant,
-
-    last_load: Instant,
-
-    total_read_duration: Duration,
-
-    max_read_duration: Duration,
-
-    min_read_duration: Duration,
 }
 
 impl<T: Storage> std::fmt::Debug for ParquetRecordBatchStream<T> {
@@ -401,7 +370,10 @@ impl<T: Storage> ParquetRecordBatchStream<T> {
 impl<T: Storage> Stream for ParquetRecordBatchStream<T> {
     type Item = Result<RecordBatch>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
         loop {
             if self.error {
                 return Poll::Pending;
@@ -412,95 +384,52 @@ impl<T: Storage> Stream for ParquetRecordBatchStream<T> {
 
             // Fetch records from batch reader if any available
             if let Some(batch_reader) = self.batch_reader.as_mut() {
-                let t = Instant::now();
-                let next = batch_reader.next();
-
-                let read_duration = t.elapsed();
-
-                self.min_read_duration = self.min_read_duration.min(read_duration);
-                self.max_read_duration = self.max_read_duration.max(read_duration);
-                self.total_read_duration = self.total_read_duration + read_duration;
-
-                let stall = t.duration_since(self.last_record);
-
-                if stall > Duration::from_millis(1) {
-                    println!("outer stall for {:.4}s", stall.as_secs_f64());
-                }
-
-                // TODO: Temporary
-                self.last_record = Instant::now();
-                match next {
+                match batch_reader.next() {
                     Some(Ok(batch)) => return Poll::Ready(Some(Ok(batch))),
                     Some(Err(e)) => {
                         self.error = true;
-                        return Poll::Ready(Some(Err(ParquetError::ArrowError(e.to_string()))));
+                        return Poll::Ready(Some(Err(ParquetError::ArrowError(
+                            e.to_string(),
+                        ))));
                     }
                     None => {
                         self.batch_reader = None;
-                        println!(
-                            "Dropped read in: {}",
-                            self.last_record.elapsed().as_secs_f64()
-                        );
                     }
                 }
             }
 
-            println!(
-                "Inner Pending: {}, {:.4}s",
-                inner_pending,
-                self.last_record.elapsed().as_secs_f64()
-            );
-
             // Batch reader is exhausted, need to wait for inner
             match inner_pending {
                 true => return Poll::Pending,
-                false => {
-                    let t = Instant::now();
-                    println!(
-                        "inner stall for {:.4}s, last load: {:.4}s, total read: {:.4}s, min read: {:.4}s, max read: {:.4}s",
-                        t.duration_since(self.last_record).as_secs_f64(),
-                        t.duration_since(self.last_load).as_secs_f64(),
-                        self.total_read_duration.as_secs_f64(),
-                        self.min_read_duration.as_secs_f64(),
-                        self.max_read_duration.as_secs_f64(),
-                    );
-                    self.last_record = t;
-                    self.last_load = t;
+                false => match self.inner.poll_next_unpin(cx) {
+                    Poll::Ready(Some(Ok(row_group))) => {
+                        let inner = self.inner.get_ref();
 
-                    self.total_read_duration = Duration::from_secs(0);
-                    self.min_read_duration = Duration::from_secs(0);
-                    self.max_read_duration = Duration::from_secs(0);
+                        let parquet_schema =
+                            inner.metadata.file_metadata().schema_descr_ptr();
 
-                    match self.inner.poll_next_unpin(cx) {
-                        Poll::Ready(Some(Ok(row_group))) => {
-                            let start = Instant::now();
+                        let array_reader = build_array_reader(
+                            parquet_schema,
+                            self.schema.clone(),
+                            inner.columns.iter().cloned(),
+                            Box::new(row_group),
+                        )?;
 
-                            let inner = self.inner.get_ref();
-
-                            let parquet_schema = inner.metadata.file_metadata().schema_descr_ptr();
-
-                            let array_reader = build_array_reader(
-                                parquet_schema,
-                                self.schema.clone(),
-                                inner.columns.iter().cloned(),
-                                Box::new(row_group),
-                            )?;
-
-                            self.batch_reader = Some(
-                                ParquetRecordBatchReader::try_new(self.batch_size, array_reader)
-                                    .expect("reader"),
-                            );
-
-                            println!("Build reader in {:.4}s", start.elapsed().as_secs_f64());
-                        }
-                        Poll::Ready(Some(Err(e))) => {
-                            self.error = true;
-                            return Poll::Ready(Some(Err(e)));
-                        }
-                        Poll::Ready(None) => return Poll::Ready(None),
-                        Poll::Pending => unreachable!("contents peeked"),
+                        self.batch_reader = Some(
+                            ParquetRecordBatchReader::try_new(
+                                self.batch_size,
+                                array_reader,
+                            )
+                            .expect("reader"),
+                        );
                     }
-                }
+                    Poll::Ready(Some(Err(e))) => {
+                        self.error = true;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    Poll::Ready(None) => return Poll::Ready(None),
+                    Poll::Pending => unreachable!("contents peeked"),
+                },
             }
         }
     }
@@ -526,7 +455,10 @@ enum RowGroupStreamState<T> {
 impl<T: Storage> Stream for RowGroupStream<T> {
     type Item = Result<InMemoryRowGroup>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
         loop {
             match &mut self.state {
                 RowGroupStreamState::Init(storage) => {
