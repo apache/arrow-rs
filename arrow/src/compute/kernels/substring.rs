@@ -35,14 +35,15 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     let data = values.as_slice();
     let zero = OffsetSize::zero();
 
-    let cal_new_start: Box<dyn Fn(OffsetSize, OffsetSize) -> OffsetSize> = 
-        if start >= zero {
-            // count from the start of string
-            Box::new(|old_start: OffsetSize, end: OffsetSize| (old_start + start).min(end))
-        } else {
-            // count from the end of string
-            Box::new(|old_start: OffsetSize, end: OffsetSize| (end + start).max(old_start))
-        };
+    let cal_new_start: Box<dyn Fn(OffsetSize, OffsetSize) -> OffsetSize> = if start
+        >= zero
+    {
+        // count from the start of string
+        Box::new(|old_start: OffsetSize, end: OffsetSize| (old_start + start).min(end))
+    } else {
+        // count from the end of string
+        Box::new(|old_start: OffsetSize, end: OffsetSize| (end + start).max(old_start))
+    };
 
     let cal_new_length: Box<dyn Fn(OffsetSize, OffsetSize) -> OffsetSize> =
         if let Some(length) = length {
@@ -50,42 +51,34 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
         } else {
             Box::new(|start: OffsetSize, end: OffsetSize| end - start)
         };
+    
+    // start and end offsets for each substring
+    let mut new_starts_ends: Vec<(OffsetSize, OffsetSize)> =
+        Vec::with_capacity(array.len());
+    let mut new_offsets: Vec<OffsetSize> = Vec::with_capacity(array.len() + 1);
+    let mut len_so_far = zero;
+    new_offsets.push(zero);
 
-    let new_starts: Vec<OffsetSize> = offsets
-        .windows(2)
-        .map(|pair| cal_new_start(pair[0], pair[1]))
-        .collect();
-
-    let new_length: Vec<OffsetSize> = offsets[1..]
-        .iter()
-        .zip(new_starts.iter())
-        .map(|(end, start)| cal_new_length(*start, *end))
-        .collect();
-
-    let new_offsets: Vec<OffsetSize> = [zero]
-        .iter()
-        .copied()
-        .chain(new_length.iter().scan(zero, |len_so_far, &len| {
-            *len_so_far += len;
-            Some(*len_so_far)
-        }))
-        .collect();
+    offsets.windows(2).for_each(|pair| {
+        let new_start = cal_new_start(pair[0], pair[1]);
+        let new_length = cal_new_length(new_start, pair[1]);
+        len_so_far += new_length;
+        new_starts_ends.push((new_start, new_start + new_length));
+        new_offsets.push(len_so_far);
+    });
 
     // concatenate substrings into a buffer
-    let new_values = {
-        let mut new_values =
-            MutableBuffer::new(new_offsets.last().unwrap().to_usize().unwrap());
-        new_starts
-            .iter()
-            .zip(new_length.iter())
-            .map(|(start, length)| {
-                let start = start.to_usize().unwrap();
-                let length = length.to_usize().unwrap();
-                &data[start..start + length]
-            })
-            .for_each(|slice| new_values.extend_from_slice(slice));
-        new_values
-    };
+    let mut new_values =
+        MutableBuffer::new(new_offsets.last().unwrap().to_usize().unwrap());
+
+    new_starts_ends
+        .iter()
+        .map(|(start, end)| {
+            let start = start.to_usize().unwrap();
+            let end = end.to_usize().unwrap();
+            &data[start..end]
+        })
+        .for_each(|slice| new_values.extend_from_slice(slice));
 
     let data = unsafe {
         ArrayData::new_unchecked(
