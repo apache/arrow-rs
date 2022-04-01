@@ -159,7 +159,7 @@ impl MapArray {
     /// Creates map array from provided keys, values and entry_offsets.
     pub fn new_from_strings<'a>(
         keys: impl Iterator<Item = &'a str>,
-        values: ArrayData,
+        values: &dyn Array,
         entry_offsets: &[u32],
     ) -> Result<Self, ArrowError> {
         let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
@@ -174,7 +174,7 @@ impl MapArray {
 
         let entry_struct = StructArray::from(vec![
             (keys_field, Arc::new(keys_data) as ArrayRef),
-            (values_field, make_array(values)),
+            (values_field, make_array(values.data().clone())),
         ]);
 
         let map_data_type = DataType::Map(
@@ -473,13 +473,7 @@ mod tests {
     #[test]
     fn test_new_from_strings() {
         let keys = vec!["a", "b", "c", "d", "e", "f", "g", "h"];
-        let values_data = ArrayData::builder(DataType::UInt32)
-            .len(8)
-            .add_buffer(Buffer::from(
-                &[0u32, 10, 20, 30, 40, 50, 60, 70].to_byte_slice(),
-            ))
-            .build()
-            .unwrap();
+        let values_data = UInt32Array::from(vec![0u32, 10, 20, 30, 40, 50, 60, 70]);
 
         // Construct a buffer for value offsets, for the nested array:
         //  [[a, b, c], [d, e, f], [g, h]]
@@ -487,13 +481,16 @@ mod tests {
 
         let map_array = MapArray::new_from_strings(
             keys.clone().into_iter(),
-            values_data.clone(),
+            &values_data,
             &entry_offsets,
         )
         .unwrap();
 
         let values = map_array.values();
-        assert_eq!(&values_data, values.data());
+        assert_eq!(
+            &values_data,
+            values.as_any().downcast_ref::<UInt32Array>().unwrap()
+        );
         assert_eq!(DataType::UInt32, map_array.value_type());
         assert_eq!(3, map_array.len());
         assert_eq!(0, map_array.null_count());
