@@ -38,7 +38,8 @@
 //!
 //! let file = File::open("test/data/basic.json").unwrap();
 //!
-//! let mut json = json::Reader::new(BufReader::new(file), Arc::new(schema), 1024, None, None);
+//! let mut json = json::Reader::new(BufReader::new(file), Arc::new(schema), 1024,
+//! Default::default());
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 
@@ -564,7 +565,7 @@ where
 ///     BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
 /// let inferred_schema = infer_json_schema(&mut reader, None).unwrap();
 /// let batch_size = 1024;
-/// let decoder = Decoder::new(Arc::new(inferred_schema), batch_size, None, None);
+/// let decoder = Decoder::new(Arc::new(inferred_schema), batch_size, Default::default());
 ///
 /// // seek back to start so that the original file is usable again
 /// reader.seek(SeekFrom::Start(0)).unwrap();
@@ -578,6 +579,14 @@ pub struct Decoder {
     /// Explicit schema for the JSON file
     schema: SchemaRef,
     /// Optional projection for which columns to load (case-sensitive names)
+    batch_size: usize,
+    /// This is a collection of options for json decoder
+    doptions: DecoderOptions,
+}
+
+#[derive(Default, Debug)]
+pub struct DecoderOptions {
+    /// Optional projection for which columns to load (case-sensitive names)
     projection: Option<Vec<String>>,
     /// optional HashMap of column names to its format string
     format_strings: Option<HashMap<String, String>>,
@@ -586,24 +595,18 @@ pub struct Decoder {
 impl Decoder {
     /// Create a new JSON decoder from any value that implements the `Iterator<Item=Result<Value>>`
     /// trait.
-    pub fn new(
-        schema: SchemaRef,
-        batch_size: usize,
-        projection: Option<Vec<String>>,
-        format_strings: Option<HashMap<String, String>>,
-    ) -> Self {
+    pub fn new(schema: SchemaRef, batch_size: usize, doptions: DecoderOptions) -> Self {
         Self {
             schema,
-            projection,
             batch_size,
-            format_strings,
+            doptions,
         }
     }
 
     /// Returns the schema of the reader, useful for getting the schema without reading
     /// record batches
     pub fn schema(&self) -> SchemaRef {
-        match &self.projection {
+        match &self.doptions.projection {
             Some(projection) => {
                 let fields = self.schema.fields();
                 let projected_fields: Vec<Field> = fields
@@ -648,7 +651,7 @@ impl Decoder {
         }
 
         let rows = &rows[..];
-        let projection = self.projection.clone().unwrap_or_default();
+        let projection = self.doptions.projection.clone().unwrap_or_default();
         let arrays = self.build_struct_array(rows, self.schema.fields(), &projection);
 
         let projected_fields: Vec<Field> = if projection.is_empty() {
@@ -926,6 +929,7 @@ impl Decoder {
         T::Native: num::NumCast,
     {
         let format_string = self
+            .doptions
             .format_strings
             .as_ref()
             .and_then(|fmts| fmts.get(col_name));
@@ -1551,16 +1555,9 @@ impl<R: Read> Reader<R> {
         reader: R,
         schema: SchemaRef,
         batch_size: usize,
-        projection: Option<Vec<String>>,
-        format_strings: Option<HashMap<String, String>>,
+        doptions: DecoderOptions,
     ) -> Self {
-        Self::from_buf_reader(
-            BufReader::new(reader),
-            schema,
-            batch_size,
-            projection,
-            format_strings,
-        )
+        Self::from_buf_reader(BufReader::new(reader), schema, batch_size, doptions)
     }
 
     /// Create a new JSON Reader from a `BufReader<R: Read>`
@@ -1570,12 +1567,11 @@ impl<R: Read> Reader<R> {
         reader: BufReader<R>,
         schema: SchemaRef,
         batch_size: usize,
-        projection: Option<Vec<String>>,
-        format_strings: Option<HashMap<String, String>>,
+        doptions: DecoderOptions,
     ) -> Self {
         Self {
             reader,
-            decoder: Decoder::new(schema, batch_size, projection, format_strings),
+            decoder: Decoder::new(schema, batch_size, doptions),
         }
     }
 
@@ -1710,8 +1706,10 @@ impl ReaderBuilder {
             buf_reader,
             schema,
             self.batch_size,
-            self.projection,
-            self.format_strings,
+            DecoderOptions {
+                projection: self.projection,
+                format_strings: self.format_strings,
+            },
         ))
     }
 }
@@ -1866,8 +1864,7 @@ mod tests {
             File::open("test/data/basic.json").unwrap(),
             Arc::new(schema.clone()),
             1024,
-            None,
-            None,
+            Default::default(),
         );
         let reader_schema = reader.schema();
         assert_eq!(reader_schema, Arc::new(schema));
@@ -1918,8 +1915,10 @@ mod tests {
             File::open("test/data/basic.json").unwrap(),
             schema.clone(),
             1024,
-            None,
-            Some(fmts),
+            DecoderOptions {
+                format_strings: Some(fmts),
+                ..Default::default()
+            },
         );
         let reader_schema = reader.schema();
         assert_eq!(reader_schema, schema);
@@ -1952,8 +1951,10 @@ mod tests {
             File::open("test/data/basic.json").unwrap(),
             Arc::new(schema),
             1024,
-            Some(vec!["a".to_string(), "c".to_string()]),
-            None,
+            DecoderOptions {
+                projection: Some(vec!["a".to_string(), "c".to_string()]),
+                ..Default::default()
+            },
         );
         let reader_schema = reader.schema();
         let expected_schema = Arc::new(Schema::new(vec![
@@ -2121,7 +2122,7 @@ mod tests {
 
         let reader = BufReader::new(GzDecoder::new(&file));
         let mut reader =
-            Reader::from_buf_reader(reader, Arc::new(schema), 64, None, None);
+            Reader::from_buf_reader(reader, Arc::new(schema), 64, Default::default());
         let batch_gz = reader.next().unwrap().unwrap();
 
         for batch in vec![batch, batch_gz] {
@@ -3162,7 +3163,7 @@ mod tests {
             true,
         )]);
 
-        let decoder = Decoder::new(Arc::new(schema), 1024, None, None);
+        let decoder = Decoder::new(Arc::new(schema), 1024, Default::default());
         let batch = decoder
             .next_batch(
                 &mut vec![
@@ -3197,7 +3198,7 @@ mod tests {
             true,
         )]);
 
-        let decoder = Decoder::new(Arc::new(schema), 1024, None, None);
+        let decoder = Decoder::new(Arc::new(schema), 1024, Default::default());
         let batch = decoder
             .next_batch(
                 // NOTE: total struct element count needs to be greater than
@@ -3226,7 +3227,7 @@ mod tests {
     #[test]
     fn test_json_read_binary_structs() {
         let schema = Schema::new(vec![Field::new("c1", DataType::Binary, true)]);
-        let decoder = Decoder::new(Arc::new(schema), 1024, None, None);
+        let decoder = Decoder::new(Arc::new(schema), 1024, Default::default());
         let batch = decoder
             .next_batch(
                 &mut vec![
