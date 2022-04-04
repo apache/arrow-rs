@@ -44,7 +44,7 @@ flight-sql-experimental = ["prost-types"]
 [dev-dependencies]
 
 [build-dependencies]
-tonic-build = "0.6"
+tonic-build = "0.7"
 # Pin specific version of the tonic-build dependencies to avoid auto-generated
 # (and checked in) arrow.flight.protocol.rs from changing
 proc-macro2 = ">1.0.30"
