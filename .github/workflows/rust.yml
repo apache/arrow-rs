@@ -54,15 +54,9 @@ jobs:
           # and thus are specific for a particular OS, arch and rust version.
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}-
-      - name: Setup Build Dependencies
-        run: |
-          apt-get update
-          apt-get install -y protobuf-compiler
-      - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
+      - uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
 
       - name: Build Workspace
         run: |
