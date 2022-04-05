@@ -56,7 +56,8 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}-
       - name: Setup Build Dependencies
         run: |
-          apt-get install cmake
+          apt-get update
+          apt-get install cmake protobuf-compiler
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
