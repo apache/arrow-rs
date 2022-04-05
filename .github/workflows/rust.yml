@@ -38,6 +38,8 @@ jobs:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
+        CARGO_HOME: "/github/home/.cargo"
+        CARGO_TARGET_DIR: "/github/home/target"
     steps:
       - uses: actions/checkout@v2
       - name: Cache Cargo
@@ -62,8 +64,6 @@ jobs:
 
       - name: Build Workspace
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cargo build
 
   # test the crate
@@ -83,6 +83,8 @@ jobs:
         RUSTFLAGS: "-C debuginfo=1"
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
         PARQUET_TEST_DATA: /__w/arrow-rs/arrow-rs/parquet-testing/data
+        CARGO_HOME: "/github/home/.cargo"
+        CARGO_TARGET_DIR: "/github/home/target"
     steps:
       - uses: actions/checkout@v2
         with:
@@ -106,9 +108,6 @@ jobs:
           rustup component add rustfmt
       - name: Run tests
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-
           # run tests on all workspace members with default feature list
           cargo test
 
@@ -150,6 +149,8 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
+        CARGO_HOME: "/github/home/.cargo"
+        CARGO_TARGET_DIR: "/github/home/target"
     steps:
       - uses: actions/checkout@v2
         with:
@@ -171,14 +172,10 @@ jobs:
           rustup component add rustfmt
       - name: Run tests
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cd arrow
           cargo test --features "simd"
       - name: Check new project build with simd features
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cd arrow/test/dependency/simd
           cargo check
 
@@ -223,6 +220,8 @@ jobs:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
+        CARGO_HOME: "/github/home/.cargo"
+        CARGO_TARGET_DIR: "/github/home/target"
     steps:
       - uses: actions/checkout@v2
         with:
@@ -246,8 +245,6 @@ jobs:
           rustup component add rustfmt clippy
       - name: Run clippy
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
 
   check_benches:
@@ -263,6 +260,8 @@ jobs:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
+        CARGO_HOME: "/github/home/.cargo"
+        CARGO_TARGET_DIR: "/github/home/target"
     steps:
       - uses: actions/checkout@v2
         with:
@@ -286,8 +285,6 @@ jobs:
           rustup component add rustfmt clippy
       - name: Check benchmarks
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cargo check --benches --workspace
 
   lint:
@@ -365,6 +362,8 @@ jobs:
         RUSTFLAGS: "-C debuginfo=1"
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
         PARQUET_TEST_DATA: /__w/arrow/arrow/parquet-testing/data
+        CARGO_HOME: "/github/home/.cargo"
+        CARGO_TARGET_DIR: "/github/home/target"
     steps:
       - uses: actions/checkout@v2
         with:
@@ -388,8 +387,6 @@ jobs:
           rustup target add wasm32-wasi
       - name: Build arrow crate
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cd arrow
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
@@ -408,6 +405,8 @@ jobs:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
+        CARGO_HOME: "/github/home/.cargo"
+        CARGO_TARGET_DIR: "/github/home/target"
     steps:
       - uses: actions/checkout@v2
         with:
@@ -433,8 +432,6 @@ jobs:
           rustup component add rustfmt
       - name: Run cargo doc
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           export RUSTDOCFLAGS="-Dwarnings"
           cargo doc --document-private-items --no-deps --workspace --all-features
 
@@ -452,6 +449,8 @@ jobs:
       env:
         # Disable debug symbol generation to speed up CI build and keep memory down
         RUSTFLAGS: "-C debuginfo=0"
+        CARGO_HOME: "/github/home/.cargo"
+        CARGO_TARGET_DIR: "/github/home/target"
     steps:
       - uses: actions/checkout@v2
       - name: Cache Cargo
@@ -473,19 +472,13 @@ jobs:
           rustup component add rustfmt
       - name: Arrow Build with default features
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cd arrow/test/dependency/default-features
           cargo check
       - name: Arrow Build with default-features=false
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cd arrow/test/dependency/no-default-features
           cargo check
       - name: Parquet Derive build with default-features
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cd parquet_derive/test/dependency/default-features
           cargo check
