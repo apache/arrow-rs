@@ -54,10 +54,10 @@ jobs:
           # and thus are specific for a particular OS, arch and rust version.
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}-
-      - uses: ./.github/actions/setup-builder
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
-
       - name: Build Workspace
         run: |
           export CARGO_HOME="/github/home/.cargo"
@@ -97,11 +97,13 @@ jobs:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
+        # Setup rust toochain and environment requirements
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
           export CARGO_HOME="/github/home/.cargo"
@@ -163,10 +165,9 @@ jobs:
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
           export CARGO_HOME="/github/home/.cargo"
@@ -194,10 +195,9 @@ jobs:
       # TODO: this won't cache anything, which is expensive. Setup this action
       # with a OS-dependent path.
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Run tests
         shell: bash
         run: |
@@ -238,10 +238,9 @@ jobs:
           # this key equals the ones on `linux-build-lib` for re-use
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt clippy
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Run clippy
         run: |
           export CARGO_HOME="/github/home/.cargo"
@@ -278,10 +277,9 @@ jobs:
           # this key equals the ones on `linux-build-lib` for re-use
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt clippy
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Check benchmarks
         run: |
           export CARGO_HOME="/github/home/.cargo"
@@ -315,10 +313,9 @@ jobs:
         with:
           submodules: true
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt clippy
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Cache Cargo
         uses: actions/cache@v2
         with:
@@ -377,7 +374,7 @@ jobs:
         with:
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-wasm32-cache3-${{ matrix.rust }}
-      - name: Setup Rust toolchain
+      - name: Setup Rust toolchain for wasm
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup override set ${{ matrix.rust }}
@@ -425,10 +422,9 @@ jobs:
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Run cargo doc
         run: |
           export CARGO_HOME="/github/home/.cargo"
@@ -465,10 +461,9 @@ jobs:
           # this key equals the ones on `linux-build-lib` for re-use
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup override set ${{ matrix.rust }}
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Arrow Build with default features
         run: |
           export CARGO_HOME="/github/home/.cargo"
