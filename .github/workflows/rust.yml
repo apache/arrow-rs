@@ -97,9 +97,6 @@ jobs:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
-        # Setup rust toochain and environment requirements
-        with:
-          rust-version: ${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -374,7 +371,7 @@ jobs:
         with:
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-wasm32-cache3-${{ matrix.rust }}
-      - name: Setup Rust toolchain for wasm
+      - name: Setup Rust toolchain for WASM
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup override set ${{ matrix.rust }}
