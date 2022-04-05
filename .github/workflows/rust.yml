@@ -57,7 +57,7 @@ jobs:
       - name: Setup Build Dependencies
         run: |
           apt-get update
-          apt-get install -y cmake protobuf-compiler
+          apt-get install -y protobuf-compiler
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
