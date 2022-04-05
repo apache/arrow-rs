@@ -235,10 +235,12 @@ jobs:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
-      - name: Setup Rust Clippy toolchain
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
+      - name: Setup Clippy
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
           rustup component add rustfmt clippy
       - name: Run clippy
         run: |
