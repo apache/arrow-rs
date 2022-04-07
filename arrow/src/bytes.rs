@@ -32,8 +32,9 @@ use crate::alloc::Deallocation;
 ///
 /// In the most common case, this buffer is allocated using [`allocate_aligned`](crate::alloc::allocate_aligned)
 /// and deallocated accordingly [`free_aligned`](crate::alloc::free_aligned).
-/// When the region is allocated by an foreign allocator, [Deallocation::Foreign], this calls the
-/// foreign deallocator to deallocate the region when it is no longer needed.
+///
+/// When the region is allocated by a different allocator, [Deallocation::Custom], this calls the
+/// custom deallocator to deallocate the region when it is no longer needed.
 pub struct Bytes {
     /// The raw pointer to be beginning of the region
     ptr: NonNull<u8>,
