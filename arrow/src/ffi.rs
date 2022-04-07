@@ -538,7 +538,8 @@ unsafe fn create_buffer(
     assert!(index < array.n_buffers as usize);
     let ptr = *buffers.add(index);
 
-    NonNull::new(ptr as *mut u8).map(|ptr| Buffer::from_unowned(ptr, len, owner))
+    NonNull::new(ptr as *mut u8)
+        .map(|ptr| Buffer::from_custom_allocation(ptr, len, owner))
 }
 
 fn create_child(
