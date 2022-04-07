@@ -295,6 +295,7 @@ impl Drop for FFI_ArrowSchema {
 
 // returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 // This is set by the Arrow specification
+#[allow(clippy::manual_bits)]
 fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
     Ok(match (data_type, i) {
         // the null buffer is bit sized
