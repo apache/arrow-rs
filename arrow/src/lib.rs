@@ -142,6 +142,7 @@ pub mod csv;
 pub mod datatypes;
 pub mod error;
 pub mod ffi;
+pub mod ffi_stream;
 #[cfg(feature = "ipc")]
 pub mod ipc;
 pub mod json;

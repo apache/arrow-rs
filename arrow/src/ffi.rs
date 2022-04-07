@@ -138,15 +138,15 @@ bitflags! {
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ArrowSchema {
-    format: *const c_char,
-    name: *const c_char,
-    metadata: *const c_char,
-    flags: i64,
-    n_children: i64,
-    children: *mut *mut FFI_ArrowSchema,
-    dictionary: *mut FFI_ArrowSchema,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
-    private_data: *mut c_void,
+    pub(crate) format: *const c_char,
+    pub(crate) name: *const c_char,
+    pub(crate) metadata: *const c_char,
+    pub(crate) flags: i64,
+    pub(crate) n_children: i64,
+    pub(crate) children: *mut *mut FFI_ArrowSchema,
+    pub(crate) dictionary: *mut FFI_ArrowSchema,
+    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
+    pub(crate) private_data: *mut c_void,
 }
 
 struct SchemaPrivateData {
@@ -373,15 +373,15 @@ pub struct FFI_ArrowArray {
     pub(crate) n_buffers: i64,
     pub(crate) n_children: i64,
     pub(crate) buffers: *mut *const c_void,
-    children: *mut *mut FFI_ArrowArray,
-    dictionary: *mut FFI_ArrowArray,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+    pub(crate) children: *mut *mut FFI_ArrowArray,
+    pub(crate) dictionary: *mut FFI_ArrowArray,
+    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
     // When exported, this MUST contain everything that is owned by this array.
     // for example, any buffer pointed to in `buffers` must be here, as well
     // as the `buffers` pointer itself.
     // In other words, everything in [FFI_ArrowArray] must be owned by
     // `private_data` and can assume that they do not outlive `private_data`.
-    private_data: *mut c_void,
+    pub(crate) private_data: *mut c_void,
 }
 
 impl Drop for FFI_ArrowArray {
@@ -425,7 +425,7 @@ impl FFI_ArrowArray {
     /// # Safety
     /// This method releases `buffers`. Consumers of this struct *must* call `release` before
     /// releasing this struct, or contents in `buffers` leak.
-    pub(crate) fn new(data: &ArrayData) -> Self {
+    pub fn new(data: &ArrayData) -> Self {
         // * insert the null buffer at the start
         // * make all others `Option<Buffer>`.
         let buffers = iter::once(data.null_buffer().cloned())
@@ -736,8 +736,8 @@ pub trait ArrowArrayRef {
 /// Furthermore, this struct assumes that the incoming data agrees with the C data interface.
 #[derive(Debug)]
 pub struct ArrowArray {
-    array: Arc<FFI_ArrowArray>,
-    schema: Arc<FFI_ArrowSchema>,
+    pub(crate) array: Arc<FFI_ArrowArray>,
+    pub(crate) schema: Arc<FFI_ArrowSchema>,
 }
 
 #[derive(Debug)]

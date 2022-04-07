@@ -2117,7 +2117,10 @@ impl UnionBuilder {
         let mut field_data = match self.fields.remove(&type_name) {
             Some(data) => data,
             None => match self.value_offset_builder {
-                Some(_) => FieldData::new(self.fields.len() as i8, T::DATA_TYPE, None),
+                Some(_) => {
+                    // For Dense Union, we don't build bitmap in individual field
+                    FieldData::new(self.fields.len() as i8, T::DATA_TYPE, None)
+                }
                 None => {
                     let mut fd = FieldData::new(
                         self.fields.len() as i8,

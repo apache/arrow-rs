@@ -1,3 +1,5 @@
+#!/bin/bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,26 +16,30 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-[package]
-name = "arrow-pyarrow-integration-testing"
-description = ""
-version = "11.1.0"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = [ "arrow" ]
-edition = "2021"
-rust-version = "1.57"
+# This script removes all but the most recent versions of arrow-rs
+# from svn
+#
+# The older versions are in SVN history as well as available on the
+# archive page https://archive.apache.org/dist/
+#
+# See
+# https://infra.apache.org/release-download-pages.html
 
-[lib]
-name = "arrow_pyarrow_integration_testing"
-crate-type = ["cdylib"]
+set -e
+set -u
 
-[dependencies]
-arrow = { path = "../arrow", version = "11.1.0", features = ["pyarrow"] }
-pyo3 = { version = "0.16", features = ["extension-module"] }
+svn_base="https://dist.apache.org/repos/dist/release/arrow"
 
-[package.metadata.maturin]
-requires-dist = ["pyarrow>=1"]
+echo "Remove all but the most recent version"
+old_releases=$(
+  svn ls ${svn_base} | \
+  grep -E '^arrow-rs-[0-9\.]+' | \
+  sort --version-sort --reverse | \
+  tail -n +2
+)
+for old_release_version in $old_releases; do
+  echo "Remove old release ${old_release_version}"
+  svn delete -m "Removing ${old_release_version}" ${svn_base}/${old_release_version}
+done

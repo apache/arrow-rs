@@ -15,25 +15,25 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "arrow-pyarrow-integration-testing"
-description = ""
-version = "11.1.0"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = [ "arrow" ]
-edition = "2021"
-rust-version = "1.57"
-
-[lib]
-name = "arrow_pyarrow_integration_testing"
-crate-type = ["cdylib"]
-
-[dependencies]
-arrow = { path = "../arrow", version = "11.1.0", features = ["pyarrow"] }
-pyo3 = { version = "0.16", features = ["extension-module"] }
-
-[package.metadata.maturin]
-requires-dist = ["pyarrow>=1"]
+name: Prepare Rust Builder
+description: 'Prepare Rust Build Environment'
+inputs:
+  rust-version:
+    description: 'version of rust to install (e.g. stable)'
+    required: true
+    default: 'stable'
+runs:
+  using: "composite"
+  steps:
+    - name: Install Build Dependencies
+      shell: bash
+      run: |
+        apt-get update
+        apt-get install -y protobuf-compiler
+    - name: Setup Rust toolchain
+      shell: bash
+      run: |
+        echo "Installing ${{ inputs.rust-version }}"
+        rustup toolchain install ${{ inputs.rust-version }}
+        rustup default ${{ inputs.rust-version }}
+        rustup component add rustfmt

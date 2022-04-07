@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::datatypes::DataType;
 use crate::{
     array::ArrayData,
     array::{data::count_nulls, OffsetSizeTrait},
@@ -22,7 +23,9 @@ use crate::{
     util::bit_util::get_bit,
 };
 
-use super::{equal_range, utils::child_logical_null_buffer};
+use super::{
+    equal_range, equal_values, utils::child_logical_null_buffer, utils::equal_nulls,
+};
 
 fn lengths_equal<T: OffsetSizeTrait>(lhs: &[T], rhs: &[T]) -> bool {
     // invariant from `base_equal`
@@ -58,22 +61,47 @@ fn offset_value_equal<T: OffsetSizeTrait>(
     lhs_pos: usize,
     rhs_pos: usize,
     len: usize,
+    data_type: &DataType,
 ) -> bool {
     let lhs_start = lhs_offsets[lhs_pos].to_usize().unwrap();
     let rhs_start = rhs_offsets[rhs_pos].to_usize().unwrap();
     let lhs_len = lhs_offsets[lhs_pos + len] - lhs_offsets[lhs_pos];
     let rhs_len = rhs_offsets[rhs_pos + len] - rhs_offsets[rhs_pos];
 
-    lhs_len == rhs_len
-        && equal_range(
-            lhs_values,
-            rhs_values,
-            lhs_nulls,
-            rhs_nulls,
-            lhs_start,
-            rhs_start,
-            lhs_len.to_usize().unwrap(),
-        )
+    lhs_len == rhs_len && {
+        match data_type {
+            DataType::Map(_, _) => {
+                // Don't use `equal_range` which calls `utils::base_equal` that checks
+                // struct fields, but we don't enforce struct field names.
+                equal_nulls(
+                    lhs_values,
+                    rhs_values,
+                    lhs_nulls,
+                    rhs_nulls,
+                    lhs_start,
+                    rhs_start,
+                    lhs_len.to_usize().unwrap(),
+                ) && equal_values(
+                    lhs_values,
+                    rhs_values,
+                    lhs_nulls,
+                    rhs_nulls,
+                    lhs_start,
+                    rhs_start,
+                    lhs_len.to_usize().unwrap(),
+                )
+            }
+            _ => equal_range(
+                lhs_values,
+                rhs_values,
+                lhs_nulls,
+                rhs_nulls,
+                lhs_start,
+                rhs_start,
+                lhs_len.to_usize().unwrap(),
+            ),
+        }
+    }
 }
 
 pub(super) fn list_equal<T: OffsetSizeTrait>(
@@ -131,17 +159,46 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
         lengths_equal(
             &lhs_offsets[lhs_start..lhs_start + len],
             &rhs_offsets[rhs_start..rhs_start + len],
-        ) && equal_range(
-            lhs_values,
-            rhs_values,
-            child_lhs_nulls.as_ref(),
-            child_rhs_nulls.as_ref(),
-            lhs_offsets[lhs_start].to_usize().unwrap(),
-            rhs_offsets[rhs_start].to_usize().unwrap(),
-            (lhs_offsets[lhs_start + len] - lhs_offsets[lhs_start])
-                .to_usize()
-                .unwrap(),
-        )
+        ) && {
+            match lhs.data_type() {
+                DataType::Map(_, _) => {
+                    // Don't use `equal_range` which calls `utils::base_equal` that checks
+                    // struct fields, but we don't enforce struct field names.
+                    equal_nulls(
+                        lhs_values,
+                        rhs_values,
+                        child_lhs_nulls.as_ref(),
+                        child_rhs_nulls.as_ref(),
+                        lhs_offsets[lhs_start].to_usize().unwrap(),
+                        rhs_offsets[rhs_start].to_usize().unwrap(),
+                        (lhs_offsets[lhs_start + len] - lhs_offsets[lhs_start])
+                            .to_usize()
+                            .unwrap(),
+                    ) && equal_values(
+                        lhs_values,
+                        rhs_values,
+                        child_lhs_nulls.as_ref(),
+                        child_rhs_nulls.as_ref(),
+                        lhs_offsets[lhs_start].to_usize().unwrap(),
+                        rhs_offsets[rhs_start].to_usize().unwrap(),
+                        (lhs_offsets[lhs_start + len] - lhs_offsets[lhs_start])
+                            .to_usize()
+                            .unwrap(),
+                    )
+                }
+                _ => equal_range(
+                    lhs_values,
+                    rhs_values,
+                    child_lhs_nulls.as_ref(),
+                    child_rhs_nulls.as_ref(),
+                    lhs_offsets[lhs_start].to_usize().unwrap(),
+                    rhs_offsets[rhs_start].to_usize().unwrap(),
+                    (lhs_offsets[lhs_start + len] - lhs_offsets[lhs_start])
+                        .to_usize()
+                        .unwrap(),
+                ),
+            }
+        }
     } else {
         // get a ref of the parent null buffer bytes, to use in testing for nullness
         let lhs_null_bytes = lhs_nulls.unwrap().as_slice();
@@ -166,6 +223,7 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
                         lhs_pos,
                         rhs_pos,
                         1,
+                        lhs.data_type(),
                     )
         })
     }
