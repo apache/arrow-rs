@@ -109,7 +109,7 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 ///
 /// # Warning
 ///
-/// This function **might** return in invalid utf-8 format if strings contain chars whose codepoint > `0x007F`.
+/// This function **might** return in invalid utf-8 format if the character length falls on a non-utf8 boundary.
 /// ## Example of getting an invalid substring
 /// ```
 /// # use arrow::array::StringArray;
