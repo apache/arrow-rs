@@ -115,10 +115,9 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 /// # use arrow::array::StringArray;
 /// # use arrow::compute::kernels::substring::substring;
 /// let array = StringArray::from(vec![Some("E=mc²")]);
-/// // this will panic
-/// let result2 = substring(&array, -1, &None).unwrap();
-/// let result2 = result2.as_any().downcast_ref::<StringArray>().unwrap();
-/// assert_eq!(result2.value(0).as_bytes(), &[0x00B2]); // invalid utf-8 format
+/// let result = substring(&array, -1, &None).unwrap();
+/// let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+/// assert_eq!(result.value(0).as_bytes(), &[0x00B2]); // invalid utf-8 format
 /// ```
 ///
 /// # Error
