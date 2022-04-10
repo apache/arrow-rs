@@ -1000,6 +1000,16 @@ impl<T: DataType> ColumnWriterImpl<T> {
         }
     }
 
+    fn compare_greater_byte_array_decimals(&self, a: &[u8], b: &[u8]) -> bool {
+        let mut a_bytes: Vec<u8> = a.iter().cloned().collect();
+        let mut b_bytes: Vec<u8> = b.iter().cloned().collect();
+
+        a_bytes[0] ^= 0b1000_0000;
+        b_bytes[0] ^= 0b1000_0000;
+        
+        a_bytes > b_bytes
+    }
+
     /// Evaluate `a > b` according to underlying logical type.
     fn compare_greater(&self, a: &T::T, b: &T::T) -> bool {
         if let Some(LogicalType::INTEGER(int_type)) = self.descr.logical_type() {
@@ -1009,26 +1019,33 @@ impl<T: DataType> ColumnWriterImpl<T> {
             }
         }
 
-        if let Some(LogicalType::DECIMAL(_)) = self.descr.logical_type() {
-            match self.descr.physical_type() {
-                Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
-                    let mut a_bytes: Vec<u8> = a.as_bytes().iter().cloned().collect();
-                    let mut b_bytes: Vec<u8> = b.as_bytes().iter().cloned().collect();
-
-                    a_bytes[0] ^= 0b1000_0000;
-                    b_bytes[0] ^= 0b1000_0000;
-                    return a_bytes > a_bytes;
-                }
-                _ => {}
-            };
-        }
-
         match self.descr.converted_type() {
             ConvertedType::UINT_8
             | ConvertedType::UINT_16
             | ConvertedType::UINT_32
             | ConvertedType::UINT_64 => {
                 return a.as_u64().unwrap() > b.as_u64().unwrap();
+            }
+            _ => {}
+        };
+
+        if let Some(LogicalType::DECIMAL(_)) = self.descr.logical_type() {
+            match self.descr.physical_type() {
+                Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
+                    return self.compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+                }
+                _ => {}
+            };
+        }
+
+        match self.descr.converted_type() {
+            ConvertedType::DECIMAL => {
+                match self.descr.physical_type() {
+                    Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
+                        return self.compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+                    }
+                    _ => {}
+                };
             }
             _ => {}
         };
