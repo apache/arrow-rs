@@ -18,7 +18,7 @@
 //! Contains column writer API.
 use std::{cmp, collections::VecDeque, convert::TryFrom, marker::PhantomData, sync::Arc};
 
-use crate::basic::{Compression, Encoding, LogicalType, PageType, Type};
+use crate::basic::{Compression, ConvertedType, Encoding, LogicalType, PageType, Type};
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::compression::{create_codec, Codec};
 use crate::data_type::private::ParquetValueType;
@@ -1008,6 +1008,31 @@ impl<T: DataType> ColumnWriterImpl<T> {
                 return a.as_u64().unwrap() > b.as_u64().unwrap();
             }
         }
+
+        if let Some(LogicalType::DECIMAL(_)) = self.descr.logical_type() {
+            match self.descr.physical_type() {
+                Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
+                    let mut a_bytes: Vec<u8> = a.as_bytes().iter().cloned().collect();
+                    let mut b_bytes: Vec<u8> = b.as_bytes().iter().cloned().collect();
+
+                    a_bytes[0] ^= 0b1000_0000;
+                    b_bytes[0] ^= 0b1000_0000;
+                    return a_bytes > a_bytes;
+                }
+                _ => {}
+            };
+        }
+
+        match self.descr.converted_type() {
+            ConvertedType::UINT_8
+            | ConvertedType::UINT_16
+            | ConvertedType::UINT_32
+            | ConvertedType::UINT_64 => {
+                return a.as_u64().unwrap() > b.as_u64().unwrap();
+            }
+            _ => {}
+        };
+
         a > b
     }
 }
