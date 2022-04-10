@@ -94,8 +94,33 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     Ok(make_array(data))
 }
 
-/// Returns an ArrayRef with a substring starting from `start` and with optional length `length` of each of the elements in `array`.
-/// `start` can be negative, in which case the start counts from the end of the string.
+/// Returns an ArrayRef with substrings of all the elements in `array`.
+///
+/// # Arguments
+///
+/// * `start` - The start index of all substrings.
+/// If `start >= 0`, then count from the start of the string,
+/// otherwise count from the end of the string.
+///
+/// * `length`(option) - The length of all substrings.
+/// If `length` is `None`, then the substring is from `start` to the end of the string.
+///
+/// Attention: Both `start` and `length` are counted by byte, not by char.
+///
+/// # Warning
+///
+/// This function **might** return in invalid utf-8 format if the character length falls on a non-utf8 boundary.
+/// ## Example of getting an invalid substring
+/// ```
+/// # use arrow::array::StringArray;
+/// # use arrow::compute::kernels::substring::substring;
+/// let array = StringArray::from(vec![Some("E=mc²")]);
+/// let result = substring(&array, -1, &None).unwrap();
+/// let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+/// assert_eq!(result.value(0).as_bytes(), &[0x00B2]); // invalid utf-8 format
+/// ```
+///
+/// # Error
 /// this function errors when the passed array is not a \[Large\]String array.
 pub fn substring(
     array: &dyn Array,
