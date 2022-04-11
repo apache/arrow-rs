@@ -16,9 +16,10 @@
 // under the License.
 
 use super::Buffer;
+use crate::alloc::Deallocation;
 use crate::{
     alloc,
-    bytes::{Bytes, Deallocation},
+    bytes::Bytes,
     datatypes::{ArrowNativeType, ToByteSlice},
     util::bit_util,
 };
@@ -266,7 +267,7 @@ impl MutableBuffer {
     #[inline]
     pub(super) fn into_buffer(self) -> Buffer {
         let bytes = unsafe {
-            Bytes::new(self.data, self.len, Deallocation::Native(self.capacity))
+            Bytes::new(self.data, self.len, Deallocation::Arrow(self.capacity))
         };
         std::mem::forget(self);
         Buffer::from_bytes(bytes)
@@ -538,8 +539,9 @@ impl MutableBuffer {
 
         let mut dst = buffer.data.as_ptr();
         for item in iterator {
+            let item = item?;
             // note how there is no reserve here (compared with `extend_from_iter`)
-            let src = item?.to_byte_slice().as_ptr();
+            let src = item.to_byte_slice().as_ptr();
             std::ptr::copy_nonoverlapping(src, dst, item_size);
             dst = dst.add(item_size);
         }

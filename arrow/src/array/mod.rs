@@ -454,6 +454,7 @@ pub use self::builder::BooleanBuilder;
 pub use self::builder::DecimalBuilder;
 pub use self::builder::FixedSizeBinaryBuilder;
 pub use self::builder::FixedSizeListBuilder;
+pub use self::builder::GenericListBuilder;
 pub use self::builder::GenericStringBuilder;
 pub use self::builder::LargeBinaryBuilder;
 pub use self::builder::LargeListBuilder;
@@ -521,7 +522,7 @@ pub use self::cast::{
 
 // ------------------------------ C Data Interface ---------------------------
 
-pub use self::array::make_array_from_raw;
+pub use self::array::{export_array_into_raw, make_array_from_raw};
 
 #[cfg(test)]
 mod tests {

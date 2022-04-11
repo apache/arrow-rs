@@ -25,6 +25,7 @@ use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
 };
+pub use crate::array::DecimalIter;
 use crate::buffer::Buffer;
 use crate::datatypes::{
     validate_decimal_precision, DECIMAL_DEFAULT_SCALE, DECIMAL_MAX_PRECISION,
@@ -34,8 +35,8 @@ use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
-/// Like OffsetSizeTrait, but specialized for Binary
-// This allow us to expose a constant datatype for the GenericBinaryArray
+/// Like [`OffsetSizeTrait`], but specialized for Binary.
+/// This allow us to expose a constant datatype for the [`GenericBinaryArray`].
 pub trait BinaryOffsetSizeTrait: OffsetSizeTrait {
     const DATA_TYPE: DataType;
 }
@@ -166,7 +167,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         Self::from(data)
     }
 
-    /// Creates a `GenericBinaryArray` based on an iterator of values without nulls
+    /// Creates a [`GenericBinaryArray`] based on an iterator of values without nulls
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
         Ptr: AsRef<[u8]>,
@@ -213,7 +214,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
     /// # Safety
     ///
-    /// caller must ensure that the offsets in the iterator are less than the array len()
+    /// caller must ensure that the indexes in the iterator are less than the `array.len()`
     pub unsafe fn take_iter_unchecked<'a>(
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
@@ -318,9 +319,10 @@ where
     }
 }
 
-/// An array where each element is a byte whose maximum length is represented by a i32.
+/// An array where each element contains 0 or more bytes.
+/// The byte length of each element is represented by an i32.
 ///
-/// Examples
+/// # Examples
 ///
 /// Create a BinaryArray from a vector of byte slices.
 ///
@@ -357,8 +359,10 @@ where
 ///
 pub type BinaryArray = GenericBinaryArray<i32>;
 
-/// An array where each element is a byte whose maximum length is represented by a i64.
-/// Examples
+/// An array where each element contains 0 or more bytes.
+/// The byte length of each element is represented by an i64.
+///
+/// # Examples
 ///
 /// Create a LargeBinaryArray from a vector of byte slices.
 ///
@@ -426,7 +430,7 @@ impl<T: BinaryOffsetSizeTrait> From<GenericListArray<T>> for GenericBinaryArray<
     }
 }
 
-/// A type of `FixedSizeListArray` whose elements are binaries.
+/// An array where each element is a fixed-size sequence of bytes.
 ///
 /// # Examples
 ///
@@ -977,45 +981,6 @@ impl From<ArrayData> for DecimalArray {
 impl From<DecimalArray> for ArrayData {
     fn from(array: DecimalArray) -> Self {
         array.data
-    }
-}
-
-/// an iterator that returns Some(i128) or None, that can be used on a
-/// DecimalArray
-#[derive(Debug)]
-pub struct DecimalIter<'a> {
-    array: &'a DecimalArray,
-    current: usize,
-    current_end: usize,
-}
-
-impl<'a> DecimalIter<'a> {
-    pub fn new(array: &'a DecimalArray) -> Self {
-        Self {
-            array,
-            current: 0,
-            current_end: array.len(),
-        }
-    }
-}
-
-impl<'a> std::iter::Iterator for DecimalIter<'a> {
-    type Item = Option<i128>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current == self.current_end {
-            None
-        } else {
-            let old = self.current;
-            self.current += 1;
-            // TODO: Improve performance by avoiding bounds check here
-            // (by using adding a `value_unchecked, for example)
-            if self.array.is_null(old) {
-                Some(None)
-            } else {
-                Some(Some(self.array.value(old)))
-            }
-        }
     }
 }
 
@@ -1604,8 +1569,28 @@ mod tests {
         let data = vec![Some(-100), None, Some(101)];
         let array: DecimalArray = data.clone().into_iter().collect();
 
-        let collected: Vec<_> = array.iter().collect();
+        let collected: Vec<_> = array.into_iter().collect();
         assert_eq!(data, collected);
+    }
+
+    #[test]
+    fn test_decimal_iter_sized() {
+        let data = vec![Some(-100), None, Some(101)];
+        let array: DecimalArray = data.into_iter().collect();
+        let mut iter = array.into_iter();
+
+        // is exact sized
+        assert_eq!(array.len(), 3);
+
+        // size_hint is reported correctly
+        assert_eq!(iter.size_hint(), (3, Some(3)));
+        iter.next().unwrap();
+        assert_eq!(iter.size_hint(), (2, Some(2)));
+        iter.next().unwrap();
+        iter.next().unwrap();
+        assert_eq!(iter.size_hint(), (0, Some(0)));
+        assert!(iter.next().is_none());
+        assert_eq!(iter.size_hint(), (0, Some(0)));
     }
 
     #[test]

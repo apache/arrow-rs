@@ -26,9 +26,10 @@
 //!
 //! ```rust
 //! # use std::sync::Arc;
-//! # use arrow::array::{Int32Array, Array, ArrayData, make_array_from_raw};
+//! # use arrow::array::{Int32Array, Array, ArrayData, export_array_into_raw, make_array, make_array_from_raw};
 //! # use arrow::error::{Result, ArrowError};
 //! # use arrow::compute::kernels::arithmetic;
+//! # use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 //! # use std::convert::TryFrom;
 //! # fn main() -> Result<()> {
 //! // create an array natively
@@ -51,7 +52,35 @@
 //! // verify
 //! assert_eq!(array, Int32Array::from(vec![Some(2), None, Some(6)]));
 //!
+//! // Simulate if raw pointers are provided by consumer
+//! let array = make_array(Int32Array::from(vec![Some(1), None, Some(3)]).data().clone());
+//!
+//! let out_array = Box::new(FFI_ArrowArray::empty());
+//! let out_schema = Box::new(FFI_ArrowSchema::empty());
+//! let out_array_ptr = Box::into_raw(out_array);
+//! let out_schema_ptr = Box::into_raw(out_schema);
+//!
+//! // export array into raw pointers from consumer
+//! unsafe { export_array_into_raw(array, out_array_ptr, out_schema_ptr)?; };
+//!
+//! // import it
+//! let array = unsafe { make_array_from_raw(out_array_ptr, out_schema_ptr)? };
+//!
+//! // perform some operation
+//! let array = array.as_any().downcast_ref::<Int32Array>().ok_or(
+//!     ArrowError::ParseError("Expects an int32".to_string()),
+//! )?;
+//! let array = arithmetic::add(&array, &array)?;
+//!
+//! // verify
+//! assert_eq!(array, Int32Array::from(vec![Some(2), None, Some(6)]));
+//!
 //! // (drop/release)
+//! unsafe {
+//!     Box::from_raw(out_array_ptr);
+//!     Box::from_raw(out_schema_ptr);
+//! }
+//!
 //! Ok(())
 //! }
 //! ```
@@ -107,17 +136,17 @@ bitflags! {
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FFI_ArrowSchema {
-    format: *const c_char,
-    name: *const c_char,
-    metadata: *const c_char,
-    flags: i64,
-    n_children: i64,
-    children: *mut *mut FFI_ArrowSchema,
-    dictionary: *mut FFI_ArrowSchema,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
-    private_data: *mut c_void,
+    pub(crate) format: *const c_char,
+    pub(crate) name: *const c_char,
+    pub(crate) metadata: *const c_char,
+    pub(crate) flags: i64,
+    pub(crate) n_children: i64,
+    pub(crate) children: *mut *mut FFI_ArrowSchema,
+    pub(crate) dictionary: *mut FFI_ArrowSchema,
+    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
+    pub(crate) private_data: *mut c_void,
 }
 
 struct SchemaPrivateData {
@@ -266,6 +295,7 @@ impl Drop for FFI_ArrowSchema {
 
 // returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 // This is set by the Arrow specification
+#[allow(clippy::manual_bits)]
 fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
     Ok(match (data_type, i) {
         // the null buffer is bit sized
@@ -336,7 +366,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FFI_ArrowArray {
     pub(crate) length: i64,
     pub(crate) null_count: i64,
@@ -344,15 +374,15 @@ pub struct FFI_ArrowArray {
     pub(crate) n_buffers: i64,
     pub(crate) n_children: i64,
     pub(crate) buffers: *mut *const c_void,
-    children: *mut *mut FFI_ArrowArray,
-    dictionary: *mut FFI_ArrowArray,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+    pub(crate) children: *mut *mut FFI_ArrowArray,
+    pub(crate) dictionary: *mut FFI_ArrowArray,
+    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
     // When exported, this MUST contain everything that is owned by this array.
     // for example, any buffer pointed to in `buffers` must be here, as well
     // as the `buffers` pointer itself.
     // In other words, everything in [FFI_ArrowArray] must be owned by
     // `private_data` and can assume that they do not outlive `private_data`.
-    private_data: *mut c_void,
+    pub(crate) private_data: *mut c_void,
 }
 
 impl Drop for FFI_ArrowArray {
@@ -396,7 +426,7 @@ impl FFI_ArrowArray {
     /// # Safety
     /// This method releases `buffers`. Consumers of this struct *must* call `release` before
     /// releasing this struct, or contents in `buffers` leak.
-    fn new(data: &ArrayData) -> Self {
+    pub fn new(data: &ArrayData) -> Self {
         // * insert the null buffer at the start
         // * make all others `Option<Buffer>`.
         let buffers = iter::once(data.null_buffer().cloned())
@@ -509,7 +539,8 @@ unsafe fn create_buffer(
     assert!(index < array.n_buffers as usize);
     let ptr = *buffers.add(index);
 
-    NonNull::new(ptr as *mut u8).map(|ptr| Buffer::from_unowned(ptr, len, owner))
+    NonNull::new(ptr as *mut u8)
+        .map(|ptr| Buffer::from_custom_allocation(ptr, len, owner))
 }
 
 fn create_child(
@@ -706,8 +737,8 @@ pub trait ArrowArrayRef {
 /// Furthermore, this struct assumes that the incoming data agrees with the C data interface.
 #[derive(Debug)]
 pub struct ArrowArray {
-    array: Arc<FFI_ArrowArray>,
-    schema: Arc<FFI_ArrowSchema>,
+    pub(crate) array: Arc<FFI_ArrowArray>,
+    pub(crate) schema: Arc<FFI_ArrowSchema>,
 }
 
 #[derive(Debug)]
@@ -769,6 +800,9 @@ impl ArrowArray {
     /// creates a new [ArrowArray] from two pointers. Used to import from the C Data Interface.
     /// # Safety
     /// See safety of [ArrowArray]
+    /// Note that this function will copy the content pointed by the raw pointers. Considering
+    /// the raw pointers can be from `Arc::into_raw` or other raw pointers, users must be responsible
+    /// on managing the allocation of the structs by themselves.
     /// # Error
     /// Errors if any of the pointers is null
     pub unsafe fn try_from_raw(
@@ -781,11 +815,16 @@ impl ArrowArray {
                     .to_string(),
             ));
         };
-        let ffi_array = (*array).clone();
-        let ffi_schema = (*schema).clone();
+
+        let array_mut = array as *mut FFI_ArrowArray;
+        let schema_mut = schema as *mut FFI_ArrowSchema;
+
+        let array_data = std::ptr::replace(array_mut, FFI_ArrowArray::empty());
+        let schema_data = std::ptr::replace(schema_mut, FFI_ArrowSchema::empty());
+
         Ok(Self {
-            array: Arc::new(ffi_array),
-            schema: Arc::new(ffi_schema),
+            array: Arc::new(array_data),
+            schema: Arc::new(schema_data),
         })
     }
 
@@ -822,10 +861,10 @@ impl<'a> ArrowArrayChild<'a> {
 mod tests {
     use super::*;
     use crate::array::{
-        make_array, Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
-        DictionaryArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, OffsetSizeTrait, StringOffsetSizeTrait, Time32MillisecondArray,
-        TimestampMillisecondArray,
+        export_array_into_raw, make_array, Array, ArrayData, BinaryOffsetSizeTrait,
+        BooleanArray, DecimalArray, DictionaryArray, GenericBinaryArray,
+        GenericListArray, GenericStringArray, Int32Array, OffsetSizeTrait,
+        StringOffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
@@ -1162,6 +1201,39 @@ mod tests {
         assert_eq!(actual, &expected);
 
         // (drop/release)
+        Ok(())
+    }
+
+    #[test]
+    fn test_export_array_into_raw() -> Result<()> {
+        let array = make_array(Int32Array::from(vec![1, 2, 3]).data().clone());
+
+        // Assume two raw pointers provided by the consumer
+        let out_array = Box::new(FFI_ArrowArray::empty());
+        let out_schema = Box::new(FFI_ArrowSchema::empty());
+        let out_array_ptr = Box::into_raw(out_array);
+        let out_schema_ptr = Box::into_raw(out_schema);
+
+        unsafe {
+            export_array_into_raw(array, out_array_ptr, out_schema_ptr)?;
+        }
+
+        // (simulate consumer) import it
+        unsafe {
+            let array = ArrowArray::try_from_raw(out_array_ptr, out_schema_ptr).unwrap();
+            let data = ArrayData::try_from(array)?;
+            let array = make_array(data);
+
+            // perform some operation
+            let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+            let array = kernels::arithmetic::add(array, array).unwrap();
+
+            // verify
+            assert_eq!(array, Int32Array::from(vec![2, 4, 6]));
+
+            Box::from_raw(out_array_ptr);
+            Box::from_raw(out_schema_ptr);
+        }
         Ok(())
     }
 }
