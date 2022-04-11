@@ -38,8 +38,13 @@
 //!
 //! let file = File::open("test/data/basic.json").unwrap();
 //!
-//! let mut json = json::Reader::new(BufReader::new(file), Arc::new(schema), 1024,
-//! Default::default());
+//! let mut json = json::Reader::new(
+//!    BufReader::new(file),
+//!    Arc::new(schema),
+//!    1024,
+//!    Default::default()
+//! );
+//!
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 
@@ -578,7 +583,7 @@ where
 pub struct Decoder {
     /// Explicit schema for the JSON file
     schema: SchemaRef,
-    /// Optional projection for which columns to load (case-sensitive names)
+    /// Batch size (number of records to load each time)
     batch_size: usize,
     /// This is a collection of options for json decoder
     doptions: DecoderOptions,
@@ -1607,7 +1612,7 @@ pub struct ReaderBuilder {
     batch_size: usize,
     /// Optional projection for which columns to load (zero-based column indices)
     projection: Option<Vec<String>>,
-    /// optional HashMap of column names to its format strings
+    /// optional HashMap of column names to format strings
     format_strings: Option<HashMap<String, String>>,
 }
 
