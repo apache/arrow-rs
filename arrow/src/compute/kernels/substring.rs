@@ -24,7 +24,7 @@ use crate::{
     error::{ArrowError, Result},
 };
 
-fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
+unsafe fn generic_substring_bytes_unchecked<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: OffsetSize,
     length: &Option<OffsetSize>,
@@ -80,17 +80,15 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
         })
         .for_each(|slice| new_values.extend_from_slice(slice));
 
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            <OffsetSize as StringOffsetSizeTrait>::DATA_TYPE,
-            array.len(),
-            None,
-            null_bit_buffer,
-            0,
-            vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
-            vec![],
-        )
-    };
+    let data = ArrayData::new_unchecked(
+        <OffsetSize as StringOffsetSizeTrait>::DATA_TYPE,
+        array.len(),
+        None,
+        null_bit_buffer,
+        0,
+        vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
+        vec![],
+    );
     Ok(make_array(data))
 }
 
@@ -107,28 +105,28 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 ///
 /// Attention: Both `start` and `length` are counted by byte, not by char.
 ///
-/// # Warning
+/// # Safety
 ///
 /// This function **might** return in invalid utf-8 format if the character length falls on a non-utf8 boundary.
 /// ## Example of getting an invalid substring
 /// ```
 /// # use arrow::array::StringArray;
-/// # use arrow::compute::kernels::substring::substring;
+/// # use arrow::compute::kernels::substring::substring_bytes_unchecked;
 /// let array = StringArray::from(vec![Some("E=mc²")]);
-/// let result = substring(&array, -1, &None).unwrap();
+/// let result = unsafe {substring_bytes_unchecked(&array, -1, &None).unwrap()};
 /// let result = result.as_any().downcast_ref::<StringArray>().unwrap();
 /// assert_eq!(result.value(0).as_bytes(), &[0x00B2]); // invalid utf-8 format
 /// ```
 ///
 /// # Error
 /// this function errors when the passed array is not a \[Large\]String array.
-pub fn substring(
+pub unsafe fn substring_bytes_unchecked(
     array: &dyn Array,
     start: i64,
     length: &Option<u64>,
 ) -> Result<ArrayRef> {
     match array.data_type() {
-        DataType::LargeUtf8 => generic_substring(
+        DataType::LargeUtf8 => generic_substring_bytes_unchecked(
             array
                 .as_any()
                 .downcast_ref::<LargeStringArray>()
@@ -136,7 +134,7 @@ pub fn substring(
             start,
             &length.map(|e| e as i64),
         ),
-        DataType::Utf8 => generic_substring(
+        DataType::Utf8 => generic_substring_bytes_unchecked(
             array
                 .as_any()
                 .downcast_ref::<StringArray>()
@@ -198,7 +196,8 @@ mod tests {
         cases.into_iter().try_for_each::<_, Result<()>>(
             |(array, start, length, expected)| {
                 let array = T::from(array);
-                let result: ArrayRef = substring(&array, start, &length)?;
+                let result: ArrayRef =
+                    unsafe { substring_bytes_unchecked(&array, start, &length)? };
                 assert_eq!(array.len(), result.len());
 
                 let result = result.as_any().downcast_ref::<T>().unwrap();
@@ -279,7 +278,8 @@ mod tests {
         cases.into_iter().try_for_each::<_, Result<()>>(
             |(array, start, length, expected)| {
                 let array = StringArray::from(array);
-                let result = substring(&array, start, &length)?;
+                let result =
+                    unsafe { substring_bytes_unchecked(&array, start, &length)? };
                 assert_eq!(array.len(), result.len());
                 let result = result.as_any().downcast_ref::<StringArray>().unwrap();
                 let expected = StringArray::from(expected);

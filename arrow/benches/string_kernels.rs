@@ -22,11 +22,14 @@ use criterion::Criterion;
 extern crate arrow;
 
 use arrow::array::*;
-use arrow::compute::kernels::substring::substring;
+use arrow::compute::kernels::substring::substring_bytes_unchecked;
 use arrow::util::bench_util::*;
 
 fn bench_substring(arr: &StringArray, start: i64, length: usize) {
-    substring(criterion::black_box(arr), start, &Some(length as u64)).unwrap();
+    unsafe {
+        substring_bytes_unchecked(criterion::black_box(arr), start, &Some(length as u64))
+            .unwrap()
+    };
 }
 
 fn add_benchmark(c: &mut Criterion) {
