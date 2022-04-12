@@ -548,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "assertion failed: (offset + length) == 0")]
+    #[should_panic(expected = "assertion failed: (offset + length) <= self.num_rows()")]
     fn create_record_batch_slice_empty_batch() {
         let schema = Schema::new(vec![]);
 
