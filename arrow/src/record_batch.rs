@@ -44,7 +44,7 @@ pub struct RecordBatch {
 
     /// The number of rows in this RecordBatch
     ///
-    /// This stored separately from the columns to handle the case of no columns
+    /// This is stored separately from the columns to handle the case of no columns
     row_count: usize,
 }
 
