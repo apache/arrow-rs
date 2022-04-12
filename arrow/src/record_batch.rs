@@ -41,6 +41,10 @@ use crate::error::{ArrowError, Result};
 pub struct RecordBatch {
     schema: SchemaRef,
     columns: Vec<Arc<dyn Array>>,
+
+    /// The number of rows in this RecordBatch
+    ///
+    /// This stored separately from the columns to handle the case of no columns
     row_count: usize,
 }
 
@@ -135,9 +139,13 @@ impl RecordBatch {
             })?;
 
         if columns.iter().any(|c| c.len() != row_count) {
-            return Err(ArrowError::InvalidArgumentError(
-                "all columns in a record batch must have the same length".to_string(),
-            ));
+            let err = match options.row_count {
+                Some(_) => {
+                    "all columns in a record batch must have the specified row count"
+                }
+                None => "all columns in a record batch must have the same length",
+            };
+            return Err(ArrowError::InvalidArgumentError(err.to_string()));
         }
 
         // function for comparing column type and field type
