@@ -109,12 +109,12 @@ impl RecordBatch {
     }
 
     /// Validate the schema and columns using [`RecordBatchOptions`]. Returns an error
-    /// if any validation check fails, otherwise returns the created [`RecordBatch`]
+    /// if any validation check fails, otherwise returns the created [`Self`]
     fn try_new_impl(
         schema: SchemaRef,
         columns: Vec<ArrayRef>,
         options: &RecordBatchOptions,
-    ) -> Result<RecordBatch> {
+    ) -> Result<Self> {
         // check that number of fields in schema match column length
         if schema.fields().len() != columns.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -127,10 +127,12 @@ impl RecordBatch {
         // check that all columns have the same row count
         let row_count = options
             .row_count
-            .or(columns.first().map(|col| col.len()))
-            .ok_or(ArrowError::InvalidArgumentError(
-                "must either specify a row count or at least one column".to_string(),
-            ))?;
+            .or_else(|| columns.first().map(|col| col.len()))
+            .ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "must either specify a row count or at least one column".to_string(),
+                )
+            })?;
 
         if columns.iter().any(|c| c.len() != row_count) {
             return Err(ArrowError::InvalidArgumentError(
@@ -951,8 +953,10 @@ mod tests {
             .to_string()
             .contains("must either specify a row count or at least one column"));
 
-        let mut options = RecordBatchOptions::default();
-        options.row_count = Some(10);
+        let options = RecordBatchOptions {
+            row_count: Some(10),
+            ..Default::default()
+        };
 
         let ok =
             RecordBatch::try_new_with_options(schema.clone(), vec![], &options).unwrap();
