@@ -3157,6 +3157,37 @@ mod tests {
     }
 
     #[test]
+    fn test_time_from_string() {
+        parse_string_column::<Time64NanosecondType>(4);
+        parse_string_column::<Time64MicrosecondType>(4);
+        parse_string_column::<Time32MillisecondType>(4);
+        parse_string_column::<Time32SecondType>(4);
+    }
+
+    fn parse_string_column<T>(value: T::Native)
+    where
+        T: ArrowPrimitiveType,
+    {
+        let schema = Schema::new(vec![Field::new("d", T::DATA_TYPE, true)]);
+
+        let builder = ReaderBuilder::new()
+            .with_schema(Arc::new(schema))
+            .with_batch_size(64);
+        let mut reader: Reader<File> = builder
+            .build::<File>(File::open("test/data/basic_nulls.json").unwrap())
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        let dd = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap();
+        assert_eq!(value, dd.value(1));
+        assert!(!dd.is_valid(2));
+    }
+
+    #[test]
     fn test_json_read_nested_list() {
         let schema = Schema::new(vec![Field::new(
             "c1",
