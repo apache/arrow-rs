@@ -1418,9 +1418,9 @@ mod tests {
         );
         let string_array: ArrayRef = Arc::new(StringArray::from(xs.clone()));
         let struct_array = StructArray::from(vec![
-            (Field::new("f1.1", DataType::Utf8, false), string_array),
+            (Field::new("f2.1", DataType::Utf8, false), string_array),
             (
-                Field::new("f1.2_struct", dict.data_type().clone(), false),
+                Field::new("f2.2_struct", dict.data_type().clone(), false),
                 dict.clone() as ArrayRef,
             ),
         ]);
