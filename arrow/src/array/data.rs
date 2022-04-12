@@ -272,6 +272,7 @@ impl ArrayData {
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
     /// module.
+    #[allow(clippy::let_and_return)]
     pub unsafe fn new_unchecked(
         data_type: DataType,
         len: usize,
