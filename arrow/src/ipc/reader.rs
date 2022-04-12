@@ -1429,7 +1429,7 @@ mod tests {
             Field::new("f2_struct", struct_array.data_type().clone(), false),
         ]));
         let input_batch = RecordBatch::try_new(
-            schema.clone(),
+            schema,
             vec![
                 Arc::new(StringArray::from(xs.clone())),
                 Arc::new(struct_array),
