@@ -1029,6 +1029,7 @@ mod tests {
     #[should_panic(expected = "PrimitiveArray data should contain a single buffer only \
                                (values buffer)")]
     // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
     fn test_primitive_array_invalid_buffer_len() {
         let buffer = Buffer::from_slice_ref(&[0i32, 1, 2, 3, 4]);
