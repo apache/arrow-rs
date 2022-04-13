@@ -48,7 +48,7 @@ use crate::basic::Compression as CodecType;
 use crate::errors::{ParquetError, Result};
 
 /// Parquet compression codec interface.
-pub trait Codec {
+pub trait Codec: Send {
     /// Compresses data stored in slice `input_buf` and writes the compressed result
     /// to `output_buf`.
     /// Note that you'll need to call `clear()` before reusing the same `output_buf`

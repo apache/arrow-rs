@@ -23,7 +23,7 @@ use crate::{
     array::{make_array, new_null_array},
     compute::concat,
 };
-use num::{abs, clamp};
+use num::abs;
 
 /// Shifts array by defined number of items (to left or right)
 /// A positive value for `offset` shifts the array to the right
@@ -51,7 +51,7 @@ use num::{abs, clamp};
 /// let expected: Int32Array = vec![Some(1), None, Some(4)].into();
 /// assert_eq!(res.as_ref(), &expected);
 ///
-/// // shift array 3 element tot he right
+/// // shift array 3 element to the right
 /// let res = shift(&a, 3).unwrap();
 /// let expected: Int32Array = vec![None, None, None].into();
 /// assert_eq!(res.as_ref(), &expected);
@@ -63,18 +63,21 @@ pub fn shift(array: &dyn Array, offset: i64) -> Result<ArrayRef> {
     } else if offset == i64::MIN || abs(offset) >= value_len {
         Ok(new_null_array(array.data_type(), array.len()))
     } else {
-        let slice_offset = clamp(-offset, 0, value_len) as usize;
-        let length = array.len() - abs(offset) as usize;
-        let slice = array.slice(slice_offset, length);
-
-        // Generate array with remaining `null` items
-        let nulls = abs(offset) as usize;
-        let null_arr = new_null_array(array.data_type(), nulls);
-
         // Concatenate both arrays, add nulls after if shift > 0 else before
         if offset > 0 {
+            let length = array.len() - offset as usize;
+            let slice = array.slice(0, length);
+
+            // Generate array with remaining `null` items
+            let null_arr = new_null_array(array.data_type(), offset as usize);
             concat(&[null_arr.as_ref(), slice.as_ref()])
         } else {
+            let offset = -offset as usize;
+            let length = array.len() - offset;
+            let slice = array.slice(offset, length);
+
+            // Generate array with remaining `null` items
+            let null_arr = new_null_array(array.data_type(), offset);
             concat(&[slice.as_ref(), null_arr.as_ref()])
         }
     }

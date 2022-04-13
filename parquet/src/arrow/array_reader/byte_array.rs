@@ -203,11 +203,12 @@ impl<I: OffsetSizeTrait + ScalarValue> ColumnValueDecoder
     }
 
     fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
-        self.decoder.as_mut().expect("decoder set").read(
-            out,
-            range.end - range.start,
-            self.dict.as_ref(),
-        )
+        let decoder = self
+            .decoder
+            .as_mut()
+            .ok_or_else(|| general_err!("no decoder set"))?;
+
+        decoder.read(out, range.end - range.start, self.dict.as_ref())
     }
 }
 
@@ -266,7 +267,9 @@ impl ByteArrayDecoder {
         match self {
             ByteArrayDecoder::Plain(d) => d.read(out, len),
             ByteArrayDecoder::Dictionary(d) => {
-                let dict = dict.expect("dictionary set");
+                let dict = dict
+                    .ok_or_else(|| general_err!("missing dictionary page for column"))?;
+
                 d.read(out, dict, len)
             }
             ByteArrayDecoder::DeltaLength(d) => d.read(out, len),
@@ -546,6 +549,10 @@ impl ByteArrayDecoderDictionary {
         dict: &OffsetBuffer<I>,
         len: usize,
     ) -> Result<usize> {
+        if dict.is_empty() {
+            return Ok(0); // All data must be NULL
+        }
+
         let mut values_read = 0;
 
         while values_read != len && self.max_remaining_values != 0 {
@@ -579,69 +586,16 @@ impl ByteArrayDecoderDictionary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::array_reader::test_util::{byte_array_all_encodings, utf8_column};
     use crate::arrow::record_reader::buffer::ValuesBuffer;
-    use crate::basic::Type as PhysicalType;
-    use crate::data_type::{ByteArray, ByteArrayType};
-    use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
-    use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
-    use crate::util::memory::MemTracker;
     use arrow::array::{Array, StringArray};
-    use std::sync::Arc;
-
-    fn column() -> ColumnDescPtr {
-        let t = Type::primitive_type_builder("col", PhysicalType::BYTE_ARRAY)
-            .with_converted_type(ConvertedType::UTF8)
-            .build()
-            .unwrap();
-
-        Arc::new(ColumnDescriptor::new(
-            Arc::new(t),
-            1,
-            0,
-            ColumnPath::new(vec![]),
-        ))
-    }
-
-    fn get_encoded(encoding: Encoding, data: &[ByteArray]) -> ByteBufferPtr {
-        let descriptor = column();
-        let mem_tracker = Arc::new(MemTracker::new());
-        let mut encoder =
-            get_encoder::<ByteArrayType>(descriptor, encoding, mem_tracker).unwrap();
-
-        encoder.put(data).unwrap();
-        encoder.flush_buffer().unwrap()
-    }
 
     #[test]
     fn test_byte_array_decoder() {
-        let data: Vec<_> = vec!["hello", "world", "a", "b"]
-            .into_iter()
-            .map(ByteArray::from)
-            .collect();
+        let (pages, encoded_dictionary) =
+            byte_array_all_encodings(vec!["hello", "world", "a", "b"]);
 
-        let mut dict_encoder =
-            DictEncoder::<ByteArrayType>::new(column(), Arc::new(MemTracker::new()));
-
-        dict_encoder.put(&data).unwrap();
-        let encoded_rle = dict_encoder.flush_buffer().unwrap();
-        let encoded_dictionary = dict_encoder.write_dict().unwrap();
-
-        // A column chunk with all the encodings!
-        let pages = vec![
-            (Encoding::PLAIN, get_encoded(Encoding::PLAIN, &data)),
-            (
-                Encoding::DELTA_BYTE_ARRAY,
-                get_encoded(Encoding::DELTA_BYTE_ARRAY, &data),
-            ),
-            (
-                Encoding::DELTA_LENGTH_BYTE_ARRAY,
-                get_encoded(Encoding::DELTA_LENGTH_BYTE_ARRAY, &data),
-            ),
-            (Encoding::PLAIN_DICTIONARY, encoded_rle.clone()),
-            (Encoding::RLE_DICTIONARY, encoded_rle),
-        ];
-
-        let column_desc = column();
+        let column_desc = utf8_column();
         let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
 
         decoder
@@ -668,15 +622,9 @@ mod tests {
             assert_eq!(decoder.read(&mut output, 4..8).unwrap(), 0);
 
             let valid = vec![false, false, true, true, false, true, true, false, false];
-            let rev_position_iter = valid
-                .iter()
-                .enumerate()
-                .rev()
-                .filter_map(|(i, valid)| valid.then(|| i));
-
             let valid_buffer = Buffer::from_iter(valid.iter().cloned());
 
-            output.pad_nulls(0, 4, valid.len(), rev_position_iter);
+            output.pad_nulls(0, 4, valid.len(), valid_buffer.as_slice());
             let array = output.into_array(Some(valid_buffer), ArrowType::Utf8);
             let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
 
@@ -694,6 +642,24 @@ mod tests {
                     None,
                 ]
             );
+        }
+    }
+
+    #[test]
+    fn test_byte_array_decoder_nulls() {
+        let (pages, encoded_dictionary) = byte_array_all_encodings(Vec::<&str>::new());
+
+        let column_desc = utf8_column();
+        let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
+
+        decoder
+            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .unwrap();
+
+        for (encoding, page) in pages {
+            let mut output = OffsetBuffer::<i32>::default();
+            decoder.set_data(encoding, page, 4, None).unwrap();
+            assert_eq!(decoder.read(&mut output, 0..1024).unwrap(), 0);
         }
     }
 }

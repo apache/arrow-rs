@@ -671,13 +671,9 @@ mod tests {
     #[test]
     fn test_rle_specific_sequences() {
         let mut expected_buffer = Vec::new();
-        let mut values = Vec::new();
-        for _ in 0..50 {
-            values.push(0);
-        }
-        for _ in 0..50 {
-            values.push(1);
-        }
+        let mut values = vec![0; 50];
+        values.resize(100, 1);
+
         expected_buffer.push(50 << 1);
         expected_buffer.push(0);
         expected_buffer.push(50 << 1);
@@ -703,9 +699,8 @@ mod tests {
         }
         let num_groups = bit_util::ceil(100, 8) as u8;
         expected_buffer.push(((num_groups << 1) as u8) | 1);
-        for _ in 1..(100 / 8) + 1 {
-            expected_buffer.push(0b10101010);
-        }
+        expected_buffer.resize(expected_buffer.len() + 100 / 8, 0b10101010);
+
         // For the last 4 0 and 1's, padded with 0.
         expected_buffer.push(0b00001010);
         validate_rle(

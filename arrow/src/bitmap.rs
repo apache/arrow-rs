@@ -15,8 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines a bitmap, which is used to track which values in an Arrow array are null.
-//! This is called a "validity bitmap" in the Arrow documentation.
+//! Defines [Bitmap] for tracking validity bitmaps
 
 use crate::buffer::Buffer;
 use crate::error::Result;
@@ -26,25 +25,25 @@ use std::mem;
 use std::ops::{BitAnd, BitOr};
 
 #[derive(Debug, Clone)]
+/// Defines a bitmap, which is used to track which values in an Arrow
+/// array are null.
+///
+/// This is called a "validity bitmap" in the Arrow documentation.
 pub struct Bitmap {
     pub(crate) bits: Buffer,
 }
 
 impl Bitmap {
     pub fn new(num_bits: usize) -> Self {
-        let num_bytes = num_bits / 8 + if num_bits % 8 > 0 { 1 } else { 0 };
-        let r = num_bytes % 64;
-        let len = if r == 0 {
-            num_bytes
-        } else {
-            num_bytes + 64 - r
-        };
+        let num_bytes = bit_util::ceil(num_bits, 8);
+        let len = bit_util::round_upto_multiple_of_64(num_bytes);
         Bitmap {
             bits: Buffer::from(&vec![0xFF; len]),
         }
     }
 
-    pub fn len(&self) -> usize {
+    /// Return the length of this Bitmap in bits (not bytes)
+    pub fn bit_len(&self) -> usize {
         self.bits.len() * 8
     }
 
@@ -117,9 +116,9 @@ mod tests {
 
     #[test]
     fn test_bitmap_length() {
-        assert_eq!(512, Bitmap::new(63 * 8).len());
-        assert_eq!(512, Bitmap::new(64 * 8).len());
-        assert_eq!(1024, Bitmap::new(65 * 8).len());
+        assert_eq!(512, Bitmap::new(63 * 8).bit_len());
+        assert_eq!(512, Bitmap::new(64 * 8).bit_len());
+        assert_eq!(1024, Bitmap::new(65 * 8).bit_len());
     }
 
     #[test]

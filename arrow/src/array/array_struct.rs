@@ -108,10 +108,12 @@ impl StructArray {
 
 impl From<ArrayData> for StructArray {
     fn from(data: ArrayData) -> Self {
-        let mut boxed_fields = vec![];
-        for cd in data.child_data() {
-            boxed_fields.push(make_array(cd.clone()));
-        }
+        let boxed_fields = data
+            .child_data()
+            .iter()
+            .map(|cd| make_array(cd.clone()))
+            .collect();
+
         Self { data, boxed_fields }
     }
 }
@@ -436,9 +438,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let mut field_types = vec![];
-        field_types.push(Field::new("a", DataType::Boolean, false));
-        field_types.push(Field::new("b", DataType::Int32, false));
+        let field_types = vec![
+            Field::new("a", DataType::Boolean, false),
+            Field::new("b", DataType::Int32, false),
+        ];
         let struct_array_data = ArrayData::builder(DataType::Struct(field_types))
             .len(5)
             .add_child_data(boolean_data.clone())

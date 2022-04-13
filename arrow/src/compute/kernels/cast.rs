@@ -145,6 +145,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (LargeUtf8, Date32 | Date64 | Timestamp(TimeUnit::Nanosecond, None)) => true,
         (LargeUtf8, _) => DataType::is_numeric(to_type),
         (Timestamp(_, _), Utf8) | (Timestamp(_, _), LargeUtf8) => true,
+        (Date32, Utf8) | (Date32, LargeUtf8) => true,
+        (Date64, Utf8) | (Date64, LargeUtf8) => true,
         (_, Utf8 | LargeUtf8) => DataType::is_numeric(from_type) || from_type == &Binary,
 
         // start numeric casts
@@ -228,6 +230,20 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
                 IntervalUnit::DayTime => true,
                 IntervalUnit::MonthDayNano => false, // Native type is i128
             }
+        },
+        (Int32, Interval(to_type)) => {
+            match to_type{
+                IntervalUnit::YearMonth => true,
+                IntervalUnit::DayTime => false,
+                IntervalUnit::MonthDayNano => false,
+            }
+        },
+        (Int64, Interval(to_type)) => {
+            match to_type{
+                IntervalUnit::YearMonth => false,
+                IntervalUnit::DayTime => true,
+                IntervalUnit::MonthDayNano => false,
+            }
         }
         (_, _) => false,
     }
@@ -260,39 +276,41 @@ pub fn cast(array: &ArrayRef, to_type: &DataType) -> Result<ArrayRef> {
 // cast the integer array to defined decimal data type array
 macro_rules! cast_integer_to_decimal {
     ($ARRAY: expr, $ARRAY_TYPE: ident, $PRECISION : ident, $SCALE : ident) => {{
-        let mut decimal_builder = DecimalBuilder::new($ARRAY.len(), *$PRECISION, *$SCALE);
         let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
         let mul: i128 = 10_i128.pow(*$SCALE as u32);
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                decimal_builder.append_null()?;
-            } else {
-                // convert i128 first
-                let v = array.value(i) as i128;
-                // if the input value is overflow, it will throw an error.
-                decimal_builder.append_value(mul * v)?;
-            }
-        }
-        Ok(Arc::new(decimal_builder.finish()))
+        let decimal_array = array
+            .iter()
+            .map(|v| {
+                v.map(|v| {
+                    let v = v as i128;
+                    // with_precision_and_scale validates the
+                    // value is within range for the output precision
+                    mul * v
+                })
+            })
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*$PRECISION, *$SCALE)?;
+        Ok(Arc::new(decimal_array))
     }};
 }
 
 // cast the floating-point array to defined decimal data type array
 macro_rules! cast_floating_point_to_decimal {
     ($ARRAY: expr, $ARRAY_TYPE: ident, $PRECISION : ident, $SCALE : ident) => {{
-        let mut decimal_builder = DecimalBuilder::new($ARRAY.len(), *$PRECISION, *$SCALE);
         let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
         let mul = 10_f64.powi(*$SCALE as i32);
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                decimal_builder.append_null()?;
-            } else {
-                let v = ((array.value(i) as f64) * mul) as i128;
-                // if the input value is overflow, it will throw an error.
-                decimal_builder.append_value(v)?;
-            }
-        }
-        Ok(Arc::new(decimal_builder.finish()))
+        let decimal_array = array
+            .iter()
+            .map(|v| {
+                v.map(|v| {
+                    // with_precision_and_scale validates the
+                    // value is within range for the output precision
+                    ((v as f64) * mul) as i128
+                })
+            })
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*$PRECISION, *$SCALE)?;
+        Ok(Arc::new(decimal_array))
     }};
 }
 
@@ -655,6 +673,8 @@ pub fn cast_with_options(
                     cast_timestamp_to_string::<TimestampSecondType, i32>(array)
                 }
             },
+            Date32 => cast_date32_to_string::<i32>(array),
+            Date64 => cast_date64_to_string::<i32>(array),
             Binary => {
                 let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
                 Ok(Arc::new(
@@ -709,6 +729,8 @@ pub fn cast_with_options(
                     cast_timestamp_to_string::<TimestampSecondType, i64>(array)
                 }
             },
+            Date32 => cast_date32_to_string::<i64>(array),
+            Date64 => cast_date64_to_string::<i64>(array),
             Binary => {
                 let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
                 Ok(Arc::new(
@@ -1129,6 +1151,24 @@ pub fn cast_with_options(
                 from_type, to_type,
             ))),
         },
+        (Int32, Interval(to_type)) => match to_type {
+            IntervalUnit::YearMonth => {
+                cast_array_data::<IntervalYearMonthType>(array, Interval(to_type.clone()))
+            }
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from {:?} to {:?} not supported",
+                from_type, to_type,
+            ))),
+        },
+        (Int64, Interval(to_type)) => match to_type {
+            IntervalUnit::DayTime => {
+                cast_array_data::<IntervalDayTimeType>(array, Interval(to_type.clone()))
+            }
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from {:?} to {:?} not supported",
+                from_type, to_type,
+            ))),
+        },
         (_, _) => Err(ArrowError::CastError(format!(
             "Casting from {:?} to {:?} not supported",
             from_type, to_type,
@@ -1166,33 +1206,28 @@ fn cast_decimal_to_decimal(
     output_precision: &usize,
     output_scale: &usize,
 ) -> Result<ArrayRef> {
-    let mut decimal_builder =
-        DecimalBuilder::new(array.len(), *output_precision, *output_scale);
     let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
-    if input_scale > output_scale {
+
+    let output_array = if input_scale > output_scale {
         // For example, input_scale is 4 and output_scale is 3;
         // Original value is 11234_i128, and will be cast to 1123_i128.
         let div = 10_i128.pow((input_scale - output_scale) as u32);
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(array.value(i) / div)?;
-            }
-        }
+        array
+            .iter()
+            .map(|v| v.map(|v| v / div))
+            .collect::<DecimalArray>()
     } else {
         // For example, input_scale is 3 and output_scale is 4;
         // Original value is 1123_i128, and will be cast to 11230_i128.
         let mul = 10_i128.pow((output_scale - input_scale) as u32);
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(array.value(i) * mul)?;
-            }
-        }
+        array
+            .iter()
+            .map(|v| v.map(|v| v * mul))
+            .collect::<DecimalArray>()
     }
-    Ok(Arc::new(decimal_builder.finish()))
+    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+    Ok(Arc::new(output_array))
 }
 
 /// Cast an array by changing its array_data type to the desired type
@@ -1257,6 +1292,44 @@ where
     OffsetSize: StringOffsetSizeTrait,
 {
     let array = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+
+    Ok(Arc::new(
+        (0..array.len())
+            .map(|ix| {
+                if array.is_null(ix) {
+                    None
+                } else {
+                    array.value_as_datetime(ix).map(|v| v.to_string())
+                }
+            })
+            .collect::<GenericStringArray<OffsetSize>>(),
+    ))
+}
+
+/// Cast date32 types to Utf8/LargeUtf8
+fn cast_date32_to_string<OffsetSize: StringOffsetSizeTrait>(
+    array: &ArrayRef,
+) -> Result<ArrayRef> {
+    let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
+
+    Ok(Arc::new(
+        (0..array.len())
+            .map(|ix| {
+                if array.is_null(ix) {
+                    None
+                } else {
+                    array.value_as_date(ix).map(|v| v.to_string())
+                }
+            })
+            .collect::<GenericStringArray<OffsetSize>>(),
+    ))
+}
+
+/// Cast date64 types to Utf8/LargeUtf8
+fn cast_date64_to_string<OffsetSize: StringOffsetSizeTrait>(
+    array: &ArrayRef,
+) -> Result<ArrayRef> {
+    let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
 
     Ok(Arc::new(
         (0..array.len())
@@ -2071,24 +2144,15 @@ mod tests {
         };
     }
 
-    // TODO remove this function if the decimal array has the creator function
     fn create_decimal_array(
         array: &[Option<i128>],
         precision: usize,
         scale: usize,
     ) -> Result<DecimalArray> {
-        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
-        for value in array {
-            match value {
-                None => {
-                    decimal_builder.append_null()?;
-                }
-                Some(v) => {
-                    decimal_builder.append_value(*v)?;
-                }
-            }
-        }
-        Ok(decimal_builder.finish())
+        array
+            .iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(precision, scale)
     }
 
     #[test]
@@ -2116,7 +2180,8 @@ mod tests {
         let array = Arc::new(input_decimal_array) as ArrayRef;
         let result = cast(&array, &DataType::Decimal(2, 2));
         assert!(result.is_err());
-        assert_eq!("Invalid argument error: The value of 12345600 i128 is not compatible with Decimal(2,2)".to_string(), result.unwrap_err().to_string());
+        assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal of precision 2. Max is 99",
+                   result.unwrap_err().to_string());
     }
 
     #[test]
@@ -2297,7 +2362,7 @@ mod tests {
         let array = Arc::new(array) as ArrayRef;
         let casted_array = cast(&array, &DataType::Decimal(3, 1));
         assert!(casted_array.is_err());
-        assert_eq!("Invalid argument error: The value of 1000 i128 is not compatible with Decimal(3,1)", casted_array.unwrap_err().to_string());
+        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal of precision 3. Max is 999", casted_array.unwrap_err().to_string());
 
         // test f32 to decimal type
         let array = Float32Array::from(vec![
@@ -2356,11 +2421,11 @@ mod tests {
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Float64).unwrap();
         let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
-        assert!(5.0 - c.value(0) < f64::EPSILON);
-        assert!(6.0 - c.value(1) < f64::EPSILON);
-        assert!(7.0 - c.value(2) < f64::EPSILON);
-        assert!(8.0 - c.value(3) < f64::EPSILON);
-        assert!(9.0 - c.value(4) < f64::EPSILON);
+        assert_eq!(5.0, c.value(0));
+        assert_eq!(6.0, c.value(1));
+        assert_eq!(7.0, c.value(2));
+        assert_eq!(8.0, c.value(3));
+        assert_eq!(9.0, c.value(4));
     }
 
     #[test]
@@ -2482,10 +2547,10 @@ mod tests {
         let values = arr.values();
         let c = values.as_any().downcast_ref::<Float64Array>().unwrap();
         assert_eq!(1, c.null_count());
-        assert!(7.0 - c.value(0) < f64::EPSILON);
-        assert!(8.0 - c.value(1) < f64::EPSILON);
+        assert_eq!(7.0, c.value(0));
+        assert_eq!(8.0, c.value(1));
         assert!(!c.is_valid(2));
-        assert!(10.0 - c.value(3) < f64::EPSILON);
+        assert_eq!(10.0, c.value(3));
     }
 
     #[test]
@@ -2534,8 +2599,8 @@ mod tests {
         let array = Arc::new(a) as ArrayRef;
         let b = cast(&array, &DataType::Float64).unwrap();
         let c = b.as_any().downcast_ref::<Float64Array>().unwrap();
-        assert!(1.0 - c.value(0) < f64::EPSILON);
-        assert!(0.0 - c.value(1) < f64::EPSILON);
+        assert_eq!(1.0, c.value(0));
+        assert_eq!(0.0, c.value(1));
         assert!(!c.is_valid(2));
     }
 
@@ -2691,6 +2756,48 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_to_date32() {
+        let a1 = Arc::new(StringArray::from(vec![
+            Some("2018-12-25"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(vec![
+            Some("2018-12-25"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        for array in &[a1, a2] {
+            let b = cast(array, &DataType::Date32).unwrap();
+            let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+            assert_eq!(17890, c.value(0));
+            assert!(c.is_null(1));
+            assert!(c.is_null(2));
+        }
+    }
+
+    #[test]
+    fn test_cast_string_to_date64() {
+        let a1 = Arc::new(StringArray::from(vec![
+            Some("2020-09-08T12:00:00"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(vec![
+            Some("2020-09-08T12:00:00"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        for array in &[a1, a2] {
+            let b = cast(array, &DataType::Date64).unwrap();
+            let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+            assert_eq!(1599566400000, c.value(0));
+            assert!(c.is_null(1));
+            assert!(c.is_null(2));
+        }
+    }
+
+    #[test]
     fn test_cast_date32_to_int32() {
         let a = Date32Array::from(vec![10000, 17890]);
         let array = Arc::new(a) as ArrayRef;
@@ -2767,6 +2874,28 @@ mod tests {
         assert_eq!("1997-05-19 00:00:00.005", c.value(0));
         assert_eq!("2018-12-25 00:00:00.001", c.value(1));
         assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_string() {
+        let a = Date32Array::from(vec![10000, 17890]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(&DataType::Utf8, c.data_type());
+        assert_eq!("1997-05-19", c.value(0));
+        assert_eq!("2018-12-25", c.value(1));
+    }
+
+    #[test]
+    fn test_cast_date64_to_string() {
+        let a = Date64Array::from(vec![10000 * 86400000, 17890 * 86400000]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(&DataType::Utf8, c.data_type());
+        assert_eq!("1997-05-19 00:00:00", c.value(0));
+        assert_eq!("2018-12-25 00:00:00", c.value(1));
     }
 
     #[test]
@@ -4292,7 +4421,7 @@ mod tests {
                     Arc::new(Int32Array::from(vec![42, 28, 19, 31])),
                 ),
             ])),
-            //Arc::new(make_union_array()),
+            Arc::new(make_union_array()),
             Arc::new(NullArray::new(10)),
             Arc::new(StringArray::from(vec!["foo", "bar"])),
             Arc::new(LargeStringArray::from(vec!["foo", "bar"])),

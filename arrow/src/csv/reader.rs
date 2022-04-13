@@ -51,12 +51,11 @@ use std::sync::Arc;
 
 use crate::array::{
     ArrayRef, BooleanArray, DecimalBuilder, DictionaryArray, PrimitiveArray, StringArray,
-    MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
-use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
+use crate::util::reader_parser::Parser;
 
 use csv_crate::{ByteRecord, StringRecord};
 use std::ops::Neg;
@@ -64,7 +63,8 @@ use std::ops::Neg;
 lazy_static! {
     static ref PARSE_DECIMAL_RE: Regex =
         Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
-    static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d*\.\d+|\d+\.\d*)$").unwrap();
+    static ref DECIMAL_RE: Regex =
+        Regex::new(r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$").unwrap();
     static ref INTEGER_RE: Regex = Regex::new(r"^-?(\d+)$").unwrap();
     static ref BOOLEAN_RE: Regex = RegexBuilder::new(r"^(true)$|^(false)$")
         .case_insensitive(true)
@@ -311,8 +311,7 @@ pub struct Reader<R: Read> {
     batch_records: Vec<StringRecord>,
     /// datetime format used to parse datetime values, (format understood by chrono)
     ///
-    /// For format refer to chrono docs:
-    /// https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html
+    /// For format refer to [chrono docs](https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html)
     datetime_format: Option<String>,
 }
 
@@ -521,7 +520,8 @@ impl<R: Read> Iterator for Reader<R> {
     }
 }
 
-/// parses a slice of [csv_crate::StringRecord] into a [array::record_batch::RecordBatch].
+/// parses a slice of [csv_crate::StringRecord] into a
+/// [RecordBatch](crate::record_batch::RecordBatch).
 fn parse(
     rows: &[StringRecord],
     fields: &[Field],
@@ -671,131 +671,6 @@ fn parse(
 
     arrays.and_then(|arr| RecordBatch::try_new(projected_schema, arr))
 }
-
-/// Specialized parsing implementations
-trait Parser: ArrowPrimitiveType {
-    fn parse(string: &str) -> Option<Self::Native> {
-        string.parse::<Self::Native>().ok()
-    }
-
-    fn parse_formatted(string: &str, _format: &str) -> Option<Self::Native> {
-        Self::parse(string)
-    }
-}
-
-impl Parser for Float32Type {
-    fn parse(string: &str) -> Option<f32> {
-        lexical_core::parse(string.as_bytes()).ok()
-    }
-}
-
-impl Parser for Float64Type {
-    fn parse(string: &str) -> Option<f64> {
-        lexical_core::parse(string.as_bytes()).ok()
-    }
-}
-
-impl Parser for UInt64Type {}
-
-impl Parser for UInt32Type {}
-
-impl Parser for UInt16Type {}
-
-impl Parser for UInt8Type {}
-
-impl Parser for Int64Type {}
-
-impl Parser for Int32Type {}
-
-impl Parser for Int16Type {}
-
-impl Parser for Int8Type {}
-
-/// Number of days between 0001-01-01 and 1970-01-01
-const EPOCH_DAYS_FROM_CE: i32 = 719_163;
-
-impl Parser for Date32Type {
-    fn parse(string: &str) -> Option<i32> {
-        use chrono::Datelike;
-
-        match Self::DATA_TYPE {
-            DataType::Date32 => {
-                let date = string.parse::<chrono::NaiveDate>().ok()?;
-                Self::Native::from_i32(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
-            }
-            _ => None,
-        }
-    }
-}
-
-impl Parser for Date64Type {
-    fn parse(string: &str) -> Option<i64> {
-        match Self::DATA_TYPE {
-            DataType::Date64 => {
-                let date_time = string.parse::<chrono::NaiveDateTime>().ok()?;
-                Self::Native::from_i64(date_time.timestamp_millis())
-            }
-            _ => None,
-        }
-    }
-
-    fn parse_formatted(string: &str, format: &str) -> Option<i64> {
-        match Self::DATA_TYPE {
-            DataType::Date64 => {
-                use chrono::format::Fixed;
-                use chrono::format::StrftimeItems;
-                let fmt = StrftimeItems::new(format);
-                let has_zone = fmt.into_iter().any(|item| match item {
-                    chrono::format::Item::Fixed(fixed_item) => matches!(
-                        fixed_item,
-                        Fixed::RFC2822
-                            | Fixed::RFC3339
-                            | Fixed::TimezoneName
-                            | Fixed::TimezoneOffsetColon
-                            | Fixed::TimezoneOffsetColonZ
-                            | Fixed::TimezoneOffset
-                            | Fixed::TimezoneOffsetZ
-                    ),
-                    _ => false,
-                });
-                if has_zone {
-                    let date_time =
-                        chrono::DateTime::parse_from_str(string, format).ok()?;
-                    Self::Native::from_i64(date_time.timestamp_millis())
-                } else {
-                    let date_time =
-                        chrono::NaiveDateTime::parse_from_str(string, format).ok()?;
-                    Self::Native::from_i64(date_time.timestamp_millis())
-                }
-            }
-            _ => None,
-        }
-    }
-}
-
-impl Parser for TimestampNanosecondType {
-    fn parse(string: &str) -> Option<i64> {
-        match Self::DATA_TYPE {
-            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-                string_to_timestamp_nanos(string).ok()
-            }
-            _ => None,
-        }
-    }
-}
-
-impl Parser for TimestampMicrosecondType {
-    fn parse(string: &str) -> Option<i64> {
-        match Self::DATA_TYPE {
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                let nanos = string_to_timestamp_nanos(string).ok();
-                nanos.map(|x| x / 1000)
-            }
-            _ => None,
-        }
-    }
-}
-
 fn parse_item<T: Parser>(string: &str) -> Option<T::Native> {
     T::parse(string)
 }
@@ -899,15 +774,8 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
         if negative {
             result = result.neg();
         }
-        if result > MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1]
-            || result < MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1]
-        {
-            return Err(ArrowError::ParseError(format!(
-                "parse decimal overflow, the precision {}, the scale {}, the value {}",
-                precision, scale, s
-            )));
-        }
-        Ok(result)
+        validate_decimal_precision(result, precision)
+            .map_err(|e| ArrowError::ParseError(format!("parse decimal overflow: {}", e)))
     } else {
         Err(ArrowError::ParseError(format!(
             "can't parse the string value {} to decimal",
@@ -918,6 +786,7 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
 
 // Parse the string format decimal value to i128 format without checking the precision and scale.
 // Like "125.12" to 12512_i128.
+#[cfg(test)]
 fn parse_decimal(s: &str) -> Result<i128> {
     if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
@@ -1140,8 +1009,7 @@ impl ReaderBuilder {
     /// Set the datetime fromat used to parse the string to Date64Type
     /// this fromat is used while when the schema wants to parse Date64Type.
     ///
-    /// For format refer to chrono docs:
-    /// https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html
+    /// For format refer to [chrono docs](https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html)
     ///
     pub fn with_datetime_format(mut self, datetime_format: String) -> Self {
         self.datetime_format = Some(datetime_format);
@@ -1180,6 +1048,13 @@ impl ReaderBuilder {
     /// Set the batch size (number of records to load at one time)
     pub fn with_batch_size(mut self, batch_size: usize) -> Self {
         self.batch_size = batch_size;
+        self
+    }
+
+    /// Set the bounds over which to scan the reader.
+    /// `start` and `end` are line numbers.
+    pub fn with_bounds(mut self, start: usize, end: usize) -> Self {
+        self.bounds = Some((start, end));
         self
     }
 
@@ -1224,7 +1099,7 @@ impl ReaderBuilder {
             schema,
             self.has_header,
             self.batch_size,
-            None,
+            self.bounds,
             self.projection.clone(),
             self.datetime_format,
         ))
@@ -1277,7 +1152,7 @@ mod tests {
                     .as_any()
                     .downcast_ref::<Float64Array>()
                     .unwrap();
-                assert!(57.653484 - lat.value(0) < f64::EPSILON);
+                assert_eq!(57.653484, lat.value(0));
 
                 // access data from a string array (ListArray<u8>)
                 let city = batch
@@ -1408,7 +1283,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(57.653484 - lat.value(0) < f64::EPSILON);
+        assert_eq!(57.653484, lat.value(0));
 
         // access data from a string array (ListArray<u8>)
         let city = batch
@@ -1446,7 +1321,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(57.653484 - lat.value(0) < f64::EPSILON);
+        assert_eq!(57.653484, lat.value(0));
 
         // access data from a string array (ListArray<u8>)
         let city = batch
@@ -1456,6 +1331,30 @@ mod tests {
             .unwrap();
 
         assert_eq!("Aberdeen, Aberdeen City, UK", city.value(13));
+    }
+
+    #[test]
+    fn test_csv_builder_with_bounds() {
+        let file = File::open("test/data/uk_cities.csv").unwrap();
+
+        // Set the bounds to the lines 0, 1 and 2.
+        let mut csv = ReaderBuilder::new().with_bounds(0, 2).build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+
+        // access data from a string array (ListArray<u8>)
+        let city = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        // The value on line 0 is within the bounds
+        assert_eq!("Elgin, Scotland, the UK", city.value(0));
+
+        // The value on line 13 is outside of the bounds. Therefore
+        // the call to .value() will panic.
+        let result = std::panic::catch_unwind(|| city.value(13));
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1570,7 +1469,7 @@ mod tests {
         let mut csv = builder.build(file).unwrap();
         let batch = csv.next().unwrap().unwrap();
 
-        assert_eq!(5, batch.num_rows());
+        assert_eq!(7, batch.num_rows());
         assert_eq!(6, batch.num_columns());
 
         let schema = batch.schema();
@@ -1766,8 +1665,15 @@ mod tests {
         let overflow_parse_tests = ["12345678", "12345678.9", "99999999.99"];
         for s in overflow_parse_tests {
             let result = parse_decimal_with_parameter(s, 10, 3);
-            assert_eq!(format!(
-                "Parser error: parse decimal overflow, the precision {}, the scale {}, the value {}", 10,3, s),result.unwrap_err().to_string());
+            let expected = "Parser error: parse decimal overflow";
+            let actual = result.unwrap_err().to_string();
+
+            assert!(
+                actual.contains(&expected),
+                "actual: '{}', expected: '{}'",
+                actual,
+                expected
+            );
         }
     }
 
@@ -1872,6 +1778,7 @@ mod tests {
         writeln!(csv1, "c1,c2,c3")?;
         writeln!(csv1, "1,\"foo\",0.5")?;
         writeln!(csv1, "3,\"bar\",1")?;
+        writeln!(csv1, "3,\"bar\",2e-06")?;
         // reading csv2 will set c2 to optional
         writeln!(csv2, "c1,c2,c3,c4")?;
         writeln!(csv2, "10,,3.14,true")?;
@@ -1887,7 +1794,7 @@ mod tests {
                 csv4.path().to_str().unwrap().to_string(),
             ],
             b',',
-            Some(3), // only csv1 and csv2 should be read
+            Some(4), // only csv1 and csv2 should be read
             true,
         )?;
 

@@ -27,14 +27,85 @@ use std::any::Any;
 
 /// An Array that can represent slots of varying types.
 ///
-/// Each slot in a `UnionArray` can have a value chosen from a number of types.  Each of the
-/// possible types are named like the fields of a [`StructArray`](crate::array::StructArray).
-/// A `UnionArray` can have two possible memory layouts, "dense" or "sparse".  For more information
-/// on please see the [specification](https://arrow.apache.org/docs/format/Columnar.html#union-layout).
+/// Each slot in a [UnionArray] can have a value chosen from a number
+/// of types.  Each of the possible types are named like the fields of
+/// a [`StructArray`](crate::array::StructArray).  A `UnionArray` can
+/// have two possible memory layouts, "dense" or "sparse".  For more
+/// information on please see the
+/// [specification](https://arrow.apache.org/docs/format/Columnar.html#union-layout).
 ///
-/// [`UnionBuilder`]can be used to create  `UnionArray`'s of primitive types.  `UnionArray`'s of nested
-/// types are also supported but not via `UnionBuilder`, see the tests for examples.
+/// [UnionBuilder](crate::array::UnionBuilder) can be used to
+/// create [UnionArray]'s of primitive types. `UnionArray`'s of nested
+/// types are also supported but not via `UnionBuilder`, see the tests
+/// for examples.
 ///
+/// # Examples
+/// ## Create a dense UnionArray `[1, 3.2, 34]`
+/// ```
+/// use arrow::buffer::Buffer;
+/// use arrow::datatypes::*;
+/// use std::sync::Arc;
+/// use arrow::array::{Array, Int32Array, Float64Array, UnionArray};
+///
+/// let int_array = Int32Array::from(vec![1, 34]);
+/// let float_array = Float64Array::from(vec![3.2]);
+/// let type_id_buffer = Buffer::from_slice_ref(&[0_i8, 1, 0]);
+/// let value_offsets_buffer = Buffer::from_slice_ref(&[0_i32, 0, 1]);
+///
+/// let children: Vec<(Field, Arc<dyn Array>)> = vec![
+///     (Field::new("A", DataType::Int32, false), Arc::new(int_array)),
+///     (Field::new("B", DataType::Float64, false), Arc::new(float_array)),
+/// ];
+///
+/// let array = UnionArray::try_new(
+///     type_id_buffer,
+///     Some(value_offsets_buffer),
+///     children,
+///     None,
+/// ).unwrap();
+///
+/// let value = array.value(0).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
+/// assert_eq!(1, value);
+///
+/// let value = array.value(1).as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+/// assert!(3.2 - value < f64::EPSILON);
+///
+/// let value = array.value(2).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
+/// assert_eq!(34, value);
+/// ```
+///
+/// ## Create a sparse UnionArray `[1, 3.2, 34]`
+/// ```
+/// use arrow::buffer::Buffer;
+/// use arrow::datatypes::*;
+/// use std::sync::Arc;
+/// use arrow::array::{Array, Int32Array, Float64Array, UnionArray};
+///
+/// let int_array = Int32Array::from(vec![Some(1), None, Some(34)]);
+/// let float_array = Float64Array::from(vec![None, Some(3.2), None]);
+/// let type_id_buffer = Buffer::from_slice_ref(&[0_i8, 1, 0]);
+///
+/// let children: Vec<(Field, Arc<dyn Array>)> = vec![
+///     (Field::new("A", DataType::Int32, false), Arc::new(int_array)),
+///     (Field::new("B", DataType::Float64, false), Arc::new(float_array)),
+/// ];
+///
+/// let array = UnionArray::try_new(
+///     type_id_buffer,
+///     None,
+///     children,
+///     None,
+/// ).unwrap();
+///
+/// let value = array.value(0).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
+/// assert_eq!(1, value);
+///
+/// let value = array.value(1).as_any().downcast_ref::<Float64Array>().unwrap().value(0);
+/// assert!(3.2 - value < f64::EPSILON);
+///
+/// let value = array.value(2).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
+/// assert_eq!(34, value);
+/// ```
 pub struct UnionArray {
     data: ArrayData,
     boxed_fields: Vec<ArrayRef>,
@@ -532,16 +603,17 @@ mod tests {
         let type_id_buffer = Buffer::from_slice_ref(&type_ids);
         let value_offsets_buffer = Buffer::from_slice_ref(&value_offsets);
 
-        let mut children: Vec<(Field, Arc<dyn Array>)> = Vec::new();
-        children.push((
-            Field::new("A", DataType::Utf8, false),
-            Arc::new(string_array),
-        ));
-        children.push((Field::new("B", DataType::Int32, false), Arc::new(int_array)));
-        children.push((
-            Field::new("C", DataType::Float64, false),
-            Arc::new(float_array),
-        ));
+        let children: Vec<(Field, Arc<dyn Array>)> = vec![
+            (
+                Field::new("A", DataType::Utf8, false),
+                Arc::new(string_array),
+            ),
+            (Field::new("B", DataType::Int32, false), Arc::new(int_array)),
+            (
+                Field::new("C", DataType::Float64, false),
+                Arc::new(float_array),
+            ),
+        ];
         let array = UnionArray::try_new(
             type_id_buffer,
             Some(value_offsets_buffer),
@@ -594,7 +666,7 @@ mod tests {
             .downcast_ref::<Float64Array>()
             .unwrap()
             .value(0);
-        assert!(10.0 - value < f64::EPSILON);
+        assert_eq!(10.0, value);
 
         let slot = array.value(4);
         let value = slot
@@ -699,7 +771,7 @@ mod tests {
                     let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
-                    assert!(value - 3_f64 < f64::EPSILON);
+                    assert_eq!(value, 3_f64);
                 }
                 2 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -711,7 +783,7 @@ mod tests {
                     let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
-                    assert!(5_f64 - value < f64::EPSILON);
+                    assert_eq!(5_f64, value);
                 }
                 4 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -763,7 +835,7 @@ mod tests {
                     assert!(!union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
-                    assert!(value - 3_f64 < f64::EPSILON);
+                    assert_eq!(value, 3_f64);
                 }
                 3 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
@@ -800,7 +872,7 @@ mod tests {
                     assert!(!new_union.is_null(i));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
-                    assert!(value - 3_f64 < f64::EPSILON);
+                    assert_eq!(value, 3_f64);
                 }
                 2 => assert!(new_union.is_null(i)),
                 3 => {

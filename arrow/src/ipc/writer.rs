@@ -36,7 +36,7 @@ use crate::util::bit_util;
 use ipc::CONTINUATION_MARKER;
 
 /// IPC write options used to control the behaviour of the writer
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IpcWriteOptions {
     /// Write padding after memory buffers to this multiple of bytes.
     /// Generally 8 or 64, defaults to 8
@@ -515,6 +515,18 @@ impl<W: Write> FileWriter<W> {
 
         Ok(())
     }
+
+    /// Unwraps the BufWriter housed in FileWriter.writer, returning the underlying
+    /// writer
+    ///
+    /// The buffer is flushed and the FileWriter is finished before returning the
+    /// writer.
+    pub fn into_inner(mut self) -> Result<W> {
+        if !self.finished {
+            self.finish()?;
+        }
+        self.writer.into_inner().map_err(ArrowError::from)
+    }
 }
 
 pub struct StreamWriter<W: Write> {
@@ -522,8 +534,6 @@ pub struct StreamWriter<W: Write> {
     writer: BufWriter<W>,
     /// IPC write options
     write_options: IpcWriteOptions,
-    /// A reference to the schema, used in validating record batches
-    schema: Schema,
     /// Whether the writer footer has been written, and the writer is finished
     finished: bool,
     /// Keeps track of dictionaries that have been written
@@ -552,7 +562,6 @@ impl<W: Write> StreamWriter<W> {
         Ok(Self {
             writer,
             write_options,
-            schema: schema.clone(),
             finished: false,
             dictionary_tracker: DictionaryTracker::new(false),
             data_gen,
@@ -872,7 +881,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}.arrow_file", "arrow"))
                     .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
             while let Some(Ok(read_batch)) = reader.next() {
                 read_batch
                     .columns()
@@ -920,7 +929,7 @@ mod tests {
 
         {
             let file = File::open(&file_name).unwrap();
-            let reader = FileReader::try_new(file).unwrap();
+            let reader = FileReader::try_new(file, None).unwrap();
             reader.for_each(|maybe_batch| {
                 maybe_batch
                     .unwrap()
@@ -990,7 +999,7 @@ mod tests {
             ))
             .unwrap();
 
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read and rewrite the file to a temp location
             {
@@ -1011,7 +1020,7 @@ mod tests {
                 version, path
             ))
             .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1042,7 +1051,7 @@ mod tests {
             ))
             .unwrap();
 
-            let reader = StreamReader::try_new(file).unwrap();
+            let reader = StreamReader::try_new(file, None).unwrap();
 
             // read and rewrite the stream to a temp location
             {
@@ -1061,7 +1070,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
                     .unwrap();
-            let mut reader = StreamReader::try_new(file).unwrap();
+            let mut reader = StreamReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1099,7 +1108,7 @@ mod tests {
             ))
             .unwrap();
 
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read and rewrite the file to a temp location
             {
@@ -1125,7 +1134,7 @@ mod tests {
                 version, path
             ))
             .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1163,7 +1172,7 @@ mod tests {
             ))
             .unwrap();
 
-            let reader = StreamReader::try_new(file).unwrap();
+            let reader = StreamReader::try_new(file, None).unwrap();
 
             // read and rewrite the stream to a temp location
             {
@@ -1186,7 +1195,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
                     .unwrap();
-            let mut reader = StreamReader::try_new(file).unwrap();
+            let mut reader = StreamReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);

@@ -74,7 +74,7 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
             let mut cells = Vec::new();
             for col in 0..batch.num_columns() {
                 let column = batch.column(col);
-                cells.push(Cell::new(&array_value_to_string(&column, row)?));
+                cells.push(Cell::new(&array_value_to_string(column, row)?));
             }
             table.add_row(cells);
         }
@@ -96,7 +96,7 @@ fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
 
     for col in columns {
         for row in 0..col.len() {
-            let cells = vec![Cell::new(&array_value_to_string(&col, row)?)];
+            let cells = vec![Cell::new(&array_value_to_string(col, row)?)];
             table.add_row(cells);
         }
     }
@@ -119,7 +119,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::array::{DecimalBuilder, FixedSizeListBuilder, Int32Array};
+    use crate::array::{DecimalArray, FixedSizeListBuilder, Int32Array};
     use std::fmt::Write;
     use std::sync::Arc;
 
@@ -320,7 +320,7 @@ mod tests {
         let mut builder = FixedSizeBinaryBuilder::new(3, 3);
 
         builder.append_value(&[1, 2, 3]).unwrap();
-        builder.append_null();
+        builder.append_null().unwrap();
         builder.append_value(&[7, 8, 9]).unwrap();
 
         let array = Arc::new(builder.finish());
@@ -517,17 +517,16 @@ mod tests {
 
     #[test]
     fn test_decimal_display() -> Result<()> {
-        let capacity = 10;
         let precision = 10;
         let scale = 2;
 
-        let mut builder = DecimalBuilder::new(capacity, precision, scale);
-        builder.append_value(101).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(200).unwrap();
-        builder.append_value(3040).unwrap();
+        let array = [Some(101), None, Some(200), Some(3040)]
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(precision, scale)
+            .unwrap();
 
-        let dm = Arc::new(builder.finish()) as ArrayRef;
+        let dm = Arc::new(array) as ArrayRef;
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f",
@@ -558,17 +557,16 @@ mod tests {
 
     #[test]
     fn test_decimal_display_zero_scale() -> Result<()> {
-        let capacity = 10;
         let precision = 5;
         let scale = 0;
 
-        let mut builder = DecimalBuilder::new(capacity, precision, scale);
-        builder.append_value(101).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(200).unwrap();
-        builder.append_value(3040).unwrap();
+        let array = [Some(101), None, Some(200), Some(3040)]
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(precision, scale)
+            .unwrap();
 
-        let dm = Arc::new(builder.finish()) as ArrayRef;
+        let dm = Arc::new(array) as ArrayRef;
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f",
@@ -677,7 +675,7 @@ mod tests {
         )?;
 
         let mut buf = String::new();
-        write!(&mut buf, "{}", pretty_format_batches(&[batch])?.to_string()).unwrap();
+        write!(&mut buf, "{}", pretty_format_batches(&[batch])?).unwrap();
 
         let s = vec![
             "+---+-----+",
@@ -689,7 +687,7 @@ mod tests {
             "| d | 100 |",
             "+---+-----+",
         ];
-        let expected = String::from(s.join("\n"));
+        let expected = s.join("\n");
         assert_eq!(expected, buf);
 
         Ok(())

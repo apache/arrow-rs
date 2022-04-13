@@ -325,8 +325,8 @@ pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 /// ```
 pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 ///
-/// A primitive array where each element is of type `TimestampSecondType.`
-/// See also [`Timestamp.`](crate::datatypes::Timestamp)
+/// A primitive array where each element is of type [TimestampSecondType].
+/// See also [`Timestamp`](crate::datatypes::DataType::Timestamp).
 ///
 /// # Example: UTC timestamps post epoch
 /// ```
@@ -400,6 +400,7 @@ pub use self::array_string::StringOffsetSizeTrait;
 
 // --------------------- Array Builder ---------------------
 
+pub use self::builder::make_builder;
 pub use self::builder::BooleanBufferBuilder;
 pub use self::builder::BufferBuilder;
 
@@ -453,19 +454,19 @@ pub use self::builder::BooleanBuilder;
 pub use self::builder::DecimalBuilder;
 pub use self::builder::FixedSizeBinaryBuilder;
 pub use self::builder::FixedSizeListBuilder;
+pub use self::builder::GenericListBuilder;
 pub use self::builder::GenericStringBuilder;
 pub use self::builder::LargeBinaryBuilder;
 pub use self::builder::LargeListBuilder;
 pub use self::builder::LargeStringBuilder;
 pub use self::builder::ListBuilder;
+pub use self::builder::MapBuilder;
 pub use self::builder::PrimitiveBuilder;
 pub use self::builder::PrimitiveDictionaryBuilder;
 pub use self::builder::StringBuilder;
 pub use self::builder::StringDictionaryBuilder;
 pub use self::builder::StructBuilder;
 pub use self::builder::UnionBuilder;
-pub use self::builder::MAX_DECIMAL_FOR_EACH_PRECISION;
-pub use self::builder::MIN_DECIMAL_FOR_EACH_PRECISION;
 
 pub type Int8Builder = PrimitiveBuilder<Int8Type>;
 pub type Int16Builder = PrimitiveBuilder<Int16Type>;
@@ -513,7 +514,7 @@ pub use self::ord::{build_compare, DynComparator};
 // --------------------- Array downcast helper functions ---------------------
 
 pub use self::cast::{
-    as_boolean_array, as_dictionary_array, as_generic_binary_array,
+    as_boolean_array, as_decimal_array, as_dictionary_array, as_generic_binary_array,
     as_generic_list_array, as_large_list_array, as_largestring_array, as_list_array,
     as_map_array, as_null_array, as_primitive_array, as_string_array, as_struct_array,
     as_union_array,
@@ -521,7 +522,7 @@ pub use self::cast::{
 
 // ------------------------------ C Data Interface ---------------------------
 
-pub use self::array::make_array_from_raw;
+pub use self::array::{export_array_into_raw, make_array_from_raw};
 
 #[cfg(test)]
 mod tests {

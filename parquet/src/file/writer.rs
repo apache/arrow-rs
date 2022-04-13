@@ -1066,13 +1066,13 @@ mod tests {
             rows,
             "row count in metadata not equal to number of rows written"
         );
-        for i in 0..reader.num_row_groups() {
+        for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
             let row_group_reader = reader.get_row_group(i).unwrap();
             let iter = row_group_reader.get_row_iter(None).unwrap();
             let res = iter
                 .map(|elem| elem.get_int(0).unwrap())
                 .collect::<Vec<i32>>();
-            assert_eq!(res, data[i]);
+            assert_eq!(res, *item);
         }
     }
 
@@ -1153,13 +1153,13 @@ mod tests {
             rows,
             "row count in metadata not equal to number of rows written"
         );
-        for i in 0..reader.num_row_groups() {
+        for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
             let row_group_reader = reader.get_row_group(i).unwrap();
             let iter = row_group_reader.get_row_iter(None).unwrap();
             let res = iter
                 .map(|elem| elem.get_int(0).unwrap())
                 .collect::<Vec<i32>>();
-            assert_eq!(res, data[i]);
+            assert_eq!(res, *item);
         }
     }
 }

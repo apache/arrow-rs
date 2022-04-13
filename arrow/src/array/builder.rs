@@ -1153,87 +1153,6 @@ pub struct FixedSizeBinaryBuilder {
     builder: FixedSizeListBuilder<UInt8Builder>,
 }
 
-pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
-    9,
-    99,
-    999,
-    9999,
-    99999,
-    999999,
-    9999999,
-    99999999,
-    999999999,
-    9999999999,
-    99999999999,
-    999999999999,
-    9999999999999,
-    99999999999999,
-    999999999999999,
-    9999999999999999,
-    99999999999999999,
-    999999999999999999,
-    9999999999999999999,
-    99999999999999999999,
-    999999999999999999999,
-    9999999999999999999999,
-    99999999999999999999999,
-    999999999999999999999999,
-    9999999999999999999999999,
-    99999999999999999999999999,
-    999999999999999999999999999,
-    9999999999999999999999999999,
-    99999999999999999999999999999,
-    999999999999999999999999999999,
-    9999999999999999999999999999999,
-    99999999999999999999999999999999,
-    999999999999999999999999999999999,
-    9999999999999999999999999999999999,
-    99999999999999999999999999999999999,
-    999999999999999999999999999999999999,
-    9999999999999999999999999999999999999,
-    170141183460469231731687303715884105727,
-];
-pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
-    -9,
-    -99,
-    -999,
-    -9999,
-    -99999,
-    -999999,
-    -9999999,
-    -99999999,
-    -999999999,
-    -9999999999,
-    -99999999999,
-    -999999999999,
-    -9999999999999,
-    -99999999999999,
-    -999999999999999,
-    -9999999999999999,
-    -99999999999999999,
-    -999999999999999999,
-    -9999999999999999999,
-    -99999999999999999999,
-    -999999999999999999999,
-    -9999999999999999999999,
-    -99999999999999999999999,
-    -999999999999999999999999,
-    -9999999999999999999999999,
-    -99999999999999999999999999,
-    -999999999999999999999999999,
-    -9999999999999999999999999999,
-    -99999999999999999999999999999,
-    -999999999999999999999999999999,
-    -9999999999999999999999999999999,
-    -99999999999999999999999999999999,
-    -999999999999999999999999999999999,
-    -9999999999999999999999999999999999,
-    -99999999999999999999999999999999999,
-    -999999999999999999999999999999999999,
-    -9999999999999999999999999999999999999,
-    -170141183460469231731687303715884105728,
-];
-
 ///
 /// Array Builder for [`DecimalArray`]
 ///
@@ -1547,14 +1466,7 @@ impl DecimalBuilder {
     /// distinct array element.
     #[inline]
     pub fn append_value(&mut self, value: i128) -> Result<()> {
-        if value > MAX_DECIMAL_FOR_EACH_PRECISION[self.precision - 1]
-            || value < MIN_DECIMAL_FOR_EACH_PRECISION[self.precision - 1]
-        {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "The value of {} i128 is not compatible with Decimal({},{})",
-                value, self.precision, self.scale
-            )));
-        }
+        let value = validate_decimal_precision(value, self.precision)?;
         let value_as_bytes = Self::from_i128_to_fixed_size_bytes(
             value,
             self.builder.value_length() as usize,
@@ -1839,6 +1751,7 @@ impl Default for MapFieldNames {
     }
 }
 
+#[allow(dead_code)]
 impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     pub fn new(
         field_names: Option<MapFieldNames>,
@@ -2204,7 +2117,10 @@ impl UnionBuilder {
         let mut field_data = match self.fields.remove(&type_name) {
             Some(data) => data,
             None => match self.value_offset_builder {
-                Some(_) => FieldData::new(self.fields.len() as i8, T::DATA_TYPE, None),
+                Some(_) => {
+                    // For Dense Union, we don't build bitmap in individual field
+                    FieldData::new(self.fields.len() as i8, T::DATA_TYPE, None)
+                }
                 None => {
                     let mut fd = FieldData::new(
                         self.fields.len() as i8,
@@ -3788,12 +3704,14 @@ mod tests {
 
     #[test]
     fn test_struct_array_builder_from_schema() {
-        let mut fields = Vec::new();
-        fields.push(Field::new("f1", DataType::Float32, false));
-        fields.push(Field::new("f2", DataType::Utf8, false));
-        let mut sub_fields = Vec::new();
-        sub_fields.push(Field::new("g1", DataType::Int32, false));
-        sub_fields.push(Field::new("g2", DataType::Boolean, false));
+        let mut fields = vec![
+            Field::new("f1", DataType::Float32, false),
+            Field::new("f2", DataType::Utf8, false),
+        ];
+        let sub_fields = vec![
+            Field::new("g1", DataType::Int32, false),
+            Field::new("g2", DataType::Boolean, false),
+        ];
         let struct_type = DataType::Struct(sub_fields);
         fields.push(Field::new("f3", struct_type, false));
 
@@ -3809,8 +3727,7 @@ mod tests {
         expected = "Data type List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }) is not currently supported"
     )]
     fn test_struct_array_builder_from_schema_unsupported_type() {
-        let mut fields = Vec::new();
-        fields.push(Field::new("f1", DataType::Int16, false));
+        let mut fields = vec![Field::new("f1", DataType::Int16, false)];
         let list_type =
             DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
         fields.push(Field::new("f2", list_type, false));

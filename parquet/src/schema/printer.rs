@@ -163,6 +163,31 @@ fn print_column_chunk_metadata(
         Some(stats) => stats.to_string(),
     };
     writeln!(out, "statistics: {}", statistics_str);
+    let bloom_filter_offset_str = match cc_metadata.bloom_filter_offset() {
+        None => "N/A".to_owned(),
+        Some(bfo) => bfo.to_string(),
+    };
+    writeln!(out, "bloom filter offset: {}", bloom_filter_offset_str);
+    let offset_index_offset_str = match cc_metadata.offset_index_offset() {
+        None => "N/A".to_owned(),
+        Some(oio) => oio.to_string(),
+    };
+    writeln!(out, "offset index offset: {}", offset_index_offset_str);
+    let offset_index_length_str = match cc_metadata.offset_index_length() {
+        None => "N/A".to_owned(),
+        Some(oil) => oil.to_string(),
+    };
+    writeln!(out, "offset index length: {}", offset_index_length_str);
+    let column_index_offset_str = match cc_metadata.column_index_offset() {
+        None => "N/A".to_owned(),
+        Some(cio) => cio.to_string(),
+    };
+    writeln!(out, "column index offset: {}", column_index_offset_str);
+    let column_index_length_str = match cc_metadata.column_index_length() {
+        None => "N/A".to_owned(),
+        Some(cil) => cil.to_string(),
+    };
+    writeln!(out, "column index length: {}", column_index_length_str);
     writeln!(out);
 }
 
@@ -684,19 +709,20 @@ mod tests {
                     .with_length(12)
                     .with_id(2)
                     .build();
-            let mut struct_fields = Vec::new();
-            struct_fields.push(Arc::new(f1.unwrap()));
-            struct_fields.push(Arc::new(f2.unwrap()));
-            struct_fields.push(Arc::new(f3.unwrap()));
+
+            let mut struct_fields = vec![
+                Arc::new(f1.unwrap()),
+                Arc::new(f2.unwrap()),
+                Arc::new(f3.unwrap()),
+            ];
             let field = Type::group_type_builder("field")
                 .with_repetition(Repetition::OPTIONAL)
                 .with_fields(&mut struct_fields)
                 .with_id(1)
                 .build()
                 .unwrap();
-            let mut fields = Vec::new();
-            fields.push(Arc::new(field));
-            fields.push(Arc::new(f4.unwrap()));
+
+            let mut fields = vec![Arc::new(field), Arc::new(f4.unwrap())];
             let message = Type::group_type_builder("schema")
                 .with_fields(&mut fields)
                 .with_id(2)

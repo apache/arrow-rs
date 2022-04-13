@@ -49,6 +49,7 @@ pub fn create_random_batch(
         columns,
         &RecordBatchOptions {
             match_field_names: false,
+            row_count: None,
         },
     )
 }

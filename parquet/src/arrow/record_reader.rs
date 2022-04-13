@@ -167,7 +167,30 @@ where
                 break;
             }
 
-            let batch_size = max(num_records - records_read, MIN_BATCH_SIZE);
+            // If repetition levels present, we don't know how much more to read
+            // in order to read the requested number of records, therefore read at least
+            // MIN_BATCH_SIZE, otherwise read **exactly** what was requested. This helps
+            // to avoid a degenerate case where the buffers are never fully drained.
+            //
+            // Consider the scenario where the user is requesting batches of MIN_BATCH_SIZE.
+            //
+            // When transitioning across a row group boundary, this will read some remainder
+            // from the row group `r`, before reading MIN_BATCH_SIZE from the next row group,
+            // leaving `MIN_BATCH_SIZE + r` in the buffer.
+            //
+            // The client will then only split off the `MIN_BATCH_SIZE` they actually wanted,
+            // leaving behind `r`. This will continue indefinitely.
+            //
+            // Aside from wasting cycles splitting and shuffling buffers unnecessarily, this
+            // prevents dictionary preservation from functioning correctly as the buffer
+            // will never be emptied, allowing a new dictionary to be registered.
+            //
+            // This degenerate case can still occur for repeated fields, but
+            // it is avoided for the more common case of a non-repeated field
+            let batch_size = match &self.rep_levels {
+                Some(_) => max(num_records - records_read, MIN_BATCH_SIZE),
+                None => num_records - records_read,
+            };
 
             // Try to more value from parquet pages
             let values_read = self.read_one_batch(batch_size)?;
@@ -268,7 +291,7 @@ where
                 self.values_written,
                 values_read,
                 levels_read,
-                def_levels.rev_valid_positions_iter(),
+                def_levels.nulls().as_slice(),
             );
         }
 
@@ -289,8 +312,13 @@ where
                 let mut records_read = 0;
                 let mut end_of_last_record = self.num_values;
 
-                for current in self.num_values..self.values_written {
-                    if buf[current] == 0 && current != self.num_values {
+                for (current, item) in buf
+                    .iter()
+                    .enumerate()
+                    .take(self.values_written)
+                    .skip(self.num_values)
+                {
+                    if *item == 0 && current != self.num_values {
                         records_read += 1;
                         end_of_last_record = current;
 
@@ -332,8 +360,9 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{BooleanBufferBuilder, Int16BufferBuilder, Int32BufferBuilder};
+    use arrow::array::{Int16BufferBuilder, Int32BufferBuilder};
     use arrow::bitmap::Bitmap;
+    use arrow::buffer::Buffer;
 
     use crate::basic::Encoding;
     use crate::column::page::Page;
@@ -347,7 +376,7 @@ mod tests {
     use super::RecordReader;
 
     struct TestPageReader {
-        pages: Box<dyn Iterator<Item = Page>>,
+        pages: Box<dyn Iterator<Item = Page> + Send>,
     }
 
     impl TestPageReader {
@@ -524,15 +553,6 @@ mod tests {
             assert_eq!(7, record_reader.num_values());
         }
 
-        // Verify result record data
-        let mut bb = Int32BufferBuilder::new(7);
-        bb.append_slice(&[0, 7, 0, 6, 3, 0, 8]);
-        let expected_buffer = bb.finish();
-        assert_eq!(
-            expected_buffer,
-            record_reader.consume_record_data().unwrap()
-        );
-
         // Verify result def levels
         let mut bb = Int16BufferBuilder::new(7);
         bb.append_slice(&[1i16, 2i16, 0i16, 2i16, 2i16, 0i16, 2i16]);
@@ -543,13 +563,28 @@ mod tests {
         );
 
         // Verify bitmap
-        let mut bb = BooleanBufferBuilder::new(7);
-        bb.append_slice(&[false, true, false, true, true, false, true]);
-        let expected_bitmap = Bitmap::from(bb.finish());
+        let expected_valid = &[false, true, false, true, true, false, true];
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_bitmap = Bitmap::from(expected_buffer);
         assert_eq!(
             Some(expected_bitmap),
             record_reader.consume_bitmap().unwrap()
         );
+
+        // Verify result record data
+        let actual = record_reader.consume_record_data().unwrap();
+        let actual_values = unsafe { actual.typed_data::<i32>() };
+
+        let expected = &[0, 7, 0, 6, 3, 0, 8];
+        assert_eq!(actual_values.len(), expected.len());
+
+        // Only validate valid values are equal
+        let iter = expected_valid.iter().zip(actual_values).zip(expected);
+        for ((valid, actual), expected) in iter {
+            if *valid {
+                assert_eq!(actual, expected)
+            }
+        }
     }
 
     #[test]
@@ -632,15 +667,6 @@ mod tests {
             assert_eq!(9, record_reader.num_values());
         }
 
-        // Verify result record data
-        let mut bb = Int32BufferBuilder::new(9);
-        bb.append_slice(&[4, 0, 0, 7, 6, 3, 2, 8, 9]);
-        let expected_buffer = bb.finish();
-        assert_eq!(
-            expected_buffer,
-            record_reader.consume_record_data().unwrap()
-        );
-
         // Verify result def levels
         let mut bb = Int16BufferBuilder::new(9);
         bb.append_slice(&[2i16, 0i16, 1i16, 2i16, 2i16, 2i16, 2i16, 2i16, 2i16]);
@@ -651,13 +677,27 @@ mod tests {
         );
 
         // Verify bitmap
-        let mut bb = BooleanBufferBuilder::new(9);
-        bb.append_slice(&[true, false, false, true, true, true, true, true, true]);
-        let expected_bitmap = Bitmap::from(bb.finish());
+        let expected_valid = &[true, false, false, true, true, true, true, true, true];
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_bitmap = Bitmap::from(expected_buffer);
         assert_eq!(
             Some(expected_bitmap),
             record_reader.consume_bitmap().unwrap()
         );
+
+        // Verify result record data
+        let actual = record_reader.consume_record_data().unwrap();
+        let actual_values = unsafe { actual.typed_data::<i32>() };
+        let expected = &[4, 0, 0, 7, 6, 3, 2, 8, 9];
+        assert_eq!(actual_values.len(), expected.len());
+
+        // Only validate valid values are equal
+        let iter = expected_valid.iter().zip(actual_values).zip(expected);
+        for ((valid, actual), expected) in iter {
+            if *valid {
+                assert_eq!(actual, expected)
+            }
+        }
     }
 
     #[test]

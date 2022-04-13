@@ -21,40 +21,20 @@
 
 use core::slice;
 use std::ptr::NonNull;
-use std::sync::Arc;
 use std::{fmt::Debug, fmt::Formatter};
 
-use crate::{alloc, ffi};
-
-/// Mode of deallocating memory regions
-pub enum Deallocation {
-    /// Native deallocation, using Rust deallocator with Arrow-specific memory alignment
-    Native(usize),
-    /// Foreign interface, via a callback
-    Foreign(Arc<ffi::FFI_ArrowArray>),
-}
-
-impl Debug for Deallocation {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        match self {
-            Deallocation::Native(capacity) => {
-                write!(f, "Deallocation::Native {{ capacity: {} }}", capacity)
-            }
-            Deallocation::Foreign(_) => {
-                write!(f, "Deallocation::Foreign {{ capacity: unknown }}")
-            }
-        }
-    }
-}
+use crate::alloc;
+use crate::alloc::Deallocation;
 
 /// A continuous, fixed-size, immutable memory region that knows how to de-allocate itself.
 /// This structs' API is inspired by the `bytes::Bytes`, but it is not limited to using rust's
 /// global allocator nor u8 alignment.
 ///
-/// In the most common case, this buffer is allocated using [`allocate_aligned`](memory::allocate_aligned)
-/// and deallocated accordingly [`free_aligned`](memory::free_aligned).
-/// When the region is allocated by an foreign allocator, [Deallocation::Foreign], this calls the
-/// foreign deallocator to deallocate the region when it is no longer needed.
+/// In the most common case, this buffer is allocated using [`allocate_aligned`](crate::alloc::allocate_aligned)
+/// and deallocated accordingly [`free_aligned`](crate::alloc::free_aligned).
+///
+/// When the region is allocated by a different allocator, [Deallocation::Custom], this calls the
+/// custom deallocator to deallocate the region when it is no longer needed.
 pub struct Bytes {
     /// The raw pointer to be beginning of the region
     ptr: NonNull<u8>,
@@ -80,7 +60,7 @@ impl Bytes {
     /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
     /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
     #[inline]
-    pub unsafe fn new(
+    pub(crate) unsafe fn new(
         ptr: std::ptr::NonNull<u8>,
         len: usize,
         deallocation: Deallocation,
@@ -113,10 +93,10 @@ impl Bytes {
 
     pub fn capacity(&self) -> usize {
         match self.deallocation {
-            Deallocation::Native(capacity) => capacity,
+            Deallocation::Arrow(capacity) => capacity,
             // we cannot determine this in general,
             // and thus we state that this is externally-owned memory
-            Deallocation::Foreign(_) => 0,
+            Deallocation::Custom(_) => 0,
         }
     }
 }
@@ -125,11 +105,11 @@ impl Drop for Bytes {
     #[inline]
     fn drop(&mut self) {
         match &self.deallocation {
-            Deallocation::Native(capacity) => {
+            Deallocation::Arrow(capacity) => {
                 unsafe { alloc::free_aligned::<u8>(self.ptr, *capacity) };
             }
-            // foreign interface knows how to deallocate itself.
-            Deallocation::Foreign(_) => (),
+            // The automatic drop implementation will free the memory once the reference count reaches zero
+            Deallocation::Custom(_allocation) => (),
         }
     }
 }

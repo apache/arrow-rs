@@ -15,16 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Provides API for reading/writing Arrow
+//! [RecordBatch](arrow::record_batch::RecordBatch)es and
+//! [Array](arrow::array::Array)s to/from Parquet Files.
+//!
 //! [Apache Arrow](http://arrow.apache.org/) is a cross-language development platform for
 //! in-memory data.
-//!
-//! This mod provides API for converting between arrow and parquet.
 //!
 //!# Example of writing Arrow record batch to Parquet file
 //!
 //!```rust
-//! use arrow::array::Int32Array;
-//! use arrow::datatypes::{DataType, Field, Schema};
+//! use arrow::array::{Int32Array, ArrayRef};
 //! use arrow::record_batch::RecordBatch;
 //! use parquet::arrow::arrow_writer::ArrowWriter;
 //! use parquet::file::properties::WriterProperties;
@@ -32,25 +33,21 @@
 //! use std::sync::Arc;
 //! let ids = Int32Array::from(vec![1, 2, 3, 4]);
 //! let vals = Int32Array::from(vec![5, 6, 7, 8]);
-//! let schema = Arc::new(Schema::new(vec![
-//!     Field::new("id", DataType::Int32, false),
-//!     Field::new("val", DataType::Int32, false),
-//! ]));
+//! let batch = RecordBatch::try_from_iter(vec![
+//!   ("id", Arc::new(ids) as ArrayRef),
+//!   ("val", Arc::new(vals) as ArrayRef),
+//! ]).unwrap();
 //!
 //! let file = File::create("data.parquet").unwrap();
-//!
-//! let batch =
-//!     RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(ids), Arc::new(vals)]).unwrap();
-//! let batches = vec![batch];
 //!
 //! // Default writer properties
 //! let props = WriterProperties::builder().build();
 //!
-//! let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).unwrap();
+//! let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
 //!
-//! for batch in batches {
-//!     writer.write(&batch).expect("Writing batch");
-//! }
+//! writer.write(&batch).expect("Writing batch");
+//!
+//! // writer must be closed to write footer
 //! writer.close().unwrap();
 //! ```
 //!
@@ -119,9 +116,13 @@
 //! ```
 
 experimental_mod!(array_reader);
-experimental_mod!(arrow_array_reader);
 pub mod arrow_reader;
 pub mod arrow_writer;
+mod bit_util;
+
+#[cfg(feature = "async")]
+pub mod async_reader;
+
 experimental_mod!(converter);
 pub(in crate::arrow) mod levels;
 pub(in crate::arrow) mod record_reader;
@@ -130,8 +131,9 @@ experimental_mod!(schema);
 pub use self::arrow_reader::ArrowReader;
 pub use self::arrow_reader::ParquetFileArrowReader;
 pub use self::arrow_writer::ArrowWriter;
+#[cfg(feature = "async")]
+pub use self::async_reader::ParquetRecordBatchStreamBuilder;
 
-#[cfg(feature = "experimental")]
 pub use self::schema::{
     arrow_to_parquet_schema, parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns,
     parquet_to_arrow_schema_by_root_columns,

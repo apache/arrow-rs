@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::arrow::bit_util::iter_set_bits_rev;
 use crate::arrow::record_reader::buffer::{
     BufferQueue, ScalarBuffer, ScalarValue, ValuesBuffer,
 };
@@ -26,6 +27,7 @@ use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
 
 /// A buffer of variable-sized byte arrays that can be converted into
 /// a corresponding [`ArrayRef`]
+#[derive(Debug)]
 pub struct OffsetBuffer<I: ScalarValue> {
     pub offsets: ScalarBuffer<I>,
     pub values: ScalarBuffer<u8>,
@@ -46,6 +48,10 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
     /// Returns the number of byte arrays in this buffer
     pub fn len(&self) -> usize {
         self.offsets.len() - 1
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// If `validate_utf8` this verifies that the first character of `data` is
@@ -80,6 +86,8 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
     ///
     /// For each value `key` in `keys` this will insert
     /// `&dict_values[dict_offsets[key]..dict_offsets[key+1]]`
+    ///
+    /// Note: This will validate offsets are valid
     pub fn extend_from_dictionary<K: ArrowNativeType, V: ArrowNativeType>(
         &mut self,
         keys: &[K],
@@ -89,7 +97,10 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
         for key in keys {
             let index = key.to_usize().unwrap();
             if index + 1 >= dict_offsets.len() {
-                return Err(general_err!("invalid offset in byte array: {}", index));
+                return Err(general_err!(
+                    "dictionary key beyond bounds of dictionary: 0..{}",
+                    dict_offsets.len().saturating_sub(1)
+                ));
             }
             let start_offset = dict_offsets[index].to_usize().unwrap();
             let end_offset = dict_offsets[index + 1].to_usize().unwrap();
@@ -178,7 +189,7 @@ impl<I: OffsetSizeTrait + ScalarValue> ValuesBuffer for OffsetBuffer<I> {
         read_offset: usize,
         values_read: usize,
         levels_read: usize,
-        rev_position_iter: impl Iterator<Item = usize>,
+        valid_mask: &[u8],
     ) {
         assert_eq!(self.offsets.len(), read_offset + values_read + 1);
         self.offsets.resize(read_offset + levels_read + 1);
@@ -189,7 +200,11 @@ impl<I: OffsetSizeTrait + ScalarValue> ValuesBuffer for OffsetBuffer<I> {
         let mut last_start_offset = I::from_usize(self.values.len()).unwrap();
 
         let values_range = read_offset..read_offset + values_read;
-        for (value_pos, level_pos) in values_range.clone().rev().zip(rev_position_iter) {
+        for (value_pos, level_pos) in values_range
+            .clone()
+            .rev()
+            .zip(iter_set_bits_rev(valid_mask))
+        {
             assert!(level_pos >= value_pos);
             assert!(level_pos < last_pos);
 
@@ -280,19 +295,36 @@ mod tests {
     #[test]
     fn test_offset_buffer_pad_nulls() {
         let mut buffer = OffsetBuffer::<i32>::default();
-        for v in ["a", "b", "c", "def", "gh"] {
+        let values = ["a", "b", "c", "def", "gh"];
+        for v in &values {
             buffer.try_push(v.as_bytes(), false).unwrap()
         }
 
-        // Both trailing and leading nulls
-        buffer.pad_nulls(1, 4, 10, [8, 7, 5, 3].into_iter());
+        let valid = vec![
+            true, false, false, true, false, true, false, true, true, false, false,
+        ];
+        let valid_mask = Buffer::from_iter(valid.iter().cloned());
 
-        // No null buffer - nulls -> ""
-        let array = buffer.into_array(None, ArrowType::Utf8);
+        // Both trailing and leading nulls
+        buffer.pad_nulls(1, values.len() - 1, valid.len() - 1, valid_mask.as_slice());
+
+        let array = buffer.into_array(Some(valid_mask), ArrowType::Utf8);
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(
-            strings.iter().map(|x| x.unwrap()).collect::<Vec<_>>(),
-            vec!["a", "", "", "b", "", "c", "", "def", "gh", "", ""]
+            strings.iter().collect::<Vec<_>>(),
+            vec![
+                Some("a"),
+                None,
+                None,
+                Some("b"),
+                None,
+                Some("c"),
+                None,
+                Some("def"),
+                Some("gh"),
+                None,
+                None
+            ]
         );
     }
 
@@ -334,5 +366,18 @@ mod tests {
 
         // Fails if run from middle of codepoint
         buffer.check_valid_utf8(12).unwrap_err();
+    }
+
+    #[test]
+    fn test_pad_nulls_empty() {
+        let mut buffer = OffsetBuffer::<i32>::default();
+        let valid_mask = Buffer::from_iter(std::iter::repeat(false).take(9));
+        buffer.pad_nulls(0, 0, 9, valid_mask.as_slice());
+
+        let array = buffer.into_array(Some(valid_mask), ArrowType::Utf8);
+        let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+
+        assert_eq!(strings.len(), 9);
+        assert!(strings.iter().all(|x| x.is_none()))
     }
 }

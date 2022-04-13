@@ -26,19 +26,6 @@ Rust [README.md](../README.md).
 Please refer to [lib.rs](src/lib.rs) for an introduction to this
 specific crate and its current functionality.
 
-### How to check memory allocations
-
-This crate heavily uses `unsafe` due to how memory is allocated in cache lines.
-We have a small tool to verify that this crate does not leak memory (beyond what the compiler already does)
-
-Run it with
-
-```bash
-cargo test --features memory-check --lib -- --test-threads 1
-```
-
-This runs all unit-tests on a single thread and counts all allocations and de-allocations.
-
 ## IPC
 
 The expected flatc version is 1.12.0+, built from [flatbuffers](https://github.com/google/flatbuffers)

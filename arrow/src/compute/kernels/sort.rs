@@ -269,7 +269,9 @@ pub fn sort_to_indices(
         }
         DataType::Utf8 => sort_string::<i32>(values, v, n, &options, limit),
         DataType::LargeUtf8 => sort_string::<i64>(values, v, n, &options, limit),
-        DataType::List(field) => match field.data_type() {
+        DataType::List(field) | DataType::FixedSizeList(field, _) => match field
+            .data_type()
+        {
             DataType::Int8 => sort_list::<i32, Int8Type>(values, v, n, &options, limit),
             DataType::Int16 => sort_list::<i32, Int16Type>(values, v, n, &options, limit),
             DataType::Int32 => sort_list::<i32, Int32Type>(values, v, n, &options, limit),
@@ -317,34 +319,6 @@ pub fn sort_to_indices(
             }
             DataType::Float64 => {
                 sort_list::<i64, Float64Type>(values, v, n, &options, limit)
-            }
-            t => {
-                return Err(ArrowError::ComputeError(format!(
-                    "Sort not supported for list type {:?}",
-                    t
-                )));
-            }
-        },
-        DataType::FixedSizeList(field, _) => match field.data_type() {
-            DataType::Int8 => sort_list::<i32, Int8Type>(values, v, n, &options, limit),
-            DataType::Int16 => sort_list::<i32, Int16Type>(values, v, n, &options, limit),
-            DataType::Int32 => sort_list::<i32, Int32Type>(values, v, n, &options, limit),
-            DataType::Int64 => sort_list::<i32, Int64Type>(values, v, n, &options, limit),
-            DataType::UInt8 => sort_list::<i32, UInt8Type>(values, v, n, &options, limit),
-            DataType::UInt16 => {
-                sort_list::<i32, UInt16Type>(values, v, n, &options, limit)
-            }
-            DataType::UInt32 => {
-                sort_list::<i32, UInt32Type>(values, v, n, &options, limit)
-            }
-            DataType::UInt64 => {
-                sort_list::<i32, UInt64Type>(values, v, n, &options, limit)
-            }
-            DataType::Float32 => {
-                sort_list::<i32, Float32Type>(values, v, n, &options, limit)
-            }
-            DataType::Float64 => {
-                sort_list::<i32, Float64Type>(values, v, n, &options, limit)
             }
             t => {
                 return Err(ArrowError::ComputeError(format!(
@@ -426,8 +400,9 @@ impl Default for SortOptions {
 /// when a limit is present, the sort is pair-comparison based as k-select might be more efficient,
 /// when the limit is absent, binary partition is used to speed up (which is linear).
 ///
-/// TODO maybe partition_validity call can be eliminated in this case and tri-color sort can be used
-/// instead. https://en.wikipedia.org/wiki/Dutch_national_flag_problem
+/// TODO maybe partition_validity call can be eliminated in this case
+/// and [tri-color sort](https://en.wikipedia.org/wiki/Dutch_national_flag_problem)
+/// can be used instead.
 fn sort_boolean(
     values: &ArrayRef,
     value_indices: Vec<u32>,
@@ -459,7 +434,7 @@ fn sort_boolean(
         // when limit is not present, we have a better way than sorting: we can just partition
         // the vec into [false..., true...] or [true..., false...] when descending
         // TODO when https://github.com/rust-lang/rust/issues/62543 is merged we can use partition_in_place
-        let (mut a, b): (Vec<(u32, bool)>, Vec<(u32, bool)>) = value_indices
+        let (mut a, b): (Vec<_>, Vec<_>) = value_indices
             .into_iter()
             .map(|index| (index, values.value(index as usize)))
             .partition(|(_, value)| *value == descending);
@@ -848,7 +823,7 @@ where
     }
 }
 
-/// Compare two `Array`s based on the ordering defined in [ord](crate::array::ord).
+/// Compare two `Array`s based on the ordering defined in [build_compare]
 fn cmp_array(a: &dyn Array, b: &dyn Array) -> Ordering {
     let cmp_op = build_compare(a, b).unwrap();
     let length = a.len().max(b.len());
@@ -1106,16 +1081,10 @@ mod tests {
     use std::sync::Arc;
 
     fn create_decimal_array(data: &[Option<i128>]) -> DecimalArray {
-        let mut builder = DecimalBuilder::new(20, 23, 6);
-
-        for d in data {
-            if let Some(v) = d {
-                builder.append_value(*v).unwrap();
-            } else {
-                builder.append_null().unwrap();
-            }
-        }
-        builder.finish()
+        data.iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(23, 6)
+            .unwrap()
     }
 
     fn test_sort_to_indices_decimal_array(

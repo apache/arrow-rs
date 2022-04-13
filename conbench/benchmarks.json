@@ -1,0 +1,8 @@
+[
+  {
+    "command": "arrow-rs",
+    "flags": {
+      "language": "Rust"
+    }
+  }
+]

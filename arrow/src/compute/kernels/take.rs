@@ -53,6 +53,21 @@ macro_rules! downcast_dict_take {
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
 ///
+/// ```text
+/// ┌─────────────────┐      ┌─────────┐                              ┌─────────────────┐
+/// │        A        │      │    0    │                              │        A        │
+/// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
+/// │        D        │      │    2    │                              │        B        │
+/// ├─────────────────┤      ├─────────┤   take(values, indicies)     ├─────────────────┤
+/// │        B        │      │    3    │ ─────────────────────────▶   │        C        │
+/// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
+/// │        C        │      │    1    │                              │        D        │
+/// ├─────────────────┤      └─────────┘                              └─────────────────┘
+/// │        E        │
+/// └─────────────────┘
+///    values array            indicies array                              result
+/// ```
+///
 /// # Errors
 /// This function errors whenever:
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
@@ -496,27 +511,30 @@ where
     IndexType: ArrowNumericType,
     IndexType::Native: ToPrimitive,
 {
-    // TODO optimize decimal take and construct decimal array from MutableBuffer
-    let mut builder = DecimalBuilder::new(
-        indices.len(),
-        decimal_values.precision(),
-        decimal_values.scale(),
-    );
-    for i in 0..indices.len() {
-        if indices.is_null(i) {
-            builder.append_null()?;
-        } else {
-            let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
-                ArrowError::ComputeError("Cast to usize failed".to_string())
-            })?;
-            if decimal_values.is_null(index) {
-                builder.append_null()?
-            } else {
-                builder.append_value(decimal_values.value(index))?
-            }
-        }
-    }
-    Ok(builder.finish())
+    indices
+        .iter()
+        .map(|index| {
+            // Use type annotations below for readability (was blowing
+            // my mind otherwise)
+            let t: Option<Result<Option<_>>> = index.map(|index| {
+                let index = ToPrimitive::to_usize(&index).ok_or_else(|| {
+                    ArrowError::ComputeError("Cast to usize failed".to_string())
+                })?;
+
+                if decimal_values.is_null(index) {
+                    Ok(None)
+                } else {
+                    Ok(Some(decimal_values.value(index)))
+                }
+            });
+            let t: Result<Option<Option<_>>> = t.transpose();
+            let t: Result<Option<_>> = t.map(|t| t.flatten());
+            t
+        })
+        .collect::<Result<DecimalArray>>()?
+        // PERF: we could avoid re-validating that the data in
+        // DecimalArray was in range as we know it came from a valid DecimalArray
+        .with_precision_and_scale(decimal_values.precision(), decimal_values.scale())
 }
 
 /// `take` implementation for all primitive arrays
@@ -597,8 +615,7 @@ where
 
     let null_count = values.null_count();
 
-    let nulls;
-    if null_count == 0 {
+    let nulls = if null_count == 0 {
         (0..data_len).try_for_each::<_, Result<()>>(|i| {
             let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
                 ArrowError::ComputeError("Cast to usize failed".to_string())
@@ -611,7 +628,7 @@ where
             Ok(())
         })?;
 
-        nulls = indices.data_ref().null_buffer().cloned();
+        indices.data_ref().null_buffer().cloned()
     } else {
         let mut null_buf = MutableBuffer::new(num_byte).with_bitset(num_byte, true);
         let null_slice = null_buf.as_slice_mut();
@@ -630,7 +647,7 @@ where
             Ok(())
         })?;
 
-        nulls = match indices.data_ref().null_buffer() {
+        match indices.data_ref().null_buffer() {
             Some(buffer) => Some(buffer_bin_and(
                 buffer,
                 indices.offset(),
@@ -639,8 +656,8 @@ where
                 indices.len(),
             )),
             None => Some(null_buf.into()),
-        };
-    }
+        }
+    };
 
     let data = unsafe {
         ArrayData::new_unchecked(
@@ -965,30 +982,19 @@ mod tests {
         precision: &usize,
         scale: &usize,
     ) -> Result<()> {
-        let mut builder = DecimalBuilder::new(data.len(), *precision, *scale);
-        for value in data {
-            match value {
-                None => {
-                    builder.append_null()?;
-                }
-                Some(v) => {
-                    builder.append_value(v)?;
-                }
-            }
-        }
-        let output = builder.finish();
-        let mut builder = DecimalBuilder::new(expected_data.len(), *precision, *scale);
-        for value in expected_data {
-            match value {
-                None => {
-                    builder.append_null()?;
-                }
-                Some(v) => {
-                    builder.append_value(v)?;
-                }
-            }
-        }
-        let expected = Arc::new(builder.finish()) as ArrayRef;
+        let output = data
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*precision, *scale)
+            .unwrap();
+
+        let expected = expected_data
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*precision, *scale)
+            .unwrap();
+
+        let expected = Arc::new(expected) as ArrayRef;
         let output = take(&output, index, options).unwrap();
         assert_eq!(&output, &expected);
         Ok(())

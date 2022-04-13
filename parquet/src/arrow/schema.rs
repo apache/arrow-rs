@@ -662,6 +662,7 @@ impl ParquetTypeConverter<'_> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_int32(&self) -> Result<DataType> {
         match (
             self.schema.get_basic_info().logical_type(),
@@ -707,6 +708,7 @@ impl ParquetTypeConverter<'_> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_int64(&self) -> Result<DataType> {
         match (
             self.schema.get_basic_info().logical_type(),
@@ -758,6 +760,7 @@ impl ParquetTypeConverter<'_> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_fixed_len_byte_array(&self) -> Result<DataType> {
         match (
             self.schema.get_basic_info().logical_type(),
@@ -796,6 +799,7 @@ impl ParquetTypeConverter<'_> {
         )
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_byte_array(&self) -> Result<DataType> {
         match (self.schema.get_basic_info().logical_type(), self.schema.get_basic_info().converted_type()) {
             (Some(LogicalType::STRING(_)), _) => Ok(DataType::Utf8),
@@ -1955,9 +1959,10 @@ mod tests {
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
 
-        let mut key_value_metadata: Vec<KeyValue> = Vec::new();
-        key_value_metadata.push(KeyValue::new("foo".to_owned(), Some("bar".to_owned())));
-        key_value_metadata.push(KeyValue::new("baz".to_owned(), None));
+        let key_value_metadata = vec![
+            KeyValue::new("foo".to_owned(), Some("bar".to_owned())),
+            KeyValue::new("baz".to_owned(), None)
+        ];
 
         let mut expected_metadata: HashMap<String, String> = HashMap::new();
         expected_metadata.insert("foo".to_owned(), "bar".to_owned());
