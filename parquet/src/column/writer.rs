@@ -37,6 +37,8 @@ use crate::file::{
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::FromBytes;
 use crate::util::memory::{ByteBufferPtr, MemTracker};
+use arrow::array::{Array, DecimalArray};
+use parquet_format::DecimalType;
 
 /// Column writer for a Parquet type.
 pub enum ColumnWriter {
@@ -1001,13 +1003,57 @@ impl<T: DataType> ColumnWriterImpl<T> {
     }
 
     fn compare_greater_byte_array_decimals(&self, a: &[u8], b: &[u8]) -> bool {
-        let mut a_bytes: Vec<u8> = a.iter().cloned().collect();
-        let mut b_bytes: Vec<u8> = b.iter().cloned().collect();
+        let a_vec: Vec<u8> = a.to_vec();
+        let b_vec: Vec<u8> = b.to_vec();
 
-        a_bytes[0] ^= 0b1000_0000;
-        b_bytes[0] ^= 0b1000_0000;
-        
-        a_bytes > b_bytes
+        let a_length = a_vec.len();
+        let b_length = b_vec.len();
+
+        if a_length == 0 || b_length == 0 {
+            return a_length > 0 && b_length == 0;
+        }
+
+        let first_a: u8 = a[0];
+        let first_b: u8 = b[0];
+
+        // We can short circuit for different signed numbers or
+        // for equal length bytes arrays that have different first bytes.
+        // The equality requirement is necessary for sign extension cases.
+        // 0xFF10 should be equal to 0x10 (due to big endian sign extension).
+        if (0x80 & first_a) != (0x80 & first_b)
+            || (a_length == b_length && first_a != first_b)
+        {
+            return (first_a as i8) > (first_b as i8);
+        }
+
+        // When the lengths are unequal and the numbers are of the same
+        // sign we need to do comparison by sign extending the shorter
+        // value first, and once we get to equal sized arrays, lexicographical
+        // unsigned comparison of everything but the first byte is sufficient.
+
+        let extension: u8 = if (first_a as i8) < 0 { 0xFF } else { 0 };
+
+        if a_length != b_length {
+            let not_equal: Option<bool>;
+
+            if a_length > b_length {
+                let lead_length = a_length - b_length;
+                not_equal =
+                    Some((&a_vec[0..lead_length]).iter().any(|&x| x != extension));
+            } else {
+                let lead_length = b_length - a_length;
+                not_equal =
+                    Some((&b_vec[0..lead_length]).iter().any(|&x| x != extension));
+            }
+
+            if !not_equal.is_none() && not_equal.unwrap() {
+                let negative_values: bool = (first_a as i8) < 0;
+                let a_longer: bool = a_length > b_length;
+                return negative_values != a_longer;
+            }
+        }
+
+        (a_vec[1..]) > (b_vec[1..])
     }
 
     /// Evaluate `a > b` according to underlying logical type.
@@ -1031,8 +1077,9 @@ impl<T: DataType> ColumnWriterImpl<T> {
 
         if let Some(LogicalType::DECIMAL(_)) = self.descr.logical_type() {
             match self.descr.physical_type() {
-                Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
-                    return self.compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+                Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
+                    return self
+                        .compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
                 }
                 _ => {}
             };
@@ -1041,8 +1088,11 @@ impl<T: DataType> ColumnWriterImpl<T> {
         match self.descr.converted_type() {
             ConvertedType::DECIMAL => {
                 match self.descr.physical_type() {
-                    Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
-                        return self.compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+                    Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
+                        return self.compare_greater_byte_array_decimals(
+                            a.as_bytes(),
+                            b.as_bytes(),
+                        );
                     }
                     _ => {}
                 };
