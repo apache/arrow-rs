@@ -295,6 +295,7 @@ impl Drop for FFI_ArrowSchema {
 
 // returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 // This is set by the Arrow specification
+#[allow(clippy::manual_bits)]
 fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
     Ok(match (data_type, i) {
         // the null buffer is bit sized
@@ -538,7 +539,8 @@ unsafe fn create_buffer(
     assert!(index < array.n_buffers as usize);
     let ptr = *buffers.add(index);
 
-    NonNull::new(ptr as *mut u8).map(|ptr| Buffer::from_unowned(ptr, len, owner))
+    NonNull::new(ptr as *mut u8)
+        .map(|ptr| Buffer::from_custom_allocation(ptr, len, owner))
 }
 
 fn create_child(
