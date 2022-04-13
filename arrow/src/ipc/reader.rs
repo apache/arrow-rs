@@ -1457,9 +1457,9 @@ mod tests {
             1,
             false,
         )));
-        let list_data = ArrayData::builder(list_data_type.clone())
+        let list_data = ArrayData::builder(list_data_type)
             .len(3)
-            .add_buffer(value_offsets.clone())
+            .add_buffer(value_offsets)
             .add_child_data(dict_data.clone())
             .build()
             .unwrap();
