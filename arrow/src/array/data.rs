@@ -219,8 +219,14 @@ pub(crate) fn into_buffers(
         DataType::Utf8
         | DataType::Binary
         | DataType::LargeUtf8
-        | DataType::LargeBinary
-        | DataType::Union(_, _) => vec![buffer1.into(), buffer2.into()],
+        | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
+        DataType::Union(_, mode) => {
+            match mode {
+                // Based on Union's DataTypeLayout
+                UnionMode::Sparse => vec![buffer1.into()],
+                UnionMode::Dense => vec![buffer1.into(), buffer2.into()],
+            }
+        }
         _ => vec![buffer1.into()],
     }
 }
@@ -2600,6 +2606,23 @@ mod tests {
         let cloned = crate::array::make_array(cloned_data);
 
         assert_eq!(&struct_array_slice, &cloned);
+    }
+
+    #[test]
+    fn test_into_buffers() {
+        let data_types = vec![
+            DataType::Union(vec![], UnionMode::Dense),
+            DataType::Union(vec![], UnionMode::Sparse),
+        ];
+
+        for data_type in data_types {
+            let buffers = new_buffers(&data_type, 0);
+            let [buffer1, buffer2] = buffers;
+            let buffers = into_buffers(&data_type, buffer1, buffer2);
+
+            let layout = layout(&data_type);
+            assert_eq!(buffers.len(), layout.buffers.len());
+        }
     }
 
     #[test]
