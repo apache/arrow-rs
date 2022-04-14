@@ -1465,10 +1465,11 @@ impl ArrayDataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ptr::NonNull;
 
     use crate::array::{
-        Array, BooleanBuilder, Int32Array, Int32Builder, Int64Array, StringArray,
-        StructBuilder, UInt64Array,
+        make_array, Array, BooleanBuilder, Int32Array, Int32Builder, Int64Array,
+        StringArray, StructBuilder, UInt64Array,
     };
     use crate::buffer::Buffer;
     use crate::datatypes::Field;
@@ -2616,5 +2617,53 @@ mod tests {
             let layout = layout(&data_type);
             assert_eq!(buffers.len(), layout.buffers.len());
         }
+    }
+
+    #[test]
+    fn test_string_data_from_foreign() {
+        let mut strings = "foobarfoobar".to_owned();
+        let mut offsets = vec![0_i32, 0, 3, 6, 12];
+        let mut bitmap = vec![0b1110_u8];
+
+        let strings_buffer = unsafe {
+            Buffer::from_custom_allocation(
+                NonNull::new_unchecked(strings.as_mut_ptr()),
+                strings.len(),
+                Arc::new(strings),
+            )
+        };
+        let offsets_buffer = unsafe {
+            Buffer::from_custom_allocation(
+                NonNull::new_unchecked(offsets.as_mut_ptr() as *mut u8),
+                offsets.len() * std::mem::size_of::<i32>(),
+                Arc::new(offsets),
+            )
+        };
+        let null_buffer = unsafe {
+            Buffer::from_custom_allocation(
+                NonNull::new_unchecked(bitmap.as_mut_ptr()),
+                bitmap.len(),
+                Arc::new(bitmap),
+            )
+        };
+
+        let data = ArrayData::try_new(
+            DataType::Utf8,
+            4,
+            None,
+            Some(null_buffer),
+            0,
+            vec![offsets_buffer, strings_buffer],
+            vec![],
+        )
+        .unwrap();
+
+        let array = make_array(data);
+        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
+
+        let expected =
+            StringArray::from(vec![None, Some("foo"), Some("bar"), Some("foobar")]);
+
+        assert_eq!(array, &expected);
     }
 }

@@ -145,6 +145,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (LargeUtf8, Date32 | Date64 | Timestamp(TimeUnit::Nanosecond, None)) => true,
         (LargeUtf8, _) => DataType::is_numeric(to_type),
         (Timestamp(_, _), Utf8) | (Timestamp(_, _), LargeUtf8) => true,
+        (Date32, Utf8) | (Date32, LargeUtf8) => true,
+        (Date64, Utf8) | (Date64, LargeUtf8) => true,
         (_, Utf8 | LargeUtf8) => DataType::is_numeric(from_type) || from_type == &Binary,
 
         // start numeric casts
@@ -671,6 +673,8 @@ pub fn cast_with_options(
                     cast_timestamp_to_string::<TimestampSecondType, i32>(array)
                 }
             },
+            Date32 => cast_date32_to_string::<i32>(array),
+            Date64 => cast_date64_to_string::<i32>(array),
             Binary => {
                 let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
                 Ok(Arc::new(
@@ -725,6 +729,8 @@ pub fn cast_with_options(
                     cast_timestamp_to_string::<TimestampSecondType, i64>(array)
                 }
             },
+            Date32 => cast_date32_to_string::<i64>(array),
+            Date64 => cast_date64_to_string::<i64>(array),
             Binary => {
                 let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
                 Ok(Arc::new(
@@ -1286,6 +1292,44 @@ where
     OffsetSize: StringOffsetSizeTrait,
 {
     let array = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+
+    Ok(Arc::new(
+        (0..array.len())
+            .map(|ix| {
+                if array.is_null(ix) {
+                    None
+                } else {
+                    array.value_as_datetime(ix).map(|v| v.to_string())
+                }
+            })
+            .collect::<GenericStringArray<OffsetSize>>(),
+    ))
+}
+
+/// Cast date32 types to Utf8/LargeUtf8
+fn cast_date32_to_string<OffsetSize: StringOffsetSizeTrait>(
+    array: &ArrayRef,
+) -> Result<ArrayRef> {
+    let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
+
+    Ok(Arc::new(
+        (0..array.len())
+            .map(|ix| {
+                if array.is_null(ix) {
+                    None
+                } else {
+                    array.value_as_date(ix).map(|v| v.to_string())
+                }
+            })
+            .collect::<GenericStringArray<OffsetSize>>(),
+    ))
+}
+
+/// Cast date64 types to Utf8/LargeUtf8
+fn cast_date64_to_string<OffsetSize: StringOffsetSizeTrait>(
+    array: &ArrayRef,
+) -> Result<ArrayRef> {
+    let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
 
     Ok(Arc::new(
         (0..array.len())
@@ -2712,6 +2756,48 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_to_date32() {
+        let a1 = Arc::new(StringArray::from(vec![
+            Some("2018-12-25"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(vec![
+            Some("2018-12-25"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        for array in &[a1, a2] {
+            let b = cast(array, &DataType::Date32).unwrap();
+            let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+            assert_eq!(17890, c.value(0));
+            assert!(c.is_null(1));
+            assert!(c.is_null(2));
+        }
+    }
+
+    #[test]
+    fn test_cast_string_to_date64() {
+        let a1 = Arc::new(StringArray::from(vec![
+            Some("2020-09-08T12:00:00"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(vec![
+            Some("2020-09-08T12:00:00"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        for array in &[a1, a2] {
+            let b = cast(array, &DataType::Date64).unwrap();
+            let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+            assert_eq!(1599566400000, c.value(0));
+            assert!(c.is_null(1));
+            assert!(c.is_null(2));
+        }
+    }
+
+    #[test]
     fn test_cast_date32_to_int32() {
         let a = Date32Array::from(vec![10000, 17890]);
         let array = Arc::new(a) as ArrayRef;
@@ -2788,6 +2874,28 @@ mod tests {
         assert_eq!("1997-05-19 00:00:00.005", c.value(0));
         assert_eq!("2018-12-25 00:00:00.001", c.value(1));
         assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_string() {
+        let a = Date32Array::from(vec![10000, 17890]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(&DataType::Utf8, c.data_type());
+        assert_eq!("1997-05-19", c.value(0));
+        assert_eq!("2018-12-25", c.value(1));
+    }
+
+    #[test]
+    fn test_cast_date64_to_string() {
+        let a = Date64Array::from(vec![10000 * 86400000, 17890 * 86400000]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(&DataType::Utf8, c.data_type());
+        assert_eq!("1997-05-19 00:00:00", c.value(0));
+        assert_eq!("2018-12-25 00:00:00", c.value(1));
     }
 
     #[test]

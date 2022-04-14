@@ -144,8 +144,8 @@ impl FileMetaData {
     }
 
     /// Returns key_value_metadata of this file.
-    pub fn key_value_metadata(&self) -> &Option<Vec<KeyValue>> {
-        &self.key_value_metadata
+    pub fn key_value_metadata(&self) -> Option<&Vec<KeyValue>> {
+        self.key_value_metadata.as_ref()
     }
 
     /// Returns Parquet ['Type`] that describes schema in this file.

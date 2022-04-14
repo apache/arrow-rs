@@ -1116,10 +1116,12 @@ mod tests {
     use rand::distributions::uniform::SampleUniform;
     use rand::{thread_rng, Rng};
 
+    use crate::arrow::{parquet_to_arrow_schema, ArrowWriter};
     use arrow::array::{
         Array, ArrayRef, LargeListArray, ListArray, PrimitiveArray, StringArray,
         StructArray,
     };
+    use arrow::datatypes::DataType::Struct;
     use arrow::datatypes::{
         ArrowPrimitiveType, DataType as ArrowType, Date32Type as ArrowDate32, Field,
         Int32Type as ArrowInt32, Int64Type as ArrowInt64,
@@ -1134,6 +1136,8 @@ mod tests {
     use crate::column::page::{Page, PageReader};
     use crate::data_type::{ByteArray, ByteArrayType, DataType, Int32Type, Int64Type};
     use crate::errors::Result;
+    use crate::file::properties::WriterProperties;
+    use crate::file::serialized_reader::SerializedFileReader;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
     use crate::util::test_common::make_pages;
@@ -2053,5 +2057,68 @@ mod tests {
                 .unwrap(),
             &PrimitiveArray::<ArrowInt32>::from(vec![Some(3), Some(4)])
         );
+    }
+
+    #[test]
+    fn test_nested_lists() {
+        // Construct column schema
+        let message_type = "
+        message table {
+            REPEATED group table_info {
+                REQUIRED BYTE_ARRAY name;
+                REPEATED group cols {
+                    REQUIRED BYTE_ARRAY name;
+                    REQUIRED INT32 type;
+                    OPTIONAL INT32 length;
+                }
+                REPEATED group tags {
+                    REQUIRED BYTE_ARRAY name;
+                    REQUIRED INT32 type;
+                    OPTIONAL INT32 length;
+                }
+            }
+        }
+        ";
+
+        let schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+
+        let arrow_schema = parquet_to_arrow_schema(schema.as_ref(), None).unwrap();
+
+        let file = tempfile::tempfile().unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_size(200)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(
+            file.try_clone().unwrap(),
+            Arc::new(arrow_schema),
+            Some(props),
+        )
+        .unwrap();
+        writer.close().unwrap();
+
+        let file_reader: Arc<dyn FileReader> =
+            Arc::new(SerializedFileReader::new(file).unwrap());
+
+        let file_metadata = file_reader.metadata().file_metadata();
+        let arrow_schema = parquet_to_arrow_schema(
+            file_metadata.schema_descr(),
+            file_metadata.key_value_metadata(),
+        )
+        .unwrap();
+
+        let mut array_reader = build_array_reader(
+            file_reader.metadata().file_metadata().schema_descr_ptr(),
+            Arc::new(arrow_schema.clone()),
+            vec![0usize].into_iter(),
+            Box::new(file_reader),
+        )
+        .unwrap();
+
+        let batch = array_reader.next_batch(100).unwrap();
+        assert_eq!(batch.data_type(), &Struct(arrow_schema.fields().clone()));
+        assert_eq!(batch.len(), 0);
     }
 }
