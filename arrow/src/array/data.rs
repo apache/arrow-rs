@@ -2600,4 +2600,21 @@ mod tests {
 
         assert_eq!(&struct_array_slice, &cloned);
     }
+
+    #[test]
+    fn test_into_buffers() {
+        let data_types = vec![
+            DataType::Union(vec![], UnionMode::Dense),
+            DataType::Union(vec![], UnionMode::Sparse),
+        ];
+
+        for data_type in data_types {
+            let buffers = new_buffers(&data_type, 0);
+            let [buffer1, buffer2] = buffers;
+            let buffers = into_buffers(&data_type, buffer1, buffer2);
+
+            let layout = layout(&data_type);
+            assert_eq!(buffers.len(), layout.buffers.len());
+        }
+    }
 }
