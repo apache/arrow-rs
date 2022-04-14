@@ -219,8 +219,14 @@ pub(crate) fn into_buffers(
         DataType::Utf8
         | DataType::Binary
         | DataType::LargeUtf8
-        | DataType::LargeBinary
-        | DataType::Union(_, _) => vec![buffer1.into(), buffer2.into()],
+        | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
+        DataType::Union(_, mode) => {
+            match mode {
+                // Based on Union's DataTypeLayout
+                UnionMode::Sparse => vec![buffer1.into()],
+                UnionMode::Dense => vec![buffer1.into(), buffer2.into()],
+            }
+        }
         _ => vec![buffer1.into()],
     }
 }
