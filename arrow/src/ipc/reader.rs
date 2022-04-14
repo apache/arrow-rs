@@ -1107,6 +1107,8 @@ mod tests {
     }
 
     #[test]
+    // https://github.com/apache/arrow-rs/issues/1548
+    #[cfg(not(feature = "force_validate"))]
     fn projection_should_work() {
         // complementary to the previous test
         let testdata = crate::util::test_util::arrow_test_data();

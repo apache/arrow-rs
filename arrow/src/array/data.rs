@@ -272,6 +272,7 @@ impl ArrayData {
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
     /// module.
+    #[allow(clippy::let_and_return)]
     pub unsafe fn new_unchecked(
         data_type: DataType,
         len: usize,
@@ -286,7 +287,7 @@ impl ArrayData {
             Some(null_count) => null_count,
         };
         let null_bitmap = null_bit_buffer.map(Bitmap::from);
-        Self {
+        let new_self = Self {
             data_type,
             len,
             null_count,
@@ -294,7 +295,12 @@ impl ArrayData {
             buffers,
             child_data,
             null_bitmap,
-        }
+        };
+
+        // Provide a force_validate mode
+        #[cfg(feature = "force_validate")]
+        new_self.validate_full().unwrap();
+        new_self
     }
 
     /// Create a new ArrayData, validating that the provided buffers
@@ -2340,7 +2346,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "child #0 invalid: Invalid argument error: Value at position 1 out of bounds: -1 (should be in [0, 1])"
+        expected = "Value at position 1 out of bounds: -1 (should be in [0, 1])"
     )]
     /// test that children are validated recursively (aka bugs in child data of struct also are flagged)
     fn test_validate_recursive() {

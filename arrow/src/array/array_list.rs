@@ -777,6 +777,9 @@ mod tests {
     #[should_panic(
         expected = "FixedSizeListArray child array length should be a multiple of 3"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_fixed_size_list_array_unequal_children() {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
@@ -1065,6 +1068,9 @@ mod tests {
     #[should_panic(
         expected = "ListArray data should contain a single buffer only (value offsets)"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_list_array_invalid_buffer_len() {
         let value_data = unsafe {
             ArrayData::builder(DataType::Int32)
@@ -1087,6 +1093,9 @@ mod tests {
     #[should_panic(
         expected = "ListArray should contain a single child array (values array)"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_list_array_invalid_child_array_len() {
         let value_offsets = Buffer::from_slice_ref(&[0, 2, 5, 7]);
         let list_data_type =
@@ -1137,6 +1146,9 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "memory is not aligned")]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_list_array_alignment() {
         let ptr = alloc::allocate_aligned::<u8>(8);
         let buf = unsafe { Buffer::from_raw_parts(ptr, 8, 8) };
