@@ -109,15 +109,23 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 ///
 /// # Warning
 ///
-/// This function **might** return in invalid utf-8 format if the character length falls on a non-utf8 boundary.
+/// This function **might** return in invalid utf-8 format if the
+/// character length falls on a non-utf8 boundary, which we
+/// [hope to fix](https://github.com/apache/arrow-rs/issues/1531)
+/// in a future release.
+///
 /// ## Example of getting an invalid substring
 /// ```
+/// # // Doesn't pass due to  https://github.com/apache/arrow-rs/issues/1531
+/// # #[cfg(not(feature = "force_validate"))]
+/// # {
 /// # use arrow::array::StringArray;
 /// # use arrow::compute::kernels::substring::substring;
 /// let array = StringArray::from(vec![Some("E=mc²")]);
 /// let result = substring(&array, -1, &None).unwrap();
 /// let result = result.as_any().downcast_ref::<StringArray>().unwrap();
 /// assert_eq!(result.value(0).as_bytes(), &[0x00B2]); // invalid utf-8 format
+/// # }
 /// ```
 ///
 /// # Error

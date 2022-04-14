@@ -111,7 +111,8 @@ jobs:
 
           # Switch to arrow crate
           cd arrow
-          # re-run tests on arrow crate with additional features
+          # re-run tests on arrow crate to ensure
+          # all arrays are created correctly
           cargo test --features=force_validate
           cargo test --features=prettyprint
           # run test on arrow crate with minimal set of features
