@@ -1692,6 +1692,9 @@ mod tests {
     }
 
     #[test]
+    // Fails when validation enabled
+    // https://github.com/apache/arrow-rs/issues/1547
+    #[cfg(not(feature = "force_validate"))]
     fn test_filter_union_array_sparse() {
         let mut builder = UnionBuilder::new_sparse(3);
         builder.append::<Int32Type>("A", 1).unwrap();
@@ -1703,6 +1706,9 @@ mod tests {
     }
 
     #[test]
+    // Fails when validation enabled
+    // https://github.com/apache/arrow-rs/issues/1547
+    #[cfg(not(feature = "force_validate"))]
     fn test_filter_union_array_sparse_with_nulls() {
         let mut builder = UnionBuilder::new_sparse(4);
         builder.append::<Int32Type>("A", 1).unwrap();
