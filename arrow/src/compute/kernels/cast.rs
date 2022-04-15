@@ -91,7 +91,20 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | UInt64
             | Float64
             | Date64
+            | Timestamp(_, _)
+            | Time64(_)
+            | Duration(_)
+            | Interval(_)
+            | FixedSizeBinary(_)
+            | Binary
+            | Utf8
+            | LargeBinary
+            | LargeUtf8
             | List(_)
+            | LargeList(_)
+            | FixedSizeList(_, _)
+            | Struct(_)
+            | Map(_, _)
             | Dictionary(_, _),
         )
         | (
@@ -109,7 +122,20 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | UInt64
             | Float64
             | Date64
+            | Timestamp(_, _)
+            | Time64(_)
+            | Duration(_)
+            | Interval(_)
+            | FixedSizeBinary(_)
+            | Binary
+            | Utf8
+            | LargeBinary
+            | LargeUtf8
             | List(_)
+            | LargeList(_)
+            | FixedSizeList(_, _)
+            | Struct(_)
+            | Map(_, _)
             | Dictionary(_, _),
             Null,
         ) => true,
@@ -469,7 +495,20 @@ pub fn cast_with_options(
             | UInt64
             | Float64
             | Date64
+            | Timestamp(_, _)
+            | Time64(_)
+            | Duration(_)
+            | Interval(_)
+            | FixedSizeBinary(_)
+            | Binary
+            | Utf8
+            | LargeBinary
+            | LargeUtf8
             | List(_)
+            | LargeList(_)
+            | FixedSizeList(_, _)
+            | Struct(_)
+            | Map(_, _)
             | Dictionary(_, _),
         )
         | (
@@ -487,7 +526,20 @@ pub fn cast_with_options(
             | UInt64
             | Float64
             | Date64
+            | Timestamp(_, _)
+            | Time64(_)
+            | Duration(_)
+            | Interval(_)
+            | FixedSizeBinary(_)
+            | Binary
+            | Utf8
+            | LargeBinary
+            | LargeUtf8
             | List(_)
+            | LargeList(_)
+            | FixedSizeList(_, _)
+            | Struct(_)
+            | Map(_, _)
             | Dictionary(_, _),
             Null,
         ) => Ok(new_null_array(to_type, array.len())),
@@ -4205,7 +4257,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_null_array_from_and_to_others() {
+    fn test_cast_null_array_from_and_to_primitive_array() {
         macro_rules! typed_test {
             ($ARR_TYPE:ident, $DATATYPE:ident, $TYPE:tt) => {{
                 {
@@ -4238,6 +4290,77 @@ mod tests {
 
         typed_test!(Float32Array, Float32, Float32Type);
         typed_test!(Float64Array, Float64, Float64Type);
+
+        typed_test!(Date32Array, Date32, Date32Type);
+        typed_test!(Date64Array, Date64, Date64Type);
+    }
+
+macro_rules! cast_from_and_to_null {
+    ($TYPE:ident) => {{
+        let array = new_null_array(&$TYPE, 4);
+        assert_eq!(array.data_type(), &$TYPE);
+        let cast_array = cast(&array, &DataType::Null).expect("cast failed");
+        assert_eq!(cast_array.data_type(), &DataType::Null);
+        for i in 0..4 {
+            assert!(cast_array.is_null(i));
+        }
+    }
+    {
+        let array = new_null_array(&DataType::Null, 4);
+        assert_eq!(array.data_type(), &DataType::Null);
+        let cast_array = cast(&array, &$TYPE).expect("cast failed");
+        assert_eq!(cast_array.data_type(), &$TYPE);
+        for i in 0..4 {
+            assert!(cast_array.is_null(i));
+        }
+    }}
+}
+
+    #[test]
+    fn test_cast_null_from_and_to_variable_sized() {
+        let data_type = DataType::Utf8;
+        cast_from_and_to_null!(data_type);
+
+        let data_type = DataType::LargeUtf8;
+        cast_from_and_to_null!(data_type);
+
+        let data_type = DataType::Binary;
+        cast_from_and_to_null!(data_type);
+    }
+
+    #[test]
+    fn test_cast_null_from_and_to_nested_type() {
+        // cast null from and to map
+        let data_type = DataType::Map(
+            Box::new(Field::new(
+                "entry",
+                DataType::Struct(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int32, true),
+                ]),
+                false,
+            )),
+            false,
+        );
+        cast_from_and_to_null!(data_type);
+
+        // cast null from and to list
+        let data_type =
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+        cast_from_and_to_null!(data_type);
+
+        // cast null from and to dictionary
+        let values = vec![None, None, None, None]
+            as Vec<Option<&str>>;
+        let array: DictionaryArray<Int8Type> = values.into_iter().collect();
+        let array = Arc::new(array) as ArrayRef;
+        let data_type = array.data_type().to_owned();
+        cast_from_and_to_null!(data_type);
+
+        // cast null from and to struct
+        let data_type =
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+        cast_from_and_to_null!(data_type);
     }
 
     /// Print the `DictionaryArray` `array` as a vector of strings
