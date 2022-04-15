@@ -336,7 +336,7 @@ mod tests {
             .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
             .unwrap();
 
-        let arrow_schema = parquet_to_arrow_schema(schema.as_ref(), &None).unwrap();
+        let arrow_schema = parquet_to_arrow_schema(schema.as_ref(), None).unwrap();
 
         let file = tempfile::tempfile().unwrap();
         let props = WriterProperties::builder()
