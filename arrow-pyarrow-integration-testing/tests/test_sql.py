@@ -61,9 +61,11 @@ _supported_pyarrow_types = [
     pa.decimal128(19, 4),
     pa.string(),
     pa.binary(),
+    pa.binary(10),
     pa.large_string(),
     pa.large_binary(),
     pa.list_(pa.int32()),
+    pa.list_(pa.int32(), 2),
     pa.large_list(pa.uint16()),
     pa.struct(
         [
@@ -85,8 +87,6 @@ _supported_pyarrow_types = [
 _unsupported_pyarrow_types = [
     pa.decimal256(76, 38),
     pa.duration("s"),
-    pa.binary(10),
-    pa.list_(pa.int32(), 2),
     pa.map_(pa.string(), pa.int32()),
     pa.union(
         [pa.field("a", pa.binary(10)), pa.field("b", pa.string())],
@@ -190,6 +190,29 @@ def test_time32_python():
     del b
     del expected
 
+def test_binary_array():
+    """
+    Python -> Rust -> Python
+    """
+    a = pa.array(["a", None, "bb", "ccc"], pa.binary())
+    b = rust.round_trip_array(a)
+    b.validate(full=True)
+    assert a.to_pylist() == b.to_pylist()
+    assert a.type == b.type
+    del a
+    del b
+
+def test_fixed_len_binary_array():
+    """
+    Python -> Rust -> Python
+    """
+    a = pa.array(["aaa", None, "bbb", "ccc"], pa.binary(3))
+    b = rust.round_trip_array(a)
+    b.validate(full=True)
+    assert a.to_pylist() == b.to_pylist()
+    assert a.type == b.type
+    del a
+    del b
 
 def test_list_array():
     """
@@ -203,6 +226,17 @@ def test_list_array():
     del a
     del b
 
+def test_fixed_len_list_array():
+    """
+    Python -> Rust -> Python
+    """
+    a = pa.array([[1, 2], None, [3, 4], [5, 6]], pa.list_(pa.int64(), 2))
+    b = rust.round_trip_array(a)
+    b.validate(full=True)
+    assert a.to_pylist() == b.to_pylist()
+    assert a.type == b.type
+    del a
+    del b
 
 def test_timestamp_python():
     """
