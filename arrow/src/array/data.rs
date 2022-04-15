@@ -219,8 +219,14 @@ pub(crate) fn into_buffers(
         DataType::Utf8
         | DataType::Binary
         | DataType::LargeUtf8
-        | DataType::LargeBinary
-        | DataType::Union(_, _) => vec![buffer1.into(), buffer2.into()],
+        | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
+        DataType::Union(_, mode) => {
+            match mode {
+                // Based on Union's DataTypeLayout
+                UnionMode::Sparse => vec![buffer1.into()],
+                UnionMode::Dense => vec![buffer1.into(), buffer2.into()],
+            }
+        }
         _ => vec![buffer1.into()],
     }
 }
@@ -272,6 +278,7 @@ impl ArrayData {
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
     /// module.
+    #[allow(clippy::let_and_return)]
     pub unsafe fn new_unchecked(
         data_type: DataType,
         len: usize,
@@ -286,7 +293,7 @@ impl ArrayData {
             Some(null_count) => null_count,
         };
         let null_bitmap = null_bit_buffer.map(Bitmap::from);
-        Self {
+        let new_self = Self {
             data_type,
             len,
             null_count,
@@ -294,7 +301,12 @@ impl ArrayData {
             buffers,
             child_data,
             null_bitmap,
-        }
+        };
+
+        // Provide a force_validate mode
+        #[cfg(feature = "force_validate")]
+        new_self.validate_full().unwrap();
+        new_self
     }
 
     /// Create a new ArrayData, validating that the provided buffers
@@ -2340,7 +2352,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "child #0 invalid: Invalid argument error: Value at position 1 out of bounds: -1 (should be in [0, 1])"
+        expected = "Value at position 1 out of bounds: -1 (should be in [0, 1])"
     )]
     /// test that children are validated recursively (aka bugs in child data of struct also are flagged)
     fn test_validate_recursive() {
@@ -2594,6 +2606,23 @@ mod tests {
         let cloned = crate::array::make_array(cloned_data);
 
         assert_eq!(&struct_array_slice, &cloned);
+    }
+
+    #[test]
+    fn test_into_buffers() {
+        let data_types = vec![
+            DataType::Union(vec![], UnionMode::Dense),
+            DataType::Union(vec![], UnionMode::Sparse),
+        ];
+
+        for data_type in data_types {
+            let buffers = new_buffers(&data_type, 0);
+            let [buffer1, buffer2] = buffers;
+            let buffers = into_buffers(&data_type, buffer1, buffer2);
+
+            let layout = layout(&data_type);
+            assert_eq!(buffers.len(), layout.buffers.len());
+        }
     }
 
     #[test]
