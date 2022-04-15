@@ -71,6 +71,10 @@ prettyprint = ["comfy-table"]
 # target without assuming an environment containing JavaScript.
 test_utils = ["rand"]
 pyarrow = ["pyo3"]
+# force_validate runs full data validation for all arrays that are created
+# this is not enabled by default as it is too computationally expensive
+# but is run as part of our CI checks
+force_validate = []
 
 [dev-dependencies]
 rand = "0.8"

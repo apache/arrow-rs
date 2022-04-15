@@ -55,6 +55,7 @@ mod builder;
 mod byte_array;
 mod byte_array_dictionary;
 mod dictionary_buffer;
+mod empty_array;
 mod map_array;
 mod offset_buffer;
 
@@ -98,6 +99,9 @@ pub trait RowGroupCollection {
     /// Get schema of parquet file.
     fn schema(&self) -> Result<SchemaDescPtr>;
 
+    /// Get the numer of rows in this collection
+    fn num_rows(&self) -> usize;
+
     /// Returns an iterator over the column chunks for particular column
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>>;
 }
@@ -105,6 +109,10 @@ pub trait RowGroupCollection {
 impl RowGroupCollection for Arc<dyn FileReader> {
     fn schema(&self) -> Result<SchemaDescPtr> {
         Ok(self.metadata().file_metadata().schema_descr_ptr())
+    }
+
+    fn num_rows(&self) -> usize {
+        self.metadata().file_metadata().num_rows() as usize
     }
 
     fn column_chunks(&self, column_index: usize) -> Result<Box<dyn PageIterator>> {
@@ -1945,7 +1953,7 @@ mod tests {
             .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
             .unwrap();
 
-        let arrow_schema = parquet_to_arrow_schema(schema.as_ref(), &None).unwrap();
+        let arrow_schema = parquet_to_arrow_schema(schema.as_ref(), None).unwrap();
 
         let file = tempfile::tempfile().unwrap();
         let props = WriterProperties::builder()

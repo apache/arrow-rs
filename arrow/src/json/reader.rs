@@ -555,8 +555,11 @@ where
     generate_schema(field_types)
 }
 
-/// JSON values to Arrow record batch decoder. Decoder's next_batch method takes a JSON Value
-/// iterator as input and outputs Arrow record batch.
+/// JSON values to Arrow record batch decoder.
+///
+/// A [`Decoder`] decodes arbitrary streams of [`serde_json::Value`]s and
+/// converts them to [`RecordBatch`]es. To decode JSON formatted files,
+/// see [`Reader`].
 ///
 /// # Examples
 /// ```
@@ -635,8 +638,9 @@ impl DecoderOptions {
 }
 
 impl Decoder {
-    /// Create a new JSON decoder from any value that implements the `Iterator<Item=Result<Value>>`
-    /// trait.
+    /// Create a new JSON decoder from some value that implements an
+    /// iterator over [`serde_json::Value`]s (aka implements the
+    /// `Iterator<Item=Result<Value>>` trait).
     pub fn new(schema: SchemaRef, options: DecoderOptions) -> Self {
         Self { schema, options }
     }
@@ -664,7 +668,10 @@ impl Decoder {
         }
     }
 
-    /// Read the next batch of records
+    /// Read the next batch of [`serde_json::Value`] records from the
+    /// interator into a [`RecordBatch`].
+    ///
+    /// Returns `None` if the input iterator is exhausted.
     pub fn next_batch<I>(&self, value_iter: &mut I) -> Result<Option<RecordBatch>>
     where
         I: Iterator<Item = Result<Value>>,
