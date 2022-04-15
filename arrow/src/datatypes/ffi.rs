@@ -67,6 +67,23 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             // Parametrized types, requiring string parse
             other => {
                 match other.splitn(2, ':').collect::<Vec<&str>>().as_slice() {
+                    // FixedSizeBinary type in format "w:num_bytes"
+                    ["w", num_bytes] => {
+                        let parsed_num_bytes = num_bytes.parse::<i32>().map_err(|_| {
+                            ArrowError::CDataInterface(
+                                "FixedSizeBinary requires an integer parameter representing number of bytes per element".to_string())
+                        })?;
+                        DataType::FixedSizeBinary(parsed_num_bytes)
+                    },
+                    // FixedSizeList type in format "+w:num_elems"
+                    ["+w", num_elems] => {
+                        let c_child = c_schema.child(0);
+                        let parsed_num_elems = num_elems.parse::<i32>().map_err(|_| {
+                            ArrowError::CDataInterface(
+                                "The FixedSizeList type requires an integer parameter representing number of elements per list".to_string())
+                        })?;
+                        DataType::FixedSizeList(Box::new(Field::try_from(c_child)?), parsed_num_elems)
+                    },
                     // Decimal types in format "d:precision,scale" or "d:precision,scale,bitWidth"
                     ["d", extra] => {
                         match extra.splitn(3, ',').collect::<Vec<&str>>().as_slice() {
@@ -178,7 +195,9 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
         let format = get_format_string(dtype)?;
         // allocate and hold the children
         let children = match dtype {
-            DataType::List(child) | DataType::LargeList(child) => {
+            DataType::List(child)
+            | DataType::LargeList(child)
+            | DataType::FixedSizeList(child, _) => {
                 vec![FFI_ArrowSchema::try_from(child.as_ref())?]
             }
             DataType::Struct(fields) => fields
@@ -215,6 +234,8 @@ fn get_format_string(dtype: &DataType) -> Result<String> {
         DataType::LargeBinary => Ok("Z".to_string()),
         DataType::Utf8 => Ok("u".to_string()),
         DataType::LargeUtf8 => Ok("U".to_string()),
+        DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{}", num_bytes)),
+        DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{}", num_elems)),
         DataType::Decimal(precision, scale) => Ok(format!("d:{},{}", precision, scale)),
         DataType::Date32 => Ok("tdD".to_string()),
         DataType::Date64 => Ok("tdm".to_string()),
@@ -325,6 +346,11 @@ mod tests {
         round_trip_type(DataType::Float64)?;
         round_trip_type(DataType::Date64)?;
         round_trip_type(DataType::Time64(TimeUnit::Nanosecond))?;
+        round_trip_type(DataType::FixedSizeBinary(12))?;
+        round_trip_type(DataType::FixedSizeList(
+            Box::new(Field::new("a", DataType::Int64, false)),
+            5,
+        ))?;
         round_trip_type(DataType::Utf8)?;
         round_trip_type(DataType::List(Box::new(Field::new(
             "a",

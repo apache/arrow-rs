@@ -345,6 +345,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send + 'static> Stream
                                 input,
                                 InMemoryRowGroup {
                                     schema: metadata.file_metadata().schema_descr_ptr(),
+                                    row_count: row_group_metadata.num_rows() as usize,
                                     column_chunks,
                                 },
                             ))
@@ -419,11 +420,16 @@ async fn read_footer<T: AsyncRead + AsyncSeek + Unpin>(
 struct InMemoryRowGroup {
     schema: SchemaDescPtr,
     column_chunks: Vec<Option<InMemoryColumnChunk>>,
+    row_count: usize,
 }
 
 impl RowGroupCollection for InMemoryRowGroup {
     fn schema(&self) -> Result<SchemaDescPtr> {
         Ok(self.schema.clone())
+    }
+
+    fn num_rows(&self) -> usize {
+        self.row_count
     }
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {

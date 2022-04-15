@@ -817,7 +817,6 @@ mod tests {
             .metadata
             .file_metadata()
             .key_value_metadata()
-            .as_ref()
             .unwrap();
 
         assert_eq!(metadata.len(), 3);

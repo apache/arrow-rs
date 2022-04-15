@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType as ArrowType, Field, IntervalUnit, Schema, SchemaRef};
 
+use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::{
     make_byte_array_dictionary_reader, make_byte_array_reader, ArrayReader,
     ComplexObjectArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
@@ -37,7 +38,7 @@ use crate::data_type::{
     Int96Type,
 };
 use crate::errors::ParquetError::ArrowError;
-use crate::errors::{ParquetError, Result};
+use crate::errors::{Result};
 use crate::schema::types::{ColumnDescriptor, ColumnPath, SchemaDescPtr, Type, TypePtr};
 use crate::schema::visitor::TypeVisitor;
 
@@ -62,10 +63,6 @@ where
 
         let root = parquet_schema.get_column_root_ptr(c);
         filtered_root_names.insert(root.name().to_string());
-    }
-
-    if leaves.is_empty() {
-        return Err(general_err!("Can't build array reader without columns!"));
     }
 
     // Only pass root fields that take part in the projection
@@ -412,10 +409,10 @@ impl<'a> ArrayReaderBuilder {
     fn build_array_reader(&mut self) -> Result<Box<dyn ArrayReader>> {
         let context = ArrayReaderBuilderContext::default();
 
-        self.visit_struct(self.root_schema.clone(), &context)
-            .and_then(|reader_opt| {
-                reader_opt.ok_or_else(|| general_err!("Failed to build array reader!"))
-            })
+        match self.visit_struct(self.root_schema.clone(), &context)? {
+            Some(reader) => Ok(reader),
+            None => Ok(make_empty_array_reader(self.row_groups.num_rows())),
+        }
     }
 
     // Utility functions
