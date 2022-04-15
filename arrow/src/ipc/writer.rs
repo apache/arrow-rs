@@ -25,7 +25,9 @@ use std::io::{BufWriter, Write};
 
 use flatbuffers::FlatBufferBuilder;
 
-use crate::array::{as_struct_array, as_union_array, ArrayData, ArrayRef};
+use crate::array::{
+    as_list_array, as_struct_array, as_union_array, make_array, ArrayData, ArrayRef,
+};
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
@@ -137,15 +139,14 @@ impl IpcDataGenerator {
         }
     }
 
-    fn encode_dictionaries(
+    fn _encode_dictionaries(
         &self,
-        field: &Field,
         column: &ArrayRef,
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
     ) -> Result<()> {
-        // TODO: Handle other nested types (map, list, etc)
+        // TODO: Handle other nested types (map, etc)
         match column.data_type() {
             DataType::Struct(fields) => {
                 let s = as_struct_array(column);
@@ -158,6 +159,16 @@ impl IpcDataGenerator {
                         write_options,
                     )?;
                 }
+            }
+            DataType::List(field) => {
+                let list = as_list_array(column);
+                self.encode_dictionaries(
+                    field,
+                    &list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
             }
             DataType::Union(fields, _) => {
                 let union = as_union_array(column);
@@ -175,12 +186,36 @@ impl IpcDataGenerator {
                     )?;
                 }
             }
+            _ => (),
+        }
+
+        Ok(())
+    }
+
+    fn encode_dictionaries(
+        &self,
+        field: &Field,
+        column: &ArrayRef,
+        encoded_dictionaries: &mut Vec<EncodedData>,
+        dictionary_tracker: &mut DictionaryTracker,
+        write_options: &IpcWriteOptions,
+    ) -> Result<()> {
+        match column.data_type() {
             DataType::Dictionary(_key_type, _value_type) => {
                 let dict_id = field
                     .dict_id()
                     .expect("All Dictionary types have `dict_id`");
                 let dict_data = column.data();
                 let dict_values = &dict_data.child_data()[0];
+
+                let values = make_array(dict_data.child_data()[0].clone());
+
+                self._encode_dictionaries(
+                    &values,
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
 
                 let emit = dictionary_tracker.insert(dict_id, column)?;
 
@@ -192,7 +227,12 @@ impl IpcDataGenerator {
                     ));
                 }
             }
-            _ => (),
+            _ => self._encode_dictionaries(
+                column,
+                encoded_dictionaries,
+                dictionary_tracker,
+                write_options,
+            )?,
         }
 
         Ok(())
@@ -205,7 +245,7 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
     ) -> Result<(Vec<EncodedData>, EncodedData)> {
         let schema = batch.schema();
-        let mut encoded_dictionaries = Vec::with_capacity(schema.fields().len());
+        let mut encoded_dictionaries = Vec::with_capacity(schema.all_fields().len());
 
         for (i, field) in schema.fields().iter().enumerate() {
             let column = batch.column(i);
