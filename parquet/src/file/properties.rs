@@ -631,7 +631,9 @@ mod tests {
         assert_eq!(props.created_by(), "default");
         assert_eq!(
             props.key_value_metadata(),
-            Some(&vec![KeyValue::new("key".to_string(), "value".to_string(),)])
+            Some(&vec![
+                KeyValue::new("key".to_string(), "value".to_string(),)
+            ])
         );
 
         assert_eq!(

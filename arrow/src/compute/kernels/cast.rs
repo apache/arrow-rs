@@ -1244,7 +1244,11 @@ where
             to_type,
             array.len(),
             Some(array.null_count()),
-            array.data().null_bitmap().cloned().map(|bitmap| bitmap.bits),
+            array
+                .data()
+                .null_bitmap()
+                .cloned()
+                .map(|bitmap| bitmap.bits),
             array.data().offset(),
             array.data().buffers().to_vec(),
             vec![],

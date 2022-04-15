@@ -376,9 +376,7 @@ impl<T: DataType> ColumnWriterImpl<T> {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) -> Result<usize> {
-        self.write_batch_internal(
-            values, def_levels, rep_levels, None, None, None, None,
-        )
+        self.write_batch_internal(values, def_levels, rep_levels, None, None, None, None)
     }
 
     /// Writer may optionally provide pre-calculated statistics for this batch, in which case we do
