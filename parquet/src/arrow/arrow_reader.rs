@@ -19,17 +19,18 @@
 
 use std::sync::Arc;
 
+use arrow::array::Array;
 use arrow::datatypes::{DataType as ArrowType, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow::{array::StructArray, error::ArrowError};
 
-use crate::arrow::array_reader::{build_array_reader, ArrayReader, StructArrayReader};
+use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::schema::{
     parquet_to_arrow_schema_by_columns, parquet_to_arrow_schema_by_root_columns,
 };
-use crate::errors::{ParquetError, Result};
+use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::reader::FileReader;
 
@@ -234,20 +235,10 @@ impl Iterator for ParquetRecordBatchReader {
                             "Struct array reader should return struct array".to_string(),
                         )
                     });
+
                 match struct_array {
                     Err(err) => Some(Err(err)),
-                    Ok(e) => {
-                        match RecordBatch::try_new(self.schema.clone(), e.columns_ref()) {
-                            Err(err) => Some(Err(err)),
-                            Ok(record_batch) => {
-                                if record_batch.num_rows() > 0 {
-                                    Some(Ok(record_batch))
-                                } else {
-                                    None
-                                }
-                            }
-                        }
-                    }
+                    Ok(e) => (e.len() > 0).then(|| Ok(RecordBatch::from(e))),
                 }
             }
         }
@@ -265,12 +256,6 @@ impl ParquetRecordBatchReader {
         batch_size: usize,
         array_reader: Box<dyn ArrayReader>,
     ) -> Result<Self> {
-        // Check that array reader is struct array reader
-        array_reader
-            .as_any()
-            .downcast_ref::<StructArrayReader>()
-            .ok_or_else(|| general_err!("The input must be struct array reader!"))?;
-
         let schema = match array_reader.get_data_type() {
             ArrowType::Struct(ref fields) => Schema::new(fields.clone()),
             _ => unreachable!("Struct array reader's data type is not struct!"),
@@ -1385,5 +1370,27 @@ mod tests {
             &arrow_reader.get_schema().unwrap(),
             schema_without_metadata.as_ref()
         );
+    }
+
+    #[test]
+    fn test_empty_projection() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/alltypes_plain.parquet", testdata);
+        let file = File::open(&path).unwrap();
+        let reader = SerializedFileReader::try_from(file).unwrap();
+        let expected_rows = reader.metadata().file_metadata().num_rows() as usize;
+
+        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
+        let batch_reader = arrow_reader.get_record_reader_by_columns([], 2).unwrap();
+
+        let mut total_rows = 0;
+        for maybe_batch in batch_reader {
+            let batch = maybe_batch.unwrap();
+            total_rows += batch.num_rows();
+            assert_eq!(batch.num_columns(), 0);
+            assert!(batch.num_rows() <= 2);
+        }
+
+        assert_eq!(total_rows, expected_rows);
     }
 }
