@@ -420,9 +420,7 @@ impl RleDecoder {
                     self.bit_width as usize,
                 );
                 if num_values == 0 {
-                    // some writers are putting less values that could fit in the bit packed run
-                    // in such a case bit_packed_left is unreliable as it represents max possible values left
-                    // to avoid infinite loop we need to return so the caller could check if all expected values were read already.
+                    // Handle writers which truncate the final block
                     self.bit_packed_left = 0;
                     continue;
                 }
@@ -474,6 +472,11 @@ impl RleDecoder {
                         &mut index_buf[..num_values],
                         self.bit_width as usize,
                     );
+                    if num_values == 0 {
+                        // Handle writers which truncate the final block
+                        self.bit_packed_left = 0;
+                        break;
+                    }
                     for i in 0..num_values {
                         buffer[values_read + i].clone_from(&dict[index_buf[i] as usize])
                     }
@@ -748,6 +751,42 @@ mod tests {
             test_rle_values(width, 1024, 0);
             test_rle_values(width, 1024, 1);
         }
+    }
+
+    #[test]
+    fn test_truncated_rle() {
+        // The final bit packed run within a page may not be a multiple of 8 values
+        // Unfortunately the specification stores `(bit-packed-run-len) / 8`
+        // This means we don't necessarily know how many values are present
+        // and some writers may not add padding to compensate for this ambiguity
+
+        // Bit pack encode 20 values with a bit width of 8
+        let mut data: Vec<u8> = vec![
+            (3 << 1) | 1, // bit-packed run of 3 * 8
+        ];
+        data.extend(std::iter::repeat(0xFF).take(20));
+        let data = ByteBufferPtr::new(data);
+
+        let mut decoder = RleDecoder::new(8);
+        decoder.set_data(data.clone());
+
+        let mut output = vec![0_u16; 100];
+        let read = decoder.get_batch(&mut output).unwrap();
+
+        assert_eq!(read, 20);
+        assert!(output.iter().take(20).all(|x| *x == 255));
+
+        // Reset decoder
+        decoder.set_data(data);
+
+        let dict: Vec<u16> = (0..256).collect();
+        let mut output = vec![0_u16; 100];
+        let read = decoder
+            .get_batch_with_dict(&dict, &mut output, 100)
+            .unwrap();
+
+        assert_eq!(read, 20);
+        assert!(output.iter().take(20).all(|x| *x == 255));
     }
 
     #[test]
