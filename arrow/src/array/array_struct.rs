@@ -360,7 +360,7 @@ mod tests {
         assert_eq!(1, struct_data.null_count());
         assert_eq!(
             // 00001011
-            &Some(Bitmap::from(Buffer::from(&[11_u8]))),
+            Some(&Bitmap::from(Buffer::from(&[11_u8]))),
             struct_data.null_bitmap()
         );
 

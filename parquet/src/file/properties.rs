@@ -145,8 +145,8 @@ impl WriterProperties {
     }
 
     /// Returns `key_value_metadata` KeyValue pairs.
-    pub fn key_value_metadata(&self) -> &Option<Vec<KeyValue>> {
-        &self.key_value_metadata
+    pub fn key_value_metadata(&self) -> Option<&Vec<KeyValue>> {
+        self.key_value_metadata.as_ref()
     }
 
     /// Returns encoding for a data page, when dictionary encoding is enabled.
@@ -523,7 +523,7 @@ mod tests {
         assert_eq!(props.max_row_group_size(), DEFAULT_MAX_ROW_GROUP_SIZE);
         assert_eq!(props.writer_version(), DEFAULT_WRITER_VERSION);
         assert_eq!(props.created_by(), DEFAULT_CREATED_BY);
-        assert_eq!(props.key_value_metadata(), &None);
+        assert_eq!(props.key_value_metadata(), None);
         assert_eq!(props.encoding(&ColumnPath::from("col")), None);
         assert_eq!(
             props.compression(&ColumnPath::from("col")),
@@ -631,7 +631,7 @@ mod tests {
         assert_eq!(props.created_by(), "default");
         assert_eq!(
             props.key_value_metadata(),
-            &Some(vec![KeyValue::new("key".to_string(), "value".to_string(),)])
+            Some(&vec![KeyValue::new("key".to_string(), "value".to_string(),)])
         );
 
         assert_eq!(

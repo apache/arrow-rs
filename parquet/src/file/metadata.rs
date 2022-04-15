@@ -139,8 +139,8 @@ impl FileMetaData {
     /// ```shell
     /// parquet-mr version 1.8.0 (build 0fda28af84b9746396014ad6a415b90592a98b3b)
     /// ```
-    pub fn created_by(&self) -> &Option<String> {
-        &self.created_by
+    pub fn created_by(&self) -> Option<&String> {
+        self.created_by.as_ref()
     }
 
     /// Returns key_value_metadata of this file.

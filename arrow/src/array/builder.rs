@@ -3561,7 +3561,7 @@ mod tests {
         assert_eq!(4, struct_data.len());
         assert_eq!(1, struct_data.null_count());
         assert_eq!(
-            &Some(Bitmap::from(Buffer::from(&[11_u8]))),
+            Some(&Bitmap::from(Buffer::from(&[11_u8]))),
             struct_data.null_bitmap()
         );
 
@@ -3675,7 +3675,7 @@ mod tests {
         assert_eq!(3, map_data.len());
         assert_eq!(1, map_data.null_count());
         assert_eq!(
-            &Some(Bitmap::from(Buffer::from(&[5_u8]))),
+            Some(&Bitmap::from(Buffer::from(&[5_u8]))),
             map_data.null_bitmap()
         );
 
