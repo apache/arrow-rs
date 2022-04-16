@@ -1108,15 +1108,13 @@ mod tests {
     }
 
     #[test]
-    // https://github.com/apache/arrow-rs/issues/1548
-    #[cfg(not(feature = "force_validate"))]
     fn projection_should_work() {
         // complementary to the previous test
         let testdata = crate::util::test_util::arrow_test_data();
         let paths = vec![
             "generated_interval",
             "generated_datetime",
-            // "generated_map", Err: Last offset 872415232 of Utf8 is larger than values length 52 (https://github.com/apache/arrow-rs/issues/859)
+            "generated_map",
             "generated_nested",
             "generated_null_trivial",
             "generated_null",
@@ -1125,8 +1123,11 @@ mod tests {
             "generated_primitive",
         ];
         paths.iter().for_each(|path| {
+            // We must use littleendian files here.
+            // The offsets are not translated for big-endian files
+            // https://github.com/apache/arrow-rs/issues/859
             let file = File::open(format!(
-                "{}/arrow-ipc-stream/integration/1.0.0-bigendian/{}.arrow_file",
+                "{}/arrow-ipc-stream/integration/1.0.0-littleendian/{}.arrow_file",
                 testdata, path
             ))
             .unwrap();
