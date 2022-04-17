@@ -23,6 +23,7 @@ use crate::{
     datatypes::DataType,
     error::{ArrowError, Result},
 };
+use std::cmp::Ordering;
 
 fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
@@ -35,21 +36,41 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     let data = values.as_slice();
     let zero = OffsetSize::zero();
 
-    let cal_new_start: Box<dyn Fn(OffsetSize, OffsetSize) -> OffsetSize> = if start
-        >= zero
-    {
-        // count from the start of string
-        Box::new(|old_start: OffsetSize, end: OffsetSize| (old_start + start).min(end))
-    } else {
-        // count from the end of string
-        Box::new(|old_start: OffsetSize, end: OffsetSize| (end + start).max(old_start))
+    // check the `idx` is a valid char boundary or not
+    // If yes, return `idx`, else return error
+    let check_char_boundary = |idx: OffsetSize| {
+        let idx_usize = idx.to_usize().unwrap();
+        if idx_usize == data.len() || data[idx_usize] >> 6 != 0b10_u8 {
+            Ok(idx)
+        } else {
+            Err(ArrowError::ComputeError(format!("The index {} is invalid because {:#010b} is not the head byte of a char.", idx_usize, data[idx_usize])))
+        }
     };
 
-    let cal_new_length: Box<dyn Fn(OffsetSize, OffsetSize) -> OffsetSize> =
-        if let Some(length) = length {
-            Box::new(|start: OffsetSize, end: OffsetSize| (*length).min(end - start))
-        } else {
-            Box::new(|start: OffsetSize, end: OffsetSize| end - start)
+    // function for calculating the start index of each string
+    let cal_new_start: Box<dyn Fn(OffsetSize, OffsetSize) -> Result<OffsetSize>> =
+        match start.cmp(&zero) {
+            // count from the start of string
+            // and check it is a valid char boundary
+            Ordering::Greater => Box::new(|old_start: OffsetSize, end: OffsetSize| {
+                check_char_boundary((old_start + start).min(end))
+            }),
+            Ordering::Equal => {
+                Box::new(|old_start: OffsetSize, _: OffsetSize| Ok(old_start))
+            }
+            // count from the end of string
+            Ordering::Less => Box::new(|old_start: OffsetSize, end: OffsetSize| {
+                check_char_boundary((end + start).max(old_start))
+            }),
+        };
+
+    // function for calculating the end index of each string
+    let cal_new_end: Box<dyn Fn(OffsetSize, OffsetSize) -> Result<OffsetSize>> =
+        match length {
+            Some(length) => Box::new(|start: OffsetSize, end: OffsetSize| {
+                check_char_boundary((*length + start).min(end))
+            }),
+            None => Box::new(|_: OffsetSize, end: OffsetSize| Ok(end)),
         };
 
     // start and end offsets for each substring
@@ -59,13 +80,14 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     let mut len_so_far = zero;
     new_offsets.push(zero);
 
-    offsets.windows(2).for_each(|pair| {
-        let new_start = cal_new_start(pair[0], pair[1]);
-        let new_length = cal_new_length(new_start, pair[1]);
-        len_so_far += new_length;
-        new_starts_ends.push((new_start, new_start + new_length));
+    offsets.windows(2).try_for_each(|pair| -> Result<()> {
+        let new_start = cal_new_start(pair[0], pair[1])?;
+        let new_end = cal_new_end(new_start, pair[1])?;
+        len_so_far += new_end - new_start;
+        new_starts_ends.push((new_start, new_end));
         new_offsets.push(len_so_far);
-    });
+        Ok(())
+    })?;
 
     // concatenate substrings into a buffer
     let mut new_values =
@@ -107,29 +129,26 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 ///
 /// Attention: Both `start` and `length` are counted by byte, not by char.
 ///
-/// # Warning
-///
-/// This function **might** return in invalid utf-8 format if the
-/// character length falls on a non-utf8 boundary, which we
-/// [hope to fix](https://github.com/apache/arrow-rs/issues/1531)
-/// in a future release.
-///
-/// ## Example of getting an invalid substring
+/// # Basic usage
 /// ```
-/// # // Doesn't pass due to  https://github.com/apache/arrow-rs/issues/1531
-/// # #[cfg(not(feature = "force_validate"))]
-/// # {
 /// # use arrow::array::StringArray;
 /// # use arrow::compute::kernels::substring::substring;
-/// let array = StringArray::from(vec![Some("E=mc²")]);
-/// let result = substring(&array, -1, &None).unwrap();
+/// let array = StringArray::from(vec![Some("arrow"), None, Some("rust")]);
+/// let result = substring(&array, 1, &Some(4)).unwrap();
 /// let result = result.as_any().downcast_ref::<StringArray>().unwrap();
-/// assert_eq!(result.value(0).as_bytes(), &[0x00B2]); // invalid utf-8 format
-/// # }
+/// assert_eq!(result, &StringArray::from(vec![Some("rrow"), None, Some("ust")]));
 /// ```
 ///
 /// # Error
-/// this function errors when the passed array is not a \[Large\]String array.
+/// - The function errors when the passed array is not a \[Large\]String array.
+/// - The function errors when you try to create a substring in the middle of a multibyte character.
+/// ```
+/// # use arrow::array::StringArray;
+/// # use arrow::compute::kernels::substring::substring;
+/// let array = StringArray::from(vec![Some("E=mc²")]);
+/// let result = substring(&array, -1, &None);
+/// assert_eq!(result.is_err(), true);
+/// ```
 pub fn substring(
     array: &dyn Array,
     start: i64,
@@ -307,5 +326,11 @@ mod tests {
     #[test]
     fn without_nulls_large_string() -> Result<()> {
         without_nulls::<LargeStringArray>()
+    }
+
+    #[test]
+    fn invalid_array_type() {
+        let array = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
+        assert_eq!(substring(&array, 0, &None).is_err(), true);
     }
 }
