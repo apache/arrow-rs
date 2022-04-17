@@ -3324,7 +3324,6 @@ mod tests {
         assert_eq!(100000000000011, sum_a);
     }
 
-
     #[test]
     fn test_options_clone() {
         // ensure options have appropriate derivation
