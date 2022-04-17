@@ -39,10 +39,10 @@ fn add_benchmark(c: &mut Criterion) {
     let str_len = 1000;
 
     let arr_string = create_string_array_with_len::<i32>(size, 0.0, str_len);
-    let start = 0;
+    let start = 1;
 
     c.bench_function("substring", |b| {
-        b.iter(|| bench_substring(&arr_string, start, str_len))
+        b.iter(|| bench_substring(&arr_string, start, str_len - 1))
     });
 }
 
