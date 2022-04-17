@@ -26,12 +26,7 @@ use arrow::compute::kernels::substring::substring;
 use arrow::util::bench_util::*;
 
 fn bench_substring(arr: &StringArray, start: i64, length: usize) {
-    substring(
-        criterion::black_box(arr),
-        start,
-        Some(length as u64).as_ref(),
-    )
-    .unwrap();
+    substring(criterion::black_box(arr), start, Some(length as u64)).unwrap();
 }
 
 fn add_benchmark(c: &mut Criterion) {

@@ -27,7 +27,7 @@ use crate::{
 fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: OffsetSize,
-    length: Option<&OffsetSize>,
+    length: Option<OffsetSize>,
 ) -> Result<ArrayRef> {
     let offsets = array.value_offsets();
     let null_bit_buffer = array.data_ref().null_buffer().cloned();
@@ -47,9 +47,9 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 
     let cal_new_length: Box<dyn Fn(OffsetSize, OffsetSize) -> OffsetSize> =
         if let Some(length) = length {
-            Box::new(|start: OffsetSize, end: OffsetSize| (*length).min(end - start))
+            Box::new(move |start: OffsetSize, end: OffsetSize| length.min(end - start))
         } else {
-            Box::new(|start: OffsetSize, end: OffsetSize| end - start)
+            Box::new(move |start: OffsetSize, end: OffsetSize| end - start)
         };
 
     // start and end offsets for each substring
@@ -130,11 +130,7 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 ///
 /// # Error
 /// this function errors when the passed array is not a \[Large\]String array.
-pub fn substring(
-    array: &dyn Array,
-    start: i64,
-    length: Option<&u64>,
-) -> Result<ArrayRef> {
+pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::LargeUtf8 => generic_substring(
             array
@@ -142,7 +138,7 @@ pub fn substring(
                 .downcast_ref::<LargeStringArray>()
                 .expect("A large string is expected"),
             start,
-            length.map(|e| *e as i64).as_ref(),
+            length.map(|e| e as i64),
         ),
         DataType::Utf8 => generic_substring(
             array
@@ -150,7 +146,7 @@ pub fn substring(
                 .downcast_ref::<StringArray>()
                 .expect("A string is expected"),
             start as i32,
-            length.map(|e| *e as i32).as_ref(),
+            length.map(|e| e as i32),
         ),
         _ => Err(ArrowError::ComputeError(format!(
             "substring does not support type {:?}",
@@ -206,7 +202,7 @@ mod tests {
         cases.into_iter().try_for_each::<_, Result<()>>(
             |(array, start, length, expected)| {
                 let array = T::from(array);
-                let result: ArrayRef = substring(&array, start, length.as_ref())?;
+                let result: ArrayRef = substring(&array, start, length)?;
                 assert_eq!(array.len(), result.len());
 
                 let result = result.as_any().downcast_ref::<T>().unwrap();
@@ -287,7 +283,7 @@ mod tests {
         cases.into_iter().try_for_each::<_, Result<()>>(
             |(array, start, length, expected)| {
                 let array = StringArray::from(array);
-                let result = substring(&array, start, length.as_ref())?;
+                let result = substring(&array, start, length)?;
                 assert_eq!(array.len(), result.len());
                 let result = result.as_any().downcast_ref::<StringArray>().unwrap();
                 let expected = StringArray::from(expected);
