@@ -590,13 +590,14 @@ pub struct Decoder {
     options: DecoderOptions,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
+/// Options for JSON decoding
 pub struct DecoderOptions {
     /// Batch size (number of records to load each time), defaults to 1024 records
     batch_size: usize,
     /// Optional projection for which columns to load (case-sensitive names)
     projection: Option<Vec<String>>,
-    /// optional HashMap of column names to its format string
+    /// optional HashMap of column name to its format string
     format_strings: Option<HashMap<String, String>>,
 }
 
@@ -3321,5 +3322,14 @@ mod tests {
         assert_eq!(12, sum_num_rows);
         assert_eq!(3, num_batches);
         assert_eq!(100000000000011, sum_a);
+    }
+
+
+    #[test]
+    fn test_options_clone() {
+        // ensure options have appropriate derivation
+        let options = DecoderOptions::new().with_batch_size(64);
+        let cloned = options.clone();
+        assert_eq!(options, cloned);
     }
 }
