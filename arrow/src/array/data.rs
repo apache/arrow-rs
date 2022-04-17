@@ -398,8 +398,8 @@ impl ArrayData {
 
     /// Returns a reference to the null bitmap of this array data
     #[inline]
-    pub const fn null_bitmap(&self) -> &Option<Bitmap> {
-        &self.null_bitmap
+    pub const fn null_bitmap(&self) -> Option<&Bitmap> {
+        self.null_bitmap.as_ref()
     }
 
     /// Returns a reference to the null buffer of this array data.
@@ -500,7 +500,7 @@ impl ArrayData {
                     .iter()
                     .map(|data| data.slice(offset, length))
                     .collect(),
-                null_bitmap: self.null_bitmap().clone(),
+                null_bitmap: self.null_bitmap().cloned(),
             };
 
             new_data

@@ -1010,7 +1010,7 @@ mod tests {
         let expected = BooleanArray::from(vec![false, false, false, false]);
 
         assert_eq!(expected, res);
-        assert_eq!(&None, res.data_ref().null_bitmap());
+        assert_eq!(None, res.data_ref().null_bitmap());
     }
 
     #[test]
@@ -1023,7 +1023,7 @@ mod tests {
         let expected = BooleanArray::from(vec![false, false, false, false]);
 
         assert_eq!(expected, res);
-        assert_eq!(&None, res.data_ref().null_bitmap());
+        assert_eq!(None, res.data_ref().null_bitmap());
     }
 
     #[test]
@@ -1035,7 +1035,7 @@ mod tests {
         let expected = BooleanArray::from(vec![true, true, true, true]);
 
         assert_eq!(expected, res);
-        assert_eq!(&None, res.data_ref().null_bitmap());
+        assert_eq!(None, res.data_ref().null_bitmap());
     }
 
     #[test]
@@ -1048,7 +1048,7 @@ mod tests {
         let expected = BooleanArray::from(vec![true, true, true, true]);
 
         assert_eq!(expected, res);
-        assert_eq!(&None, res.data_ref().null_bitmap());
+        assert_eq!(None, res.data_ref().null_bitmap());
     }
 
     #[test]
@@ -1060,7 +1060,7 @@ mod tests {
         let expected = BooleanArray::from(vec![false, true, false, true]);
 
         assert_eq!(expected, res);
-        assert_eq!(&None, res.data_ref().null_bitmap());
+        assert_eq!(None, res.data_ref().null_bitmap());
     }
 
     #[test]
@@ -1091,7 +1091,7 @@ mod tests {
         let expected = BooleanArray::from(vec![false, true, false, true]);
 
         assert_eq!(expected, res);
-        assert_eq!(&None, res.data_ref().null_bitmap());
+        assert_eq!(None, res.data_ref().null_bitmap());
     }
 
     #[test]
@@ -1103,7 +1103,7 @@ mod tests {
         let expected = BooleanArray::from(vec![true, false, true, false]);
 
         assert_eq!(expected, res);
-        assert_eq!(&None, res.data_ref().null_bitmap());
+        assert_eq!(None, res.data_ref().null_bitmap());
     }
 
     #[test]
@@ -1134,7 +1134,7 @@ mod tests {
         let expected = BooleanArray::from(vec![true, false, true, false]);
 
         assert_eq!(expected, res);
-        assert_eq!(&None, res.data_ref().null_bitmap());
+        assert_eq!(None, res.data_ref().null_bitmap());
     }
 
     #[test]

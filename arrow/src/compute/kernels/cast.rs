@@ -1244,7 +1244,11 @@ where
             to_type,
             array.len(),
             Some(array.null_count()),
-            array.data().null_bitmap().clone().map(|bitmap| bitmap.bits),
+            array
+                .data()
+                .null_bitmap()
+                .cloned()
+                .map(|bitmap| bitmap.bits),
             array.data().offset(),
             array.data().buffers().to_vec(),
             vec![],
@@ -1730,7 +1734,7 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                     cast_keys
                         .data()
                         .null_bitmap()
-                        .clone()
+                        .cloned()
                         .map(|bitmap| bitmap.bits),
                     cast_keys.data().offset(),
                     cast_keys.data().buffers().to_vec(),
@@ -1948,7 +1952,7 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
             cast_array
                 .data()
                 .null_bitmap()
-                .clone()
+                .cloned()
                 .map(|bitmap| bitmap.bits),
             0,
             vec![offsets.into()],
@@ -1976,7 +1980,7 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
             to_type.clone(),
             array.len(),
             Some(data.null_count()),
-            data.null_bitmap().clone().map(|bitmap| bitmap.bits),
+            data.null_bitmap().cloned().map(|bitmap| bitmap.bits),
             array.offset(),
             // reuse offset buffer
             data.buffers().to_vec(),

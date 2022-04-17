@@ -605,7 +605,7 @@ mod tests {
         let file_metadata = metadata.file_metadata();
         assert!(file_metadata.created_by().is_some());
         assert_eq!(
-      file_metadata.created_by().as_ref().unwrap(),
+      file_metadata.created_by().unwrap(),
       "impala version 1.3.0-INTERNAL (build 8a48ddb1eff84592b3fc06bc6f51ec120e1fffc9)"
     );
         assert!(file_metadata.key_value_metadata().is_none());
@@ -695,7 +695,7 @@ mod tests {
         let file_metadata = metadata.file_metadata();
         assert!(file_metadata.created_by().is_some());
         assert_eq!(
-            file_metadata.created_by().as_ref().unwrap(),
+            file_metadata.created_by().unwrap(),
             "parquet-mr version 1.8.1 (build 4aba4dae7bb0d4edbcf7923ae1339f28fd3f7fcf)"
         );
         assert!(file_metadata.key_value_metadata().is_some());
