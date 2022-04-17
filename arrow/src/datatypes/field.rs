@@ -91,8 +91,8 @@ impl Field {
 
     /// Returns the immutable reference to the `Field`'s optional custom metadata.
     #[inline]
-    pub const fn metadata(&self) -> &Option<BTreeMap<String, String>> {
-        &self.metadata
+    pub const fn metadata(&self) -> Option<&BTreeMap<String, String>> {
+        self.metadata.as_ref()
     }
 
     /// Returns an immutable reference to the `Field`'s name.

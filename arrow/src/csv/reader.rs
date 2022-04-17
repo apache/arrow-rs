@@ -509,7 +509,7 @@ impl<R: Read> Iterator for Reader<R> {
             &self.batch_records[..read_records],
             self.schema.fields(),
             Some(self.schema.metadata.clone()),
-            &self.projection,
+            self.projection.as_ref(),
             self.line_number,
             format,
         );
@@ -526,12 +526,12 @@ fn parse(
     rows: &[StringRecord],
     fields: &[Field],
     metadata: Option<std::collections::HashMap<String, String>>,
-    projection: &Option<Vec<usize>>,
+    projection: Option<&Vec<usize>>,
     line_number: usize,
     datetime_format: Option<&str>,
 ) -> Result<RecordBatch> {
     let projection: Vec<usize> = match projection {
-        Some(ref v) => v.clone(),
+        Some(v) => v.clone(),
         None => fields.iter().enumerate().map(|(i, _)| i).collect(),
     };
 

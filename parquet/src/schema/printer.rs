@@ -231,7 +231,7 @@ fn print_timeunit(unit: &TimeUnit) -> &str {
 
 #[inline]
 fn print_logical_and_converted(
-    logical_type: &Option<LogicalType>,
+    logical_type: Option<&LogicalType>,
     converted_type: ConvertedType,
     precision: i32,
     scale: i32,
@@ -315,7 +315,7 @@ impl<'a> Printer<'a> {
                 // Also print logical type if it is available
                 // If there is a logical type, do not print converted type
                 let logical_type_str = print_logical_and_converted(
-                    &basic_info.logical_type(),
+                    basic_info.logical_type().as_ref(),
                     basic_info.converted_type(),
                     precision,
                     scale,
@@ -347,7 +347,7 @@ impl<'a> Printer<'a> {
                     let r = basic_info.repetition();
                     write!(self.output, "{} group {} ", r, basic_info.name());
                     let logical_str = print_logical_and_converted(
-                        &basic_info.logical_type(),
+                        basic_info.logical_type().as_ref(),
                         basic_info.converted_type(),
                         0,
                         0,
