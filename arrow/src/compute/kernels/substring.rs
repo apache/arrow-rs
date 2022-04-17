@@ -52,14 +52,12 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
         match start.cmp(&zero) {
             // count from the start of string
             // and check it is a valid char boundary
-            Ordering::Greater => Box::new(|old_start: OffsetSize, end: OffsetSize| {
+            Ordering::Greater => Box::new(|old_start, end| {
                 check_char_boundary((old_start + start).min(end))
             }),
-            Ordering::Equal => {
-                Box::new(|old_start: OffsetSize, _: OffsetSize| Ok(old_start))
-            }
+            Ordering::Equal => Box::new(|old_start, _| Ok(old_start)),
             // count from the end of string
-            Ordering::Less => Box::new(|old_start: OffsetSize, end: OffsetSize| {
+            Ordering::Less => Box::new(|old_start, end| {
                 check_char_boundary((end + start).max(old_start))
             }),
         };
@@ -67,10 +65,10 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     // function for calculating the end index of each string
     let cal_new_end: Box<dyn Fn(OffsetSize, OffsetSize) -> Result<OffsetSize>> =
         match length {
-            Some(length) => Box::new(|start: OffsetSize, end: OffsetSize| {
-                check_char_boundary((*length + start).min(end))
-            }),
-            None => Box::new(|_: OffsetSize, end: OffsetSize| Ok(end)),
+            Some(length) => {
+                Box::new(|start, end| check_char_boundary((*length + start).min(end)))
+            }
+            None => Box::new(|_, end| Ok(end)),
         };
 
     // start and end offsets for each substring
@@ -329,8 +327,23 @@ mod tests {
     }
 
     #[test]
-    fn invalid_array_type() {
+    fn check_invalid_array_type() {
         let array = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
         assert_eq!(substring(&array, 0, &None).is_err(), true);
+    }
+
+    // tests for the utf-8 validation checking
+    #[test]
+    fn check_start_index() {
+        let array = StringArray::from(vec![Some("E=mc²"), Some("ascii")]);
+        let result = substring(&array, -1, &None);
+        assert_eq!(result.is_err(), true);
+    }
+
+    #[test]
+    fn check_length() {
+        let array = StringArray::from(vec![Some("E=mc²"), Some("ascii")]);
+        let result = substring(&array, 0, &Some(5));
+        assert_eq!(result.is_err(), true);
     }
 }
