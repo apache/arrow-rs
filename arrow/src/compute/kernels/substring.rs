@@ -38,15 +38,18 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 
     // Check if `offset` is at a valid char boundary.
     // If yes, return `offset`, else return error
-    let check_char_boundary = |offset: OffsetSize| {
-        let offset_usize = offset.to_usize().unwrap();
-        if offset_usize == data.len() || data[offset_usize] >> 6 != 0b10_u8 {
-            Ok(offset)
-        } else {
-            Err(ArrowError::ComputeError(format!(
-                "The offset {} is at an invalid utf-8 boundary.",
-                offset_usize
-            )))
+    let check_char_boundary = {
+        let data_str = unsafe { std::str::from_utf8_unchecked(data) };
+        |offset: OffsetSize| {
+            let offset_usize = offset.to_usize().unwrap();
+            if data_str.is_char_boundary(offset_usize) {
+                Ok(offset)
+            } else {
+                Err(ArrowError::ComputeError(format!(
+                    "The offset {} is at an invalid utf-8 boundary.",
+                    offset_usize
+                )))
+            }
         }
     };
 
@@ -145,8 +148,8 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 /// # Error
 /// - The function errors when the passed array is not a \[Large\]String array.
 /// - The function errors if the offset of a substring in the input array is at invalid char boundary.
-/// 
-/// ## Example of trying to get an invalid utf-8 substring
+///
+/// ## Example of trying to get an invalid utf-8 format substring
 /// ```
 /// # use arrow::array::StringArray;
 /// # use arrow::compute::kernels::substring::substring;
