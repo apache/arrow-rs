@@ -717,13 +717,7 @@ impl ArrayReader for StructArrayReader {
             .children
             .iter_mut()
             .map(|reader| reader.next_batch(batch_size))
-            .try_fold(
-                Vec::new(),
-                |mut result, child_array| -> Result<Vec<ArrayRef>> {
-                    result.push(child_array?);
-                    Ok(result)
-                },
-            )?;
+            .collect::<Result<Vec<_>>>()?;
 
         // check that array child data has same size
         let children_array_len =

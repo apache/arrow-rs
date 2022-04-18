@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
@@ -111,6 +111,16 @@ impl InMemoryArrayReader {
         def_levels: Option<Vec<i16>>,
         rep_levels: Option<Vec<i16>>,
     ) -> Self {
+        assert!(def_levels
+            .as_ref()
+            .map(|d| d.len() == array.len())
+            .unwrap_or(true));
+
+        assert!(rep_levels
+            .as_ref()
+            .map(|r| r.len() == array.len())
+            .unwrap_or(true));
+
         Self {
             data_type,
             array,
