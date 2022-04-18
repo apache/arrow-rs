@@ -172,7 +172,7 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         Self {
             data: self.data.clone(),
             values: self.values.clone(),
-            keys: PrimitiveArray::<K>::from(self.data.clone()),
+            keys: PrimitiveArray::<K>::from(self.keys.data().clone()),
             is_ordered,
         }
     }
