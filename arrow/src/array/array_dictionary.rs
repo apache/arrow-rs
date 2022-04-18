@@ -202,27 +202,34 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
                 .iter()
                 .map(|opt_key| {
                     if let Some(key) = opt_key {
-                        let new_key =
-                            usize::try_from(sort_indices[key.to_usize().unwrap()])
-                                .unwrap();
-                        Some(K::Native::from_usize(new_key).unwrap())
+                        let key_usize = key.to_usize().unwrap();
+                        // Safety:
+                        // sort_indices will have the same length as the dictionary values
+                        // so if the keys were valid for values they will be valid indices into sort_indices
+                        let new_key = unsafe { *sort_indices.get_unchecked(key_usize) };
+                        let new_key_usize = usize::try_from(new_key).unwrap();
+                        Some(K::Native::from_usize(new_key_usize).unwrap())
                     } else {
                         None
                     }
                 })
                 .collect::<PrimitiveArray<K>>();
 
-            let new_data = ArrayData::try_new(
-                self.data_type().clone(),
-                new_indices.len(),
-                Some(new_indices.null_count()),
-                new_indices.data().null_buffer().cloned(),
-                0,
-                new_indices.data().buffers().to_vec(),
-                vec![sorted_dictionary.data().clone()],
-            )?;
+            // Safety:
+            // after remapping the keys will be in the same range as before
+            let new_data = unsafe {
+                ArrayData::new_unchecked(
+                    self.data_type().clone(),
+                    new_indices.len(),
+                    Some(new_indices.null_count()),
+                    new_indices.data().null_buffer().cloned(),
+                    0,
+                    new_indices.data().buffers().to_vec(),
+                    vec![sorted_dictionary.data().clone()],
+                )
+            };
 
-            Ok(DictionaryArray::from(new_data))
+            Ok(DictionaryArray::from(new_data).as_ordered(true))
         }
     }
 
