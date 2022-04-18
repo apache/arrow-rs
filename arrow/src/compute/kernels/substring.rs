@@ -144,12 +144,14 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 ///
 /// # Error
 /// - The function errors when the passed array is not a \[Large\]String array.
-/// - The function errors when you try to create a substring in the middle of a multibyte character.
+/// - The function errors if the offset of a substring in the input array is at invalid char boundary.
+/// 
+/// ## Example of trying to get an invalid utf-8 substring
 /// ```
 /// # use arrow::array::StringArray;
 /// # use arrow::compute::kernels::substring::substring;
 /// let array = StringArray::from(vec![Some("E=mc²")]);
-/// let error = substring(&array, -1, None).unwrap_err().to_string();
+/// let error = substring(&array, 0, Some(&5)).unwrap_err().to_string();
 /// assert!(error.contains("invalid utf-8 boundary"));
 /// ```
 pub fn substring(
