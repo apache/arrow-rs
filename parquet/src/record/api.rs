@@ -716,15 +716,19 @@ impl fmt::Display for Field {
             Field::Float(value) => {
                 if !(1e-15..=1e19).contains(&value) {
                     write!(f, "{:E}", value)
+                } else if value.trunc() == value {
+                    write!(f, "{}.0", value)
                 } else {
-                    write!(f, "{:?}", value)
+                    write!(f, "{}", value)
                 }
             }
             Field::Double(value) => {
                 if !(1e-15..=1e19).contains(&value) {
                     write!(f, "{:E}", value)
+                } else if value.trunc() == value {
+                    write!(f, "{}.0", value)
                 } else {
-                    write!(f, "{:?}", value)
+                    write!(f, "{}", value)
                 }
             }
             Field::Decimal(ref value) => {
@@ -1372,8 +1376,8 @@ mod tests {
         assert_eq!(4, row.get_ushort(7).unwrap());
         assert_eq!(5, row.get_uint(8).unwrap());
         assert_eq!(6, row.get_ulong(9).unwrap());
-        assert!(7.1 - row.get_float(10).unwrap() < f32::EPSILON);
-        assert!(8.1 - row.get_double(11).unwrap() < f64::EPSILON);
+        assert!((7.1 - row.get_float(10).unwrap()).abs() < f32::EPSILON);
+        assert!((8.1 - row.get_double(11).unwrap()).abs() < f64::EPSILON);
         assert_eq!("abc", row.get_string(12).unwrap());
         assert_eq!(5, row.get_bytes(13).unwrap().len());
         assert_eq!(7, row.get_decimal(14).unwrap().precision());
@@ -1520,10 +1524,10 @@ mod tests {
             Field::Float(9.2),
             Field::Float(10.3),
         ]);
-        assert!(10.3 - list.get_float(2).unwrap() < f32::EPSILON);
+        assert!((10.3 - list.get_float(2).unwrap()).abs() < f32::EPSILON);
 
         let list = make_list(vec![Field::Double(3.1415)]);
-        assert!(3.1415 - list.get_double(0).unwrap() < f64::EPSILON);
+        assert!((3.1415 - list.get_double(0).unwrap()).abs() < f64::EPSILON);
 
         let list = make_list(vec![Field::Str("abc".to_string())]);
         assert_eq!(&"abc".to_string(), list.get_string(0).unwrap());

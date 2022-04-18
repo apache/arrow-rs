@@ -78,7 +78,6 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
 
     // build up the reader covering the entire metadata
     let mut default_end_cursor = Cursor::new(default_len_end_buf);
-    let metadata_read: Box<dyn Read>;
     if footer_metadata_len > file_size as usize {
         return Err(general_err!(
             "Invalid Parquet file. Metadata start is less than zero ({})",
@@ -87,16 +86,21 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
     } else if footer_metadata_len < DEFAULT_FOOTER_READ_SIZE {
         // the whole metadata is in the bytes we already read
         default_end_cursor.seek(SeekFrom::End(-(footer_metadata_len as i64)))?;
-        metadata_read = Box::new(default_end_cursor);
+        parse_metadata_buffer(&mut default_end_cursor)
     } else {
         // the end of file read by default is not long enough, read missing bytes
         let complementary_end_read = chunk_reader.get_read(
             file_size - footer_metadata_len as u64,
             FOOTER_SIZE + metadata_len as usize - default_end_len,
         )?;
-        metadata_read = Box::new(complementary_end_read.chain(default_end_cursor));
+        parse_metadata_buffer(&mut complementary_end_read.chain(default_end_cursor))
     }
+}
 
+/// Reads [`ParquetMetaData`] from the provided [`Read`] starting at the readers current position
+pub(crate) fn parse_metadata_buffer<T: Read + ?Sized>(
+    metadata_read: &mut T,
+) -> Result<ParquetMetaData> {
     // TODO: row group filtering
     let mut prot = TCompactInputProtocol::new(metadata_read);
     let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
@@ -160,12 +164,12 @@ mod tests {
     use crate::basic::SortOrder;
     use crate::basic::Type;
     use crate::schema::types::Type as SchemaType;
-    use crate::util::test_common::get_temp_file;
+    use crate::util::cursor::SliceableCursor;
     use parquet_format::TypeDefinedOrder;
 
     #[test]
     fn test_parse_metadata_size_smaller_than_footer() {
-        let test_file = get_temp_file("corrupt-1.parquet", &[]);
+        let test_file = tempfile::tempfile().unwrap();
         let reader_result = parse_metadata(&test_file);
         assert!(reader_result.is_err());
         assert_eq!(
@@ -176,8 +180,8 @@ mod tests {
 
     #[test]
     fn test_parse_metadata_corrupt_footer() {
-        let test_file = get_temp_file("corrupt-2.parquet", &[1, 2, 3, 4, 5, 6, 7, 8]);
-        let reader_result = parse_metadata(&test_file);
+        let data = SliceableCursor::new(Arc::new(vec![1, 2, 3, 4, 5, 6, 7, 8]));
+        let reader_result = parse_metadata(&data);
         assert!(reader_result.is_err());
         assert_eq!(
             reader_result.err().unwrap(),
@@ -188,7 +192,7 @@ mod tests {
     #[test]
     fn test_parse_metadata_invalid_length() {
         let test_file =
-            get_temp_file("corrupt-3.parquet", &[0, 0, 0, 255, b'P', b'A', b'R', b'1']);
+            SliceableCursor::new(Arc::new(vec![0, 0, 0, 255, b'P', b'A', b'R', b'1']));
         let reader_result = parse_metadata(&test_file);
         assert!(reader_result.is_err());
         assert_eq!(
@@ -202,7 +206,7 @@ mod tests {
     #[test]
     fn test_parse_metadata_invalid_start() {
         let test_file =
-            get_temp_file("corrupt-4.parquet", &[255, 0, 0, 0, b'P', b'A', b'R', b'1']);
+            SliceableCursor::new(Arc::new(vec![255, 0, 0, 0, b'P', b'A', b'R', b'1']));
         let reader_result = parse_metadata(&test_file);
         assert!(reader_result.is_err());
         assert_eq!(

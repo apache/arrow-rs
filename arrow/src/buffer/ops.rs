@@ -34,18 +34,18 @@ use super::{Buffer, MutableBuffer};
 /// Contrary to the non-simd version `bitwise_bin_op_helper`, the offset and length is specified in bytes
 /// and this version does not support operations starting at arbitrary bit offsets.
 #[cfg(feature = "simd")]
-pub fn bitwise_bin_op_simd_helper<F_SIMD, F_SCALAR>(
+pub fn bitwise_bin_op_simd_helper<SI, SC>(
     left: &Buffer,
     left_offset: usize,
     right: &Buffer,
     right_offset: usize,
     len: usize,
-    simd_op: F_SIMD,
-    scalar_op: F_SCALAR,
+    simd_op: SI,
+    scalar_op: SC,
 ) -> Buffer
 where
-    F_SIMD: Fn(u8x64, u8x64) -> u8x64,
-    F_SCALAR: Fn(u8, u8) -> u8,
+    SI: Fn(u8x64, u8x64) -> u8x64,
+    SC: Fn(u8, u8) -> u8,
 {
     let mut result = MutableBuffer::new(len).with_bitset(len, false);
     let lanes = u8x64::lanes();
@@ -83,16 +83,16 @@ where
 /// Contrary to the non-simd version `bitwise_unary_op_helper`, the offset and length is specified in bytes
 /// and this version does not support operations starting at arbitrary bit offsets.
 #[cfg(feature = "simd")]
-pub fn bitwise_unary_op_simd_helper<F_SIMD, F_SCALAR>(
+pub fn bitwise_unary_op_simd_helper<SI, SC>(
     left: &Buffer,
     left_offset: usize,
     len: usize,
-    simd_op: F_SIMD,
-    scalar_op: F_SCALAR,
+    simd_op: SI,
+    scalar_op: SC,
 ) -> Buffer
 where
-    F_SIMD: Fn(u8x64) -> u8x64,
-    F_SCALAR: Fn(u8) -> u8,
+    SI: Fn(u8x64) -> u8x64,
+    SC: Fn(u8) -> u8,
 {
     let mut result = MutableBuffer::new(len).with_bitset(len, false);
     let lanes = u8x64::lanes();
@@ -140,7 +140,8 @@ where
         .iter()
         .zip(right_chunks.iter())
         .map(|(left, right)| op(left, right));
-    // Soundness: `BitChunks` is a trusted len iterator
+    // Soundness: `BitChunks` is a `BitChunks` iterator which
+    // correctly reports its upper bound
     let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
 
     let remainder_bytes = ceil(left_chunks.remainder_len(), 8);

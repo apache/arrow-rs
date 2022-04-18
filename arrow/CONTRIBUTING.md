@@ -26,19 +26,6 @@ Rust [README.md](../README.md).
 Please refer to [lib.rs](src/lib.rs) for an introduction to this
 specific crate and its current functionality.
 
-### How to check memory allocations
-
-This crate heavily uses `unsafe` due to how memory is allocated in cache lines.
-We have a small tool to verify that this crate does not leak memory (beyond what the compiler already does)
-
-Run it with
-
-```bash
-cargo test --features memory-check --lib -- --test-threads 1
-```
-
-This runs all unit-tests on a single thread and counts all allocations and de-allocations.
-
 ## IPC
 
 The expected flatc version is 1.12.0+, built from [flatbuffers](https://github.com/google/flatbuffers)
@@ -99,7 +86,15 @@ The arrow format declares a IPC protocol, which this crate supports. IPC is equi
 
 #### SIMD
 
-The API provided by the `packed_simd` library is currently `unsafe`. However, SIMD offers a significant performance improvement over non-SIMD operations.
+The API provided by the [packed_simd_2](https://docs.rs/packed_simd_2/latest/packed_simd_2/) crate is currently `unsafe`. However,
+SIMD offers a significant performance improvement over non-SIMD operations. A related crate in development is
+[portable-simd](https://rust-lang.github.io/portable-simd/core_simd/) which has a nice
+[beginners guide](https://github.com/rust-lang/portable-simd/blob/master/beginners-guide.md). These crates provide the ability
+for code on x86 and ARM architectures to use some of the available parallel register operations. As an example if two arrays
+of numbers are added, [1,2,3,4] + [5,6,7,8], rather than using four instructions to add each of the elements of the arrays,
+one instruction can be used to all all four elements at the same time, which leads to improved time to solution. SIMD instructions
+are typically most effective when data is aligned to allow a single load instruction to bring multiple consecutive data elements
+to the registers, before use of a SIMD instruction.
 
 #### Performance
 

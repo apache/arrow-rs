@@ -55,10 +55,9 @@ jobs:
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}-
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Build Workspace
         run: |
           export CARGO_HOME="/github/home/.cargo"
@@ -99,30 +98,41 @@ jobs:
           # this key equals the ones on `linux-build-lib` for re-use
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
+
           # run tests on all workspace members with default feature list
           cargo test
+
+          # Switch to arrow crate
           cd arrow
-          # re-run tests on arrow workspace with additional features
+          # re-run tests on arrow crate to ensure
+          # all arrays are created correctly
+          cargo test --features=force_validate
           cargo test --features=prettyprint
-          # run test on arrow with minimal set of features
+          # run test on arrow crate with minimal set of features
           cargo test --no-default-features
           cargo run --example builders
           cargo run --example dynamic_types
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
-          # Exit arrow directory
-          cd ..
-          (cd parquet && cargo check --no-default-features)
-          (cd arrow && cargo check --no-default-features)
-          (cd arrow-flight && cargo check --no-default-features)
+          cargo check --no-default-features
+
+          # Switch to parquet crate
+          cd ../parquet
+          # re-run tests on parquet crate with async feature enabled
+          cargo test --features=async
+          cargo check --no-default-features
+
+          # Switch to arrow-flight
+          cd ../arrow-flight
+          cargo test --features=flight-sql-experimental
+          cargo check --no-default-features
 
   # test the --features "simd" of the arrow crate. This requires nightly.
   linux-test-simd:
@@ -154,10 +164,9 @@ jobs:
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
           export CARGO_HOME="/github/home/.cargo"
@@ -229,18 +238,59 @@ jobs:
           # this key equals the ones on `linux-build-lib` for re-use
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
+      - name: Setup Clippy
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
           rustup component add rustfmt clippy
       - name: Run clippy
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cargo clippy --features test_common --all-targets --workspace -- -D warnings -A clippy::redundant_field_names
+          cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
+
+  check_benches:
+    name: Check Benchmarks (but don't run them)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64]
+        rust: [stable]
+    container:
+      image: ${{ matrix.arch }}/rust
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Cache Cargo
+        uses: actions/cache@v2
+        with:
+          path: /github/home/.cargo
+          # this key equals the ones on `linux-build-lib` for re-use
+          key: cargo-cache3-
+      - name: Cache Rust dependencies
+        uses: actions/cache@v2
+        with:
+          path: /github/home/target
+          # this key equals the ones on `linux-build-lib` for re-use
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
+      - name: Check benchmarks
+        run: |
+          export CARGO_HOME="/github/home/.cargo"
+          export CARGO_TARGET_DIR="/github/home/target"
+          cargo check --benches --workspace
 
   lint:
-    name: Lint
+    name: Lint (cargo fmt)
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -328,7 +378,7 @@ jobs:
         with:
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-wasm32-cache3-${{ matrix.rust }}
-      - name: Setup Rust toolchain
+      - name: Setup Rust toolchain for WASM
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup override set ${{ matrix.rust }}
@@ -342,6 +392,50 @@ jobs:
           cd arrow
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
+
+  # test doc links still work
+  docs:
+    name: Docs are clean on AMD64 Rust ${{ matrix.rust }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64]
+        rust: [nightly]
+    container:
+      image: ${{ matrix.arch }}/rust
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Install python dev
+        run: |
+          apt update
+          apt install -y libpython3.9-dev
+      - name: Cache Cargo
+        uses: actions/cache@v2
+        with:
+          path: /github/home/.cargo
+          key: cargo-nightly-cache3-
+      - name: Cache Rust dependencies
+        uses: actions/cache@v2
+        with:
+          path: /github/home/target
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
+      - name: Run cargo doc
+        run: |
+          export CARGO_HOME="/github/home/.cargo"
+          export CARGO_TARGET_DIR="/github/home/target"
+          export RUSTDOCFLAGS="-Dwarnings"
+          cargo doc --document-private-items --no-deps --workspace --all-features
+
 
   # test builds with various feature flag combinations outside the main workspace
   default-build:
@@ -371,10 +465,9 @@ jobs:
           # this key equals the ones on `linux-build-lib` for re-use
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup override set ${{ matrix.rust }}
-          rustup component add rustfmt
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Arrow Build with default features
         run: |
           export CARGO_HOME="/github/home/.cargo"

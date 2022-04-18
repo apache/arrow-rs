@@ -53,6 +53,21 @@ macro_rules! downcast_dict_take {
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
 ///
+/// ```text
+/// ┌─────────────────┐      ┌─────────┐                              ┌─────────────────┐
+/// │        A        │      │    0    │                              │        A        │
+/// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
+/// │        D        │      │    2    │                              │        B        │
+/// ├─────────────────┤      ├─────────┤   take(values, indicies)     ├─────────────────┤
+/// │        B        │      │    3    │ ─────────────────────────▶   │        C        │
+/// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
+/// │        C        │      │    1    │                              │        D        │
+/// ├─────────────────┤      └─────────┘                              └─────────────────┘
+/// │        E        │
+/// └─────────────────┘
+///    values array            indicies array                              result
+/// ```
+///
 /// # Errors
 /// This function errors whenever:
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
@@ -131,6 +146,10 @@ where
             let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
             Ok(Arc::new(take_boolean(values, indices)?))
         }
+        DataType::Decimal(_, _) => {
+            let decimal_values = values.as_any().downcast_ref::<DecimalArray>().unwrap();
+            Ok(Arc::new(take_decimal128(decimal_values, indices)?))
+        }
         DataType::Int8 => downcast_take!(Int8Type, values, indices),
         DataType::Int16 => downcast_take!(Int16Type, values, indices),
         DataType::Int32 => downcast_take!(Int32Type, values, indices),
@@ -170,6 +189,9 @@ where
         }
         DataType::Interval(IntervalUnit::DayTime) => {
             downcast_take!(IntervalDayTimeType, values, indices)
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            downcast_take!(IntervalMonthDayNanoType, values, indices)
         }
         DataType::Duration(TimeUnit::Second) => {
             downcast_take!(DurationSecondType, values, indices)
@@ -480,6 +502,41 @@ where
     Ok((buffer, nulls))
 }
 
+/// `take` implementation for decimal arrays
+fn take_decimal128<IndexType>(
+    decimal_values: &DecimalArray,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<DecimalArray>
+where
+    IndexType: ArrowNumericType,
+    IndexType::Native: ToPrimitive,
+{
+    indices
+        .iter()
+        .map(|index| {
+            // Use type annotations below for readability (was blowing
+            // my mind otherwise)
+            let t: Option<Result<Option<_>>> = index.map(|index| {
+                let index = ToPrimitive::to_usize(&index).ok_or_else(|| {
+                    ArrowError::ComputeError("Cast to usize failed".to_string())
+                })?;
+
+                if decimal_values.is_null(index) {
+                    Ok(None)
+                } else {
+                    Ok(Some(decimal_values.value(index)))
+                }
+            });
+            let t: Result<Option<Option<_>>> = t.transpose();
+            let t: Result<Option<_>> = t.map(|t| t.flatten());
+            t
+        })
+        .collect::<Result<DecimalArray>>()?
+        // PERF: we could avoid re-validating that the data in
+        // DecimalArray was in range as we know it came from a valid DecimalArray
+        .with_precision_and_scale(decimal_values.precision(), decimal_values.scale())
+}
+
 /// `take` implementation for all primitive arrays
 ///
 /// This checks if an `indices` slot is populated, and gets the value from `values`
@@ -528,7 +585,7 @@ where
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            T::DATA_TYPE,
+            values.data_type().clone(),
             indices.len(),
             None,
             nulls,
@@ -558,8 +615,7 @@ where
 
     let null_count = values.null_count();
 
-    let nulls;
-    if null_count == 0 {
+    let nulls = if null_count == 0 {
         (0..data_len).try_for_each::<_, Result<()>>(|i| {
             let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
                 ArrowError::ComputeError("Cast to usize failed".to_string())
@@ -572,7 +628,7 @@ where
             Ok(())
         })?;
 
-        nulls = indices.data_ref().null_buffer().cloned();
+        indices.data_ref().null_buffer().cloned()
     } else {
         let mut null_buf = MutableBuffer::new(num_byte).with_bitset(num_byte, true);
         let null_slice = null_buf.as_slice_mut();
@@ -591,7 +647,7 @@ where
             Ok(())
         })?;
 
-        nulls = match indices.data_ref().null_buffer() {
+        match indices.data_ref().null_buffer() {
             Some(buffer) => Some(buffer_bin_and(
                 buffer,
                 indices.offset(),
@@ -600,8 +656,8 @@ where
                 indices.len(),
             )),
             None => Some(null_buf.into()),
-        };
-    }
+        }
+    };
 
     let data = unsafe {
         ArrayData::new_unchecked(
@@ -918,6 +974,32 @@ mod tests {
     use super::*;
     use crate::compute::util::tests::build_fixed_size_list_nullable;
 
+    fn test_take_decimal_arrays(
+        data: Vec<Option<i128>>,
+        index: &UInt32Array,
+        options: Option<TakeOptions>,
+        expected_data: Vec<Option<i128>>,
+        precision: &usize,
+        scale: &usize,
+    ) -> Result<()> {
+        let output = data
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*precision, *scale)
+            .unwrap();
+
+        let expected = expected_data
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*precision, *scale)
+            .unwrap();
+
+        let expected = Arc::new(expected) as ArrayRef;
+        let output = take(&output, index, options).unwrap();
+        assert_eq!(&output, &expected);
+        Ok(())
+    }
+
     fn test_take_boolean_arrays(
         data: Vec<Option<bool>>,
         index: &UInt32Array,
@@ -1012,6 +1094,38 @@ mod tests {
             struct_builder.append(value.is_some()).unwrap();
         }
         struct_builder.finish()
+    }
+
+    #[test]
+    fn test_take_decimal128_non_null_indices() {
+        let index = UInt32Array::from(vec![0, 5, 3, 1, 4, 2]);
+        let precision: usize = 10;
+        let scale: usize = 5;
+        test_take_decimal_arrays(
+            vec![None, Some(3), Some(5), Some(2), Some(3), None],
+            &index,
+            None,
+            vec![None, None, Some(2), Some(3), Some(3), Some(5)],
+            &precision,
+            &scale,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_take_decimal128() {
+        let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(2)]);
+        let precision: usize = 10;
+        let scale: usize = 5;
+        test_take_decimal_arrays(
+            vec![Some(0), Some(1), Some(2), Some(3), Some(4)],
+            &index,
+            None,
+            vec![Some(3), None, Some(1), Some(3), Some(2)],
+            &precision,
+            &scale,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1186,6 +1300,15 @@ mod tests {
         )
         .unwrap();
 
+        // interval_month_day_nano
+        test_take_primitive_arrays::<IntervalMonthDayNanoType>(
+            vec![Some(0), None, Some(2), Some(-15), None],
+            &index,
+            None,
+            vec![Some(-15), None, None, Some(-15), Some(2)],
+        )
+        .unwrap();
+
         // duration_second
         test_take_primitive_arrays::<DurationSecondType>(
             vec![Some(0), None, Some(2), Some(-15), None],
@@ -1239,6 +1362,23 @@ mod tests {
             vec![Some(-3.1), None, None, Some(-3.1), Some(2.21)],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_take_preserve_timezone() {
+        let index = Int64Array::from(vec![Some(0), None]);
+
+        let input = TimestampNanosecondArray::from_vec(
+            vec![1_639_715_368_000_000_000, 1_639_715_368_000_000_000],
+            Some("UTC".to_owned()),
+        );
+        let result = take_impl(&input, &index, None).unwrap();
+        match result.data_type() {
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                assert_eq!(tz.clone(), Some("UTC".to_owned()))
+            }
+            _ => panic!(),
+        }
     }
 
     #[test]

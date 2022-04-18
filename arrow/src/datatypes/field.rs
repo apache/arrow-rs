@@ -83,10 +83,16 @@ impl Field {
         }
     }
 
+    /// Sets the metadata of this `Field` to be `metadata` and returns self
+    pub fn with_metadata(mut self, metadata: Option<BTreeMap<String, String>>) -> Self {
+        self.set_metadata(metadata);
+        self
+    }
+
     /// Returns the immutable reference to the `Field`'s optional custom metadata.
     #[inline]
-    pub const fn metadata(&self) -> &Option<BTreeMap<String, String>> {
-        &self.metadata
+    pub const fn metadata(&self) -> Option<&BTreeMap<String, String>> {
+        self.metadata.as_ref()
     }
 
     /// Returns an immutable reference to the `Field`'s name.
@@ -110,14 +116,25 @@ impl Field {
     /// Returns a (flattened) vector containing all fields contained within this field (including it self)
     pub(crate) fn fields(&self) -> Vec<&Field> {
         let mut collected_fields = vec![self];
-        match &self.data_type {
-            DataType::Struct(fields) | DataType::Union(fields) => {
-                collected_fields.extend(fields.iter().map(|f| f.fields()).flatten())
+        collected_fields.append(&mut self._fields(&self.data_type));
+
+        collected_fields
+    }
+
+    fn _fields<'a>(&'a self, dt: &'a DataType) -> Vec<&Field> {
+        let mut collected_fields = vec![];
+
+        match dt {
+            DataType::Struct(fields) | DataType::Union(fields, _) => {
+                collected_fields.extend(fields.iter().flat_map(|f| f.fields()))
             }
             DataType::List(field)
             | DataType::LargeList(field)
             | DataType::FixedSizeList(field, _)
             | DataType::Map(field, _) => collected_fields.push(field),
+            DataType::Dictionary(_, value_field) => {
+                collected_fields.append(&mut self._fields(value_field.as_ref()))
+            }
             _ => (),
         }
 
@@ -484,8 +501,8 @@ impl Field {
                     ));
                 }
             },
-            DataType::Union(nested_fields) => match &from.data_type {
-                DataType::Union(from_nested_fields) => {
+            DataType::Union(nested_fields, _) => match &from.data_type {
+                DataType::Union(from_nested_fields, _) => {
                     for from_field in from_nested_fields {
                         let mut is_new_field = true;
                         for self_field in nested_fields.iter_mut() {

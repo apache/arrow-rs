@@ -36,7 +36,7 @@
 //!
 //! let file = File::open("test/data/uk_cities.csv").unwrap();
 //!
-//! let mut csv = csv::Reader::new(file, Arc::new(schema), false, None, 1024, None, None);
+//! let mut csv = csv::Reader::new(file, Arc::new(schema), false, None, 1024, None, None, None);
 //! let batch = csv.next().unwrap().unwrap();
 //! ```
 
@@ -51,12 +51,11 @@ use std::sync::Arc;
 
 use crate::array::{
     ArrayRef, BooleanArray, DecimalBuilder, DictionaryArray, PrimitiveArray, StringArray,
-    MAX_DECIMAL_FOR_EACH_PRECISION, MIN_DECIMAL_FOR_EACH_PRECISION,
 };
-use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
+use crate::util::reader_parser::Parser;
 
 use csv_crate::{ByteRecord, StringRecord};
 use std::ops::Neg;
@@ -64,7 +63,8 @@ use std::ops::Neg;
 lazy_static! {
     static ref PARSE_DECIMAL_RE: Regex =
         Regex::new(r"^-?(\d+\.?\d*|\d*\.?\d+)$").unwrap();
-    static ref DECIMAL_RE: Regex = Regex::new(r"^-?(\d*\.\d+|\d+\.\d*)$").unwrap();
+    static ref DECIMAL_RE: Regex =
+        Regex::new(r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$").unwrap();
     static ref INTEGER_RE: Regex = Regex::new(r"^-?(\d+)$").unwrap();
     static ref BOOLEAN_RE: Regex = RegexBuilder::new(r"^(true)$|^(false)$")
         .case_insensitive(true)
@@ -76,7 +76,8 @@ lazy_static! {
 }
 
 /// Infer the data type of a record
-fn infer_field_schema(string: &str) -> DataType {
+fn infer_field_schema(string: &str, datetime_re: Option<Regex>) -> DataType {
+    let datetime_re = datetime_re.unwrap_or_else(|| DATETIME_RE.clone());
     // when quoting is enabled in the reader, these quotes aren't escaped, we default to
     // Utf8 for them
     if string.starts_with('"') {
@@ -89,13 +90,26 @@ fn infer_field_schema(string: &str) -> DataType {
         DataType::Float64
     } else if INTEGER_RE.is_match(string) {
         DataType::Int64
-    } else if DATETIME_RE.is_match(string) {
+    } else if datetime_re.is_match(string) {
         DataType::Date64
     } else if DATE_RE.is_match(string) {
         DataType::Date32
     } else {
         DataType::Utf8
     }
+}
+
+/// This is a collection of options for csv reader when the builder pattern cannot be used
+/// and the parameters need to be passed around
+#[derive(Debug, Default, Clone)]
+pub struct ReaderOptions {
+    has_header: bool,
+    delimiter: Option<u8>,
+    escape: Option<u8>,
+    quote: Option<u8>,
+    terminator: Option<u8>,
+    max_read_records: Option<usize>,
+    datetime_re: Option<Regex>,
 }
 
 /// Infer the schema of a CSV file by reading through the first n records of the file,
@@ -111,38 +125,23 @@ pub fn infer_file_schema<R: Read + Seek>(
     max_read_records: Option<usize>,
     has_header: bool,
 ) -> Result<(Schema, usize)> {
-    infer_file_schema_with_csv_options(
-        reader,
-        delimiter,
+    let roptions = ReaderOptions {
+        delimiter: Some(delimiter),
         max_read_records,
         has_header,
-        None,
-        None,
-        None,
-    )
+        ..Default::default()
+    };
+
+    infer_file_schema_with_csv_options(reader, roptions)
 }
 
 fn infer_file_schema_with_csv_options<R: Read + Seek>(
     reader: &mut R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-    escape: Option<u8>,
-    quote: Option<u8>,
-    terminator: Option<u8>,
+    roptoins: ReaderOptions,
 ) -> Result<(Schema, usize)> {
     let saved_offset = reader.seek(SeekFrom::Current(0))?;
 
-    let (schema, records_count) = infer_reader_schema_with_csv_options(
-        reader,
-        delimiter,
-        max_read_records,
-        has_header,
-        escape,
-        quote,
-        terminator,
-    )?;
-
+    let (schema, records_count) = infer_reader_schema_with_csv_options(reader, roptoins)?;
     // return the reader seek back to the start
     reader.seek(SeekFrom::Start(saved_offset))?;
 
@@ -161,38 +160,31 @@ pub fn infer_reader_schema<R: Read>(
     max_read_records: Option<usize>,
     has_header: bool,
 ) -> Result<(Schema, usize)> {
-    infer_reader_schema_with_csv_options(
-        reader,
-        delimiter,
+    let roptions = ReaderOptions {
+        delimiter: Some(delimiter),
         max_read_records,
         has_header,
-        None,
-        None,
-        None,
-    )
+        ..Default::default()
+    };
+    infer_reader_schema_with_csv_options(reader, roptions)
 }
 
 fn infer_reader_schema_with_csv_options<R: Read>(
     reader: &mut R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-    escape: Option<u8>,
-    quote: Option<u8>,
-    terminator: Option<u8>,
+    roptions: ReaderOptions,
 ) -> Result<(Schema, usize)> {
     let mut csv_reader = Reader::build_csv_reader(
         reader,
-        has_header,
-        Some(delimiter),
-        escape,
-        quote,
-        terminator,
+        roptions.has_header,
+        roptions.delimiter,
+        roptions.escape,
+        roptions.quote,
+        roptions.terminator,
     );
 
     // get or create header names
     // when has_header is false, creates default column names with column_ prefix
-    let headers: Vec<String> = if has_header {
+    let headers: Vec<String> = if roptions.has_header {
         let headers = &csv_reader.headers()?.clone();
         headers.iter().map(|s| s.to_string()).collect()
     } else {
@@ -212,7 +204,7 @@ fn infer_reader_schema_with_csv_options<R: Read>(
     let mut fields = vec![];
 
     let mut record = StringRecord::new();
-    let max_records = max_read_records.unwrap_or(usize::MAX);
+    let max_records = roptions.max_read_records.unwrap_or(usize::MAX);
     while records_count < max_records {
         if !csv_reader.read_record(&mut record)? {
             break;
@@ -224,7 +216,8 @@ fn infer_reader_schema_with_csv_options<R: Read>(
                 if string.is_empty() {
                     nulls[i] = true;
                 } else {
-                    column_types[i].insert(infer_field_schema(string));
+                    column_types[i]
+                        .insert(infer_field_schema(string, roptions.datetime_re.clone()));
                 }
             }
         }
@@ -316,6 +309,10 @@ pub struct Reader<R: Read> {
     batch_size: usize,
     /// Vector that can hold the `StringRecord`s of the batches
     batch_records: Vec<StringRecord>,
+    /// datetime format used to parse datetime values, (format understood by chrono)
+    ///
+    /// For format refer to [chrono docs](https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html)
+    datetime_format: Option<String>,
 }
 
 impl<R> fmt::Debug for Reader<R>
@@ -327,6 +324,7 @@ where
             .field("schema", &self.schema)
             .field("projection", &self.projection)
             .field("line_number", &self.line_number)
+            .field("datetime_format", &self.datetime_format)
             .finish()
     }
 }
@@ -337,6 +335,7 @@ impl<R: Read> Reader<R> {
     /// If reading a `File` or an input that supports `std::io::Read` and `std::io::Seek`;
     /// you can customise the Reader, such as to enable schema inference, use
     /// `ReaderBuilder`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         reader: R,
         schema: SchemaRef,
@@ -345,9 +344,17 @@ impl<R: Read> Reader<R> {
         batch_size: usize,
         bounds: Bounds,
         projection: Option<Vec<usize>>,
+        datetime_format: Option<String>,
     ) -> Self {
         Self::from_reader(
-            reader, schema, has_header, delimiter, batch_size, bounds, projection,
+            reader,
+            schema,
+            has_header,
+            delimiter,
+            batch_size,
+            bounds,
+            projection,
+            datetime_format,
         )
     }
 
@@ -370,6 +377,7 @@ impl<R: Read> Reader<R> {
     ///
     /// This constructor allows you more flexibility in what records are processed by the
     /// csv reader.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_reader(
         reader: R,
         schema: SchemaRef,
@@ -378,11 +386,18 @@ impl<R: Read> Reader<R> {
         batch_size: usize,
         bounds: Bounds,
         projection: Option<Vec<usize>>,
+        datetime_format: Option<String>,
     ) -> Self {
         let csv_reader =
             Self::build_csv_reader(reader, has_header, delimiter, None, None, None);
         Self::from_csv_reader(
-            csv_reader, schema, has_header, batch_size, bounds, projection,
+            csv_reader,
+            schema,
+            has_header,
+            batch_size,
+            bounds,
+            projection,
+            datetime_format,
         )
     }
 
@@ -417,6 +432,7 @@ impl<R: Read> Reader<R> {
         batch_size: usize,
         bounds: Bounds,
         projection: Option<Vec<usize>>,
+        datetime_format: Option<String>,
     ) -> Self {
         let (start, end) = match bounds {
             None => (0, usize::MAX),
@@ -450,6 +466,7 @@ impl<R: Read> Reader<R> {
             batch_size,
             end,
             batch_records,
+            datetime_format,
         }
     }
 }
@@ -482,13 +499,19 @@ impl<R: Read> Iterator for Reader<R> {
             return None;
         }
 
+        let format: Option<&str> = match self.datetime_format {
+            Some(ref format) => Some(format.as_ref()),
+            _ => None,
+        };
+
         // parse the batches into a RecordBatch
         let result = parse(
             &self.batch_records[..read_records],
             self.schema.fields(),
             Some(self.schema.metadata.clone()),
-            &self.projection,
+            self.projection.as_ref(),
             self.line_number,
+            format,
         );
 
         self.line_number += read_records;
@@ -497,16 +520,18 @@ impl<R: Read> Iterator for Reader<R> {
     }
 }
 
-/// parses a slice of [csv_crate::StringRecord] into a [array::record_batch::RecordBatch].
+/// parses a slice of [csv_crate::StringRecord] into a
+/// [RecordBatch](crate::record_batch::RecordBatch).
 fn parse(
     rows: &[StringRecord],
     fields: &[Field],
     metadata: Option<std::collections::HashMap<String, String>>,
-    projection: &Option<Vec<usize>>,
+    projection: Option<&Vec<usize>>,
     line_number: usize,
+    datetime_format: Option<&str>,
 ) -> Result<RecordBatch> {
     let projection: Vec<usize> = match projection {
-        Some(ref v) => v.clone(),
+        Some(v) => v.clone(),
         None => fields.iter().enumerate().map(|(i, _)| i).collect(),
     };
 
@@ -520,47 +545,60 @@ fn parse(
                 DataType::Decimal(precision, scale) => {
                     build_decimal_array(line_number, rows, i, *precision, *scale)
                 }
-                DataType::Int8 => build_primitive_array::<Int8Type>(line_number, rows, i),
+                DataType::Int8 => {
+                    build_primitive_array::<Int8Type>(line_number, rows, i, None)
+                }
                 DataType::Int16 => {
-                    build_primitive_array::<Int16Type>(line_number, rows, i)
+                    build_primitive_array::<Int16Type>(line_number, rows, i, None)
                 }
                 DataType::Int32 => {
-                    build_primitive_array::<Int32Type>(line_number, rows, i)
+                    build_primitive_array::<Int32Type>(line_number, rows, i, None)
                 }
                 DataType::Int64 => {
-                    build_primitive_array::<Int64Type>(line_number, rows, i)
+                    build_primitive_array::<Int64Type>(line_number, rows, i, None)
                 }
                 DataType::UInt8 => {
-                    build_primitive_array::<UInt8Type>(line_number, rows, i)
+                    build_primitive_array::<UInt8Type>(line_number, rows, i, None)
                 }
                 DataType::UInt16 => {
-                    build_primitive_array::<UInt16Type>(line_number, rows, i)
+                    build_primitive_array::<UInt16Type>(line_number, rows, i, None)
                 }
                 DataType::UInt32 => {
-                    build_primitive_array::<UInt32Type>(line_number, rows, i)
+                    build_primitive_array::<UInt32Type>(line_number, rows, i, None)
                 }
                 DataType::UInt64 => {
-                    build_primitive_array::<UInt64Type>(line_number, rows, i)
+                    build_primitive_array::<UInt64Type>(line_number, rows, i, None)
                 }
                 DataType::Float32 => {
-                    build_primitive_array::<Float32Type>(line_number, rows, i)
+                    build_primitive_array::<Float32Type>(line_number, rows, i, None)
                 }
                 DataType::Float64 => {
-                    build_primitive_array::<Float64Type>(line_number, rows, i)
+                    build_primitive_array::<Float64Type>(line_number, rows, i, None)
                 }
                 DataType::Date32 => {
-                    build_primitive_array::<Date32Type>(line_number, rows, i)
+                    build_primitive_array::<Date32Type>(line_number, rows, i, None)
                 }
-                DataType::Date64 => {
-                    build_primitive_array::<Date64Type>(line_number, rows, i)
-                }
-                DataType::Timestamp(TimeUnit::Microsecond, _) => build_primitive_array::<
-                    TimestampMicrosecondType,
-                >(
-                    line_number, rows, i
+                DataType::Date64 => build_primitive_array::<Date64Type>(
+                    line_number,
+                    rows,
+                    i,
+                    datetime_format,
                 ),
+                DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                    build_primitive_array::<TimestampMicrosecondType>(
+                        line_number,
+                        rows,
+                        i,
+                        None,
+                    )
+                }
                 DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                    build_primitive_array::<TimestampNanosecondType>(line_number, rows, i)
+                    build_primitive_array::<TimestampNanosecondType>(
+                        line_number,
+                        rows,
+                        i,
+                        None,
+                    )
                 }
                 DataType::Utf8 => Ok(Arc::new(
                     rows.iter().map(|row| row.get(i)).collect::<StringArray>(),
@@ -633,96 +671,12 @@ fn parse(
 
     arrays.and_then(|arr| RecordBatch::try_new(projected_schema, arr))
 }
-
-/// Specialized parsing implementations
-trait Parser: ArrowPrimitiveType {
-    fn parse(string: &str) -> Option<Self::Native> {
-        string.parse::<Self::Native>().ok()
-    }
-}
-
-impl Parser for Float32Type {
-    fn parse(string: &str) -> Option<f32> {
-        lexical_core::parse(string.as_bytes()).ok()
-    }
-}
-
-impl Parser for Float64Type {
-    fn parse(string: &str) -> Option<f64> {
-        lexical_core::parse(string.as_bytes()).ok()
-    }
-}
-
-impl Parser for UInt64Type {}
-
-impl Parser for UInt32Type {}
-
-impl Parser for UInt16Type {}
-
-impl Parser for UInt8Type {}
-
-impl Parser for Int64Type {}
-
-impl Parser for Int32Type {}
-
-impl Parser for Int16Type {}
-
-impl Parser for Int8Type {}
-
-/// Number of days between 0001-01-01 and 1970-01-01
-const EPOCH_DAYS_FROM_CE: i32 = 719_163;
-
-impl Parser for Date32Type {
-    fn parse(string: &str) -> Option<i32> {
-        use chrono::Datelike;
-
-        match Self::DATA_TYPE {
-            DataType::Date32 => {
-                let date = string.parse::<chrono::NaiveDate>().ok()?;
-                Self::Native::from_i32(date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
-            }
-            _ => None,
-        }
-    }
-}
-
-impl Parser for Date64Type {
-    fn parse(string: &str) -> Option<i64> {
-        match Self::DATA_TYPE {
-            DataType::Date64 => {
-                let date_time = string.parse::<chrono::NaiveDateTime>().ok()?;
-                Self::Native::from_i64(date_time.timestamp_millis())
-            }
-            _ => None,
-        }
-    }
-}
-
-impl Parser for TimestampNanosecondType {
-    fn parse(string: &str) -> Option<i64> {
-        match Self::DATA_TYPE {
-            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-                string_to_timestamp_nanos(string).ok()
-            }
-            _ => None,
-        }
-    }
-}
-
-impl Parser for TimestampMicrosecondType {
-    fn parse(string: &str) -> Option<i64> {
-        match Self::DATA_TYPE {
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                let nanos = string_to_timestamp_nanos(string).ok();
-                nanos.map(|x| x / 1000)
-            }
-            _ => None,
-        }
-    }
-}
-
 fn parse_item<T: Parser>(string: &str) -> Option<T::Native> {
     T::parse(string)
+}
+
+fn parse_formatted<T: Parser>(string: &str, format: &str) -> Option<T::Native> {
+    T::parse_formatted(string, format)
 }
 
 fn parse_bool(string: &str) -> Option<bool> {
@@ -820,15 +774,8 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
         if negative {
             result = result.neg();
         }
-        if result > MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1]
-            || result < MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1]
-        {
-            return Err(ArrowError::ParseError(format!(
-                "parse decimal overflow, the precision {}, the scale {}, the value {}",
-                precision, scale, s
-            )));
-        }
-        Ok(result)
+        validate_decimal_precision(result, precision)
+            .map_err(|e| ArrowError::ParseError(format!("parse decimal overflow: {}", e)))
     } else {
         Err(ArrowError::ParseError(format!(
             "can't parse the string value {} to decimal",
@@ -839,6 +786,7 @@ fn parse_decimal_with_parameter(s: &str, precision: usize, scale: usize) -> Resu
 
 // Parse the string format decimal value to i128 format without checking the precision and scale.
 // Like "125.12" to 12512_i128.
+#[cfg(test)]
 fn parse_decimal(s: &str) -> Result<i128> {
     if PARSE_DECIMAL_RE.is_match(s) {
         let mut offset = s.len();
@@ -886,6 +834,7 @@ fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
     line_number: usize,
     rows: &[StringRecord],
     col_idx: usize,
+    format: Option<&str>,
 ) -> Result<ArrayRef> {
     rows.iter()
         .enumerate()
@@ -896,7 +845,10 @@ fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
                         return Ok(None);
                     }
 
-                    let parsed = parse_item::<T>(s);
+                    let parsed = match format {
+                        Some(format) => parse_formatted::<T>(s, format),
+                        _ => parse_item::<T>(s),
+                    };
                     match parsed {
                         Some(e) => Ok(Some(e)),
                         None => Err(ArrowError::ParseError(format!(
@@ -982,6 +934,10 @@ pub struct ReaderBuilder {
     bounds: Bounds,
     /// Optional projection for which columns to load (zero-based column indices)
     projection: Option<Vec<usize>>,
+    /// DateTime format to be used while trying to infer datetime format
+    datetime_re: Option<Regex>,
+    /// DateTime format to be used while parsing datetime format
+    datetime_format: Option<String>,
 }
 
 impl Default for ReaderBuilder {
@@ -997,6 +953,8 @@ impl Default for ReaderBuilder {
             batch_size: 1024,
             bounds: None,
             projection: None,
+            datetime_re: None,
+            datetime_format: None,
         }
     }
 }
@@ -1041,6 +999,23 @@ impl ReaderBuilder {
         self
     }
 
+    /// Set the datetime regex used to parse the string to Date64Type
+    /// this regex is used while infering schema
+    pub fn with_datetime_re(mut self, datetime_re: Regex) -> Self {
+        self.datetime_re = Some(datetime_re);
+        self
+    }
+
+    /// Set the datetime fromat used to parse the string to Date64Type
+    /// this fromat is used while when the schema wants to parse Date64Type.
+    ///
+    /// For format refer to [chrono docs](https://docs.rs/chrono/0.4.19/chrono/format/strftime/index.html)
+    ///
+    pub fn with_datetime_format(mut self, datetime_format: String) -> Self {
+        self.datetime_format = Some(datetime_format);
+        self
+    }
+
     /// Set the CSV file's column delimiter as a byte character
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
         self.delimiter = Some(delimiter);
@@ -1076,6 +1051,13 @@ impl ReaderBuilder {
         self
     }
 
+    /// Set the bounds over which to scan the reader.
+    /// `start` and `end` are line numbers.
+    pub fn with_bounds(mut self, start: usize, end: usize) -> Self {
+        self.bounds = Some((start, end));
+        self
+    }
+
     /// Set the reader's column projection
     pub fn with_projection(mut self, projection: Vec<usize>) -> Self {
         self.projection = Some(projection);
@@ -1089,15 +1071,17 @@ impl ReaderBuilder {
         let schema = match self.schema {
             Some(schema) => schema,
             None => {
-                let (inferred_schema, _) = infer_file_schema_with_csv_options(
-                    &mut reader,
-                    delimiter,
-                    self.max_records,
-                    self.has_header,
-                    self.escape,
-                    self.quote,
-                    self.terminator,
-                )?;
+                let roptions = ReaderOptions {
+                    delimiter: Some(delimiter),
+                    max_read_records: self.max_records,
+                    has_header: self.has_header,
+                    escape: self.escape,
+                    quote: self.quote,
+                    terminator: self.terminator,
+                    datetime_re: self.datetime_re,
+                };
+                let (inferred_schema, _) =
+                    infer_file_schema_with_csv_options(&mut reader, roptions)?;
 
                 Arc::new(inferred_schema)
             }
@@ -1115,8 +1099,9 @@ impl ReaderBuilder {
             schema,
             self.has_header,
             self.batch_size,
-            None,
+            self.bounds,
             self.projection.clone(),
+            self.datetime_format,
         ))
     }
 }
@@ -1136,44 +1121,49 @@ mod tests {
 
     #[test]
     fn test_csv() {
-        let schema = Schema::new(vec![
-            Field::new("city", DataType::Utf8, false),
-            Field::new("lat", DataType::Float64, false),
-            Field::new("lng", DataType::Float64, false),
-        ]);
+        let _: Vec<()> = vec![None, Some("%Y-%m-%dT%H:%M:%S%.f%:z".to_string())]
+            .into_iter()
+            .map(|format| {
+                let schema = Schema::new(vec![
+                    Field::new("city", DataType::Utf8, false),
+                    Field::new("lat", DataType::Float64, false),
+                    Field::new("lng", DataType::Float64, false),
+                ]);
 
-        let file = File::open("test/data/uk_cities.csv").unwrap();
+                let file = File::open("test/data/uk_cities.csv").unwrap();
+                let mut csv = Reader::new(
+                    file,
+                    Arc::new(schema.clone()),
+                    false,
+                    None,
+                    1024,
+                    None,
+                    None,
+                    format,
+                );
+                assert_eq!(Arc::new(schema), csv.schema());
+                let batch = csv.next().unwrap().unwrap();
+                assert_eq!(37, batch.num_rows());
+                assert_eq!(3, batch.num_columns());
 
-        let mut csv = Reader::new(
-            file,
-            Arc::new(schema.clone()),
-            false,
-            None,
-            1024,
-            None,
-            None,
-        );
-        assert_eq!(Arc::new(schema), csv.schema());
-        let batch = csv.next().unwrap().unwrap();
-        assert_eq!(37, batch.num_rows());
-        assert_eq!(3, batch.num_columns());
+                // access data from a primitive array
+                let lat = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .unwrap();
+                assert_eq!(57.653484, lat.value(0));
 
-        // access data from a primitive array
-        let lat = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
-        assert!(57.653484 - lat.value(0) < f64::EPSILON);
+                // access data from a string array (ListArray<u8>)
+                let city = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .unwrap();
 
-        // access data from a string array (ListArray<u8>)
-        let city = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-
-        assert_eq!("Aberdeen, Aberdeen City, UK", city.value(13));
+                assert_eq!("Aberdeen, Aberdeen City, UK", city.value(13));
+            })
+            .collect();
     }
 
     #[test]
@@ -1199,6 +1189,7 @@ mod tests {
             1024,
             None,
             None,
+            None,
         );
         assert_eq!(Arc::new(schema), csv.schema());
         let batch = csv.next().unwrap().unwrap();
@@ -1218,7 +1209,8 @@ mod tests {
 
         let file = File::open("test/data/decimal_test.csv").unwrap();
 
-        let mut csv = Reader::new(file, Arc::new(schema), false, None, 1024, None, None);
+        let mut csv =
+            Reader::new(file, Arc::new(schema), false, None, 1024, None, None, None);
         let batch = csv.next().unwrap().unwrap();
         // access data from a primitive array
         let lat = batch
@@ -1261,6 +1253,7 @@ mod tests {
             1024,
             None,
             None,
+            None,
         );
         let batch = csv.next().unwrap().unwrap();
         assert_eq!(74, batch.num_rows());
@@ -1290,7 +1283,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(57.653484 - lat.value(0) < f64::EPSILON);
+        assert_eq!(57.653484, lat.value(0));
 
         // access data from a string array (ListArray<u8>)
         let city = batch
@@ -1328,7 +1321,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
-        assert!(57.653484 - lat.value(0) < f64::EPSILON);
+        assert_eq!(57.653484, lat.value(0));
 
         // access data from a string array (ListArray<u8>)
         let city = batch
@@ -1338,6 +1331,30 @@ mod tests {
             .unwrap();
 
         assert_eq!("Aberdeen, Aberdeen City, UK", city.value(13));
+    }
+
+    #[test]
+    fn test_csv_builder_with_bounds() {
+        let file = File::open("test/data/uk_cities.csv").unwrap();
+
+        // Set the bounds to the lines 0, 1 and 2.
+        let mut csv = ReaderBuilder::new().with_bounds(0, 2).build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+
+        // access data from a string array (ListArray<u8>)
+        let city = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        // The value on line 0 is within the bounds
+        assert_eq!("Elgin, Scotland, the UK", city.value(0));
+
+        // The value on line 13 is outside of the bounds. Therefore
+        // the call to .value() will panic.
+        let result = std::panic::catch_unwind(|| city.value(13));
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1358,6 +1375,7 @@ mod tests {
             1024,
             None,
             Some(vec![0, 1]),
+            None,
         );
         let projected_schema = Arc::new(Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
@@ -1392,6 +1410,7 @@ mod tests {
             1024,
             None,
             Some(vec![0, 1]),
+            None,
         );
         let projected_schema = Arc::new(Schema::new(vec![
             Field::new(
@@ -1425,7 +1444,8 @@ mod tests {
 
         let file = File::open("test/data/null_test.csv").unwrap();
 
-        let mut csv = Reader::new(file, Arc::new(schema), true, None, 1024, None, None);
+        let mut csv =
+            Reader::new(file, Arc::new(schema), true, None, 1024, None, None, None);
         let batch = csv.next().unwrap().unwrap();
 
         assert!(!batch.column(1).is_null(0));
@@ -1449,7 +1469,7 @@ mod tests {
         let mut csv = builder.build(file).unwrap();
         let batch = csv.next().unwrap().unwrap();
 
-        assert_eq!(5, batch.num_rows());
+        assert_eq!(7, batch.num_rows());
         assert_eq!(6, batch.num_columns());
 
         let schema = batch.schema();
@@ -1522,18 +1542,31 @@ mod tests {
 
     #[test]
     fn test_infer_field_schema() {
-        assert_eq!(infer_field_schema("A"), DataType::Utf8);
-        assert_eq!(infer_field_schema("\"123\""), DataType::Utf8);
-        assert_eq!(infer_field_schema("10"), DataType::Int64);
-        assert_eq!(infer_field_schema("10.2"), DataType::Float64);
-        assert_eq!(infer_field_schema(".2"), DataType::Float64);
-        assert_eq!(infer_field_schema("2."), DataType::Float64);
-        assert_eq!(infer_field_schema("true"), DataType::Boolean);
-        assert_eq!(infer_field_schema("false"), DataType::Boolean);
-        assert_eq!(infer_field_schema("2020-11-08"), DataType::Date32);
-        assert_eq!(infer_field_schema("2020-11-08T14:20:01"), DataType::Date64);
-        assert_eq!(infer_field_schema("-5.13"), DataType::Float64);
-        assert_eq!(infer_field_schema("0.1300"), DataType::Float64);
+        assert_eq!(infer_field_schema("A", None), DataType::Utf8);
+        assert_eq!(infer_field_schema("\"123\"", None), DataType::Utf8);
+        assert_eq!(infer_field_schema("10", None), DataType::Int64);
+        assert_eq!(infer_field_schema("10.2", None), DataType::Float64);
+        assert_eq!(infer_field_schema(".2", None), DataType::Float64);
+        assert_eq!(infer_field_schema("2.", None), DataType::Float64);
+        assert_eq!(infer_field_schema("true", None), DataType::Boolean);
+        assert_eq!(infer_field_schema("false", None), DataType::Boolean);
+        assert_eq!(infer_field_schema("2020-11-08", None), DataType::Date32);
+        assert_eq!(
+            infer_field_schema("2020-11-08T14:20:01", None),
+            DataType::Date64
+        );
+        // to be inferred as a date64 this needs a custom datetime_re
+        assert_eq!(
+            infer_field_schema("2020-11-08 14:20:01", None),
+            DataType::Utf8
+        );
+        let reg = Regex::new(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$").ok();
+        assert_eq!(
+            infer_field_schema("2020-11-08 14:20:01", reg),
+            DataType::Date64
+        );
+        assert_eq!(infer_field_schema("-5.13", None), DataType::Float64);
+        assert_eq!(infer_field_schema("0.1300", None), DataType::Float64);
     }
 
     #[test]
@@ -1557,6 +1590,19 @@ mod tests {
         assert_eq!(
             parse_item::<Date64Type>("1900-02-28T12:34:56").unwrap(),
             -2203932304000
+        );
+        assert_eq!(
+            parse_formatted::<Date64Type>("1900-02-28 12:34:56", "%Y-%m-%d %H:%M:%S")
+                .unwrap(),
+            -2203932304000
+        );
+        assert_eq!(
+            parse_formatted::<Date64Type>(
+                "1900-02-28 12:34:56+0030",
+                "%Y-%m-%d %H:%M:%S%z"
+            )
+            .unwrap(),
+            -2203932304000 - (30 * 60 * 1000)
         );
     }
 
@@ -1619,8 +1665,15 @@ mod tests {
         let overflow_parse_tests = ["12345678", "12345678.9", "99999999.99"];
         for s in overflow_parse_tests {
             let result = parse_decimal_with_parameter(s, 10, 3);
-            assert_eq!(format!(
-                "Parser error: parse decimal overflow, the precision {}, the scale {}, the value {}", 10,3, s),result.unwrap_err().to_string());
+            let expected = "Parser error: parse decimal overflow";
+            let actual = result.unwrap_err().to_string();
+
+            assert!(
+                actual.contains(&expected),
+                "actual: '{}', expected: '{}'",
+                actual,
+                expected
+            );
         }
     }
 
@@ -1725,6 +1778,7 @@ mod tests {
         writeln!(csv1, "c1,c2,c3")?;
         writeln!(csv1, "1,\"foo\",0.5")?;
         writeln!(csv1, "3,\"bar\",1")?;
+        writeln!(csv1, "3,\"bar\",2e-06")?;
         // reading csv2 will set c2 to optional
         writeln!(csv2, "c1,c2,c3,c4")?;
         writeln!(csv2, "10,,3.14,true")?;
@@ -1740,7 +1794,7 @@ mod tests {
                 csv4.path().to_str().unwrap().to_string(),
             ],
             b',',
-            Some(3), // only csv1 and csv2 should be read
+            Some(4), // only csv1 and csv2 should be read
             true,
         )?;
 
@@ -1789,6 +1843,7 @@ mod tests {
             // starting at row 2 and up to row 6.
             Some((2, 6)),
             Some(vec![0]),
+            None,
         );
 
         let batch = csv.next().unwrap().unwrap();

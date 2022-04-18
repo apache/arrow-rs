@@ -25,9 +25,11 @@ use super::{
     make_array, Array, ArrayData, ArrayRef, PrimitiveArray, PrimitiveBuilder,
     StringArray, StringBuilder, StringDictionaryBuilder,
 };
-use crate::datatypes::ArrowNativeType;
-use crate::datatypes::{ArrowDictionaryKeyType, ArrowPrimitiveType, DataType};
+use crate::datatypes::{
+    ArrowDictionaryKeyType, ArrowNativeType, ArrowPrimitiveType, DataType,
+};
 use crate::error::ArrowError;
+use crate::error::Result;
 
 /// A dictionary array where each element is a single value indexed by an integer key.
 /// This is mostly used to represent strings or a limited set of primitive types as integers,
@@ -52,15 +54,31 @@ use crate::error::ArrowError;
 /// let array : DictionaryArray<Int8Type> = test.into_iter().collect();
 /// assert_eq!(array.keys(), &Int8Array::from(vec![0, 0, 1, 2]));
 /// ```
+///
+/// Example from existing arrays:
+///
+/// ```
+/// use arrow::array::{DictionaryArray, Int8Array, StringArray};
+/// use arrow::datatypes::Int8Type;
+/// // You can form your own DictionaryArray by providing the
+/// // values (dictionary) and keys (indexes into the dictionary):
+/// let values = StringArray::from_iter_values(["a", "b", "c"]);
+/// let keys = Int8Array::from_iter_values([0, 0, 1, 2]);
+/// let array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+/// let expected: DictionaryArray::<Int8Type> = vec!["a", "a", "b", "c"]
+///    .into_iter()
+///    .collect();
+/// assert_eq!(&array, &expected);
+/// ```
 pub struct DictionaryArray<K: ArrowPrimitiveType> {
     /// Data of this dictionary. Note that this is _not_ compatible with the C Data interface,
     /// as, in the current implementation, `values` below are the first child of this struct.
     data: ArrayData,
 
-    /// The keys of this dictionary. These are constructed from the buffer and null bitmap
-    /// of `data`.
-    /// Also, note that these do not correspond to the true values of this array. Rather, they map
-    /// to the real values.
+    /// The keys of this dictionary. These are constructed from the
+    /// buffer and null bitmap of `data`.  Also, note that these do
+    /// not correspond to the true values of this array. Rather, they
+    /// map to the real values.
     keys: PrimitiveArray<K>,
 
     /// Array of dictionary values (can by any DataType).
@@ -71,6 +89,42 @@ pub struct DictionaryArray<K: ArrowPrimitiveType> {
 }
 
 impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
+    /// Attempt to create a new DictionaryArray with a specified keys
+    /// (indexes into the dictionary) and values (dictionary)
+    /// array. Returns an error if there are any keys that are outside
+    /// of the dictionary array.
+    pub fn try_new(keys: &PrimitiveArray<K>, values: &dyn Array) -> Result<Self> {
+        let dict_data_type = DataType::Dictionary(
+            Box::new(keys.data_type().clone()),
+            Box::new(values.data_type().clone()),
+        );
+
+        // Note: This use the ArrayDataBuilder::build_unchecked and afterwards
+        // call the new function which only validates that the keys are in bounds.
+        let mut data = ArrayData::builder(dict_data_type)
+            .len(keys.len())
+            .add_buffer(keys.data().buffers()[0].clone())
+            .add_child_data(values.data().clone());
+
+        match keys.data().null_buffer() {
+            Some(buffer) if keys.data().null_count() > 0 => {
+                data = data
+                    .null_bit_buffer(buffer.clone())
+                    .null_count(keys.data().null_count());
+            }
+            _ => data = data.null_count(0),
+        }
+
+        // Safety: `validate` ensures key type is correct, and
+        //  `validate_dictionary_offset` ensures all offsets are within range
+        let array = unsafe { data.build_unchecked() };
+
+        array.validate()?;
+        array.validate_dictionary_offset()?;
+
+        Ok(array.into())
+    }
+
     /// Return an array view of the keys of this dictionary as a PrimitiveArray.
     pub fn keys(&self) -> &PrimitiveArray<K> {
         &self.keys
@@ -83,8 +137,7 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
 
         (0..rd_buf.len())
             .position(|i| rd_buf.value(i) == value)
-            .map(K::Native::from_usize)
-            .flatten()
+            .and_then(K::Native::from_usize)
     }
 
     /// Returns a reference to the dictionary values array
@@ -107,7 +160,7 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         self.keys.is_empty()
     }
 
-    // Currently exists for compatibility purposes with Arrow IPC.
+    /// Currently exists for compatibility purposes with Arrow IPC.
     pub fn is_ordered(&self) -> bool {
         self.is_ordered
     }
@@ -124,7 +177,7 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         }
     }
 
-    pub fn make_ordered(&self) -> Result<Self, ArrowError> {
+    pub fn make_ordered(&self) -> Result<Self> {
         if self.is_ordered {
             Ok(self.as_ordered(true))
         } else {
@@ -171,6 +224,13 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
 
             Ok(DictionaryArray::from(new_data))
         }
+    }
+
+    /// Return an iterator over the keys (indexes into the dictionary)
+    pub fn keys_iter(&self) -> impl Iterator<Item = Option<usize>> + '_ {
+        self.keys
+            .iter()
+            .map(|key| key.map(|k| k.to_usize().expect("Dictionary index not usize")))
     }
 }
 
@@ -319,13 +379,15 @@ impl<T: ArrowPrimitiveType> fmt::Debug for DictionaryArray<T> {
 mod tests {
     use super::*;
 
-    use crate::{
-        array::Int16Array,
-        datatypes::{Int32Type, Int8Type, UInt32Type, UInt8Type},
-    };
+    use crate::array::{Float32Array, Int8Array};
+    use crate::datatypes::{Float32Type, Int16Type};
     use crate::{
         array::Int16DictionaryArray, array::PrimitiveDictionaryBuilder,
         datatypes::DataType,
+    };
+    use crate::{
+        array::{Int16Array, Int32Array},
+        datatypes::{Int32Type, Int8Type, UInt32Type, UInt8Type},
     };
     use crate::{buffer::Buffer, datatypes::ToByteSlice};
 
@@ -506,5 +568,111 @@ mod tests {
             .unwrap();
 
         assert_eq!(&expected_values, actual_values);
+    }
+
+    #[test]
+    fn test_dictionary_iter() {
+        // Construct a value array
+        let values = Int8Array::from_iter_values([10_i8, 11, 12, 13, 14, 15, 16, 17]);
+        let keys = Int16Array::from_iter_values([2_i16, 3, 4]);
+
+        // Construct a dictionary array from the above two
+        let dict_array = DictionaryArray::<Int16Type>::try_new(&keys, &values).unwrap();
+
+        let mut key_iter = dict_array.keys_iter();
+        assert_eq!(2, key_iter.next().unwrap().unwrap());
+        assert_eq!(3, key_iter.next().unwrap().unwrap());
+        assert_eq!(4, key_iter.next().unwrap().unwrap());
+        assert!(key_iter.next().is_none());
+
+        let mut iter = dict_array
+            .values()
+            .as_any()
+            .downcast_ref::<Int8Array>()
+            .unwrap()
+            .take_iter(dict_array.keys_iter());
+
+        assert_eq!(12, iter.next().unwrap().unwrap());
+        assert_eq!(13, iter.next().unwrap().unwrap());
+        assert_eq!(14, iter.next().unwrap().unwrap());
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_dictionary_iter_with_null() {
+        let test = vec![Some("a"), None, Some("b"), None, None, Some("a")];
+        let array: DictionaryArray<Int32Type> = test.into_iter().collect();
+
+        let mut iter = array
+            .values()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .take_iter(array.keys_iter());
+
+        assert_eq!("a", iter.next().unwrap().unwrap());
+        assert!(iter.next().unwrap().is_none());
+        assert_eq!("b", iter.next().unwrap().unwrap());
+        assert!(iter.next().unwrap().is_none());
+        assert!(iter.next().unwrap().is_none());
+        assert_eq!("a", iter.next().unwrap().unwrap());
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_try_new() {
+        let values: StringArray = [Some("foo"), Some("bar"), Some("baz")]
+            .into_iter()
+            .collect();
+        let keys: Int32Array = [Some(0), Some(2), None, Some(1)].into_iter().collect();
+
+        let array = DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+        assert_eq!(array.keys().data_type(), &DataType::Int32);
+        assert_eq!(array.values().data_type(), &DataType::Utf8);
+
+        assert_eq!(array.data().null_count(), 1);
+
+        assert!(array.keys().is_valid(0));
+        assert!(array.keys().is_valid(1));
+        assert!(array.keys().is_null(2));
+        assert!(array.keys().is_valid(3));
+
+        assert_eq!(array.keys().value(0), 0);
+        assert_eq!(array.keys().value(1), 2);
+        assert_eq!(array.keys().value(3), 1);
+
+        assert_eq!(
+            "DictionaryArray {keys: PrimitiveArray<Int32>\n[\n  0,\n  2,\n  null,\n  1,\n] values: StringArray\n[\n  \"foo\",\n  \"bar\",\n  \"baz\",\n]}\n",
+            format!("{:?}", array)
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Value at position 1 out of bounds: 3 (should be in [0, 1])"
+    )]
+    fn test_try_new_index_too_large() {
+        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+        // dictionary only has 2 values, so offset 3 is out of bounds
+        let keys: Int32Array = [Some(0), Some(3)].into_iter().collect();
+        DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Value at position 0 out of bounds: -100 (should be in [0, 1])"
+    )]
+    fn test_try_new_index_too_small() {
+        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+        let keys: Int32Array = [Some(-100)].into_iter().collect();
+        DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "Dictionary key type must be integer, but was Float32")]
+    fn test_try_wrong_dictionary_key_type() {
+        let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
+        let keys: Float32Array = [Some(0_f32), None, Some(3_f32)].into_iter().collect();
+        DictionaryArray::<Float32Type>::try_new(&keys, &values).unwrap();
     }
 }

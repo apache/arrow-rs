@@ -97,6 +97,7 @@
 //! ```
 pub mod footer;
 pub mod metadata;
+pub mod page_encoding_stats;
 pub mod properties;
 pub mod reader;
 pub mod serialized_reader;
@@ -104,7 +105,7 @@ pub mod statistics;
 pub mod writer;
 
 const FOOTER_SIZE: usize = 8;
-const PARQUET_MAGIC: [u8; 4] = [b'P', b'A', b'R', b'1'];
+pub(crate) const PARQUET_MAGIC: [u8; 4] = [b'P', b'A', b'R', b'1'];
 
 /// The number of bytes read at the end of the parquet file on first read
 const DEFAULT_FOOTER_READ_SIZE: usize = 64 * 1024;

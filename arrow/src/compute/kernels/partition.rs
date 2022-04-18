@@ -113,7 +113,7 @@ fn exponential_search_next_partition_point(
 ///
 /// The values corresponding to those indices are assumed to be partitioned according to the given predicate.
 ///
-/// See [`std::slice::partition_point`]
+/// See [`slice::partition_point`]
 #[inline]
 fn partition_point<P: Fn(usize) -> bool>(start: usize, end: usize, pred: P) -> usize {
     let mut left = start;

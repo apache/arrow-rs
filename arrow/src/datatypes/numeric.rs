@@ -19,9 +19,7 @@ use super::*;
 #[cfg(feature = "simd")]
 use packed_simd::*;
 #[cfg(feature = "simd")]
-use std::ops::{
-    Add, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, Mul, Neg, Not, Rem, Sub,
-};
+use std::ops::{Add, BitAnd, BitAndAssign, BitOr, BitOrAssign, Div, Mul, Not, Rem, Sub};
 
 /// A subtype of primitive type that represents numeric values.
 ///
@@ -147,6 +145,20 @@ macro_rules! make_numeric_type {
                 // this match will get removed by the compiler since the number of lanes is known at
                 // compile-time for each concrete numeric type
                 match Self::lanes() {
+                    4 => {
+                        // the bit position in each lane indicates the index of that lane
+                        let vecidx = i128x4::new(1, 2, 4, 8);
+
+                        // broadcast the lowermost 8 bits of mask to each lane
+                        let vecmask = i128x4::splat((mask & 0x0F) as i128);
+                        // compute whether the bit corresponding to each lanes index is set
+                        let vecmask = (vecidx & vecmask).eq(vecidx);
+
+                        // transmute is necessary because the different match arms return different
+                        // mask types, at runtime only one of those expressions will exist per type,
+                        // with the type being equal to `SimdMask`.
+                        unsafe { std::mem::transmute(vecmask) }
+                    }
                     8 => {
                         // the bit position in each lane indicates the index of that lane
                         let vecidx = i64x8::new(1, 2, 4, 8, 16, 32, 64, 128);
@@ -348,78 +360,11 @@ make_numeric_type!(Time64MicrosecondType, i64, i64x8, m64x8);
 make_numeric_type!(Time64NanosecondType, i64, i64x8, m64x8);
 make_numeric_type!(IntervalYearMonthType, i32, i32x16, m32x16);
 make_numeric_type!(IntervalDayTimeType, i64, i64x8, m64x8);
+make_numeric_type!(IntervalMonthDayNanoType, i128, i128x4, m128x4);
 make_numeric_type!(DurationSecondType, i64, i64x8, m64x8);
 make_numeric_type!(DurationMillisecondType, i64, i64x8, m64x8);
 make_numeric_type!(DurationMicrosecondType, i64, i64x8, m64x8);
 make_numeric_type!(DurationNanosecondType, i64, i64x8, m64x8);
-
-/// A subtype of primitive type that represents signed numeric values.
-///
-/// SIMD operations are defined in this trait if available on the target system.
-#[cfg(feature = "simd")]
-pub trait ArrowSignedNumericType: ArrowNumericType
-where
-    Self::SignedSimd: Neg<Output = Self::SignedSimd>,
-{
-    /// Defines the SIMD type that should be used for this numeric type
-    type SignedSimd;
-
-    /// Loads a slice of signed numeric type into a SIMD register
-    fn load_signed(slice: &[Self::Native]) -> Self::SignedSimd;
-
-    /// Performs a SIMD unary operation on signed numeric type
-    fn signed_unary_op<F: Fn(Self::SignedSimd) -> Self::SignedSimd>(
-        a: Self::SignedSimd,
-        op: F,
-    ) -> Self::SignedSimd;
-
-    /// Writes a signed SIMD result back to a slice
-    fn write_signed(simd_result: Self::SignedSimd, slice: &mut [Self::Native]);
-}
-
-#[cfg(not(feature = "simd"))]
-pub trait ArrowSignedNumericType: ArrowNumericType
-where
-    Self::Native: std::ops::Neg<Output = Self::Native>,
-{
-}
-
-macro_rules! make_signed_numeric_type {
-    ($impl_ty:ty, $simd_ty:ident) => {
-        #[cfg(feature = "simd")]
-        impl ArrowSignedNumericType for $impl_ty {
-            type SignedSimd = $simd_ty;
-
-            #[inline]
-            fn load_signed(slice: &[Self::Native]) -> Self::SignedSimd {
-                unsafe { Self::SignedSimd::from_slice_unaligned_unchecked(slice) }
-            }
-
-            #[inline]
-            fn signed_unary_op<F: Fn(Self::SignedSimd) -> Self::SignedSimd>(
-                a: Self::SignedSimd,
-                op: F,
-            ) -> Self::SignedSimd {
-                op(a)
-            }
-
-            #[inline]
-            fn write_signed(simd_result: Self::SignedSimd, slice: &mut [Self::Native]) {
-                unsafe { simd_result.write_to_slice_unaligned_unchecked(slice) };
-            }
-        }
-
-        #[cfg(not(feature = "simd"))]
-        impl ArrowSignedNumericType for $impl_ty {}
-    };
-}
-
-make_signed_numeric_type!(Int8Type, i8x64);
-make_signed_numeric_type!(Int16Type, i16x32);
-make_signed_numeric_type!(Int32Type, i32x16);
-make_signed_numeric_type!(Int64Type, i64x8);
-make_signed_numeric_type!(Float32Type, f32x16);
-make_signed_numeric_type!(Float64Type, f64x8);
 
 #[cfg(feature = "simd")]
 pub trait ArrowFloatNumericType: ArrowNumericType {
@@ -447,11 +392,11 @@ macro_rules! make_float_numeric_type {
 make_float_numeric_type!(Float32Type, f32x16);
 make_float_numeric_type!(Float64Type, f64x8);
 
-#[cfg(all(test, simd_x86))]
+#[cfg(all(test, feature = "simd"))]
 mod tests {
     use crate::datatypes::{
         ArrowNumericType, Float32Type, Float64Type, Int32Type, Int64Type, Int8Type,
-        UInt16Type,
+        IntervalMonthDayNanoType, UInt16Type,
     };
     use packed_simd::*;
     use FromCast;
@@ -467,6 +412,17 @@ mod tests {
                 .map(|i| (if (mask & (1 << i)) != 0 { -1 } else { 0 }))
                 .collect::<Vec<$T>>()
         }};
+    }
+
+    #[test]
+    fn test_mask_i128() {
+        let mask = 0b1101;
+        let actual = IntervalMonthDayNanoType::mask_from_u64(mask);
+        let expected = expected_mask!(i128, mask);
+        let expected =
+            m128x4::from_cast(i128x4::from_slice_unaligned(expected.as_slice()));
+
+        assert_eq!(expected, actual);
     }
 
     #[test]

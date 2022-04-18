@@ -16,27 +16,48 @@
 // under the License.
 
 use std::cmp::{max, min};
-use std::mem::{replace, size_of};
 
-use crate::column::{page::PageReader, reader::ColumnReaderImpl};
+use arrow::bitmap::Bitmap;
+use arrow::buffer::Buffer;
+
+use crate::arrow::record_reader::{
+    buffer::{BufferQueue, ScalarBuffer, ValuesBuffer},
+    definition_levels::{DefinitionLevelBuffer, DefinitionLevelDecoder},
+};
+use crate::column::{
+    page::PageReader,
+    reader::{
+        decoder::{ColumnLevelDecoderImpl, ColumnValueDecoder, ColumnValueDecoderImpl},
+        GenericColumnReader,
+    },
+};
 use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use arrow::array::BooleanBufferBuilder;
-use arrow::bitmap::Bitmap;
-use arrow::buffer::{Buffer, MutableBuffer};
+
+pub(crate) mod buffer;
+mod definition_levels;
 
 const MIN_BATCH_SIZE: usize = 1024;
 
 /// A `RecordReader` is a stateful column reader that delimits semantic records.
-pub struct RecordReader<T: DataType> {
+pub type RecordReader<T> =
+    GenericRecordReader<ScalarBuffer<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
+
+#[doc(hidden)]
+/// A generic stateful column reader that delimits semantic records
+///
+/// This type is hidden from the docs, and relies on private traits with no
+/// public implementations. As such this type signature may be changed without
+/// breaking downstream users as it can only be constructed through type aliases
+pub struct GenericRecordReader<V, CV> {
     column_desc: ColumnDescPtr,
 
-    records: MutableBuffer,
-    def_levels: Option<MutableBuffer>,
-    rep_levels: Option<MutableBuffer>,
-    null_bitmap: Option<BooleanBufferBuilder>,
-    column_reader: Option<ColumnReaderImpl<T>>,
+    records: V,
+    def_levels: Option<DefinitionLevelBuffer>,
+    rep_levels: Option<ScalarBuffer<i16>>,
+    column_reader:
+        Option<GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelDecoder, CV>>,
 
     /// Number of records accumulated in records
     num_records: usize,
@@ -47,30 +68,49 @@ pub struct RecordReader<T: DataType> {
     values_written: usize,
 }
 
-impl<T: DataType> RecordReader<T> {
-    pub fn new(column_schema: ColumnDescPtr) -> Self {
-        let (def_levels, null_map) = if column_schema.max_def_level() > 0 {
-            (
-                Some(MutableBuffer::new(MIN_BATCH_SIZE)),
-                Some(BooleanBufferBuilder::new(0)),
-            )
-        } else {
-            (None, None)
-        };
+impl<V, CV> GenericRecordReader<V, CV>
+where
+    V: ValuesBuffer + Default,
+    CV: ColumnValueDecoder<Slice = V::Slice>,
+{
+    /// Create a new [`GenericRecordReader`]
+    pub fn new(desc: ColumnDescPtr) -> Self {
+        Self::new_with_options(desc, false)
+    }
 
-        let rep_levels = if column_schema.max_rep_level() > 0 {
-            Some(MutableBuffer::new(MIN_BATCH_SIZE))
-        } else {
-            None
-        };
+    /// Create a new [`GenericRecordReader`] with the ability to only generate the bitmask
+    ///
+    /// If `null_mask_only` is true only the null bitmask will be generated and
+    /// [`Self::consume_def_levels`] and [`Self::consume_rep_levels`] will always return `None`
+    ///
+    /// It is insufficient to solely check that that the max definition level is 1 as we
+    /// need there to be no nullable parent array that will required decoded definition levels
+    ///
+    /// In particular consider the case of:
+    ///
+    /// ```ignore
+    /// message nested {
+    ///   OPTIONAL Group group {
+    ///     REQUIRED INT32 leaf;
+    ///   }
+    /// }
+    /// ```
+    ///
+    /// The maximum definition level of leaf is 1, however, we still need to decode the
+    /// definition levels so that the parent group can be constructed correctly
+    ///
+    pub(crate) fn new_with_options(desc: ColumnDescPtr, null_mask_only: bool) -> Self {
+        let def_levels = (desc.max_def_level() > 0)
+            .then(|| DefinitionLevelBuffer::new(&desc, null_mask_only));
+
+        let rep_levels = (desc.max_rep_level() > 0).then(ScalarBuffer::new);
 
         Self {
-            records: MutableBuffer::new(MIN_BATCH_SIZE),
+            records: Default::default(),
             def_levels,
             rep_levels,
-            null_bitmap: null_map,
             column_reader: None,
-            column_desc: column_schema,
+            column_desc: desc,
             num_records: 0,
             num_values: 0,
             values_written: 0,
@@ -79,8 +119,10 @@ impl<T: DataType> RecordReader<T> {
 
     /// Set the current page reader.
     pub fn set_page_reader(&mut self, page_reader: Box<dyn PageReader>) -> Result<()> {
-        self.column_reader =
-            Some(ColumnReaderImpl::new(self.column_desc.clone(), page_reader));
+        self.column_reader = Some(GenericColumnReader::new(
+            self.column_desc.clone(),
+            page_reader,
+        ));
         Ok(())
     }
 
@@ -125,7 +167,30 @@ impl<T: DataType> RecordReader<T> {
                 break;
             }
 
-            let batch_size = max(num_records - records_read, MIN_BATCH_SIZE);
+            // If repetition levels present, we don't know how much more to read
+            // in order to read the requested number of records, therefore read at least
+            // MIN_BATCH_SIZE, otherwise read **exactly** what was requested. This helps
+            // to avoid a degenerate case where the buffers are never fully drained.
+            //
+            // Consider the scenario where the user is requesting batches of MIN_BATCH_SIZE.
+            //
+            // When transitioning across a row group boundary, this will read some remainder
+            // from the row group `r`, before reading MIN_BATCH_SIZE from the next row group,
+            // leaving `MIN_BATCH_SIZE + r` in the buffer.
+            //
+            // The client will then only split off the `MIN_BATCH_SIZE` they actually wanted,
+            // leaving behind `r`. This will continue indefinitely.
+            //
+            // Aside from wasting cycles splitting and shuffling buffers unnecessarily, this
+            // prevents dictionary preservation from functioning correctly as the buffer
+            // will never be emptied, allowing a new dictionary to be registered.
+            //
+            // This degenerate case can still occur for repeated fields, but
+            // it is avoided for the more common case of a non-repeated field
+            let batch_size = match &self.rep_levels {
+                Some(_) => max(num_records - records_read, MIN_BATCH_SIZE),
+                None => num_records - records_read,
+            };
 
             // Try to more value from parquet pages
             let values_read = self.read_one_batch(batch_size)?;
@@ -154,108 +219,31 @@ impl<T: DataType> RecordReader<T> {
     /// definition level values that have already been read into memory but not counted
     /// as record values, e.g. those from `self.num_values` to `self.values_written`.
     pub fn consume_def_levels(&mut self) -> Result<Option<Buffer>> {
-        let new_buffer = if let Some(ref mut def_levels_buf) = &mut self.def_levels {
-            let num_left_values = self.values_written - self.num_values;
-            // create an empty buffer, as it will be resized below
-            let mut new_buffer = MutableBuffer::new(0);
-            let num_bytes = num_left_values * size_of::<i16>();
-            let new_len = self.num_values * size_of::<i16>();
-
-            new_buffer.resize(num_bytes, 0);
-
-            let new_def_levels = new_buffer.as_slice_mut();
-            let left_def_levels = &def_levels_buf.as_slice_mut()[new_len..];
-
-            new_def_levels[0..num_bytes].copy_from_slice(&left_def_levels[0..num_bytes]);
-
-            def_levels_buf.resize(new_len, 0);
-            Some(new_buffer)
-        } else {
-            None
-        };
-
-        Ok(replace(&mut self.def_levels, new_buffer).map(|x| x.into()))
+        Ok(match self.def_levels.as_mut() {
+            Some(x) => x.split_levels(self.num_values),
+            None => None,
+        })
     }
 
     /// Return repetition level data.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_rep_levels(&mut self) -> Result<Option<Buffer>> {
-        // TODO: Optimize to reduce the copy
-        let new_buffer = if let Some(ref mut rep_levels_buf) = &mut self.rep_levels {
-            let num_left_values = self.values_written - self.num_values;
-            // create an empty buffer, as it will be resized below
-            let mut new_buffer = MutableBuffer::new(0);
-            let num_bytes = num_left_values * size_of::<i16>();
-            let new_len = self.num_values * size_of::<i16>();
-
-            new_buffer.resize(num_bytes, 0);
-
-            let new_rep_levels = new_buffer.as_slice_mut();
-            let left_rep_levels = &rep_levels_buf.as_slice_mut()[new_len..];
-
-            new_rep_levels[0..num_bytes].copy_from_slice(&left_rep_levels[0..num_bytes]);
-
-            rep_levels_buf.resize(new_len, 0);
-
-            Some(new_buffer)
-        } else {
-            None
-        };
-
-        Ok(replace(&mut self.rep_levels, new_buffer).map(|x| x.into()))
+        Ok(match self.rep_levels.as_mut() {
+            Some(x) => Some(x.split_off(self.num_values)),
+            None => None,
+        })
     }
 
     /// Returns currently stored buffer data.
     /// The side effect is similar to `consume_def_levels`.
-    pub fn consume_record_data(&mut self) -> Result<Buffer> {
-        // TODO: Optimize to reduce the copy
-        let num_left_values = self.values_written - self.num_values;
-        // create an empty buffer, as it will be resized below
-        let mut new_buffer = MutableBuffer::new(0);
-        let num_bytes = num_left_values * T::get_type_size();
-        let new_len = self.num_values * T::get_type_size();
-
-        new_buffer.resize(num_bytes, 0);
-
-        let new_records = new_buffer.as_slice_mut();
-        let left_records = &mut self.records.as_slice_mut()[new_len..];
-
-        new_records[0..num_bytes].copy_from_slice(&left_records[0..num_bytes]);
-
-        self.records.resize(new_len, 0);
-
-        Ok(replace(&mut self.records, new_buffer).into())
+    pub fn consume_record_data(&mut self) -> Result<V::Output> {
+        Ok(self.records.split_off(self.num_values))
     }
 
     /// Returns currently stored null bitmap data.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_bitmap_buffer(&mut self) -> Result<Option<Buffer>> {
-        // TODO: Optimize to reduce the copy
-        if self.column_desc.max_def_level() > 0 {
-            assert!(self.null_bitmap.is_some());
-            let num_left_values = self.values_written - self.num_values;
-            let new_bitmap_builder = Some(BooleanBufferBuilder::new(max(
-                MIN_BATCH_SIZE,
-                num_left_values,
-            )));
-
-            let old_bitmap = replace(&mut self.null_bitmap, new_bitmap_builder)
-                .map(|mut builder| builder.finish())
-                .unwrap();
-
-            let old_bitmap = Bitmap::from(old_bitmap);
-
-            for i in self.num_values..self.values_written {
-                self.null_bitmap
-                    .as_mut()
-                    .unwrap()
-                    .append(old_bitmap.is_set(i));
-            }
-
-            Ok(Some(old_bitmap.into_buffer()))
-        } else {
-            Ok(None)
-        }
+        Ok(self.consume_bitmap()?.map(|b| b.into_buffer()))
     }
 
     /// Reset state of record reader.
@@ -269,43 +257,22 @@ impl<T: DataType> RecordReader<T> {
 
     /// Returns bitmap data.
     pub fn consume_bitmap(&mut self) -> Result<Option<Bitmap>> {
-        self.consume_bitmap_buffer()
-            .map(|buffer| buffer.map(Bitmap::from))
+        Ok(self
+            .def_levels
+            .as_mut()
+            .map(|levels| levels.split_bitmask(self.num_values)))
     }
 
     /// Try to read one batch of data.
     fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
-        // Reserve spaces
-        self.records
-            .resize(self.records.len() + batch_size * T::get_type_size(), 0);
-        if let Some(ref mut buf) = self.rep_levels {
-            buf.resize(buf.len() + batch_size * size_of::<i16>(), 0);
-        }
-        if let Some(ref mut buf) = self.def_levels {
-            buf.resize(buf.len() + batch_size * size_of::<i16>(), 0);
-        }
+        let rep_levels = self
+            .rep_levels
+            .as_mut()
+            .map(|levels| levels.spare_capacity_mut(batch_size));
 
-        let values_written = self.values_written;
+        let def_levels = self.def_levels.as_mut();
 
-        // Convert mutable buffer spaces to mutable slices
-        let (prefix, values, suffix) =
-            unsafe { self.records.as_slice_mut().align_to_mut::<T::T>() };
-        assert!(prefix.is_empty() && suffix.is_empty());
-        let values = &mut values[values_written..];
-
-        let def_levels = self.def_levels.as_mut().map(|buf| {
-            let (prefix, def_levels, suffix) =
-                unsafe { buf.as_slice_mut().align_to_mut::<i16>() };
-            assert!(prefix.is_empty() && suffix.is_empty());
-            &mut def_levels[values_written..]
-        });
-
-        let rep_levels = self.rep_levels.as_mut().map(|buf| {
-            let (prefix, rep_levels, suffix) =
-                unsafe { buf.as_slice_mut().align_to_mut::<i16>() };
-            assert!(prefix.is_empty() && suffix.is_empty());
-            &mut rep_levels[values_written..]
-        });
+        let values = self.records.spare_capacity_mut(batch_size);
 
         let (values_read, levels_read) = self
             .column_reader
@@ -313,54 +280,22 @@ impl<T: DataType> RecordReader<T> {
             .unwrap()
             .read_batch(batch_size, def_levels, rep_levels, values)?;
 
-        // get new references for the def levels.
-        let def_levels = self.def_levels.as_ref().map(|buf| {
-            let (prefix, def_levels, suffix) =
-                unsafe { buf.as_slice().align_to::<i16>() };
-            assert!(prefix.is_empty() && suffix.is_empty());
-            &def_levels[values_written..]
-        });
-
-        let max_def_level = self.column_desc.max_def_level();
-
         if values_read < levels_read {
-            let def_levels = def_levels.ok_or_else(|| {
+            let def_levels = self.def_levels.as_ref().ok_or_else(|| {
                 general_err!(
                     "Definition levels should exist when data is less than levels!"
                 )
             })?;
 
-            // Fill spaces in column data with default values
-            let mut values_pos = values_read;
-            let mut level_pos = levels_read;
-
-            while level_pos > values_pos {
-                if def_levels[level_pos - 1] == max_def_level {
-                    // This values is not empty
-                    // We use swap rather than assign here because T::T doesn't
-                    // implement Copy
-                    values.swap(level_pos - 1, values_pos - 1);
-                    values_pos -= 1;
-                } else {
-                    values[level_pos - 1] = T::T::default();
-                }
-
-                level_pos -= 1;
-            }
+            self.records.pad_nulls(
+                self.values_written,
+                values_read,
+                levels_read,
+                def_levels.nulls().as_slice(),
+            );
         }
 
-        // Fill in bitmap data
-        if let Some(null_buffer) = self.null_bitmap.as_mut() {
-            let def_levels = def_levels.ok_or_else(|| {
-                general_err!(
-                    "Definition levels should exist when data is less than levels!"
-                )
-            })?;
-            (0..levels_read)
-                .for_each(|idx| null_buffer.append(def_levels[idx] == max_def_level));
-        }
-
-        let values_read = max(values_read, levels_read);
+        let values_read = max(levels_read, values_read);
         self.set_values_written(self.values_written + values_read)?;
         Ok(values_read)
     }
@@ -370,20 +305,20 @@ impl<T: DataType> RecordReader<T> {
     ///
     /// A "complete" record is one where the buffer contains a subsequent repetition level of 0
     fn count_records(&self, records_to_read: usize) -> (usize, usize) {
-        let rep_levels = self.rep_levels.as_ref().map(|buf| {
-            let (prefix, rep_levels, suffix) =
-                unsafe { buf.as_slice().align_to::<i16>() };
-            assert!(prefix.is_empty() && suffix.is_empty());
-            rep_levels
-        });
-
-        match rep_levels {
+        match self.rep_levels.as_ref() {
             Some(buf) => {
+                let buf = buf.as_slice();
+
                 let mut records_read = 0;
                 let mut end_of_last_record = self.num_values;
 
-                for current in self.num_values..self.values_written {
-                    if buf[current] == 0 && current != self.num_values {
+                for (current, item) in buf
+                    .iter()
+                    .enumerate()
+                    .take(self.values_written)
+                    .skip(self.num_values)
+                {
+                    if *item == 0 && current != self.num_values {
                         records_read += 1;
                         end_of_last_record = current;
 
@@ -407,17 +342,14 @@ impl<T: DataType> RecordReader<T> {
     #[allow(clippy::unnecessary_wraps)]
     fn set_values_written(&mut self, new_values_written: usize) -> Result<()> {
         self.values_written = new_values_written;
-        self.records
-            .resize(self.values_written * T::get_type_size(), 0);
-
-        let new_levels_len = self.values_written * size_of::<i16>();
+        self.records.set_len(self.values_written);
 
         if let Some(ref mut buf) = self.rep_levels {
-            buf.resize(new_levels_len, 0)
+            buf.set_len(self.values_written)
         };
 
         if let Some(ref mut buf) = self.def_levels {
-            buf.resize(new_levels_len, 0)
+            buf.set_len(self.values_written)
         };
 
         Ok(())
@@ -426,7 +358,12 @@ impl<T: DataType> RecordReader<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::RecordReader;
+    use std::sync::Arc;
+
+    use arrow::array::{Int16BufferBuilder, Int32BufferBuilder};
+    use arrow::bitmap::Bitmap;
+    use arrow::buffer::Buffer;
+
     use crate::basic::Encoding;
     use crate::column::page::Page;
     use crate::column::page::PageReader;
@@ -435,12 +372,11 @@ mod tests {
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
     use crate::util::test_common::page_util::{DataPageBuilder, DataPageBuilderImpl};
-    use arrow::array::{BooleanBufferBuilder, Int16BufferBuilder, Int32BufferBuilder};
-    use arrow::bitmap::Bitmap;
-    use std::sync::Arc;
+
+    use super::RecordReader;
 
     struct TestPageReader {
-        pages: Box<dyn Iterator<Item = Page>>,
+        pages: Box<dyn Iterator<Item = Page> + Send>,
     }
 
     impl TestPageReader {
@@ -617,15 +553,6 @@ mod tests {
             assert_eq!(7, record_reader.num_values());
         }
 
-        // Verify result record data
-        let mut bb = Int32BufferBuilder::new(7);
-        bb.append_slice(&[0, 7, 0, 6, 3, 0, 8]);
-        let expected_buffer = bb.finish();
-        assert_eq!(
-            expected_buffer,
-            record_reader.consume_record_data().unwrap()
-        );
-
         // Verify result def levels
         let mut bb = Int16BufferBuilder::new(7);
         bb.append_slice(&[1i16, 2i16, 0i16, 2i16, 2i16, 0i16, 2i16]);
@@ -636,13 +563,28 @@ mod tests {
         );
 
         // Verify bitmap
-        let mut bb = BooleanBufferBuilder::new(7);
-        bb.append_slice(&[false, true, false, true, true, false, true]);
-        let expected_bitmap = Bitmap::from(bb.finish());
+        let expected_valid = &[false, true, false, true, true, false, true];
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_bitmap = Bitmap::from(expected_buffer);
         assert_eq!(
             Some(expected_bitmap),
             record_reader.consume_bitmap().unwrap()
         );
+
+        // Verify result record data
+        let actual = record_reader.consume_record_data().unwrap();
+        let actual_values = unsafe { actual.typed_data::<i32>() };
+
+        let expected = &[0, 7, 0, 6, 3, 0, 8];
+        assert_eq!(actual_values.len(), expected.len());
+
+        // Only validate valid values are equal
+        let iter = expected_valid.iter().zip(actual_values).zip(expected);
+        for ((valid, actual), expected) in iter {
+            if *valid {
+                assert_eq!(actual, expected)
+            }
+        }
     }
 
     #[test]
@@ -725,15 +667,6 @@ mod tests {
             assert_eq!(9, record_reader.num_values());
         }
 
-        // Verify result record data
-        let mut bb = Int32BufferBuilder::new(9);
-        bb.append_slice(&[4, 0, 0, 7, 6, 3, 2, 8, 9]);
-        let expected_buffer = bb.finish();
-        assert_eq!(
-            expected_buffer,
-            record_reader.consume_record_data().unwrap()
-        );
-
         // Verify result def levels
         let mut bb = Int16BufferBuilder::new(9);
         bb.append_slice(&[2i16, 0i16, 1i16, 2i16, 2i16, 2i16, 2i16, 2i16, 2i16]);
@@ -744,13 +677,27 @@ mod tests {
         );
 
         // Verify bitmap
-        let mut bb = BooleanBufferBuilder::new(9);
-        bb.append_slice(&[true, false, false, true, true, true, true, true, true]);
-        let expected_bitmap = Bitmap::from(bb.finish());
+        let expected_valid = &[true, false, false, true, true, true, true, true, true];
+        let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
+        let expected_bitmap = Bitmap::from(expected_buffer);
         assert_eq!(
             Some(expected_bitmap),
             record_reader.consume_bitmap().unwrap()
         );
+
+        // Verify result record data
+        let actual = record_reader.consume_record_data().unwrap();
+        let actual_values = unsafe { actual.typed_data::<i32>() };
+        let expected = &[4, 0, 0, 7, 6, 3, 2, 8, 9];
+        assert_eq!(actual_values.len(), expected.len());
+
+        // Only validate valid values are equal
+        let iter = expected_valid.iter().zip(actual_values).zip(expected);
+        for ((valid, actual), expected) in iter {
+            if *valid {
+                assert_eq!(actual, expected)
+            }
+        }
     }
 
     #[test]

@@ -20,31 +20,35 @@
 //! See [`Compression`](crate::basic::Compression) enum for all available compression
 //! algorithms.
 //!
-//! # Example
-//!
-//! ```no_run
-//! use parquet::{basic::Compression, compression::create_codec};
-//!
-//! let mut codec = match create_codec(Compression::SNAPPY) {
-//!     Ok(Some(codec)) => codec,
-//!     _ => panic!(),
-//! };
-//!
-//! let data = vec![b'p', b'a', b'r', b'q', b'u', b'e', b't'];
-//! let mut compressed = vec![];
-//! codec.compress(&data[..], &mut compressed).unwrap();
-//!
-//! let mut output = vec![];
-//! codec.decompress(&compressed[..], &mut output).unwrap();
-//!
-//! assert_eq!(output, data);
-//! ```
+#[cfg_attr(
+    feature = "experimental",
+    doc = r##"
+# Example
 
+```no_run
+use parquet::{basic::Compression, compression::create_codec};
+
+let mut codec = match create_codec(Compression::SNAPPY) {
+ Ok(Some(codec)) => codec,
+ _ => panic!(),
+};
+
+let data = vec![b'p', b'a', b'r', b'q', b'u', b'e', b't'];
+let mut compressed = vec![];
+codec.compress(&data[..], &mut compressed).unwrap();
+
+let mut output = vec![];
+codec.decompress(&compressed[..], &mut output).unwrap();
+
+assert_eq!(output, data);
+```
+"##
+)]
 use crate::basic::Compression as CodecType;
 use crate::errors::{ParquetError, Result};
 
 /// Parquet compression codec interface.
-pub trait Codec {
+pub trait Codec: Send {
     /// Compresses data stored in slice `input_buf` and writes the compressed result
     /// to `output_buf`.
     /// Note that you'll need to call `clear()` before reusing the same `output_buf`

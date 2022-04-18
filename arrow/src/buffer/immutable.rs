@@ -21,12 +21,10 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use std::{convert::AsRef, usize};
 
-use crate::util::bit_chunk_iterator::BitChunks;
-use crate::{
-    bytes::{Bytes, Deallocation},
-    datatypes::ArrowNativeType,
-    ffi,
-};
+use crate::alloc::{Allocation, Deallocation};
+use crate::ffi::FFI_ArrowArray;
+use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
+use crate::{bytes::Bytes, datatypes::ArrowNativeType};
 
 use super::ops::bitwise_unary_op_helper;
 use super::MutableBuffer;
@@ -76,7 +74,7 @@ impl Buffer {
     /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
     pub unsafe fn from_raw_parts(ptr: NonNull<u8>, len: usize, capacity: usize) -> Self {
         assert!(len <= capacity);
-        Buffer::build_with_arguments(ptr, len, Deallocation::Native(capacity))
+        Buffer::build_with_arguments(ptr, len, Deallocation::Arrow(capacity))
     }
 
     /// Creates a buffer from an existing memory region (must already be byte-aligned), this
@@ -86,18 +84,41 @@ impl Buffer {
     ///
     /// * `ptr` - Pointer to raw parts
     /// * `len` - Length of raw parts in **bytes**
-    /// * `data` - An [ffi::FFI_ArrowArray] with the data
+    /// * `data` - An [crate::ffi::FFI_ArrowArray] with the data
     ///
     /// # Safety
     ///
     /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
     /// bytes and that the foreign deallocator frees the region.
+    #[deprecated(
+        note = "use from_custom_allocation instead which makes it clearer that the allocation is in fact owned"
+    )]
     pub unsafe fn from_unowned(
         ptr: NonNull<u8>,
         len: usize,
-        data: Arc<ffi::FFI_ArrowArray>,
+        data: Arc<FFI_ArrowArray>,
     ) -> Self {
-        Buffer::build_with_arguments(ptr, len, Deallocation::Foreign(data))
+        Self::from_custom_allocation(ptr, len, data)
+    }
+
+    /// Creates a buffer from an existing memory region. Ownership of the memory is tracked via reference counting
+    /// and the memory will be freed using the `drop` method of [crate::alloc::Allocation] when the reference count reaches zero.
+    ///
+    /// # Arguments
+    ///
+    /// * `ptr` - Pointer to raw parts
+    /// * `len` - Length of raw parts in **bytes**
+    /// * `owner` - A [crate::alloc::Allocation] which is responsible for freeing that data
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe as there is no guarantee that the given pointer is valid for `len` bytes
+    pub unsafe fn from_custom_allocation(
+        ptr: NonNull<u8>,
+        len: usize,
+        owner: Arc<dyn Allocation>,
+    ) -> Self {
+        Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner))
     }
 
     /// Auxiliary method to create a new Buffer
@@ -153,6 +174,7 @@ impl Buffer {
     ///
     /// Note that this should be used cautiously, and the returned pointer should not be
     /// stored anywhere, to avoid dangling pointers.
+    #[inline]
     pub fn as_ptr(&self) -> *const u8 {
         unsafe { self.data.ptr().as_ptr().add(self.offset) }
     }
@@ -204,11 +226,7 @@ impl Buffer {
     /// Returns the number of 1-bits in this buffer, starting from `offset` with `length` bits
     /// inspected. Note that both `offset` and `length` are measured in bits.
     pub fn count_set_bits_offset(&self, offset: usize, len: usize) -> usize {
-        let chunks = self.bit_chunks(offset, len);
-        let mut count = chunks.iter().map(|c| c.count_ones() as usize).sum();
-        count += chunks.remainder_bits().count_ones() as usize;
-
-        count
+        UnalignedBitChunk::new(self.as_slice(), offset, len).count_ones()
     }
 }
 
@@ -244,6 +262,8 @@ impl std::ops::Deref for Buffer {
 }
 
 unsafe impl Sync for Buffer {}
+// false positive, see https://github.com/apache/arrow-rs/pull/1169
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl Send for Buffer {}
 
 impl From<MutableBuffer> for Buffer {
@@ -322,6 +342,7 @@ impl<T: ArrowNativeType> FromIterator<T> for Buffer {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::thread;
 
     use super::*;
@@ -533,5 +554,31 @@ mod tests {
             4,
             Buffer::from(&[0b01101101, 0b10101010]).count_set_bits_offset(7, 9)
         );
+    }
+
+    #[test]
+    fn test_unwind_safe() {
+        fn assert_unwind_safe<T: RefUnwindSafe + UnwindSafe>() {}
+        assert_unwind_safe::<Buffer>()
+    }
+
+    #[test]
+    fn test_from_foreign_vec() {
+        let mut vector = vec![1_i32, 2, 3, 4, 5];
+        let buffer = unsafe {
+            Buffer::from_custom_allocation(
+                NonNull::new_unchecked(vector.as_mut_ptr() as *mut u8),
+                vector.len() * std::mem::size_of::<i32>(),
+                Arc::new(vector),
+            )
+        };
+
+        let slice = unsafe { buffer.typed_data::<i32>() };
+        assert_eq!(slice, &[1, 2, 3, 4, 5]);
+
+        let buffer = buffer.slice(std::mem::size_of::<i32>());
+
+        let slice = unsafe { buffer.typed_data::<i32>() };
+        assert_eq!(slice, &[2, 3, 4, 5]);
     }
 }

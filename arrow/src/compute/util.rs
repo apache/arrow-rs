@@ -18,7 +18,7 @@
 //! Common utilities for computation kernels.
 
 use crate::array::*;
-use crate::buffer::{buffer_bin_and, buffer_bin_or, Buffer};
+use crate::buffer::{buffer_bin_and, Buffer};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use num::{One, ToPrimitive, Zero};
@@ -48,40 +48,6 @@ pub(super) fn combine_option_bitmap(
             None => Ok(Some(l.bit_slice(left_offset_in_bits, len_in_bits))),
 
             Some(r) => Ok(Some(buffer_bin_and(
-                l,
-                left_offset_in_bits,
-                r,
-                right_offset_in_bits,
-                len_in_bits,
-            ))),
-        },
-    }
-}
-
-/// Compares the null bitmaps of two arrays using a bitwise `or` operation.
-///
-/// This function is useful when implementing operations on higher level arrays.
-#[allow(clippy::unnecessary_wraps)]
-pub(super) fn compare_option_bitmap(
-    left_data: &ArrayData,
-    right_data: &ArrayData,
-    len_in_bits: usize,
-) -> Result<Option<Buffer>> {
-    let left_offset_in_bits = left_data.offset();
-    let right_offset_in_bits = right_data.offset();
-
-    let left = left_data.null_buffer();
-    let right = right_data.null_buffer();
-
-    match left {
-        None => match right {
-            None => Ok(None),
-            Some(r) => Ok(Some(r.bit_slice(right_offset_in_bits, len_in_bits))),
-        },
-        Some(l) => match right {
-            None => Ok(Some(l.bit_slice(left_offset_in_bits, len_in_bits))),
-
-            Some(r) => Ok(Some(buffer_bin_or(
                 l,
                 left_offset_in_bits,
                 r,
@@ -175,9 +141,43 @@ pub(super) mod tests {
 
     use std::sync::Arc;
 
+    use crate::buffer::buffer_bin_or;
     use crate::datatypes::DataType;
     use crate::util::bit_util;
     use crate::{array::ArrayData, buffer::MutableBuffer};
+
+    /// Compares the null bitmaps of two arrays using a bitwise `or` operation.
+    ///
+    /// This function is useful when implementing operations on higher level arrays.
+    pub(super) fn compare_option_bitmap(
+        left_data: &ArrayData,
+        right_data: &ArrayData,
+        len_in_bits: usize,
+    ) -> Result<Option<Buffer>> {
+        let left_offset_in_bits = left_data.offset();
+        let right_offset_in_bits = right_data.offset();
+
+        let left = left_data.null_buffer();
+        let right = right_data.null_buffer();
+
+        match left {
+            None => match right {
+                None => Ok(None),
+                Some(r) => Ok(Some(r.bit_slice(right_offset_in_bits, len_in_bits))),
+            },
+            Some(l) => match right {
+                None => Ok(Some(l.bit_slice(left_offset_in_bits, len_in_bits))),
+
+                Some(r) => Ok(Some(buffer_bin_or(
+                    l,
+                    left_offset_in_bits,
+                    r,
+                    right_offset_in_bits,
+                    len_in_bits,
+                ))),
+            },
+        }
+    }
 
     fn make_data_with_null_bit_buffer(
         len: usize,
@@ -341,27 +341,6 @@ pub(super) mod tests {
             .unwrap();
 
         GenericListArray::<S>::from(list_data)
-    }
-
-    pub(crate) fn build_fixed_size_list<T>(
-        data: Vec<Option<Vec<T::Native>>>,
-        length: <Int32Type as ArrowPrimitiveType>::Native,
-    ) -> FixedSizeListArray
-    where
-        T: ArrowPrimitiveType,
-        PrimitiveArray<T>: From<Vec<Option<T::Native>>>,
-    {
-        let data = data
-            .into_iter()
-            .map(|subarray| {
-                subarray.map(|item| {
-                    item.into_iter()
-                        .map(Some)
-                        .collect::<Vec<Option<T::Native>>>()
-                })
-            })
-            .collect();
-        build_fixed_size_list_nullable(data, length)
     }
 
     pub(crate) fn build_fixed_size_list_nullable<T>(

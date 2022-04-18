@@ -177,13 +177,13 @@ impl<P: Iterator<Item = Page>> InMemoryPageReader<P> {
     }
 }
 
-impl<P: Iterator<Item = Page>> PageReader for InMemoryPageReader<P> {
+impl<P: Iterator<Item = Page> + Send> PageReader for InMemoryPageReader<P> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         Ok(self.page_iter.next())
     }
 }
 
-impl<P: Iterator<Item = Page>> Iterator for InMemoryPageReader<P> {
+impl<P: Iterator<Item = Page> + Send> Iterator for InMemoryPageReader<P> {
     type Item = Result<Page>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -223,7 +223,7 @@ impl<I: Iterator<Item = Vec<Page>>> Iterator for InMemoryPageIterator<I> {
     }
 }
 
-impl<I: Iterator<Item = Vec<Page>>> PageIterator for InMemoryPageIterator<I> {
+impl<I: Iterator<Item = Vec<Page>> + Send> PageIterator for InMemoryPageIterator<I> {
     fn schema(&mut self) -> Result<SchemaDescPtr> {
         Ok(self.schema.clone())
     }

@@ -25,7 +25,9 @@ use std::io::{BufWriter, Write};
 
 use flatbuffers::FlatBufferBuilder;
 
-use crate::array::{as_struct_array, as_union_array, ArrayData, ArrayRef};
+use crate::array::{
+    as_list_array, as_struct_array, as_union_array, make_array, ArrayData, ArrayRef,
+};
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
@@ -36,7 +38,7 @@ use crate::util::bit_util;
 use ipc::CONTINUATION_MARKER;
 
 /// IPC write options used to control the behaviour of the writer
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IpcWriteOptions {
     /// Write padding after memory buffers to this multiple of bytes.
     /// Generally 8 or 64, defaults to 8
@@ -137,15 +139,14 @@ impl IpcDataGenerator {
         }
     }
 
-    fn encode_dictionaries(
+    fn _encode_dictionaries(
         &self,
-        field: &Field,
         column: &ArrayRef,
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
     ) -> Result<()> {
-        // TODO: Handle other nested types (map, list, etc)
+        // TODO: Handle other nested types (map, etc)
         match column.data_type() {
             DataType::Struct(fields) => {
                 let s = as_struct_array(column);
@@ -159,7 +160,17 @@ impl IpcDataGenerator {
                     )?;
                 }
             }
-            DataType::Union(fields) => {
+            DataType::List(field) => {
+                let list = as_list_array(column);
+                self.encode_dictionaries(
+                    field,
+                    &list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
+            DataType::Union(fields, _) => {
                 let union = as_union_array(column);
                 for (field, ref column) in fields
                     .iter()
@@ -175,12 +186,36 @@ impl IpcDataGenerator {
                     )?;
                 }
             }
+            _ => (),
+        }
+
+        Ok(())
+    }
+
+    fn encode_dictionaries(
+        &self,
+        field: &Field,
+        column: &ArrayRef,
+        encoded_dictionaries: &mut Vec<EncodedData>,
+        dictionary_tracker: &mut DictionaryTracker,
+        write_options: &IpcWriteOptions,
+    ) -> Result<()> {
+        match column.data_type() {
             DataType::Dictionary(_key_type, _value_type) => {
                 let dict_id = field
                     .dict_id()
                     .expect("All Dictionary types have `dict_id`");
                 let dict_data = column.data();
                 let dict_values = &dict_data.child_data()[0];
+
+                let values = make_array(dict_data.child_data()[0].clone());
+
+                self._encode_dictionaries(
+                    &values,
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
 
                 let emit = dictionary_tracker.insert(dict_id, column)?;
 
@@ -192,7 +227,12 @@ impl IpcDataGenerator {
                     ));
                 }
             }
-            _ => (),
+            _ => self._encode_dictionaries(
+                column,
+                encoded_dictionaries,
+                dictionary_tracker,
+                write_options,
+            )?,
         }
 
         Ok(())
@@ -205,7 +245,7 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
     ) -> Result<(Vec<EncodedData>, EncodedData)> {
         let schema = batch.schema();
-        let mut encoded_dictionaries = Vec::with_capacity(schema.fields().len());
+        let mut encoded_dictionaries = Vec::with_capacity(schema.all_fields().len());
 
         for (i, field) in schema.fields().iter().enumerate() {
             let column = batch.column(i);
@@ -515,6 +555,18 @@ impl<W: Write> FileWriter<W> {
 
         Ok(())
     }
+
+    /// Unwraps the BufWriter housed in FileWriter.writer, returning the underlying
+    /// writer
+    ///
+    /// The buffer is flushed and the FileWriter is finished before returning the
+    /// writer.
+    pub fn into_inner(mut self) -> Result<W> {
+        if !self.finished {
+            self.finish()?;
+        }
+        self.writer.into_inner().map_err(ArrowError::from)
+    }
 }
 
 pub struct StreamWriter<W: Write> {
@@ -522,8 +574,6 @@ pub struct StreamWriter<W: Write> {
     writer: BufWriter<W>,
     /// IPC write options
     write_options: IpcWriteOptions,
-    /// A reference to the schema, used in validating record batches
-    schema: Schema,
     /// Whether the writer footer has been written, and the writer is finished
     finished: bool,
     /// Keeps track of dictionaries that have been written
@@ -552,7 +602,6 @@ impl<W: Write> StreamWriter<W> {
         Ok(Self {
             writer,
             write_options,
-            schema: schema.clone(),
             finished: false,
             dictionary_tracker: DictionaryTracker::new(false),
             data_gen,
@@ -872,7 +921,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}.arrow_file", "arrow"))
                     .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
             while let Some(Ok(read_batch)) = reader.next() {
                 read_batch
                     .columns()
@@ -920,7 +969,7 @@ mod tests {
 
         {
             let file = File::open(&file_name).unwrap();
-            let reader = FileReader::try_new(file).unwrap();
+            let reader = FileReader::try_new(file, None).unwrap();
             reader.for_each(|maybe_batch| {
                 maybe_batch
                     .unwrap()
@@ -990,7 +1039,7 @@ mod tests {
             ))
             .unwrap();
 
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read and rewrite the file to a temp location
             {
@@ -1011,7 +1060,7 @@ mod tests {
                 version, path
             ))
             .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1042,7 +1091,7 @@ mod tests {
             ))
             .unwrap();
 
-            let reader = StreamReader::try_new(file).unwrap();
+            let reader = StreamReader::try_new(file, None).unwrap();
 
             // read and rewrite the stream to a temp location
             {
@@ -1061,7 +1110,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
                     .unwrap();
-            let mut reader = StreamReader::try_new(file).unwrap();
+            let mut reader = StreamReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1099,7 +1148,7 @@ mod tests {
             ))
             .unwrap();
 
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read and rewrite the file to a temp location
             {
@@ -1125,7 +1174,7 @@ mod tests {
                 version, path
             ))
             .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1163,7 +1212,7 @@ mod tests {
             ))
             .unwrap();
 
-            let reader = StreamReader::try_new(file).unwrap();
+            let reader = StreamReader::try_new(file, None).unwrap();
 
             // read and rewrite the stream to a temp location
             {
@@ -1186,7 +1235,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
                     .unwrap();
-            let mut reader = StreamReader::try_new(file).unwrap();
+            let mut reader = StreamReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);

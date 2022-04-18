@@ -15,17 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// This file is named like this so that it is the last one to be tested
-// It contains no content, it has a single test that verifies that there is no memory leak
-// on all unit-tests
+#[macro_use]
+extern crate criterion;
+use criterion::Criterion;
 
-#[cfg(feature = "memory-check")]
-mod tests {
-    use crate::memory::ALLOCATIONS;
+extern crate arrow;
 
-    // verify that there is no data un-allocated
-    #[test]
-    fn test_memory_check() {
-        unsafe { assert_eq!(ALLOCATIONS.load(std::sync::atomic::Ordering::SeqCst), 0) }
-    }
+use arrow::array::*;
+use arrow::compute::kernels::substring::substring;
+use arrow::util::bench_util::*;
+
+fn bench_substring(arr: &StringArray, start: i64, length: usize) {
+    substring(criterion::black_box(arr), start, Some(length as u64)).unwrap();
 }
+
+fn add_benchmark(c: &mut Criterion) {
+    let size = 65536;
+    let str_len = 1000;
+
+    let arr_string = create_string_array_with_len::<i32>(size, 0.0, str_len);
+    let start = 0;
+
+    c.bench_function("substring", |b| {
+        b.iter(|| bench_substring(&arr_string, start, str_len))
+    });
+}
+
+criterion_group!(benches, add_benchmark);
+criterion_main!(benches);

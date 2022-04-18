@@ -25,6 +25,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem;
+use std::ops::Range;
 use std::sync::Arc;
 
 use crate::array::*;
@@ -310,7 +311,7 @@ impl BooleanBufferBuilder {
     #[inline]
     pub fn new(capacity: usize) -> Self {
         let byte_capacity = bit_util::ceil(capacity, 8);
-        let buffer = MutableBuffer::from_len_zeroed(byte_capacity);
+        let buffer = MutableBuffer::new(byte_capacity);
         Self { buffer, len: 0 }
     }
 
@@ -366,6 +367,15 @@ impl BooleanBufferBuilder {
         }
     }
 
+    /// Resizes the buffer, either truncating its contents (with no change in capacity), or
+    /// growing it (potentially reallocating it) and writing `false` in the newly available bits.
+    #[inline]
+    pub fn resize(&mut self, len: usize) {
+        let len_bytes = bit_util::ceil(len, 8);
+        self.buffer.resize(len_bytes, 0);
+        self.len = len;
+    }
+
     #[inline]
     pub fn append(&mut self, v: bool) {
         self.advance(1);
@@ -396,6 +406,31 @@ impl BooleanBufferBuilder {
                 unsafe { bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i) }
             }
         }
+    }
+
+    /// Append `range` bits from `to_set`
+    ///
+    /// `to_set` is a slice of bits packed LSB-first into `[u8]`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `to_set` does not contain `ceil(range.end / 8)` bytes
+    pub fn append_packed_range(&mut self, range: Range<usize>, to_set: &[u8]) {
+        let offset_write = self.len;
+        let len = range.end - range.start;
+        self.advance(len);
+        crate::util::bit_mask::set_bits(
+            self.buffer.as_slice_mut(),
+            to_set,
+            offset_write,
+            range.start,
+            len,
+        );
+    }
+
+    /// Returns the packed bits
+    pub fn as_slice(&self) -> &[u8] {
+        self.buffer.as_slice()
     }
 
     #[inline]
@@ -1118,87 +1153,6 @@ pub struct FixedSizeBinaryBuilder {
     builder: FixedSizeListBuilder<UInt8Builder>,
 }
 
-pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
-    9,
-    99,
-    999,
-    9999,
-    99999,
-    999999,
-    9999999,
-    99999999,
-    999999999,
-    9999999999,
-    99999999999,
-    999999999999,
-    9999999999999,
-    99999999999999,
-    999999999999999,
-    9999999999999999,
-    99999999999999999,
-    999999999999999999,
-    9999999999999999999,
-    99999999999999999999,
-    999999999999999999999,
-    9999999999999999999999,
-    99999999999999999999999,
-    999999999999999999999999,
-    9999999999999999999999999,
-    99999999999999999999999999,
-    999999999999999999999999999,
-    9999999999999999999999999999,
-    99999999999999999999999999999,
-    999999999999999999999999999999,
-    9999999999999999999999999999999,
-    99999999999999999999999999999999,
-    999999999999999999999999999999999,
-    9999999999999999999999999999999999,
-    99999999999999999999999999999999999,
-    999999999999999999999999999999999999,
-    9999999999999999999999999999999999999,
-    170141183460469231731687303715884105727,
-];
-pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
-    -9,
-    -99,
-    -999,
-    -9999,
-    -99999,
-    -999999,
-    -9999999,
-    -99999999,
-    -999999999,
-    -9999999999,
-    -99999999999,
-    -999999999999,
-    -9999999999999,
-    -99999999999999,
-    -999999999999999,
-    -9999999999999999,
-    -99999999999999999,
-    -999999999999999999,
-    -9999999999999999999,
-    -99999999999999999999,
-    -999999999999999999999,
-    -9999999999999999999999,
-    -99999999999999999999999,
-    -999999999999999999999999,
-    -9999999999999999999999999,
-    -99999999999999999999999999,
-    -999999999999999999999999999,
-    -9999999999999999999999999999,
-    -99999999999999999999999999999,
-    -999999999999999999999999999999,
-    -9999999999999999999999999999999,
-    -99999999999999999999999999999999,
-    -999999999999999999999999999999999,
-    -9999999999999999999999999999999999,
-    -99999999999999999999999999999999999,
-    -999999999999999999999999999999999999,
-    -9999999999999999999999999999999999999,
-    -170141183460469231731687303715884105728,
-];
-
 ///
 /// Array Builder for [`DecimalArray`]
 ///
@@ -1512,14 +1466,7 @@ impl DecimalBuilder {
     /// distinct array element.
     #[inline]
     pub fn append_value(&mut self, value: i128) -> Result<()> {
-        if value > MAX_DECIMAL_FOR_EACH_PRECISION[self.precision - 1]
-            || value < MIN_DECIMAL_FOR_EACH_PRECISION[self.precision - 1]
-        {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "The value of {} i128 is not compatible with Decimal({},{})",
-                value, self.precision, self.scale
-            )));
-        }
+        let value = validate_decimal_precision(value, self.precision)?;
         let value_as_bytes = Self::from_i128_to_fixed_size_bytes(
             value,
             self.builder.value_length() as usize,
@@ -1686,6 +1633,9 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Interval(IntervalUnit::DayTime) => {
             Box::new(IntervalDayTimeBuilder::new(capacity))
         }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            Box::new(IntervalMonthDayNanoBuilder::new(capacity))
+        }
         DataType::Duration(TimeUnit::Second) => {
             Box::new(DurationSecondBuilder::new(capacity))
         }
@@ -1801,6 +1751,7 @@ impl Default for MapFieldNames {
     }
 }
 
+#[allow(dead_code)]
 impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     pub fn new(
         field_names: Option<MapFieldNames>,
@@ -2031,6 +1982,7 @@ impl FieldData {
             | DataType::Time64(_)
             | DataType::Interval(IntervalUnit::DayTime)
             | DataType::Duration(_) => self.append_null::<Int64Type>()?,
+            DataType::Interval(IntervalUnit::MonthDayNano) => self.append_null::<IntervalMonthDayNanoType>()?,
             DataType::UInt8 => self.append_null::<UInt8Type>()?,
             DataType::UInt16 => self.append_null::<UInt16Type>()?,
             DataType::UInt32 => self.append_null::<UInt32Type>()?,
@@ -2139,12 +2091,16 @@ impl UnionBuilder {
 
         self.type_id_builder.append(i8::default());
 
-        // Handle sparse union
-        if self.value_offset_builder.is_none() {
-            for (_, fd) in self.fields.iter_mut() {
-                fd.append_null_dynamic()?;
+        match &mut self.value_offset_builder {
+            // Handle dense union
+            Some(value_offset_builder) => value_offset_builder.append(i32::default()),
+            // Handle sparse union
+            None => {
+                for (_, fd) in self.fields.iter_mut() {
+                    fd.append_null_dynamic()?;
+                }
             }
-        }
+        };
         self.len += 1;
         Ok(())
     }
@@ -2161,7 +2117,10 @@ impl UnionBuilder {
         let mut field_data = match self.fields.remove(&type_name) {
             Some(data) => data,
             None => match self.value_offset_builder {
-                Some(_) => FieldData::new(self.fields.len() as i8, T::DATA_TYPE, None),
+                Some(_) => {
+                    // For Dense Union, we don't build bitmap in individual field
+                    FieldData::new(self.fields.len() as i8, T::DATA_TYPE, None)
+                }
                 None => {
                     let mut fd = FieldData::new(
                         self.fields.len() as i8,
@@ -2713,7 +2672,8 @@ mod tests {
         let buffer = b.finish();
         assert_eq!(1, buffer.len());
 
-        let mut b = BooleanBufferBuilder::new(4);
+        // Overallocate capacity
+        let mut b = BooleanBufferBuilder::new(8);
         b.append_slice(&[false, true, false, true]);
         assert_eq!(4, b.len());
         assert_eq!(512, b.capacity());
@@ -2835,6 +2795,42 @@ mod tests {
     }
 
     #[test]
+    fn test_bool_buffer_fuzz() {
+        use rand::prelude::*;
+
+        let mut buffer = BooleanBufferBuilder::new(12);
+        let mut all_bools = vec![];
+        let mut rng = rand::thread_rng();
+
+        let src_len = 32;
+        let (src, compacted_src) = {
+            let src: Vec<_> = std::iter::from_fn(|| Some(rng.next_u32() & 1 == 0))
+                .take(src_len)
+                .collect();
+
+            let mut compacted_src = BooleanBufferBuilder::new(src_len);
+            compacted_src.append_slice(&src);
+            (src, compacted_src.finish())
+        };
+
+        for _ in 0..100 {
+            let a = rng.next_u32() as usize % src_len;
+            let b = rng.next_u32() as usize % src_len;
+
+            let start = a.min(b);
+            let end = a.max(b);
+
+            buffer.append_packed_range(start..end, compacted_src.as_slice());
+            all_bools.extend_from_slice(&src[start..end]);
+        }
+
+        let mut compacted = BooleanBufferBuilder::new(all_bools.len());
+        compacted.append_slice(&all_bools);
+
+        assert_eq!(buffer.finish(), compacted.finish())
+    }
+
+    #[test]
     fn test_boolean_array_builder_append_slice() {
         let arr1 =
             BooleanArray::from(vec![Some(true), Some(false), None, None, Some(false)]);
@@ -2858,6 +2854,29 @@ mod tests {
         let arr2 = builder.finish();
 
         assert_eq!(arr1, arr2);
+    }
+
+    #[test]
+    fn test_boolean_array_builder_resize() {
+        let mut builder = BooleanBufferBuilder::new(20);
+        builder.append_n(4, true);
+        builder.append_n(7, false);
+        builder.append_n(2, true);
+        builder.resize(20);
+
+        assert_eq!(builder.len, 20);
+        assert_eq!(
+            builder.buffer.as_slice(),
+            &[0b00001111, 0b00011000, 0b00000000]
+        );
+
+        builder.resize(5);
+        assert_eq!(builder.len, 5);
+        assert_eq!(builder.buffer.as_slice(), &[0b00001111]);
+
+        builder.append_n(4, true);
+        assert_eq!(builder.len, 9);
+        assert_eq!(builder.buffer.as_slice(), &[0b11101111, 0b00000001]);
     }
 
     #[test]
@@ -3542,7 +3561,7 @@ mod tests {
         assert_eq!(4, struct_data.len());
         assert_eq!(1, struct_data.null_count());
         assert_eq!(
-            &Some(Bitmap::from(Buffer::from(&[11_u8]))),
+            Some(&Bitmap::from(Buffer::from(&[11_u8]))),
             struct_data.null_bitmap()
         );
 
@@ -3656,7 +3675,7 @@ mod tests {
         assert_eq!(3, map_data.len());
         assert_eq!(1, map_data.null_count());
         assert_eq!(
-            &Some(Bitmap::from(Buffer::from(&[5_u8]))),
+            Some(&Bitmap::from(Buffer::from(&[5_u8]))),
             map_data.null_bitmap()
         );
 
@@ -3685,12 +3704,14 @@ mod tests {
 
     #[test]
     fn test_struct_array_builder_from_schema() {
-        let mut fields = Vec::new();
-        fields.push(Field::new("f1", DataType::Float32, false));
-        fields.push(Field::new("f2", DataType::Utf8, false));
-        let mut sub_fields = Vec::new();
-        sub_fields.push(Field::new("g1", DataType::Int32, false));
-        sub_fields.push(Field::new("g2", DataType::Boolean, false));
+        let mut fields = vec![
+            Field::new("f1", DataType::Float32, false),
+            Field::new("f2", DataType::Utf8, false),
+        ];
+        let sub_fields = vec![
+            Field::new("g1", DataType::Int32, false),
+            Field::new("g2", DataType::Boolean, false),
+        ];
         let struct_type = DataType::Struct(sub_fields);
         fields.push(Field::new("f3", struct_type, false));
 
@@ -3706,8 +3727,7 @@ mod tests {
         expected = "Data type List(Field { name: \"item\", data_type: Int64, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }) is not currently supported"
     )]
     fn test_struct_array_builder_from_schema_unsupported_type() {
-        let mut fields = Vec::new();
-        fields.push(Field::new("f1", DataType::Int16, false));
+        let mut fields = vec![Field::new("f1", DataType::Int16, false)];
         let list_type =
             DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
         fields.push(Field::new("f2", list_type, false));

@@ -188,7 +188,7 @@ impl<W: ParquetWriter> SerializedFileWriter<W> {
                 .iter()
                 .map(|v| v.to_thrift())
                 .collect(),
-            key_value_metadata: self.props.key_value_metadata().to_owned(),
+            key_value_metadata: self.props.key_value_metadata().cloned(),
             created_by: Some(self.props.created_by().to_owned()),
             column_orders: None,
             encryption_algorithm: None,
@@ -550,11 +550,11 @@ mod tests {
         statistics::{from_thrift, to_thrift, Statistics},
     };
     use crate::record::RowAccessor;
-    use crate::util::{memory::ByteBufferPtr, test_common::get_temp_file};
+    use crate::util::memory::ByteBufferPtr;
 
     #[test]
     fn test_file_writer_error_after_close() {
-        let file = get_temp_file("test_file_writer_error_after_close", &[]);
+        let file = tempfile::tempfile().unwrap();
         let schema = Arc::new(types::Type::group_type_builder("schema").build().unwrap());
         let props = Arc::new(WriterProperties::builder().build());
         let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
@@ -577,7 +577,7 @@ mod tests {
 
     #[test]
     fn test_row_group_writer_error_after_close() {
-        let file = get_temp_file("test_file_writer_row_group_error_after_close", &[]);
+        let file = tempfile::tempfile().unwrap();
         let schema = Arc::new(types::Type::group_type_builder("schema").build().unwrap());
         let props = Arc::new(WriterProperties::builder().build());
         let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
@@ -596,8 +596,7 @@ mod tests {
 
     #[test]
     fn test_row_group_writer_error_not_all_columns_written() {
-        let file =
-            get_temp_file("test_row_group_writer_error_not_all_columns_written", &[]);
+        let file = tempfile::tempfile().unwrap();
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
                 .with_fields(&mut vec![Arc::new(
@@ -623,7 +622,7 @@ mod tests {
 
     #[test]
     fn test_row_group_writer_num_records_mismatch() {
-        let file = get_temp_file("test_row_group_writer_num_records_mismatch", &[]);
+        let file = tempfile::tempfile().unwrap();
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
                 .with_fields(&mut vec![
@@ -670,7 +669,7 @@ mod tests {
 
     #[test]
     fn test_file_writer_empty_file() {
-        let file = get_temp_file("test_file_writer_write_empty_file", &[]);
+        let file = tempfile::tempfile().unwrap();
 
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
@@ -693,7 +692,7 @@ mod tests {
 
     #[test]
     fn test_file_writer_with_metadata() {
-        let file = get_temp_file("test_file_writer_write_with_metadata", &[]);
+        let file = tempfile::tempfile().unwrap();
 
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
@@ -732,7 +731,7 @@ mod tests {
 
     #[test]
     fn test_file_writer_v2_with_metadata() {
-        let file = get_temp_file("test_file_writer_v2_write_with_metadata", &[]);
+        let file = tempfile::tempfile().unwrap();
         let field_logical_type = Some(LogicalType::INTEGER(IntType {
             bit_width: 8,
             is_signed: false,
@@ -785,19 +784,19 @@ mod tests {
 
     #[test]
     fn test_file_writer_empty_row_groups() {
-        let file = get_temp_file("test_file_writer_write_empty_row_groups", &[]);
+        let file = tempfile::tempfile().unwrap();
         test_file_roundtrip(file, vec![]);
     }
 
     #[test]
     fn test_file_writer_single_row_group() {
-        let file = get_temp_file("test_file_writer_write_single_row_group", &[]);
+        let file = tempfile::tempfile().unwrap();
         test_file_roundtrip(file, vec![vec![1, 2, 3, 4, 5]]);
     }
 
     #[test]
     fn test_file_writer_multiple_row_groups() {
-        let file = get_temp_file("test_file_writer_write_multiple_row_groups", &[]);
+        let file = tempfile::tempfile().unwrap();
         test_file_roundtrip(
             file,
             vec![
@@ -811,7 +810,7 @@ mod tests {
 
     #[test]
     fn test_file_writer_multiple_large_row_groups() {
-        let file = get_temp_file("test_file_writer_multiple_large_row_groups", &[]);
+        let file = tempfile::tempfile().unwrap();
         test_file_roundtrip(
             file,
             vec![vec![123; 1024], vec![124; 1000], vec![125; 15], vec![]],
@@ -1067,13 +1066,13 @@ mod tests {
             rows,
             "row count in metadata not equal to number of rows written"
         );
-        for i in 0..reader.num_row_groups() {
+        for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
             let row_group_reader = reader.get_row_group(i).unwrap();
             let iter = row_group_reader.get_row_iter(None).unwrap();
             let res = iter
                 .map(|elem| elem.get_int(0).unwrap())
                 .collect::<Vec<i32>>();
-            assert_eq!(res, data[i]);
+            assert_eq!(res, *item);
         }
     }
 
@@ -1154,13 +1153,13 @@ mod tests {
             rows,
             "row count in metadata not equal to number of rows written"
         );
-        for i in 0..reader.num_row_groups() {
+        for (i, item) in data.iter().enumerate().take(reader.num_row_groups()) {
             let row_group_reader = reader.get_row_group(i).unwrap();
             let iter = row_group_reader.get_row_iter(None).unwrap();
             let res = iter
                 .map(|elem| elem.get_int(0).unwrap())
                 .collect::<Vec<i32>>();
-            assert_eq!(res, data[i]);
+            assert_eq!(res, *item);
         }
     }
 }

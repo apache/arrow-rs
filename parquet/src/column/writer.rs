@@ -270,8 +270,8 @@ impl<T: DataType> ColumnWriterImpl<T> {
         values: &[T::T],
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
-        min: &Option<T::T>,
-        max: &Option<T::T>,
+        min: Option<&T::T>,
+        max: Option<&T::T>,
         null_count: Option<u64>,
         distinct_count: Option<u64>,
     ) -> Result<usize> {
@@ -376,9 +376,7 @@ impl<T: DataType> ColumnWriterImpl<T> {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) -> Result<usize> {
-        self.write_batch_internal(
-            values, def_levels, rep_levels, &None, &None, None, None,
-        )
+        self.write_batch_internal(values, def_levels, rep_levels, None, None, None, None)
     }
 
     /// Writer may optionally provide pre-calculated statistics for this batch, in which case we do
@@ -389,8 +387,8 @@ impl<T: DataType> ColumnWriterImpl<T> {
         values: &[T::T],
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
-        min: &Option<T::T>,
-        max: &Option<T::T>,
+        min: Option<&T::T>,
+        max: Option<&T::T>,
         nulls_count: Option<u64>,
         distinct_count: Option<u64>,
     ) -> Result<usize> {
@@ -567,6 +565,14 @@ impl<T: DataType> ColumnWriterImpl<T> {
     /// Returns true if there is enough data for a data page, false otherwise.
     #[inline]
     fn should_add_data_page(&self) -> bool {
+        // This is necessary in the event of a much larger dictionary size than page size
+        //
+        // In such a scenario the dictionary decoder may return an estimated encoded
+        // size in excess of the page size limit, even when there are no buffered values
+        if self.num_buffered_values == 0 {
+            return false;
+        }
+
         match self.dict_encoder {
             Some(ref encoder) => {
                 encoder.estimated_data_encoded_size() >= self.props.data_pagesize_limit()
@@ -1058,7 +1064,7 @@ mod tests {
     use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
     use crate::util::{
         io::{FileSink, FileSource},
-        test_common::{get_temp_file, random_numbers_range},
+        test_common::random_numbers_range,
     };
 
     use super::*;
@@ -1479,8 +1485,8 @@ mod tests {
                 &[1, 2, 3, 4],
                 None,
                 None,
-                &Some(-17),
-                &Some(9000),
+                Some(&-17),
+                Some(&9000),
                 Some(21),
                 Some(55),
             )
@@ -1516,14 +1522,13 @@ mod tests {
     #[test]
     fn test_column_writer_empty_column_roundtrip() {
         let props = WriterProperties::builder().build();
-        column_roundtrip::<Int32Type>("test_col_writer_rnd_1", props, &[], None, None);
+        column_roundtrip::<Int32Type>(props, &[], None, None);
     }
 
     #[test]
     fn test_column_writer_non_nullable_values_roundtrip() {
         let props = WriterProperties::builder().build();
         column_roundtrip_random::<Int32Type>(
-            "test_col_writer_rnd_2",
             props,
             1024,
             std::i32::MIN,
@@ -1537,7 +1542,6 @@ mod tests {
     fn test_column_writer_nullable_non_repeated_values_roundtrip() {
         let props = WriterProperties::builder().build();
         column_roundtrip_random::<Int32Type>(
-            "test_column_writer_nullable_non_repeated_values_roundtrip",
             props,
             1024,
             std::i32::MIN,
@@ -1551,7 +1555,6 @@ mod tests {
     fn test_column_writer_nullable_repeated_values_roundtrip() {
         let props = WriterProperties::builder().build();
         column_roundtrip_random::<Int32Type>(
-            "test_col_writer_rnd_3",
             props,
             1024,
             std::i32::MIN,
@@ -1568,7 +1571,6 @@ mod tests {
             .set_data_pagesize_limit(32)
             .build();
         column_roundtrip_random::<Int32Type>(
-            "test_col_writer_rnd_4",
             props,
             1024,
             std::i32::MIN,
@@ -1584,7 +1586,6 @@ mod tests {
             let props = WriterProperties::builder().set_write_batch_size(*i).build();
 
             column_roundtrip_random::<Int32Type>(
-                "test_col_writer_rnd_5",
                 props,
                 1024,
                 std::i32::MIN,
@@ -1602,7 +1603,6 @@ mod tests {
             .set_dictionary_enabled(false)
             .build();
         column_roundtrip_random::<Int32Type>(
-            "test_col_writer_rnd_6",
             props,
             1024,
             std::i32::MIN,
@@ -1619,7 +1619,6 @@ mod tests {
             .set_dictionary_enabled(false)
             .build();
         column_roundtrip_random::<Int32Type>(
-            "test_col_writer_rnd_7",
             props,
             1024,
             std::i32::MIN,
@@ -1636,7 +1635,6 @@ mod tests {
             .set_compression(Compression::SNAPPY)
             .build();
         column_roundtrip_random::<Int32Type>(
-            "test_col_writer_rnd_8",
             props,
             2048,
             std::i32::MIN,
@@ -1653,7 +1651,6 @@ mod tests {
             .set_compression(Compression::SNAPPY)
             .build();
         column_roundtrip_random::<Int32Type>(
-            "test_col_writer_rnd_9",
             props,
             2048,
             std::i32::MIN,
@@ -1667,7 +1664,7 @@ mod tests {
     fn test_column_writer_add_data_pages_with_dict() {
         // ARROW-5129: Test verifies that we add data page in case of dictionary encoding
         // and no fallback occurred so far.
-        let file = get_temp_file("test_column_writer_add_data_pages_with_dict", &[]);
+        let file = tempfile::tempfile().unwrap();
         let sink = FileSink::new(&file);
         let page_writer = Box::new(SerializedPageWriter::new(sink));
         let props = Arc::new(
@@ -1894,7 +1891,6 @@ mod tests {
     /// `max_size` is maximum number of values or levels (if `max_def_level` > 0) to write
     /// for a column.
     fn column_roundtrip_random<T: DataType>(
-        file_name: &str,
         props: WriterProperties,
         max_size: usize,
         min_value: T::T,
@@ -1931,18 +1927,17 @@ mod tests {
         let mut values: Vec<T::T> = Vec::new();
         random_numbers_range(num_values, min_value, max_value, &mut values);
 
-        column_roundtrip::<T>(file_name, props, &values[..], def_levels, rep_levels);
+        column_roundtrip::<T>(props, &values[..], def_levels, rep_levels);
     }
 
     /// Performs write-read roundtrip and asserts written values and levels.
-    fn column_roundtrip<'a, T: DataType>(
-        file_name: &'a str,
+    fn column_roundtrip<T: DataType>(
         props: WriterProperties,
         values: &[T::T],
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) {
-        let file = get_temp_file(file_name, &[]);
+        let file = tempfile::tempfile().unwrap();
         let sink = FileSink::new(&file);
         let page_writer = Box::new(SerializedPageWriter::new(sink));
 

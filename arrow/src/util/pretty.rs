@@ -74,7 +74,7 @@ fn create_table(results: &[RecordBatch]) -> Result<Table> {
             let mut cells = Vec::new();
             for col in 0..batch.num_columns() {
                 let column = batch.column(col);
-                cells.push(Cell::new(&array_value_to_string(&column, row)?));
+                cells.push(Cell::new(&array_value_to_string(column, row)?));
             }
             table.add_row(cells);
         }
@@ -96,7 +96,7 @@ fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
 
     for col in columns {
         for row in 0..col.len() {
-            let cells = vec![Cell::new(&array_value_to_string(&col, row)?)];
+            let cells = vec![Cell::new(&array_value_to_string(col, row)?)];
             table.add_row(cells);
         }
     }
@@ -108,19 +108,22 @@ fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
 mod tests {
     use crate::{
         array::{
-            self, new_null_array, Array, Date32Array, Date64Array, PrimitiveBuilder,
-            StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
-            Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-            Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+            self, new_null_array, Array, Date32Array, Date64Array,
+            FixedSizeBinaryBuilder, Float16Array, PrimitiveBuilder, StringArray,
+            StringBuilder, StringDictionaryBuilder, StructArray, Time32MillisecondArray,
+            Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+            TimestampMicrosecondArray, TimestampMillisecondArray,
             TimestampNanosecondArray, TimestampSecondArray,
         },
         datatypes::{DataType, Field, Int32Type, Schema},
     };
 
     use super::*;
-    use crate::array::{DecimalBuilder, FixedSizeListBuilder, Int32Array};
+    use crate::array::{DecimalArray, FixedSizeListBuilder, Int32Array};
     use std::fmt::Write;
     use std::sync::Arc;
+
+    use half::f16;
 
     #[test]
     fn test_pretty_format_batches() -> Result<()> {
@@ -308,6 +311,39 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_pretty_format_fixed_size_binary() -> Result<()> {
+        // define a schema.
+        let field_type = DataType::FixedSizeBinary(3);
+        let schema = Arc::new(Schema::new(vec![Field::new("d1", field_type, true)]));
+
+        let mut builder = FixedSizeBinaryBuilder::new(3, 3);
+
+        builder.append_value(&[1, 2, 3]).unwrap();
+        builder.append_null().unwrap();
+        builder.append_value(&[7, 8, 9]).unwrap();
+
+        let array = Arc::new(builder.finish());
+
+        let batch = RecordBatch::try_new(schema, vec![array])?;
+        let table = pretty_format_batches(&[batch])?.to_string();
+        let expected = vec![
+            "+--------+",
+            "| d1     |",
+            "+--------+",
+            "| 010203 |",
+            "|        |",
+            "| 070809 |",
+            "+--------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
+
+        Ok(())
+    }
+
     /// Generate an array with type $ARRAYTYPE with a numeric value of
     /// $VALUE, and compare $EXPECTED_RESULT to the output of
     /// formatting that array with `pretty_format_batches`
@@ -481,17 +517,16 @@ mod tests {
 
     #[test]
     fn test_decimal_display() -> Result<()> {
-        let capacity = 10;
         let precision = 10;
         let scale = 2;
 
-        let mut builder = DecimalBuilder::new(capacity, precision, scale);
-        builder.append_value(101).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(200).unwrap();
-        builder.append_value(3040).unwrap();
+        let array = [Some(101), None, Some(200), Some(3040)]
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(precision, scale)
+            .unwrap();
 
-        let dm = Arc::new(builder.finish()) as ArrayRef;
+        let dm = Arc::new(array) as ArrayRef;
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f",
@@ -522,17 +557,16 @@ mod tests {
 
     #[test]
     fn test_decimal_display_zero_scale() -> Result<()> {
-        let capacity = 10;
         let precision = 5;
         let scale = 0;
 
-        let mut builder = DecimalBuilder::new(capacity, precision, scale);
-        builder.append_value(101).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(200).unwrap();
-        builder.append_value(3040).unwrap();
+        let array = [Some(101), None, Some(200), Some(3040)]
+            .into_iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(precision, scale)
+            .unwrap();
 
-        let dm = Arc::new(builder.finish()) as ArrayRef;
+        let dm = Arc::new(array) as ArrayRef;
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f",
@@ -641,7 +675,7 @@ mod tests {
         )?;
 
         let mut buf = String::new();
-        write!(&mut buf, "{}", pretty_format_batches(&[batch])?.to_string()).unwrap();
+        write!(&mut buf, "{}", pretty_format_batches(&[batch])?).unwrap();
 
         let s = vec![
             "+---+-----+",
@@ -653,8 +687,38 @@ mod tests {
             "| d | 100 |",
             "+---+-----+",
         ];
-        let expected = String::from(s.join("\n"));
+        let expected = s.join("\n");
         assert_eq!(expected, buf);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_float16_display() -> Result<()> {
+        let values = vec![
+            Some(f16::from_f32(f32::NAN)),
+            Some(f16::from_f32(4.0)),
+            Some(f16::from_f32(f32::NEG_INFINITY)),
+        ];
+        let array = Arc::new(values.into_iter().collect::<Float16Array>()) as ArrayRef;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f16",
+            array.data_type().clone(),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(schema, vec![array])?;
+
+        let table = pretty_format_batches(&[batch])?.to_string();
+
+        let expected = vec![
+            "+------+", "| f16  |", "+------+", "| NaN  |", "| 4    |", "| -inf |",
+            "+------+",
+        ];
+
+        let actual: Vec<&str> = table.lines().collect();
+        assert_eq!(expected, actual, "Actual result:\n{}", table);
 
         Ok(())
     }

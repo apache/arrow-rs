@@ -19,45 +19,21 @@
 
 # Release Process
 
-## Branching
+## Overview
 
-Arrow maintains two branches: `active_release` and `master`.
+We try to release a new version of Arrow every two weeks. This cadence balances getting new features into arrow without overwhelming downstream projects with too frequent changes.
 
-- All new PRs are created and merged against `master`
-- All versions are created from the `active_release` branch
-- Once merged to master, changes are "cherry-picked" (via a hopefully soon to be automated process), to the `active_release` branch based on the judgement of the original PR author and maintainers.
-
-- We do not merge breaking api changes, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md) to the `active_release` branch. Instead, they are merged to the `master` branch and included in the next major release.
-
-Please see the [original proposal](https://docs.google.com/document/d/1tMQ67iu8XyGGZuj--h9WQYB9inCk6c2sL_4xMTwENGc/edit?ts=60961758) document the rational of this change.
-
-## Release Branching
-
-We aim to release every other week from the `active_release` branch.
-
-Every other week, a maintainer proposes a minor (e.g. `4.1.0` to `4.2.0`) or patch (e.g `4.1.0` to `4.1.1`) release, depending on changes to the `active_release` in the previous 2 weeks, following the process below.
-
-If this release is approved by at least three PMC members, that tarball is uploaded to the official apache distribution sites, a new version from that tarball is released to crates.io later in the week.
-
-The overall Apache Arrow in general does synchronized major releases every three months. The Rust implementation aims to do its major releases in the same time frame.
+If any code has been merged to master that has a breaking API change, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md), the major version number incremented changed (e.g. `9.0.2` to `9.0.2`). Otherwise the new minor version incremented (e.g. `9.0.2` to `7.1.0`).
 
 # Release Mechanics
 
-This directory contains the scripts used to manage an Apache Arrow Release.
-
-# Process Overview
+## Process Overview
 
 As part of the Apache governance model, official releases consist of
 signed source tarballs approved by the PMC.
 
 We then use the code in the approved source tarball to release to
 crates.io, the Rust ecosystem's package manager.
-
-## Branching
-
-# Release Preparation
-
-# Change Log
 
 We create a `CHANGELOG.md` so our users know what has been changed between releases.
 
@@ -67,47 +43,16 @@ The CHANGELOG is created automatically using
 This script creates a changelog using github issues and the
 labels associated with them.
 
-## CHANGELOG for maintenance releases
+## Prepare CHANGELOG and version:
 
-At the time of writing, the `update_change_log.sh` script does not work well with branches as it seems to intermix issues that were resolved in master.
+Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect the planned release.
 
-To generate a bare bones CHANGELOG for maintenance releases, you can use a command similar to the following to get all changes between 5.0.0 and the active_release.
-
-```shell
-git log --pretty=oneline 5.0.0..apache/active_release
-```
-
-This command will make markdown links that work when rendered outside of github:
-
-```shell
-git log --pretty=oneline 5.1.0..apache/active_release | sed -e 's|\(^[0-9a-f]*\) |* [\1](https://github.com/apache/arrow-rs/commit/\1) |' | sed -e 's|#\([0-9]*\)|[#\1](https://github.com/apache/arrow-rs/pull/\1)|g'
-```
-
-# Mechanics of creating a release
-
-## Prepare the release branch and tags
-
-First, ensure that `active_release` contains the content of the desired release. For minor and patch releases, no additional steps are needed.
-
-To prepare for _a major release_, change `active release` to point at the latest `master` with commands such as:
-
-```
-git checkout active_release
-git fetch apache
-git reset --hard apache/master
-git push -f
-```
-
-### Update CHANGELOG.md + Version
-
-Now prepare a PR to update `CHANGELOG.md` and versions on `active_release` branch to reflect the planned release.
-
-See [#298](https://github.com/apache/arrow-rs/pull/298) for an example.
+See [#1141](https://github.com/apache/arrow-rs/pull/1141) for an example.
 
 Here are the commands that could be used to prepare the 5.1.0 release:
 
 ```bash
-git checkout active_release
+git checkout master
 git pull
 git checkout -b make-release
 
@@ -126,9 +71,14 @@ Note that when reviewing the change log, rather than editing the
 `CHANGELOG.md`, it is preferred to update the issues and their labels
 (e.g. add `invalid` label to exclude them from release notes)
 
+Merge this PR to `master` prior to the next step.
+
 ## Prepare release candidate tarball
 
-(Note you need to be a committer to run these scripts as they upload to the apache svn distribution servers)
+After you have merged the updates to the `CHANGELOG` and version,
+create a release candidate using the following steps. Note you need to
+be a committer to run these scripts as they upload to the apache `svn`
+distribution servers.
 
 ### Create git tag for the release:
 
@@ -138,7 +88,7 @@ Using a string such as `4.0.1` as the `<version>`, create and push the tag thusl
 
 ```shell
 git fetch apache
-git tag <version> apache/active_release
+git tag <version> apache/master
 # push tag to apache
 git push apache <version>
 ```
@@ -198,7 +148,7 @@ The vote will be open for at least 72 hours.
 
 For the release to become "official" it needs at least three PMC members to vote +1 on it.
 
-#### Verifying Release Candidates
+## Verifying release candidates
 
 The `dev/release/verify-release-candidate.sh` is a script in this repository that can assist in the verification process. Run it like:
 
@@ -246,41 +196,3 @@ following commands
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
 ```
-
-# Backporting
-
-As of the time of writing, backporting to `active_release` done semi-manually.
-
-_Note_: Since minor releases will be automatically picked up by other CI systems, it is CRITICAL to only cherry pick commits that are API compatible -- that is that do not require any code changes in crates that rely on arrow. API changes are released with the next major version.
-
-Step 1: Pick the commit to cherry-pick.
-
-Step 2: Create cherry-pick PR to active_release
-
-Step 3a: If CI passes, merge cherry-pick PR
-
-Step 3b: If CI doesn't pass or some other changes are needed, the PR should be reviewed / approved as normal prior to merge
-
-For example, to backport `b2de5446cc1e45a0559fb39039d0545df1ac0d26` to active_release, you could use the following command
-
-```shell
-git clone git@github.com:apache/arrow-rs.git /tmp/arrow-rs
-
-CHERRY_PICK_SHA=b2de5446cc1e45a0559fb39039d0545df1ac0d26 ARROW_GITHUB_API_TOKEN=$ARROW_GITHUB_API_TOKEN CHECKOUT_ROOT=/tmp/arrow-rs  python3 dev/release/cherry-pick-pr.py
-```
-
-## Labels
-
-There are two labels that help keep track of backporting:
-
-1. [`cherry-picked`](https://github.com/apache/arrow-rs/labels/cherry-picked) for PRs that have been cherry-picked/backported to `active_release`
-2. [`release-cherry-pick`](https://github.com/apache/arrow-rs/labels/release-cherry-pick) for the PRs that are the cherry pick to `active_release`
-
-You can find candidates to cherry pick using [this filter](https://github.com/apache/arrow-rs/pulls?q=is%3Apr+is%3Aclosed+-label%3Arelease-cherry-pick+-label%3Acherry-picked)
-
-## Rationale for creating PRs on cherry picked PRs:
-
-1. PRs are a natural place to run the CI tests to make sure there are no logical conflicts
-2. PRs offer a place for the original author / committers to comment and say it should/should not be backported.
-3. PRs offer a way to make cleanups / fixups and approve (if needed) for non cherry pick PRs
-4. There is an additional control / review when the candidate release is created

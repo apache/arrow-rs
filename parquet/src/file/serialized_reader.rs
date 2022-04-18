@@ -127,6 +127,57 @@ pub struct SerializedFileReader<R: ChunkReader> {
     metadata: ParquetMetaData,
 }
 
+/// A builder for [`ReadOptions`].
+/// For the predicates that are added to the builder,
+/// they will be chained using 'AND' to filter the row groups.
+pub struct ReadOptionsBuilder {
+    predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
+}
+
+impl ReadOptionsBuilder {
+    /// New builder
+    pub fn new() -> Self {
+        ReadOptionsBuilder { predicates: vec![] }
+    }
+
+    /// Add a predicate on row group metadata to the reading option,
+    /// Filter only row groups that match the predicate criteria
+    pub fn with_predicate(
+        mut self,
+        predicate: Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>,
+    ) -> Self {
+        self.predicates.push(predicate);
+        self
+    }
+
+    /// Add a range predicate on filtering row groups if their midpoints are within
+    /// the Closed-Open range `[start..end) {x | start <= x < end}`
+    pub fn with_range(mut self, start: i64, end: i64) -> Self {
+        assert!(start < end);
+        let predicate = move |rg: &RowGroupMetaData, _: usize| {
+            let mid = get_midpoint_offset(rg);
+            mid >= start && mid < end
+        };
+        self.predicates.push(Box::new(predicate));
+        self
+    }
+
+    /// Seal the builder and return the read options
+    pub fn build(self) -> ReadOptions {
+        ReadOptions {
+            predicates: self.predicates,
+        }
+    }
+}
+
+/// A collection of options for reading a Parquet file.
+///
+/// Currently, only predicates on row group metadata are supported.
+/// All predicates will be chained using 'AND' to filter the row groups.
+pub struct ReadOptions {
+    predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
+}
+
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Creates file reader from a Parquet file.
     /// Returns error if Parquet file does not exist or is corrupt.
@@ -138,23 +189,46 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
         })
     }
 
-    /// Filters row group metadata to only those row groups,
-    /// for which the predicate function returns true
-    pub fn filter_row_groups(
-        &mut self,
-        predicate: &dyn Fn(&RowGroupMetaData, usize) -> bool,
-    ) {
+    /// Creates file reader from a Parquet file with read options.
+    /// Returns error if Parquet file does not exist or is corrupt.
+    pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
+        let metadata = footer::parse_metadata(&chunk_reader)?;
+        let mut predicates = options.predicates;
+        let row_groups = metadata.row_groups().to_vec();
         let mut filtered_row_groups = Vec::<RowGroupMetaData>::new();
-        for (i, row_group_metadata) in self.metadata.row_groups().iter().enumerate() {
-            if predicate(row_group_metadata, i) {
-                filtered_row_groups.push(row_group_metadata.clone());
+        for (i, rg_meta) in row_groups.into_iter().enumerate() {
+            let mut keep = true;
+            for predicate in &mut predicates {
+                if !predicate(&rg_meta, i) {
+                    keep = false;
+                    break;
+                }
+            }
+            if keep {
+                filtered_row_groups.push(rg_meta);
             }
         }
-        self.metadata = ParquetMetaData::new(
-            self.metadata.file_metadata().clone(),
-            filtered_row_groups,
-        );
+
+        Ok(Self {
+            chunk_reader: Arc::new(chunk_reader),
+            metadata: ParquetMetaData::new(
+                metadata.file_metadata().clone(),
+                filtered_row_groups,
+            ),
+        })
     }
+}
+
+/// Get midpoint offset for a row group
+fn get_midpoint_offset(meta: &RowGroupMetaData) -> i64 {
+    let col = meta.column(0);
+    let mut offset = col.data_page_offset();
+    if let Some(dic_offset) = col.dictionary_page_offset() {
+        if offset > dic_offset {
+            offset = dic_offset
+        }
+    };
+    offset + meta.compressed_size() / 2
 }
 
 impl<R: 'static + ChunkReader> FileReader for SerializedFileReader<R> {
@@ -271,7 +345,7 @@ impl<T: Read> SerializedPageReader<T> {
     }
 }
 
-impl<T: Read> Iterator for SerializedPageReader<T> {
+impl<T: Read + Send> Iterator for SerializedPageReader<T> {
     type Item = Result<Page>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -279,7 +353,7 @@ impl<T: Read> Iterator for SerializedPageReader<T> {
     }
 }
 
-impl<T: Read> PageReader for SerializedPageReader<T> {
+impl<T: Read + Send> PageReader for SerializedPageReader<T> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         while self.seen_num_values < self.total_num_values {
             let page_header = self.read_page_header()?;
@@ -400,7 +474,7 @@ impl<T: Read> PageReader for SerializedPageReader<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic::ColumnOrder;
+    use crate::basic::{self, ColumnOrder};
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::{get_test_file, get_test_path};
@@ -531,7 +605,7 @@ mod tests {
         let file_metadata = metadata.file_metadata();
         assert!(file_metadata.created_by().is_some());
         assert_eq!(
-      file_metadata.created_by().as_ref().unwrap(),
+      file_metadata.created_by().unwrap(),
       "impala version 1.3.0-INTERNAL (build 8a48ddb1eff84592b3fc06bc6f51ec120e1fffc9)"
     );
         assert!(file_metadata.key_value_metadata().is_none());
@@ -621,7 +695,7 @@ mod tests {
         let file_metadata = metadata.file_metadata();
         assert!(file_metadata.created_by().is_some());
         assert_eq!(
-            file_metadata.created_by().as_ref().unwrap(),
+            file_metadata.created_by().unwrap(),
             "parquet-mr version 1.8.1 (build 4aba4dae7bb0d4edbcf7923ae1339f28fd3f7fcf)"
         );
         assert!(file_metadata.key_value_metadata().is_some());
@@ -743,7 +817,6 @@ mod tests {
             .metadata
             .file_metadata()
             .key_value_metadata()
-            .as_ref()
             .unwrap();
 
         assert_eq!(metadata.len(), 3);
@@ -761,19 +834,125 @@ mod tests {
     }
 
     #[test]
-    fn test_file_reader_filter_row_groups() -> Result<()> {
-        let test_file = get_test_file("alltypes_plain.parquet");
-        let mut reader = SerializedFileReader::new(test_file)?;
+    fn test_file_reader_optional_metadata() {
+        // file with optional metadata: bloom filters, encoding stats, column index and offset index.
+        let file = get_test_file("data_index_bloom_encoding_stats.parquet");
+        let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
 
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        let col0_metadata = row_group_metadata.column(0);
+
+        // test optional bloom filter offset
+        assert_eq!(col0_metadata.bloom_filter_offset().unwrap(), 192);
+
+        // test page encoding stats
+        let page_encoding_stats =
+            col0_metadata.page_encoding_stats().unwrap().get(0).unwrap();
+
+        assert_eq!(page_encoding_stats.page_type, basic::PageType::DATA_PAGE);
+        assert_eq!(page_encoding_stats.encoding, Encoding::PLAIN);
+        assert_eq!(page_encoding_stats.count, 1);
+
+        // test optional column index offset
+        assert_eq!(col0_metadata.column_index_offset().unwrap(), 156);
+        assert_eq!(col0_metadata.column_index_length().unwrap(), 25);
+
+        // test optional offset index offset
+        assert_eq!(col0_metadata.offset_index_offset().unwrap(), 181);
+        assert_eq!(col0_metadata.offset_index_length().unwrap(), 11);
+    }
+
+    #[test]
+    fn test_file_reader_with_no_filter() -> Result<()> {
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let origin_reader = SerializedFileReader::new(test_file)?;
         // test initial number of row groups
+        let metadata = origin_reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_reader_filter_row_groups_with_predicate() -> Result<()> {
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let read_options = ReadOptionsBuilder::new()
+            .with_predicate(Box::new(|_, _| false))
+            .build();
+        let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_reader_filter_row_groups_with_range() -> Result<()> {
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let origin_reader = SerializedFileReader::new(test_file)?;
+        // test initial number of row groups
+        let metadata = origin_reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+        let mid = get_midpoint_offset(metadata.row_group(0));
+
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let read_options = ReadOptionsBuilder::new().with_range(0, mid + 1).build();
+        let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 1);
 
-        // test filtering out all row groups
-        reader.filter_row_groups(&|_, _| false);
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let read_options = ReadOptionsBuilder::new().with_range(0, mid).build();
+        let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_reader_filter_row_groups_and_range() -> Result<()> {
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let origin_reader = SerializedFileReader::new(test_file)?;
+        let metadata = origin_reader.metadata();
+        let mid = get_midpoint_offset(metadata.row_group(0));
+
+        // true, true predicate
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let read_options = ReadOptionsBuilder::new()
+            .with_predicate(Box::new(|_, _| true))
+            .with_range(mid, mid + 1)
+            .build();
+        let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        // true, false predicate
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let read_options = ReadOptionsBuilder::new()
+            .with_predicate(Box::new(|_, _| true))
+            .with_range(0, mid)
+            .build();
+        let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
 
+        // false, true predicate
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let read_options = ReadOptionsBuilder::new()
+            .with_predicate(Box::new(|_, _| false))
+            .with_range(mid, mid + 1)
+            .build();
+        let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 0);
+
+        // false, false predicate
+        let test_file = get_test_file("alltypes_plain.parquet");
+        let read_options = ReadOptionsBuilder::new()
+            .with_predicate(Box::new(|_, _| false))
+            .with_range(0, mid)
+            .build();
+        let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 0);
         Ok(())
     }
 }

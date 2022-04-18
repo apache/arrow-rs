@@ -202,6 +202,39 @@ fn array_from_json(
                         Value::String(s) => {
                             s.parse().expect("Unable to parse string as i64")
                         }
+                        Value::Object(ref map)
+                            if map.contains_key("days")
+                                && map.contains_key("milliseconds") =>
+                        {
+                            match field.data_type() {
+                                DataType::Interval(IntervalUnit::DayTime) => {
+                                    let days = map.get("days").unwrap();
+                                    let milliseconds = map.get("milliseconds").unwrap();
+
+                                    match (days, milliseconds) {
+                                        (Value::Number(d), Value::Number(m)) => {
+                                            let mut bytes = [0_u8; 8];
+                                            let m = (m.as_i64().unwrap() as i32)
+                                                .to_le_bytes();
+                                            let d = (d.as_i64().unwrap() as i32)
+                                                .to_le_bytes();
+
+                                            let c = [d, m].concat();
+                                            bytes.copy_from_slice(c.as_slice());
+                                            i64::from_le_bytes(bytes)
+                                        }
+                                        _ => panic!(
+                                            "Unable to parse {:?} as interval daytime",
+                                            value
+                                        ),
+                                    }
+                                }
+                                _ => panic!(
+                                    "Unable to parse {:?} as interval daytime",
+                                    value
+                                ),
+                            }
+                        }
                         _ => panic!("Unable to parse {:?} as number", value),
                     }),
                     _ => b.append_null(),
@@ -275,6 +308,49 @@ fn array_from_json(
                             .parse()
                             .expect("Unable to parse string as u64"),
                     ),
+                    _ => b.append_null(),
+                }?;
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let mut b = IntervalMonthDayNanoBuilder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(match value {
+                        Value::Object(v) => {
+                            let months = v.get("months").unwrap();
+                            let days = v.get("days").unwrap();
+                            let nanoseconds = v.get("nanoseconds").unwrap();
+                            match (months, days, nanoseconds) {
+                                (
+                                    Value::Number(months),
+                                    Value::Number(days),
+                                    Value::Number(nanoseconds),
+                                ) => {
+                                    let months = months.as_i64().unwrap() as i32;
+                                    let days = days.as_i64().unwrap() as i32;
+                                    let nanoseconds = nanoseconds.as_i64().unwrap();
+                                    let months_days_ns: i128 = ((nanoseconds as i128)
+                                        & 0xFFFFFFFFFFFFFFFF)
+                                        << 64
+                                        | ((days as i128) & 0xFFFFFFFF) << 32
+                                        | ((months as i128) & 0xFFFFFFFF);
+                                    months_days_ns
+                                }
+                                (_, _, _) => {
+                                    panic!("Unable to parse {:?} as MonthDayNano", v)
+                                }
+                            }
+                        }
+                        _ => panic!("Unable to parse {:?} as MonthDayNano", value),
+                    }),
                     _ => b.append_null(),
                 }?;
             }
@@ -509,6 +585,47 @@ fn array_from_json(
                     field
                 ))),
             }
+        }
+        DataType::Decimal(precision, scale) => {
+            let mut b = DecimalBuilder::new(json_col.count, *precision, *scale);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i128>().unwrap()),
+                    _ => b.append_null(),
+                }?;
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Map(child_field, _) => {
+            let null_buf = create_null_buf(&json_col);
+            let children = json_col.children.clone().unwrap();
+            let child_array = array_from_json(
+                child_field,
+                children.get(0).unwrap().clone(),
+                dictionaries,
+            )?;
+            let offsets: Vec<i32> = json_col
+                .offset
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap() as i32)
+                .collect();
+            let array_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .add_buffer(Buffer::from(&offsets.to_byte_slice()))
+                .add_child_data(child_array.data().clone())
+                .null_bit_buffer(null_buf)
+                .build()
+                .unwrap();
+
+            let array = MapArray::from(array_data);
+            Ok(Arc::new(array))
         }
         t => Err(ArrowError::JsonError(format!(
             "data type {:?} not supported",

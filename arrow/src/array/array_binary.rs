@@ -15,21 +15,28 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Borrow;
 use std::convert::{From, TryInto};
 use std::fmt;
 use std::{any::Any, iter::FromIterator};
 
+use super::BooleanBufferBuilder;
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
 };
+pub use crate::array::DecimalIter;
 use crate::buffer::Buffer;
-use crate::error::ArrowError;
+use crate::datatypes::{
+    validate_decimal_precision, DECIMAL_DEFAULT_SCALE, DECIMAL_MAX_PRECISION,
+    DECIMAL_MAX_SCALE,
+};
+use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
-/// Like OffsetSizeTrait, but specialized for Binary
-// This allow us to expose a constant datatype for the GenericBinaryArray
+/// Like [`OffsetSizeTrait`], but specialized for Binary.
+/// This allow us to expose a constant datatype for the [`GenericBinaryArray`].
 pub trait BinaryOffsetSizeTrait: OffsetSizeTrait {
     const DATA_TYPE: DataType;
 }
@@ -124,22 +131,10 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     }
 
     /// Creates a [GenericBinaryArray] from a vector of byte slices
+    ///
+    /// See also [`Self::from_iter_values`]
     pub fn from_vec(v: Vec<&[u8]>) -> Self {
-        let mut offsets = Vec::with_capacity(v.len() + 1);
-        let mut values = Vec::new();
-        let mut length_so_far: OffsetSize = OffsetSize::zero();
-        offsets.push(length_so_far);
-        for s in &v {
-            length_so_far += OffsetSize::from_usize(s.len()).unwrap();
-            offsets.push(length_so_far);
-            values.extend_from_slice(s);
-        }
-        let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
-            .len(v.len())
-            .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_buffer(Buffer::from_slice_ref(&values));
-        let array_data = unsafe { array_data.build_unchecked() };
-        GenericBinaryArray::<OffsetSize>::from(array_data)
+        Self::from_iter_values(v)
     }
 
     /// Creates a [GenericBinaryArray] from a vector of Optional (null) byte slices
@@ -170,6 +165,61 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)
+    }
+
+    /// Creates a [`GenericBinaryArray`] based on an iterator of values without nulls
+    pub fn from_iter_values<Ptr, I>(iter: I) -> Self
+    where
+        Ptr: AsRef<[u8]>,
+        I: IntoIterator<Item = Ptr>,
+    {
+        let iter = iter.into_iter();
+        let (_, data_len) = iter.size_hint();
+        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
+
+        let mut offsets =
+            MutableBuffer::new((data_len + 1) * std::mem::size_of::<OffsetSize>());
+        let mut values = MutableBuffer::new(0);
+
+        let mut length_so_far = OffsetSize::zero();
+        offsets.push(length_so_far);
+
+        for s in iter {
+            let s = s.as_ref();
+            length_so_far += OffsetSize::from_usize(s.len()).unwrap();
+            offsets.push(length_so_far);
+            values.extend_from_slice(s);
+        }
+
+        // iterator size hint may not be correct so compute the actual number of offsets
+        assert!(!offsets.is_empty()); // wrote at least one
+        let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
+
+        let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
+            .len(actual_len)
+            .add_buffer(offsets.into())
+            .add_buffer(values.into());
+        let array_data = unsafe { array_data.build_unchecked() };
+        Self::from(array_data)
+    }
+
+    /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
+    pub fn take_iter<'a>(
+        &'a self,
+        indexes: impl Iterator<Item = Option<usize>> + 'a,
+    ) -> impl Iterator<Item = Option<&[u8]>> + 'a {
+        indexes.map(|opt_index| opt_index.map(|index| self.value(index)))
+    }
+
+    /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
+    /// # Safety
+    ///
+    /// caller must ensure that the indexes in the iterator are less than the `array.len()`
+    pub unsafe fn take_iter_unchecked<'a>(
+        &'a self,
+        indexes: impl Iterator<Item = Option<usize>> + 'a,
+    ) -> impl Iterator<Item = Option<&[u8]>> + 'a {
+        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
 }
 
@@ -269,9 +319,10 @@ where
     }
 }
 
-/// An array where each element is a byte whose maximum length is represented by a i32.
+/// An array where each element contains 0 or more bytes.
+/// The byte length of each element is represented by an i32.
 ///
-/// Examples
+/// # Examples
 ///
 /// Create a BinaryArray from a vector of byte slices.
 ///
@@ -308,8 +359,10 @@ where
 ///
 pub type BinaryArray = GenericBinaryArray<i32>;
 
-/// An array where each element is a byte whose maximum length is represented by a i64.
-/// Examples
+/// An array where each element contains 0 or more bytes.
+/// The byte length of each element is represented by an i64.
+///
+/// # Examples
 ///
 /// Create a LargeBinaryArray from a vector of byte slices.
 ///
@@ -359,7 +412,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> From<Vec<Option<&[u8]>>>
     for GenericBinaryArray<OffsetSize>
 {
     fn from(v: Vec<Option<&[u8]>>) -> Self {
-        GenericBinaryArray::<OffsetSize>::from_opt_vec(v)
+        Self::from_opt_vec(v)
     }
 }
 
@@ -367,17 +420,17 @@ impl<OffsetSize: BinaryOffsetSizeTrait> From<Vec<&[u8]>>
     for GenericBinaryArray<OffsetSize>
 {
     fn from(v: Vec<&[u8]>) -> Self {
-        GenericBinaryArray::<OffsetSize>::from_vec(v)
+        Self::from_iter_values(v)
     }
 }
 
 impl<T: BinaryOffsetSizeTrait> From<GenericListArray<T>> for GenericBinaryArray<T> {
     fn from(v: GenericListArray<T>) -> Self {
-        GenericBinaryArray::<T>::from_list(v)
+        Self::from_list(v)
     }
 }
 
-/// A type of `FixedSizeListArray` whose elements are binaries.
+/// An array where each element is a fixed-size sequence of bytes.
 ///
 /// # Examples
 ///
@@ -424,6 +477,18 @@ impl FixedSizeBinaryArray {
         }
     }
 
+    /// Returns the element at index `i` as a byte slice.
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
+        let offset = i.checked_add(self.data.offset()).unwrap();
+        let pos = self.value_offset_at(offset);
+        std::slice::from_raw_parts(
+            self.value_data.as_ptr().offset(pos as isize),
+            (self.value_offset_at(offset + 1) - pos) as usize,
+        )
+    }
+
     /// Returns the offset for the element at index `i`.
     ///
     /// Note this doesn't do any bound checking, for performance reason.
@@ -467,7 +532,7 @@ impl FixedSizeBinaryArray {
     /// # Errors
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
-    pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
+    pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self>
     where
         T: Iterator<Item = Option<U>>,
         U: AsRef<[u8]>,
@@ -478,7 +543,7 @@ impl FixedSizeBinaryArray {
         let mut null_buf = MutableBuffer::from_len_zeroed(0);
         let mut buffer = MutableBuffer::from_len_zeroed(0);
         let mut prepend = 0;
-        iter.try_for_each(|item| -> Result<(), ArrowError> {
+        iter.try_for_each(|item| -> Result<()> {
             // extend null bitmask by one byte per each 8 items
             if byte == 0 {
                 null_buf.push(0u8);
@@ -551,7 +616,7 @@ impl FixedSizeBinaryArray {
     /// # Errors
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
-    pub fn try_from_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
+    pub fn try_from_iter<T, U>(mut iter: T) -> Result<Self>
     where
         T: Iterator<Item = U>,
         U: AsRef<[u8]>,
@@ -559,7 +624,7 @@ impl FixedSizeBinaryArray {
         let mut len = 0;
         let mut size = None;
         let mut buffer = MutableBuffer::from_len_zeroed(0);
-        iter.try_for_each(|item| -> Result<(), ArrowError> {
+        iter.try_for_each(|item| -> Result<()> {
             let slice = item.as_ref();
             if let Some(size) = size {
                 if size != slice.len() {
@@ -666,19 +731,28 @@ impl Array for FixedSizeBinaryArray {
     }
 }
 
-/// A type of `DecimalArray` whose elements are binaries.
+/// `DecimalArray` stores fixed width decimal numbers,
+/// with a fixed precision and scale.
 ///
 /// # Examples
 ///
 /// ```
-///    use arrow::array::{Array, DecimalArray, DecimalBuilder};
+///    use arrow::array::{Array, DecimalArray};
 ///    use arrow::datatypes::DataType;
-///    let mut builder = DecimalBuilder::new(30, 23, 6);
 ///
-///    builder.append_value(8_887_000_000).unwrap();
-///    builder.append_null().unwrap();
-///    builder.append_value(-8_887_000_000).unwrap();
-///    let decimal_array: DecimalArray = builder.finish();
+///    // Create a DecimalArray with the default precision and scale
+///    let decimal_array: DecimalArray = vec![
+///       Some(8_887_000_000),
+///       None,
+///       Some(-8_887_000_000),
+///     ]
+///     .into_iter().collect();
+///
+///    // set precision and scale so values are interpreted
+///    // as `8887.000000`, `Null`, and `-8887.000000`
+///    let decimal_array = decimal_array
+///     .with_precision_and_scale(23, 6)
+///     .unwrap();
 ///
 ///    assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
 ///    assert_eq!(8_887_000_000, decimal_array.value(0));
@@ -792,12 +866,92 @@ impl DecimalArray {
         let array_data = unsafe { builder.build_unchecked() };
         Self::from(array_data)
     }
+
+    /// Creates a [DecimalArray] with default precision and scale,
+    /// based on an iterator of `i128` values without nulls
+    pub fn from_iter_values<I: IntoIterator<Item = i128>>(iter: I) -> Self {
+        let val_buf: Buffer = iter.into_iter().collect();
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                Self::default_type(),
+                val_buf.len() / std::mem::size_of::<i128>(),
+                None,
+                None,
+                0,
+                vec![val_buf],
+                vec![],
+            )
+        };
+        DecimalArray::from(data)
+    }
+
+    /// Return the precision (total digits) that can be stored by this array
     pub fn precision(&self) -> usize {
         self.precision
     }
 
+    /// Return the scale (digits after the decimal) that can be stored by this array
     pub fn scale(&self) -> usize {
         self.scale
+    }
+
+    /// Returns a DecimalArray with the same data as self, with the
+    /// specified precision.
+    ///
+    /// Returns an Error if:
+    /// 1. `precision` is larger than [`DECIMAL_MAX_PRECISION`]
+    /// 2. `scale` is larger than [`DECIMAL_MAX_SCALE`];
+    /// 3. `scale` is > `precision`
+    pub fn with_precision_and_scale(
+        mut self,
+        precision: usize,
+        scale: usize,
+    ) -> Result<Self> {
+        if precision > DECIMAL_MAX_PRECISION {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "precision {} is greater than max {}",
+                precision, DECIMAL_MAX_PRECISION
+            )));
+        }
+        if scale > DECIMAL_MAX_SCALE {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "scale {} is greater than max {}",
+                scale, DECIMAL_MAX_SCALE
+            )));
+        }
+        if scale > precision {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "scale {} is greater than precision {}",
+                scale, precision
+            )));
+        }
+
+        // Ensure that all values are within the requested
+        // precision. For performance, only check if the precision is
+        // decreased
+        if precision < self.precision {
+            for v in self.iter().flatten() {
+                validate_decimal_precision(v, precision)?;
+            }
+        }
+
+        assert_eq!(
+            self.data.data_type(),
+            &DataType::Decimal(self.precision, self.scale)
+        );
+
+        // safety: self.data is valid DataType::Decimal as checked above
+        let new_data_type = DataType::Decimal(precision, scale);
+        self.precision = precision;
+        self.scale = scale;
+        self.data = self.data.with_data_type(new_data_type);
+        Ok(self)
+    }
+
+    /// The default precision and scale used when not specified.
+    pub fn default_type() -> DataType {
+        // Keep maximum precision
+        DataType::Decimal(DECIMAL_MAX_PRECISION, DECIMAL_DEFAULT_SCALE)
     }
 }
 
@@ -821,6 +975,64 @@ impl From<ArrayData> for DecimalArray {
             scale,
             length,
         }
+    }
+}
+
+impl From<DecimalArray> for ArrayData {
+    fn from(array: DecimalArray) -> Self {
+        array.data
+    }
+}
+
+impl<'a> IntoIterator for &'a DecimalArray {
+    type Item = Option<i128>;
+    type IntoIter = DecimalIter<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        DecimalIter::<'a>::new(self)
+    }
+}
+
+impl<'a> DecimalArray {
+    /// constructs a new iterator
+    pub fn iter(&'a self) -> DecimalIter<'a> {
+        DecimalIter::new(self)
+    }
+}
+
+impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalArray {
+    fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let size_hint = upper.unwrap_or(lower);
+
+        let mut null_buf = BooleanBufferBuilder::new(size_hint);
+
+        let buffer: Buffer = iter
+            .map(|item| {
+                if let Some(a) = item.borrow() {
+                    null_buf.append(true);
+                    *a
+                } else {
+                    null_buf.append(false);
+                    // arbitrary value for NULL
+                    0
+                }
+            })
+            .collect();
+
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                Self::default_type(),
+                null_buf.len(),
+                None,
+                Some(null_buf.into()),
+                0,
+                vec![buffer],
+                vec![],
+            )
+        };
+        DecimalArray::from(data)
     }
 }
 
@@ -848,9 +1060,12 @@ impl Array for DecimalArray {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::{
         array::{DecimalBuilder, LargeListArray, ListArray},
-        datatypes::Field,
+        datatypes::{Field, Schema},
+        record_batch::RecordBatch,
     };
 
     use super::*;
@@ -1214,6 +1429,9 @@ mod tests {
     #[should_panic(
         expected = "FixedSizeBinaryArray can only be created from FixedSizeList<u8> arrays"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_fixed_size_binary_array_from_incorrect_list_array() {
         let values: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         let values_data = ArrayData::builder(DataType::UInt32)
@@ -1292,7 +1510,7 @@ mod tests {
         let mut result = decimal_builder.append_value(123456);
         let mut error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: The value of 123456 i128 is not compatible with Decimal(5,3)",
+            "Invalid argument error: 123456 is too large to store in a Decimal of precision 5. Max is 99999",
             error.to_string()
         );
         decimal_builder.append_value(12345).unwrap();
@@ -1303,14 +1521,14 @@ mod tests {
         result = decimal_builder.append_value(100);
         error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: The value of 100 i128 is not compatible with Decimal(2,1)",
+            "Invalid argument error: 100 is too large to store in a Decimal of precision 2. Max is 99",
             error.to_string()
         );
         decimal_builder.append_value(99).unwrap();
         result = decimal_builder.append_value(-100);
         error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: The value of -100 i128 is not compatible with Decimal(2,1)",
+            "Invalid argument error: -100 is too small to store in a Decimal of precision 2. Min is -99",
             error.to_string()
         );
         decimal_builder.append_value(-99).unwrap();
@@ -1318,14 +1536,77 @@ mod tests {
         assert_eq!("9.9", arr.value_as_string(0));
         assert_eq!("-9.9", arr.value_as_string(1));
     }
+    #[test]
+    fn test_decimal_from_iter_values() {
+        let array = DecimalArray::from_iter_values(vec![-100, 0, 101].into_iter());
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
+        assert_eq!(-100, array.value(0));
+        assert!(!array.is_null(0));
+        assert_eq!(0, array.value(1));
+        assert!(!array.is_null(1));
+        assert_eq!(101, array.value(2));
+        assert!(!array.is_null(2));
+    }
+
+    #[test]
+    fn test_decimal_from_iter() {
+        let array: DecimalArray = vec![Some(-100), None, Some(101)].into_iter().collect();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
+        assert_eq!(-100, array.value(0));
+        assert!(!array.is_null(0));
+        assert!(array.is_null(1));
+        assert_eq!(101, array.value(2));
+        assert!(!array.is_null(2));
+    }
+
+    #[test]
+    fn test_decimal_iter() {
+        let data = vec![Some(-100), None, Some(101)];
+        let array: DecimalArray = data.clone().into_iter().collect();
+
+        let collected: Vec<_> = array.iter().collect();
+        assert_eq!(data, collected);
+    }
+
+    #[test]
+    fn test_decimal_into_iter() {
+        let data = vec![Some(-100), None, Some(101)];
+        let array: DecimalArray = data.clone().into_iter().collect();
+
+        let collected: Vec<_> = array.into_iter().collect();
+        assert_eq!(data, collected);
+    }
+
+    #[test]
+    fn test_decimal_iter_sized() {
+        let data = vec![Some(-100), None, Some(101)];
+        let array: DecimalArray = data.into_iter().collect();
+        let mut iter = array.into_iter();
+
+        // is exact sized
+        assert_eq!(array.len(), 3);
+
+        // size_hint is reported correctly
+        assert_eq!(iter.size_hint(), (3, Some(3)));
+        iter.next().unwrap();
+        assert_eq!(iter.size_hint(), (2, Some(2)));
+        iter.next().unwrap();
+        iter.next().unwrap();
+        assert_eq!(iter.size_hint(), (0, Some(0)));
+        assert!(iter.next().is_none());
+        assert_eq!(iter.size_hint(), (0, Some(0)));
+    }
 
     #[test]
     fn test_decimal_array_value_as_string() {
-        let mut decimal_builder = DecimalBuilder::new(7, 6, 3);
-        for value in [123450, -123450, 100, -100, 10, -10, 0] {
-            decimal_builder.append_value(value).unwrap();
-        }
-        let arr = decimal_builder.finish();
+        let arr = [123450, -123450, 100, -100, 10, -10, 0]
+            .into_iter()
+            .map(Some)
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(6, 3)
+            .unwrap();
 
         assert_eq!("123.450", arr.value_as_string(0));
         assert_eq!("-123.450", arr.value_as_string(1));
@@ -1337,15 +1618,64 @@ mod tests {
     }
 
     #[test]
-    fn test_decimal_array_fmt_debug() {
-        let values: Vec<i128> = vec![8887000000, -8887000000];
-        let mut decimal_builder = DecimalBuilder::new(3, 23, 6);
+    fn test_decimal_array_with_precision_and_scale() {
+        let arr = DecimalArray::from_iter_values([12345, 456, 7890, -123223423432432])
+            .with_precision_and_scale(20, 2)
+            .unwrap();
 
-        values.iter().for_each(|&value| {
-            decimal_builder.append_value(value).unwrap();
-        });
-        decimal_builder.append_null().unwrap();
-        let arr = decimal_builder.finish();
+        assert_eq!(arr.data_type(), &DataType::Decimal(20, 2));
+        assert_eq!(arr.precision(), 20);
+        assert_eq!(arr.scale(), 2);
+
+        let actual: Vec<_> = (0..arr.len()).map(|i| arr.value_as_string(i)).collect();
+        let expected = vec!["123.45", "4.56", "78.90", "-1232234234324.32"];
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "-123223423432432 is too small to store in a Decimal of precision 5. Min is -99999"
+    )]
+    fn test_decimal_array_with_precision_and_scale_out_of_range() {
+        DecimalArray::from_iter_values([12345, 456, 7890, -123223423432432])
+            // precision is too small to hold value
+            .with_precision_and_scale(5, 2)
+            .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "precision 40 is greater than max 38")]
+    fn test_decimal_array_with_precision_and_scale_invalid_precision() {
+        DecimalArray::from_iter_values([12345, 456])
+            .with_precision_and_scale(40, 2)
+            .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "scale 40 is greater than max 38")]
+    fn test_decimal_array_with_precision_and_scale_invalid_scale() {
+        DecimalArray::from_iter_values([12345, 456])
+            .with_precision_and_scale(20, 40)
+            .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "scale 10 is greater than precision 4")]
+    fn test_decimal_array_with_precision_and_scale_invalid_precision_and_scale() {
+        DecimalArray::from_iter_values([12345, 456])
+            .with_precision_and_scale(4, 10)
+            .unwrap();
+    }
+
+    #[test]
+    fn test_decimal_array_fmt_debug() {
+        let arr = [Some(8887000000), Some(-8887000000), None]
+            .iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(23, 6)
+            .unwrap();
+
         assert_eq!(
             "DecimalArray<23, 6>\n[\n  8887.000000,\n  -8887.000000,\n  null,\n]",
             format!("{:?}", arr)
@@ -1358,6 +1688,16 @@ mod tests {
         let arr = FixedSizeBinaryArray::try_from_iter(input_arg.into_iter()).unwrap();
 
         assert_eq!(2, arr.value_length());
+        assert_eq!(3, arr.len())
+    }
+
+    #[test]
+    fn test_all_none_fixed_size_binary_array_from_sparse_iter() {
+        let none_option: Option<[u8; 32]> = None;
+        let input_arg = vec![none_option, none_option, none_option];
+        let arr =
+            FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+        assert_eq!(0, arr.value_length());
         assert_eq!(3, arr.len())
     }
 
@@ -1404,5 +1744,24 @@ mod tests {
             .data()
             .validate_full()
             .expect("All null array has valid array data");
+    }
+
+    #[test]
+    // Test for https://github.com/apache/arrow-rs/issues/1390
+    #[should_panic(
+        expected = "column types must match schema types, expected FixedSizeBinary(2) but found FixedSizeBinary(0) at column index 0"
+    )]
+    fn fixed_size_binary_array_all_null_in_batch_with_schema() {
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), false)]);
+
+        let none_option: Option<[u8; 2]> = None;
+        let item = FixedSizeBinaryArray::try_from_sparse_iter(
+            vec![none_option, none_option, none_option].into_iter(),
+        )
+        .unwrap();
+
+        // Should not panic
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(item)]).unwrap();
     }
 }

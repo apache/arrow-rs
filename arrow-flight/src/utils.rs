@@ -69,6 +69,7 @@ pub fn flight_data_to_arrow_batch(
                 batch,
                 schema,
                 dictionaries_by_field,
+                None,
             )
         })?
 }

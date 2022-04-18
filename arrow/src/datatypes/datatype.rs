@@ -115,7 +115,7 @@ pub enum DataType {
     /// A nested datatype that contains a number of sub-fields.
     Struct(Vec<Field>),
     /// A nested datatype that can represent slots of differing types.
-    Union(Vec<Field>),
+    Union(Vec<Field>, UnionMode),
     /// A dictionary encoded array (`key_type`, `value_type`), where
     /// each array element is an index of `key_type` into an
     /// associated dictionary of `value_type`.
@@ -127,7 +127,12 @@ pub enum DataType {
     /// This type mostly used to represent low cardinality string
     /// arrays or a limited set of primitive types as integers.
     Dictionary(Box<DataType>, Box<DataType>),
-    /// Decimal value with precision and scale
+    /// Exact decimal value with precision and scale
+    ///
+    /// * precision is the total number of digits
+    /// * scale is the number of digits past the decimal
+    ///
+    /// For example the number 123.45 has precision 5 and scale 2.
     Decimal(usize, usize),
     /// A Map is a logical nested type that is represented as
     ///
@@ -158,7 +163,7 @@ pub enum TimeUnit {
     Nanosecond,
 }
 
-/// YEAR_MONTH or DAY_TIME interval in SQL style.
+/// YEAR_MONTH, DAY_TIME, MONTH_DAY_NANO interval in SQL style.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum IntervalUnit {
     /// Indicates the number of elapsed whole months, stored as 4-byte integers.
@@ -166,11 +171,143 @@ pub enum IntervalUnit {
     /// Indicates the number of elapsed days and milliseconds,
     /// stored as 2 contiguous 32-bit integers (days, milliseconds) (8-bytes in total).
     DayTime,
+    /// A triple of the number of elapsed months, days, and nanoseconds.
+    /// The values are stored contiguously in 16 byte blocks. Months and
+    /// days are encoded as 32 bit integers and nanoseconds is encoded as a
+    /// 64 bit integer. All integers are signed. Each field is independent
+    /// (e.g. there is no constraint that nanoseconds have the same sign
+    /// as days or that the quantity of nanoseconds represents less
+    /// than a day's worth of time).
+    MonthDayNano,
+}
+
+// Sparse or Dense union layouts
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum UnionMode {
+    Sparse,
+    Dense,
 }
 
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+/// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value
+/// that can be stored in [DataType::Decimal] value of precision `p`
+pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
+    9,
+    99,
+    999,
+    9999,
+    99999,
+    999999,
+    9999999,
+    99999999,
+    999999999,
+    9999999999,
+    99999999999,
+    999999999999,
+    9999999999999,
+    99999999999999,
+    999999999999999,
+    9999999999999999,
+    99999999999999999,
+    999999999999999999,
+    9999999999999999999,
+    99999999999999999999,
+    999999999999999999999,
+    9999999999999999999999,
+    99999999999999999999999,
+    999999999999999999999999,
+    9999999999999999999999999,
+    99999999999999999999999999,
+    999999999999999999999999999,
+    9999999999999999999999999999,
+    99999999999999999999999999999,
+    999999999999999999999999999999,
+    9999999999999999999999999999999,
+    99999999999999999999999999999999,
+    999999999999999999999999999999999,
+    9999999999999999999999999999999999,
+    99999999999999999999999999999999999,
+    999999999999999999999999999999999999,
+    9999999999999999999999999999999999999,
+    170141183460469231731687303715884105727,
+];
+
+/// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value
+/// that can be stored in a [DataType::Decimal] value of precision `p`
+pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
+    -9,
+    -99,
+    -999,
+    -9999,
+    -99999,
+    -999999,
+    -9999999,
+    -99999999,
+    -999999999,
+    -9999999999,
+    -99999999999,
+    -999999999999,
+    -9999999999999,
+    -99999999999999,
+    -999999999999999,
+    -9999999999999999,
+    -99999999999999999,
+    -999999999999999999,
+    -9999999999999999999,
+    -99999999999999999999,
+    -999999999999999999999,
+    -9999999999999999999999,
+    -99999999999999999999999,
+    -999999999999999999999999,
+    -9999999999999999999999999,
+    -99999999999999999999999999,
+    -999999999999999999999999999,
+    -9999999999999999999999999999,
+    -99999999999999999999999999999,
+    -999999999999999999999999999999,
+    -9999999999999999999999999999999,
+    -99999999999999999999999999999999,
+    -999999999999999999999999999999999,
+    -9999999999999999999999999999999999,
+    -99999999999999999999999999999999999,
+    -999999999999999999999999999999999999,
+    -9999999999999999999999999999999999999,
+    -170141183460469231731687303715884105728,
+];
+
+/// The maximum precision for [DataType::Decimal] values
+pub const DECIMAL_MAX_PRECISION: usize = 38;
+
+/// The maximum scale for [DataType::Decimal] values
+pub const DECIMAL_MAX_SCALE: usize = 38;
+
+/// The default scale for [DataType::Decimal] values
+pub const DECIMAL_DEFAULT_SCALE: usize = 10;
+
+/// Validates that the specified `i128` value can be properly
+/// interpreted as a Decimal number with precision `precision`
+#[inline]
+pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Result<i128> {
+    let max = MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1];
+    let min = MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1];
+
+    if value > max {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{} is too large to store in a Decimal of precision {}. Max is {}",
+            value, precision, max
+        )))
+    } else if value < min {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{} is too small to store in a Decimal of precision {}. Min is {}",
+            value, precision, min
+        )))
+    } else {
+        Ok(value)
     }
 }
 
@@ -287,6 +424,9 @@ impl DataType {
                     Some(p) if p == "YEAR_MONTH" => {
                         Ok(DataType::Interval(IntervalUnit::YearMonth))
                     }
+                    Some(p) if p == "MONTH_DAY_NANO" => {
+                        Ok(DataType::Interval(IntervalUnit::MonthDayNano))
+                    }
                     _ => Err(ArrowError::ParseError(
                         "interval unit missing or invalid".to_string(),
                     )),
@@ -395,7 +535,7 @@ impl DataType {
                 json!({"name": "fixedsizebinary", "byteWidth": byte_width})
             }
             DataType::Struct(_) => json!({"name": "struct"}),
-            DataType::Union(_) => json!({"name": "union"}),
+            DataType::Union(_, _) => json!({"name": "union"}),
             DataType::List(_) => json!({ "name": "list"}),
             DataType::LargeList(_) => json!({ "name": "largelist"}),
             DataType::FixedSizeList(_, length) => {
@@ -442,6 +582,7 @@ impl DataType {
             DataType::Interval(unit) => json!({"name": "interval", "unit": match unit {
                 IntervalUnit::YearMonth => "YEAR_MONTH",
                 IntervalUnit::DayTime => "DAY_TIME",
+                IntervalUnit::MonthDayNano => "MONTH_DAY_NANO",
             }}),
             DataType::Duration(unit) => json!({"name": "duration", "unit": match unit {
                 TimeUnit::Second => "SECOND",

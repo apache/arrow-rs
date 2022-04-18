@@ -23,49 +23,11 @@
 
 This crate contains the official Native Rust implementation of [Apache Parquet](https://parquet.apache.org/), which is part of the [Apache Arrow](https://arrow.apache.org/) project.
 
-## Example
-
-Example usage of reading data:
-
-```rust
-use std::fs::File;
-use std::path::Path;
-use parquet::file::reader::{FileReader, SerializedFileReader};
-
-let file = File::open(&Path::new("/path/to/file")).unwrap();
-let reader = SerializedFileReader::new(file).unwrap();
-let mut iter = reader.get_row_iter(None).unwrap();
-while let Some(record) = iter.next() {
-    println!("{}", record);
-}
-```
-
-See [crate documentation](https://docs.rs/crate/parquet) on available API.
+See [crate documentation](https://docs.rs/parquet/latest/parquet/) for examples and the full API.
 
 ## Rust Version Compatbility
 
 This crate is tested with the latest stable version of Rust. We do not currrently test against other, older versions of the Rust compiler.
-
-## Upgrading from versions prior to 4.0
-
-If you are upgrading from version 3.0 or previous of this crate, you
-likely need to change your code to use [`ConvertedType`] rather than
-[`LogicalType`] to preserve existing behaviour in your code.
-
-Version 2.4.0 of the Parquet format introduced a `LogicalType` to replace the existing `ConvertedType`.
-This crate used `parquet::basic::LogicalType` to map to the `ConvertedType`, but this has been renamed to `parquet::basic::ConvertedType` from version 4.0 of this crate.
-
-The `ConvertedType` is deprecated in the format, but is still written
-to preserve backward compatibility.
-It is preferred that `LogicalType` is used, as it supports nanosecond
-precision timestamps without using the deprecated `Int96` Parquet type.
-
-## Supported Parquet Version
-
-- Parquet-format 2.6.0
-
-To update Parquet format to a newer version, check if [parquet-format](https://github.com/sunchao/parquet-format-rs)
-version is available. Then simply update version of `parquet-format` crate in Cargo.toml.
 
 ## Features
 
@@ -75,13 +37,15 @@ version is available. Then simply update version of `parquet-format` crate in Ca
   - [x] Primitive column value readers
   - [x] Row record reader
   - [x] Arrow record reader
+  - [x] Async support (to Arrow)
 - [x] Statistics support
 - [x] Write support
   - [x] Primitive column value writers
   - [ ] Row record writer
   - [x] Arrow record writer
+  - [ ] Async support
 - [ ] Predicate pushdown
-- [x] Parquet format 2.6.0 support
+- [x] Parquet format 4.0.0 support
 
 ## License
 

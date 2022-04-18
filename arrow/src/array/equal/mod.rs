@@ -20,7 +20,7 @@
 //! depend on dynamic casting of `Array`.
 
 use super::{
-    Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
+    Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray, DictionaryArray,
     FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
     GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
     StringOffsetSizeTrait, StructArray,
@@ -40,6 +40,7 @@ mod list;
 mod null;
 mod primitive;
 mod structure;
+mod union;
 mod utils;
 mod variable_size;
 
@@ -55,6 +56,7 @@ use list::list_equal;
 use null::null_equal;
 use primitive::primitive_equal;
 use structure::struct_equal;
+use union::union_equal;
 use variable_size::variable_sized_equal;
 
 impl PartialEq for dyn Array {
@@ -77,6 +79,12 @@ impl PartialEq for NullArray {
 
 impl<T: ArrowPrimitiveType> PartialEq for PrimitiveArray<T> {
     fn eq(&self, other: &PrimitiveArray<T>) -> bool {
+        equal(self.data(), other.data())
+    }
+}
+
+impl<K: ArrowPrimitiveType> PartialEq for DictionaryArray<K> {
+    fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
 }
@@ -199,6 +207,9 @@ fn equal_values(
         | DataType::Duration(_) => primitive_equal::<i64>(
             lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
         ),
+        DataType::Interval(IntervalUnit::MonthDayNano) => primitive_equal::<i128>(
+            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
+        ),
         DataType::Utf8 | DataType::Binary => variable_sized_equal::<i32>(
             lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
         ),
@@ -223,7 +234,9 @@ fn equal_values(
         DataType::Struct(_) => {
             struct_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
         }
-        DataType::Union(_) => unimplemented!("See ARROW-8576"),
+        DataType::Union(_, _) => {
+            union_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
+        }
         DataType::Dictionary(data_type, _) => match data_type.as_ref() {
             DataType::Int8 => dictionary_equal::<i8>(
                 lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
@@ -301,14 +314,14 @@ mod tests {
     use std::sync::Arc;
 
     use crate::array::{
-        array::Array, ArrayDataBuilder, ArrayRef, BinaryOffsetSizeTrait, BooleanArray,
-        DecimalBuilder, FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray,
+        array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryOffsetSizeTrait,
+        BooleanArray, FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray,
         Int32Builder, ListBuilder, NullArray, PrimitiveBuilder, StringArray,
-        StringDictionaryBuilder, StringOffsetSizeTrait, StructArray,
+        StringDictionaryBuilder, StringOffsetSizeTrait, StructArray, UnionBuilder,
     };
     use crate::array::{GenericStringArray, Int32Array};
     use crate::buffer::Buffer;
-    use crate::datatypes::{Field, Int16Type, ToByteSlice};
+    use crate::datatypes::{Field, Int16Type, Int32Type, ToByteSlice};
 
     use super::*;
 
@@ -504,7 +517,9 @@ mod tests {
         assert_eq!(equal(rhs, lhs), expected, "\n{:?}\n{:?}", rhs, lhs);
     }
 
-    fn binary_cases() -> Vec<(Vec<Option<String>>, Vec<Option<String>>, bool)> {
+    type OptionString = Option<String>;
+
+    fn binary_cases() -> Vec<(Vec<OptionString>, Vec<OptionString>, bool)> {
         let base = vec![
             Some("hello".to_owned()),
             None,
@@ -541,11 +556,9 @@ mod tests {
         let cases = binary_cases();
 
         for (lhs, rhs, expected) in cases {
-            let lhs = lhs.iter().map(|x| x.as_deref()).collect();
-            let rhs = rhs.iter().map(|x| x.as_deref()).collect();
-            let lhs = GenericStringArray::<OffsetSize>::from_opt_vec(lhs);
+            let lhs: GenericStringArray<OffsetSize> = lhs.into_iter().collect();
             let lhs = lhs.data();
-            let rhs = GenericStringArray::<OffsetSize>::from_opt_vec(rhs);
+            let rhs: GenericStringArray<OffsetSize> = rhs.into_iter().collect();
             let rhs = rhs.data();
             test_equal(lhs, rhs, expected);
         }
@@ -589,6 +602,19 @@ mod tests {
     #[test]
     fn test_large_binary_equal() {
         test_generic_binary_equal::<i64>()
+    }
+
+    #[test]
+    fn test_fixed_size_binary_array() {
+        let a_input_arg = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
+        let a = FixedSizeBinaryArray::try_from_iter(a_input_arg.into_iter()).unwrap();
+        let a = a.data();
+
+        let b_input_arg = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
+        let b = FixedSizeBinaryArray::try_from_iter(b_input_arg.into_iter()).unwrap();
+        let b = b.data();
+
+        test_equal(a, b, true);
     }
 
     #[test]
@@ -809,16 +835,11 @@ mod tests {
     }
 
     fn create_decimal_array(data: &[Option<i128>]) -> ArrayData {
-        let mut builder = DecimalBuilder::new(20, 23, 6);
-
-        for d in data {
-            if let Some(v) = d {
-                builder.append_value(*v).unwrap();
-            } else {
-                builder.append_null().unwrap();
-            }
-        }
-        builder.finish().data().clone()
+        data.iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(23, 6)
+            .unwrap()
+            .into()
     }
 
     #[test]
@@ -1295,5 +1316,133 @@ mod tests {
             &[Some("a"), None, Some("a"), Some("d")],
         );
         test_equal(&a, &b, false);
+    }
+
+    #[test]
+    fn test_non_null_empty_strings() {
+        let s = StringArray::from(vec![Some(""), Some(""), Some("")]);
+
+        let string1 = s.data();
+
+        let string2 = ArrayData::builder(DataType::Utf8)
+            .len(string1.len())
+            .buffers(string1.buffers().to_vec())
+            .build()
+            .unwrap();
+
+        // string2 is identical to string1 except that it has no validity buffer but since there
+        // are no nulls, string1 and string2 are equal
+        test_equal(string1, &string2, true);
+    }
+
+    #[test]
+    fn test_null_empty_strings() {
+        let s = StringArray::from(vec![Some(""), None, Some("")]);
+
+        let string1 = s.data();
+
+        let string2 = ArrayData::builder(DataType::Utf8)
+            .len(string1.len())
+            .buffers(string1.buffers().to_vec())
+            .build()
+            .unwrap();
+
+        // string2 is identical to string1 except that it has no validity buffer since string1 has
+        // nulls in it, string1 and string2 are not equal
+        test_equal(string1, &string2, false);
+    }
+
+    #[test]
+    fn test_union_equal_dense() {
+        let mut builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union1 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union2 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 5).unwrap();
+        builder.append::<Int32Type>("c", 4).unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union3 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union4 = builder.build().unwrap();
+
+        test_equal(union1.data(), union2.data(), true);
+        test_equal(union1.data(), union3.data(), false);
+        test_equal(union1.data(), union4.data(), false);
+    }
+
+    #[test]
+    fn test_union_equal_sparse() {
+        let mut builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union1 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union2 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 5).unwrap();
+        builder.append::<Int32Type>("c", 4).unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union3 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null().unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union4 = builder.build().unwrap();
+
+        test_equal(union1.data(), union2.data(), true);
+        test_equal(union1.data(), union3.data(), false);
+        test_equal(union1.data(), union4.data(), false);
     }
 }

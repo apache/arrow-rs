@@ -147,8 +147,56 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
             "env `{}` is undefined or has empty value, and the pre-defined data dir `{}` not found\n\
              HINT: try running `git submodule update --init`",
             udf_env,
-            pb.display().to_string(),
+            pb.display(),
         ).into())
+    }
+}
+
+/// An iterator that is untruthful about its actual length
+#[derive(Debug, Clone)]
+pub struct BadIterator<T> {
+    /// where the iterator currently is
+    cur: usize,
+    /// How many items will this iterator *actually* make
+    limit: usize,
+    /// How many items this iterator claims it will make
+    claimed: usize,
+    /// The items to return. If there are fewer items than `limit`
+    /// they will be repeated
+    pub items: Vec<T>,
+}
+
+impl<T> BadIterator<T> {
+    /// Create a new iterator for <limit> items, but that reports to
+    /// produce <claimed> items. Must provide at least 1 item.
+    pub fn new(limit: usize, claimed: usize, items: Vec<T>) -> Self {
+        assert!(!items.is_empty());
+        Self {
+            cur: 0,
+            limit,
+            claimed,
+            items,
+        }
+    }
+}
+
+impl<T: Clone> Iterator for BadIterator<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cur < self.limit {
+            let next_item_idx = self.cur % self.items.len();
+            let next_item = self.items[next_item_idx].clone();
+            self.cur += 1;
+            Some(next_item)
+        } else {
+            None
+        }
+    }
+
+    /// report whatever the iterator says to
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.claimed as usize))
     }
 }
 

@@ -17,62 +17,68 @@
 
 //! Defines kernel to extract a substring of a \[Large\]StringArray
 
+use crate::buffer::MutableBuffer;
 use crate::{array::*, buffer::Buffer};
 use crate::{
     datatypes::DataType,
     error::{ArrowError, Result},
 };
 
-#[allow(clippy::unnecessary_wraps)]
 fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: OffsetSize,
-    length: &Option<OffsetSize>,
+    length: Option<OffsetSize>,
 ) -> Result<ArrayRef> {
-    // compute current offsets
-    let offsets = array.data_ref().clone().buffers()[0].clone();
-    let offsets: &[OffsetSize] = unsafe { offsets.typed_data::<OffsetSize>() };
-
-    // compute null bitmap (copy)
+    let offsets = array.value_offsets();
     let null_bit_buffer = array.data_ref().null_buffer().cloned();
-
-    // compute values
-    let values = &array.data_ref().buffers()[1];
+    let values = array.value_data();
     let data = values.as_slice();
+    let zero = OffsetSize::zero();
 
-    let mut new_values = Vec::new(); // we have no way to estimate how much this will be.
+    let cal_new_start: Box<dyn Fn(OffsetSize, OffsetSize) -> OffsetSize> = if start
+        >= zero
+    {
+        // count from the start of string
+        Box::new(|old_start: OffsetSize, end: OffsetSize| (old_start + start).min(end))
+    } else {
+        // count from the end of string
+        Box::new(|old_start: OffsetSize, end: OffsetSize| (end + start).max(old_start))
+    };
+
+    let cal_new_length: Box<dyn Fn(OffsetSize, OffsetSize) -> OffsetSize> =
+        if let Some(length) = length {
+            Box::new(move |start: OffsetSize, end: OffsetSize| length.min(end - start))
+        } else {
+            Box::new(move |start: OffsetSize, end: OffsetSize| end - start)
+        };
+
+    // start and end offsets for each substring
+    let mut new_starts_ends: Vec<(OffsetSize, OffsetSize)> =
+        Vec::with_capacity(array.len());
     let mut new_offsets: Vec<OffsetSize> = Vec::with_capacity(array.len() + 1);
+    let mut len_so_far = zero;
+    new_offsets.push(zero);
 
-    let mut length_so_far = OffsetSize::zero();
-    new_offsets.push(length_so_far);
-    (0..array.len()).for_each(|i| {
-        // the length of this entry
-        let length_i: OffsetSize = offsets[i + 1] - offsets[i];
-        // compute where we should start slicing this entry
-        let start = offsets[i]
-            + if start >= OffsetSize::zero() {
-                start
-            } else {
-                length_i + start
-            };
-
-        let start = start.max(offsets[i]).min(offsets[i + 1]);
-        // compute the length of the slice
-        let length: OffsetSize = length
-            .unwrap_or(length_i)
-            // .max(0) is not needed as it is guaranteed
-            .min(offsets[i + 1] - start); // so we do not go beyond this entry
-
-        length_so_far += length;
-
-        new_offsets.push(length_so_far);
-
-        // we need usize for ranges
-        let start = start.to_usize().unwrap();
-        let length = length.to_usize().unwrap();
-
-        new_values.extend_from_slice(&data[start..start + length]);
+    offsets.windows(2).for_each(|pair| {
+        let new_start = cal_new_start(pair[0], pair[1]);
+        let new_length = cal_new_length(new_start, pair[1]);
+        len_so_far += new_length;
+        new_starts_ends.push((new_start, new_start + new_length));
+        new_offsets.push(len_so_far);
     });
+
+    // concatenate substrings into a buffer
+    let mut new_values =
+        MutableBuffer::new(new_offsets.last().unwrap().to_usize().unwrap());
+
+    new_starts_ends
+        .iter()
+        .map(|(start, end)| {
+            let start = start.to_usize().unwrap();
+            let end = end.to_usize().unwrap();
+            &data[start..end]
+        })
+        .for_each(|slice| new_values.extend_from_slice(slice));
 
     let data = unsafe {
         ArrayData::new_unchecked(
@@ -81,24 +87,50 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
             None,
             null_bit_buffer,
             0,
-            vec![
-                Buffer::from_slice_ref(&new_offsets),
-                Buffer::from_slice_ref(&new_values),
-            ],
+            vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
             vec![],
         )
     };
     Ok(make_array(data))
 }
 
-/// Returns an ArrayRef with a substring starting from `start` and with optional length `length` of each of the elements in `array`.
-/// `start` can be negative, in which case the start counts from the end of the string.
+/// Returns an ArrayRef with substrings of all the elements in `array`.
+///
+/// # Arguments
+///
+/// * `start` - The start index of all substrings.
+/// If `start >= 0`, then count from the start of the string,
+/// otherwise count from the end of the string.
+///
+/// * `length`(option) - The length of all substrings.
+/// If `length` is `None`, then the substring is from `start` to the end of the string.
+///
+/// Attention: Both `start` and `length` are counted by byte, not by char.
+///
+/// # Warning
+///
+/// This function **might** return in invalid utf-8 format if the
+/// character length falls on a non-utf8 boundary, which we
+/// [hope to fix](https://github.com/apache/arrow-rs/issues/1531)
+/// in a future release.
+///
+/// ## Example of getting an invalid substring
+/// ```
+/// # // Doesn't pass due to  https://github.com/apache/arrow-rs/issues/1531
+/// # #[cfg(not(feature = "force_validate"))]
+/// # {
+/// # use arrow::array::StringArray;
+/// # use arrow::compute::kernels::substring::substring;
+/// let array = StringArray::from(vec![Some("E=mc²")]);
+/// let result = substring(&array, -1, None).unwrap();
+/// let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+/// assert_eq!(result.value(0).as_bytes(), &[0x00B2]); // invalid utf-8 format
+/// # }
+/// ```
+///
+/// # Error
 /// this function errors when the passed array is not a \[Large\]String array.
-pub fn substring(
-    array: &dyn Array,
-    start: i64,
-    length: &Option<u64>,
-) -> Result<ArrayRef> {
+pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<ArrayRef> {
     match array.data_type() {
         DataType::LargeUtf8 => generic_substring(
             array
@@ -106,7 +138,7 @@ pub fn substring(
                 .downcast_ref::<LargeStringArray>()
                 .expect("A large string is expected"),
             start,
-            &length.map(|e| e as i64),
+            length.map(|e| e as i64),
         ),
         DataType::Utf8 => generic_substring(
             array
@@ -114,7 +146,7 @@ pub fn substring(
                 .downcast_ref::<StringArray>()
                 .expect("A string is expected"),
             start as i32,
-            &length.map(|e| e as i32),
+            length.map(|e| e as i32),
         ),
         _ => Err(ArrowError::ComputeError(format!(
             "substring does not support type {:?}",
@@ -170,7 +202,7 @@ mod tests {
         cases.into_iter().try_for_each::<_, Result<()>>(
             |(array, start, length, expected)| {
                 let array = T::from(array);
-                let result: ArrayRef = substring(&array, start, &length)?;
+                let result: ArrayRef = substring(&array, start, length)?;
                 assert_eq!(array.len(), result.len());
 
                 let result = result.as_any().downcast_ref::<T>().unwrap();
@@ -251,7 +283,7 @@ mod tests {
         cases.into_iter().try_for_each::<_, Result<()>>(
             |(array, start, length, expected)| {
                 let array = StringArray::from(array);
-                let result = substring(&array, start, &length)?;
+                let result = substring(&array, start, length)?;
                 assert_eq!(array.len(), result.len());
                 let result = result.as_any().downcast_ref::<StringArray>().unwrap();
                 let expected = StringArray::from(expected);

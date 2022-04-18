@@ -31,7 +31,7 @@ type TonicStream<T> = Pin<Box<dyn Stream<Item = T> + Send + Sync + 'static>>;
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
-pub async fn scenario_setup(port: &str) -> Result {
+pub async fn scenario_setup(port: u16) -> Result {
     let service = MiddlewareScenarioImpl {};
     let svc = FlightServiceServer::new(service);
     let addr = super::listen_on(port).await?;

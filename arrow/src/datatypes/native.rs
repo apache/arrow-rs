@@ -67,6 +67,12 @@ pub trait ArrowNativeType:
     fn from_i64(_: i64) -> Option<Self> {
         None
     }
+
+    /// Convert native type from i128.
+    #[inline]
+    fn from_i128(_: i128) -> Option<Self> {
+        None
+    }
 }
 
 /// Trait bridging the dynamic-typed nature of Arrow (via [`DataType`]) with the
@@ -197,6 +203,39 @@ impl ArrowNativeType for i64 {
     /// Convert native type from i64.
     #[inline]
     fn from_i64(val: i64) -> Option<Self> {
+        Some(val)
+    }
+}
+
+impl JsonSerializable for i128 {
+    fn into_json_value(self) -> Option<Value> {
+        // Serialize as string to avoid issues with arbitrary_precision serde_json feature
+        // - https://github.com/serde-rs/json/issues/559
+        // - https://github.com/serde-rs/json/issues/845
+        // - https://github.com/serde-rs/json/issues/846
+        Some(self.to_string().into())
+    }
+}
+
+impl ArrowNativeType for i128 {
+    #[inline]
+    fn from_usize(v: usize) -> Option<Self> {
+        num::FromPrimitive::from_usize(v)
+    }
+
+    #[inline]
+    fn to_usize(&self) -> Option<usize> {
+        num::ToPrimitive::to_usize(self)
+    }
+
+    #[inline]
+    fn to_isize(&self) -> Option<isize> {
+        num::ToPrimitive::to_isize(self)
+    }
+
+    /// Convert native type from i128.
+    #[inline]
+    fn from_i128(val: i128) -> Option<Self> {
         Some(val)
     }
 }

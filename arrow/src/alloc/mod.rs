@@ -18,21 +18,18 @@
 //! Defines memory-related functions, such as allocate/deallocate/reallocate memory
 //! regions, cache and allocation alignments.
 
+use std::alloc::{handle_alloc_error, Layout};
+use std::fmt::{Debug, Formatter};
 use std::mem::size_of;
+use std::panic::RefUnwindSafe;
 use std::ptr::NonNull;
-use std::{
-    alloc::{handle_alloc_error, Layout},
-    sync::atomic::AtomicIsize,
-};
+use std::sync::Arc;
 
 mod alignment;
 mod types;
 
 pub use alignment::ALIGNMENT;
 pub use types::NativeType;
-
-// If this number is not zero after all objects have been `drop`, there is a memory leak
-pub static mut ALLOCATIONS: AtomicIsize = AtomicIsize::new(0);
 
 #[inline]
 unsafe fn null_pointer<T: NativeType>() -> NonNull<T> {
@@ -48,7 +45,6 @@ pub fn allocate_aligned<T: NativeType>(size: usize) -> NonNull<T> {
             null_pointer()
         } else {
             let size = size * size_of::<T>();
-            ALLOCATIONS.fetch_add(size as isize, std::sync::atomic::Ordering::SeqCst);
 
             let layout = Layout::from_size_align_unchecked(size, ALIGNMENT);
             let raw_ptr = std::alloc::alloc(layout) as *mut T;
@@ -66,7 +62,6 @@ pub fn allocate_aligned_zeroed<T: NativeType>(size: usize) -> NonNull<T> {
             null_pointer()
         } else {
             let size = size * size_of::<T>();
-            ALLOCATIONS.fetch_add(size as isize, std::sync::atomic::Ordering::SeqCst);
 
             let layout = Layout::from_size_align_unchecked(size, ALIGNMENT);
             let raw_ptr = std::alloc::alloc_zeroed(layout) as *mut T;
@@ -86,7 +81,6 @@ pub fn allocate_aligned_zeroed<T: NativeType>(size: usize) -> NonNull<T> {
 pub unsafe fn free_aligned<T: NativeType>(ptr: NonNull<T>, size: usize) {
     if ptr != null_pointer() {
         let size = size * size_of::<T>();
-        ALLOCATIONS.fetch_sub(size as isize, std::sync::atomic::Ordering::SeqCst);
         std::alloc::dealloc(
             ptr.as_ptr() as *mut u8,
             Layout::from_size_align_unchecked(size, ALIGNMENT),
@@ -121,10 +115,6 @@ pub unsafe fn reallocate<T: NativeType>(
         return null_pointer();
     }
 
-    ALLOCATIONS.fetch_add(
-        new_size as isize - old_size as isize,
-        std::sync::atomic::Ordering::SeqCst,
-    );
     let raw_ptr = std::alloc::realloc(
         ptr.as_ptr() as *mut u8,
         Layout::from_size_align_unchecked(old_size, ALIGNMENT),
@@ -133,4 +123,33 @@ pub unsafe fn reallocate<T: NativeType>(
     NonNull::new(raw_ptr).unwrap_or_else(|| {
         handle_alloc_error(Layout::from_size_align_unchecked(new_size, ALIGNMENT))
     })
+}
+
+/// The owner of an allocation.
+/// The trait implementation is responsible for dropping the allocations once no more references exist.
+pub trait Allocation: RefUnwindSafe {}
+
+impl<T: RefUnwindSafe> Allocation for T {}
+
+/// Mode of deallocating memory regions
+pub(crate) enum Deallocation {
+    /// An allocation of the given capacity that needs to be deallocated using arrows's cache aligned allocator.
+    /// See [allocate_aligned] and [free_aligned].
+    Arrow(usize),
+    /// An allocation from an external source like the FFI interface or a Rust Vec.
+    /// Deallocation will happen
+    Custom(Arc<dyn Allocation>),
+}
+
+impl Debug for Deallocation {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        match self {
+            Deallocation::Arrow(capacity) => {
+                write!(f, "Deallocation::Arrow {{ capacity: {} }}", capacity)
+            }
+            Deallocation::Custom(_) => {
+                write!(f, "Deallocation::Custom {{ capacity: unknown }}")
+            }
+        }
+    }
 }

@@ -40,7 +40,7 @@
 //!
 //! \[1\] [parquet-format#nested-encoding](https://github.com/apache/parquet-format#nested-encoding)
 
-use arrow::array::{make_array, ArrayRef, MapArray, StructArray};
+use arrow::array::{make_array, Array, ArrayRef, MapArray, StructArray};
 use arrow::datatypes::{DataType, Field};
 
 /// Keeps track of the level information per array that is needed to write an Arrow array to Parquet.
@@ -123,7 +123,7 @@ impl LevelInfo {
     /// The parent struct's nullness is tracked, as it determines whether the child
     /// max_definition should be incremented.
     /// The 'is_parent_struct' variable asks "is this field's parent a struct?".
-    /// * If we are starting at a [RecordBatch], this is `false`.
+    /// * If we are starting at a [RecordBatch](arrow::record_batch::RecordBatch), this is `false`.
     /// * If we are calculating a list's child, this is `false`.
     /// * If we are calculating a struct (i.e. `field.data_type90 == Struct`),
     /// this depends on whether the struct is a child of a struct.
@@ -200,9 +200,8 @@ impl LevelInfo {
                 );
 
                 match child_array.data_type() {
-                    // TODO: The behaviour of a <list<null>> is untested
-                    DataType::Null => vec![list_level],
-                    DataType::Boolean
+                    DataType::Null
+                    | DataType::Boolean
                     | DataType::Int8
                     | DataType::Int16
                     | DataType::Int32
@@ -241,7 +240,7 @@ impl LevelInfo {
                         list_level.calculate_array_levels(&child_array, list_field)
                     }
                     DataType::FixedSizeList(_, _) => unimplemented!(),
-                    DataType::Union(_) => unimplemented!(),
+                    DataType::Union(_, _) => unimplemented!(),
                 }
             }
             DataType::Map(map_field, _) => {
@@ -287,11 +286,18 @@ impl LevelInfo {
                     .as_any()
                     .downcast_ref::<StructArray>()
                     .expect("Unable to get struct array");
-                let struct_level = self.calculate_child_levels(
+                let mut struct_level = self.calculate_child_levels(
                     array_offsets,
                     array_mask,
                     LevelType::Struct(field.is_nullable()),
                 );
+
+                // If the parent field is a list, calculate the children of the struct as if it
+                // were a list as well.
+                if matches!(self.level_type, LevelType::List(_)) {
+                    struct_level.level_type = LevelType::List(false);
+                }
+
                 let mut struct_levels = vec![];
                 struct_array
                     .columns()
@@ -304,7 +310,7 @@ impl LevelInfo {
                     });
                 struct_levels
             }
-            DataType::Union(_) => unimplemented!(),
+            DataType::Union(_, _) => unimplemented!(),
             DataType::Dictionary(_, _) => {
                 // Need to check for these cases not implemented in C++:
                 // - "Writing DictionaryArray with nested dictionary type not yet supported"
@@ -670,8 +676,9 @@ impl LevelInfo {
         len: usize,
     ) -> (Vec<i64>, Vec<bool>) {
         match array.data_type() {
-            DataType::Null
-            | DataType::Boolean
+            // A NullArray is entirely nulls, despite not containing a null buffer
+            DataType::Null => ((0..=(len as i64)).collect(), vec![false; len]),
+            DataType::Boolean
             | DataType::Int8
             | DataType::Int16
             | DataType::Int32
@@ -704,12 +711,11 @@ impl LevelInfo {
                 ((0..=(len as i64)).collect(), array_mask)
             }
             DataType::List(_) | DataType::Map(_, _) => {
-                let data = array.data();
-                let offsets = unsafe { data.buffers()[0].typed_data::<i32>() };
+                let offsets = unsafe { array.data().buffers()[0].typed_data::<i32>() };
                 let offsets = offsets
-                    .to_vec()
-                    .into_iter()
-                    .skip(offset)
+                    .iter()
+                    .copied()
+                    .skip(array.offset() + offset)
                     .take(len + 1)
                     .map(|v| v as i64)
                     .collect::<Vec<i64>>();
@@ -722,7 +728,7 @@ impl LevelInfo {
             DataType::LargeList(_) => {
                 let offsets = unsafe { array.data().buffers()[0].typed_data::<i64>() }
                     .iter()
-                    .skip(offset)
+                    .skip(array.offset() + offset)
                     .take(len + 1)
                     .copied()
                     .collect();
@@ -743,7 +749,7 @@ impl LevelInfo {
                     array_mask,
                 )
             }
-            DataType::FixedSizeList(_, _) | DataType::Union(_) => {
+            DataType::FixedSizeList(_, _) | DataType::Union(_, _) => {
                 unimplemented!("Getting offsets not yet implemented")
             }
         }
@@ -751,14 +757,14 @@ impl LevelInfo {
 
     /// Given a level's information, calculate the offsets required to index an array correctly.
     pub(crate) fn filter_array_indices(&self) -> Vec<usize> {
-        // happy path if not dealing with lists
-        let is_nullable = match self.level_type {
-            LevelType::Primitive(is_nullable) => is_nullable,
-            _ => panic!(
+        if !matches!(self.level_type, LevelType::Primitive(_)) {
+            panic!(
                 "Cannot filter indices on a non-primitive array, found {:?}",
                 self.level_type
-            ),
-        };
+            );
+        }
+
+        // happy path if not dealing with lists
         if self.repetition.is_none() {
             return self
                 .definition
@@ -773,17 +779,26 @@ impl LevelInfo {
                 })
                 .collect();
         }
+
         let mut filtered = vec![];
-        // remove slots that are false from definition_mask
+        let mut definition_levels = self.definition.iter();
         let mut index = 0;
-        self.definition.iter().for_each(|def| {
-            if *def == self.max_definition {
-                filtered.push(index);
+
+        for len in self.array_offsets.windows(2).map(|s| s[1] - s[0]) {
+            if len == 0 {
+                // Skip this definition level--the iterator should not be empty, and the definition
+                // level be less than max_definition, i.e., a null value)
+                assert!(*definition_levels.next().unwrap() < self.max_definition);
+            } else {
+                for (_, def) in (0..len).zip(&mut definition_levels) {
+                    if *def == self.max_definition {
+                        filtered.push(index);
+                    }
+                    index += 1;
+                }
             }
-            if *def >= self.max_definition - is_nullable as i16 {
-                index += 1;
-            }
-        });
+        }
+
         filtered
     }
 }
@@ -1674,5 +1689,134 @@ mod tests {
             length: 7,
         };
         assert_eq!(list_level, &expected_level);
+    }
+
+    #[test]
+    fn test_list_of_struct() {
+        // define schema
+        let int_field = Field::new("a", DataType::Int32, true);
+        let item_field =
+            Field::new("item", DataType::Struct(vec![int_field.clone()]), true);
+        let list_field = Field::new("list", DataType::List(Box::new(item_field)), true);
+
+        let int_builder = Int32Builder::new(10);
+        let struct_builder =
+            StructBuilder::new(vec![int_field], vec![Box::new(int_builder)]);
+        let mut list_builder = ListBuilder::new(struct_builder);
+
+        // [{a: 1}], [], null, [null, null], [{a: null}], [{a: 2}]
+        //
+        // [{a: 1}]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_value(1)
+            .unwrap();
+        values.append(true).unwrap();
+        list_builder.append(true).unwrap();
+
+        // []
+        list_builder.append(true).unwrap();
+
+        // null
+        list_builder.append(false).unwrap();
+
+        // [null, null]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values.append(false).unwrap();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values.append(false).unwrap();
+        list_builder.append(true).unwrap();
+
+        // [{a: null}]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_null()
+            .unwrap();
+        values.append(true).unwrap();
+        list_builder.append(true).unwrap();
+
+        // [{a: 2}]
+        let values = list_builder.values();
+        values
+            .field_builder::<Int32Builder>(0)
+            .unwrap()
+            .append_value(2)
+            .unwrap();
+        values.append(true).unwrap();
+        list_builder.append(true).unwrap();
+
+        let array = Arc::new(list_builder.finish());
+
+        let schema = Arc::new(Schema::new(vec![list_field]));
+
+        let rb = RecordBatch::try_new(schema, vec![array]).unwrap();
+
+        let batch_level = LevelInfo::new(0, rb.num_rows());
+        let list_level =
+            &batch_level.calculate_array_levels(rb.column(0), rb.schema().field(0))[0];
+
+        let expected_level = LevelInfo {
+            definition: vec![4, 1, 0, 2, 2, 3, 4],
+            repetition: Some(vec![0, 0, 0, 0, 1, 0, 0]),
+            array_offsets: vec![0, 1, 1, 1, 3, 4, 5],
+            array_mask: vec![true, true, false, false, false, false, true],
+            max_definition: 4,
+            level_type: LevelType::Primitive(true),
+            offset: 0,
+            length: 5,
+        };
+
+        assert_eq!(list_level, &expected_level);
+    }
+
+    #[test]
+    fn test_nested_indices() {
+        // Given a buffer like
+        // [0, null, null, 1, 2]
+        //
+        // The two level infos below might represent the two structures
+        // 1: [{a: 0}], [], null, [null, null], [{a: 1}], [{a: 2}]
+        // 2: [0], [], null, [null, null], [1], [2]
+        //
+        // (That is, their only difference is that the leaf values are nested one level deeper in a
+        // struct).
+
+        let level1 = LevelInfo {
+            definition: vec![4, 1, 0, 2, 2, 4, 4],
+            repetition: Some(vec![0, 0, 0, 0, 1, 0, 0]),
+            array_offsets: vec![0, 1, 1, 1, 3, 4, 5],
+            array_mask: vec![true, true, false, false, false, false, true],
+            max_definition: 4,
+            level_type: LevelType::Primitive(true),
+            offset: 0,
+            length: 5,
+        };
+
+        let level2 = LevelInfo {
+            definition: vec![3, 1, 0, 2, 2, 3, 3],
+            repetition: Some(vec![0, 0, 0, 0, 1, 0, 0]),
+            array_offsets: vec![0, 1, 1, 1, 3, 4, 5],
+            array_mask: vec![true, true, false, false, false, false, true],
+            max_definition: 3,
+            level_type: LevelType::Primitive(true),
+            offset: 0,
+            length: 5,
+        };
+
+        // filter_array_indices should return the same indices in this case.
+        assert_eq!(level1.filter_array_indices(), level2.filter_array_indices());
     }
 }

@@ -41,6 +41,11 @@ use crate::error::{ArrowError, Result};
 pub struct RecordBatch {
     schema: SchemaRef,
     columns: Vec<Arc<dyn Array>>,
+
+    /// The number of rows in this RecordBatch
+    ///
+    /// This is stored separately from the columns to handle the case of no columns
+    row_count: usize,
 }
 
 impl RecordBatch {
@@ -77,8 +82,7 @@ impl RecordBatch {
     /// ```
     pub fn try_new(schema: SchemaRef, columns: Vec<ArrayRef>) -> Result<Self> {
         let options = RecordBatchOptions::default();
-        Self::validate_new_batch(&schema, columns.as_slice(), &options)?;
-        Ok(RecordBatch { schema, columns })
+        Self::try_new_impl(schema, columns, &options)
     }
 
     /// Creates a `RecordBatch` from a schema and columns, with additional options,
@@ -90,8 +94,7 @@ impl RecordBatch {
         columns: Vec<ArrayRef>,
         options: &RecordBatchOptions,
     ) -> Result<Self> {
-        Self::validate_new_batch(&schema, columns.as_slice(), options)?;
-        Ok(RecordBatch { schema, columns })
+        Self::try_new_impl(schema, columns, options)
     }
 
     /// Creates a new empty [`RecordBatch`].
@@ -101,23 +104,21 @@ impl RecordBatch {
             .iter()
             .map(|field| new_empty_array(field.data_type()))
             .collect();
-        RecordBatch { schema, columns }
+
+        RecordBatch {
+            schema,
+            columns,
+            row_count: 0,
+        }
     }
 
     /// Validate the schema and columns using [`RecordBatchOptions`]. Returns an error
-    /// if any validation check fails.
-    fn validate_new_batch(
-        schema: &SchemaRef,
-        columns: &[ArrayRef],
+    /// if any validation check fails, otherwise returns the created [`Self`]
+    fn try_new_impl(
+        schema: SchemaRef,
+        columns: Vec<ArrayRef>,
         options: &RecordBatchOptions,
-    ) -> Result<()> {
-        // check that there are some columns
-        if columns.is_empty() {
-            return Err(ArrowError::InvalidArgumentError(
-                "at least one column must be defined to create a record batch"
-                    .to_string(),
-            ));
-        }
+    ) -> Result<Self> {
         // check that number of fields in schema match column length
         if schema.fields().len() != columns.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -126,53 +127,84 @@ impl RecordBatch {
                 schema.fields().len(),
             )));
         }
-        // check that all columns have the same row count, and match the schema
-        let len = columns[0].data().len();
 
-        // This is a bit repetitive, but it is better to check the condition outside the loop
-        if options.match_field_names {
-            for (i, column) in columns.iter().enumerate() {
-                if column.len() != len {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "all columns in a record batch must have the same length"
-                            .to_string(),
-                    ));
+        // check that all columns have the same row count
+        let row_count = options
+            .row_count
+            .or_else(|| columns.first().map(|col| col.len()))
+            .ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "must either specify a row count or at least one column".to_string(),
+                )
+            })?;
+
+        if columns.iter().any(|c| c.len() != row_count) {
+            let err = match options.row_count {
+                Some(_) => {
+                    "all columns in a record batch must have the specified row count"
                 }
-                if column.data_type() != schema.field(i).data_type() {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "column types must match schema types, expected {:?} but found {:?} at column index {}",
-                        schema.field(i).data_type(),
-                        column.data_type(),
-                        i)));
-                }
-            }
-        } else {
-            for (i, column) in columns.iter().enumerate() {
-                if column.len() != len {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "all columns in a record batch must have the same length"
-                            .to_string(),
-                    ));
-                }
-                if !column
-                    .data_type()
-                    .equals_datatype(schema.field(i).data_type())
-                {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "column types must match schema types, expected {:?} but found {:?} at column index {}",
-                        schema.field(i).data_type(),
-                        column.data_type(),
-                        i)));
-                }
-            }
+                None => "all columns in a record batch must have the same length",
+            };
+            return Err(ArrowError::InvalidArgumentError(err.to_string()));
         }
 
-        Ok(())
+        // function for comparing column type and field type
+        // return true if 2 types are not matched
+        let type_not_match = if options.match_field_names {
+            |(_, (col_type, field_type)): &(usize, (&DataType, &DataType))| {
+                col_type != field_type
+            }
+        } else {
+            |(_, (col_type, field_type)): &(usize, (&DataType, &DataType))| {
+                !col_type.equals_datatype(field_type)
+            }
+        };
+
+        // check that all columns match the schema
+        let not_match = columns
+            .iter()
+            .zip(schema.fields().iter())
+            .map(|(col, field)| (col.data_type(), field.data_type()))
+            .enumerate()
+            .find(type_not_match);
+
+        if let Some((i, (col_type, field_type))) = not_match {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "column types must match schema types, expected {:?} but found {:?} at column index {}",
+                field_type,
+                col_type,
+                i)));
+        }
+
+        Ok(RecordBatch {
+            schema,
+            columns,
+            row_count,
+        })
     }
 
     /// Returns the [`Schema`](crate::datatypes::Schema) of the record batch.
     pub fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    /// Projects the schema onto the specified columns
+    pub fn project(&self, indices: &[usize]) -> Result<RecordBatch> {
+        let projected_schema = self.schema.project(indices)?;
+        let batch_fields = indices
+            .iter()
+            .map(|f| {
+                self.columns.get(*f).cloned().ok_or_else(|| {
+                    ArrowError::SchemaError(format!(
+                        "project index {} out of bounds, max field {}",
+                        f,
+                        self.columns.len()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        RecordBatch::try_new(SchemaRef::new(projected_schema), batch_fields)
     }
 
     /// Returns the number of columns in the record batch.
@@ -203,10 +235,6 @@ impl RecordBatch {
 
     /// Returns the number of rows in each column.
     ///
-    /// # Panics
-    ///
-    /// Panics if the `RecordBatch` contains no columns.
-    ///
     /// # Example
     ///
     /// ```
@@ -228,7 +256,7 @@ impl RecordBatch {
     /// # }
     /// ```
     pub fn num_rows(&self) -> usize {
-        self.columns[0].data().len()
+        self.row_count
     }
 
     /// Get a reference to a column's array by index.
@@ -252,10 +280,6 @@ impl RecordBatch {
     ///
     /// Panics if `offset` with `length` is greater than column length.
     pub fn slice(&self, offset: usize, length: usize) -> RecordBatch {
-        if self.schema.fields().is_empty() {
-            assert!((offset + length) == 0);
-            return RecordBatch::new_empty(self.schema.clone());
-        }
         assert!((offset + length) <= self.num_rows());
 
         let columns = self
@@ -267,6 +291,7 @@ impl RecordBatch {
         Self {
             schema: self.schema.clone(),
             columns,
+            row_count: length,
         }
     }
 
@@ -387,15 +412,20 @@ impl RecordBatch {
 
 /// Options that control the behaviour used when creating a [`RecordBatch`].
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct RecordBatchOptions {
     /// Match field names of structs and lists. If set to `true`, the names must match.
     pub match_field_names: bool,
+
+    /// Optional row count, useful for specifying a row count for a RecordBatch with no columns
+    pub row_count: Option<usize>,
 }
 
 impl Default for RecordBatchOptions {
     fn default() -> Self {
         Self {
             match_field_names: true,
+            row_count: None,
         }
     }
 }
@@ -411,6 +441,7 @@ impl From<&StructArray> for RecordBatch {
             let columns = struct_array.boxed_fields.clone();
             RecordBatch {
                 schema: Arc::new(schema),
+                row_count: struct_array.len(),
                 columns,
             }
         } else {
@@ -517,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "assertion failed: (offset + length) == 0")]
+    #[should_panic(expected = "assertion failed: (offset + length) <= self.num_rows()")]
     fn create_record_batch_slice_empty_batch() {
         let schema = Schema::new(vec![]);
 
@@ -582,7 +613,7 @@ mod tests {
         let a = Int64Array::from(vec![1, 2, 3, 4, 5]);
 
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]);
-        assert!(!batch.is_ok());
+        assert!(batch.is_err());
     }
 
     #[test]
@@ -629,6 +660,7 @@ mod tests {
         // creating the batch without field name validation should pass
         let options = RecordBatchOptions {
             match_field_names: false,
+            row_count: None,
         };
         let batch = RecordBatch::try_new_with_options(schema, vec![a], &options);
         assert!(batch.is_ok());
@@ -643,7 +675,7 @@ mod tests {
 
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)]);
-        assert!(!batch.is_ok());
+        assert!(batch.is_err());
     }
 
     #[test]
@@ -899,5 +931,52 @@ mod tests {
         .unwrap();
 
         assert_ne!(batch1, batch2);
+    }
+
+    #[test]
+    fn project() {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+        let b: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let c: ArrayRef = Arc::new(StringArray::from(vec!["d", "e", "f"]));
+
+        let record_batch = RecordBatch::try_from_iter(vec![
+            ("a", a.clone()),
+            ("b", b.clone()),
+            ("c", c.clone()),
+        ])
+        .expect("valid conversion");
+
+        let expected = RecordBatch::try_from_iter(vec![("a", a), ("c", c)])
+            .expect("valid conversion");
+
+        assert_eq!(expected, record_batch.project(&[0, 2]).unwrap());
+    }
+
+    #[test]
+    fn test_no_column_record_batch() {
+        let schema = Arc::new(Schema::new(vec![]));
+
+        let err = RecordBatch::try_new(schema.clone(), vec![]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("must either specify a row count or at least one column"));
+
+        let options = RecordBatchOptions {
+            row_count: Some(10),
+            ..Default::default()
+        };
+
+        let ok =
+            RecordBatch::try_new_with_options(schema.clone(), vec![], &options).unwrap();
+        assert_eq!(ok.num_rows(), 10);
+
+        let a = ok.slice(2, 5);
+        assert_eq!(a.num_rows(), 5);
+
+        let b = ok.slice(5, 0);
+        assert_eq!(b.num_rows(), 0);
+
+        assert_ne!(a, b);
+        assert_eq!(b, RecordBatch::new_empty(schema))
     }
 }

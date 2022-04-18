@@ -38,7 +38,7 @@
 //! let a = Int32Array::from(vec![1, 2, 3]);
 //! let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap();
 //!
-//! let json_rows = json::writer::record_batches_to_json_rows(&[batch]);
+//! let json_rows = json::writer::record_batches_to_json_rows(&[batch]).unwrap();
 //! assert_eq!(
 //!     serde_json::Value::Object(json_rows[1].clone()),
 //!     serde_json::json!({"a": 2}),
@@ -110,64 +110,68 @@ use serde_json::Value;
 
 use crate::array::*;
 use crate::datatypes::*;
-use crate::error::Result;
+use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
 
-fn primitive_array_to_json<T: ArrowPrimitiveType>(array: &ArrayRef) -> Vec<Value> {
-    as_primitive_array::<T>(array)
+fn primitive_array_to_json<T: ArrowPrimitiveType>(
+    array: &ArrayRef,
+) -> Result<Vec<Value>> {
+    Ok(as_primitive_array::<T>(array)
         .iter()
         .map(|maybe_value| match maybe_value {
             Some(v) => v.into_json_value().unwrap_or(Value::Null),
             None => Value::Null,
         })
-        .collect()
+        .collect())
 }
 
 fn struct_array_to_jsonmap_array(
     array: &StructArray,
     row_count: usize,
-) -> Vec<JsonMap<String, Value>> {
+) -> Result<Vec<JsonMap<String, Value>>> {
     let inner_col_names = array.column_names();
 
     let mut inner_objs = iter::repeat(JsonMap::new())
         .take(row_count)
         .collect::<Vec<JsonMap<String, Value>>>();
 
-    array
-        .columns()
-        .iter()
-        .enumerate()
-        .for_each(|(j, struct_col)| {
-            set_column_for_json_rows(
-                &mut inner_objs,
-                row_count,
-                struct_col,
-                inner_col_names[j],
-            );
-        });
-
-    inner_objs
+    for (j, struct_col) in array.columns().iter().enumerate() {
+        set_column_for_json_rows(
+            &mut inner_objs,
+            row_count,
+            struct_col,
+            inner_col_names[j],
+        )?
+    }
+    Ok(inner_objs)
 }
 
 /// Converts an arrow [`ArrayRef`] into a `Vec` of Serde JSON [`serde_json::Value`]'s
-pub fn array_to_json_array(array: &ArrayRef) -> Vec<Value> {
+pub fn array_to_json_array(array: &ArrayRef) -> Result<Vec<Value>> {
     match array.data_type() {
-        DataType::Null => iter::repeat(Value::Null).take(array.len()).collect(),
-        DataType::Boolean => as_boolean_array(array)
+        DataType::Null => Ok(iter::repeat(Value::Null).take(array.len()).collect()),
+        DataType::Boolean => Ok(as_boolean_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
                 Some(v) => v.into(),
                 None => Value::Null,
             })
-            .collect(),
+            .collect()),
 
-        DataType::Utf8 => as_string_array(array)
+        DataType::Utf8 => Ok(as_string_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
                 Some(v) => v.into(),
                 None => Value::Null,
             })
-            .collect(),
+            .collect()),
+        DataType::LargeUtf8 => Ok(as_largestring_array(array)
+            .iter()
+            .map(|maybe_value| match maybe_value {
+                Some(v) => v.into(),
+                None => Value::Null,
+            })
+            .collect()),
         DataType::Int8 => primitive_array_to_json::<Int8Type>(array),
         DataType::Int16 => primitive_array_to_json::<Int16Type>(array),
         DataType::Int32 => primitive_array_to_json::<Int32Type>(array),
@@ -181,28 +185,26 @@ pub fn array_to_json_array(array: &ArrayRef) -> Vec<Value> {
         DataType::List(_) => as_list_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Value::Array(array_to_json_array(&v)),
-                None => Value::Null,
+                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                None => Ok(Value::Null),
             })
             .collect(),
         DataType::LargeList(_) => as_large_list_array(array)
             .iter()
             .map(|maybe_value| match maybe_value {
-                Some(v) => Value::Array(array_to_json_array(&v)),
-                None => Value::Null,
+                Some(v) => Ok(Value::Array(array_to_json_array(&v)?)),
+                None => Ok(Value::Null),
             })
             .collect(),
         DataType::Struct(_) => {
             let jsonmaps =
-                struct_array_to_jsonmap_array(as_struct_array(array), array.len());
-            jsonmaps.into_iter().map(Value::Object).collect()
+                struct_array_to_jsonmap_array(as_struct_array(array), array.len())?;
+            Ok(jsonmaps.into_iter().map(Value::Object).collect())
         }
-        _ => {
-            panic!(
-                "Unsupported datatype for array conversion: {:#?}",
-                array.data_type()
-            );
-        }
+        t => Err(ArrowError::JsonError(format!(
+            "data type {:?} not supported",
+            t
+        ))),
     }
 }
 
@@ -261,37 +263,37 @@ fn set_column_for_json_rows(
     row_count: usize,
     array: &ArrayRef,
     col_name: &str,
-) {
+) -> Result<()> {
     match array.data_type() {
         DataType::Int8 => {
-            set_column_by_primitive_type::<Int8Type>(rows, row_count, array, col_name)
+            set_column_by_primitive_type::<Int8Type>(rows, row_count, array, col_name);
         }
         DataType::Int16 => {
-            set_column_by_primitive_type::<Int16Type>(rows, row_count, array, col_name)
+            set_column_by_primitive_type::<Int16Type>(rows, row_count, array, col_name);
         }
         DataType::Int32 => {
-            set_column_by_primitive_type::<Int32Type>(rows, row_count, array, col_name)
+            set_column_by_primitive_type::<Int32Type>(rows, row_count, array, col_name);
         }
         DataType::Int64 => {
-            set_column_by_primitive_type::<Int64Type>(rows, row_count, array, col_name)
+            set_column_by_primitive_type::<Int64Type>(rows, row_count, array, col_name);
         }
         DataType::UInt8 => {
-            set_column_by_primitive_type::<UInt8Type>(rows, row_count, array, col_name)
+            set_column_by_primitive_type::<UInt8Type>(rows, row_count, array, col_name);
         }
         DataType::UInt16 => {
-            set_column_by_primitive_type::<UInt16Type>(rows, row_count, array, col_name)
+            set_column_by_primitive_type::<UInt16Type>(rows, row_count, array, col_name);
         }
         DataType::UInt32 => {
-            set_column_by_primitive_type::<UInt32Type>(rows, row_count, array, col_name)
+            set_column_by_primitive_type::<UInt32Type>(rows, row_count, array, col_name);
         }
         DataType::UInt64 => {
-            set_column_by_primitive_type::<UInt64Type>(rows, row_count, array, col_name)
+            set_column_by_primitive_type::<UInt64Type>(rows, row_count, array, col_name);
         }
         DataType::Float32 => {
-            set_column_by_primitive_type::<Float32Type>(rows, row_count, array, col_name)
+            set_column_by_primitive_type::<Float32Type>(rows, row_count, array, col_name);
         }
         DataType::Float64 => {
-            set_column_by_primitive_type::<Float64Type>(rows, row_count, array, col_name)
+            set_column_by_primitive_type::<Float64Type>(rows, row_count, array, col_name);
         }
         DataType::Null => {
             // when value is null, we simply skip setting the key
@@ -301,6 +303,15 @@ fn set_column_for_json_rows(
         }
         DataType::Utf8 => {
             set_column_by_array_type!(as_string_array, col_name, rows, array, row_count);
+        }
+        DataType::LargeUtf8 => {
+            set_column_by_array_type!(
+                as_largestring_array,
+                col_name,
+                rows,
+                array,
+                row_count
+            );
         }
         DataType::Date32 => {
             set_temporal_column_by_array_type!(
@@ -444,7 +455,7 @@ fn set_column_for_json_rows(
         }
         DataType::Struct(_) => {
             let inner_objs =
-                struct_array_to_jsonmap_array(as_struct_array(array), row_count);
+                struct_array_to_jsonmap_array(as_struct_array(array), row_count)?;
             rows.iter_mut()
                 .take(row_count)
                 .zip(inner_objs.into_iter())
@@ -457,46 +468,88 @@ fn set_column_for_json_rows(
             rows.iter_mut()
                 .zip(listarr.iter())
                 .take(row_count)
-                .for_each(|(row, maybe_value)| {
+                .try_for_each(|(row, maybe_value)| -> Result<()> {
                     if let Some(v) = maybe_value {
                         row.insert(
                             col_name.to_string(),
-                            Value::Array(array_to_json_array(&v)),
+                            Value::Array(array_to_json_array(&v)?),
                         );
                     }
-                });
+                    Ok(())
+                })?;
         }
         DataType::LargeList(_) => {
             let listarr = as_large_list_array(array);
             rows.iter_mut()
                 .zip(listarr.iter())
                 .take(row_count)
-                .for_each(|(row, maybe_value)| {
+                .try_for_each(|(row, maybe_value)| -> Result<()> {
                     if let Some(v) = maybe_value {
-                        row.insert(
-                            col_name.to_string(),
-                            Value::Array(array_to_json_array(&v)),
-                        );
+                        let val = array_to_json_array(&v)?;
+                        row.insert(col_name.to_string(), Value::Array(val));
                     }
-                });
+                    Ok(())
+                })?;
         }
         DataType::Dictionary(_, value_type) => {
             let slice = array.slice(0, row_count);
             let hydrated = crate::compute::kernels::cast::cast(&slice, value_type)
                 .expect("cannot cast dictionary to underlying values");
-            set_column_for_json_rows(rows, row_count, &hydrated, col_name)
+            set_column_for_json_rows(rows, row_count, &hydrated, col_name)?;
+        }
+        DataType::Map(_, _) => {
+            let maparr = as_map_array(array);
+
+            let keys = maparr.keys();
+            let values = maparr.values();
+
+            // Keys have to be strings to convert to json.
+            if !matches!(keys.data_type(), DataType::Utf8) {
+                return Err(ArrowError::JsonError(format!(
+                    "data type {:?} not supported in nested map for json writer",
+                    keys.data_type()
+                )));
+            }
+
+            let keys = as_string_array(&keys);
+            let values = array_to_json_array(&values)?;
+
+            let mut kv = keys.iter().zip(values.into_iter());
+
+            for (i, row) in rows.iter_mut().take(row_count).enumerate() {
+                if maparr.is_null(i) {
+                    row.insert(col_name.to_string(), serde_json::Value::Null);
+                    continue;
+                }
+
+                let len = maparr.value_length(i) as usize;
+                let mut obj = serde_json::Map::new();
+
+                for (_, (k, v)) in (0..len).zip(&mut kv) {
+                    obj.insert(
+                        k.expect("keys in a map should be non-null").to_string(),
+                        v,
+                    );
+                }
+
+                row.insert(col_name.to_string(), serde_json::Value::Object(obj));
+            }
         }
         _ => {
-            panic!("Unsupported datatype: {:#?}", array.data_type());
+            return Err(ArrowError::JsonError(format!(
+                "data type {:?} not supported in nested map for json writer",
+                array.data_type()
+            )))
         }
     }
+    Ok(())
 }
 
 /// Converts an arrow [`RecordBatch`] into a `Vec` of Serde JSON
 /// [`JsonMap`]s (objects)
 pub fn record_batches_to_json_rows(
     batches: &[RecordBatch],
-) -> Vec<JsonMap<String, Value>> {
+) -> Result<Vec<JsonMap<String, Value>>> {
     let mut rows: Vec<JsonMap<String, Value>> = iter::repeat(JsonMap::new())
         .take(batches.iter().map(|b| b.num_rows()).sum())
         .collect();
@@ -504,17 +557,17 @@ pub fn record_batches_to_json_rows(
     if !rows.is_empty() {
         let schema = batches[0].schema();
         let mut base = 0;
-        batches.iter().for_each(|batch| {
+        for batch in batches {
             let row_count = batch.num_rows();
-            batch.columns().iter().enumerate().for_each(|(j, col)| {
+            for (j, col) in batch.columns().iter().enumerate() {
                 let col_name = schema.field(j).name();
-                set_column_for_json_rows(&mut rows[base..], row_count, col, col_name);
-            });
+                set_column_for_json_rows(&mut rows[base..], row_count, col, col_name)?
+            }
             base += row_count;
-        });
+        }
     }
 
-    rows
+    Ok(rows)
 }
 
 /// This trait defines how to format a sequence of JSON objects to a
@@ -646,9 +699,17 @@ where
         Ok(())
     }
 
+    /// Convert the `RecordBatch` into JSON rows, and write them to the output
+    pub fn write(&mut self, batch: RecordBatch) -> Result<()> {
+        for row in record_batches_to_json_rows(&[batch])? {
+            self.write_row(&Value::Object(row))?;
+        }
+        Ok(())
+    }
+
     /// Convert the [`RecordBatch`] into JSON rows, and write them to the output
     pub fn write_batches(&mut self, batches: &[RecordBatch]) -> Result<()> {
-        for row in record_batches_to_json_rows(batches) {
+        for row in record_batches_to_json_rows(batches)? {
             self.write_row(&Value::Object(row))?;
         }
         Ok(())
@@ -711,6 +772,37 @@ mod tests {
 {"c1":3,"c2":"c"}
 {"c2":"d"}
 {"c1":5}
+"#
+        );
+    }
+
+    #[test]
+    fn write_large_utf8() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::LargeUtf8, true),
+        ]);
+
+        let a = StringArray::from(vec![Some("a"), None, Some("c"), Some("d"), None]);
+        let b = LargeStringArray::from(vec![Some("a"), Some("b"), None, Some("d"), None]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
+                .unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[batch]).unwrap();
+        }
+
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            r#"{"c1":"a","c2":"a"}
+{"c2":"b"}
+{"c1":"c"}
+{"c1":"d","c2":"d"}
+{}
 "#
         );
     }
@@ -1314,5 +1406,95 @@ mod tests {
 {"list":[{}]}
 "#
         );
+    }
+
+    #[test]
+    fn json_writer_map() {
+        let keys_array =
+            super::StringArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
+        let values_array = super::Int64Array::from(vec![10, 20, 30, 40, 50]);
+
+        let keys = Field::new("keys", DataType::Utf8, false);
+        let values = Field::new("values", DataType::Int64, false);
+        let entry_struct = StructArray::from(vec![
+            (keys, Arc::new(keys_array) as ArrayRef),
+            (values, Arc::new(values_array) as ArrayRef),
+        ]);
+
+        let map_data_type = DataType::Map(
+            Box::new(Field::new(
+                "entries",
+                entry_struct.data_type().clone(),
+                true,
+            )),
+            false,
+        );
+
+        // [{"foo": 10}, null, {}, {"bar": 20, "baz": 30, "qux": 40}, {"quux": 50}, {}]
+        let entry_offsets = Buffer::from(&[0, 1, 1, 1, 4, 5, 5].to_byte_slice());
+        let valid_buffer = Buffer::from([0b00111101]);
+
+        let map_data = ArrayData::builder(map_data_type.clone())
+            .len(6)
+            .null_bit_buffer(valid_buffer)
+            .add_buffer(entry_offsets)
+            .add_child_data(entry_struct.data().clone())
+            .build()
+            .unwrap();
+
+        let map = MapArray::from(map_data);
+
+        let map_field = Field::new("map", map_data_type, false);
+        let schema = Arc::new(Schema::new(vec![map_field]));
+
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(map)]).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write_batches(&[batch]).unwrap();
+        }
+
+        assert_eq!(
+            String::from_utf8(buf).unwrap(),
+            r#"{"map":{"foo":10}}
+{"map":null}
+{"map":{}}
+{"map":{"bar":20,"baz":30,"qux":40}}
+{"map":{"quux":50}}
+{"map":{}}
+"#
+        );
+    }
+
+    #[test]
+    fn test_write_single_batch() {
+        let test_file = "test/data/basic.json";
+        let builder = ReaderBuilder::new()
+            .infer_schema(None)
+            .with_batch_size(1024);
+        let mut reader: Reader<File> = builder
+            .build::<File>(File::open(test_file).unwrap())
+            .unwrap();
+        let batch = reader.next().unwrap().unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = LineDelimitedWriter::new(&mut buf);
+            writer.write(batch).unwrap();
+        }
+
+        let result = String::from_utf8(buf).unwrap();
+        let expected = read_to_string(test_file).unwrap();
+        for (r, e) in result.lines().zip(expected.lines()) {
+            let mut expected_json = serde_json::from_str::<Value>(e).unwrap();
+            // remove null value from object to make comparision consistent:
+            if let Value::Object(obj) = expected_json {
+                expected_json = Value::Object(
+                    obj.into_iter().filter(|(_, v)| *v != Value::Null).collect(),
+                );
+            }
+            assert_eq!(serde_json::from_str::<Value>(r).unwrap(), expected_json,);
+        }
     }
 }

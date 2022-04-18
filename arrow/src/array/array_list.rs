@@ -49,7 +49,10 @@ impl OffsetSizeTrait for i64 {
     }
 }
 
-/// Generic struct for a primitive Array
+/// Generic struct for a variable-size list array.
+///
+/// Columnar format in Apache Arrow:
+/// <https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout>
 ///
 /// For non generic lists, you may wish to consider using [`ListArray`] or [`LargeListArray`]`
 pub struct GenericListArray<OffsetSize> {
@@ -281,30 +284,25 @@ impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericListArray<OffsetSize> {
 /// # Example
 ///
 /// ```
-///     # use arrow::array::{Array, ListArray, Int32Array};
-///     # use arrow::datatypes::{DataType, Int32Type};
-///     let data = vec![
-///        Some(vec![Some(0), Some(1), Some(2)]),
-///        None,
-///        Some(vec![Some(3), None, Some(5), Some(19)]),
-///        Some(vec![Some(6), Some(7)]),
-///     ];
-///     let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
-///     assert_eq!(DataType::Int32, list_array.value_type());
-///     assert_eq!(4, list_array.len());
-///     assert_eq!(1, list_array.null_count());
-///     assert_eq!(3, list_array.value_length(0));
-///     assert_eq!(0, list_array.value_length(1));
-///     assert_eq!(4, list_array.value_length(2));
-///     assert_eq!(
-///         19,
-///         list_array
-///         .value(2)
-///         .as_any()
-///         .downcast_ref::<Int32Array>()
-///         .unwrap()
-///         .value(3)
-///     )
+/// # use arrow::array::{Array, ListArray, Int32Array};
+/// # use arrow::datatypes::{DataType, Int32Type};
+/// let data = vec![
+///    Some(vec![]),
+///    None,
+///    Some(vec![Some(3), None, Some(5), Some(19)]),
+///    Some(vec![Some(6), Some(7)]),
+/// ];
+/// let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(data);
+///
+/// assert_eq!(false, list_array.is_valid(1));
+///
+/// let list0 = list_array.value(0);
+/// let list2 = list_array.value(2);
+/// let list3 = list_array.value(3);
+///
+/// assert_eq!(&[] as &[i32], list0.as_any().downcast_ref::<Int32Array>().unwrap().values());
+/// assert_eq!(false, list2.as_any().downcast_ref::<Int32Array>().unwrap().is_valid(1));
+/// assert_eq!(&[6, 7], list3.as_any().downcast_ref::<Int32Array>().unwrap().values());
 /// ```
 pub type ListArray = GenericListArray<i32>;
 
@@ -313,37 +311,64 @@ pub type ListArray = GenericListArray<i32>;
 /// # Example
 ///
 /// ```
-///     # use arrow::array::{Array, LargeListArray, Int64Array};
-///     # use arrow::datatypes::{DataType, Int64Type};
-///     let data = vec![
-///        Some(vec![Some(0), Some(1), Some(2)]),
-///        None,
-///        Some(vec![Some(3), None, Some(5), Some(19)]),
-///        Some(vec![Some(6), Some(7)]),
-///     ];
-///     let list_array = LargeListArray::from_iter_primitive::<Int64Type, _, _>(data);
-///     assert_eq!(DataType::Int64, list_array.value_type());
-///     assert_eq!(4, list_array.len());
-///     assert_eq!(1, list_array.null_count());
-///     assert_eq!(3, list_array.value_length(0));
-///     assert_eq!(0, list_array.value_length(1));
-///     assert_eq!(4, list_array.value_length(2));
-///     assert_eq!(
-///         19,
-///         list_array
-///         .value(2)
-///         .as_any()
-///         .downcast_ref::<Int64Array>()
-///         .unwrap()
-///         .value(3)
-///     )
+/// # use arrow::array::{Array, LargeListArray, Int32Array};
+/// # use arrow::datatypes::{DataType, Int32Type};
+/// let data = vec![
+///    Some(vec![]),
+///    None,
+///    Some(vec![Some(3), None, Some(5), Some(19)]),
+///    Some(vec![Some(6), Some(7)]),
+/// ];
+/// let list_array = LargeListArray::from_iter_primitive::<Int32Type, _, _>(data);
+///
+/// assert_eq!(false, list_array.is_valid(1));
+///
+/// let list0 = list_array.value(0);
+/// let list2 = list_array.value(2);
+/// let list3 = list_array.value(3);
+///
+/// assert_eq!(&[] as &[i32], list0.as_any().downcast_ref::<Int32Array>().unwrap().values());
+/// assert_eq!(false, list2.as_any().downcast_ref::<Int32Array>().unwrap().is_valid(1));
+/// assert_eq!(&[6, 7], list3.as_any().downcast_ref::<Int32Array>().unwrap().values());
 /// ```
 pub type LargeListArray = GenericListArray<i64>;
 
 /// A list array where each element is a fixed-size sequence of values with the same
 /// type whose maximum length is represented by a i32.
 ///
-/// For non generic lists, you may wish to consider using [`FixedSizeBinaryArray`]
+/// # Example
+///
+/// ```
+/// # use arrow::array::{Array, ArrayData, FixedSizeListArray, Int32Array};
+/// # use arrow::datatypes::{DataType, Field};
+/// # use arrow::buffer::Buffer;
+/// // Construct a value array
+/// let value_data = ArrayData::builder(DataType::Int32)
+///     .len(9)
+///     .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8]))
+///     .build()
+///     .unwrap();
+/// let list_data_type = DataType::FixedSizeList(
+///     Box::new(Field::new("item", DataType::Int32, false)),
+///     3,
+/// );
+/// let list_data = ArrayData::builder(list_data_type.clone())
+///     .len(3)
+///     .add_child_data(value_data.clone())
+///     .build()
+///     .unwrap();
+/// let list_array = FixedSizeListArray::from(list_data);
+/// let list0 = list_array.value(0);
+/// let list1 = list_array.value(1);
+/// let list2 = list_array.value(2);
+///
+/// assert_eq!( &[0, 1, 2], list0.as_any().downcast_ref::<Int32Array>().unwrap().values());
+/// assert_eq!( &[3, 4, 5], list1.as_any().downcast_ref::<Int32Array>().unwrap().values());
+/// assert_eq!( &[6, 7, 8], list2.as_any().downcast_ref::<Int32Array>().unwrap().values());
+/// ```
+///
+/// For non generic lists, you may wish to consider using
+/// [crate::array::FixedSizeBinaryArray]
 pub struct FixedSizeListArray {
     data: ArrayData,
     values: ArrayRef,
@@ -752,6 +777,9 @@ mod tests {
     #[should_panic(
         expected = "FixedSizeListArray child array length should be a multiple of 3"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_fixed_size_list_array_unequal_children() {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
@@ -1040,6 +1068,9 @@ mod tests {
     #[should_panic(
         expected = "ListArray data should contain a single buffer only (value offsets)"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_list_array_invalid_buffer_len() {
         let value_data = unsafe {
             ArrayData::builder(DataType::Int32)
@@ -1062,6 +1093,9 @@ mod tests {
     #[should_panic(
         expected = "ListArray should contain a single child array (values array)"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_list_array_invalid_child_array_len() {
         let value_offsets = Buffer::from_slice_ref(&[0, 2, 5, 7]);
         let list_data_type =
@@ -1112,6 +1146,9 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "memory is not aligned")]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_list_array_alignment() {
         let ptr = alloc::allocate_aligned::<u8>(8);
         let buf = unsafe { Buffer::from_raw_parts(ptr, 8, 8) };

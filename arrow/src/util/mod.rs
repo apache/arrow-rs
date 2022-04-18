@@ -18,6 +18,7 @@
 #[cfg(feature = "test_utils")]
 pub mod bench_util;
 pub mod bit_chunk_iterator;
+pub(crate) mod bit_mask;
 pub mod bit_util;
 #[cfg(feature = "test_utils")]
 pub mod data_gen;
@@ -33,3 +34,5 @@ pub mod test_util;
 
 mod trusted_len;
 pub(crate) use trusted_len::trusted_len_unzip;
+
+pub(crate) mod reader_parser;

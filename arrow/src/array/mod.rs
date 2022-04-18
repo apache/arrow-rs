@@ -325,8 +325,8 @@ pub type UInt32DictionaryArray = DictionaryArray<UInt32Type>;
 /// ```
 pub type UInt64DictionaryArray = DictionaryArray<UInt64Type>;
 ///
-/// A primitive array where each element is of type `TimestampSecondType.`
-/// See also [`Timestamp.`](crate::datatypes::Timestamp)
+/// A primitive array where each element is of type [TimestampSecondType].
+/// See also [`Timestamp`](crate::datatypes::DataType::Timestamp).
 ///
 /// # Example: UTC timestamps post epoch
 /// ```
@@ -385,6 +385,7 @@ pub type Time64MicrosecondArray = PrimitiveArray<Time64MicrosecondType>;
 pub type Time64NanosecondArray = PrimitiveArray<Time64NanosecondType>;
 pub type IntervalYearMonthArray = PrimitiveArray<IntervalYearMonthType>;
 pub type IntervalDayTimeArray = PrimitiveArray<IntervalDayTimeType>;
+pub type IntervalMonthDayNanoArray = PrimitiveArray<IntervalMonthDayNanoType>;
 pub type DurationSecondArray = PrimitiveArray<DurationSecondType>;
 pub type DurationMillisecondArray = PrimitiveArray<DurationMillisecondType>;
 pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
@@ -399,6 +400,7 @@ pub use self::array_string::StringOffsetSizeTrait;
 
 // --------------------- Array Builder ---------------------
 
+pub use self::builder::make_builder;
 pub use self::builder::BooleanBufferBuilder;
 pub use self::builder::BufferBuilder;
 
@@ -413,22 +415,38 @@ pub type UInt64BufferBuilder = BufferBuilder<u64>;
 pub type Float32BufferBuilder = BufferBuilder<f32>;
 pub type Float64BufferBuilder = BufferBuilder<f64>;
 
-pub type TimestampSecondBufferBuilder = BufferBuilder<TimestampSecondType>;
-pub type TimestampMillisecondBufferBuilder = BufferBuilder<TimestampMillisecondType>;
-pub type TimestampMicrosecondBufferBuilder = BufferBuilder<TimestampMicrosecondType>;
-pub type TimestampNanosecondBufferBuilder = BufferBuilder<TimestampNanosecondType>;
-pub type Date32BufferBuilder = BufferBuilder<Date32Type>;
-pub type Date64BufferBuilder = BufferBuilder<Date64Type>;
-pub type Time32SecondBufferBuilder = BufferBuilder<Time32SecondType>;
-pub type Time32MillisecondBufferBuilder = BufferBuilder<Time32MillisecondType>;
-pub type Time64MicrosecondBufferBuilder = BufferBuilder<Time64MicrosecondType>;
-pub type Time64NanosecondBufferBuilder = BufferBuilder<Time64NanosecondType>;
-pub type IntervalYearMonthBufferBuilder = BufferBuilder<IntervalYearMonthType>;
-pub type IntervalDayTimeBufferBuilder = BufferBuilder<IntervalDayTimeType>;
-pub type DurationSecondBufferBuilder = BufferBuilder<DurationSecondType>;
-pub type DurationMillisecondBufferBuilder = BufferBuilder<DurationMillisecondType>;
-pub type DurationMicrosecondBufferBuilder = BufferBuilder<DurationMicrosecondType>;
-pub type DurationNanosecondBufferBuilder = BufferBuilder<DurationNanosecondType>;
+pub type TimestampSecondBufferBuilder =
+    BufferBuilder<<TimestampSecondType as ArrowPrimitiveType>::Native>;
+pub type TimestampMillisecondBufferBuilder =
+    BufferBuilder<<TimestampMillisecondType as ArrowPrimitiveType>::Native>;
+pub type TimestampMicrosecondBufferBuilder =
+    BufferBuilder<<TimestampMicrosecondType as ArrowPrimitiveType>::Native>;
+pub type TimestampNanosecondBufferBuilder =
+    BufferBuilder<<TimestampNanosecondType as ArrowPrimitiveType>::Native>;
+pub type Date32BufferBuilder = BufferBuilder<<Date32Type as ArrowPrimitiveType>::Native>;
+pub type Date64BufferBuilder = BufferBuilder<<Date64Type as ArrowPrimitiveType>::Native>;
+pub type Time32SecondBufferBuilder =
+    BufferBuilder<<Time32SecondType as ArrowPrimitiveType>::Native>;
+pub type Time32MillisecondBufferBuilder =
+    BufferBuilder<<Time32MillisecondType as ArrowPrimitiveType>::Native>;
+pub type Time64MicrosecondBufferBuilder =
+    BufferBuilder<<Time64MicrosecondType as ArrowPrimitiveType>::Native>;
+pub type Time64NanosecondBufferBuilder =
+    BufferBuilder<<Time64NanosecondType as ArrowPrimitiveType>::Native>;
+pub type IntervalYearMonthBufferBuilder =
+    BufferBuilder<<IntervalYearMonthType as ArrowPrimitiveType>::Native>;
+pub type IntervalDayTimeBufferBuilder =
+    BufferBuilder<<IntervalDayTimeType as ArrowPrimitiveType>::Native>;
+pub type IntervalMonthDayNanoBufferBuilder =
+    BufferBuilder<<IntervalMonthDayNanoType as ArrowPrimitiveType>::Native>;
+pub type DurationSecondBufferBuilder =
+    BufferBuilder<<DurationSecondType as ArrowPrimitiveType>::Native>;
+pub type DurationMillisecondBufferBuilder =
+    BufferBuilder<<DurationMillisecondType as ArrowPrimitiveType>::Native>;
+pub type DurationMicrosecondBufferBuilder =
+    BufferBuilder<<DurationMicrosecondType as ArrowPrimitiveType>::Native>;
+pub type DurationNanosecondBufferBuilder =
+    BufferBuilder<<DurationNanosecondType as ArrowPrimitiveType>::Native>;
 
 pub use self::builder::ArrayBuilder;
 pub use self::builder::BinaryBuilder;
@@ -436,19 +454,19 @@ pub use self::builder::BooleanBuilder;
 pub use self::builder::DecimalBuilder;
 pub use self::builder::FixedSizeBinaryBuilder;
 pub use self::builder::FixedSizeListBuilder;
+pub use self::builder::GenericListBuilder;
 pub use self::builder::GenericStringBuilder;
 pub use self::builder::LargeBinaryBuilder;
 pub use self::builder::LargeListBuilder;
 pub use self::builder::LargeStringBuilder;
 pub use self::builder::ListBuilder;
+pub use self::builder::MapBuilder;
 pub use self::builder::PrimitiveBuilder;
 pub use self::builder::PrimitiveDictionaryBuilder;
 pub use self::builder::StringBuilder;
 pub use self::builder::StringDictionaryBuilder;
 pub use self::builder::StructBuilder;
 pub use self::builder::UnionBuilder;
-pub use self::builder::MAX_DECIMAL_FOR_EACH_PRECISION;
-pub use self::builder::MIN_DECIMAL_FOR_EACH_PRECISION;
 
 pub type Int8Builder = PrimitiveBuilder<Int8Type>;
 pub type Int16Builder = PrimitiveBuilder<Int16Type>;
@@ -473,6 +491,7 @@ pub type Time64MicrosecondBuilder = PrimitiveBuilder<Time64MicrosecondType>;
 pub type Time64NanosecondBuilder = PrimitiveBuilder<Time64NanosecondType>;
 pub type IntervalYearMonthBuilder = PrimitiveBuilder<IntervalYearMonthType>;
 pub type IntervalDayTimeBuilder = PrimitiveBuilder<IntervalDayTimeType>;
+pub type IntervalMonthDayNanoBuilder = PrimitiveBuilder<IntervalMonthDayNanoType>;
 pub type DurationSecondBuilder = PrimitiveBuilder<DurationSecondType>;
 pub type DurationMillisecondBuilder = PrimitiveBuilder<DurationMillisecondType>;
 pub type DurationMicrosecondBuilder = PrimitiveBuilder<DurationMicrosecondType>;
@@ -495,11 +514,46 @@ pub use self::ord::{build_compare, DynComparator};
 // --------------------- Array downcast helper functions ---------------------
 
 pub use self::cast::{
-    as_boolean_array, as_dictionary_array, as_generic_binary_array,
+    as_boolean_array, as_decimal_array, as_dictionary_array, as_generic_binary_array,
     as_generic_list_array, as_large_list_array, as_largestring_array, as_list_array,
-    as_null_array, as_primitive_array, as_string_array, as_struct_array, as_union_array,
+    as_map_array, as_null_array, as_primitive_array, as_string_array, as_struct_array,
+    as_union_array,
 };
 
 // ------------------------------ C Data Interface ---------------------------
 
-pub use self::array::make_array_from_raw;
+pub use self::array::{export_array_into_raw, make_array_from_raw};
+
+#[cfg(test)]
+mod tests {
+    use crate::array::*;
+
+    #[test]
+    fn test_buffer_builder_availability() {
+        let _builder = Int8BufferBuilder::new(10);
+        let _builder = Int16BufferBuilder::new(10);
+        let _builder = Int32BufferBuilder::new(10);
+        let _builder = Int64BufferBuilder::new(10);
+        let _builder = UInt16BufferBuilder::new(10);
+        let _builder = UInt32BufferBuilder::new(10);
+        let _builder = Float32BufferBuilder::new(10);
+        let _builder = Float64BufferBuilder::new(10);
+        let _builder = TimestampSecondBufferBuilder::new(10);
+        let _builder = TimestampMillisecondBufferBuilder::new(10);
+        let _builder = TimestampMicrosecondBufferBuilder::new(10);
+        let _builder = TimestampNanosecondBufferBuilder::new(10);
+        let _builder = Date32BufferBuilder::new(10);
+        let _builder = Date64BufferBuilder::new(10);
+        let _builder = Time32SecondBufferBuilder::new(10);
+        let _builder = Time32MillisecondBufferBuilder::new(10);
+        let _builder = Time64MicrosecondBufferBuilder::new(10);
+        let _builder = Time64NanosecondBufferBuilder::new(10);
+        let _builder = IntervalYearMonthBufferBuilder::new(10);
+        let _builder = IntervalDayTimeBufferBuilder::new(10);
+        let _builder = IntervalMonthDayNanoBufferBuilder::new(10);
+        let _builder = DurationSecondBufferBuilder::new(10);
+        let _builder = DurationMillisecondBufferBuilder::new(10);
+        let _builder = DurationMicrosecondBufferBuilder::new(10);
+        let _builder = DurationNanosecondBufferBuilder::new(10);
+    }
+}

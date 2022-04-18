@@ -15,43 +15,82 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![allow(incomplete_features)]
+//! This crate contains the official Native Rust implementation of
+//! [Apache Parquet](https://parquet.apache.org/), part of
+//! the [Apache Arrow](https://arrow.apache.org/) project.
+//!
+//! # Getting Started
+//! Start with some examples:
+//!
+//! 1. [mod@file] for reading and writing parquet files using the
+//! [ColumnReader](column::reader::ColumnReader) API.
+//!
+//! 2. [arrow] for reading and writing parquet files to Arrow
+//! `RecordBatch`es
+//!
+//! 3. [arrow::async_reader] for `async` reading and writing parquet
+//! files to Arrow `RecordBatch`es (requires the `async` feature).
 #![allow(dead_code)]
 #![allow(non_camel_case_types)]
 #![allow(
-    clippy::approx_constant,
-    clippy::cast_ptr_alignment,
-    clippy::float_cmp,
-    clippy::float_equality_without_abs,
     clippy::from_over_into,
-    clippy::many_single_char_names,
-    clippy::needless_range_loop,
     clippy::new_without_default,
     clippy::or_fun_call,
-    clippy::same_item_push,
-    clippy::too_many_arguments,
-    clippy::transmute_ptr_to_ptr,
-    clippy::upper_case_acronyms,
-    clippy::vec_init_then_push
+    clippy::too_many_arguments
 )]
+
+/// Defines a module with an experimental public API
+///
+/// The module will not be documented, and will only be public if the
+/// experimental feature flag is enabled
+///
+/// Experimental modules have no stability guarantees
+macro_rules! experimental_mod {
+    ($module:ident $(, #[$meta:meta])*) => {
+        #[cfg(feature = "experimental")]
+        #[doc(hidden)]
+        $(#[$meta])*
+        pub mod $module;
+        #[cfg(not(feature = "experimental"))]
+        $(#[$meta])*
+        mod $module;
+    };
+}
+
+macro_rules! experimental_mod_crate {
+    ($module:ident $(, #[$meta:meta])*) => {
+        #[cfg(feature = "experimental")]
+        #[doc(hidden)]
+        $(#[$meta])*
+        pub mod $module;
+        #[cfg(not(feature = "experimental"))]
+        $(#[$meta])*
+        pub(crate) mod $module;
+    };
+}
 
 #[macro_use]
 pub mod errors;
 pub mod basic;
+
 #[macro_use]
 pub mod data_type;
 
 // Exported for external use, such as benchmarks
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
 pub use self::encodings::{decoding, encoding};
+
+#[cfg(feature = "experimental")]
+#[doc(hidden)]
 pub use self::util::memory;
 
-#[macro_use]
-pub mod util;
+experimental_mod!(util, #[macro_use]);
 #[cfg(any(feature = "arrow", test))]
 pub mod arrow;
 pub mod column;
-pub mod compression;
-mod encodings;
+experimental_mod!(compression);
+experimental_mod!(encodings);
 pub mod file;
 pub mod record;
 pub mod schema;

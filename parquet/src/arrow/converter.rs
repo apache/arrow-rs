@@ -18,7 +18,7 @@
 use crate::data_type::{ByteArray, DataType, FixedLenByteArray, Int96};
 // TODO: clean up imports (best done when there are few moving parts)
 use arrow::array::{
-    Array, ArrayRef, BinaryBuilder, DecimalBuilder, FixedSizeBinaryBuilder,
+    Array, ArrayRef, BinaryBuilder, FixedSizeBinaryBuilder,
     IntervalDayTimeArray, IntervalDayTimeBuilder, IntervalYearMonthArray,
     IntervalYearMonthBuilder, LargeBinaryBuilder, LargeStringBuilder, PrimitiveBuilder,
     PrimitiveDictionaryBuilder, StringBuilder, StringDictionaryBuilder,
@@ -100,21 +100,15 @@ impl DecimalArrayConverter {
 
 impl Converter<Vec<Option<FixedLenByteArray>>, DecimalArray> for DecimalArrayConverter {
     fn convert(&self, source: Vec<Option<FixedLenByteArray>>) -> Result<DecimalArray> {
-        let mut builder = DecimalBuilder::new(
-            source.len(),
-            self.precision as usize,
-            self.scale as usize,
-        );
-        for v in source {
-            match v {
-                Some(array) => {
-                    builder.append_value(Self::from_bytes_to_i128(array.data()))
-                }
-                None => builder.append_null(),
-            }?
-        }
+        let array = source.into_iter()
+            .map(|array| array.map(|array| Self::from_bytes_to_i128(array.data())))
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(
+                self.precision as usize,
+                self.scale as usize
+            )?;
 
-        Ok(builder.finish())
+        Ok(array)
     }
 }
 /// An Arrow Interval converter, which reads the first 4 bytes of a Parquet interval,

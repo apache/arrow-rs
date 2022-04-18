@@ -106,6 +106,45 @@ macro_rules! make_string_interval_day_time {
     }};
 }
 
+macro_rules! make_string_interval_month_day_nano {
+    ($column: ident, $row: ident) => {{
+        let array = $column
+            .as_any()
+            .downcast_ref::<array::IntervalMonthDayNanoArray>()
+            .unwrap();
+
+        let s = if array.is_null($row) {
+            "NULL".to_string()
+        } else {
+            let value: u128 = array.value($row) as u128;
+
+            let months_part: i32 =
+                ((value & 0xFFFFFFFF000000000000000000000000) >> 96) as i32;
+            let days_part: i32 = ((value & 0xFFFFFFFF0000000000000000) >> 64) as i32;
+            let nanoseconds_part: i64 = (value & 0xFFFFFFFFFFFFFFFF) as i64;
+
+            let secs = nanoseconds_part / 1000000000;
+            let mins = secs / 60;
+            let hours = mins / 60;
+
+            let secs = secs - (mins * 60);
+            let mins = mins - (hours * 60);
+
+            format!(
+                "0 years {} mons {} days {} hours {} mins {}.{:02} secs",
+                months_part,
+                days_part,
+                hours,
+                mins,
+                secs,
+                (nanoseconds_part % 1000000000),
+            )
+        };
+
+        Ok(s)
+    }};
+}
+
 macro_rules! make_string_date {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
@@ -262,6 +301,9 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
         DataType::LargeUtf8 => make_string!(array::LargeStringArray, column, row),
         DataType::Binary => make_string_hex!(array::BinaryArray, column, row),
         DataType::LargeBinary => make_string_hex!(array::LargeBinaryArray, column, row),
+        DataType::FixedSizeBinary(_) => {
+            make_string_hex!(array::FixedSizeBinaryArray, column, row)
+        }
         DataType::Boolean => make_string!(array::BooleanArray, column, row),
         DataType::Int8 => make_string!(array::Int8Array, column, row),
         DataType::Int16 => make_string!(array::Int16Array, column, row),
@@ -271,7 +313,7 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
         DataType::UInt16 => make_string!(array::UInt16Array, column, row),
         DataType::UInt32 => make_string!(array::UInt32Array, column, row),
         DataType::UInt64 => make_string!(array::UInt64Array, column, row),
-        DataType::Float16 => make_string!(array::Float32Array, column, row),
+        DataType::Float16 => make_string!(array::Float16Array, column, row),
         DataType::Float32 => make_string!(array::Float32Array, column, row),
         DataType::Float64 => make_string!(array::Float64Array, column, row),
         DataType::Decimal(..) => make_string_from_decimal(column, row),
@@ -307,6 +349,9 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
             }
             IntervalUnit::YearMonth => {
                 make_string_interval_year_month!(column, row)
+            }
+            IntervalUnit::MonthDayNano => {
+                make_string_interval_month_day_nano!(column, row)
             }
         },
         DataType::List(_) => make_string_from_list!(column, row),

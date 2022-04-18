@@ -45,7 +45,7 @@ use crate::{
 /// to converting the Parquet schema column-wise
 pub fn parquet_to_arrow_schema(
     parquet_schema: &SchemaDescriptor,
-    key_value_metadata: &Option<Vec<KeyValue>>,
+    key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<Schema> {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
     metadata
@@ -65,7 +65,7 @@ pub fn parquet_to_arrow_schema(
 pub fn parquet_to_arrow_schema_by_root_columns<T>(
     parquet_schema: &SchemaDescriptor,
     column_indices: T,
-    key_value_metadata: &Option<Vec<KeyValue>>,
+    key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<Schema>
 where
     T: IntoIterator<Item = usize>,
@@ -116,7 +116,7 @@ where
 pub fn parquet_to_arrow_schema_by_columns<T>(
     parquet_schema: &SchemaDescriptor,
     column_indices: T,
-    key_value_metadata: &Option<Vec<KeyValue>>,
+    key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<Schema>
 where
     T: IntoIterator<Item = usize>,
@@ -274,7 +274,7 @@ pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
 }
 
 fn parse_key_value_metadata(
-    key_value_metadata: &Option<Vec<KeyValue>>,
+    key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Option<HashMap<String, String>> {
     match key_value_metadata {
         Some(key_values) => {
@@ -536,7 +536,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 ))
             }
         }
-        DataType::Union(_) => unimplemented!("See ARROW-8817."),
+        DataType::Union(_, _) => unimplemented!("See ARROW-8817."),
         DataType::Dictionary(_, ref value) => {
             // Dictionary encoding not handled at the schema level
             let dict_field = Field::new(name, *value.clone(), field.is_nullable());
@@ -662,6 +662,7 @@ impl ParquetTypeConverter<'_> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_int32(&self) -> Result<DataType> {
         match (
             self.schema.get_basic_info().logical_type(),
@@ -689,6 +690,8 @@ impl ParquetTypeConverter<'_> {
                     t.unit
                 ))),
             },
+            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#unknown-always-null
+            (Some(LogicalType::UNKNOWN(_)), _) => Ok(DataType::Null),
             (None, ConvertedType::UINT_8) => Ok(DataType::UInt8),
             (None, ConvertedType::UINT_16) => Ok(DataType::UInt16),
             (None, ConvertedType::UINT_32) => Ok(DataType::UInt32),
@@ -707,6 +710,7 @@ impl ParquetTypeConverter<'_> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_int64(&self) -> Result<DataType> {
         match (
             self.schema.get_basic_info().logical_type(),
@@ -758,6 +762,7 @@ impl ParquetTypeConverter<'_> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_fixed_len_byte_array(&self) -> Result<DataType> {
         match (
             self.schema.get_basic_info().logical_type(),
@@ -796,6 +801,7 @@ impl ParquetTypeConverter<'_> {
         )
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_byte_array(&self) -> Result<DataType> {
         match (self.schema.get_basic_info().logical_type(), self.schema.get_basic_info().converted_type()) {
             (Some(LogicalType::STRING(_)), _) => Ok(DataType::Utf8),
@@ -1044,7 +1050,6 @@ mod tests {
     use crate::{
         arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader},
         schema::{parser::parse_message_type, types::SchemaDescriptor},
-        util::test_common::get_temp_file,
     };
 
     #[test]
@@ -1068,7 +1073,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
 
         let arrow_fields = vec![
             Field::new("boolean", DataType::Boolean, false),
@@ -1100,7 +1105,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
 
         let arrow_fields = vec![
             Field::new("binary", DataType::Binary, false),
@@ -1122,7 +1127,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
 
         let arrow_fields = vec![
             Field::new("boolean", DataType::Boolean, false),
@@ -1133,7 +1138,7 @@ mod tests {
         let converted_arrow_schema = parquet_to_arrow_schema_by_columns(
             &parquet_schema,
             vec![0usize, 1usize],
-            &None,
+            None,
         )
         .unwrap();
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
@@ -1337,7 +1342,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
@@ -1416,7 +1421,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
@@ -1532,7 +1537,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
@@ -1570,7 +1575,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
@@ -1620,7 +1625,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![0, 3, 4], &None)
+            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![0, 3, 4], None)
                 .unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
@@ -1671,7 +1676,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![3, 4, 0], &None)
+            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![3, 4, 0], None)
                 .unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
@@ -1727,7 +1732,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
@@ -1956,16 +1961,17 @@ mod tests {
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
 
-        let mut key_value_metadata: Vec<KeyValue> = Vec::new();
-        key_value_metadata.push(KeyValue::new("foo".to_owned(), Some("bar".to_owned())));
-        key_value_metadata.push(KeyValue::new("baz".to_owned(), None));
+        let key_value_metadata = vec![
+            KeyValue::new("foo".to_owned(), Some("bar".to_owned())),
+            KeyValue::new("baz".to_owned(), None),
+        ];
 
         let mut expected_metadata: HashMap<String, String> = HashMap::new();
         expected_metadata.insert("foo".to_owned(), "bar".to_owned());
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &Some(key_value_metadata)).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, Some(&key_value_metadata)).unwrap();
 
         assert_eq!(converted_arrow_schema.metadata(), &expected_metadata);
     }
@@ -2124,7 +2130,7 @@ mod tests {
         );
 
         // write to an empty parquet file so that schema is serialized
-        let file = get_temp_file("test_arrow_schema_roundtrip.parquet", &[]);
+        let file = tempfile::tempfile().unwrap();
         let mut writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
             Arc::new(schema.clone()),
@@ -2195,7 +2201,7 @@ mod tests {
         );
 
         // write to an empty parquet file so that schema is serialized
-        let file = get_temp_file("test_arrow_schema_roundtrip_lists.parquet", &[]);
+        let file = tempfile::tempfile().unwrap();
         let mut writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
             Arc::new(schema.clone()),
