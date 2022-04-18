@@ -59,7 +59,7 @@ multiversion = "0.6.1"
 bitflags = "1.2.1"
 
 [features]
-default = ["csv", "ipc", "test_utils", "force_validate"]
+default = ["csv", "ipc", "test_utils"]
 avx512 = []
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
