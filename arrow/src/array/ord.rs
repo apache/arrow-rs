@@ -94,16 +94,7 @@ where
     let right_values = StringArray::from(right.values().data().clone());
 
     // only compare by keys if both arrays actually point to the same value buffers
-    if left.is_ordered()
-        && std::ptr::eq(
-            left_values.value_data().as_ptr(),
-            right_values.value_data().as_ptr(),
-        )
-        && std::ptr::eq(
-            left_values.value_offsets().as_ptr(),
-            right_values.value_offsets().as_ptr(),
-        )
-    {
+    if left.is_ordered() && ArrayData::ptr_eq(left_values.data(), right_values.data()) {
         Box::new(move |i: usize, j: usize| {
             let key_left = left_keys.value(i);
             let key_right = right_keys.value(j);
