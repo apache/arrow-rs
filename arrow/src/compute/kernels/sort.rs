@@ -384,7 +384,6 @@ impl Default for SortOptions {
             descending: false,
             // default to nulls first to match spark's behavior
             nulls_first: true,
-            //
         }
     }
 }
