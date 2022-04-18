@@ -36,18 +36,24 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     let data = values.as_slice();
     let zero = OffsetSize::zero();
 
-    // check the `idx` is a valid char boundary or not
-    // If yes, return `idx`, else return error
-    let check_char_boundary = |idx: OffsetSize| {
-        let idx_usize = idx.to_usize().unwrap();
-        if idx_usize == data.len() || data[idx_usize] >> 6 != 0b10_u8 {
-            Ok(idx)
+    // Check if `offset` is at a valid char boundary.
+    // If yes, return `offset`, else return error
+    let check_char_boundary = |offset: OffsetSize| {
+        let offset_usize = offset.to_usize().unwrap();
+        if offset_usize == data.len() || data[offset_usize] >> 6 != 0b10_u8 {
+            Ok(offset)
         } else {
-            Err(ArrowError::ComputeError(format!("The index {} is invalid because {:#010b} is not the head byte of a char.", idx_usize, data[idx_usize])))
+            Err(ArrowError::ComputeError(format!(
+                "The offset {} is at an invalid utf-8 boundary.",
+                offset_usize
+            )))
         }
     };
 
-    // function for calculating the start index of each string
+    // Functions for calculating the offset of each substring in the old array.
+    // Takes the start and end offsets of the original string,
+    // and returns the byte offset to copy data from the source values array.
+    // Returns an error if this offset is not at a valid UTF-8 char boundary.
     let cal_new_start: Box<dyn Fn(OffsetSize, OffsetSize) -> Result<OffsetSize>> =
         match start.cmp(&zero) {
             // count from the start of string
@@ -62,7 +68,6 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
             }),
         };
 
-    // function for calculating the end index of each string
     let cal_new_end: Box<dyn Fn(OffsetSize, OffsetSize) -> Result<OffsetSize>> =
         match length {
             Some(length) => {
@@ -71,7 +76,7 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
             None => Box::new(|_, end| Ok(end)),
         };
 
-    // start and end offsets for each substring
+    // start and end offsets of all substrings
     let mut new_starts_ends: Vec<(OffsetSize, OffsetSize)> =
         Vec::with_capacity(array.len());
     let mut new_offsets: Vec<OffsetSize> = Vec::with_capacity(array.len() + 1);
@@ -144,8 +149,8 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 /// # use arrow::array::StringArray;
 /// # use arrow::compute::kernels::substring::substring;
 /// let array = StringArray::from(vec![Some("E=mc²")]);
-/// let result = substring(&array, -1, None);
-/// assert_eq!(result.is_err(), true);
+/// let error = substring(&array, -1, None).unwrap_err().to_string();
+/// assert!(error.contains("invalid utf-8 boundary"));
 /// ```
 pub fn substring(
     array: &dyn Array,
@@ -329,21 +334,22 @@ mod tests {
     #[test]
     fn check_invalid_array_type() {
         let array = Int32Array::from(vec![Some(1), Some(2), Some(3)]);
-        assert_eq!(substring(&array, 0, None).is_err(), true);
+        let err = substring(&array, 0, None).unwrap_err().to_string();
+        assert!(err.contains("substring does not support type"));
     }
 
     // tests for the utf-8 validation checking
     #[test]
     fn check_start_index() {
         let array = StringArray::from(vec![Some("E=mc²"), Some("ascii")]);
-        let result = substring(&array, -1, None);
-        assert_eq!(result.is_err(), true);
+        let err = substring(&array, -1, None).unwrap_err().to_string();
+        assert!(err.contains("invalid utf-8 boundary"));
     }
 
     #[test]
     fn check_length() {
         let array = StringArray::from(vec![Some("E=mc²"), Some("ascii")]);
-        let result = substring(&array, 0, Some(&5));
-        assert_eq!(result.is_err(), true);
+        let err = substring(&array, 0, Some(&5)).unwrap_err().to_string();
+        assert!(err.contains("invalid utf-8 boundary"));
     }
 }
