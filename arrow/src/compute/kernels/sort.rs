@@ -1226,10 +1226,12 @@ mod tests {
         limit: Option<usize>,
         expected_data: Vec<Option<&str>>,
     ) {
-        let array = data
-            .into_iter()
-            .collect::<DictionaryArray<T>>()
-            .as_ordered(ordered);
+        let mut array = data.into_iter().collect::<DictionaryArray<T>>();
+
+        if ordered {
+            array = array.as_ordered();
+        }
+
         let array_values = array.values().clone();
         let dict = array_values
             .as_any()

@@ -166,20 +166,20 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
     }
 
     /// Returns a DictionaryArray referencing the same data
-    /// with the [DictionaryArray::is_ordered] set to the given value.
+    /// with the [DictionaryArray::is_ordered] flag set to `true`.
     /// Note that this does not actually reorder the values in the dictionary.
-    pub fn as_ordered(&self, is_ordered: bool) -> Self {
+    pub fn as_ordered(&self) -> Self {
         Self {
             data: self.data.clone(),
             values: self.values.clone(),
             keys: PrimitiveArray::<K>::from(self.keys.data().clone()),
-            is_ordered,
+            is_ordered: true,
         }
     }
 
     pub fn make_ordered(&self) -> Result<Self> {
         if self.is_ordered {
-            Ok(self.as_ordered(true))
+            Ok(self.as_ordered())
         } else {
             // validate up front that we can do all of the conversions needed below
             u32::try_from(self.values.len())
@@ -229,7 +229,7 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
                 )
             };
 
-            Ok(DictionaryArray::from(new_data).as_ordered(true))
+            Ok(DictionaryArray::from(new_data).as_ordered())
         }
     }
 

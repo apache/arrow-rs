@@ -75,9 +75,13 @@ where
     )
     .unwrap();
 
-    let dictionary_array = DictionaryArray::<T>::from(data);
+    let mut dictionary_array = DictionaryArray::<T>::from(data);
 
-    vec![Arc::new(dictionary_array.as_ordered(mark_as_sorted))]
+    if mark_as_sorted {
+        dictionary_array = dictionary_array.as_ordered();
+    }
+
+    vec![Arc::new(dictionary_array)]
 }
 
 fn bench_partition(sorted_columns: &[ArrayRef]) {

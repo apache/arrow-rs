@@ -342,7 +342,7 @@ pub mod tests {
         let array = data
             .into_iter()
             .collect::<DictionaryArray<Int16Type>>()
-            .as_ordered(true);
+            .as_ordered();
 
         let cmp = build_compare(&array, &array)?;
 
