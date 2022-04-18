@@ -26,7 +26,8 @@ use std::io::{BufWriter, Write};
 use flatbuffers::FlatBufferBuilder;
 
 use crate::array::{
-    as_list_array, as_struct_array, as_union_array, make_array, ArrayData, ArrayRef,
+    as_list_array, as_map_array, as_struct_array, as_union_array, make_array, Array,
+    ArrayData, ArrayRef,
 };
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::*;
@@ -146,7 +147,7 @@ impl IpcDataGenerator {
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
     ) -> Result<()> {
-        // TODO: Handle other nested types (map, etc)
+        // TODO: Handle other nested types (LargeList, FixedSizeList)
         match column.data_type() {
             DataType::Struct(fields) => {
                 let s = as_struct_array(column);
@@ -165,6 +166,34 @@ impl IpcDataGenerator {
                 self.encode_dictionaries(
                     field,
                     &list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
+            DataType::Map(field, _) => {
+                let map_array = as_map_array(column);
+
+                let (keys, values) = match field.data_type() {
+                    DataType::Struct(fields) if fields.len() == 2 => {
+                        (&fields[0], &fields[1])
+                    }
+                    _ => panic!("Incorrect field data type {:?}", field.data_type()),
+                };
+
+                // keys
+                self.encode_dictionaries(
+                    keys,
+                    &map_array.keys(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+
+                // values
+                self.encode_dictionaries(
+                    values,
+                    &map_array.values(),
                     encoded_dictionaries,
                     dictionary_tracker,
                     write_options,

@@ -1481,4 +1481,55 @@ mod tests {
         let output_batch = roundtrip_ipc_stream(&input_batch);
         assert_eq!(input_batch, output_batch);
     }
+
+    #[test]
+    fn test_roundtrip_stream_nested_dict_dict_in_map() {
+        let values = StringArray::from_iter_values(["a", "b", "c"]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1]);
+        let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+
+        let keys_array = Int32Array::from_iter_values([0, 0, 1, 2, 0, 1]);
+        let keys_field = Field::new("keys", DataType::Int32, false);
+        let values_field = Field::new_dict(
+            "values",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            false,
+            1,
+            false,
+        );
+        let entry_struct = StructArray::from(vec![
+            (keys_field, make_array(keys_array.data().clone())),
+            (values_field, make_array(dict_array.data().clone())),
+        ]);
+        let map_data_type = DataType::Map(
+            Box::new(Field::new(
+                "entries",
+                entry_struct.data_type().clone(),
+                true,
+            )),
+            false,
+        );
+
+        let entry_offsets = Buffer::from_slice_ref(&[0, 2, 4, 6]);
+        let map_data = ArrayData::builder(map_data_type)
+            .len(3)
+            .add_buffer(entry_offsets)
+            .add_child_data(entry_struct.data().clone())
+            .build()
+            .unwrap();
+        let map_array = MapArray::from(map_data);
+
+        let dict_dict_array =
+            DictionaryArray::<Int8Type>::try_new(&keys, &map_array).unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f1",
+            dict_dict_array.data_type().clone(),
+            false,
+        )]));
+        let input_batch =
+            RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
+        let output_batch = roundtrip_ipc_stream(&input_batch);
+        assert_eq!(input_batch, output_batch);
+    }
 }
