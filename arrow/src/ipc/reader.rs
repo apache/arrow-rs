@@ -1019,7 +1019,7 @@ mod tests {
 
     use flate2::read::GzDecoder;
 
-    use crate::datatypes::Int8Type;
+    use crate::datatypes::{ArrowNativeType, Int8Type};
     use crate::{datatypes, util::integration_util::*};
 
     #[test]
@@ -1444,29 +1444,27 @@ mod tests {
         assert_eq!(input_batch, output_batch);
     }
 
-    #[test]
-    fn test_roundtrip_stream_nested_dict_dict() {
+    fn test_test_roundtrip_stream_nested_dict_dict_for_list<
+        OffsetSize: OffsetSizeTrait,
+        U: ArrowNativeType,
+    >(
+        list_data_type: DataType,
+        offsets: &[U; 4],
+    ) {
         let values = StringArray::from_iter_values(["a", "b", "c"]);
         let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1]);
         let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
         let dict_data = dict_array.data();
 
-        let value_offsets = Buffer::from_slice_ref(&[0, 2, 4, 6]);
+        let value_offsets = Buffer::from_slice_ref(offsets);
 
-        let list_data_type = DataType::List(Box::new(Field::new_dict(
-            "item",
-            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-            false,
-            1,
-            false,
-        )));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(dict_data.clone())
             .build()
             .unwrap();
-        let list_array = ListArray::from(list_data);
+        let list_array = GenericListArray::<OffsetSize>::from(list_data);
 
         let dict_dict_array =
             DictionaryArray::<Int8Type>::try_new(&keys, &list_array).unwrap();
@@ -1480,5 +1478,36 @@ mod tests {
             RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
         let output_batch = roundtrip_ipc_stream(&input_batch);
         assert_eq!(input_batch, output_batch);
+    }
+
+    #[test]
+    fn test_roundtrip_stream_nested_dict_dict_in_list() {
+        // list
+        let list_data_type = DataType::List(Box::new(Field::new_dict(
+            "item",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            false,
+            1,
+            false,
+        )));
+        let offsets: &[i32; 4] = &[0, 2, 4, 6];
+        test_test_roundtrip_stream_nested_dict_dict_for_list::<i32, i32>(
+            list_data_type,
+            offsets,
+        );
+
+        // large list
+        let list_data_type = DataType::LargeList(Box::new(Field::new_dict(
+            "item",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            false,
+            1,
+            false,
+        )));
+        let offsets: &[i64; 4] = &[0, 2, 4, 6];
+        test_test_roundtrip_stream_nested_dict_dict_for_list::<i64, i64>(
+            list_data_type,
+            offsets,
+        );
     }
 }

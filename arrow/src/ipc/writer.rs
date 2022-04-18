@@ -26,7 +26,8 @@ use std::io::{BufWriter, Write};
 use flatbuffers::FlatBufferBuilder;
 
 use crate::array::{
-    as_list_array, as_struct_array, as_union_array, make_array, ArrayData, ArrayRef,
+    as_large_list_array, as_list_array, as_struct_array, as_union_array, make_array,
+    ArrayData, ArrayRef,
 };
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::*;
@@ -162,6 +163,16 @@ impl IpcDataGenerator {
             }
             DataType::List(field) => {
                 let list = as_list_array(column);
+                self.encode_dictionaries(
+                    field,
+                    &list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
+            DataType::LargeList(field) => {
+                let list = as_large_list_array(column);
                 self.encode_dictionaries(
                     field,
                     &list.values(),
