@@ -1444,30 +1444,31 @@ mod tests {
         assert_eq!(input_batch, output_batch);
     }
 
-    fn test_test_roundtrip_stream_nested_dict_dict_for_list<
+    fn test_roundtrip_stream_dict_of_list_of_dict_impl<
         OffsetSize: OffsetSizeTrait,
         U: ArrowNativeType,
     >(
         list_data_type: DataType,
-        offsets: &[U; 4],
+        offsets: &[U; 5],
     ) {
-        let values = StringArray::from_iter_values(["a", "b", "c"]);
-        let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1]);
+        let values = StringArray::from(vec![Some("a"), None, Some("c"), None]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1, 3]);
         let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
         let dict_data = dict_array.data();
 
         let value_offsets = Buffer::from_slice_ref(offsets);
 
         let list_data = ArrayData::builder(list_data_type)
-            .len(3)
+            .len(4)
             .add_buffer(value_offsets)
             .add_child_data(dict_data.clone())
             .build()
             .unwrap();
         let list_array = GenericListArray::<OffsetSize>::from(list_data);
 
+        let keys_for_dict = Int8Array::from_iter_values([0, 3, 0, 1, 1, 2, 0, 1, 3]);
         let dict_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&keys, &list_array).unwrap();
+            DictionaryArray::<Int8Type>::try_new(&keys_for_dict, &list_array).unwrap();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f1",
@@ -1481,17 +1482,17 @@ mod tests {
     }
 
     #[test]
-    fn test_roundtrip_stream_nested_dict_dict_in_list() {
+    fn test_roundtrip_stream_dict_of_list_of_dict() {
         // list
         let list_data_type = DataType::List(Box::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-            false,
+            true,
             1,
             false,
         )));
-        let offsets: &[i32; 4] = &[0, 2, 4, 6];
-        test_test_roundtrip_stream_nested_dict_dict_for_list::<i32, i32>(
+        let offsets: &[i32; 5] = &[0, 2, 4, 4, 6];
+        test_roundtrip_stream_dict_of_list_of_dict_impl::<i32, i32>(
             list_data_type,
             offsets,
         );
@@ -1500,12 +1501,12 @@ mod tests {
         let list_data_type = DataType::LargeList(Box::new(Field::new_dict(
             "item",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-            false,
+            true,
             1,
             false,
         )));
-        let offsets: &[i64; 4] = &[0, 2, 4, 6];
-        test_test_roundtrip_stream_nested_dict_dict_for_list::<i64, i64>(
+        let offsets: &[i64; 5] = &[0, 2, 4, 4, 7];
+        test_roundtrip_stream_dict_of_list_of_dict_impl::<i64, i64>(
             list_data_type,
             offsets,
         );

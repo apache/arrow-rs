@@ -131,7 +131,7 @@ impl Field {
             DataType::List(field)
             | DataType::LargeList(field)
             | DataType::FixedSizeList(field, _)
-            | DataType::Map(field, _) => collected_fields.extend(field.fields()),
+            | DataType::Map(field, _) => collected_fields.push(field),
             DataType::Dictionary(_, value_field) => {
                 collected_fields.append(&mut self._fields(value_field.as_ref()))
             }
