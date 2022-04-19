@@ -39,6 +39,7 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     // Check if `offset` is at a valid char boundary.
     // If yes, return `offset`, else return error
     let check_char_boundary = {
+        // Safety: a StringArray must contain valid UTF8 data
         let data_str = unsafe { std::str::from_utf8_unchecked(data) };
         |offset: OffsetSize| {
             let offset_usize = offset.to_usize().unwrap();
