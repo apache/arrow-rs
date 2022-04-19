@@ -1018,7 +1018,7 @@ impl ParquetTypeConverter<'_> {
                         Box::new(Field::new(
                             key_item.name(),
                             DataType::Struct(vec![key, value]),
-                            false,
+                            self.schema.is_optional(),
                         )),
                         false, // There is no information to tell if keys are sorted
                     ))),
