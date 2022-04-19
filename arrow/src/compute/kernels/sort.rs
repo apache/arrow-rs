@@ -269,7 +269,9 @@ pub fn sort_to_indices(
         }
         DataType::Utf8 => sort_string::<i32>(values, v, n, &options, limit),
         DataType::LargeUtf8 => sort_string::<i64>(values, v, n, &options, limit),
-        DataType::List(field) => match field.data_type() {
+        DataType::List(field) | DataType::FixedSizeList(field, _) => match field
+            .data_type()
+        {
             DataType::Int8 => sort_list::<i32, Int8Type>(values, v, n, &options, limit),
             DataType::Int16 => sort_list::<i32, Int16Type>(values, v, n, &options, limit),
             DataType::Int32 => sort_list::<i32, Int32Type>(values, v, n, &options, limit),
@@ -317,34 +319,6 @@ pub fn sort_to_indices(
             }
             DataType::Float64 => {
                 sort_list::<i64, Float64Type>(values, v, n, &options, limit)
-            }
-            t => {
-                return Err(ArrowError::ComputeError(format!(
-                    "Sort not supported for list type {:?}",
-                    t
-                )));
-            }
-        },
-        DataType::FixedSizeList(field, _) => match field.data_type() {
-            DataType::Int8 => sort_list::<i32, Int8Type>(values, v, n, &options, limit),
-            DataType::Int16 => sort_list::<i32, Int16Type>(values, v, n, &options, limit),
-            DataType::Int32 => sort_list::<i32, Int32Type>(values, v, n, &options, limit),
-            DataType::Int64 => sort_list::<i32, Int64Type>(values, v, n, &options, limit),
-            DataType::UInt8 => sort_list::<i32, UInt8Type>(values, v, n, &options, limit),
-            DataType::UInt16 => {
-                sort_list::<i32, UInt16Type>(values, v, n, &options, limit)
-            }
-            DataType::UInt32 => {
-                sort_list::<i32, UInt32Type>(values, v, n, &options, limit)
-            }
-            DataType::UInt64 => {
-                sort_list::<i32, UInt64Type>(values, v, n, &options, limit)
-            }
-            DataType::Float32 => {
-                sort_list::<i32, Float32Type>(values, v, n, &options, limit)
-            }
-            DataType::Float64 => {
-                sort_list::<i32, Float64Type>(values, v, n, &options, limit)
             }
             t => {
                 return Err(ArrowError::ComputeError(format!(

@@ -219,8 +219,14 @@ pub(crate) fn into_buffers(
         DataType::Utf8
         | DataType::Binary
         | DataType::LargeUtf8
-        | DataType::LargeBinary
-        | DataType::Union(_, _) => vec![buffer1.into(), buffer2.into()],
+        | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
+        DataType::Union(_, mode) => {
+            match mode {
+                // Based on Union's DataTypeLayout
+                UnionMode::Sparse => vec![buffer1.into()],
+                UnionMode::Dense => vec![buffer1.into(), buffer2.into()],
+            }
+        }
         _ => vec![buffer1.into()],
     }
 }
@@ -272,6 +278,7 @@ impl ArrayData {
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
     /// module.
+    #[allow(clippy::let_and_return)]
     pub unsafe fn new_unchecked(
         data_type: DataType,
         len: usize,
@@ -286,7 +293,7 @@ impl ArrayData {
             Some(null_count) => null_count,
         };
         let null_bitmap = null_bit_buffer.map(Bitmap::from);
-        Self {
+        let new_self = Self {
             data_type,
             len,
             null_count,
@@ -294,7 +301,12 @@ impl ArrayData {
             buffers,
             child_data,
             null_bitmap,
-        }
+        };
+
+        // Provide a force_validate mode
+        #[cfg(feature = "force_validate")]
+        new_self.validate_full().unwrap();
+        new_self
     }
 
     /// Create a new ArrayData, validating that the provided buffers
@@ -386,8 +398,8 @@ impl ArrayData {
 
     /// Returns a reference to the null bitmap of this array data
     #[inline]
-    pub const fn null_bitmap(&self) -> &Option<Bitmap> {
-        &self.null_bitmap
+    pub const fn null_bitmap(&self) -> Option<&Bitmap> {
+        self.null_bitmap.as_ref()
     }
 
     /// Returns a reference to the null buffer of this array data.
@@ -488,7 +500,7 @@ impl ArrayData {
                     .iter()
                     .map(|data| data.slice(offset, length))
                     .collect(),
-                null_bitmap: self.null_bitmap().clone(),
+                null_bitmap: self.null_bitmap().cloned(),
             };
 
             new_data
@@ -693,7 +705,7 @@ impl ArrayData {
                 // At the moment, constructing a DictionaryArray will also check this
                 if !DataType::is_dictionary_key_type(key_type) {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "Dictionary values must be integer, but was {}",
+                        "Dictionary key type must be integer, but was {}",
                         key_type
                     )));
                 }
@@ -926,8 +938,8 @@ impl ArrayData {
     ///
     /// 1. Null count is correct
     /// 2. All offsets are valid
-    /// 3. All String data is  valid UTF-8
-    /// 3. All dictionary offsets are valid
+    /// 3. All String data is valid UTF-8
+    /// 4. All dictionary offsets are valid
     ///
     /// Does not (yet) check
     /// 1. Union type_ids are valid see [#85](https://github.com/apache/arrow-rs/issues/85)
@@ -949,53 +961,7 @@ impl ArrayData {
             )));
         }
 
-        match &self.data_type {
-            DataType::Utf8 => {
-                self.validate_utf8::<i32>()?;
-            }
-            DataType::LargeUtf8 => {
-                self.validate_utf8::<i64>()?;
-            }
-            DataType::Binary => {
-                self.validate_offsets_full::<i32>(self.buffers[1].len())?;
-            }
-            DataType::LargeBinary => {
-                self.validate_offsets_full::<i64>(self.buffers[1].len())?;
-            }
-            DataType::List(_) | DataType::Map(_, _) => {
-                let child = &self.child_data[0];
-                self.validate_offsets_full::<i32>(child.len + child.offset)?;
-            }
-            DataType::LargeList(_) => {
-                let child = &self.child_data[0];
-                self.validate_offsets_full::<i64>(child.len + child.offset)?;
-            }
-            DataType::Union(_, _) => {
-                // Validate Union Array as part of implementing new Union semantics
-                // See comments in `ArrayData::validate()`
-                // https://github.com/apache/arrow-rs/issues/85
-                //
-                // TODO file follow on ticket for full union validation
-            }
-            DataType::Dictionary(key_type, _value_type) => {
-                let dictionary_length: i64 = self.child_data[0].len.try_into().unwrap();
-                let max_value = dictionary_length - 1;
-                match key_type.as_ref() {
-                    DataType::UInt8 => self.check_bounds::<u8>(max_value)?,
-                    DataType::UInt16 => self.check_bounds::<u16>(max_value)?,
-                    DataType::UInt32 => self.check_bounds::<u32>(max_value)?,
-                    DataType::UInt64 => self.check_bounds::<u64>(max_value)?,
-                    DataType::Int8 => self.check_bounds::<i8>(max_value)?,
-                    DataType::Int16 => self.check_bounds::<i16>(max_value)?,
-                    DataType::Int32 => self.check_bounds::<i32>(max_value)?,
-                    DataType::Int64 => self.check_bounds::<i64>(max_value)?,
-                    _ => unreachable!(),
-                }
-            }
-            _ => {
-                // No extra validation check required for other types
-            }
-        };
+        self.validate_dictionary_offset()?;
 
         // validate all children recursively
         self.child_data
@@ -1011,6 +977,52 @@ impl ArrayData {
             })?;
 
         Ok(())
+    }
+
+    pub fn validate_dictionary_offset(&self) -> Result<()> {
+        match &self.data_type {
+            DataType::Utf8 => self.validate_utf8::<i32>(),
+            DataType::LargeUtf8 => self.validate_utf8::<i64>(),
+            DataType::Binary => self.validate_offsets_full::<i32>(self.buffers[1].len()),
+            DataType::LargeBinary => {
+                self.validate_offsets_full::<i64>(self.buffers[1].len())
+            }
+            DataType::List(_) | DataType::Map(_, _) => {
+                let child = &self.child_data[0];
+                self.validate_offsets_full::<i32>(child.len + child.offset)
+            }
+            DataType::LargeList(_) => {
+                let child = &self.child_data[0];
+                self.validate_offsets_full::<i64>(child.len + child.offset)
+            }
+            DataType::Union(_, _) => {
+                // Validate Union Array as part of implementing new Union semantics
+                // See comments in `ArrayData::validate()`
+                // https://github.com/apache/arrow-rs/issues/85
+                //
+                // TODO file follow on ticket for full union validation
+                Ok(())
+            }
+            DataType::Dictionary(key_type, _value_type) => {
+                let dictionary_length: i64 = self.child_data[0].len.try_into().unwrap();
+                let max_value = dictionary_length - 1;
+                match key_type.as_ref() {
+                    DataType::UInt8 => self.check_bounds::<u8>(max_value),
+                    DataType::UInt16 => self.check_bounds::<u16>(max_value),
+                    DataType::UInt32 => self.check_bounds::<u32>(max_value),
+                    DataType::UInt64 => self.check_bounds::<u64>(max_value),
+                    DataType::Int8 => self.check_bounds::<i8>(max_value),
+                    DataType::Int16 => self.check_bounds::<i16>(max_value),
+                    DataType::Int32 => self.check_bounds::<i32>(max_value),
+                    DataType::Int64 => self.check_bounds::<i64>(max_value),
+                    _ => unreachable!(),
+                }
+            }
+            _ => {
+                // No extra validation check required for other types
+                Ok(())
+            }
+        }
     }
 
     /// Calls the `validate(item_index, range)` function for each of
@@ -1459,10 +1471,11 @@ impl ArrayDataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ptr::NonNull;
 
     use crate::array::{
-        Array, BooleanBuilder, Int32Array, Int32Builder, Int64Array, StringArray,
-        StructBuilder, UInt64Array,
+        make_array, Array, BooleanBuilder, Int32Array, Int32Builder, Int64Array,
+        StringArray, StructBuilder, UInt64Array,
     };
     use crate::buffer::Buffer;
     use crate::datatypes::Field;
@@ -1736,7 +1749,7 @@ mod tests {
 
     // Test creating a dictionary with a non integer type
     #[test]
-    #[should_panic(expected = "Dictionary values must be integer, but was Utf8")]
+    #[should_panic(expected = "Dictionary key type must be integer, but was Utf8")]
     fn test_non_int_dictionary() {
         let i32_buffer = Buffer::from_slice_ref(&[0i32, 2i32]);
         let data_type =
@@ -2339,7 +2352,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "child #0 invalid: Invalid argument error: Value at position 1 out of bounds: -1 (should be in [0, 1])"
+        expected = "Value at position 1 out of bounds: -1 (should be in [0, 1])"
     )]
     /// test that children are validated recursively (aka bugs in child data of struct also are flagged)
     fn test_validate_recursive() {
@@ -2593,5 +2606,70 @@ mod tests {
         let cloned = crate::array::make_array(cloned_data);
 
         assert_eq!(&struct_array_slice, &cloned);
+    }
+
+    #[test]
+    fn test_into_buffers() {
+        let data_types = vec![
+            DataType::Union(vec![], UnionMode::Dense),
+            DataType::Union(vec![], UnionMode::Sparse),
+        ];
+
+        for data_type in data_types {
+            let buffers = new_buffers(&data_type, 0);
+            let [buffer1, buffer2] = buffers;
+            let buffers = into_buffers(&data_type, buffer1, buffer2);
+
+            let layout = layout(&data_type);
+            assert_eq!(buffers.len(), layout.buffers.len());
+        }
+    }
+
+    #[test]
+    fn test_string_data_from_foreign() {
+        let mut strings = "foobarfoobar".to_owned();
+        let mut offsets = vec![0_i32, 0, 3, 6, 12];
+        let mut bitmap = vec![0b1110_u8];
+
+        let strings_buffer = unsafe {
+            Buffer::from_custom_allocation(
+                NonNull::new_unchecked(strings.as_mut_ptr()),
+                strings.len(),
+                Arc::new(strings),
+            )
+        };
+        let offsets_buffer = unsafe {
+            Buffer::from_custom_allocation(
+                NonNull::new_unchecked(offsets.as_mut_ptr() as *mut u8),
+                offsets.len() * std::mem::size_of::<i32>(),
+                Arc::new(offsets),
+            )
+        };
+        let null_buffer = unsafe {
+            Buffer::from_custom_allocation(
+                NonNull::new_unchecked(bitmap.as_mut_ptr()),
+                bitmap.len(),
+                Arc::new(bitmap),
+            )
+        };
+
+        let data = ArrayData::try_new(
+            DataType::Utf8,
+            4,
+            None,
+            Some(null_buffer),
+            0,
+            vec![offsets_buffer, strings_buffer],
+            vec![],
+        )
+        .unwrap();
+
+        let array = make_array(data);
+        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
+
+        let expected =
+            StringArray::from(vec![None, Some("foo"), Some("bar"), Some("foobar")]);
+
+        assert_eq!(array, &expected);
     }
 }

@@ -18,7 +18,7 @@
 use crate::array::{data::count_nulls, ArrayData, OffsetSizeTrait};
 use crate::bitmap::Bitmap;
 use crate::buffer::{Buffer, MutableBuffer};
-use crate::datatypes::DataType;
+use crate::datatypes::{DataType, UnionMode};
 use crate::util::bit_util;
 
 // whether bits along the positions are equal
@@ -66,7 +66,38 @@ pub(super) fn equal_nulls(
 
 #[inline]
 pub(super) fn base_equal(lhs: &ArrayData, rhs: &ArrayData) -> bool {
-    lhs.data_type() == rhs.data_type() && lhs.len() == rhs.len()
+    let equal_type = match (lhs.data_type(), rhs.data_type()) {
+        (DataType::Union(l_fields, l_mode), DataType::Union(r_fields, r_mode)) => {
+            l_fields == r_fields && l_mode == r_mode
+        }
+        (DataType::Map(l_field, l_sorted), DataType::Map(r_field, r_sorted)) => {
+            let field_equal = match (l_field.data_type(), r_field.data_type()) {
+                (DataType::Struct(l_fields), DataType::Struct(r_fields))
+                    if l_fields.len() == 2 && r_fields.len() == 2 =>
+                {
+                    let l_key_field = l_fields.get(0).unwrap();
+                    let r_key_field = r_fields.get(0).unwrap();
+                    let l_value_field = l_fields.get(1).unwrap();
+                    let r_value_field = r_fields.get(1).unwrap();
+
+                    // We don't enforce the equality of field names
+                    let data_type_equal = l_key_field.data_type()
+                        == r_key_field.data_type()
+                        && l_value_field.data_type() == r_value_field.data_type();
+                    let nullability_equal = l_key_field.is_nullable()
+                        == r_key_field.is_nullable()
+                        && l_value_field.is_nullable() == r_value_field.is_nullable();
+                    let metadata_equal = l_key_field.metadata() == r_key_field.metadata()
+                        && l_value_field.metadata() == r_value_field.metadata();
+                    data_type_equal && nullability_equal && metadata_equal
+                }
+                _ => panic!("Map type should have 2 fields Struct in its field"),
+            };
+            field_equal && l_sorted == r_sorted
+        }
+        (l_data_type, r_data_type) => l_data_type == r_data_type,
+    };
+    equal_type && lhs.len() == rhs.len()
 }
 
 // whether the two memory regions are equal
@@ -101,7 +132,7 @@ pub(super) fn child_logical_null_buffer(
             let ceil = bit_util::ceil(parent_len, 8);
             Bitmap::from(Buffer::from(vec![0b11111111; ceil]))
         });
-    let self_null_bitmap = child_data.null_bitmap().clone().unwrap_or_else(|| {
+    let self_null_bitmap = child_data.null_bitmap().cloned().unwrap_or_else(|| {
         let ceil = bit_util::ceil(child_data.len(), 8);
         Bitmap::from(Buffer::from(vec![0b11111111; ceil]))
     });
@@ -161,13 +192,52 @@ pub(super) fn child_logical_null_buffer(
             });
             Some(buffer.into())
         }
-        DataType::Union(_, _) => {
-            unimplemented!("Logical equality not yet implemented for union arrays")
-        }
+        DataType::Union(_, mode) => union_child_logical_null_buffer(
+            parent_data,
+            parent_len,
+            &parent_bitmap,
+            &self_null_bitmap,
+            mode,
+        ),
         DataType::Dictionary(_, _) => {
             unimplemented!("Logical equality not yet implemented for nested dictionaries")
         }
         data_type => panic!("Data type {:?} is not a supported nested type", data_type),
+    }
+}
+
+pub(super) fn union_child_logical_null_buffer(
+    parent_data: &ArrayData,
+    parent_len: usize,
+    parent_bitmap: &Bitmap,
+    self_null_bitmap: &Bitmap,
+    mode: &UnionMode,
+) -> Option<Buffer> {
+    match mode {
+        UnionMode::Sparse => {
+            // See the logic of `DataType::Struct` in `child_logical_null_buffer`.
+            let result = parent_bitmap & self_null_bitmap;
+            if let Ok(bitmap) = result {
+                return Some(bitmap.bits);
+            }
+
+            // slow path
+            let array_offset = parent_data.offset();
+            let mut buffer = MutableBuffer::new_null(parent_len);
+            let null_slice = buffer.as_slice_mut();
+            (0..parent_len).for_each(|index| {
+                if parent_bitmap.is_set(index + array_offset)
+                    && self_null_bitmap.is_set(index + array_offset)
+                {
+                    bit_util::set_bit(null_slice, index);
+                }
+            });
+            Some(buffer.into())
+        }
+        UnionMode::Dense => {
+            // We don't keep bitmap in child data of Dense UnionArray
+            unimplemented!("Logical equality not yet implemented for dense union arrays")
+        }
     }
 }
 

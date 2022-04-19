@@ -60,26 +60,38 @@ impl Parser for Int8Type {}
 
 impl Parser for TimestampNanosecondType {
     fn parse(string: &str) -> Option<i64> {
-        match Self::DATA_TYPE {
-            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
-                string_to_timestamp_nanos(string).ok()
-            }
-            _ => None,
-        }
+        string_to_timestamp_nanos(string).ok()
     }
 }
 
 impl Parser for TimestampMicrosecondType {
     fn parse(string: &str) -> Option<i64> {
-        match Self::DATA_TYPE {
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
-                let nanos = string_to_timestamp_nanos(string).ok();
-                nanos.map(|x| x / 1000)
-            }
-            _ => None,
-        }
+        let nanos = string_to_timestamp_nanos(string).ok();
+        nanos.map(|x| x / 1000)
     }
 }
+
+impl Parser for TimestampMillisecondType {
+    fn parse(string: &str) -> Option<i64> {
+        let nanos = string_to_timestamp_nanos(string).ok();
+        nanos.map(|x| x / 1_000_000)
+    }
+}
+
+impl Parser for TimestampSecondType {
+    fn parse(string: &str) -> Option<i64> {
+        let nanos = string_to_timestamp_nanos(string).ok();
+        nanos.map(|x| x / 1_000_000_000)
+    }
+}
+
+impl Parser for Time64NanosecondType {}
+
+impl Parser for Time64MicrosecondType {}
+
+impl Parser for Time32MillisecondType {}
+
+impl Parser for Time32SecondType {}
 
 /// Number of days between 0001-01-01 and 1970-01-01
 const EPOCH_DAYS_FROM_CE: i32 = 719_163;

@@ -15,20 +15,25 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "parquet_derive_test"
-version = "12.0.0"
-license = "Apache-2.0"
-description = "Integration test package for parquet-derive"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-keywords = [ "parquet" ]
-edition = "2021"
-publish = false
-rust-version = "1.57"
-
-[dependencies]
-parquet = { path = "../parquet", version = "12.0.0" }
-parquet_derive = { path = "../parquet_derive", version = "12.0.0" }
-chrono = "0.4.19"
+name: Prepare Rust Builder
+description: 'Prepare Rust Build Environment'
+inputs:
+  rust-version:
+    description: 'version of rust to install (e.g. stable)'
+    required: true
+    default: 'stable'
+runs:
+  using: "composite"
+  steps:
+    - name: Install Build Dependencies
+      shell: bash
+      run: |
+        apt-get update
+        apt-get install -y protobuf-compiler
+    - name: Setup Rust toolchain
+      shell: bash
+      run: |
+        echo "Installing ${{ inputs.rust-version }}"
+        rustup toolchain install ${{ inputs.rust-version }}
+        rustup default ${{ inputs.rust-version }}
+        rustup component add rustfmt

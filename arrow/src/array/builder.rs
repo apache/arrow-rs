@@ -2117,7 +2117,10 @@ impl UnionBuilder {
         let mut field_data = match self.fields.remove(&type_name) {
             Some(data) => data,
             None => match self.value_offset_builder {
-                Some(_) => FieldData::new(self.fields.len() as i8, T::DATA_TYPE, None),
+                Some(_) => {
+                    // For Dense Union, we don't build bitmap in individual field
+                    FieldData::new(self.fields.len() as i8, T::DATA_TYPE, None)
+                }
                 None => {
                     let mut fd = FieldData::new(
                         self.fields.len() as i8,
@@ -3558,7 +3561,7 @@ mod tests {
         assert_eq!(4, struct_data.len());
         assert_eq!(1, struct_data.null_count());
         assert_eq!(
-            &Some(Bitmap::from(Buffer::from(&[11_u8]))),
+            Some(&Bitmap::from(Buffer::from(&[11_u8]))),
             struct_data.null_bitmap()
         );
 
@@ -3672,7 +3675,7 @@ mod tests {
         assert_eq!(3, map_data.len());
         assert_eq!(1, map_data.null_count());
         assert_eq!(
-            &Some(Bitmap::from(Buffer::from(&[5_u8]))),
+            Some(&Bitmap::from(Buffer::from(&[5_u8]))),
             map_data.null_bitmap()
         );
 

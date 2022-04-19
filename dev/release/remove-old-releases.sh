@@ -1,3 +1,5 @@
+#!/bin/bash
+#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,21 +16,30 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+#
 
-[package]
-name = "parquet_derive_test"
-version = "12.0.0"
-license = "Apache-2.0"
-description = "Integration test package for parquet-derive"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-keywords = [ "parquet" ]
-edition = "2021"
-publish = false
-rust-version = "1.57"
+# This script removes all but the most recent versions of arrow-rs
+# from svn
+#
+# The older versions are in SVN history as well as available on the
+# archive page https://archive.apache.org/dist/
+#
+# See
+# https://infra.apache.org/release-download-pages.html
 
-[dependencies]
-parquet = { path = "../parquet", version = "12.0.0" }
-parquet_derive = { path = "../parquet_derive", version = "12.0.0" }
-chrono = "0.4.19"
+set -e
+set -u
+
+svn_base="https://dist.apache.org/repos/dist/release/arrow"
+
+echo "Remove all but the most recent version"
+old_releases=$(
+  svn ls ${svn_base} | \
+  grep -E '^arrow-rs-[0-9\.]+' | \
+  sort --version-sort --reverse | \
+  tail -n +2
+)
+for old_release_version in $old_releases; do
+  echo "Remove old release ${old_release_version}"
+  svn delete -m "Removing ${old_release_version}" ${svn_base}/${old_release_version}
+done

@@ -33,7 +33,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // avoid rerunning build if the file has not changed
         println!("cargo:rerun-if-changed=../format/Flight.proto");
 
-        tonic_build::compile_protos("../format/Flight.proto")?;
+        let proto_dir = Path::new("../format");
+        let proto_path = Path::new("../format/Flight.proto");
+
+        tonic_build::configure()
+            // protoc in unbuntu builder needs this option
+            .protoc_arg("--experimental_allow_proto3_optional")
+            .compile(&[proto_path], &[proto_dir])?;
+
         // read file contents to string
         let mut file = OpenOptions::new()
             .read(true)
@@ -58,7 +65,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // avoid rerunning build if the file has not changed
         println!("cargo:rerun-if-changed=../format/FlightSql.proto");
 
-        tonic_build::compile_protos("../format/FlightSql.proto")?;
+        let proto_dir = Path::new("../format");
+        let proto_path = Path::new("../format/FlightSql.proto");
+
+        tonic_build::configure()
+            // protoc in unbuntu builder needs this option
+            .protoc_arg("--experimental_allow_proto3_optional")
+            .compile(&[proto_path], &[proto_dir])?;
+
         // read file contents to string
         let mut file = OpenOptions::new()
             .read(true)

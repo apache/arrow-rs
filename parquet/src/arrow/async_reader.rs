@@ -539,7 +539,7 @@ async fn fetch_next_row_group<T: Storage>(
         input,
         InMemoryRowGroup {
             schema,
-            column_chunks,
+            row_count: row_group_metadata.num_rows() as usize,column_chunks,
         },
     ))
 }
@@ -576,11 +576,16 @@ fn decode_footer(buf: &[u8]) -> Result<ParquetMetaData> {
 struct InMemoryRowGroup {
     schema: SchemaDescPtr,
     column_chunks: Vec<Option<InMemoryColumnChunk>>,
+    row_count: usize,
 }
 
 impl RowGroupCollection for InMemoryRowGroup {
     fn schema(&self) -> Result<SchemaDescPtr> {
         Ok(self.schema.clone())
+    }
+
+    fn num_rows(&self) -> usize {
+        self.row_count
     }
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {

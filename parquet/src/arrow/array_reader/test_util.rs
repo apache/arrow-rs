@@ -15,12 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::ArrayRef;
+use arrow::datatypes::DataType as ArrowType;
+use std::any::Any;
 use std::sync::Arc;
 
+use crate::arrow::array_reader::ArrayReader;
 use crate::basic::{ConvertedType, Encoding, Type as PhysicalType};
+use crate::column::page::{PageIterator, PageReader};
 use crate::data_type::{ByteArray, ByteArrayType};
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
-use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
+use crate::errors::Result;
+use crate::schema::types::{
+    ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, Type,
+};
 use crate::util::memory::{ByteBufferPtr, MemTracker};
 
 /// Returns a descriptor for a UTF-8 column
@@ -86,4 +94,79 @@ pub fn byte_array_all_encodings(
     ];
 
     (pages, encoded_dictionary)
+}
+
+/// Array reader for test.
+pub struct InMemoryArrayReader {
+    data_type: ArrowType,
+    array: ArrayRef,
+    def_levels: Option<Vec<i16>>,
+    rep_levels: Option<Vec<i16>>,
+}
+
+impl InMemoryArrayReader {
+    pub fn new(
+        data_type: ArrowType,
+        array: ArrayRef,
+        def_levels: Option<Vec<i16>>,
+        rep_levels: Option<Vec<i16>>,
+    ) -> Self {
+        Self {
+            data_type,
+            array,
+            def_levels,
+            rep_levels,
+        }
+    }
+}
+
+impl ArrayReader for InMemoryArrayReader {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn get_data_type(&self) -> &ArrowType {
+        &self.data_type
+    }
+
+    fn next_batch(&mut self, _batch_size: usize) -> Result<ArrayRef> {
+        Ok(self.array.clone())
+    }
+
+    fn get_def_levels(&self) -> Option<&[i16]> {
+        self.def_levels.as_deref()
+    }
+
+    fn get_rep_levels(&self) -> Option<&[i16]> {
+        self.rep_levels.as_deref()
+    }
+}
+
+/// Iterator for testing reading empty columns
+pub struct EmptyPageIterator {
+    schema: SchemaDescPtr,
+}
+
+impl EmptyPageIterator {
+    pub fn new(schema: SchemaDescPtr) -> Self {
+        EmptyPageIterator { schema }
+    }
+}
+
+impl Iterator for EmptyPageIterator {
+    type Item = Result<Box<dyn PageReader>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        None
+    }
+}
+
+impl PageIterator for EmptyPageIterator {
+    fn schema(&mut self) -> Result<SchemaDescPtr> {
+        Ok(self.schema.clone())
+    }
+
+    fn column_schema(&mut self) -> Result<ColumnDescPtr> {
+        Ok(self.schema.column(0))
+    }
 }

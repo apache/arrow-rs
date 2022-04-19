@@ -138,15 +138,15 @@ bitflags! {
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ArrowSchema {
-    format: *const c_char,
-    name: *const c_char,
-    metadata: *const c_char,
-    flags: i64,
-    n_children: i64,
-    children: *mut *mut FFI_ArrowSchema,
-    dictionary: *mut FFI_ArrowSchema,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
-    private_data: *mut c_void,
+    pub(crate) format: *const c_char,
+    pub(crate) name: *const c_char,
+    pub(crate) metadata: *const c_char,
+    pub(crate) flags: i64,
+    pub(crate) n_children: i64,
+    pub(crate) children: *mut *mut FFI_ArrowSchema,
+    pub(crate) dictionary: *mut FFI_ArrowSchema,
+    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowSchema)>,
+    pub(crate) private_data: *mut c_void,
 }
 
 struct SchemaPrivateData {
@@ -295,6 +295,7 @@ impl Drop for FFI_ArrowSchema {
 
 // returns the number of bits that buffer `i` (in the C data interface) is expected to have.
 // This is set by the Arrow specification
+#[allow(clippy::manual_bits)]
 fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
     Ok(match (data_type, i) {
         // the null buffer is bit sized
@@ -332,6 +333,17 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
                 data_type, i
             )))
         }
+        (DataType::FixedSizeBinary(num_bytes), 1) => size_of::<u8>() * (*num_bytes as usize) * 8,
+        (DataType::FixedSizeList(f, num_elems), 1) => {
+            let child_bit_width = bit_width(f.data_type(), 1)?;
+            child_bit_width * (*num_elems as usize)
+        },
+        (DataType::FixedSizeBinary(_), _) | (DataType::FixedSizeList(_, _), _) => {
+            return Err(ArrowError::CDataInterface(format!(
+                "The datatype \"{:?}\" expects 2 buffers, but requested {}. Please verify that the C data interface is correctly implemented.",
+                data_type, i
+            )))
+        },
         // Variable-sized binaries: have two buffers.
         // "small": first buffer is i32, second is in bytes
         (DataType::Utf8, 1) | (DataType::Binary, 1) | (DataType::List(_), 1) => size_of::<i32>() * 8,
@@ -373,15 +385,15 @@ pub struct FFI_ArrowArray {
     pub(crate) n_buffers: i64,
     pub(crate) n_children: i64,
     pub(crate) buffers: *mut *const c_void,
-    children: *mut *mut FFI_ArrowArray,
-    dictionary: *mut FFI_ArrowArray,
-    release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
+    pub(crate) children: *mut *mut FFI_ArrowArray,
+    pub(crate) dictionary: *mut FFI_ArrowArray,
+    pub(crate) release: Option<unsafe extern "C" fn(arg1: *mut FFI_ArrowArray)>,
     // When exported, this MUST contain everything that is owned by this array.
     // for example, any buffer pointed to in `buffers` must be here, as well
     // as the `buffers` pointer itself.
     // In other words, everything in [FFI_ArrowArray] must be owned by
     // `private_data` and can assume that they do not outlive `private_data`.
-    private_data: *mut c_void,
+    pub(crate) private_data: *mut c_void,
 }
 
 impl Drop for FFI_ArrowArray {
@@ -425,7 +437,7 @@ impl FFI_ArrowArray {
     /// # Safety
     /// This method releases `buffers`. Consumers of this struct *must* call `release` before
     /// releasing this struct, or contents in `buffers` leak.
-    pub(crate) fn new(data: &ArrayData) -> Self {
+    pub fn new(data: &ArrayData) -> Self {
         // * insert the null buffer at the start
         // * make all others `Option<Buffer>`.
         let buffers = iter::once(data.null_buffer().cloned())
@@ -538,7 +550,8 @@ unsafe fn create_buffer(
     assert!(index < array.n_buffers as usize);
     let ptr = *buffers.add(index);
 
-    NonNull::new(ptr as *mut u8).map(|ptr| Buffer::from_unowned(ptr, len, owner))
+    NonNull::new(ptr as *mut u8)
+        .map(|ptr| Buffer::from_custom_allocation(ptr, len, owner))
 }
 
 fn create_child(
@@ -735,8 +748,8 @@ pub trait ArrowArrayRef {
 /// Furthermore, this struct assumes that the incoming data agrees with the C data interface.
 #[derive(Debug)]
 pub struct ArrowArray {
-    array: Arc<FFI_ArrowArray>,
-    schema: Arc<FFI_ArrowSchema>,
+    pub(crate) array: Arc<FFI_ArrowArray>,
+    pub(crate) schema: Arc<FFI_ArrowSchema>,
 }
 
 #[derive(Debug)]
@@ -860,9 +873,10 @@ mod tests {
     use super::*;
     use crate::array::{
         export_array_into_raw, make_array, Array, ArrayData, BinaryOffsetSizeTrait,
-        BooleanArray, DecimalArray, DictionaryArray, GenericBinaryArray,
-        GenericListArray, GenericStringArray, Int32Array, OffsetSizeTrait,
-        StringOffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray,
+        BooleanArray, DecimalArray, DictionaryArray, FixedSizeBinaryArray,
+        FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
+        Int32Array, OffsetSizeTrait, StringOffsetSizeTrait, Time32MillisecondArray,
+        TimestampMillisecondArray,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
@@ -1168,6 +1182,117 @@ mod tests {
                 Some(2)
             ])
         );
+
+        // (drop/release)
+        Ok(())
+    }
+
+    #[test]
+    fn test_fixed_size_binary_array() -> Result<()> {
+        let values = vec![
+            None,
+            Some(vec![10, 10, 10]),
+            None,
+            Some(vec![20, 20, 20]),
+            Some(vec![30, 30, 30]),
+            None,
+        ];
+        let array = FixedSizeBinaryArray::try_from_sparse_iter(values.into_iter())?;
+
+        // export it
+        let array = ArrowArray::try_from(array.data().clone())?;
+
+        // (simulate consumer) import it
+        let data = ArrayData::try_from(array)?;
+        let array = make_array(data);
+
+        // perform some operation
+        let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+
+        // verify
+        assert_eq!(
+            array,
+            &FixedSizeBinaryArray::try_from_sparse_iter(
+                vec![
+                    None,
+                    Some(vec![10, 10, 10]),
+                    None,
+                    Some(vec![20, 20, 20]),
+                    Some(vec![30, 30, 30]),
+                    None,
+                    None,
+                    Some(vec![10, 10, 10]),
+                    None,
+                    Some(vec![20, 20, 20]),
+                    Some(vec![30, 30, 30]),
+                    None,
+                ]
+                .into_iter()
+            )?
+        );
+
+        // (drop/release)
+        Ok(())
+    }
+
+    #[test]
+    fn test_fixed_size_list_array() -> Result<()> {
+        // 0000 0100
+        let mut validity_bits: [u8; 1] = [0; 1];
+        bit_util::set_bit(&mut validity_bits, 2);
+
+        let v: Vec<i32> = (0..9).into_iter().collect();
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(9)
+            .add_buffer(Buffer::from_slice_ref(&v))
+            .build()?;
+
+        let list_data_type =
+            DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int32, false)), 3);
+        let list_data = ArrayData::builder(list_data_type.clone())
+            .len(3)
+            .null_bit_buffer(Buffer::from(validity_bits))
+            .add_child_data(value_data)
+            .build()?;
+
+        // export it
+        let array = ArrowArray::try_from(list_data)?;
+
+        // (simulate consumer) import it
+        let data = ArrayData::try_from(array)?;
+        let array = make_array(data);
+
+        // perform some operation
+        let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).unwrap();
+        let array = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+
+        // 0010 0100
+        let mut expected_validity_bits: [u8; 1] = [0; 1];
+        bit_util::set_bit(&mut expected_validity_bits, 2);
+        bit_util::set_bit(&mut expected_validity_bits, 5);
+
+        let mut w = vec![];
+        w.extend_from_slice(&v);
+        w.extend_from_slice(&v);
+
+        let expected_value_data = ArrayData::builder(DataType::Int32)
+            .len(18)
+            .add_buffer(Buffer::from_slice_ref(&w))
+            .build()?;
+
+        let expected_list_data = ArrayData::builder(list_data_type)
+            .len(6)
+            .null_bit_buffer(Buffer::from(expected_validity_bits))
+            .add_child_data(expected_value_data)
+            .build()?;
+        let expected_array = FixedSizeListArray::from(expected_list_data);
+
+        // verify
+        assert_eq!(array, &expected_array);
 
         // (drop/release)
         Ok(())

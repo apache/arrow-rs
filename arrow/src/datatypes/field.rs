@@ -91,8 +91,8 @@ impl Field {
 
     /// Returns the immutable reference to the `Field`'s optional custom metadata.
     #[inline]
-    pub const fn metadata(&self) -> &Option<BTreeMap<String, String>> {
-        &self.metadata
+    pub const fn metadata(&self) -> Option<&BTreeMap<String, String>> {
+        self.metadata.as_ref()
     }
 
     /// Returns an immutable reference to the `Field`'s name.
@@ -116,7 +116,15 @@ impl Field {
     /// Returns a (flattened) vector containing all fields contained within this field (including it self)
     pub(crate) fn fields(&self) -> Vec<&Field> {
         let mut collected_fields = vec![self];
-        match &self.data_type {
+        collected_fields.append(&mut self._fields(&self.data_type));
+
+        collected_fields
+    }
+
+    fn _fields<'a>(&'a self, dt: &'a DataType) -> Vec<&Field> {
+        let mut collected_fields = vec![];
+
+        match dt {
             DataType::Struct(fields) | DataType::Union(fields, _) => {
                 collected_fields.extend(fields.iter().flat_map(|f| f.fields()))
             }
@@ -124,6 +132,9 @@ impl Field {
             | DataType::LargeList(field)
             | DataType::FixedSizeList(field, _)
             | DataType::Map(field, _) => collected_fields.push(field),
+            DataType::Dictionary(_, value_field) => {
+                collected_fields.append(&mut self._fields(value_field.as_ref()))
+            }
             _ => (),
         }
 
