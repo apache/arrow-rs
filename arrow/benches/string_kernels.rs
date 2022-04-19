@@ -25,8 +25,8 @@ use arrow::array::*;
 use arrow::compute::kernels::substring::substring;
 use arrow::util::bench_util::*;
 
-fn bench_substring(arr: &StringArray, start: i64, length: usize) {
-    substring(criterion::black_box(arr), start, Some(length as u64)).unwrap();
+fn bench_substring(arr: &StringArray, start: i64, length: Option<u64>) {
+    substring(criterion::black_box(arr), start, length).unwrap();
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -34,10 +34,13 @@ fn add_benchmark(c: &mut Criterion) {
     let str_len = 1000;
 
     let arr_string = create_string_array_with_len::<i32>(size, 0.0, str_len);
-    let start = 0;
 
-    c.bench_function("substring", |b| {
-        b.iter(|| bench_substring(&arr_string, start, str_len))
+    c.bench_function("substring (start = 0, length = None)", |b| {
+        b.iter(|| bench_substring(&arr_string, 0, None))
+    });
+
+    c.bench_function("substring (start = 1, length = str_len - 1)", |b| {
+        b.iter(|| bench_substring(&arr_string, 1, Some((str_len - 1) as u64)))
     });
 }
 
