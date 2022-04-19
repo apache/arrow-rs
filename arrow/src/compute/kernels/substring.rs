@@ -53,32 +53,6 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
         }
     };
 
-    // Functions for calculating the offset of each substring in the old array.
-    // Takes the start and end offsets of the original string,
-    // and returns the byte offset to copy data from the source values array.
-    // Returns an error if this offset is not at a valid UTF-8 char boundary.
-    let cal_new_start: Box<dyn Fn(OffsetSize, OffsetSize) -> Result<OffsetSize>> =
-        match start.cmp(&zero) {
-            // count from the start of string
-            // and check it is a valid char boundary
-            Ordering::Greater => Box::new(|old_start, end| {
-                check_char_boundary((old_start + start).min(end))
-            }),
-            Ordering::Equal => Box::new(|old_start, _| Ok(old_start)),
-            // count from the end of string
-            Ordering::Less => Box::new(|old_start, end| {
-                check_char_boundary((end + start).max(old_start))
-            }),
-        };
-
-    let cal_new_end: Box<dyn Fn(OffsetSize, OffsetSize) -> Result<OffsetSize>> =
-        match length {
-            Some(length) => {
-                Box::new(move |start, end| check_char_boundary((length + start).min(end)))
-            }
-            None => Box::new(|_, end| Ok(end)),
-        };
-
     // start and end offsets of all substrings
     let mut new_starts_ends: Vec<(OffsetSize, OffsetSize)> =
         Vec::with_capacity(array.len());
@@ -87,8 +61,15 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
     new_offsets.push(zero);
 
     offsets.windows(2).try_for_each(|pair| -> Result<()> {
-        let new_start = cal_new_start(pair[0], pair[1])?;
-        let new_end = cal_new_end(new_start, pair[1])?;
+        let new_start = match start.cmp(&zero) {
+            Ordering::Greater => check_char_boundary((pair[0] + start).min(pair[1]))?,
+            Ordering::Equal => pair[0],
+            Ordering::Less => check_char_boundary((pair[1] + start).max(pair[0]))?,
+        };
+        let new_end = match length {
+            Some(length) => check_char_boundary((length + new_start).min(pair[1]))?,
+            None => pair[1],
+        };
         len_so_far += new_end - new_start;
         new_starts_ends.push((new_start, new_end));
         new_offsets.push(len_so_far);
