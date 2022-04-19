@@ -282,8 +282,7 @@ fn equal_range(
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    utils::base_equal(lhs, rhs)
-        && utils::equal_nulls(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
+    utils::equal_nulls(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
         && equal_values(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
 }
 
