@@ -1483,23 +1483,33 @@ mod tests {
     }
 
     #[test]
-    fn test_roundtrip_stream_nested_dict_dict_in_map() {
-        let values = StringArray::from_iter_values(["a", "b", "c"]);
-        let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1]);
-        let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+    fn test_roundtrip_stream_nested_dict_of_map_of_dict() {
+        let values = StringArray::from(vec![Some("a"), None, Some("b"), Some("c")]);
+        let value_dict_keys = Int8Array::from_iter_values([0, 1, 1, 2, 3, 1]);
+        let value_dict_array =
+            DictionaryArray::<Int8Type>::try_new(&value_dict_keys, &values).unwrap();
 
-        let keys_array = Int32Array::from_iter_values([0, 0, 1, 2, 0, 1]);
-        let keys_field = Field::new("keys", DataType::Int32, false);
+        let key_dict_keys = Int8Array::from_iter_values([0, 0, 2, 1, 1, 3]);
+        let key_dict_array =
+            DictionaryArray::<Int8Type>::try_new(&key_dict_keys, &values).unwrap();
+
+        let keys_field = Field::new_dict(
+            "keys",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            true,
+            1,
+            false,
+        );
         let values_field = Field::new_dict(
             "values",
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
-            false,
+            true,
             1,
             false,
         );
         let entry_struct = StructArray::from(vec![
-            (keys_field, make_array(keys_array.data().clone())),
-            (values_field, make_array(dict_array.data().clone())),
+            (keys_field, make_array(key_dict_array.data().clone())),
+            (values_field, make_array(value_dict_array.data().clone())),
         ]);
         let map_data_type = DataType::Map(
             Box::new(Field::new(
@@ -1519,8 +1529,9 @@ mod tests {
             .unwrap();
         let map_array = MapArray::from(map_data);
 
+        let dict_keys = Int8Array::from_iter_values([0, 1, 1, 2, 2, 1]);
         let dict_dict_array =
-            DictionaryArray::<Int8Type>::try_new(&keys, &map_array).unwrap();
+            DictionaryArray::<Int8Type>::try_new(&dict_keys, &map_array).unwrap();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "f1",
