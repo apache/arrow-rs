@@ -18,7 +18,6 @@
 use crate::{
     array::ArrayData,
     array::{data::count_nulls, OffsetSizeTrait},
-    buffer::Buffer,
     util::bit_util::get_bit,
 };
 
@@ -49,8 +48,6 @@ fn lengths_equal<T: OffsetSizeTrait>(lhs: &[T], rhs: &[T]) -> bool {
 pub(super) fn list_equal<T: OffsetSizeTrait>(
     lhs: &ArrayData,
     rhs: &ArrayData,
-    lhs_nulls: Option<&Buffer>,
-    rhs_nulls: Option<&Buffer>,
     lhs_start: usize,
     rhs_start: usize,
     len: usize,
@@ -76,10 +73,11 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
     // however, one is more likely to slice into a list array and get a region that has 0
     // child values.
     // The test that triggered this behaviour had [4, 4] as a slice of 1 value slot.
-    let lhs_child_length = lhs_offsets.get(len).unwrap().to_usize().unwrap()
-        - lhs_offsets.first().unwrap().to_usize().unwrap();
-    let rhs_child_length = rhs_offsets.get(len).unwrap().to_usize().unwrap()
-        - rhs_offsets.first().unwrap().to_usize().unwrap();
+    let lhs_child_length = lhs_offsets[lhs_start + len].to_usize().unwrap()
+        - lhs_offsets[lhs_start].to_usize().unwrap();
+
+    let rhs_child_length = rhs_offsets[rhs_start + len].to_usize().unwrap()
+        - rhs_offsets[rhs_start].to_usize().unwrap();
 
     if lhs_child_length == 0 && lhs_child_length == rhs_child_length {
         return true;
@@ -88,32 +86,30 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
     let lhs_values = &lhs.child_data()[0];
     let rhs_values = &rhs.child_data()[0];
 
-    let lhs_null_count = count_nulls(lhs_nulls, lhs_start, len);
-    let rhs_null_count = count_nulls(rhs_nulls, rhs_start, len);
+    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
+    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
 
     if lhs_null_count != rhs_null_count {
         return false;
     }
 
     if lhs_null_count == 0 && rhs_null_count == 0 {
-        lengths_equal(
-            &lhs_offsets[lhs_start..lhs_start + len],
-            &rhs_offsets[rhs_start..rhs_start + len],
-        ) && equal_range(
-            lhs_values,
-            rhs_values,
-            lhs_values.null_buffer(),
-            rhs_values.null_buffer(),
-            lhs_offsets[lhs_start].to_usize().unwrap(),
-            rhs_offsets[rhs_start].to_usize().unwrap(),
-            (lhs_offsets[lhs_start + len] - lhs_offsets[lhs_start])
-                .to_usize()
-                .unwrap(),
-        )
+        lhs_child_length == rhs_child_length
+            && lengths_equal(
+                &lhs_offsets[lhs_start..lhs_start + len],
+                &rhs_offsets[rhs_start..rhs_start + len],
+            )
+            && equal_range(
+                lhs_values,
+                rhs_values,
+                lhs_offsets[lhs_start].to_usize().unwrap(),
+                rhs_offsets[rhs_start].to_usize().unwrap(),
+                lhs_child_length,
+            )
     } else {
         // get a ref of the parent null buffer bytes, to use in testing for nullness
-        let lhs_null_bytes = lhs_nulls.unwrap().as_slice();
-        let rhs_null_bytes = rhs_nulls.unwrap().as_slice();
+        let lhs_null_bytes = lhs.null_buffer().unwrap().as_slice();
+        let rhs_null_bytes = rhs.null_buffer().unwrap().as_slice();
 
         // with nulls, we need to compare item by item whenever it is not null
         // TODO: Could potentially compare runs of not NULL values
@@ -141,8 +137,6 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
                     && equal_range(
                         lhs_values,
                         rhs_values,
-                        lhs_values.null_buffer(),
-                        rhs_values.null_buffer(),
                         lhs_offset_start,
                         rhs_offset_start,
                         lhs_len,

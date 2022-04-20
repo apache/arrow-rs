@@ -811,7 +811,11 @@ fn write_array_data(
     let mut offset = offset;
     nodes.push(ipc::FieldNode::new(num_rows as i64, null_count as i64));
     // NullArray does not have any buffers, thus the null buffer is not generated
-    if array_data.data_type() != &DataType::Null {
+    // UnionArray does not have a validity buffer
+    if !matches!(
+        array_data.data_type(),
+        DataType::Null | DataType::Union(_, _)
+    ) {
         // write null buffer if exists
         let null_buffer = match array_data.null_buffer() {
             None => {
@@ -1273,8 +1277,7 @@ mod tests {
         let offsets = Buffer::from_slice_ref(&[0_i32, 1, 2]);
 
         let union =
-            UnionArray::try_new(types, Some(offsets), vec![(dctfield, array)], None)
-                .unwrap();
+            UnionArray::try_new(types, Some(offsets), vec![(dctfield, array)]).unwrap();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "union",

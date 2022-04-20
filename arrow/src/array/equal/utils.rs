@@ -16,9 +16,7 @@
 // under the License.
 
 use crate::array::{data::count_nulls, ArrayData};
-use crate::bitmap::Bitmap;
-use crate::buffer::{Buffer, MutableBuffer};
-use crate::datatypes::{DataType, UnionMode};
+use crate::datatypes::DataType;
 use crate::util::bit_util;
 
 // whether bits along the positions are equal
@@ -41,22 +39,20 @@ pub(super) fn equal_bits(
 pub(super) fn equal_nulls(
     lhs: &ArrayData,
     rhs: &ArrayData,
-    lhs_nulls: Option<&Buffer>,
-    rhs_nulls: Option<&Buffer>,
     lhs_start: usize,
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    let lhs_null_count = count_nulls(lhs_nulls, lhs_start + lhs.offset(), len);
-    let rhs_null_count = count_nulls(rhs_nulls, rhs_start + rhs.offset(), len);
+    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
+    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
 
     if lhs_null_count != rhs_null_count {
         return false;
     }
 
     if lhs_null_count > 0 || rhs_null_count > 0 {
-        let lhs_values = lhs_nulls.unwrap().as_slice();
-        let rhs_values = rhs_nulls.unwrap().as_slice();
+        let lhs_values = lhs.null_buffer().unwrap().as_slice();
+        let rhs_values = rhs.null_buffer().unwrap().as_slice();
         equal_bits(
             lhs_values,
             rhs_values,
@@ -115,121 +111,4 @@ pub(super) fn equal_len(
     len: usize,
 ) -> bool {
     lhs_values[lhs_start..(lhs_start + len)] == rhs_values[rhs_start..(rhs_start + len)]
-}
-
-/// Computes the logical validity bitmap of the array data using the
-/// parent's array data. The parent should be a list or struct, else
-/// the logical bitmap of the array is returned unaltered.
-///
-/// Parent data is passed along with the parent's logical bitmap, as
-/// nested arrays could have a logical bitmap different to the physical
-/// one on the `ArrayData`.
-pub(super) fn child_logical_null_buffer(
-    parent_data: &ArrayData,
-    logical_null_buffer: Option<&Buffer>,
-    child_data: &ArrayData,
-) -> Option<Buffer> {
-    let parent_len = parent_data.len();
-    let parent_bitmap = logical_null_buffer
-        .cloned()
-        .map(Bitmap::from)
-        .unwrap_or_else(|| {
-            let ceil = bit_util::ceil(parent_len, 8);
-            Bitmap::from(Buffer::from(vec![0b11111111; ceil]))
-        });
-    let self_null_bitmap = child_data.null_bitmap().cloned().unwrap_or_else(|| {
-        let ceil = bit_util::ceil(child_data.len(), 8);
-        Bitmap::from(Buffer::from(vec![0b11111111; ceil]))
-    });
-    match parent_data.data_type() {
-        DataType::FixedSizeList(_, len) => {
-            let len = *len as usize;
-            let array_offset = parent_data.offset();
-            let bitmap_len = bit_util::ceil(parent_len * len, 8);
-            let mut buffer = MutableBuffer::from_len_zeroed(bitmap_len);
-            let null_slice = buffer.as_slice_mut();
-            (array_offset..parent_len + array_offset).for_each(|index| {
-                let start = index * len;
-                let end = start + len;
-                let mask = parent_bitmap.is_set(index);
-                (start..end).for_each(|child_index| {
-                    if mask && self_null_bitmap.is_set(child_index) {
-                        bit_util::set_bit(null_slice, child_index);
-                    }
-                });
-            });
-            Some(buffer.into())
-        }
-        DataType::Struct(_) => {
-            // Arrow implementations are free to pad data, which can result in null buffers not
-            // having the same length.
-            // Rust bitwise comparisons will return an error if left AND right is performed on
-            // buffers of different length.
-            // This might be a valid case during integration testing, where we read Arrow arrays
-            // from IPC data, which has padding.
-            //
-            // We first perform a bitwise comparison, and if there is an error, we revert to a
-            // slower method that indexes into the buffers one-by-one.
-            let result = &parent_bitmap & &self_null_bitmap;
-            if let Ok(bitmap) = result {
-                return Some(bitmap.bits);
-            }
-            // slow path
-            let array_offset = parent_data.offset();
-            let mut buffer = MutableBuffer::new_null(parent_len);
-            let null_slice = buffer.as_slice_mut();
-            (array_offset..parent_len + array_offset).for_each(|index| {
-                if parent_bitmap.is_set(index) && self_null_bitmap.is_set(index) {
-                    bit_util::set_bit(null_slice, index);
-                }
-            });
-            Some(buffer.into())
-        }
-        DataType::Union(_, mode) => union_child_logical_null_buffer(
-            parent_data,
-            parent_len,
-            &parent_bitmap,
-            &self_null_bitmap,
-            mode,
-        ),
-        DataType::Dictionary(_, _) => {
-            unimplemented!("Logical equality not yet implemented for nested dictionaries")
-        }
-        data_type => panic!("Data type {:?} is not a supported nested type", data_type),
-    }
-}
-
-pub(super) fn union_child_logical_null_buffer(
-    parent_data: &ArrayData,
-    parent_len: usize,
-    parent_bitmap: &Bitmap,
-    self_null_bitmap: &Bitmap,
-    mode: &UnionMode,
-) -> Option<Buffer> {
-    match mode {
-        UnionMode::Sparse => {
-            // See the logic of `DataType::Struct` in `child_logical_null_buffer`.
-            let result = parent_bitmap & self_null_bitmap;
-            if let Ok(bitmap) = result {
-                return Some(bitmap.bits);
-            }
-
-            // slow path
-            let array_offset = parent_data.offset();
-            let mut buffer = MutableBuffer::new_null(parent_len);
-            let null_slice = buffer.as_slice_mut();
-            (0..parent_len).for_each(|index| {
-                if parent_bitmap.is_set(index + array_offset)
-                    && self_null_bitmap.is_set(index + array_offset)
-                {
-                    bit_util::set_bit(null_slice, index);
-                }
-            });
-            Some(buffer.into())
-        }
-        UnionMode::Dense => {
-            // We don't keep bitmap in child data of Dense UnionArray
-            unimplemented!("Logical equality not yet implemented for dense union arrays")
-        }
-    }
 }

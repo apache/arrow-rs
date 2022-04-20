@@ -190,11 +190,10 @@ fn create_array(
 
             let len = union_node.length() as usize;
 
-            let null_buffer: Buffer = read_buffer(&buffers[buffer_index], data);
             let type_ids: Buffer =
-                read_buffer(&buffers[buffer_index + 1], data)[..len].into();
+                read_buffer(&buffers[buffer_index], data)[..len].into();
 
-            buffer_index += 2;
+            buffer_index += 1;
 
             let value_offsets = match mode {
                 UnionMode::Dense => {
@@ -224,13 +223,7 @@ fn create_array(
                 children.push((field.clone(), triple.0));
             }
 
-            let array = UnionArray::try_new(
-                type_ids,
-                value_offsets,
-                children,
-                Some(null_buffer),
-            )?;
-
+            let array = UnionArray::try_new(type_ids, value_offsets, children)?;
             Arc::new(array)
         }
         Null => {
@@ -1359,7 +1352,7 @@ mod tests {
 
     fn check_union_with_builder(mut builder: UnionBuilder) {
         builder.append::<datatypes::Int32Type>("a", 1).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null::<datatypes::Int32Type>("a").unwrap();
         builder.append::<datatypes::Float64Type>("c", 3.0).unwrap();
         builder.append::<datatypes::Int32Type>("a", 4).unwrap();
         builder.append::<datatypes::Int64Type>("d", 11).unwrap();
