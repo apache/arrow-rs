@@ -521,12 +521,12 @@ mod tests {
         // Construct an empty value array
         let value_data = ArrayData::builder(DataType::Int32)
             .len(0)
-            .add_buffer(Buffer::from_iter(std::iter::empty::<i32>()))
+            .add_buffer(Buffer::from([]))
             .build()
             .unwrap();
 
         // Construct an empty offset buffer
-        let value_offsets = Buffer::from_iter(std::iter::empty::<i32>());
+        let value_offsets = Buffer::from([]);
 
         // Construct a list array from the above two
         let list_data_type =
