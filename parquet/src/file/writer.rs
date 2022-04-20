@@ -188,7 +188,7 @@ impl<W: ParquetWriter> SerializedFileWriter<W> {
                 .iter()
                 .map(|v| v.to_thrift())
                 .collect(),
-            key_value_metadata: self.props.key_value_metadata().to_owned(),
+            key_value_metadata: self.props.key_value_metadata().cloned(),
             created_by: Some(self.props.created_by().to_owned()),
             column_orders: None,
             encryption_algorithm: None,

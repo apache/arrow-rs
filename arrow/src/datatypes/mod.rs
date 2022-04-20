@@ -1276,7 +1276,7 @@ mod tests {
         assert!(f1.try_merge(&f2).is_ok());
         assert!(f1.metadata().is_some());
         assert_eq!(
-            f1.metadata().clone().unwrap(),
+            f1.metadata().cloned().unwrap(),
             [
                 ("foo".to_string(), "bar".to_string()),
                 ("foo2".to_string(), "bar2".to_string())
@@ -1297,7 +1297,7 @@ mod tests {
         assert!(f1.try_merge(&f2).is_ok());
         assert!(f1.metadata().is_some());
         assert_eq!(
-            f1.metadata().clone().unwrap(),
+            f1.metadata().cloned().unwrap(),
             [("foo".to_string(), "bar".to_string())]
                 .iter()
                 .cloned()

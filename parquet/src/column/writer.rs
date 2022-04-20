@@ -270,8 +270,8 @@ impl<T: DataType> ColumnWriterImpl<T> {
         values: &[T::T],
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
-        min: &Option<T::T>,
-        max: &Option<T::T>,
+        min: Option<&T::T>,
+        max: Option<&T::T>,
         null_count: Option<u64>,
         distinct_count: Option<u64>,
     ) -> Result<usize> {
@@ -376,9 +376,7 @@ impl<T: DataType> ColumnWriterImpl<T> {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) -> Result<usize> {
-        self.write_batch_internal(
-            values, def_levels, rep_levels, &None, &None, None, None,
-        )
+        self.write_batch_internal(values, def_levels, rep_levels, None, None, None, None)
     }
 
     /// Writer may optionally provide pre-calculated statistics for this batch, in which case we do
@@ -389,8 +387,8 @@ impl<T: DataType> ColumnWriterImpl<T> {
         values: &[T::T],
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
-        min: &Option<T::T>,
-        max: &Option<T::T>,
+        min: Option<&T::T>,
+        max: Option<&T::T>,
         nulls_count: Option<u64>,
         distinct_count: Option<u64>,
     ) -> Result<usize> {
@@ -1487,8 +1485,8 @@ mod tests {
                 &[1, 2, 3, 4],
                 None,
                 None,
-                &Some(-17),
-                &Some(9000),
+                Some(&-17),
+                Some(&9000),
                 Some(21),
                 Some(55),
             )

@@ -70,7 +70,7 @@ fn substring(array: ArrayData, start: i64) -> PyResult<ArrayData> {
     let array = ArrayRef::from(array);
 
     // substring
-    let array = kernels::substring::substring(array.as_ref(), start, &None)?;
+    let array = kernels::substring::substring(array.as_ref(), start, None)?;
 
     Ok(array.data().to_owned())
 }

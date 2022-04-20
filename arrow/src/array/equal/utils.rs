@@ -132,7 +132,7 @@ pub(super) fn child_logical_null_buffer(
             let ceil = bit_util::ceil(parent_len, 8);
             Bitmap::from(Buffer::from(vec![0b11111111; ceil]))
         });
-    let self_null_bitmap = child_data.null_bitmap().clone().unwrap_or_else(|| {
+    let self_null_bitmap = child_data.null_bitmap().cloned().unwrap_or_else(|| {
         let ceil = bit_util::ceil(child_data.len(), 8);
         Bitmap::from(Buffer::from(vec![0b11111111; ceil]))
     });
