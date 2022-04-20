@@ -399,8 +399,6 @@ impl BooleanBufferBuilder {
 
     #[inline]
     pub fn append_n(&mut self, additional: usize, v: bool) {
-        let start_bits = min(additional, 8 - self.len() % 8);
-
         if v {
             self.advance_true(additional);
         } else {
@@ -409,10 +407,14 @@ impl BooleanBufferBuilder {
 
         if additional > 0 && v {
             let offset = self.len() - additional;
+            let start_bits = min(additional, 8 - self.len() % 8);
+            let remaining = (additional - start_bits) % 8;
 
-            (0..start_bits).for_each(|i| unsafe {
-                bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i)
-            });
+            (0..start_bits)
+                .chain(additional - remaining..additional)
+                .for_each(|i| unsafe {
+                    bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i)
+                });
         }
     }
 
