@@ -239,15 +239,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 
         let values = make_array(values);
         let value_offsets = data.buffers()[0].as_ptr();
-
         let value_offsets = unsafe { RawPtrBox::<OffsetSize>::new(value_offsets) };
-        unsafe {
-            if !(*value_offsets.as_ptr().offset(0)).is_zero() {
-                return Err(ArrowError::InvalidArgumentError(String::from(
-                    "offsets do not start at zero",
-                )));
-            }
-        }
         Ok(Self {
             data,
             values,
@@ -522,6 +514,32 @@ mod tests {
 
         let another = create_from_buffers();
         assert_eq!(list_array, another)
+    }
+
+    #[test]
+    fn test_empty_list_array() {
+        // Construct an empty value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(0)
+            .add_buffer(Buffer::from_iter(std::iter::empty::<i32>()))
+            .build()
+            .unwrap();
+
+        // Construct an empty offset buffer
+        let value_offsets = Buffer::from_iter(std::iter::empty::<i32>());
+
+        // Construct a list array from the above two
+        let list_data_type =
+            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+        let list_data = ArrayData::builder(list_data_type.clone())
+            .len(0)
+            .add_buffer(value_offsets.clone())
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap();
+
+        let list_array = ListArray::from(list_data);
+        assert_eq!(list_array.len(), 0)
     }
 
     #[test]
@@ -1110,8 +1128,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "offsets do not start at zero")]
-    fn test_list_array_invalid_value_offset_start() {
+    fn test_list_array_offsets_need_not_start_at_zero() {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
             .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
@@ -1128,7 +1145,11 @@ mod tests {
             .add_child_data(value_data)
             .build()
             .unwrap();
-        drop(ListArray::from(list_data));
+
+        let list_array = ListArray::from(list_data);
+        assert_eq!(list_array.value_length(0), 0);
+        assert_eq!(list_array.value_length(1), 3);
+        assert_eq!(list_array.value_length(2), 2);
     }
 
     #[test]
