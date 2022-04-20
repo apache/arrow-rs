@@ -2125,6 +2125,29 @@ mod tests {
                     ),
                     true,
                 ),
+                Field::new(
+                    "c41",
+                    DataType::Map(
+                        Box::new(Field::new(
+                            "my_entries",
+                            DataType::Struct(vec![
+                                Field::new("my_key", DataType::Utf8, false),
+                                Field::new(
+                                    "my_value",
+                                    DataType::List(Box::new(Field::new(
+                                        "item",
+                                        DataType::Utf8,
+                                        true,
+                                    ))),
+                                    true,
+                                ),
+                            ]),
+                            false,
+                        )),
+                        false, // fails to roundtrip keys_sorted
+                    ),
+                    false,
+                ),
             ],
             metadata,
         );
