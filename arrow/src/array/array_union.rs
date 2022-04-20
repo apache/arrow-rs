@@ -61,7 +61,6 @@ use std::any::Any;
 ///     type_id_buffer,
 ///     Some(value_offsets_buffer),
 ///     children,
-///     None,
 /// ).unwrap();
 ///
 /// let value = array.value(0).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
@@ -94,7 +93,6 @@ use std::any::Any;
 ///     type_id_buffer,
 ///     None,
 ///     children,
-///     None,
 /// ).unwrap();
 ///
 /// let value = array.value(0).as_any().downcast_ref::<Int32Array>().unwrap().value(0);

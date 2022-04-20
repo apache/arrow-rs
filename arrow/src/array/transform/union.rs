@@ -48,17 +48,13 @@ pub(super) fn build_extend_dense(array: &ArrayData) -> Extend {
                 .buffer1
                 .extend_from_slice(&type_ids[start..start + len]);
 
-            // extends offsets
-            mutable
-                .buffer2
-                .extend_from_slice(&offsets[start..start + len]);
-
             (start..start + len).for_each(|i| {
                 let type_id = type_ids[i] as usize;
                 let src_offset = offsets[i] as usize;
                 let child_data = &mut mutable.child_data[type_id];
                 let dst_offset = child_data.len();
 
+                // Extend offsets
                 mutable.buffer2.push(dst_offset as i32);
                 mutable.child_data[type_id].extend(index, src_offset, src_offset + 1)
             })
