@@ -798,7 +798,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 
     /// Appends values from a slice of type `T` and a validity boolean slice
     #[inline]
-    pub fn append_values(&mut self, values: &[T::Native], is_valid: &[bool]) -> Result<()> {
+    pub fn append_values(
+        &mut self,
+        values: &[T::Native],
+        is_valid: &[bool],
+    ) -> Result<()> {
         if values.len() != is_valid.len() {
             return Err(ArrowError::InvalidArgumentError(
                 "Value and validity lengths must be equal".to_string(),
@@ -865,8 +869,10 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
                 .as_ref()
                 .map(|b| b.count_set_bits())
                 .unwrap_or(len);
-        let data_type =
-            DataType::Dictionary(Box::new(T::DATA_TYPE), Box::new(values.data_type().clone()));
+        let data_type = DataType::Dictionary(
+            Box::new(T::DATA_TYPE),
+            Box::new(values.data_type().clone()),
+        );
         let mut builder = ArrayData::builder(data_type)
             .len(len)
             .add_buffer(self.values_builder.finish());
@@ -1180,7 +1186,9 @@ pub struct DecimalBuilder {
     scale: usize,
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSize> {
+impl<OffsetSize: BinaryOffsetSizeTrait> ArrayBuilder
+    for GenericBinaryBuilder<OffsetSize>
+{
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -1212,7 +1220,9 @@ impl<OffsetSize: BinaryOffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<Of
     }
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> ArrayBuilder for GenericStringBuilder<OffsetSize> {
+impl<OffsetSize: StringOffsetSizeTrait> ArrayBuilder
+    for GenericStringBuilder<OffsetSize>
+{
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -1479,8 +1489,10 @@ impl DecimalBuilder {
     #[inline]
     pub fn append_value(&mut self, value: i128) -> Result<()> {
         let value = validate_decimal_precision(value, self.precision)?;
-        let value_as_bytes =
-            Self::from_i128_to_fixed_size_bytes(value, self.builder.value_length() as usize)?;
+        let value_as_bytes = Self::from_i128_to_fixed_size_bytes(
+            value,
+            self.builder.value_length() as usize,
+        )?;
         if self.builder.value_length() != value_as_bytes.len() as i32 {
             return Err(ArrowError::InvalidArgumentError(
                 "Byte slice does not have the same length as DecimalBuilder value lengths"
@@ -1514,7 +1526,11 @@ impl DecimalBuilder {
 
     /// Builds the `DecimalArray` and reset this builder.
     pub fn finish(&mut self) -> DecimalArray {
-        DecimalArray::from_fixed_size_list_array(self.builder.finish(), self.precision, self.scale)
+        DecimalArray::from_fixed_size_list_array(
+            self.builder.finish(),
+            self.precision,
+            self.scale,
+        )
     }
 }
 
@@ -1601,22 +1617,30 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Float32 => Box::new(Float32Builder::new(capacity)),
         DataType::Float64 => Box::new(Float64Builder::new(capacity)),
         DataType::Binary => Box::new(BinaryBuilder::new(capacity)),
-        DataType::FixedSizeBinary(len) => Box::new(FixedSizeBinaryBuilder::new(capacity, *len)),
+        DataType::FixedSizeBinary(len) => {
+            Box::new(FixedSizeBinaryBuilder::new(capacity, *len))
+        }
         DataType::Decimal(precision, scale) => {
             Box::new(DecimalBuilder::new(capacity, *precision, *scale))
         }
         DataType::Utf8 => Box::new(StringBuilder::new(capacity)),
         DataType::Date32 => Box::new(Date32Builder::new(capacity)),
         DataType::Date64 => Box::new(Date64Builder::new(capacity)),
-        DataType::Time32(TimeUnit::Second) => Box::new(Time32SecondBuilder::new(capacity)),
+        DataType::Time32(TimeUnit::Second) => {
+            Box::new(Time32SecondBuilder::new(capacity))
+        }
         DataType::Time32(TimeUnit::Millisecond) => {
             Box::new(Time32MillisecondBuilder::new(capacity))
         }
         DataType::Time64(TimeUnit::Microsecond) => {
             Box::new(Time64MicrosecondBuilder::new(capacity))
         }
-        DataType::Time64(TimeUnit::Nanosecond) => Box::new(Time64NanosecondBuilder::new(capacity)),
-        DataType::Timestamp(TimeUnit::Second, _) => Box::new(TimestampSecondBuilder::new(capacity)),
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            Box::new(Time64NanosecondBuilder::new(capacity))
+        }
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            Box::new(TimestampSecondBuilder::new(capacity))
+        }
         DataType::Timestamp(TimeUnit::Millisecond, _) => {
             Box::new(TimestampMillisecondBuilder::new(capacity))
         }
@@ -1635,7 +1659,9 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Interval(IntervalUnit::MonthDayNano) => {
             Box::new(IntervalMonthDayNanoBuilder::new(capacity))
         }
-        DataType::Duration(TimeUnit::Second) => Box::new(DurationSecondBuilder::new(capacity)),
+        DataType::Duration(TimeUnit::Second) => {
+            Box::new(DurationSecondBuilder::new(capacity))
+        }
         DataType::Duration(TimeUnit::Millisecond) => {
             Box::new(DurationMillisecondBuilder::new(capacity))
         }
@@ -1645,7 +1671,9 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
         DataType::Duration(TimeUnit::Nanosecond) => {
             Box::new(DurationNanosecondBuilder::new(capacity))
         }
-        DataType::Struct(fields) => Box::new(StructBuilder::from_fields(fields.clone(), capacity)),
+        DataType::Struct(fields) => {
+            Box::new(StructBuilder::from_fields(fields.clone(), capacity))
+        }
         t => panic!("Data type {:?} is not currently supported", t),
     }
 }
@@ -1748,7 +1776,11 @@ impl Default for MapFieldNames {
 
 #[allow(dead_code)]
 impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
-    pub fn new(field_names: Option<MapFieldNames>, key_builder: K, value_builder: V) -> Self {
+    pub fn new(
+        field_names: Option<MapFieldNames>,
+        key_builder: K,
+        value_builder: V,
+    ) -> Self {
         let capacity = key_builder.len();
         Self::with_capacity(field_names, key_builder, value_builder, capacity)
     }
@@ -1891,7 +1923,11 @@ struct FieldData {
 
 impl FieldData {
     /// Creates a new `FieldData`.
-    fn new(type_id: i8, data_type: DataType, bitmap_builder: Option<BooleanBufferBuilder>) -> Self {
+    fn new(
+        type_id: i8,
+        data_type: DataType,
+        bitmap_builder: Option<BooleanBufferBuilder>,
+    ) -> Self {
         Self {
             type_id,
             data_type,
@@ -1903,7 +1939,10 @@ impl FieldData {
 
     /// Appends a single value to this `FieldData`'s `values_buffer`.
     #[allow(clippy::unnecessary_wraps)]
-    fn append_to_values_buffer<T: ArrowPrimitiveType>(&mut self, v: T::Native) -> Result<()> {
+    fn append_to_values_buffer<T: ArrowPrimitiveType>(
+        &mut self,
+        v: T::Native,
+    ) -> Result<()> {
         let values_buffer = self
             .values_buffer
             .take()
@@ -2093,7 +2132,11 @@ impl UnionBuilder {
 
     /// Appends a value to this builder.
     #[inline]
-    pub fn append<T: ArrowPrimitiveType>(&mut self, type_name: &str, v: T::Native) -> Result<()> {
+    pub fn append<T: ArrowPrimitiveType>(
+        &mut self,
+        type_name: &str,
+        v: T::Native,
+    ) -> Result<()> {
         let type_name = type_name.to_string();
 
         let mut field_data = match self.fields.remove(&type_name) {
@@ -2243,7 +2286,10 @@ where
     V: ArrowPrimitiveType,
 {
     /// Creates a new `PrimitiveDictionaryBuilder` from a keys builder and a value builder.
-    pub fn new(keys_builder: PrimitiveBuilder<K>, values_builder: PrimitiveBuilder<V>) -> Self {
+    pub fn new(
+        keys_builder: PrimitiveBuilder<K>,
+        values_builder: PrimitiveBuilder<V>,
+    ) -> Self {
         Self {
             keys_builder,
             values_builder,
@@ -2427,7 +2473,8 @@ where
                 let value = dictionary_values.value(i);
                 map.insert(
                     value.as_bytes().into(),
-                    K::Native::from_usize(i).ok_or(ArrowError::DictionaryKeyOverflowError)?,
+                    K::Native::from_usize(i)
+                        .ok_or(ArrowError::DictionaryKeyOverflowError)?,
                 );
                 values_builder.append_value(value)?;
             } else {
@@ -2810,7 +2857,8 @@ mod tests {
 
     #[test]
     fn test_boolean_array_builder_append_slice() {
-        let arr1 = BooleanArray::from(vec![Some(true), Some(false), None, None, Some(false)]);
+        let arr1 =
+            BooleanArray::from(vec![Some(true), Some(false), None, None, Some(false)]);
 
         let mut builder = BooleanArray::builder(0);
         builder.append_slice(&[true, false]).unwrap();
@@ -3705,7 +3753,8 @@ mod tests {
     )]
     fn test_struct_array_builder_from_schema_unsupported_type() {
         let mut fields = vec![Field::new("f1", DataType::Int16, false)];
-        let list_type = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
+        let list_type =
+            DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
         fields.push(Field::new("f2", list_type, false));
 
         let _ = StructBuilder::from_fields(fields, 5);
@@ -3782,7 +3831,8 @@ mod tests {
 
         let key_builder = PrimitiveBuilder::<Int8Type>::new(6);
         let mut builder =
-            StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary).unwrap();
+            StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
+                .unwrap();
         builder.append("abc").unwrap();
         builder.append_null().unwrap();
         builder.append("def").unwrap();
@@ -3813,7 +3863,8 @@ mod tests {
 
         let key_builder = PrimitiveBuilder::<Int16Type>::new(4);
         let mut builder =
-            StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary).unwrap();
+            StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
+                .unwrap();
         builder.append("abc").unwrap();
         builder.append_null().unwrap();
         builder.append("def").unwrap();
