@@ -147,7 +147,7 @@ impl IpcDataGenerator {
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
     ) -> Result<()> {
-        // TODO: Handle other nested types (LargeList, FixedSizeList)
+        // TODO: Handle other nested types (FixedSizeList)
         match column.data_type() {
             DataType::Struct(fields) => {
                 let s = as_struct_array(column);
