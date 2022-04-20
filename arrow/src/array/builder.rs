@@ -399,6 +399,8 @@ impl BooleanBufferBuilder {
 
     #[inline]
     pub fn append_n(&mut self, additional: usize, v: bool) {
+        let len = self.len();
+
         if v {
             self.advance_true(additional);
         } else {
@@ -406,8 +408,9 @@ impl BooleanBufferBuilder {
         }
 
         if additional > 0 && v {
+            let start_bits = min(additional, 8 - len % 8);
+
             let offset = self.len() - additional;
-            let start_bits = min(additional, 8 - self.len() % 8);
             let remaining = (additional - start_bits) % 8;
 
             (0..start_bits)
