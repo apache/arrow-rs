@@ -1018,7 +1018,7 @@ impl ParquetTypeConverter<'_> {
                         Box::new(Field::new(
                             key_item.name(),
                             DataType::Struct(vec![key, value]),
-                            false,
+                            self.schema.is_optional(),
                         )),
                         false, // There is no information to tell if keys are sorted
                     ))),
@@ -1500,7 +1500,7 @@ mod tests {
                             Field::new("str", DataType::Utf8, false),
                             Field::new("num", DataType::Int32, false),
                         ]),
-                        false,
+                        true,
                     )),
                     false,
                 ),
@@ -1525,7 +1525,7 @@ mod tests {
                             Field::new("key", DataType::Utf8, false),
                             Field::new("value", DataType::Int32, true),
                         ]),
-                        false,
+                        true,
                     )),
                     false,
                 ),
@@ -2096,7 +2096,7 @@ mod tests {
                                     true,
                                 ),
                             ]),
-                            false,
+                            true,
                         )),
                         false, // fails to roundtrip keys_sorted
                     ),
@@ -2119,11 +2119,34 @@ mod tests {
                                     true,
                                 ),
                             ]),
-                            false,
+                            true,
                         )),
                         false, // fails to roundtrip keys_sorted
                     ),
                     true,
+                ),
+                Field::new(
+                    "c41",
+                    DataType::Map(
+                        Box::new(Field::new(
+                            "my_entries",
+                            DataType::Struct(vec![
+                                Field::new("my_key", DataType::Utf8, false),
+                                Field::new(
+                                    "my_value",
+                                    DataType::List(Box::new(Field::new(
+                                        "item",
+                                        DataType::Utf8,
+                                        true,
+                                    ))),
+                                    true,
+                                ),
+                            ]),
+                            false,
+                        )),
+                        false, // fails to roundtrip keys_sorted
+                    ),
+                    false,
                 ),
             ],
             metadata,
