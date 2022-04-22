@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines kernel to extract a substring of a \[Large\]StringArray
+//! Defines kernel to extract a substring of an Array
+//! Supported array types: \[Large\]StringArray, \[Large\]BinaryArray
 
 use crate::buffer::MutableBuffer;
 use crate::{array::*, buffer::Buffer};
@@ -85,6 +86,7 @@ fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
     Ok(make_array(data))
 }
 
+/// substring by byte
 fn utf8_substring<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: OffsetSize,
@@ -188,8 +190,8 @@ fn utf8_substring<OffsetSize: StringOffsetSizeTrait>(
 /// ```
 ///
 /// # Error
-/// - The function errors when the passed array is not a \[Large\]String array.
-/// - The function errors if the offset of a substring in the input array is at invalid char boundary.
+/// - The function errors when the passed array is not a \[Large\]String array or \[Large\]Binary array.
+/// - The function errors if the offset of a substring in the input array is at invalid char boundary (only for \[Large\]String array).
 ///
 /// ## Example of trying to get an invalid utf-8 format substring
 /// ```
