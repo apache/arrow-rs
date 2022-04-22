@@ -263,7 +263,7 @@ fn print_logical_and_converted(
             LogicalType::JSON(_) => "JSON".to_string(),
             LogicalType::String => "STRING".to_string(),
             LogicalType::UUID(_) => "UUID".to_string(),
-            LogicalType::ENUM(_) => "ENUM".to_string(),
+            LogicalType::Enum => "ENUM".to_string(),
             LogicalType::List => "LIST".to_string(),
             LogicalType::Map => "MAP".to_string(),
             LogicalType::UNKNOWN(_) => "UNKNOWN".to_string(),

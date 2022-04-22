@@ -168,7 +168,7 @@ pub enum LogicalType {
     String,
     Map,
     List,
-    ENUM(EnumType),
+    Enum,
     DECIMAL(DecimalType),
     DATE(DateType),
     TIME(TimeType),
@@ -336,7 +336,7 @@ impl ColumnOrder {
         match logical_type {
             Some(logical) => match logical {
                 LogicalType::String
-                | LogicalType::ENUM(_)
+                | LogicalType::Enum
                 | LogicalType::JSON(_)
                 | LogicalType::BSON(_) => SortOrder::UNSIGNED,
                 LogicalType::INTEGER(t) => match t.is_signed {
@@ -589,7 +589,7 @@ impl convert::From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::STRING(_) => LogicalType::String,
             parquet::LogicalType::MAP(_) => LogicalType::Map,
             parquet::LogicalType::LIST(_) => LogicalType::List,
-            parquet::LogicalType::ENUM(t) => LogicalType::ENUM(t),
+            parquet::LogicalType::ENUM(_) => LogicalType::Enum,
             parquet::LogicalType::DECIMAL(t) => LogicalType::DECIMAL(t),
             parquet::LogicalType::DATE(t) => LogicalType::DATE(t),
             parquet::LogicalType::TIME(t) => LogicalType::TIME(t),
@@ -609,7 +609,7 @@ impl convert::From<LogicalType> for parquet::LogicalType {
             LogicalType::String => parquet::LogicalType::STRING(Default::default()),
             LogicalType::Map => parquet::LogicalType::MAP(Default::default()),
             LogicalType::List => parquet::LogicalType::LIST(Default::default()),
-            LogicalType::ENUM(t) => parquet::LogicalType::ENUM(t),
+            LogicalType::Enum => parquet::LogicalType::ENUM(Default::default()),
             LogicalType::DECIMAL(t) => parquet::LogicalType::DECIMAL(t),
             LogicalType::DATE(t) => parquet::LogicalType::DATE(t),
             LogicalType::TIME(t) => parquet::LogicalType::TIME(t),
@@ -639,7 +639,7 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::String => ConvertedType::UTF8,
                 LogicalType::Map => ConvertedType::MAP,
                 LogicalType::List => ConvertedType::LIST,
-                LogicalType::ENUM(_) => ConvertedType::ENUM,
+                LogicalType::Enum => ConvertedType::ENUM,
                 LogicalType::DECIMAL(_) => ConvertedType::DECIMAL,
                 LogicalType::DATE(_) => ConvertedType::DATE,
                 LogicalType::TIME(t) => match t.unit {
@@ -866,7 +866,7 @@ impl str::FromStr for LogicalType {
             })),
             "MAP" => Ok(LogicalType::Map),
             "LIST" => Ok(LogicalType::List),
-            "ENUM" => Ok(LogicalType::ENUM(EnumType {})),
+            "ENUM" => Ok(LogicalType::Enum),
             "DECIMAL" => Ok(LogicalType::DECIMAL(DecimalType {
                 precision: -1,
                 scale: -1,
@@ -1502,7 +1502,7 @@ mod tests {
             ConvertedType::NONE
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::ENUM(Default::default()))),
+            ConvertedType::from(Some(LogicalType::Enum)),
             ConvertedType::ENUM
         );
         assert_eq!(
@@ -1790,7 +1790,7 @@ mod tests {
             LogicalType::String,
             LogicalType::JSON(Default::default()),
             LogicalType::BSON(Default::default()),
-            LogicalType::ENUM(Default::default()),
+            LogicalType::Enum,
             LogicalType::UUID(Default::default()),
             LogicalType::INTEGER(IntType {
                 bit_width: 8,

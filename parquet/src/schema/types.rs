@@ -312,7 +312,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                             logical_type
                         ));
                     }
-                    (LogicalType::ENUM(_), PhysicalType::BYTE_ARRAY) => {}
+                    (LogicalType::Enum, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::DECIMAL(t), _) => {
                         // Check that scale and precision are consistent with legacy values
                         if t.scale != self.scale {

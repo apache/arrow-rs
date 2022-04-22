@@ -807,7 +807,7 @@ impl ParquetTypeConverter<'_> {
             (Some(LogicalType::String), _) => Ok(DataType::Utf8),
             (Some(LogicalType::JSON(_)), _) => Ok(DataType::Binary),
             (Some(LogicalType::BSON(_)), _) => Ok(DataType::Binary),
-            (Some(LogicalType::ENUM(_)), _) => Ok(DataType::Binary),
+            (Some(LogicalType::Enum), _) => Ok(DataType::Binary),
             (None, ConvertedType::NONE) => Ok(DataType::Binary),
             (None, ConvertedType::JSON) => Ok(DataType::Binary),
             (None, ConvertedType::BSON) => Ok(DataType::Binary),
