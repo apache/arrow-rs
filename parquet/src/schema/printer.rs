@@ -265,7 +265,7 @@ fn print_logical_and_converted(
             LogicalType::UUID(_) => "UUID".to_string(),
             LogicalType::ENUM(_) => "ENUM".to_string(),
             LogicalType::LIST(_) => "LIST".to_string(),
-            LogicalType::MAP(_) => "MAP".to_string(),
+            LogicalType::Map => "MAP".to_string(),
             LogicalType::UNKNOWN(_) => "UNKNOWN".to_string(),
         },
         None => {

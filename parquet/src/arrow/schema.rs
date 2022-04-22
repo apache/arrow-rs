@@ -527,7 +527,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                             .with_repetition(Repetition::REPEATED)
                             .build()?,
                     )])
-                    .with_logical_type(Some(LogicalType::MAP(Default::default())))
+                    .with_logical_type(Some(LogicalType::Map))
                     .with_repetition(repetition)
                     .build()
             } else {
@@ -831,7 +831,7 @@ impl ParquetTypeConverter<'_> {
             self.schema.get_basic_info().converted_type(),
         ) {
             (Some(LogicalType::LIST(_)), _) | (_, ConvertedType::LIST) => self.to_list(),
-            (Some(LogicalType::MAP(_)), _)
+            (Some(LogicalType::Map), _)
             | (_, ConvertedType::MAP)
             | (_, ConvertedType::MAP_KEY_VALUE) => self.to_map(),
             (_, _) => {

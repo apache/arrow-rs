@@ -306,7 +306,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
                 // Check that logical type and physical type are compatible
                 match (logical_type, self.physical_type) {
-                    (LogicalType::MAP(_), _) | (LogicalType::LIST(_), _) => {
+                    (LogicalType::Map, _) | (LogicalType::LIST(_), _) => {
                         return Err(general_err!(
                             "{:?} cannot be applied to a primitive type",
                             logical_type
