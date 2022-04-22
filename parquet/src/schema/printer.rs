@@ -261,7 +261,7 @@ fn print_logical_and_converted(
             LogicalType::DATE(_) => "DATE".to_string(),
             LogicalType::BSON(_) => "BSON".to_string(),
             LogicalType::JSON(_) => "JSON".to_string(),
-            LogicalType::STRING(_) => "STRING".to_string(),
+            LogicalType::String => "STRING".to_string(),
             LogicalType::UUID(_) => "UUID".to_string(),
             LogicalType::ENUM(_) => "ENUM".to_string(),
             LogicalType::LIST(_) => "LIST".to_string(),
@@ -592,7 +592,7 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::BYTE_ARRAY,
-                    Some(LogicalType::STRING(Default::default())),
+                    Some(LogicalType::String),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
                 )
@@ -699,7 +699,7 @@ mod tests {
                 .with_id(1)
                 .build();
             let f3 = Type::primitive_type_builder("f3", PhysicalType::BYTE_ARRAY)
-                .with_logical_type(Some(LogicalType::STRING(Default::default())))
+                .with_logical_type(Some(LogicalType::String))
                 .with_id(1)
                 .build();
             let f4 =

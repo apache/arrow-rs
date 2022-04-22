@@ -353,7 +353,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         if t.bit_width == 64 => {}
                     // Null type
                     (LogicalType::UNKNOWN(_), PhysicalType::INT32) => {}
-                    (LogicalType::STRING(_), PhysicalType::BYTE_ARRAY) => {}
+                    (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::JSON(_), PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::BSON(_), PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::UUID(_), PhysicalType::FIXED_LEN_BYTE_ARRAY) => {}

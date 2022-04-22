@@ -165,7 +165,7 @@ pub enum ConvertedType {
 /// [`ConvertedType`]. Please see the README.md for more details.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogicalType {
-    STRING(StringType),
+    String,
     MAP(MapType),
     LIST(ListType),
     ENUM(EnumType),
@@ -335,7 +335,7 @@ impl ColumnOrder {
         // TODO: Should this take converted and logical type, for compatibility?
         match logical_type {
             Some(logical) => match logical {
-                LogicalType::STRING(_)
+                LogicalType::String
                 | LogicalType::ENUM(_)
                 | LogicalType::JSON(_)
                 | LogicalType::BSON(_) => SortOrder::UNSIGNED,
@@ -586,7 +586,7 @@ impl convert::From<ConvertedType> for Option<parquet::ConvertedType> {
 impl convert::From<parquet::LogicalType> for LogicalType {
     fn from(value: parquet::LogicalType) -> Self {
         match value {
-            parquet::LogicalType::STRING(t) => LogicalType::STRING(t),
+            parquet::LogicalType::STRING(_) => LogicalType::String,
             parquet::LogicalType::MAP(t) => LogicalType::MAP(t),
             parquet::LogicalType::LIST(t) => LogicalType::LIST(t),
             parquet::LogicalType::ENUM(t) => LogicalType::ENUM(t),
@@ -606,7 +606,7 @@ impl convert::From<parquet::LogicalType> for LogicalType {
 impl convert::From<LogicalType> for parquet::LogicalType {
     fn from(value: LogicalType) -> Self {
         match value {
-            LogicalType::STRING(t) => parquet::LogicalType::STRING(t),
+            LogicalType::String => parquet::LogicalType::STRING(Default::default()),
             LogicalType::MAP(t) => parquet::LogicalType::MAP(t),
             LogicalType::LIST(t) => parquet::LogicalType::LIST(t),
             LogicalType::ENUM(t) => parquet::LogicalType::ENUM(t),
@@ -636,7 +636,7 @@ impl From<Option<LogicalType>> for ConvertedType {
     fn from(value: Option<LogicalType>) -> Self {
         match value {
             Some(value) => match value {
-                LogicalType::STRING(_) => ConvertedType::UTF8,
+                LogicalType::String => ConvertedType::UTF8,
                 LogicalType::MAP(_) => ConvertedType::MAP,
                 LogicalType::LIST(_) => ConvertedType::LIST,
                 LogicalType::ENUM(_) => ConvertedType::ENUM,
@@ -880,7 +880,7 @@ impl str::FromStr for LogicalType {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MILLIS(parquet::MilliSeconds {}),
             })),
-            "STRING" => Ok(LogicalType::STRING(StringType {})),
+            "STRING" => Ok(LogicalType::String),
             "JSON" => Ok(LogicalType::JSON(JsonType {})),
             "BSON" => Ok(LogicalType::BSON(BsonType {})),
             "UUID" => Ok(LogicalType::UUID(UUIDType {})),
@@ -1384,7 +1384,7 @@ mod tests {
             ConvertedType::JSON
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::STRING(Default::default()))),
+            ConvertedType::from(Some(LogicalType::String)),
             ConvertedType::UTF8
         );
         assert_eq!(
@@ -1787,7 +1787,7 @@ mod tests {
 
         // Unsigned comparison (physical type does not matter)
         let unsigned = vec![
-            LogicalType::STRING(Default::default()),
+            LogicalType::String,
             LogicalType::JSON(Default::default()),
             LogicalType::BSON(Default::default()),
             LogicalType::ENUM(Default::default()),

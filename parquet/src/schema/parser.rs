@@ -1221,7 +1221,7 @@ mod tests {
             ),
             Arc::new(
                 Type::primitive_type_builder("_10", PhysicalType::BYTE_ARRAY)
-                    .with_logical_type(Some(LogicalType::STRING(Default::default())))
+                    .with_logical_type(Some(LogicalType::String))
                     .build()
                     .unwrap(),
             ),

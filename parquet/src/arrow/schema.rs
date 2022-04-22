@@ -475,7 +475,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         }
         DataType::Utf8 | DataType::LargeUtf8 => {
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
-                .with_logical_type(Some(LogicalType::STRING(Default::default())))
+                .with_logical_type(Some(LogicalType::String))
                 .with_repetition(repetition)
                 .build()
         }
@@ -804,7 +804,7 @@ impl ParquetTypeConverter<'_> {
     #[allow(clippy::wrong_self_convention)]
     fn from_byte_array(&self) -> Result<DataType> {
         match (self.schema.get_basic_info().logical_type(), self.schema.get_basic_info().converted_type()) {
-            (Some(LogicalType::STRING(_)), _) => Ok(DataType::Utf8),
+            (Some(LogicalType::String), _) => Ok(DataType::Utf8),
             (Some(LogicalType::JSON(_)), _) => Ok(DataType::Binary),
             (Some(LogicalType::BSON(_)), _) => Ok(DataType::Binary),
             (Some(LogicalType::ENUM(_)), _) => Ok(DataType::Binary),
