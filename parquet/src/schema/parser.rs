@@ -992,9 +992,7 @@ mod tests {
                         Arc::new(
                             Type::group_type_builder("a1")
                                 .with_repetition(Repetition::OPTIONAL)
-                                .with_logical_type(Some(LogicalType::LIST(
-                                    Default::default(),
-                                )))
+                                .with_logical_type(Some(LogicalType::List))
                                 .with_converted_type(ConvertedType::LIST)
                                 .with_fields(&mut vec![Arc::new(
                                     Type::primitive_type_builder(
@@ -1012,9 +1010,7 @@ mod tests {
                         Arc::new(
                             Type::group_type_builder("b1")
                                 .with_repetition(Repetition::OPTIONAL)
-                                .with_logical_type(Some(LogicalType::LIST(
-                                    Default::default(),
-                                )))
+                                .with_logical_type(Some(LogicalType::List))
                                 .with_converted_type(ConvertedType::LIST)
                                 .with_fields(&mut vec![Arc::new(
                                     Type::group_type_builder("b2")

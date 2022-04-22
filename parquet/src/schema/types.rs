@@ -306,7 +306,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
                 // Check that logical type and physical type are compatible
                 match (logical_type, self.physical_type) {
-                    (LogicalType::Map, _) | (LogicalType::LIST(_), _) => {
+                    (LogicalType::Map, _) | (LogicalType::List, _) => {
                         return Err(general_err!(
                             "{:?} cannot be applied to a primitive type",
                             logical_type
@@ -1496,7 +1496,7 @@ mod tests {
 
         let result = Type::group_type_builder("foo")
             .with_repetition(Repetition::REPEATED)
-            .with_logical_type(Some(LogicalType::LIST(Default::default())))
+            .with_logical_type(Some(LogicalType::List))
             .with_fields(&mut fields)
             .with_id(1)
             .build();
@@ -1507,10 +1507,7 @@ mod tests {
         assert!(tp.is_group());
         assert!(!tp.is_primitive());
         assert_eq!(basic_info.repetition(), Repetition::REPEATED);
-        assert_eq!(
-            basic_info.logical_type(),
-            Some(LogicalType::LIST(Default::default()))
-        );
+        assert_eq!(basic_info.logical_type(), Some(LogicalType::List));
         assert_eq!(basic_info.converted_type(), ConvertedType::LIST);
         assert_eq!(basic_info.id(), 1);
         assert_eq!(tp.get_fields().len(), 2);

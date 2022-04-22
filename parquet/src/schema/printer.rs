@@ -264,7 +264,7 @@ fn print_logical_and_converted(
             LogicalType::String => "STRING".to_string(),
             LogicalType::UUID(_) => "UUID".to_string(),
             LogicalType::ENUM(_) => "ENUM".to_string(),
-            LogicalType::LIST(_) => "LIST".to_string(),
+            LogicalType::List => "LIST".to_string(),
             LogicalType::Map => "MAP".to_string(),
             LogicalType::UNKNOWN(_) => "UNKNOWN".to_string(),
         },
@@ -751,7 +751,7 @@ mod tests {
 
         let a1 = Type::group_type_builder("a1")
             .with_repetition(Repetition::OPTIONAL)
-            .with_logical_type(Some(LogicalType::LIST(Default::default())))
+            .with_logical_type(Some(LogicalType::List))
             .with_converted_type(ConvertedType::LIST)
             .with_fields(&mut vec![Arc::new(a2)])
             .build()
@@ -776,7 +776,7 @@ mod tests {
 
         let b1 = Type::group_type_builder("b1")
             .with_repetition(Repetition::OPTIONAL)
-            .with_logical_type(Some(LogicalType::LIST(Default::default())))
+            .with_logical_type(Some(LogicalType::List))
             .with_converted_type(ConvertedType::LIST)
             .with_fields(&mut vec![Arc::new(b2)])
             .build()

@@ -167,7 +167,7 @@ pub enum ConvertedType {
 pub enum LogicalType {
     String,
     Map,
-    LIST(ListType),
+    List,
     ENUM(EnumType),
     DECIMAL(DecimalType),
     DATE(DateType),
@@ -343,7 +343,7 @@ impl ColumnOrder {
                     true => SortOrder::SIGNED,
                     false => SortOrder::UNSIGNED,
                 },
-                LogicalType::Map | LogicalType::LIST(_) => SortOrder::UNDEFINED,
+                LogicalType::Map | LogicalType::List => SortOrder::UNDEFINED,
                 LogicalType::DECIMAL(_) => SortOrder::SIGNED,
                 LogicalType::DATE(_) => SortOrder::SIGNED,
                 LogicalType::TIME(_) => SortOrder::SIGNED,
@@ -588,7 +588,7 @@ impl convert::From<parquet::LogicalType> for LogicalType {
         match value {
             parquet::LogicalType::STRING(_) => LogicalType::String,
             parquet::LogicalType::MAP(_) => LogicalType::Map,
-            parquet::LogicalType::LIST(t) => LogicalType::LIST(t),
+            parquet::LogicalType::LIST(_) => LogicalType::List,
             parquet::LogicalType::ENUM(t) => LogicalType::ENUM(t),
             parquet::LogicalType::DECIMAL(t) => LogicalType::DECIMAL(t),
             parquet::LogicalType::DATE(t) => LogicalType::DATE(t),
@@ -608,7 +608,7 @@ impl convert::From<LogicalType> for parquet::LogicalType {
         match value {
             LogicalType::String => parquet::LogicalType::STRING(Default::default()),
             LogicalType::Map => parquet::LogicalType::MAP(Default::default()),
-            LogicalType::LIST(t) => parquet::LogicalType::LIST(t),
+            LogicalType::List => parquet::LogicalType::LIST(Default::default()),
             LogicalType::ENUM(t) => parquet::LogicalType::ENUM(t),
             LogicalType::DECIMAL(t) => parquet::LogicalType::DECIMAL(t),
             LogicalType::DATE(t) => parquet::LogicalType::DATE(t),
@@ -638,7 +638,7 @@ impl From<Option<LogicalType>> for ConvertedType {
             Some(value) => match value {
                 LogicalType::String => ConvertedType::UTF8,
                 LogicalType::Map => ConvertedType::MAP,
-                LogicalType::LIST(_) => ConvertedType::LIST,
+                LogicalType::List => ConvertedType::LIST,
                 LogicalType::ENUM(_) => ConvertedType::ENUM,
                 LogicalType::DECIMAL(_) => ConvertedType::DECIMAL,
                 LogicalType::DATE(_) => ConvertedType::DATE,
@@ -865,7 +865,7 @@ impl str::FromStr for LogicalType {
                 is_signed: false,
             })),
             "MAP" => Ok(LogicalType::Map),
-            "LIST" => Ok(LogicalType::LIST(ListType {})),
+            "LIST" => Ok(LogicalType::List),
             "ENUM" => Ok(LogicalType::ENUM(EnumType {})),
             "DECIMAL" => Ok(LogicalType::DECIMAL(DecimalType {
                 precision: -1,
@@ -1490,7 +1490,7 @@ mod tests {
             ConvertedType::INT_64
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::LIST(Default::default()))),
+            ConvertedType::from(Some(LogicalType::List)),
             ConvertedType::LIST
         );
         assert_eq!(
@@ -1862,10 +1862,7 @@ mod tests {
         check_sort_order(signed, SortOrder::SIGNED);
 
         // Undefined comparison
-        let undefined = vec![
-            LogicalType::LIST(Default::default()),
-            LogicalType::Map,
-        ];
+        let undefined = vec![LogicalType::List, LogicalType::Map];
         check_sort_order(undefined, SortOrder::UNDEFINED);
     }
 
