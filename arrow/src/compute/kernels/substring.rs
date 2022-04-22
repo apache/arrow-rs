@@ -25,7 +25,67 @@ use crate::{
 };
 use std::cmp::Ordering;
 
-fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
+fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
+    array: &GenericBinaryArray<OffsetSize>,
+    start: OffsetSize,
+    length: Option<OffsetSize>,
+) -> Result<ArrayRef> {
+    let offsets = array.value_offsets();
+    let null_bit_buffer = array.data_ref().null_buffer().cloned();
+    let values = array.value_data();
+    let data = values.as_slice();
+    let zero = OffsetSize::zero();
+
+    // start and end offsets of all substrings
+    let mut new_starts_ends: Vec<(OffsetSize, OffsetSize)> =
+        Vec::with_capacity(array.len());
+    let mut new_offsets: Vec<OffsetSize> = Vec::with_capacity(array.len() + 1);
+    let mut len_so_far = zero;
+    new_offsets.push(zero);
+
+    offsets.windows(2).for_each(|pair| {
+        let new_start = match start.cmp(&zero) {
+            Ordering::Greater => (pair[0] + start).min(pair[1]),
+            Ordering::Equal => pair[0],
+            Ordering::Less => (pair[1] + start).max(pair[0]),
+        };
+        let new_end = match length {
+            Some(length) => (length + new_start).min(pair[1]),
+            None => pair[1],
+        };
+        len_so_far += new_end - new_start;
+        new_starts_ends.push((new_start, new_end));
+        new_offsets.push(len_so_far);
+    });
+
+    // concatenate substrings into a buffer
+    let mut new_values =
+        MutableBuffer::new(new_offsets.last().unwrap().to_usize().unwrap());
+
+    new_starts_ends
+        .iter()
+        .map(|(start, end)| {
+            let start = start.to_usize().unwrap();
+            let end = end.to_usize().unwrap();
+            &data[start..end]
+        })
+        .for_each(|slice| new_values.extend_from_slice(slice));
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            <OffsetSize as BinaryOffsetSizeTrait>::DATA_TYPE,
+            array.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
+            vec![],
+        )
+    };
+    Ok(make_array(data))
+}
+
+fn utf8_substring<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: OffsetSize,
     length: Option<OffsetSize>,
@@ -141,7 +201,23 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 /// ```
 pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<ArrayRef> {
     match array.data_type() {
-        DataType::LargeUtf8 => generic_substring(
+        DataType::LargeBinary => binary_substring(
+            array
+                .as_any()
+                .downcast_ref::<LargeBinaryArray>()
+                .expect("A large binary is expected"),
+            start,
+            length.map(|e| e as i64),
+        ),
+        DataType::Binary => binary_substring(
+            array
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .expect("A binary is expected"),
+            start as i32,
+            length.map(|e| e as i32),
+        ),
+        DataType::LargeUtf8 => utf8_substring(
             array
                 .as_any()
                 .downcast_ref::<LargeStringArray>()
@@ -149,7 +225,7 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
             start,
             length.map(|e| e as i64),
         ),
-        DataType::Utf8 => generic_substring(
+        DataType::Utf8 => utf8_substring(
             array
                 .as_any()
                 .downcast_ref::<StringArray>()
@@ -168,8 +244,7 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
 mod tests {
     use super::*;
 
-    fn with_nulls<T: 'static + Array + PartialEq + From<Vec<Option<&'static str>>>>(
-    ) -> Result<()> {
+    fn with_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
         let cases = vec![
             // identity
             (
@@ -210,12 +285,15 @@ mod tests {
 
         cases.into_iter().try_for_each::<_, Result<()>>(
             |(array, start, length, expected)| {
-                let array = T::from(array);
+                let array = GenericStringArray::<O>::from(array);
                 let result: ArrayRef = substring(&array, start, length)?;
                 assert_eq!(array.len(), result.len());
 
-                let result = result.as_any().downcast_ref::<T>().unwrap();
-                let expected = T::from(expected);
+                let result = result
+                    .as_any()
+                    .downcast_ref::<GenericStringArray<O>>()
+                    .unwrap();
+                let expected = GenericStringArray::<O>::from(expected);
                 assert_eq!(&expected, result);
                 Ok(())
             },
@@ -226,12 +304,12 @@ mod tests {
 
     #[test]
     fn with_nulls_string() -> Result<()> {
-        with_nulls::<StringArray>()
+        with_nulls_generic_string::<i32>()
     }
 
     #[test]
     fn with_nulls_large_string() -> Result<()> {
-        with_nulls::<LargeStringArray>()
+        with_nulls_generic_string::<i64>()
     }
 
     fn without_nulls<T: 'static + Array + PartialEq + From<Vec<Option<&'static str>>>>(
