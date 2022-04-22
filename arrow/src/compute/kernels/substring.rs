@@ -312,8 +312,7 @@ mod tests {
         with_nulls_generic_string::<i64>()
     }
 
-    fn without_nulls<T: 'static + Array + PartialEq + From<Vec<Option<&'static str>>>>(
-    ) -> Result<()> {
+    fn without_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
         let cases = vec![
             // increase start
             (
@@ -369,11 +368,14 @@ mod tests {
 
         cases.into_iter().try_for_each::<_, Result<()>>(
             |(array, start, length, expected)| {
-                let array = StringArray::from(array);
+                let array = GenericStringArray::<O>::from(array);
                 let result = substring(&array, start, length)?;
                 assert_eq!(array.len(), result.len());
-                let result = result.as_any().downcast_ref::<StringArray>().unwrap();
-                let expected = StringArray::from(expected);
+                let result = result
+                    .as_any()
+                    .downcast_ref::<GenericStringArray<O>>()
+                    .unwrap();
+                let expected = GenericStringArray::<O>::from(expected);
                 assert_eq!(&expected, result,);
                 Ok(())
             },
@@ -384,12 +386,12 @@ mod tests {
 
     #[test]
     fn without_nulls_string() -> Result<()> {
-        without_nulls::<StringArray>()
+        without_nulls_generic_string::<i32>()
     }
 
     #[test]
     fn without_nulls_large_string() -> Result<()> {
-        without_nulls::<LargeStringArray>()
+        without_nulls_generic_string::<i64>()
     }
 
     #[test]
