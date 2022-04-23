@@ -182,7 +182,10 @@ pub enum LogicalType {
         is_adjusted_to_u_t_c: bool,
         unit: TimeUnit,
     },
-    INTEGER(IntType),
+    Integer {
+        bit_width: i8,
+        is_signed: bool,
+    },
     UNKNOWN(NullType),
     JSON(JsonType),
     BSON(BsonType),
@@ -348,7 +351,7 @@ impl ColumnOrder {
                 | LogicalType::Enum
                 | LogicalType::JSON(_)
                 | LogicalType::BSON(_) => SortOrder::UNSIGNED,
-                LogicalType::INTEGER(t) => match t.is_signed {
+                LogicalType::Integer { is_signed, .. } => match is_signed {
                     true => SortOrder::SIGNED,
                     false => SortOrder::UNSIGNED,
                 },
@@ -612,7 +615,10 @@ impl convert::From<parquet::LogicalType> for LogicalType {
                 is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
                 unit: t.unit,
             },
-            parquet::LogicalType::INTEGER(t) => LogicalType::INTEGER(t),
+            parquet::LogicalType::INTEGER(t) => LogicalType::Integer {
+                bit_width: t.bit_width,
+                is_signed: t.is_signed,
+            },
             parquet::LogicalType::UNKNOWN(t) => LogicalType::UNKNOWN(t),
             parquet::LogicalType::JSON(t) => LogicalType::JSON(t),
             parquet::LogicalType::BSON(t) => LogicalType::BSON(t),
@@ -646,7 +652,13 @@ impl convert::From<LogicalType> for parquet::LogicalType {
                 is_adjusted_to_u_t_c,
                 unit,
             }),
-            LogicalType::INTEGER(t) => parquet::LogicalType::INTEGER(t),
+            LogicalType::Integer {
+                bit_width,
+                is_signed,
+            } => parquet::LogicalType::INTEGER(IntType {
+                bit_width,
+                is_signed,
+            }),
             LogicalType::UNKNOWN(t) => parquet::LogicalType::UNKNOWN(t),
             LogicalType::JSON(t) => parquet::LogicalType::JSON(t),
             LogicalType::BSON(t) => parquet::LogicalType::BSON(t),
@@ -684,7 +696,10 @@ impl From<Option<LogicalType>> for ConvertedType {
                     TimeUnit::MICROS(_) => ConvertedType::TIMESTAMP_MICROS,
                     TimeUnit::NANOS(_) => ConvertedType::NONE,
                 },
-                LogicalType::INTEGER(t) => match (t.bit_width, t.is_signed) {
+                LogicalType::Integer {
+                    bit_width,
+                    is_signed,
+                } => match (bit_width, is_signed) {
                     (8, true) => ConvertedType::INT_8,
                     (16, true) => ConvertedType::INT_16,
                     (32, true) => ConvertedType::INT_32,
@@ -892,10 +907,10 @@ impl str::FromStr for LogicalType {
     fn from_str(s: &str) -> result::Result<Self, Self::Err> {
         match s {
             // The type is a placeholder that gets updated elsewhere
-            "INTEGER" => Ok(LogicalType::INTEGER(IntType {
+            "INTEGER" => Ok(LogicalType::Integer {
                 bit_width: 8,
                 is_signed: false,
-            })),
+            }),
             "MAP" => Ok(LogicalType::Map),
             "LIST" => Ok(LogicalType::List),
             "ENUM" => Ok(LogicalType::Enum),
@@ -1466,59 +1481,59 @@ mod tests {
             ConvertedType::NONE
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::INTEGER(IntType {
+            ConvertedType::from(Some(LogicalType::Integer {
                 bit_width: 8,
                 is_signed: false
-            }))),
+            })),
             ConvertedType::UINT_8
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::INTEGER(IntType {
+            ConvertedType::from(Some(LogicalType::Integer {
                 bit_width: 8,
                 is_signed: true
-            }))),
+            })),
             ConvertedType::INT_8
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::INTEGER(IntType {
+            ConvertedType::from(Some(LogicalType::Integer {
                 bit_width: 16,
                 is_signed: false
-            }))),
+            })),
             ConvertedType::UINT_16
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::INTEGER(IntType {
+            ConvertedType::from(Some(LogicalType::Integer {
                 bit_width: 16,
                 is_signed: true
-            }))),
+            })),
             ConvertedType::INT_16
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::INTEGER(IntType {
+            ConvertedType::from(Some(LogicalType::Integer {
                 bit_width: 32,
                 is_signed: false
-            }))),
+            })),
             ConvertedType::UINT_32
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::INTEGER(IntType {
+            ConvertedType::from(Some(LogicalType::Integer {
                 bit_width: 32,
                 is_signed: true
-            }))),
+            })),
             ConvertedType::INT_32
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::INTEGER(IntType {
+            ConvertedType::from(Some(LogicalType::Integer {
                 bit_width: 64,
                 is_signed: false
-            }))),
+            })),
             ConvertedType::UINT_64
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::INTEGER(IntType {
+            ConvertedType::from(Some(LogicalType::Integer {
                 bit_width: 64,
                 is_signed: true
-            }))),
+            })),
             ConvertedType::INT_64
         );
         assert_eq!(
@@ -1824,43 +1839,43 @@ mod tests {
             LogicalType::BSON(Default::default()),
             LogicalType::Enum,
             LogicalType::UUID(Default::default()),
-            LogicalType::INTEGER(IntType {
+            LogicalType::Integer {
                 bit_width: 8,
                 is_signed: false,
-            }),
-            LogicalType::INTEGER(IntType {
+            },
+            LogicalType::Integer {
                 bit_width: 16,
                 is_signed: false,
-            }),
-            LogicalType::INTEGER(IntType {
+            },
+            LogicalType::Integer {
                 bit_width: 32,
                 is_signed: false,
-            }),
-            LogicalType::INTEGER(IntType {
+            },
+            LogicalType::Integer {
                 bit_width: 64,
                 is_signed: false,
-            }),
+            },
         ];
         check_sort_order(unsigned, SortOrder::UNSIGNED);
 
         // Signed comparison (physical type does not matter)
         let signed = vec![
-            LogicalType::INTEGER(IntType {
+            LogicalType::Integer {
                 bit_width: 8,
                 is_signed: true,
-            }),
-            LogicalType::INTEGER(IntType {
+            },
+            LogicalType::Integer {
                 bit_width: 8,
                 is_signed: true,
-            }),
-            LogicalType::INTEGER(IntType {
+            },
+            LogicalType::Integer {
                 bit_width: 8,
                 is_signed: true,
-            }),
-            LogicalType::INTEGER(IntType {
+            },
+            LogicalType::Integer {
                 bit_width: 8,
                 is_signed: true,
-            }),
+            },
             LogicalType::Decimal {
                 scale: 20,
                 precision: 4,

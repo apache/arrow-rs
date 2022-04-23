@@ -34,7 +34,7 @@ use crate::file::{metadata::KeyValue, properties::WriterProperties};
 use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type, TypePtr};
 use crate::{
     basic::{
-        ConvertedType, IntType, LogicalType, Repetition,
+        ConvertedType, LogicalType, Repetition,
         TimeUnit as ParquetTimeUnit, Type as PhysicalType,
     },
     errors::ParquetError,
@@ -331,17 +331,17 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             .with_repetition(repetition)
             .build(),
         DataType::Int8 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 8,
                 is_signed: true,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::Int16 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 16,
                 is_signed: true,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::Int32 => Type::primitive_type_builder(name, PhysicalType::INT32)
@@ -351,31 +351,31 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             .with_repetition(repetition)
             .build(),
         DataType::UInt8 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 8,
                 is_signed: false,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::UInt16 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 16,
                 is_signed: false,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::UInt32 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 32,
                 is_signed: false,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::UInt64 => Type::primitive_type_builder(name, PhysicalType::INT64)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 64,
                 is_signed: false,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::Float16 => Err(ArrowError("Float16 arrays not supported".to_string())),
@@ -669,7 +669,7 @@ impl ParquetTypeConverter<'_> {
             self.schema.get_basic_info().converted_type(),
         ) {
             (None, ConvertedType::NONE) => Ok(DataType::Int32),
-            (Some(LogicalType::INTEGER(t)), _) => match (t.bit_width, t.is_signed) {
+            (Some(LogicalType::Integer { bit_width, is_signed }), _) => match (bit_width, is_signed) {
                 (8, true) => Ok(DataType::Int8),
                 (16, true) => Ok(DataType::Int16),
                 (32, true) => Ok(DataType::Int32),
@@ -678,7 +678,7 @@ impl ParquetTypeConverter<'_> {
                 (32, false) => Ok(DataType::UInt32),
                 _ => Err(ArrowError(format!(
                     "Cannot create INT32 physical type from {:?}",
-                    t
+                    self.schema.get_basic_info().logical_type(), 
                 ))),
             },
             (Some(LogicalType::Decimal {..}), _) => Ok(self.to_decimal()),
@@ -717,8 +717,8 @@ impl ParquetTypeConverter<'_> {
             self.schema.get_basic_info().converted_type(),
         ) {
             (None, ConvertedType::NONE) => Ok(DataType::Int64),
-            (Some(LogicalType::INTEGER(t)), _) if t.bit_width == 64 => {
-                match t.is_signed {
+            (Some(LogicalType::Integer { bit_width, is_signed }), _) if bit_width == 64 => {
+                match is_signed {
                     true => Ok(DataType::Int64),
                     false => Ok(DataType::UInt64),
                 }

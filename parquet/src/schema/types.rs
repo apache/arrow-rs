@@ -347,10 +347,10 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         }
                     }
                     (LogicalType::Timestamp { .. }, PhysicalType::INT64) => {}
-                    (LogicalType::INTEGER(t), PhysicalType::INT32)
-                        if t.bit_width <= 32 => {}
-                    (LogicalType::INTEGER(t), PhysicalType::INT64)
-                        if t.bit_width == 64 => {}
+                    (LogicalType::Integer { bit_width, .. }, PhysicalType::INT32)
+                        if *bit_width <= 32 => {}
+                    (LogicalType::Integer { bit_width, .. }, PhysicalType::INT64)
+                        if *bit_width == 64 => {}
                     // Null type
                     (LogicalType::UNKNOWN(_), PhysicalType::INT32) => {}
                     (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
@@ -1198,7 +1198,6 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
 mod tests {
     use super::*;
 
-    use crate::basic::IntType;
     use crate::schema::parser::parse_message_type;
 
     // TODO: add tests for v2 types
@@ -1206,10 +1205,10 @@ mod tests {
     #[test]
     fn test_primitive_type() {
         let mut result = Type::primitive_type_builder("foo", PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 32,
                 is_signed: true,
-            })))
+            }))
             .with_id(0)
             .build();
         assert!(result.is_ok());
@@ -1221,10 +1220,10 @@ mod tests {
             assert_eq!(basic_info.repetition(), Repetition::OPTIONAL);
             assert_eq!(
                 basic_info.logical_type(),
-                Some(LogicalType::INTEGER(IntType {
+                Some(LogicalType::Integer {
                     bit_width: 32,
                     is_signed: true
-                }))
+                })
             );
             assert_eq!(basic_info.converted_type(), ConvertedType::INT_32);
             assert_eq!(basic_info.id(), 0);
@@ -1239,16 +1238,16 @@ mod tests {
         // Test illegal inputs with logical type
         result = Type::primitive_type_builder("foo", PhysicalType::INT64)
             .with_repetition(Repetition::REPEATED)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 is_signed: true,
                 bit_width: 8,
-            })))
+            }))
             .build();
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: Cannot annotate INTEGER(IntType { bit_width: 8, is_signed: true }) from INT64 fields"
+                "Parquet error: Cannot annotate Integer { bit_width: 8, is_signed: true } from INT64 fields"
             );
         }
 

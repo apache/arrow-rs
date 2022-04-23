@@ -1000,8 +1000,8 @@ impl<T: DataType> ColumnWriterImpl<T> {
 
     /// Evaluate `a > b` according to underlying logical type.
     fn compare_greater(&self, a: &T::T, b: &T::T) -> bool {
-        if let Some(LogicalType::INTEGER(int_type)) = self.descr.logical_type() {
-            if !int_type.is_signed {
+        if let Some(LogicalType::Integer { is_signed, .. }) = self.descr.logical_type() {
+            if !is_signed {
                 // need to compare unsigned
                 return a.as_u64().unwrap() > b.as_u64().unwrap();
             }

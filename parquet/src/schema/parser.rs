@@ -45,7 +45,7 @@
 use std::sync::Arc;
 
 use crate::basic::{
-    ConvertedType, IntType, LogicalType, Repetition, TimeUnit, Type as PhysicalType,
+    ConvertedType, LogicalType, Repetition, TimeUnit, Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{Type, TypePtr};
@@ -427,7 +427,7 @@ impl<'a> Parser<'a> {
                             }
                         }
                     }
-                    LogicalType::INTEGER(_) => {
+                    LogicalType::Integer { .. } => {
                         if let Some("(") = self.tokenizer.next() {
                             let bit_width = parse_i32(
                                 self.tokenizer.next(),
@@ -449,7 +449,7 @@ impl<'a> Parser<'a> {
                                     }
                                 }
                                 _ => {
-                                    return Err(general_err!("Logical type INTEGER cannot be used with physical type {}", physical_type))
+                                    return Err(general_err!("Logical type Integer cannot be used with physical type {}", physical_type))
                                 }
                             }
                             if let Some(",") = self.tokenizer.next() {
@@ -459,10 +459,10 @@ impl<'a> Parser<'a> {
                                     "Failed to parse is_signed for INTEGER type",
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
-                                logical = Some(LogicalType::INTEGER(IntType {
+                                logical = Some(LogicalType::Integer {
                                     bit_width,
                                     is_signed,
-                                }));
+                                });
                                 converted = ConvertedType::from(logical.clone());
                             } else {
                                 // Invalid token for unit
@@ -1140,20 +1140,20 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_1", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
-                    .with_logical_type(Some(LogicalType::INTEGER(IntType {
+                    .with_logical_type(Some(LogicalType::Integer {
                         bit_width: 8,
                         is_signed: true,
-                    })))
+                    }))
                     .build()
                     .unwrap(),
             ),
             Arc::new(
                 Type::primitive_type_builder("_2", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
-                    .with_logical_type(Some(LogicalType::INTEGER(IntType {
+                    .with_logical_type(Some(LogicalType::Integer {
                         bit_width: 16,
                         is_signed: false,
-                    })))
+                    }))
                     .build()
                     .unwrap(),
             ),

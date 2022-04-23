@@ -238,8 +238,11 @@ fn print_logical_and_converted(
 ) -> String {
     match logical_type {
         Some(logical_type) => match logical_type {
-            LogicalType::INTEGER(t) => {
-                format!("INTEGER({},{})", t.bit_width, t.is_signed)
+            LogicalType::Integer {
+                bit_width,
+                is_signed,
+            } => {
+                format!("INTEGER({},{})", bit_width, is_signed)
             }
             LogicalType::Decimal { scale, precision } => {
                 format!("DECIMAL({},{})", precision, scale)
@@ -381,7 +384,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::basic::{IntType, LogicalType, Repetition, Type as PhysicalType};
+    use crate::basic::{LogicalType, Repetition, Type as PhysicalType};
     use crate::errors::Result;
     use crate::schema::{parser::parse_message_type, types::Type};
 
@@ -433,10 +436,10 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT32,
-                    Some(LogicalType::INTEGER(IntType {
+                    Some(LogicalType::Integer {
                         bit_width: 32,
                         is_signed: true,
-                    })),
+                    }),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
                 )
@@ -447,10 +450,10 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT32,
-                    Some(LogicalType::INTEGER(IntType {
+                    Some(LogicalType::Integer {
                         bit_width: 8,
                         is_signed: false,
-                    })),
+                    }),
                     ConvertedType::NONE,
                     Repetition::OPTIONAL,
                 )
@@ -461,10 +464,10 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT32,
-                    Some(LogicalType::INTEGER(IntType {
+                    Some(LogicalType::Integer {
                         bit_width: 16,
                         is_signed: true,
-                    })),
+                    }),
                     ConvertedType::INT_16,
                     Repetition::REPEATED,
                 )
