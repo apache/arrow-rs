@@ -1591,7 +1591,7 @@ mod tests {
             )),
             3,
         );
-        let list_data = ArrayData::builder(list_data_type.clone())
+        let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_child_data(dict_data.clone())
             .build()
