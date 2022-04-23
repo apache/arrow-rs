@@ -264,14 +264,14 @@ fn print_logical_and_converted(
                 format!("TIME({},{})", print_timeunit(unit), is_adjusted_to_u_t_c)
             }
             LogicalType::Date => "DATE".to_string(),
-            LogicalType::BSON(_) => "BSON".to_string(),
-            LogicalType::JSON(_) => "JSON".to_string(),
+            LogicalType::Bson => "BSON".to_string(),
+            LogicalType::Json => "JSON".to_string(),
             LogicalType::String => "STRING".to_string(),
             LogicalType::UUID(_) => "UUID".to_string(),
             LogicalType::Enum => "ENUM".to_string(),
             LogicalType::List => "LIST".to_string(),
             LogicalType::Map => "MAP".to_string(),
-            LogicalType::UNKNOWN(_) => "UNKNOWN".to_string(),
+            LogicalType::Unknown => "UNKNOWN".to_string(),
         },
         None => {
             // Also print converted type if it is available
@@ -572,7 +572,7 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::BYTE_ARRAY,
-                    Some(LogicalType::JSON(Default::default())),
+                    Some(LogicalType::Json),
                     ConvertedType::JSON,
                     Repetition::REQUIRED,
                 )
@@ -583,7 +583,7 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::BYTE_ARRAY,
-                    Some(LogicalType::BSON(Default::default())),
+                    Some(LogicalType::Bson),
                     ConvertedType::BSON,
                     Repetition::REQUIRED,
                 )

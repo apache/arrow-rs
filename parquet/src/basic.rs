@@ -186,9 +186,9 @@ pub enum LogicalType {
         bit_width: i8,
         is_signed: bool,
     },
-    UNKNOWN(NullType),
-    JSON(JsonType),
-    BSON(BsonType),
+    Unknown,
+    Json,
+    Bson,
     UUID(UUIDType),
 }
 
@@ -349,8 +349,8 @@ impl ColumnOrder {
             Some(logical) => match logical {
                 LogicalType::String
                 | LogicalType::Enum
-                | LogicalType::JSON(_)
-                | LogicalType::BSON(_) => SortOrder::UNSIGNED,
+                | LogicalType::Json
+                | LogicalType::Bson => SortOrder::UNSIGNED,
                 LogicalType::Integer { is_signed, .. } => match is_signed {
                     true => SortOrder::SIGNED,
                     false => SortOrder::UNSIGNED,
@@ -360,7 +360,7 @@ impl ColumnOrder {
                 LogicalType::Date => SortOrder::SIGNED,
                 LogicalType::Time { .. } => SortOrder::SIGNED,
                 LogicalType::Timestamp { .. } => SortOrder::SIGNED,
-                LogicalType::UNKNOWN(_) => SortOrder::UNDEFINED,
+                LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::UUID(_) => SortOrder::UNSIGNED,
             },
             // Fall back to converted type
@@ -619,9 +619,9 @@ impl convert::From<parquet::LogicalType> for LogicalType {
                 bit_width: t.bit_width,
                 is_signed: t.is_signed,
             },
-            parquet::LogicalType::UNKNOWN(t) => LogicalType::UNKNOWN(t),
-            parquet::LogicalType::JSON(t) => LogicalType::JSON(t),
-            parquet::LogicalType::BSON(t) => LogicalType::BSON(t),
+            parquet::LogicalType::UNKNOWN(_) => LogicalType::Unknown,
+            parquet::LogicalType::JSON(_) => LogicalType::Json,
+            parquet::LogicalType::BSON(_) => LogicalType::Bson,
             parquet::LogicalType::UUID(t) => LogicalType::UUID(t),
         }
     }
@@ -659,9 +659,9 @@ impl convert::From<LogicalType> for parquet::LogicalType {
                 bit_width,
                 is_signed,
             }),
-            LogicalType::UNKNOWN(t) => parquet::LogicalType::UNKNOWN(t),
-            LogicalType::JSON(t) => parquet::LogicalType::JSON(t),
-            LogicalType::BSON(t) => parquet::LogicalType::BSON(t),
+            LogicalType::Unknown => parquet::LogicalType::UNKNOWN(Default::default()),
+            LogicalType::Json => parquet::LogicalType::JSON(Default::default()),
+            LogicalType::Bson => parquet::LogicalType::BSON(Default::default()),
             LogicalType::UUID(t) => parquet::LogicalType::UUID(t),
         }
     }
@@ -710,9 +710,9 @@ impl From<Option<LogicalType>> for ConvertedType {
                     (64, false) => ConvertedType::UINT_64,
                     t => panic!("Integer type {:?} is not supported", t),
                 },
-                LogicalType::UNKNOWN(_) => ConvertedType::NONE,
-                LogicalType::JSON(_) => ConvertedType::JSON,
-                LogicalType::BSON(_) => ConvertedType::BSON,
+                LogicalType::Unknown => ConvertedType::NONE,
+                LogicalType::Json => ConvertedType::JSON,
+                LogicalType::Bson => ConvertedType::BSON,
                 LogicalType::UUID(_) => ConvertedType::NONE,
             },
             None => ConvertedType::NONE,
@@ -928,10 +928,10 @@ impl str::FromStr for LogicalType {
                 unit: TimeUnit::MILLIS(parquet::MilliSeconds {}),
             }),
             "STRING" => Ok(LogicalType::String),
-            "JSON" => Ok(LogicalType::JSON(JsonType {})),
-            "BSON" => Ok(LogicalType::BSON(BsonType {})),
+            "JSON" => Ok(LogicalType::Json),
+            "BSON" => Ok(LogicalType::Bson),
             "UUID" => Ok(LogicalType::UUID(UUIDType {})),
-            "UNKNOWN" => Ok(LogicalType::UNKNOWN(NullType {})),
+            "UNKNOWN" => Ok(LogicalType::Unknown),
             "INTERVAL" => Err(general_err!("Interval logical type not yet supported")),
             other => Err(general_err!("Invalid logical type {}", other)),
         }
@@ -1423,11 +1423,11 @@ mod tests {
             ConvertedType::DECIMAL
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::BSON(Default::default()))),
+            ConvertedType::from(Some(LogicalType::Bson)),
             ConvertedType::BSON
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::JSON(Default::default()))),
+            ConvertedType::from(Some(LogicalType::Json)),
             ConvertedType::JSON
         );
         assert_eq!(
@@ -1553,7 +1553,7 @@ mod tests {
             ConvertedType::ENUM
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::UNKNOWN(Default::default()))),
+            ConvertedType::from(Some(LogicalType::Unknown)),
             ConvertedType::NONE
         );
     }
@@ -1835,8 +1835,8 @@ mod tests {
         // Unsigned comparison (physical type does not matter)
         let unsigned = vec![
             LogicalType::String,
-            LogicalType::JSON(Default::default()),
-            LogicalType::BSON(Default::default()),
+            LogicalType::Json,
+            LogicalType::Bson,
             LogicalType::Enum,
             LogicalType::UUID(Default::default()),
             LogicalType::Integer {

@@ -352,10 +352,10 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     (LogicalType::Integer { bit_width, .. }, PhysicalType::INT64)
                         if *bit_width == 64 => {}
                     // Null type
-                    (LogicalType::UNKNOWN(_), PhysicalType::INT32) => {}
+                    (LogicalType::Unknown, PhysicalType::INT32) => {}
                     (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::JSON(_), PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::BSON(_), PhysicalType::BYTE_ARRAY) => {}
+                    (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
+                    (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::UUID(_), PhysicalType::FIXED_LEN_BYTE_ARRAY) => {}
                     (a, b) => {
                         return Err(general_err!(

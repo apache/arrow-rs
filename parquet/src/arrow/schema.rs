@@ -324,7 +324,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
     // create type from field
     match field.data_type() {
         DataType::Null => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::UNKNOWN(Default::default())))
+            .with_logical_type(Some(LogicalType::Unknown))
             .with_repetition(repetition)
             .build(),
         DataType::Boolean => Type::primitive_type_builder(name, PhysicalType::BOOLEAN)
@@ -691,7 +691,7 @@ impl ParquetTypeConverter<'_> {
                 ))),
             },
             // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#unknown-always-null
-            (Some(LogicalType::UNKNOWN(_)), _) => Ok(DataType::Null),
+            (Some(LogicalType::Unknown), _) => Ok(DataType::Null),
             (None, ConvertedType::UINT_8) => Ok(DataType::UInt8),
             (None, ConvertedType::UINT_16) => Ok(DataType::UInt16),
             (None, ConvertedType::UINT_32) => Ok(DataType::UInt32),
@@ -805,8 +805,8 @@ impl ParquetTypeConverter<'_> {
     fn from_byte_array(&self) -> Result<DataType> {
         match (self.schema.get_basic_info().logical_type(), self.schema.get_basic_info().converted_type()) {
             (Some(LogicalType::String), _) => Ok(DataType::Utf8),
-            (Some(LogicalType::JSON(_)), _) => Ok(DataType::Binary),
-            (Some(LogicalType::BSON(_)), _) => Ok(DataType::Binary),
+            (Some(LogicalType::Json), _) => Ok(DataType::Binary),
+            (Some(LogicalType::Bson), _) => Ok(DataType::Binary),
             (Some(LogicalType::Enum), _) => Ok(DataType::Binary),
             (None, ConvertedType::NONE) => Ok(DataType::Binary),
             (None, ConvertedType::JSON) => Ok(DataType::Binary),
