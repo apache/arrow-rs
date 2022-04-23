@@ -169,9 +169,15 @@ pub enum LogicalType {
     Map,
     List,
     Enum,
-    Decimal { scale: i32, precision: i32 },
+    Decimal {
+        scale: i32,
+        precision: i32,
+    },
     Date,
-    TIME(TimeType),
+    Time {
+        is_adjusted_to_u_t_c: bool,
+        unit: TimeUnit,
+    },
     TIMESTAMP(TimestampType),
     INTEGER(IntType),
     UNKNOWN(NullType),
@@ -346,7 +352,7 @@ impl ColumnOrder {
                 LogicalType::Map | LogicalType::List => SortOrder::UNDEFINED,
                 LogicalType::Decimal { .. } => SortOrder::SIGNED,
                 LogicalType::Date => SortOrder::SIGNED,
-                LogicalType::TIME(_) => SortOrder::SIGNED,
+                LogicalType::Time { .. } => SortOrder::SIGNED,
                 LogicalType::TIMESTAMP(_) => SortOrder::SIGNED,
                 LogicalType::UNKNOWN(_) => SortOrder::UNDEFINED,
                 LogicalType::UUID(_) => SortOrder::UNSIGNED,
@@ -595,7 +601,10 @@ impl convert::From<parquet::LogicalType> for LogicalType {
                 precision: t.precision,
             },
             parquet::LogicalType::DATE(_) => LogicalType::Date,
-            parquet::LogicalType::TIME(t) => LogicalType::TIME(t),
+            parquet::LogicalType::TIME(t) => LogicalType::Time {
+                is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
+                unit: t.unit,
+            },
             parquet::LogicalType::TIMESTAMP(t) => LogicalType::TIMESTAMP(t),
             parquet::LogicalType::INTEGER(t) => LogicalType::INTEGER(t),
             parquet::LogicalType::UNKNOWN(t) => LogicalType::UNKNOWN(t),
@@ -617,7 +626,13 @@ impl convert::From<LogicalType> for parquet::LogicalType {
                 parquet::LogicalType::DECIMAL(DecimalType { scale, precision })
             }
             LogicalType::Date => parquet::LogicalType::DATE(Default::default()),
-            LogicalType::TIME(t) => parquet::LogicalType::TIME(t),
+            LogicalType::Time {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => parquet::LogicalType::TIME(TimeType {
+                is_adjusted_to_u_t_c,
+                unit,
+            }),
             LogicalType::TIMESTAMP(t) => parquet::LogicalType::TIMESTAMP(t),
             LogicalType::INTEGER(t) => parquet::LogicalType::INTEGER(t),
             LogicalType::UNKNOWN(t) => parquet::LogicalType::UNKNOWN(t),
@@ -647,7 +662,7 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::Enum => ConvertedType::ENUM,
                 LogicalType::Decimal { .. } => ConvertedType::DECIMAL,
                 LogicalType::Date => ConvertedType::DATE,
-                LogicalType::TIME(t) => match t.unit {
+                LogicalType::Time { unit, .. } => match unit {
                     TimeUnit::MILLIS(_) => ConvertedType::TIME_MILLIS,
                     TimeUnit::MICROS(_) => ConvertedType::TIME_MICROS,
                     TimeUnit::NANOS(_) => ConvertedType::NONE,
@@ -877,10 +892,10 @@ impl str::FromStr for LogicalType {
                 scale: -1,
             }),
             "DATE" => Ok(LogicalType::Date),
-            "TIME" => Ok(LogicalType::TIME(TimeType {
+            "TIME" => Ok(LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MILLIS(parquet::MilliSeconds {}),
-            })),
+            }),
             "TIMESTAMP" => Ok(LogicalType::TIMESTAMP(TimestampType {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MILLIS(parquet::MilliSeconds {}),
@@ -1397,24 +1412,24 @@ mod tests {
             ConvertedType::DATE
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::TIME(TimeType {
+            ConvertedType::from(Some(LogicalType::Time {
                 unit: TimeUnit::MILLIS(Default::default()),
                 is_adjusted_to_u_t_c: true,
-            }))),
+            })),
             ConvertedType::TIME_MILLIS
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::TIME(TimeType {
+            ConvertedType::from(Some(LogicalType::Time {
                 unit: TimeUnit::MICROS(Default::default()),
                 is_adjusted_to_u_t_c: true,
-            }))),
+            })),
             ConvertedType::TIME_MICROS
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::TIME(TimeType {
+            ConvertedType::from(Some(LogicalType::Time {
                 unit: TimeUnit::NANOS(Default::default()),
                 is_adjusted_to_u_t_c: false,
-            }))),
+            })),
             ConvertedType::NONE
         );
         assert_eq!(
@@ -1839,18 +1854,18 @@ mod tests {
                 precision: 4,
             },
             LogicalType::Date,
-            LogicalType::TIME(TimeType {
+            LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MILLIS(Default::default()),
-            }),
-            LogicalType::TIME(TimeType {
+            },
+            LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MICROS(Default::default()),
-            }),
-            LogicalType::TIME(TimeType {
+            },
+            LogicalType::Time {
                 is_adjusted_to_u_t_c: true,
                 unit: TimeUnit::NANOS(Default::default()),
-            }),
+            },
             LogicalType::TIMESTAMP(TimestampType {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MILLIS(Default::default()),

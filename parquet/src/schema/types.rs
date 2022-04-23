@@ -22,7 +22,7 @@ use std::{collections::HashMap, convert::From, fmt, sync::Arc};
 use parquet_format::SchemaElement;
 
 use crate::basic::{
-    ConvertedType, LogicalType, Repetition, TimeType, TimeUnit, Type as PhysicalType,
+    ConvertedType, LogicalType, Repetition, TimeUnit, Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
 
@@ -333,14 +333,14 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     }
                     (LogicalType::Date, PhysicalType::INT32) => {}
                     (
-                        LogicalType::TIME(TimeType {
+                        LogicalType::Time {
                             unit: TimeUnit::MILLIS(_),
                             ..
-                        }),
+                        },
                         PhysicalType::INT32,
                     ) => {}
-                    (LogicalType::TIME(t), PhysicalType::INT64) => {
-                        if t.unit == TimeUnit::MILLIS(Default::default()) {
+                    (LogicalType::Time { unit, .. }, PhysicalType::INT64) => {
+                        if *unit == TimeUnit::MILLIS(Default::default()) {
                             return Err(general_err!(
                                 "Cannot use millisecond unit on INT64 type"
                             ));

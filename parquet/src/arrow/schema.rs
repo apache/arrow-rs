@@ -34,7 +34,7 @@ use crate::file::{metadata::KeyValue, properties::WriterProperties};
 use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type, TypePtr};
 use crate::{
     basic::{
-        ConvertedType, IntType, LogicalType, Repetition, TimeType,
+        ConvertedType, IntType, LogicalType, Repetition,
         TimeUnit as ParquetTimeUnit, TimestampType, Type as PhysicalType,
     },
     errors::ParquetError,
@@ -410,21 +410,21 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             .with_repetition(repetition)
             .build(),
         DataType::Time32(_) => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::TIME(TimeType {
+            .with_logical_type(Some(LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
                 unit: ParquetTimeUnit::MILLIS(Default::default()),
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::Time64(unit) => Type::primitive_type_builder(name, PhysicalType::INT64)
-            .with_logical_type(Some(LogicalType::TIME(TimeType {
+            .with_logical_type(Some(LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
                 unit: match unit {
                     TimeUnit::Microsecond => ParquetTimeUnit::MICROS(Default::default()),
                     TimeUnit::Nanosecond => ParquetTimeUnit::NANOS(Default::default()),
                     u => unreachable!("Invalid unit for Time64: {:?}", u),
                 },
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::Duration(_) => Err(ArrowError(
@@ -683,11 +683,11 @@ impl ParquetTypeConverter<'_> {
             },
             (Some(LogicalType::Decimal {..}), _) => Ok(self.to_decimal()),
             (Some(LogicalType::Date), _) => Ok(DataType::Date32),
-            (Some(LogicalType::TIME(t)), _) => match t.unit {
+            (Some(LogicalType::Time { unit, .. }), _) => match unit {
                 ParquetTimeUnit::MILLIS(_) => Ok(DataType::Time32(TimeUnit::Millisecond)),
                 _ => Err(ArrowError(format!(
                     "Cannot create INT32 physical type from {:?}",
-                    t.unit
+                    unit
                 ))),
             },
             // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#unknown-always-null
@@ -723,7 +723,7 @@ impl ParquetTypeConverter<'_> {
                     false => Ok(DataType::UInt64),
                 }
             }
-            (Some(LogicalType::TIME(t)), _) => match t.unit {
+            (Some(LogicalType::Time { unit, .. }), _) => match unit {
                 ParquetTimeUnit::MILLIS(_) => Err(ArrowError(
                     "Cannot create INT64 from MILLIS time unit".to_string(),
                 )),

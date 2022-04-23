@@ -45,7 +45,7 @@
 use std::sync::Arc;
 
 use crate::basic::{
-    ConvertedType, IntType, LogicalType, Repetition, TimeType, TimeUnit, TimestampType,
+    ConvertedType, IntType, LogicalType, Repetition, TimeUnit, TimestampType,
     Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
@@ -378,7 +378,7 @@ impl<'a> Parser<'a> {
                             converted = ConvertedType::from(logical.clone());
                         }
                     }
-                    LogicalType::TIME(_) => {
+                    LogicalType::Time { .. } => {
                         if let Some("(") = self.tokenizer.next() {
                             let unit = parse_timeunit(
                                 self.tokenizer.next(),
@@ -392,10 +392,10 @@ impl<'a> Parser<'a> {
                                     "Failed to parse timezone info for TIME type",
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
-                                logical = Some(LogicalType::TIME(TimeType {
+                                logical = Some(LogicalType::Time {
                                     is_adjusted_to_u_t_c,
                                     unit,
-                                }));
+                                });
                                 converted = ConvertedType::from(logical.clone());
                             } else {
                                 // Invalid token for unit
@@ -1178,19 +1178,19 @@ mod tests {
             ),
             Arc::new(
                 Type::primitive_type_builder("_6", PhysicalType::INT32)
-                    .with_logical_type(Some(LogicalType::TIME(TimeType {
+                    .with_logical_type(Some(LogicalType::Time {
                         unit: TimeUnit::MILLIS(Default::default()),
                         is_adjusted_to_u_t_c: false,
-                    })))
+                    }))
                     .build()
                     .unwrap(),
             ),
             Arc::new(
                 Type::primitive_type_builder("_7", PhysicalType::INT64)
-                    .with_logical_type(Some(LogicalType::TIME(TimeType {
+                    .with_logical_type(Some(LogicalType::Time {
                         unit: TimeUnit::MICROS(Default::default()),
                         is_adjusted_to_u_t_c: true,
-                    })))
+                    }))
                     .build()
                     .unwrap(),
             ),

@@ -251,12 +251,11 @@ fn print_logical_and_converted(
                     t.is_adjusted_to_u_t_c
                 )
             }
-            LogicalType::TIME(t) => {
-                format!(
-                    "TIME({},{})",
-                    print_timeunit(&t.unit),
-                    t.is_adjusted_to_u_t_c
-                )
+            LogicalType::Time {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => {
+                format!("TIME({},{})", print_timeunit(unit), is_adjusted_to_u_t_c)
             }
             LogicalType::Date => "DATE".to_string(),
             LogicalType::BSON(_) => "BSON".to_string(),
@@ -380,7 +379,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::basic::{
-        IntType, LogicalType, Repetition, TimeType, TimestampType, Type as PhysicalType,
+        IntType, LogicalType, Repetition, TimestampType, Type as PhysicalType,
     };
     use crate::errors::Result;
     use crate::schema::{parser::parse_message_type, types::Type};
@@ -533,10 +532,10 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT32,
-                    Some(LogicalType::TIME(TimeType {
+                    Some(LogicalType::Time {
                         unit: TimeUnit::MILLIS(Default::default()),
                         is_adjusted_to_u_t_c: false,
-                    })),
+                    }),
                     ConvertedType::TIME_MILLIS,
                     Repetition::REQUIRED,
                 )
