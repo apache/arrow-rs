@@ -1894,7 +1894,7 @@ struct FieldData {
     values_buffer: Option<MutableBuffer>,
     ///  The number of array slots represented by the buffer
     slots: usize,
-    /// A builder for the bitmap if required (for Sparse Unions)
+    /// A builder for the null bitmap
     bitmap_builder: BooleanBufferBuilder,
 }
 
@@ -2154,7 +2154,7 @@ impl UnionBuilder {
                 .add_buffer(buffer)
                 .len(slots)
                 .null_bit_buffer(bitmap_builder.finish());
-            //                .build();
+
             let arr_data_ref = unsafe { arr_data_builder.build_unchecked() };
             let array_ref = make_array(arr_data_ref);
             children.push((type_id, (Field::new(&name, data_type, false), array_ref)))
