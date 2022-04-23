@@ -267,7 +267,7 @@ fn print_logical_and_converted(
             LogicalType::Bson => "BSON".to_string(),
             LogicalType::Json => "JSON".to_string(),
             LogicalType::String => "STRING".to_string(),
-            LogicalType::UUID(_) => "UUID".to_string(),
+            LogicalType::Uuid => "UUID".to_string(),
             LogicalType::Enum => "ENUM".to_string(),
             LogicalType::List => "LIST".to_string(),
             LogicalType::Map => "MAP".to_string(),
@@ -636,7 +636,7 @@ mod tests {
             ),
             (
                 Type::primitive_type_builder("field", PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                    .with_logical_type(Some(LogicalType::UUID(Default::default())))
+                    .with_logical_type(Some(LogicalType::Uuid))
                     .with_length(16)
                     .with_repetition(Repetition::REQUIRED)
                     .build()

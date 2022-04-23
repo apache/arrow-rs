@@ -356,7 +356,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
                     (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::UUID(_), PhysicalType::FIXED_LEN_BYTE_ARRAY) => {}
+                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {}
                     (a, b) => {
                         return Err(general_err!(
                             "Cannot annotate {:?} from {} fields",

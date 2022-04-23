@@ -548,7 +548,7 @@ impl Type {
             "NaiveDateTime" => quote! { None },
             "f32" | "f64" => quote! { None },
             "String" | "str" => quote! { Some(LogicalType::String) },
-            "Uuid" => quote! { Some(LogicalType::UUID(Default::default())) },
+            "Uuid" => quote! { Some(LogicalType::Uuid) },
             f => unimplemented!("{} currently is not supported", f),
         }
     }

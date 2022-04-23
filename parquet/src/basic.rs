@@ -189,7 +189,7 @@ pub enum LogicalType {
     Unknown,
     Json,
     Bson,
-    UUID(UUIDType),
+    Uuid,
 }
 
 // ----------------------------------------------------------------------
@@ -361,7 +361,7 @@ impl ColumnOrder {
                 LogicalType::Time { .. } => SortOrder::SIGNED,
                 LogicalType::Timestamp { .. } => SortOrder::SIGNED,
                 LogicalType::Unknown => SortOrder::UNDEFINED,
-                LogicalType::UUID(_) => SortOrder::UNSIGNED,
+                LogicalType::Uuid => SortOrder::UNSIGNED,
             },
             // Fall back to converted type
             None => Self::get_converted_sort_order(converted_type, physical_type),
@@ -622,7 +622,7 @@ impl convert::From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::UNKNOWN(_) => LogicalType::Unknown,
             parquet::LogicalType::JSON(_) => LogicalType::Json,
             parquet::LogicalType::BSON(_) => LogicalType::Bson,
-            parquet::LogicalType::UUID(t) => LogicalType::UUID(t),
+            parquet::LogicalType::UUID(_) => LogicalType::Uuid,
         }
     }
 }
@@ -662,7 +662,7 @@ impl convert::From<LogicalType> for parquet::LogicalType {
             LogicalType::Unknown => parquet::LogicalType::UNKNOWN(Default::default()),
             LogicalType::Json => parquet::LogicalType::JSON(Default::default()),
             LogicalType::Bson => parquet::LogicalType::BSON(Default::default()),
-            LogicalType::UUID(t) => parquet::LogicalType::UUID(t),
+            LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
         }
     }
 }
@@ -713,7 +713,7 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::Unknown => ConvertedType::NONE,
                 LogicalType::Json => ConvertedType::JSON,
                 LogicalType::Bson => ConvertedType::BSON,
-                LogicalType::UUID(_) => ConvertedType::NONE,
+                LogicalType::Uuid => ConvertedType::NONE,
             },
             None => ConvertedType::NONE,
         }
@@ -930,7 +930,7 @@ impl str::FromStr for LogicalType {
             "STRING" => Ok(LogicalType::String),
             "JSON" => Ok(LogicalType::Json),
             "BSON" => Ok(LogicalType::Bson),
-            "UUID" => Ok(LogicalType::UUID(UUIDType {})),
+            "UUID" => Ok(LogicalType::Uuid),
             "UNKNOWN" => Ok(LogicalType::Unknown),
             "INTERVAL" => Err(general_err!("Interval logical type not yet supported")),
             other => Err(general_err!("Invalid logical type {}", other)),
@@ -1545,7 +1545,7 @@ mod tests {
             ConvertedType::MAP
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::UUID(Default::default()))),
+            ConvertedType::from(Some(LogicalType::Uuid)),
             ConvertedType::NONE
         );
         assert_eq!(
@@ -1838,7 +1838,7 @@ mod tests {
             LogicalType::Json,
             LogicalType::Bson,
             LogicalType::Enum,
-            LogicalType::UUID(Default::default()),
+            LogicalType::Uuid,
             LogicalType::Integer {
                 bit_width: 8,
                 is_signed: false,
