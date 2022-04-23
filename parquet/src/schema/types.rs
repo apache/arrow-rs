@@ -467,13 +467,13 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             return Err(general_err!("Invalid DECIMAL scale: {}", self.scale));
         }
 
-        if self.scale >= self.precision {
+        if self.scale > self.precision {
             return Err(general_err!(
-            "Invalid DECIMAL: scale ({}) cannot be greater than or equal to precision \
+                "Invalid DECIMAL: scale ({}) cannot be greater than precision \
              ({})",
-            self.scale,
-            self.precision
-        ));
+                self.scale,
+                self.precision
+            ));
         }
 
         // Check precision and scale based on physical type limitations.
@@ -1344,9 +1344,18 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: Invalid DECIMAL: scale (2) cannot be greater than or equal to precision (1)"
+                "Parquet error: Invalid DECIMAL: scale (2) cannot be greater than precision (1)"
             );
         }
+
+        // It is OK if precision == scale
+        result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_converted_type(ConvertedType::DECIMAL)
+            .with_precision(1)
+            .with_scale(1)
+            .build();
+        assert!(result.is_ok());
 
         result = Type::primitive_type_builder("foo", PhysicalType::INT32)
             .with_repetition(Repetition::REQUIRED)
