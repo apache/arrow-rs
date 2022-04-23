@@ -314,6 +314,143 @@ mod tests {
         with_nulls_generic_binary::<i64>()
     }
 
+    fn without_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
+        let cases: Vec<(Vec<&[u8]>, i64, Option<u64>, Vec<&[u8]>)> = vec![
+            // increase start
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                0,
+                None,
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                1,
+                None,
+                vec![b"ello", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                2,
+                None,
+                vec![b"llo", b"", &[0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                3,
+                None,
+                vec![b"lo", b"", &[0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                10,
+                None,
+                vec![b"", b"", b""],
+            ),
+            // increase start negatively
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -1,
+                None,
+                vec![b"o", b"", &[0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -2,
+                None,
+                vec![b"lo", b"", &[0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -3,
+                None,
+                vec![b"llo", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -10,
+                None,
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+            ),
+            // increase length
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                1,
+                Some(1),
+                vec![b"e", b"", &[0xf9]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                1,
+                Some(2),
+                vec![b"el", b"", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                1,
+                Some(3),
+                vec![b"ell", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                1,
+                Some(4),
+                vec![b"ello", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -3,
+                Some(1),
+                vec![b"l", b"", &[0xf9]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -3,
+                Some(2),
+                vec![b"ll", b"", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -3,
+                Some(3),
+                vec![b"llo", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -3,
+                Some(4),
+                vec![b"llo", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+        ];
+
+        cases.into_iter().try_for_each::<_, Result<()>>(
+            |(array, start, length, expected)| {
+                let array = GenericBinaryArray::<O>::from(array);
+                let result = substring(&array, start, length)?;
+                assert_eq!(array.len(), result.len());
+                let result = result
+                    .as_any()
+                    .downcast_ref::<GenericBinaryArray<O>>()
+                    .unwrap();
+                let expected = GenericBinaryArray::<O>::from(expected);
+                assert_eq!(&expected, result,);
+                Ok(())
+            },
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn without_nulls_binary() -> Result<()> {
+        without_nulls_generic_binary::<i32>()
+    }
+
+    #[test]
+    fn without_nulls_large_binary() -> Result<()> {
+        without_nulls_generic_binary::<i64>()
+    }
+
     fn with_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
         let cases = vec![
             // identity
