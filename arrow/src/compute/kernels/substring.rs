@@ -246,6 +246,7 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
 mod tests {
     use super::*;
 
+    #[allow(clippy::type_complexity)]
     fn with_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
         let cases: Vec<(Vec<Option<&[u8]>>, i64, Option<u64>, Vec<Option<&[u8]>>)> = vec![
             // identity
@@ -314,6 +315,7 @@ mod tests {
         with_nulls_generic_binary::<i64>()
     }
 
+    #[allow(clippy::type_complexity)]
     fn without_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
         let cases: Vec<(Vec<&[u8]>, i64, Option<u64>, Vec<&[u8]>)> = vec![
             // increase start
