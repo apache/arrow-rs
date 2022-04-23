@@ -169,7 +169,7 @@ pub enum LogicalType {
     Map,
     List,
     Enum,
-    DECIMAL(DecimalType),
+    Decimal { scale: i32, precision: i32 },
     DATE(DateType),
     TIME(TimeType),
     TIMESTAMP(TimestampType),
@@ -344,7 +344,7 @@ impl ColumnOrder {
                     false => SortOrder::UNSIGNED,
                 },
                 LogicalType::Map | LogicalType::List => SortOrder::UNDEFINED,
-                LogicalType::DECIMAL(_) => SortOrder::SIGNED,
+                LogicalType::Decimal { .. } => SortOrder::SIGNED,
                 LogicalType::DATE(_) => SortOrder::SIGNED,
                 LogicalType::TIME(_) => SortOrder::SIGNED,
                 LogicalType::TIMESTAMP(_) => SortOrder::SIGNED,
@@ -590,7 +590,10 @@ impl convert::From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::MAP(_) => LogicalType::Map,
             parquet::LogicalType::LIST(_) => LogicalType::List,
             parquet::LogicalType::ENUM(_) => LogicalType::Enum,
-            parquet::LogicalType::DECIMAL(t) => LogicalType::DECIMAL(t),
+            parquet::LogicalType::DECIMAL(t) => LogicalType::Decimal {
+                scale: t.scale,
+                precision: t.precision,
+            },
             parquet::LogicalType::DATE(t) => LogicalType::DATE(t),
             parquet::LogicalType::TIME(t) => LogicalType::TIME(t),
             parquet::LogicalType::TIMESTAMP(t) => LogicalType::TIMESTAMP(t),
@@ -610,7 +613,9 @@ impl convert::From<LogicalType> for parquet::LogicalType {
             LogicalType::Map => parquet::LogicalType::MAP(Default::default()),
             LogicalType::List => parquet::LogicalType::LIST(Default::default()),
             LogicalType::Enum => parquet::LogicalType::ENUM(Default::default()),
-            LogicalType::DECIMAL(t) => parquet::LogicalType::DECIMAL(t),
+            LogicalType::Decimal { scale, precision } => {
+                parquet::LogicalType::DECIMAL(DecimalType { scale, precision })
+            }
             LogicalType::DATE(t) => parquet::LogicalType::DATE(t),
             LogicalType::TIME(t) => parquet::LogicalType::TIME(t),
             LogicalType::TIMESTAMP(t) => parquet::LogicalType::TIMESTAMP(t),
@@ -640,7 +645,7 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::Map => ConvertedType::MAP,
                 LogicalType::List => ConvertedType::LIST,
                 LogicalType::Enum => ConvertedType::ENUM,
-                LogicalType::DECIMAL(_) => ConvertedType::DECIMAL,
+                LogicalType::Decimal { .. } => ConvertedType::DECIMAL,
                 LogicalType::DATE(_) => ConvertedType::DATE,
                 LogicalType::TIME(t) => match t.unit {
                     TimeUnit::MILLIS(_) => ConvertedType::TIME_MILLIS,
@@ -867,10 +872,10 @@ impl str::FromStr for LogicalType {
             "MAP" => Ok(LogicalType::Map),
             "LIST" => Ok(LogicalType::List),
             "ENUM" => Ok(LogicalType::Enum),
-            "DECIMAL" => Ok(LogicalType::DECIMAL(DecimalType {
+            "DECIMAL" => Ok(LogicalType::Decimal {
                 precision: -1,
                 scale: -1,
-            })),
+            }),
             "DATE" => Ok(LogicalType::DATE(DateType {})),
             "TIME" => Ok(LogicalType::TIME(TimeType {
                 is_adjusted_to_u_t_c: false,
@@ -1369,10 +1374,10 @@ mod tests {
         let logical_none: Option<LogicalType> = None;
         assert_eq!(ConvertedType::from(logical_none), ConvertedType::NONE);
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::DECIMAL(DecimalType {
+            ConvertedType::from(Some(LogicalType::Decimal {
                 precision: 20,
                 scale: 5
-            }))),
+            })),
             ConvertedType::DECIMAL
         );
         assert_eq!(
@@ -1829,10 +1834,10 @@ mod tests {
                 bit_width: 8,
                 is_signed: true,
             }),
-            LogicalType::DECIMAL(DecimalType {
+            LogicalType::Decimal {
                 scale: 20,
                 precision: 4,
-            }),
+            },
             LogicalType::DATE(Default::default()),
             LogicalType::TIME(TimeType {
                 is_adjusted_to_u_t_c: false,

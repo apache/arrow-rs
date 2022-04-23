@@ -34,7 +34,7 @@ use crate::file::{metadata::KeyValue, properties::WriterProperties};
 use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type, TypePtr};
 use crate::{
     basic::{
-        ConvertedType, DecimalType, IntType, LogicalType, Repetition, TimeType,
+        ConvertedType, IntType, LogicalType, Repetition, TimeType,
         TimeUnit as ParquetTimeUnit, TimestampType, Type as PhysicalType,
     },
     errors::ParquetError,
@@ -465,10 +465,10 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_repetition(repetition)
                 .with_length(decimal_length_from_precision(*precision) as i32)
-                .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+                .with_logical_type(Some(LogicalType::Decimal {
                     scale: *scale as i32,
                     precision: *precision as i32,
-                })))
+                }))
                 .with_precision(*precision as i32)
                 .with_scale(*scale as i32)
                 .build()
@@ -681,7 +681,7 @@ impl ParquetTypeConverter<'_> {
                     t
                 ))),
             },
-            (Some(LogicalType::DECIMAL(_)), _) => Ok(self.to_decimal()),
+            (Some(LogicalType::Decimal {..}), _) => Ok(self.to_decimal()),
             (Some(LogicalType::DATE(_)), _) => Ok(DataType::Date32),
             (Some(LogicalType::TIME(t)), _) => match t.unit {
                 ParquetTimeUnit::MILLIS(_) => Ok(DataType::Time32(TimeUnit::Millisecond)),
@@ -753,7 +753,7 @@ impl ParquetTypeConverter<'_> {
             (None, ConvertedType::TIMESTAMP_MICROS) => {
                 Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
             }
-            (Some(LogicalType::DECIMAL(_)), _) => Ok(self.to_decimal()),
+            (Some(LogicalType::Decimal {..}), _) => Ok(self.to_decimal()),
             (None, ConvertedType::DECIMAL) => Ok(self.to_decimal()),
             (logical, converted) => Err(ArrowError(format!(
                 "Unable to convert parquet INT64 logical type {:?} or converted type {}",
@@ -768,7 +768,7 @@ impl ParquetTypeConverter<'_> {
             self.schema.get_basic_info().logical_type(),
             self.schema.get_basic_info().converted_type(),
         ) {
-            (Some(LogicalType::DECIMAL(_)), _) => Ok(self.to_decimal()),
+            (Some(LogicalType::Decimal {..}), _) => Ok(self.to_decimal()),
             (None, ConvertedType::DECIMAL) => Ok(self.to_decimal()),
             (None, ConvertedType::INTERVAL) => {
                 // There is currently no reliable way of determining which IntervalUnit

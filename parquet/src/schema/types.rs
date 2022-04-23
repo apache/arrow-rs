@@ -313,19 +313,19 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         ));
                     }
                     (LogicalType::Enum, PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::DECIMAL(t), _) => {
+                    (LogicalType::Decimal { scale, precision }, _) => {
                         // Check that scale and precision are consistent with legacy values
-                        if t.scale != self.scale {
+                        if *scale != self.scale {
                             return Err(general_err!(
                                 "DECIMAL logical type scale {} must match self.scale {}",
-                                t.scale,
+                                scale,
                                 self.scale
                             ));
                         }
-                        if t.precision != self.precision {
+                        if *precision != self.precision {
                             return Err(general_err!(
                                 "DECIMAL logical type precision {} must match self.precision {}",
-                                t.precision,
+                                precision,
                                 self.precision
                             ));
                         }
@@ -1198,7 +1198,7 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
 mod tests {
     use super::*;
 
-    use crate::basic::{DecimalType, IntType};
+    use crate::basic::IntType;
     use crate::schema::parser::parse_message_type;
 
     // TODO: add tests for v2 types
@@ -1281,10 +1281,10 @@ mod tests {
 
         result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
             .with_repetition(Repetition::REQUIRED)
-            .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+            .with_logical_type(Some(LogicalType::Decimal {
                 scale: 32,
                 precision: 12,
-            })))
+            }))
             .with_precision(-1)
             .with_scale(-1)
             .build();

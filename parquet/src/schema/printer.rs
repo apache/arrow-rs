@@ -241,8 +241,8 @@ fn print_logical_and_converted(
             LogicalType::INTEGER(t) => {
                 format!("INTEGER({},{})", t.bit_width, t.is_signed)
             }
-            LogicalType::DECIMAL(t) => {
-                format!("DECIMAL({},{})", t.precision, t.scale)
+            LogicalType::Decimal { scale, precision } => {
+                format!("DECIMAL({},{})", precision, scale)
             }
             LogicalType::TIMESTAMP(t) => {
                 format!(
@@ -380,7 +380,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::basic::{
-        DateType, DecimalType, IntType, LogicalType, Repetition, TimeType, TimestampType,
+        DateType, IntType, LogicalType, Repetition, TimeType, TimestampType,
         Type as PhysicalType,
     };
     use crate::errors::Result;
@@ -646,10 +646,10 @@ mod tests {
                     "decimal",
                     PhysicalType::FIXED_LEN_BYTE_ARRAY,
                 )
-                .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+                .with_logical_type(Some(LogicalType::Decimal {
                     precision: 32,
                     scale: 20,
-                })))
+                }))
                 .with_precision(32)
                 .with_scale(20)
                 .with_length(decimal_length_from_precision(32))
@@ -835,10 +835,10 @@ mod tests {
     fn test_print_and_parse_decimal() {
         let f1 = Type::primitive_type_builder("f1", PhysicalType::INT32)
             .with_repetition(Repetition::OPTIONAL)
-            .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+            .with_logical_type(Some(LogicalType::Decimal {
                 precision: 9,
                 scale: 2,
-            })))
+            }))
             .with_converted_type(ConvertedType::DECIMAL)
             .with_precision(9)
             .with_scale(2)
@@ -847,10 +847,10 @@ mod tests {
 
         let f2 = Type::primitive_type_builder("f2", PhysicalType::INT32)
             .with_repetition(Repetition::OPTIONAL)
-            .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+            .with_logical_type(Some(LogicalType::Decimal {
                 precision: 9,
                 scale: 0,
-            })))
+            }))
             .with_converted_type(ConvertedType::DECIMAL)
             .with_precision(9)
             .with_scale(0)

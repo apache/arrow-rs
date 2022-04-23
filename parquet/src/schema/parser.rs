@@ -45,8 +45,8 @@
 use std::sync::Arc;
 
 use crate::basic::{
-    ConvertedType, DecimalType, IntType, LogicalType, Repetition, TimeType, TimeUnit,
-    TimestampType, Type as PhysicalType,
+    ConvertedType, IntType, LogicalType, Repetition, TimeType, TimeUnit, TimestampType,
+    Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{Type, TypePtr};
@@ -357,7 +357,7 @@ impl<'a> Parser<'a> {
             // Parse the concrete logical type
             if let Some(tpe) = &logical {
                 match tpe {
-                    LogicalType::DECIMAL(_) => {
+                    LogicalType::Decimal { .. } => {
                         if let Some("(") = self.tokenizer.next() {
                             precision = parse_i32(
                                 self.tokenizer.next(),
@@ -374,10 +374,7 @@ impl<'a> Parser<'a> {
                             } else {
                                 scale = 0
                             }
-                            logical = Some(LogicalType::DECIMAL(DecimalType {
-                                scale,
-                                precision,
-                            }));
+                            logical = Some(LogicalType::Decimal { scale, precision });
                             converted = ConvertedType::from(logical.clone());
                         }
                     }
@@ -925,10 +922,10 @@ mod tests {
                         "f1",
                         PhysicalType::FIXED_LEN_BYTE_ARRAY,
                     )
-                    .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+                    .with_logical_type(Some(LogicalType::Decimal {
                         precision: 9,
                         scale: 3,
-                    })))
+                    }))
                     .with_converted_type(ConvertedType::DECIMAL)
                     .with_length(5)
                     .with_precision(9)
@@ -941,10 +938,10 @@ mod tests {
                         "f2",
                         PhysicalType::FIXED_LEN_BYTE_ARRAY,
                     )
-                    .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+                    .with_logical_type(Some(LogicalType::Decimal {
                         precision: 38,
                         scale: 18,
-                    })))
+                    }))
                     .with_converted_type(ConvertedType::DECIMAL)
                     .with_length(16)
                     .with_precision(38)
