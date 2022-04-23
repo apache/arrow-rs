@@ -61,9 +61,11 @@ pub(super) fn struct_equal(
             let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos + lhs.offset());
             let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos + rhs.offset());
 
-            lhs_is_null
-                || (lhs_is_null == rhs_is_null)
-                    && equal_child_values(lhs, rhs, lhs_pos, rhs_pos, 1)
+            if lhs_is_null != rhs_is_null {
+                return false;
+            }
+
+            lhs_is_null || equal_child_values(lhs, rhs, lhs_pos, rhs_pos, 1)
         })
     }
 }
