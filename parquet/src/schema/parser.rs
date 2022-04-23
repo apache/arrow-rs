@@ -45,8 +45,7 @@
 use std::sync::Arc;
 
 use crate::basic::{
-    ConvertedType, IntType, LogicalType, Repetition, TimeUnit, TimestampType,
-    Type as PhysicalType,
+    ConvertedType, IntType, LogicalType, Repetition, TimeUnit, Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{Type, TypePtr};
@@ -403,7 +402,7 @@ impl<'a> Parser<'a> {
                             }
                         }
                     }
-                    LogicalType::TIMESTAMP(_) => {
+                    LogicalType::Timestamp { .. } => {
                         if let Some("(") = self.tokenizer.next() {
                             let unit = parse_timeunit(
                                 self.tokenizer.next(),
@@ -417,10 +416,10 @@ impl<'a> Parser<'a> {
                                     "Failed to parse timezone info for TIMESTAMP type",
                                 )?;
                                 assert_token(self.tokenizer.next(), ")")?;
-                                logical = Some(LogicalType::TIMESTAMP(TimestampType {
+                                logical = Some(LogicalType::Timestamp {
                                     is_adjusted_to_u_t_c,
                                     unit,
-                                }));
+                                });
                                 converted = ConvertedType::from(logical.clone());
                             } else {
                                 // Invalid token for unit
@@ -1196,19 +1195,19 @@ mod tests {
             ),
             Arc::new(
                 Type::primitive_type_builder("_8", PhysicalType::INT64)
-                    .with_logical_type(Some(LogicalType::TIMESTAMP(TimestampType {
+                    .with_logical_type(Some(LogicalType::Timestamp {
                         unit: TimeUnit::MILLIS(Default::default()),
                         is_adjusted_to_u_t_c: true,
-                    })))
+                    }))
                     .build()
                     .unwrap(),
             ),
             Arc::new(
                 Type::primitive_type_builder("_9", PhysicalType::INT64)
-                    .with_logical_type(Some(LogicalType::TIMESTAMP(TimestampType {
+                    .with_logical_type(Some(LogicalType::Timestamp {
                         unit: TimeUnit::NANOS(Default::default()),
                         is_adjusted_to_u_t_c: false,
-                    })))
+                    }))
                     .build()
                     .unwrap(),
             ),

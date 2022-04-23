@@ -35,7 +35,7 @@ use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type, TypePtr};
 use crate::{
     basic::{
         ConvertedType, IntType, LogicalType, Repetition,
-        TimeUnit as ParquetTimeUnit, TimestampType, Type as PhysicalType,
+        TimeUnit as ParquetTimeUnit, Type as PhysicalType,
     },
     errors::ParquetError,
 };
@@ -389,7 +389,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             name,
             PhysicalType::INT64,
         )
-        .with_logical_type(Some(LogicalType::TIMESTAMP(TimestampType {
+        .with_logical_type(Some(LogicalType::Timestamp {
             is_adjusted_to_u_t_c: matches!(zone, Some(z) if !z.as_str().is_empty()),
             unit: match time_unit {
                 TimeUnit::Second => ParquetTimeUnit::MILLIS(Default::default()),
@@ -397,7 +397,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 TimeUnit::Microsecond => ParquetTimeUnit::MICROS(Default::default()),
                 TimeUnit::Nanosecond => ParquetTimeUnit::NANOS(Default::default()),
             },
-        })))
+        }))
         .with_repetition(repetition)
         .build(),
         DataType::Date32 => Type::primitive_type_builder(name, PhysicalType::INT32)
@@ -730,13 +730,13 @@ impl ParquetTypeConverter<'_> {
                 ParquetTimeUnit::MICROS(_) => Ok(DataType::Time64(TimeUnit::Microsecond)),
                 ParquetTimeUnit::NANOS(_) => Ok(DataType::Time64(TimeUnit::Nanosecond)),
             },
-            (Some(LogicalType::TIMESTAMP(t)), _) => Ok(DataType::Timestamp(
-                match t.unit {
+            (Some(LogicalType::Timestamp { is_adjusted_to_u_t_c, unit }), _) => Ok(DataType::Timestamp(
+                match unit {
                     ParquetTimeUnit::MILLIS(_) => TimeUnit::Millisecond,
                     ParquetTimeUnit::MICROS(_) => TimeUnit::Microsecond,
                     ParquetTimeUnit::NANOS(_) => TimeUnit::Nanosecond,
                 },
-                if t.is_adjusted_to_u_t_c {
+                if is_adjusted_to_u_t_c {
                     Some("UTC".to_string())
                 } else {
                     None

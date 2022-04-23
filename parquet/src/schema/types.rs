@@ -346,7 +346,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                             ));
                         }
                     }
-                    (LogicalType::TIMESTAMP(_), PhysicalType::INT64) => {}
+                    (LogicalType::Timestamp { .. }, PhysicalType::INT64) => {}
                     (LogicalType::INTEGER(t), PhysicalType::INT32)
                         if t.bit_width <= 32 => {}
                     (LogicalType::INTEGER(t), PhysicalType::INT64)

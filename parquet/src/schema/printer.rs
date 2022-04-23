@@ -244,11 +244,14 @@ fn print_logical_and_converted(
             LogicalType::Decimal { scale, precision } => {
                 format!("DECIMAL({},{})", precision, scale)
             }
-            LogicalType::TIMESTAMP(t) => {
+            LogicalType::Timestamp {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => {
                 format!(
                     "TIMESTAMP({},{})",
-                    print_timeunit(&t.unit),
-                    t.is_adjusted_to_u_t_c
+                    print_timeunit(unit),
+                    is_adjusted_to_u_t_c
                 )
             }
             LogicalType::Time {
@@ -378,9 +381,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::basic::{
-        IntType, LogicalType, Repetition, TimestampType, Type as PhysicalType,
-    };
+    use crate::basic::{IntType, LogicalType, Repetition, Type as PhysicalType};
     use crate::errors::Result;
     use crate::schema::{parser::parse_message_type, types::Type};
 
@@ -507,10 +508,10 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT64,
-                    Some(LogicalType::TIMESTAMP(TimestampType {
+                    Some(LogicalType::Timestamp {
                         is_adjusted_to_u_t_c: true,
                         unit: TimeUnit::MILLIS(Default::default()),
-                    })),
+                    }),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
                 )

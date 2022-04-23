@@ -178,7 +178,10 @@ pub enum LogicalType {
         is_adjusted_to_u_t_c: bool,
         unit: TimeUnit,
     },
-    TIMESTAMP(TimestampType),
+    Timestamp {
+        is_adjusted_to_u_t_c: bool,
+        unit: TimeUnit,
+    },
     INTEGER(IntType),
     UNKNOWN(NullType),
     JSON(JsonType),
@@ -353,7 +356,7 @@ impl ColumnOrder {
                 LogicalType::Decimal { .. } => SortOrder::SIGNED,
                 LogicalType::Date => SortOrder::SIGNED,
                 LogicalType::Time { .. } => SortOrder::SIGNED,
-                LogicalType::TIMESTAMP(_) => SortOrder::SIGNED,
+                LogicalType::Timestamp { .. } => SortOrder::SIGNED,
                 LogicalType::UNKNOWN(_) => SortOrder::UNDEFINED,
                 LogicalType::UUID(_) => SortOrder::UNSIGNED,
             },
@@ -605,7 +608,10 @@ impl convert::From<parquet::LogicalType> for LogicalType {
                 is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
                 unit: t.unit,
             },
-            parquet::LogicalType::TIMESTAMP(t) => LogicalType::TIMESTAMP(t),
+            parquet::LogicalType::TIMESTAMP(t) => LogicalType::Timestamp {
+                is_adjusted_to_u_t_c: t.is_adjusted_to_u_t_c,
+                unit: t.unit,
+            },
             parquet::LogicalType::INTEGER(t) => LogicalType::INTEGER(t),
             parquet::LogicalType::UNKNOWN(t) => LogicalType::UNKNOWN(t),
             parquet::LogicalType::JSON(t) => LogicalType::JSON(t),
@@ -633,7 +639,13 @@ impl convert::From<LogicalType> for parquet::LogicalType {
                 is_adjusted_to_u_t_c,
                 unit,
             }),
-            LogicalType::TIMESTAMP(t) => parquet::LogicalType::TIMESTAMP(t),
+            LogicalType::Timestamp {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => parquet::LogicalType::TIMESTAMP(TimestampType {
+                is_adjusted_to_u_t_c,
+                unit,
+            }),
             LogicalType::INTEGER(t) => parquet::LogicalType::INTEGER(t),
             LogicalType::UNKNOWN(t) => parquet::LogicalType::UNKNOWN(t),
             LogicalType::JSON(t) => parquet::LogicalType::JSON(t),
@@ -667,7 +679,7 @@ impl From<Option<LogicalType>> for ConvertedType {
                     TimeUnit::MICROS(_) => ConvertedType::TIME_MICROS,
                     TimeUnit::NANOS(_) => ConvertedType::NONE,
                 },
-                LogicalType::TIMESTAMP(t) => match t.unit {
+                LogicalType::Timestamp { unit, .. } => match unit {
                     TimeUnit::MILLIS(_) => ConvertedType::TIMESTAMP_MILLIS,
                     TimeUnit::MICROS(_) => ConvertedType::TIMESTAMP_MICROS,
                     TimeUnit::NANOS(_) => ConvertedType::NONE,
@@ -896,10 +908,10 @@ impl str::FromStr for LogicalType {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MILLIS(parquet::MilliSeconds {}),
             }),
-            "TIMESTAMP" => Ok(LogicalType::TIMESTAMP(TimestampType {
+            "TIMESTAMP" => Ok(LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MILLIS(parquet::MilliSeconds {}),
-            })),
+            }),
             "STRING" => Ok(LogicalType::String),
             "JSON" => Ok(LogicalType::JSON(JsonType {})),
             "BSON" => Ok(LogicalType::BSON(BsonType {})),
@@ -1433,24 +1445,24 @@ mod tests {
             ConvertedType::NONE
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::TIMESTAMP(TimestampType {
+            ConvertedType::from(Some(LogicalType::Timestamp {
                 unit: TimeUnit::MILLIS(Default::default()),
                 is_adjusted_to_u_t_c: true,
-            }))),
+            })),
             ConvertedType::TIMESTAMP_MILLIS
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::TIMESTAMP(TimestampType {
+            ConvertedType::from(Some(LogicalType::Timestamp {
                 unit: TimeUnit::MICROS(Default::default()),
                 is_adjusted_to_u_t_c: false,
-            }))),
+            })),
             ConvertedType::TIMESTAMP_MICROS
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::TIMESTAMP(TimestampType {
+            ConvertedType::from(Some(LogicalType::Timestamp {
                 unit: TimeUnit::NANOS(Default::default()),
                 is_adjusted_to_u_t_c: false,
-            }))),
+            })),
             ConvertedType::NONE
         );
         assert_eq!(
@@ -1866,18 +1878,18 @@ mod tests {
                 is_adjusted_to_u_t_c: true,
                 unit: TimeUnit::NANOS(Default::default()),
             },
-            LogicalType::TIMESTAMP(TimestampType {
+            LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MILLIS(Default::default()),
-            }),
-            LogicalType::TIMESTAMP(TimestampType {
+            },
+            LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MICROS(Default::default()),
-            }),
-            LogicalType::TIMESTAMP(TimestampType {
+            },
+            LogicalType::Timestamp {
                 is_adjusted_to_u_t_c: true,
                 unit: TimeUnit::NANOS(Default::default()),
-            }),
+            },
         ];
         check_sort_order(signed, SortOrder::SIGNED);
 
