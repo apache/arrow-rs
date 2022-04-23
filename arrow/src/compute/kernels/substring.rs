@@ -246,6 +246,74 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
 mod tests {
     use super::*;
 
+    fn with_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
+        let cases: Vec<(Vec<Option<&[u8]>>, i64, Option<u64>, Vec<Option<&[u8]>>)> = vec![
+            // identity
+            (
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+                0,
+                None,
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+            ),
+            // 0 length -> Nothing
+            (
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+                0,
+                Some(0),
+                vec![Some(&[]), None, Some(&[])],
+            ),
+            // high start -> Nothing
+            (
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+                1000,
+                Some(0),
+                vec![Some(&[]), None, Some(&[])],
+            ),
+            // high negative start -> identity
+            (
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+                -1000,
+                None,
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+            ),
+            // high length -> identity
+            (
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+                0,
+                Some(1000),
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+            ),
+        ];
+
+        cases.into_iter().try_for_each::<_, Result<()>>(
+            |(array, start, length, expected)| {
+                let array = GenericBinaryArray::<O>::from(array);
+                let result: ArrayRef = substring(&array, start, length)?;
+                assert_eq!(array.len(), result.len());
+
+                let result = result
+                    .as_any()
+                    .downcast_ref::<GenericBinaryArray<O>>()
+                    .unwrap();
+                let expected = GenericBinaryArray::<O>::from(expected);
+                assert_eq!(&expected, result);
+                Ok(())
+            },
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn with_nulls_binary() -> Result<()> {
+        with_nulls_generic_binary::<i32>()
+    }
+
+    #[test]
+    fn with_nulls_large_binary() -> Result<()> {
+        with_nulls_generic_binary::<i64>()
+    }
+
     fn with_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
         let cases = vec![
             // identity
