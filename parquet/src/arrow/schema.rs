@@ -669,7 +669,10 @@ impl ParquetTypeConverter<'_> {
             self.schema.get_basic_info().converted_type(),
         ) {
             (None, ConvertedType::NONE) => Ok(DataType::Int32),
-            (Some(LogicalType::Integer { bit_width, is_signed }), _) => match (bit_width, is_signed) {
+            (Some(ref t @ LogicalType::Integer {
+                bit_width,
+                is_signed,
+            }), _) => match (bit_width, is_signed) {
                 (8, true) => Ok(DataType::Int8),
                 (16, true) => Ok(DataType::Int16),
                 (32, true) => Ok(DataType::Int32),
@@ -678,7 +681,7 @@ impl ParquetTypeConverter<'_> {
                 (32, false) => Ok(DataType::UInt32),
                 _ => Err(ArrowError(format!(
                     "Cannot create INT32 physical type from {:?}",
-                    self.schema.get_basic_info().logical_type(), 
+                    t,
                 ))),
             },
             (Some(LogicalType::Decimal {..}), _) => Ok(self.to_decimal()),
