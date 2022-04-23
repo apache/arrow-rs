@@ -258,7 +258,7 @@ fn print_logical_and_converted(
                     t.is_adjusted_to_u_t_c
                 )
             }
-            LogicalType::DATE(_) => "DATE".to_string(),
+            LogicalType::Date => "DATE".to_string(),
             LogicalType::BSON(_) => "BSON".to_string(),
             LogicalType::JSON(_) => "JSON".to_string(),
             LogicalType::String => "STRING".to_string(),
@@ -380,8 +380,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::basic::{
-        DateType, IntType, LogicalType, Repetition, TimeType, TimestampType,
-        Type as PhysicalType,
+        IntType, LogicalType, Repetition, TimeType, TimestampType, Type as PhysicalType,
     };
     use crate::errors::Result;
     use crate::schema::{parser::parse_message_type, types::Type};
@@ -523,7 +522,7 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT32,
-                    Some(LogicalType::DATE(DateType {})),
+                    Some(LogicalType::Date),
                     ConvertedType::NONE,
                     Repetition::OPTIONAL,
                 )

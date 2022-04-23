@@ -401,12 +401,12 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         .with_repetition(repetition)
         .build(),
         DataType::Date32 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::DATE(Default::default())))
+            .with_logical_type(Some(LogicalType::Date))
             .with_repetition(repetition)
             .build(),
         // date64 is cast to date32
         DataType::Date64 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::DATE(Default::default())))
+            .with_logical_type(Some(LogicalType::Date))
             .with_repetition(repetition)
             .build(),
         DataType::Time32(_) => Type::primitive_type_builder(name, PhysicalType::INT32)
@@ -682,7 +682,7 @@ impl ParquetTypeConverter<'_> {
                 ))),
             },
             (Some(LogicalType::Decimal {..}), _) => Ok(self.to_decimal()),
-            (Some(LogicalType::DATE(_)), _) => Ok(DataType::Date32),
+            (Some(LogicalType::Date), _) => Ok(DataType::Date32),
             (Some(LogicalType::TIME(t)), _) => match t.unit {
                 ParquetTimeUnit::MILLIS(_) => Ok(DataType::Time32(TimeUnit::Millisecond)),
                 _ => Err(ArrowError(format!(

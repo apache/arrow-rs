@@ -1094,7 +1094,7 @@ mod tests {
             ),
             Arc::new(
                 Type::primitive_type_builder("_5", PhysicalType::INT32)
-                    .with_logical_type(Some(LogicalType::DATE(Default::default())))
+                    .with_logical_type(Some(LogicalType::Date))
                     .with_converted_type(ConvertedType::DATE)
                     .build()
                     .unwrap(),
@@ -1172,7 +1172,7 @@ mod tests {
             ),
             Arc::new(
                 Type::primitive_type_builder("_5", PhysicalType::INT32)
-                    .with_logical_type(Some(LogicalType::DATE(Default::default())))
+                    .with_logical_type(Some(LogicalType::Date))
                     .build()
                     .unwrap(),
             ),

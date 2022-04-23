@@ -331,7 +331,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         }
                         self.check_decimal_precision_scale()?;
                     }
-                    (LogicalType::DATE(_), PhysicalType::INT32) => {}
+                    (LogicalType::Date, PhysicalType::INT32) => {}
                     (
                         LogicalType::TIME(TimeType {
                             unit: TimeUnit::MILLIS(_),

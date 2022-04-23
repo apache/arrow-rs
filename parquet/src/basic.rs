@@ -170,7 +170,7 @@ pub enum LogicalType {
     List,
     Enum,
     Decimal { scale: i32, precision: i32 },
-    DATE(DateType),
+    Date,
     TIME(TimeType),
     TIMESTAMP(TimestampType),
     INTEGER(IntType),
@@ -345,7 +345,7 @@ impl ColumnOrder {
                 },
                 LogicalType::Map | LogicalType::List => SortOrder::UNDEFINED,
                 LogicalType::Decimal { .. } => SortOrder::SIGNED,
-                LogicalType::DATE(_) => SortOrder::SIGNED,
+                LogicalType::Date => SortOrder::SIGNED,
                 LogicalType::TIME(_) => SortOrder::SIGNED,
                 LogicalType::TIMESTAMP(_) => SortOrder::SIGNED,
                 LogicalType::UNKNOWN(_) => SortOrder::UNDEFINED,
@@ -594,7 +594,7 @@ impl convert::From<parquet::LogicalType> for LogicalType {
                 scale: t.scale,
                 precision: t.precision,
             },
-            parquet::LogicalType::DATE(t) => LogicalType::DATE(t),
+            parquet::LogicalType::DATE(_) => LogicalType::Date,
             parquet::LogicalType::TIME(t) => LogicalType::TIME(t),
             parquet::LogicalType::TIMESTAMP(t) => LogicalType::TIMESTAMP(t),
             parquet::LogicalType::INTEGER(t) => LogicalType::INTEGER(t),
@@ -616,7 +616,7 @@ impl convert::From<LogicalType> for parquet::LogicalType {
             LogicalType::Decimal { scale, precision } => {
                 parquet::LogicalType::DECIMAL(DecimalType { scale, precision })
             }
-            LogicalType::DATE(t) => parquet::LogicalType::DATE(t),
+            LogicalType::Date => parquet::LogicalType::DATE(Default::default()),
             LogicalType::TIME(t) => parquet::LogicalType::TIME(t),
             LogicalType::TIMESTAMP(t) => parquet::LogicalType::TIMESTAMP(t),
             LogicalType::INTEGER(t) => parquet::LogicalType::INTEGER(t),
@@ -646,7 +646,7 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::List => ConvertedType::LIST,
                 LogicalType::Enum => ConvertedType::ENUM,
                 LogicalType::Decimal { .. } => ConvertedType::DECIMAL,
-                LogicalType::DATE(_) => ConvertedType::DATE,
+                LogicalType::Date => ConvertedType::DATE,
                 LogicalType::TIME(t) => match t.unit {
                     TimeUnit::MILLIS(_) => ConvertedType::TIME_MILLIS,
                     TimeUnit::MICROS(_) => ConvertedType::TIME_MICROS,
@@ -876,7 +876,7 @@ impl str::FromStr for LogicalType {
                 precision: -1,
                 scale: -1,
             }),
-            "DATE" => Ok(LogicalType::DATE(DateType {})),
+            "DATE" => Ok(LogicalType::Date),
             "TIME" => Ok(LogicalType::TIME(TimeType {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MILLIS(parquet::MilliSeconds {}),
@@ -1393,7 +1393,7 @@ mod tests {
             ConvertedType::UTF8
         );
         assert_eq!(
-            ConvertedType::from(Some(LogicalType::DATE(Default::default()))),
+            ConvertedType::from(Some(LogicalType::Date)),
             ConvertedType::DATE
         );
         assert_eq!(
@@ -1838,7 +1838,7 @@ mod tests {
                 scale: 20,
                 precision: 4,
             },
-            LogicalType::DATE(Default::default()),
+            LogicalType::Date,
             LogicalType::TIME(TimeType {
                 is_adjusted_to_u_t_c: false,
                 unit: TimeUnit::MILLIS(Default::default()),
