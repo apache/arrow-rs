@@ -37,8 +37,6 @@ use crate::file::{
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::FromBytes;
 use crate::util::memory::{ByteBufferPtr, MemTracker};
-use arrow::array::{Array, DecimalArray};
-use parquet_format::DecimalType;
 
 /// Column writer for a Parquet type.
 pub enum ColumnWriter {
@@ -1570,6 +1568,62 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_check_byte_array_min_max() {
+        let page_writer = get_test_page_writer();
+        let props = Arc::new(WriterProperties::builder().build());
+        let mut writer =
+            get_test_decimals_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+        writer
+            .write_batch(
+                &[
+                    ByteArray::from(vec![
+                        255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 179u8,
+                        172u8, 19u8, 35u8, 231u8, 90u8, 0u8, 0u8,
+                    ]),
+                    ByteArray::from(vec![
+                        255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 228u8,
+                        62u8, 146u8, 152u8, 177u8, 56u8, 0u8, 0u8,
+                    ]),
+                    ByteArray::from(vec![
+                        0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8,
+                        0u8, 0u8, 0u8,
+                    ]),
+                    ByteArray::from(vec![
+                        0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 41u8, 162u8, 36u8, 26u8,
+                        246u8, 44u8, 0u8, 0u8,
+                    ]),
+                ],
+                None,
+                None,
+            )
+            .unwrap();
+        let (_bytes_written, _rows_written, metadata) = writer.close().unwrap();
+        if let Some(stats) = metadata.statistics() {
+            assert!(stats.has_min_max_set());
+            if let Statistics::ByteArray(stats) = stats {
+                assert_eq!(
+                    stats.min(),
+                    &ByteArray::from(vec![
+                        255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 179u8,
+                        172u8, 19u8, 35u8, 231u8, 90u8, 0u8, 0u8,
+                    ])
+                );
+                assert_eq!(
+                    stats.max(),
+                    &ByteArray::from(vec![
+                        0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 41u8, 162u8, 36u8, 26u8,
+                        246u8, 44u8, 0u8, 0u8,
+                    ])
+                );
+            } else {
+                panic!("expecting Statistics::ByteArray");
+            }
+        } else {
+            panic!("metadata missing statistics");
+        }
+    }
+
+    #[test]
     fn test_column_writer_precalculated_statistics() {
         let page_writer = get_test_page_writer();
         let props = Arc::new(WriterProperties::builder().build());
@@ -2246,5 +2300,50 @@ mod tests {
         } else {
             panic!("metadata missing statistics");
         }
+    }
+
+    /// Returns Decimals column writer.
+    fn get_test_decimals_column_writer<T: DataType>(
+        page_writer: Box<dyn PageWriter>,
+        max_def_level: i16,
+        max_rep_level: i16,
+        props: WriterPropertiesPtr,
+    ) -> ColumnWriterImpl<T> {
+        let descr = Arc::new(get_test_decimals_column_descr::<T>(
+            max_def_level,
+            max_rep_level,
+        ));
+        let column_writer = get_column_writer(descr, props, page_writer);
+        get_typed_column_writer::<T>(column_writer)
+    }
+
+    /// Returns decimals column reader.
+    fn get_test_decimals_column_reader<T: DataType>(
+        page_reader: Box<dyn PageReader>,
+        max_def_level: i16,
+        max_rep_level: i16,
+    ) -> ColumnReaderImpl<T> {
+        let descr = Arc::new(get_test_decimals_column_descr::<T>(
+            max_def_level,
+            max_rep_level,
+        ));
+        let column_reader = get_column_reader(descr, page_reader);
+        get_typed_column_reader::<T>(column_reader)
+    }
+
+    /// Returns descriptor for Decimal type with primitive column.
+    fn get_test_decimals_column_descr<T: DataType>(
+        max_def_level: i16,
+        max_rep_level: i16,
+    ) -> ColumnDescriptor {
+        let path = ColumnPath::from("col");
+        let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
+            .with_length(16)
+            .with_logical_type(Some(LogicalType::DECIMAL(parquet_format::DecimalType::new(2, 3))))
+            .with_scale(2)
+            .with_precision(3)
+            .build()
+            .unwrap();
+        ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
     }
 }
