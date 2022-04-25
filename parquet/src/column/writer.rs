@@ -1001,11 +1001,8 @@ impl<T: DataType> ColumnWriterImpl<T> {
     }
 
     fn compare_greater_byte_array_decimals(&self, a: &[u8], b: &[u8]) -> bool {
-        let a_vec: Vec<u8> = a.to_vec();
-        let b_vec: Vec<u8> = b.to_vec();
-
-        let a_length = a_vec.len();
-        let b_length = b_vec.len();
+        let a_length = a.len();
+        let b_length = b.len();
 
         if a_length == 0 || b_length == 0 {
             return a_length > 0 && b_length == 0;
@@ -1037,11 +1034,11 @@ impl<T: DataType> ColumnWriterImpl<T> {
             if a_length > b_length {
                 let lead_length = a_length - b_length;
                 not_equal =
-                    Some((&a_vec[0..lead_length]).iter().any(|&x| x != extension));
+                    Some((&a[0..lead_length]).iter().any(|&x| x != extension));
             } else {
                 let lead_length = b_length - a_length;
                 not_equal =
-                    Some((&b_vec[0..lead_length]).iter().any(|&x| x != extension));
+                    Some((&b[0..lead_length]).iter().any(|&x| x != extension));
             }
 
             if !not_equal.is_none() && not_equal.unwrap() {
@@ -1051,7 +1048,7 @@ impl<T: DataType> ColumnWriterImpl<T> {
             }
         }
 
-        (a_vec[1..]) > (b_vec[1..])
+        (a[1..]) > (b[1..])
     }
 
     /// Evaluate `a > b` according to underlying logical type.
