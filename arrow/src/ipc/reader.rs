@@ -1573,4 +1573,43 @@ mod tests {
             offsets,
         );
     }
+
+    #[test]
+    fn test_roundtrip_stream_dict_of_fixed_size_list_of_dict() {
+        let values = StringArray::from(vec![Some("a"), None, Some("c"), None]);
+        let keys = Int8Array::from_iter_values([0, 0, 1, 2, 0, 1, 3, 1, 2]);
+        let dict_array = DictionaryArray::<Int8Type>::try_new(&keys, &values).unwrap();
+        let dict_data = dict_array.data();
+
+        let list_data_type = DataType::FixedSizeList(
+            Box::new(Field::new_dict(
+                "item",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+                true,
+                1,
+                false,
+            )),
+            3,
+        );
+        let list_data = ArrayData::builder(list_data_type)
+            .len(3)
+            .add_child_data(dict_data.clone())
+            .build()
+            .unwrap();
+        let list_array = FixedSizeListArray::from(list_data);
+
+        let keys_for_dict = Int8Array::from_iter_values([0, 1, 0, 1, 1, 2, 0, 1, 2]);
+        let dict_dict_array =
+            DictionaryArray::<Int8Type>::try_new(&keys_for_dict, &list_array).unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "f1",
+            dict_dict_array.data_type().clone(),
+            false,
+        )]));
+        let input_batch =
+            RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
+        let output_batch = roundtrip_ipc_stream(&input_batch);
+        assert_eq!(input_batch, output_batch);
+    }
 }

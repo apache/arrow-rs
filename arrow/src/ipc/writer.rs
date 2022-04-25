@@ -27,7 +27,7 @@ use flatbuffers::FlatBufferBuilder;
 
 use crate::array::{
     as_large_list_array, as_list_array, as_map_array, as_struct_array, as_union_array,
-    make_array, Array, ArrayData, ArrayRef,
+    make_array, Array, ArrayData, ArrayRef, FixedSizeListArray,
 };
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::*;
@@ -147,7 +147,6 @@ impl IpcDataGenerator {
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
     ) -> Result<()> {
-        // TODO: Handle other nested types (FixedSizeList)
         match column.data_type() {
             DataType::Struct(fields) => {
                 let s = as_struct_array(column);
@@ -173,6 +172,19 @@ impl IpcDataGenerator {
             }
             DataType::LargeList(field) => {
                 let list = as_large_list_array(column);
+                self.encode_dictionaries(
+                    field,
+                    &list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
+            DataType::FixedSizeList(field, _) => {
+                let list = column
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .expect("Unable to downcast to fixed size list array");
                 self.encode_dictionaries(
                     field,
                     &list.values(),
