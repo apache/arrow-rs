@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines kernel to extract a substring of a \[Large\]StringArray
+//! Defines kernel to extract a substring of an Array
+//! Supported array types: \[Large\]StringArray, \[Large\]BinaryArray
 
 use crate::buffer::MutableBuffer;
 use crate::{array::*, buffer::Buffer};
@@ -25,7 +26,68 @@ use crate::{
 };
 use std::cmp::Ordering;
 
-fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
+fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
+    array: &GenericBinaryArray<OffsetSize>,
+    start: OffsetSize,
+    length: Option<OffsetSize>,
+) -> Result<ArrayRef> {
+    let offsets = array.value_offsets();
+    let null_bit_buffer = array.data_ref().null_buffer().cloned();
+    let values = array.value_data();
+    let data = values.as_slice();
+    let zero = OffsetSize::zero();
+
+    // start and end offsets of all substrings
+    let mut new_starts_ends: Vec<(OffsetSize, OffsetSize)> =
+        Vec::with_capacity(array.len());
+    let mut new_offsets: Vec<OffsetSize> = Vec::with_capacity(array.len() + 1);
+    let mut len_so_far = zero;
+    new_offsets.push(zero);
+
+    offsets.windows(2).for_each(|pair| {
+        let new_start = match start.cmp(&zero) {
+            Ordering::Greater => (pair[0] + start).min(pair[1]),
+            Ordering::Equal => pair[0],
+            Ordering::Less => (pair[1] + start).max(pair[0]),
+        };
+        let new_end = match length {
+            Some(length) => (length + new_start).min(pair[1]),
+            None => pair[1],
+        };
+        len_so_far += new_end - new_start;
+        new_starts_ends.push((new_start, new_end));
+        new_offsets.push(len_so_far);
+    });
+
+    // concatenate substrings into a buffer
+    let mut new_values =
+        MutableBuffer::new(new_offsets.last().unwrap().to_usize().unwrap());
+
+    new_starts_ends
+        .iter()
+        .map(|(start, end)| {
+            let start = start.to_usize().unwrap();
+            let end = end.to_usize().unwrap();
+            &data[start..end]
+        })
+        .for_each(|slice| new_values.extend_from_slice(slice));
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            <OffsetSize as BinaryOffsetSizeTrait>::DATA_TYPE,
+            array.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
+            vec![],
+        )
+    };
+    Ok(make_array(data))
+}
+
+/// substring by byte
+fn utf8_substring<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: OffsetSize,
     length: Option<OffsetSize>,
@@ -128,8 +190,8 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 /// ```
 ///
 /// # Error
-/// - The function errors when the passed array is not a \[Large\]String array.
-/// - The function errors if the offset of a substring in the input array is at invalid char boundary.
+/// - The function errors when the passed array is not a \[Large\]String array or \[Large\]Binary array.
+/// - The function errors if the offset of a substring in the input array is at invalid char boundary (only for \[Large\]String array).
 ///
 /// ## Example of trying to get an invalid utf-8 format substring
 /// ```
@@ -141,7 +203,23 @@ fn generic_substring<OffsetSize: StringOffsetSizeTrait>(
 /// ```
 pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<ArrayRef> {
     match array.data_type() {
-        DataType::LargeUtf8 => generic_substring(
+        DataType::LargeBinary => binary_substring(
+            array
+                .as_any()
+                .downcast_ref::<LargeBinaryArray>()
+                .expect("A large binary is expected"),
+            start,
+            length.map(|e| e as i64),
+        ),
+        DataType::Binary => binary_substring(
+            array
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .expect("A binary is expected"),
+            start as i32,
+            length.map(|e| e as i32),
+        ),
+        DataType::LargeUtf8 => utf8_substring(
             array
                 .as_any()
                 .downcast_ref::<LargeStringArray>()
@@ -149,7 +227,7 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
             start,
             length.map(|e| e as i64),
         ),
-        DataType::Utf8 => generic_substring(
+        DataType::Utf8 => utf8_substring(
             array
                 .as_any()
                 .downcast_ref::<StringArray>()
@@ -168,8 +246,214 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
 mod tests {
     use super::*;
 
-    fn with_nulls<T: 'static + Array + PartialEq + From<Vec<Option<&'static str>>>>(
-    ) -> Result<()> {
+    #[allow(clippy::type_complexity)]
+    fn with_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
+        let cases: Vec<(Vec<Option<&[u8]>>, i64, Option<u64>, Vec<Option<&[u8]>>)> = vec![
+            // identity
+            (
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+                0,
+                None,
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+            ),
+            // 0 length -> Nothing
+            (
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+                0,
+                Some(0),
+                vec![Some(&[]), None, Some(&[])],
+            ),
+            // high start -> Nothing
+            (
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+                1000,
+                Some(0),
+                vec![Some(&[]), None, Some(&[])],
+            ),
+            // high negative start -> identity
+            (
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+                -1000,
+                None,
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+            ),
+            // high length -> identity
+            (
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+                0,
+                Some(1000),
+                vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
+            ),
+        ];
+
+        cases.into_iter().try_for_each::<_, Result<()>>(
+            |(array, start, length, expected)| {
+                let array = GenericBinaryArray::<O>::from(array);
+                let result: ArrayRef = substring(&array, start, length)?;
+                assert_eq!(array.len(), result.len());
+
+                let result = result
+                    .as_any()
+                    .downcast_ref::<GenericBinaryArray<O>>()
+                    .unwrap();
+                let expected = GenericBinaryArray::<O>::from(expected);
+                assert_eq!(&expected, result);
+                Ok(())
+            },
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn with_nulls_binary() -> Result<()> {
+        with_nulls_generic_binary::<i32>()
+    }
+
+    #[test]
+    fn with_nulls_large_binary() -> Result<()> {
+        with_nulls_generic_binary::<i64>()
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn without_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
+        let cases: Vec<(Vec<&[u8]>, i64, Option<u64>, Vec<&[u8]>)> = vec![
+            // increase start
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                0,
+                None,
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                1,
+                None,
+                vec![b"ello", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                2,
+                None,
+                vec![b"llo", b"", &[0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                3,
+                None,
+                vec![b"lo", b"", &[0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                10,
+                None,
+                vec![b"", b"", b""],
+            ),
+            // increase start negatively
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -1,
+                None,
+                vec![b"o", b"", &[0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -2,
+                None,
+                vec![b"lo", b"", &[0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -3,
+                None,
+                vec![b"llo", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -10,
+                None,
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+            ),
+            // increase length
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                1,
+                Some(1),
+                vec![b"e", b"", &[0xf9]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                1,
+                Some(2),
+                vec![b"el", b"", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                1,
+                Some(3),
+                vec![b"ell", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                1,
+                Some(4),
+                vec![b"ello", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -3,
+                Some(1),
+                vec![b"l", b"", &[0xf9]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -3,
+                Some(2),
+                vec![b"ll", b"", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -3,
+                Some(3),
+                vec![b"llo", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+            (
+                vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
+                -3,
+                Some(4),
+                vec![b"llo", b"", &[0xf9, 0xff, 0xfa]],
+            ),
+        ];
+
+        cases.into_iter().try_for_each::<_, Result<()>>(
+            |(array, start, length, expected)| {
+                let array = GenericBinaryArray::<O>::from(array);
+                let result = substring(&array, start, length)?;
+                assert_eq!(array.len(), result.len());
+                let result = result
+                    .as_any()
+                    .downcast_ref::<GenericBinaryArray<O>>()
+                    .unwrap();
+                let expected = GenericBinaryArray::<O>::from(expected);
+                assert_eq!(&expected, result,);
+                Ok(())
+            },
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn without_nulls_binary() -> Result<()> {
+        without_nulls_generic_binary::<i32>()
+    }
+
+    #[test]
+    fn without_nulls_large_binary() -> Result<()> {
+        without_nulls_generic_binary::<i64>()
+    }
+
+    fn with_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
         let cases = vec![
             // identity
             (
@@ -210,12 +494,15 @@ mod tests {
 
         cases.into_iter().try_for_each::<_, Result<()>>(
             |(array, start, length, expected)| {
-                let array = T::from(array);
+                let array = GenericStringArray::<O>::from(array);
                 let result: ArrayRef = substring(&array, start, length)?;
                 assert_eq!(array.len(), result.len());
 
-                let result = result.as_any().downcast_ref::<T>().unwrap();
-                let expected = T::from(expected);
+                let result = result
+                    .as_any()
+                    .downcast_ref::<GenericStringArray<O>>()
+                    .unwrap();
+                let expected = GenericStringArray::<O>::from(expected);
                 assert_eq!(&expected, result);
                 Ok(())
             },
@@ -226,16 +513,15 @@ mod tests {
 
     #[test]
     fn with_nulls_string() -> Result<()> {
-        with_nulls::<StringArray>()
+        with_nulls_generic_string::<i32>()
     }
 
     #[test]
     fn with_nulls_large_string() -> Result<()> {
-        with_nulls::<LargeStringArray>()
+        with_nulls_generic_string::<i64>()
     }
 
-    fn without_nulls<T: 'static + Array + PartialEq + From<Vec<Option<&'static str>>>>(
-    ) -> Result<()> {
+    fn without_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
         let cases = vec![
             // increase start
             (
@@ -291,11 +577,14 @@ mod tests {
 
         cases.into_iter().try_for_each::<_, Result<()>>(
             |(array, start, length, expected)| {
-                let array = StringArray::from(array);
+                let array = GenericStringArray::<O>::from(array);
                 let result = substring(&array, start, length)?;
                 assert_eq!(array.len(), result.len());
-                let result = result.as_any().downcast_ref::<StringArray>().unwrap();
-                let expected = StringArray::from(expected);
+                let result = result
+                    .as_any()
+                    .downcast_ref::<GenericStringArray<O>>()
+                    .unwrap();
+                let expected = GenericStringArray::<O>::from(expected);
                 assert_eq!(&expected, result,);
                 Ok(())
             },
@@ -306,12 +595,12 @@ mod tests {
 
     #[test]
     fn without_nulls_string() -> Result<()> {
-        without_nulls::<StringArray>()
+        without_nulls_generic_string::<i32>()
     }
 
     #[test]
     fn without_nulls_large_string() -> Result<()> {
-        without_nulls::<LargeStringArray>()
+        without_nulls_generic_string::<i64>()
     }
 
     #[test]
