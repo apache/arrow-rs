@@ -19,7 +19,7 @@
 
 # Examples
 
-- [`builders](builders.rs): Using the Builder API
+- [`builders.rs`](builders.rs): Using the Builder API
 - `collect` (TODO): Using the `FromIter` API
 - [`dynamic_types.rs`](dynamic_types.rs):
 - [`read_csv.rs`](read_csv.rs): Reading CSV files with explict schema, pretty printing Arrays
