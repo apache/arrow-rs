@@ -119,7 +119,7 @@ struct GetPrimaryKeysArgs {
     table: String,
 }
 
-async fn new_client(hostname: &String, port: &usize) -> Result<FlightSqlServiceClient, ArrowError> {
+async fn new_client(hostname: &String, port: &usize) -> Result<FlightSqlServiceClient<Channel>, ArrowError> {
     let client_address = format!("http://{}:{}", hostname, port);
     let inner = FlightServiceClient::connect(client_address)
         .await
@@ -127,7 +127,7 @@ async fn new_client(hostname: &String, port: &usize) -> Result<FlightSqlServiceC
     Ok(FlightSqlServiceClient::new(RefCell::new(inner)))
 }
 
-async fn get_and_print(mut client: FlightSqlServiceClient, fi: FlightInfo) -> Result<(), ArrowError> {
+async fn get_and_print(mut client: FlightSqlServiceClient<Channel>, fi: FlightInfo) -> Result<(), ArrowError> {
 
     let first_endpoint = fi.endpoint.first()
         .ok_or(ArrowError::ComputeError("Failed to get first endpoint".to_string()))?;

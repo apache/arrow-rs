@@ -40,6 +40,7 @@ use crate::{
     flight_service_server::FlightService, Action, ActionType, FlightData,
     FlightDescriptor, FlightInfo, IpcMessage, Ticket,
 };
+use crate::sql::server::FlightSqlService;
 
 use super::{
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
@@ -54,24 +55,24 @@ use super::{
 /// A FlightSQLServiceClient is an endpoint for retrieving or storing Arrow data
 /// by FlightSQL protocol.
 #[derive(Debug, Clone)]
-pub struct FlightSqlServiceClient {
-    inner: RefCell<FlightServiceClient<tonic::transport::Channel>>,
+pub struct FlightSqlServiceClient<T> {
+    inner: RefCell<FlightServiceClient<T>>,
 }
 
-impl FlightSqlServiceClient
+impl<T> FlightSqlServiceClient<T>
 where
-    //T: tonic::client::GrpcService<tonic::body::BoxBody>,
-    //T::ResponseBody: Body + Send + 'static,
-    //T::Error: Into<StdError>,
-    //<T::ResponseBody as Body>::Error: Into<StdError> + Send,
+    T: tonic::client::GrpcService<tonic::body::BoxBody>,
+    T::Error: Into<StdError>,
+    T::ResponseBody: Default + Body<Data = bytes::Bytes> + Send + 'static,
+    <T::ResponseBody as Body>::Error: Into<StdError> + Send,
 {
     /// create FlightSqlServiceClient using FlightServiceClient
-    pub fn new(client: RefCell<FlightServiceClient<tonic::transport::Channel>>) -> Self {
+    pub fn new(client: RefCell<FlightServiceClient<T>>) -> Self {
         FlightSqlServiceClient { inner: client }
     }
 
     /// borrow mut FlightServiceClient
-    fn mut_client(&self) -> RefMut<'_, FlightServiceClient<tonic::transport::Channel>> {
+    fn mut_client(&self) -> RefMut<'_, FlightServiceClient<T>> {
         self.inner.borrow_mut()
     }
 
@@ -201,7 +202,7 @@ where
     }
 
     /// Create a prepared statement object.
-    pub async fn prepare(&mut self, query: String) -> Result<PreparedStatement<'_>> {
+    pub async fn prepare(&mut self, query: String) -> Result<PreparedStatement<'_, T>> {
         let cmd = ActionCreatePreparedStatementRequest { query };
         let action = Action {
             r#type: ACTION_TYPE_CREATE_PREPARED_STATEMENT.to_string(),
@@ -240,8 +241,8 @@ where
 
 /// A PreparedStatement
 #[derive(Debug, Clone)]
-pub struct PreparedStatement<'a> {
-    inner: &'a RefCell<FlightServiceClient<tonic::transport::Channel>>,
+pub struct PreparedStatement<'a, T> {
+    inner: &'a RefCell<FlightServiceClient<T>>,
     is_closed: bool,
     parameter_binding: Option<RecordBatch<'a>>,
     handle: Vec<u8>,
@@ -249,15 +250,15 @@ pub struct PreparedStatement<'a> {
     parameter_schema: Schema,
 }
 
-impl<'a> PreparedStatement<'a>
+impl<'a, T> PreparedStatement<'a, T>
 where
-    //T: tonic::client::GrpcService<tonic::body::BoxBody>,
-    //T::ResponseBody: Body + Send + 'static,
-    //T::Error: Into<StdError>,
-    //<T::ResponseBody as Body>::Error: Into<StdError> + Send,
+    T: tonic::client::GrpcService<tonic::body::BoxBody>,
+    T::Error: Into<StdError>,
+    T::ResponseBody: Default + Body<Data = bytes::Bytes> + Send + 'static,
+    <T::ResponseBody as Body>::Error: Into<StdError> + Send,
 {
     pub(crate) fn new(
-        client: &'a RefCell<FlightServiceClient<tonic::transport::Channel>>,
+        client: &'a RefCell<FlightServiceClient<T>>,
         handle: Vec<u8>,
         dataset_schema: Schema,
         parameter_schema: Schema,
@@ -381,7 +382,7 @@ where
     }
 
     /// borrow mut FlightServiceClient
-    fn mut_client(&self) -> RefMut<'_, FlightServiceClient<tonic::transport::Channel>> {
+    fn mut_client(&self) -> RefMut<'_, FlightServiceClient<T>> {
         self.inner.borrow_mut()
     }
 }
