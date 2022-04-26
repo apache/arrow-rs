@@ -58,10 +58,13 @@ pub use gen::SupportedSqlGrammar;
 pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
 
+use crate::FlightDescriptor;
+
+pub mod client;
 pub mod server;
 
 /// ProstMessageExt are useful utility methods for prost::Message types
-pub trait ProstMessageExt: prost::Message + Default {
+pub trait ProstMessageExt: prost::Message + Default + Sized {
     /// type_url for this Message
     fn type_url() -> &'static str;
 
@@ -109,6 +112,9 @@ prost_message_ext!(
     DoPutUpdateResult,
     TicketStatementQuery,
 );
+
+pub static ACTION_TYPE_CREATE_PREPARED_STATEMENT: &str = "CreatePreparedStatement";
+pub static ACTION_TYPE_CLOSE_PREPARED_STATEMENT: &str = "ClosePreparedStatement";
 
 /// ProstAnyExt are useful utility methods for prost_types::Any
 /// The API design is inspired by [rust-protobuf](https://github.com/stepancheg/rust-protobuf/blob/master/protobuf/src/well_known_types_util/any.rs)

@@ -57,6 +57,7 @@ pyo3 = { version = "0.16", optional = true }
 lexical-core = "^0.8"
 multiversion = "0.6.1"
 bitflags = "1.2.1"
+tonic = { version = "0.6", optional = true }
 
 [features]
 default = ["csv", "ipc", "test_utils"]
@@ -75,6 +76,7 @@ pyarrow = ["pyo3"]
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
 force_validate = []
+flight-sql-experimental = ["tonic"]
 
 [dev-dependencies]
 rand = "0.8"
