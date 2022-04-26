@@ -17,30 +17,24 @@
 
 use std::{
     cell::{RefCell, RefMut},
-    pin::Pin,
-    sync::Arc,
 };
-use std::ops::Deref;
 
 use arrow::{
     datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result},
     ipc::{RecordBatch,MessageHeader},
 };
-use futures::{stream, Stream};
+use futures::stream;
 use prost::Message;
-use prost_types::Any;
 use tonic::{
     codegen::{Body, StdError},
     Streaming,
 };
 
 use crate::{
-    flight_descriptor, flight_service_client::FlightServiceClient,
-    flight_service_server::FlightService, Action, ActionType, FlightData,
-    FlightDescriptor, FlightInfo, IpcMessage, Ticket,
+    flight_service_client::FlightServiceClient,
+    Action, FlightData, FlightInfo, IpcMessage, Ticket, FlightDescriptor,
 };
-use crate::sql::server::FlightSqlService;
 
 use super::{
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
@@ -48,7 +42,7 @@ use super::{
     CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
     CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
     CommandPreparedStatementQuery, CommandStatementQuery, CommandStatementUpdate,
-    DoPutUpdateResult, ProstAnyExt, ProstMessageExt, SqlInfo, TicketStatementQuery,
+    DoPutUpdateResult, ProstAnyExt, ProstMessageExt, SqlInfo,
     ACTION_TYPE_CLOSE_PREPARED_STATEMENT, ACTION_TYPE_CREATE_PREPARED_STATEMENT,
 };
 
@@ -296,7 +290,7 @@ where
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any: prost_types::Any = prost::Message::decode(&*result.app_metadata)
+        let _: prost_types::Any = prost::Message::decode(&*result.app_metadata)
             .map_err(decode_error_to_arrow_error)?;
         Err(ArrowError::NotYetImplemented(
             "Not yet implemented".to_string(),

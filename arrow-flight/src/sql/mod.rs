@@ -58,8 +58,6 @@ pub use gen::SupportedSqlGrammar;
 pub use gen::TicketStatementQuery;
 pub use gen::UpdateDeleteRules;
 
-use crate::FlightDescriptor;
-
 pub mod client;
 pub mod server;
 
