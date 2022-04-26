@@ -366,12 +366,12 @@ where
             r#type: ACTION_TYPE_CLOSE_PREPARED_STATEMENT.to_string(),
             body: cmd.as_any().encode_to_vec(),
         };
-        /* TODO
         let _ = self
             .mut_client()
             .do_action(action)
-            .await?;
-        self.is_closed = true;*/
+            .await
+            .map_err(status_to_arrow_error)?;
+        self.is_closed = true;
         Ok(())
     }
 
