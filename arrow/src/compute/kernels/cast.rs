@@ -91,7 +91,20 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | UInt64
             | Float64
             | Date64
+            | Timestamp(_, _)
+            | Time64(_)
+            | Duration(_)
+            | Interval(_)
+            | FixedSizeBinary(_)
+            | Binary
+            | Utf8
+            | LargeBinary
+            | LargeUtf8
             | List(_)
+            | LargeList(_)
+            | FixedSizeList(_, _)
+            | Struct(_)
+            | Map(_, _)
             | Dictionary(_, _),
         )
         | (
@@ -109,7 +122,20 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | UInt64
             | Float64
             | Date64
+            | Timestamp(_, _)
+            | Time64(_)
+            | Duration(_)
+            | Interval(_)
+            | FixedSizeBinary(_)
+            | Binary
+            | Utf8
+            | LargeBinary
+            | LargeUtf8
             | List(_)
+            | LargeList(_)
+            | FixedSizeList(_, _)
+            | Struct(_)
+            | Map(_, _)
             | Dictionary(_, _),
             Null,
         ) => true,
@@ -145,6 +171,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (LargeUtf8, Date32 | Date64 | Timestamp(TimeUnit::Nanosecond, None)) => true,
         (LargeUtf8, _) => DataType::is_numeric(to_type),
         (Timestamp(_, _), Utf8) | (Timestamp(_, _), LargeUtf8) => true,
+        (Date32, Utf8) | (Date32, LargeUtf8) => true,
+        (Date64, Utf8) | (Date64, LargeUtf8) => true,
         (_, Utf8 | LargeUtf8) => DataType::is_numeric(from_type) || from_type == &Binary,
 
         // start numeric casts
@@ -467,7 +495,20 @@ pub fn cast_with_options(
             | UInt64
             | Float64
             | Date64
+            | Timestamp(_, _)
+            | Time64(_)
+            | Duration(_)
+            | Interval(_)
+            | FixedSizeBinary(_)
+            | Binary
+            | Utf8
+            | LargeBinary
+            | LargeUtf8
             | List(_)
+            | LargeList(_)
+            | FixedSizeList(_, _)
+            | Struct(_)
+            | Map(_, _)
             | Dictionary(_, _),
         )
         | (
@@ -485,7 +526,20 @@ pub fn cast_with_options(
             | UInt64
             | Float64
             | Date64
+            | Timestamp(_, _)
+            | Time64(_)
+            | Duration(_)
+            | Interval(_)
+            | FixedSizeBinary(_)
+            | Binary
+            | Utf8
+            | LargeBinary
+            | LargeUtf8
             | List(_)
+            | LargeList(_)
+            | FixedSizeList(_, _)
+            | Struct(_)
+            | Map(_, _)
             | Dictionary(_, _),
             Null,
         ) => Ok(new_null_array(to_type, array.len())),
@@ -671,6 +725,8 @@ pub fn cast_with_options(
                     cast_timestamp_to_string::<TimestampSecondType, i32>(array)
                 }
             },
+            Date32 => cast_date32_to_string::<i32>(array),
+            Date64 => cast_date64_to_string::<i32>(array),
             Binary => {
                 let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
                 Ok(Arc::new(
@@ -725,6 +781,8 @@ pub fn cast_with_options(
                     cast_timestamp_to_string::<TimestampSecondType, i64>(array)
                 }
             },
+            Date32 => cast_date32_to_string::<i64>(array),
+            Date64 => cast_date64_to_string::<i64>(array),
             Binary => {
                 let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
                 Ok(Arc::new(
@@ -1238,7 +1296,11 @@ where
             to_type,
             array.len(),
             Some(array.null_count()),
-            array.data().null_bitmap().clone().map(|bitmap| bitmap.bits),
+            array
+                .data()
+                .null_bitmap()
+                .cloned()
+                .map(|bitmap| bitmap.bits),
             array.data().offset(),
             array.data().buffers().to_vec(),
             vec![],
@@ -1286,6 +1348,44 @@ where
     OffsetSize: StringOffsetSizeTrait,
 {
     let array = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
+
+    Ok(Arc::new(
+        (0..array.len())
+            .map(|ix| {
+                if array.is_null(ix) {
+                    None
+                } else {
+                    array.value_as_datetime(ix).map(|v| v.to_string())
+                }
+            })
+            .collect::<GenericStringArray<OffsetSize>>(),
+    ))
+}
+
+/// Cast date32 types to Utf8/LargeUtf8
+fn cast_date32_to_string<OffsetSize: StringOffsetSizeTrait>(
+    array: &ArrayRef,
+) -> Result<ArrayRef> {
+    let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
+
+    Ok(Arc::new(
+        (0..array.len())
+            .map(|ix| {
+                if array.is_null(ix) {
+                    None
+                } else {
+                    array.value_as_date(ix).map(|v| v.to_string())
+                }
+            })
+            .collect::<GenericStringArray<OffsetSize>>(),
+    ))
+}
+
+/// Cast date64 types to Utf8/LargeUtf8
+fn cast_date64_to_string<OffsetSize: StringOffsetSizeTrait>(
+    array: &ArrayRef,
+) -> Result<ArrayRef> {
+    let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
 
     Ok(Arc::new(
         (0..array.len())
@@ -1686,7 +1786,7 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                     cast_keys
                         .data()
                         .null_bitmap()
-                        .clone()
+                        .cloned()
                         .map(|bitmap| bitmap.bits),
                     cast_keys.data().offset(),
                     cast_keys.data().buffers().to_vec(),
@@ -1904,7 +2004,7 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
             cast_array
                 .data()
                 .null_bitmap()
-                .clone()
+                .cloned()
                 .map(|bitmap| bitmap.bits),
             0,
             vec![offsets.into()],
@@ -1932,7 +2032,7 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
             to_type.clone(),
             array.len(),
             Some(data.null_count()),
-            data.null_bitmap().clone().map(|bitmap| bitmap.bits),
+            data.null_bitmap().cloned().map(|bitmap| bitmap.bits),
             array.offset(),
             // reuse offset buffer
             data.buffers().to_vec(),
@@ -2712,6 +2812,48 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_to_date32() {
+        let a1 = Arc::new(StringArray::from(vec![
+            Some("2018-12-25"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(vec![
+            Some("2018-12-25"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        for array in &[a1, a2] {
+            let b = cast(array, &DataType::Date32).unwrap();
+            let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
+            assert_eq!(17890, c.value(0));
+            assert!(c.is_null(1));
+            assert!(c.is_null(2));
+        }
+    }
+
+    #[test]
+    fn test_cast_string_to_date64() {
+        let a1 = Arc::new(StringArray::from(vec![
+            Some("2020-09-08T12:00:00"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(vec![
+            Some("2020-09-08T12:00:00"),
+            Some("Not a valid date"),
+            None,
+        ])) as ArrayRef;
+        for array in &[a1, a2] {
+            let b = cast(array, &DataType::Date64).unwrap();
+            let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
+            assert_eq!(1599566400000, c.value(0));
+            assert!(c.is_null(1));
+            assert!(c.is_null(2));
+        }
+    }
+
+    #[test]
     fn test_cast_date32_to_int32() {
         let a = Date32Array::from(vec![10000, 17890]);
         let array = Arc::new(a) as ArrayRef;
@@ -2788,6 +2930,28 @@ mod tests {
         assert_eq!("1997-05-19 00:00:00.005", c.value(0));
         assert_eq!("2018-12-25 00:00:00.001", c.value(1));
         assert!(c.is_null(2));
+    }
+
+    #[test]
+    fn test_cast_date32_to_string() {
+        let a = Date32Array::from(vec![10000, 17890]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(&DataType::Utf8, c.data_type());
+        assert_eq!("1997-05-19", c.value(0));
+        assert_eq!("2018-12-25", c.value(1));
+    }
+
+    #[test]
+    fn test_cast_date64_to_string() {
+        let a = Date64Array::from(vec![10000 * 86400000, 17890 * 86400000]);
+        let array = Arc::new(a) as ArrayRef;
+        let b = cast(&array, &DataType::Utf8).unwrap();
+        let c = b.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(&DataType::Utf8, c.data_type());
+        assert_eq!("1997-05-19 00:00:00", c.value(0));
+        assert_eq!("2018-12-25 00:00:00", c.value(1));
     }
 
     #[test]
@@ -4097,7 +4261,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_null_array_from_and_to_others() {
+    fn test_cast_null_array_from_and_to_primitive_array() {
         macro_rules! typed_test {
             ($ARR_TYPE:ident, $DATATYPE:ident, $TYPE:tt) => {{
                 {
@@ -4130,6 +4294,82 @@ mod tests {
 
         typed_test!(Float32Array, Float32, Float32Type);
         typed_test!(Float64Array, Float64, Float64Type);
+
+        typed_test!(Date32Array, Date32, Date32Type);
+        typed_test!(Date64Array, Date64, Date64Type);
+    }
+
+    fn cast_from_and_to_null(data_type: &DataType) {
+        // Cast from data_type to null
+        {
+            let array = new_null_array(data_type, 4);
+            assert_eq!(array.data_type(), data_type);
+            let cast_array = cast(&array, &DataType::Null).expect("cast failed");
+            assert_eq!(cast_array.data_type(), &DataType::Null);
+            for i in 0..4 {
+                assert!(cast_array.is_null(i));
+            }
+        }
+        // Cast from null to data_type
+        {
+            let array = new_null_array(&DataType::Null, 4);
+            assert_eq!(array.data_type(), &DataType::Null);
+            let cast_array = cast(&array, data_type).expect("cast failed");
+            assert_eq!(cast_array.data_type(), data_type);
+            for i in 0..4 {
+                assert!(cast_array.is_null(i));
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_null_from_and_to_variable_sized() {
+        cast_from_and_to_null(&DataType::Utf8);
+        cast_from_and_to_null(&DataType::LargeUtf8);
+        cast_from_and_to_null(&DataType::Binary);
+        cast_from_and_to_null(&DataType::LargeBinary);
+    }
+
+    #[test]
+    fn test_cast_null_from_and_to_nested_type() {
+        // Cast null from and to map
+        let data_type = DataType::Map(
+            Box::new(Field::new(
+                "entry",
+                DataType::Struct(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int32, true),
+                ]),
+                false,
+            )),
+            false,
+        );
+        cast_from_and_to_null(&data_type);
+
+        // Cast null from and to list
+        let data_type =
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
+        cast_from_and_to_null(&data_type);
+        let data_type =
+            DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
+        cast_from_and_to_null(&data_type);
+        let data_type = DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::Int32, true)),
+            4,
+        );
+        cast_from_and_to_null(&data_type);
+
+        // Cast null from and to dictionary
+        let values = vec![None, None, None, None] as Vec<Option<&str>>;
+        let array: DictionaryArray<Int8Type> = values.into_iter().collect();
+        let array = Arc::new(array) as ArrayRef;
+        let data_type = array.data_type().to_owned();
+        cast_from_and_to_null(&data_type);
+
+        // Cast null from and to struct
+        let data_type =
+            DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
+        cast_from_and_to_null(&data_type);
     }
 
     /// Print the `DictionaryArray` `array` as a vector of strings

@@ -1060,9 +1060,12 @@ impl Array for DecimalArray {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::{
         array::{DecimalBuilder, LargeListArray, ListArray},
-        datatypes::Field,
+        datatypes::{Field, Schema},
+        record_batch::RecordBatch,
     };
 
     use super::*;
@@ -1426,6 +1429,9 @@ mod tests {
     #[should_panic(
         expected = "FixedSizeBinaryArray can only be created from FixedSizeList<u8> arrays"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_fixed_size_binary_array_from_incorrect_list_array() {
         let values: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         let values_data = ArrayData::builder(DataType::UInt32)
@@ -1738,5 +1744,24 @@ mod tests {
             .data()
             .validate_full()
             .expect("All null array has valid array data");
+    }
+
+    #[test]
+    // Test for https://github.com/apache/arrow-rs/issues/1390
+    #[should_panic(
+        expected = "column types must match schema types, expected FixedSizeBinary(2) but found FixedSizeBinary(0) at column index 0"
+    )]
+    fn fixed_size_binary_array_all_null_in_batch_with_schema() {
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), false)]);
+
+        let none_option: Option<[u8; 2]> = None;
+        let item = FixedSizeBinaryArray::try_from_sparse_iter(
+            vec![none_option, none_option, none_option].into_iter(),
+        )
+        .unwrap();
+
+        // Should not panic
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(item)]).unwrap();
     }
 }

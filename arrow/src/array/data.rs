@@ -219,8 +219,14 @@ pub(crate) fn into_buffers(
         DataType::Utf8
         | DataType::Binary
         | DataType::LargeUtf8
-        | DataType::LargeBinary
-        | DataType::Union(_, _) => vec![buffer1.into(), buffer2.into()],
+        | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
+        DataType::Union(_, mode) => {
+            match mode {
+                // Based on Union's DataTypeLayout
+                UnionMode::Sparse => vec![buffer1.into()],
+                UnionMode::Dense => vec![buffer1.into(), buffer2.into()],
+            }
+        }
         _ => vec![buffer1.into()],
     }
 }
@@ -272,6 +278,7 @@ impl ArrayData {
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
     /// module.
+    #[allow(clippy::let_and_return)]
     pub unsafe fn new_unchecked(
         data_type: DataType,
         len: usize,
@@ -286,7 +293,7 @@ impl ArrayData {
             Some(null_count) => null_count,
         };
         let null_bitmap = null_bit_buffer.map(Bitmap::from);
-        Self {
+        let new_self = Self {
             data_type,
             len,
             null_count,
@@ -294,7 +301,12 @@ impl ArrayData {
             buffers,
             child_data,
             null_bitmap,
-        }
+        };
+
+        // Provide a force_validate mode
+        #[cfg(feature = "force_validate")]
+        new_self.validate_full().unwrap();
+        new_self
     }
 
     /// Create a new ArrayData, validating that the provided buffers
@@ -386,8 +398,8 @@ impl ArrayData {
 
     /// Returns a reference to the null bitmap of this array data
     #[inline]
-    pub const fn null_bitmap(&self) -> &Option<Bitmap> {
-        &self.null_bitmap
+    pub const fn null_bitmap(&self) -> Option<&Bitmap> {
+        self.null_bitmap.as_ref()
     }
 
     /// Returns a reference to the null buffer of this array data.
@@ -488,7 +500,7 @@ impl ArrayData {
                     .iter()
                     .map(|data| data.slice(offset, length))
                     .collect(),
-                null_bitmap: self.null_bitmap().clone(),
+                null_bitmap: self.null_bitmap().cloned(),
             };
 
             new_data
@@ -1459,10 +1471,11 @@ impl ArrayDataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ptr::NonNull;
 
     use crate::array::{
-        Array, BooleanBuilder, Int32Array, Int32Builder, Int64Array, StringArray,
-        StructBuilder, UInt64Array,
+        make_array, Array, BooleanBuilder, Int32Array, Int32Builder, Int64Array,
+        StringArray, StructBuilder, UInt64Array,
     };
     use crate::buffer::Buffer;
     use crate::datatypes::Field;
@@ -2339,7 +2352,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "child #0 invalid: Invalid argument error: Value at position 1 out of bounds: -1 (should be in [0, 1])"
+        expected = "Value at position 1 out of bounds: -1 (should be in [0, 1])"
     )]
     /// test that children are validated recursively (aka bugs in child data of struct also are flagged)
     fn test_validate_recursive() {
@@ -2593,5 +2606,70 @@ mod tests {
         let cloned = crate::array::make_array(cloned_data);
 
         assert_eq!(&struct_array_slice, &cloned);
+    }
+
+    #[test]
+    fn test_into_buffers() {
+        let data_types = vec![
+            DataType::Union(vec![], UnionMode::Dense),
+            DataType::Union(vec![], UnionMode::Sparse),
+        ];
+
+        for data_type in data_types {
+            let buffers = new_buffers(&data_type, 0);
+            let [buffer1, buffer2] = buffers;
+            let buffers = into_buffers(&data_type, buffer1, buffer2);
+
+            let layout = layout(&data_type);
+            assert_eq!(buffers.len(), layout.buffers.len());
+        }
+    }
+
+    #[test]
+    fn test_string_data_from_foreign() {
+        let mut strings = "foobarfoobar".to_owned();
+        let mut offsets = vec![0_i32, 0, 3, 6, 12];
+        let mut bitmap = vec![0b1110_u8];
+
+        let strings_buffer = unsafe {
+            Buffer::from_custom_allocation(
+                NonNull::new_unchecked(strings.as_mut_ptr()),
+                strings.len(),
+                Arc::new(strings),
+            )
+        };
+        let offsets_buffer = unsafe {
+            Buffer::from_custom_allocation(
+                NonNull::new_unchecked(offsets.as_mut_ptr() as *mut u8),
+                offsets.len() * std::mem::size_of::<i32>(),
+                Arc::new(offsets),
+            )
+        };
+        let null_buffer = unsafe {
+            Buffer::from_custom_allocation(
+                NonNull::new_unchecked(bitmap.as_mut_ptr()),
+                bitmap.len(),
+                Arc::new(bitmap),
+            )
+        };
+
+        let data = ArrayData::try_new(
+            DataType::Utf8,
+            4,
+            None,
+            Some(null_buffer),
+            0,
+            vec![offsets_buffer, strings_buffer],
+            vec![],
+        )
+        .unwrap();
+
+        let array = make_array(data);
+        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
+
+        let expected =
+            StringArray::from(vec![None, Some("foo"), Some("bar"), Some("foobar")]);
+
+        assert_eq!(array, &expected);
     }
 }

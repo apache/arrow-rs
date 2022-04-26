@@ -38,7 +38,12 @@
 //!
 //! let file = File::open("test/data/basic.json").unwrap();
 //!
-//! let mut json = json::Reader::new(BufReader::new(file), Arc::new(schema), 1024, None);
+//! let mut json = json::Reader::new(
+//!    BufReader::new(file),
+//!    Arc::new(schema),
+//!    json::reader::DecoderOptions::new(),
+//! );
+//!
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 
@@ -55,6 +60,7 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
 use crate::util::bit_util;
+use crate::util::reader_parser::Parser;
 use crate::{array::*, buffer::Buffer};
 
 #[derive(Debug, Clone)]
@@ -549,12 +555,15 @@ where
     generate_schema(field_types)
 }
 
-/// JSON values to Arrow record batch decoder. Decoder's next_batch method takes a JSON Value
-/// iterator as input and outputs Arrow record batch.
+/// JSON values to Arrow record batch decoder.
+///
+/// A [`Decoder`] decodes arbitrary streams of [`serde_json::Value`]s and
+/// converts them to [`RecordBatch`]es. To decode JSON formatted files,
+/// see [`Reader`].
 ///
 /// # Examples
 /// ```
-/// use arrow::json::reader::{Decoder, ValueIter, infer_json_schema};
+/// use arrow::json::reader::{Decoder, DecoderOptions, ValueIter, infer_json_schema};
 /// use std::fs::File;
 /// use std::io::{BufReader, Seek, SeekFrom};
 /// use std::sync::Arc;
@@ -562,8 +571,9 @@ where
 /// let mut reader =
 ///     BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
 /// let inferred_schema = infer_json_schema(&mut reader, None).unwrap();
-/// let batch_size = 1024;
-/// let decoder = Decoder::new(Arc::new(inferred_schema), batch_size, None);
+/// let options = DecoderOptions::new()
+///     .with_batch_size(1024);
+/// let decoder = Decoder::new(Arc::new(inferred_schema), options);
 ///
 /// // seek back to start so that the original file is usable again
 /// reader.seek(SeekFrom::Start(0)).unwrap();
@@ -576,31 +586,70 @@ where
 pub struct Decoder {
     /// Explicit schema for the JSON file
     schema: SchemaRef,
+    /// This is a collection of options for json decoder
+    options: DecoderOptions,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+/// Options for JSON decoding
+pub struct DecoderOptions {
+    /// Batch size (number of records to load each time), defaults to 1024 records
+    batch_size: usize,
     /// Optional projection for which columns to load (case-sensitive names)
     projection: Option<Vec<String>>,
-    /// Batch size (number of records to load each time)
-    batch_size: usize,
+    /// optional HashMap of column name to its format string
+    format_strings: Option<HashMap<String, String>>,
+}
+
+impl Default for DecoderOptions {
+    fn default() -> Self {
+        Self {
+            batch_size: 1024,
+            projection: None,
+            format_strings: None,
+        }
+    }
+}
+
+impl DecoderOptions {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Set the batch size (number of records to load at one time)
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.batch_size = batch_size;
+        self
+    }
+
+    /// Set the reader's column projection
+    pub fn with_projection(mut self, projection: Vec<String>) -> Self {
+        self.projection = Some(projection);
+        self
+    }
+
+    /// Set the decoder's format Strings param
+    pub fn with_format_strings(
+        mut self,
+        format_strings: HashMap<String, String>,
+    ) -> Self {
+        self.format_strings = Some(format_strings);
+        self
+    }
 }
 
 impl Decoder {
-    /// Create a new JSON decoder from any value that implements the `Iterator<Item=Result<Value>>`
-    /// trait.
-    pub fn new(
-        schema: SchemaRef,
-        batch_size: usize,
-        projection: Option<Vec<String>>,
-    ) -> Self {
-        Self {
-            schema,
-            projection,
-            batch_size,
-        }
+    /// Create a new JSON decoder from some value that implements an
+    /// iterator over [`serde_json::Value`]s (aka implements the
+    /// `Iterator<Item=Result<Value>>` trait).
+    pub fn new(schema: SchemaRef, options: DecoderOptions) -> Self {
+        Self { schema, options }
     }
 
     /// Returns the schema of the reader, useful for getting the schema without reading
     /// record batches
     pub fn schema(&self) -> SchemaRef {
-        match &self.projection {
+        match &self.options.projection {
             Some(projection) => {
                 let fields = self.schema.fields();
                 let projected_fields: Vec<Field> = fields
@@ -620,14 +669,18 @@ impl Decoder {
         }
     }
 
-    /// Read the next batch of records
+    /// Read the next batch of [`serde_json::Value`] records from the
+    /// interator into a [`RecordBatch`].
+    ///
+    /// Returns `None` if the input iterator is exhausted.
     pub fn next_batch<I>(&self, value_iter: &mut I) -> Result<Option<RecordBatch>>
     where
         I: Iterator<Item = Result<Value>>,
     {
-        let mut rows: Vec<Value> = Vec::with_capacity(self.batch_size);
+        let batch_size = self.options.batch_size;
+        let mut rows: Vec<Value> = Vec::with_capacity(batch_size);
 
-        for value in value_iter.by_ref().take(self.batch_size) {
+        for value in value_iter.by_ref().take(batch_size) {
             let v = value?;
             match v {
                 Value::Object(_) => rows.push(v),
@@ -645,7 +698,7 @@ impl Decoder {
         }
 
         let rows = &rows[..];
-        let projection = self.projection.clone().unwrap_or_default();
+        let projection = self.options.projection.clone().unwrap_or_default();
         let arrays = self.build_struct_array(rows, self.schema.fields(), &projection);
 
         let projected_fields: Vec<Field> = if projection.is_empty() {
@@ -913,7 +966,7 @@ impl Decoder {
     }
 
     #[allow(clippy::unnecessary_wraps)]
-    fn build_primitive_array<T: ArrowPrimitiveType>(
+    fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
         &self,
         rows: &[Value],
         col_name: &str,
@@ -922,20 +975,30 @@ impl Decoder {
         T: ArrowNumericType,
         T::Native: num::NumCast,
     {
+        let format_string = self
+            .options
+            .format_strings
+            .as_ref()
+            .and_then(|fmts| fmts.get(col_name));
         Ok(Arc::new(
             rows.iter()
                 .map(|row| {
-                    row.get(&col_name)
-                        .and_then(|value| {
-                            if value.is_i64() {
-                                value.as_i64().map(num::cast::cast)
-                            } else if value.is_u64() {
-                                value.as_u64().map(num::cast::cast)
-                            } else {
-                                value.as_f64().map(num::cast::cast)
+                    row.get(&col_name).and_then(|value| {
+                        if value.is_i64() {
+                            value.as_i64().and_then(num::cast::cast)
+                        } else if value.is_u64() {
+                            value.as_u64().and_then(num::cast::cast)
+                        } else if value.is_string() {
+                            match format_string {
+                                Some(fmt) => {
+                                    T::parse_formatted(value.as_str().unwrap(), fmt)
+                                }
+                                None => T::parse(value.as_str().unwrap()),
                             }
-                        })
-                        .flatten()
+                        } else {
+                            value.as_f64().and_then(num::cast::cast)
+                        }
+                    })
                 })
                 .collect::<PrimitiveArray<T>>(),
         ))
@@ -1535,13 +1598,8 @@ impl<R: Read> Reader<R> {
     ///
     /// If reading a `File`, you can customise the Reader, such as to enable schema
     /// inference, use `ReaderBuilder`.
-    pub fn new(
-        reader: R,
-        schema: SchemaRef,
-        batch_size: usize,
-        projection: Option<Vec<String>>,
-    ) -> Self {
-        Self::from_buf_reader(BufReader::new(reader), schema, batch_size, projection)
+    pub fn new(reader: R, schema: SchemaRef, options: DecoderOptions) -> Self {
+        Self::from_buf_reader(BufReader::new(reader), schema, options)
     }
 
     /// Create a new JSON Reader from a `BufReader<R: Read>`
@@ -1550,12 +1608,11 @@ impl<R: Read> Reader<R> {
     pub fn from_buf_reader(
         reader: BufReader<R>,
         schema: SchemaRef,
-        batch_size: usize,
-        projection: Option<Vec<String>>,
+        options: DecoderOptions,
     ) -> Self {
         Self {
             reader,
-            decoder: Decoder::new(schema, batch_size, projection),
+            decoder: Decoder::new(schema, options),
         }
     }
 
@@ -1574,7 +1631,7 @@ impl<R: Read> Reader<R> {
 }
 
 /// JSON file reader builder
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ReaderBuilder {
     /// Optional schema for the JSON file
     ///
@@ -1585,23 +1642,8 @@ pub struct ReaderBuilder {
     ///
     /// If a number is not provided, all the records are read.
     max_records: Option<usize>,
-    /// Batch size (number of records to load each time)
-    ///
-    /// The default batch size when using the `ReaderBuilder` is 1024 records
-    batch_size: usize,
-    /// Optional projection for which columns to load (zero-based column indices)
-    projection: Option<Vec<String>>,
-}
-
-impl Default for ReaderBuilder {
-    fn default() -> Self {
-        Self {
-            schema: None,
-            max_records: None,
-            batch_size: 1024,
-            projection: None,
-        }
-    }
+    /// Options for json decoder
+    options: DecoderOptions,
 }
 
 impl ReaderBuilder {
@@ -1648,13 +1690,22 @@ impl ReaderBuilder {
 
     /// Set the batch size (number of records to load at one time)
     pub fn with_batch_size(mut self, batch_size: usize) -> Self {
-        self.batch_size = batch_size;
+        self.options = self.options.with_batch_size(batch_size);
         self
     }
 
     /// Set the reader's column projection
     pub fn with_projection(mut self, projection: Vec<String>) -> Self {
-        self.projection = Some(projection);
+        self.options = self.options.with_projection(projection);
+        self
+    }
+
+    /// Set the decoder's format Strings param
+    pub fn with_format_strings(
+        mut self,
+        format_strings: HashMap<String, String>,
+    ) -> Self {
+        self.options = self.options.with_format_strings(format_strings);
         self
     }
 
@@ -1674,12 +1725,7 @@ impl ReaderBuilder {
             )?),
         };
 
-        Ok(Reader::from_buf_reader(
-            buf_reader,
-            schema,
-            self.batch_size,
-            self.projection,
-        ))
+        Ok(Reader::from_buf_reader(buf_reader, schema, self.options))
     }
 }
 
@@ -1711,7 +1757,7 @@ mod tests {
             .unwrap();
         let batch = reader.next().unwrap().unwrap();
 
-        assert_eq!(4, batch.num_columns());
+        assert_eq!(5, batch.num_columns());
         assert_eq!(12, batch.num_rows());
 
         let schema = reader.schema();
@@ -1832,8 +1878,7 @@ mod tests {
         let mut reader: Reader<File> = Reader::new(
             File::open("test/data/basic.json").unwrap(),
             Arc::new(schema.clone()),
-            1024,
-            None,
+            DecoderOptions::new(),
         );
         let reader_schema = reader.schema();
         assert_eq!(reader_schema, Arc::new(schema));
@@ -1871,6 +1916,37 @@ mod tests {
     }
 
     #[test]
+    fn test_json_format_strings_for_date() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("e", DataType::Date32, false)]));
+        let e = schema.column_with_name("e").unwrap();
+        assert_eq!(&DataType::Date32, e.1.data_type());
+        let mut fmts = HashMap::new();
+        let date_format = "%Y-%m-%d".to_string();
+        fmts.insert("e".to_string(), date_format.clone());
+
+        let mut reader: Reader<File> = Reader::new(
+            File::open("test/data/basic.json").unwrap(),
+            schema.clone(),
+            DecoderOptions::new().with_format_strings(fmts),
+        );
+        let reader_schema = reader.schema();
+        assert_eq!(reader_schema, schema);
+        let batch = reader.next().unwrap().unwrap();
+
+        let ee = batch
+            .column(e.0)
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .unwrap();
+        let dt = Date32Type::parse_formatted("1970-1-2", &date_format).unwrap();
+        assert_eq!(dt, ee.value(0));
+        let dt = Date32Type::parse_formatted("1969-12-31", &date_format).unwrap();
+        assert_eq!(dt, ee.value(1));
+        assert!(!ee.is_valid(2));
+    }
+
+    #[test]
     fn test_json_basic_schema_projection() {
         // We test implicit and explicit projection:
         // Implicit: omitting fields from a schema
@@ -1884,8 +1960,7 @@ mod tests {
         let mut reader: Reader<File> = Reader::new(
             File::open("test/data/basic.json").unwrap(),
             Arc::new(schema),
-            1024,
-            Some(vec!["a".to_string(), "c".to_string()]),
+            DecoderOptions::new().with_projection(vec!["a".to_string(), "c".to_string()]),
         );
         let reader_schema = reader.schema();
         let expected_schema = Arc::new(Schema::new(vec![
@@ -2052,7 +2127,8 @@ mod tests {
         file.seek(SeekFrom::Start(0)).unwrap();
 
         let reader = BufReader::new(GzDecoder::new(&file));
-        let mut reader = Reader::from_buf_reader(reader, Arc::new(schema), 64, None);
+        let options = DecoderOptions::new().with_batch_size(64);
+        let mut reader = Reader::from_buf_reader(reader, Arc::new(schema), options);
         let batch_gz = reader.next().unwrap().unwrap();
 
         for batch in vec![batch, batch_gz] {
@@ -3082,6 +3158,37 @@ mod tests {
     }
 
     #[test]
+    fn test_time_from_string() {
+        parse_string_column::<Time64NanosecondType>(4);
+        parse_string_column::<Time64MicrosecondType>(4);
+        parse_string_column::<Time32MillisecondType>(4);
+        parse_string_column::<Time32SecondType>(4);
+    }
+
+    fn parse_string_column<T>(value: T::Native)
+    where
+        T: ArrowPrimitiveType,
+    {
+        let schema = Schema::new(vec![Field::new("d", T::DATA_TYPE, true)]);
+
+        let builder = ReaderBuilder::new()
+            .with_schema(Arc::new(schema))
+            .with_batch_size(64);
+        let mut reader: Reader<File> = builder
+            .build::<File>(File::open("test/data/basic_nulls.json").unwrap())
+            .unwrap();
+
+        let batch = reader.next().unwrap().unwrap();
+        let dd = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap();
+        assert_eq!(value, dd.value(1));
+        assert!(!dd.is_valid(2));
+    }
+
+    #[test]
     fn test_json_read_nested_list() {
         let schema = Schema::new(vec![Field::new(
             "c1",
@@ -3093,7 +3200,7 @@ mod tests {
             true,
         )]);
 
-        let decoder = Decoder::new(Arc::new(schema), 1024, None);
+        let decoder = Decoder::new(Arc::new(schema), DecoderOptions::new());
         let batch = decoder
             .next_batch(
                 &mut vec![
@@ -3128,7 +3235,7 @@ mod tests {
             true,
         )]);
 
-        let decoder = Decoder::new(Arc::new(schema), 1024, None);
+        let decoder = Decoder::new(Arc::new(schema), DecoderOptions::new());
         let batch = decoder
             .next_batch(
                 // NOTE: total struct element count needs to be greater than
@@ -3157,7 +3264,7 @@ mod tests {
     #[test]
     fn test_json_read_binary_structs() {
         let schema = Schema::new(vec![Field::new("c1", DataType::Binary, true)]);
-        let decoder = Decoder::new(Arc::new(schema), 1024, None);
+        let decoder = Decoder::new(Arc::new(schema), DecoderOptions::new());
         let batch = decoder
             .next_batch(
                 &mut vec![
@@ -3200,7 +3307,7 @@ mod tests {
         let mut sum_a = 0;
         for batch in reader {
             let batch = batch.unwrap();
-            assert_eq!(4, batch.num_columns());
+            assert_eq!(5, batch.num_columns());
             sum_num_rows += batch.num_rows();
             num_batches += 1;
             let batch_schema = batch.schema();
@@ -3215,5 +3322,13 @@ mod tests {
         assert_eq!(12, sum_num_rows);
         assert_eq!(3, num_batches);
         assert_eq!(100000000000011, sum_a);
+    }
+
+    #[test]
+    fn test_options_clone() {
+        // ensure options have appropriate derivation
+        let options = DecoderOptions::new().with_batch_size(64);
+        let cloned = options.clone();
+        assert_eq!(options, cloned);
     }
 }

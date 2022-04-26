@@ -19,19 +19,20 @@
 
 # Apache Arrow Official Native Rust Implementation
 
-[![Crates.io](https://img.shields.io/crates/v/arrow.svg)](https://crates.io/crates/arrow)
+[![crates.io](https://img.shields.io/crates/v/arrow.svg)](https://crates.io/crates/arrow)
+[![docs.rs](https://img.shields.io/docsrs/arrow.svg)](https://docs.rs/arrow/latest/arrow/)
 
-This crate contains the official Native Rust implementation of [Apache Arrow][arrow] in memory format, governed by the Apache Software Foundation.
+This crate contains the official Native Rust implementation of [Apache Arrow][arrow] in memory format, governed by the Apache Software Foundation. Additional details can be found on [crates.io](https://crates.io/crates/arrow), [docs.rs](https://docs.rs/arrow/latest/arrow/) and [examples](https://github.com/apache/arrow-rs/tree/master/arrow/examples).
 
 ## Rust Version Compatibility
 
-This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
+This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions.
 
 ## Versioning / Releases
 
 The arrow crate follows the [SemVer standard](https://doc.rust-lang.org/cargo/reference/semver.html) defined by Cargo and works well within the Rust crate ecosystem.
 
-However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `11.1.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
+However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `12.0.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
 
 ## Features
 

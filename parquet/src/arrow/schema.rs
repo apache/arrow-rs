@@ -34,8 +34,8 @@ use crate::file::{metadata::KeyValue, properties::WriterProperties};
 use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type, TypePtr};
 use crate::{
     basic::{
-        ConvertedType, DecimalType, IntType, LogicalType, Repetition, TimeType,
-        TimeUnit as ParquetTimeUnit, TimestampType, Type as PhysicalType,
+        ConvertedType, LogicalType, Repetition,
+        TimeUnit as ParquetTimeUnit, Type as PhysicalType,
     },
     errors::ParquetError,
 };
@@ -45,7 +45,7 @@ use crate::{
 /// to converting the Parquet schema column-wise
 pub fn parquet_to_arrow_schema(
     parquet_schema: &SchemaDescriptor,
-    key_value_metadata: &Option<Vec<KeyValue>>,
+    key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<Schema> {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
     metadata
@@ -65,7 +65,7 @@ pub fn parquet_to_arrow_schema(
 pub fn parquet_to_arrow_schema_by_root_columns<T>(
     parquet_schema: &SchemaDescriptor,
     column_indices: T,
-    key_value_metadata: &Option<Vec<KeyValue>>,
+    key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<Schema>
 where
     T: IntoIterator<Item = usize>,
@@ -116,7 +116,7 @@ where
 pub fn parquet_to_arrow_schema_by_columns<T>(
     parquet_schema: &SchemaDescriptor,
     column_indices: T,
-    key_value_metadata: &Option<Vec<KeyValue>>,
+    key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<Schema>
 where
     T: IntoIterator<Item = usize>,
@@ -274,7 +274,7 @@ pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
 }
 
 fn parse_key_value_metadata(
-    key_value_metadata: &Option<Vec<KeyValue>>,
+    key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Option<HashMap<String, String>> {
     match key_value_metadata {
         Some(key_values) => {
@@ -324,24 +324,24 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
     // create type from field
     match field.data_type() {
         DataType::Null => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::UNKNOWN(Default::default())))
+            .with_logical_type(Some(LogicalType::Unknown))
             .with_repetition(repetition)
             .build(),
         DataType::Boolean => Type::primitive_type_builder(name, PhysicalType::BOOLEAN)
             .with_repetition(repetition)
             .build(),
         DataType::Int8 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 8,
                 is_signed: true,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::Int16 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 16,
                 is_signed: true,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::Int32 => Type::primitive_type_builder(name, PhysicalType::INT32)
@@ -351,31 +351,31 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             .with_repetition(repetition)
             .build(),
         DataType::UInt8 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 8,
                 is_signed: false,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::UInt16 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 16,
                 is_signed: false,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::UInt32 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 32,
                 is_signed: false,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::UInt64 => Type::primitive_type_builder(name, PhysicalType::INT64)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 64,
                 is_signed: false,
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::Float16 => Err(ArrowError("Float16 arrays not supported".to_string())),
@@ -389,7 +389,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             name,
             PhysicalType::INT64,
         )
-        .with_logical_type(Some(LogicalType::TIMESTAMP(TimestampType {
+        .with_logical_type(Some(LogicalType::Timestamp {
             is_adjusted_to_u_t_c: matches!(zone, Some(z) if !z.as_str().is_empty()),
             unit: match time_unit {
                 TimeUnit::Second => ParquetTimeUnit::MILLIS(Default::default()),
@@ -397,34 +397,34 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 TimeUnit::Microsecond => ParquetTimeUnit::MICROS(Default::default()),
                 TimeUnit::Nanosecond => ParquetTimeUnit::NANOS(Default::default()),
             },
-        })))
+        }))
         .with_repetition(repetition)
         .build(),
         DataType::Date32 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::DATE(Default::default())))
+            .with_logical_type(Some(LogicalType::Date))
             .with_repetition(repetition)
             .build(),
         // date64 is cast to date32
         DataType::Date64 => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::DATE(Default::default())))
+            .with_logical_type(Some(LogicalType::Date))
             .with_repetition(repetition)
             .build(),
         DataType::Time32(_) => Type::primitive_type_builder(name, PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::TIME(TimeType {
+            .with_logical_type(Some(LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
                 unit: ParquetTimeUnit::MILLIS(Default::default()),
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::Time64(unit) => Type::primitive_type_builder(name, PhysicalType::INT64)
-            .with_logical_type(Some(LogicalType::TIME(TimeType {
+            .with_logical_type(Some(LogicalType::Time {
                 is_adjusted_to_u_t_c: false,
                 unit: match unit {
                     TimeUnit::Microsecond => ParquetTimeUnit::MICROS(Default::default()),
                     TimeUnit::Nanosecond => ParquetTimeUnit::NANOS(Default::default()),
                     u => unreachable!("Invalid unit for Time64: {:?}", u),
                 },
-            })))
+            }))
             .with_repetition(repetition)
             .build(),
         DataType::Duration(_) => Err(ArrowError(
@@ -465,17 +465,17 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_repetition(repetition)
                 .with_length(decimal_length_from_precision(*precision) as i32)
-                .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+                .with_logical_type(Some(LogicalType::Decimal {
                     scale: *scale as i32,
                     precision: *precision as i32,
-                })))
+                }))
                 .with_precision(*precision as i32)
                 .with_scale(*scale as i32)
                 .build()
         }
         DataType::Utf8 | DataType::LargeUtf8 => {
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
-                .with_logical_type(Some(LogicalType::STRING(Default::default())))
+                .with_logical_type(Some(LogicalType::String))
                 .with_repetition(repetition)
                 .build()
         }
@@ -487,7 +487,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                         .with_repetition(Repetition::REPEATED)
                         .build()?,
                 )])
-                .with_logical_type(Some(LogicalType::LIST(Default::default())))
+                .with_logical_type(Some(LogicalType::List))
                 .with_repetition(repetition)
                 .build()
         }
@@ -527,7 +527,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                             .with_repetition(Repetition::REPEATED)
                             .build()?,
                     )])
-                    .with_logical_type(Some(LogicalType::MAP(Default::default())))
+                    .with_logical_type(Some(LogicalType::Map))
                     .with_repetition(repetition)
                     .build()
             } else {
@@ -662,13 +662,17 @@ impl ParquetTypeConverter<'_> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_int32(&self) -> Result<DataType> {
         match (
             self.schema.get_basic_info().logical_type(),
             self.schema.get_basic_info().converted_type(),
         ) {
             (None, ConvertedType::NONE) => Ok(DataType::Int32),
-            (Some(LogicalType::INTEGER(t)), _) => match (t.bit_width, t.is_signed) {
+            (Some(ref t @ LogicalType::Integer {
+                bit_width,
+                is_signed,
+            }), _) => match (bit_width, is_signed) {
                 (8, true) => Ok(DataType::Int8),
                 (16, true) => Ok(DataType::Int16),
                 (32, true) => Ok(DataType::Int32),
@@ -677,18 +681,20 @@ impl ParquetTypeConverter<'_> {
                 (32, false) => Ok(DataType::UInt32),
                 _ => Err(ArrowError(format!(
                     "Cannot create INT32 physical type from {:?}",
-                    t
+                    t,
                 ))),
             },
-            (Some(LogicalType::DECIMAL(_)), _) => Ok(self.to_decimal()),
-            (Some(LogicalType::DATE(_)), _) => Ok(DataType::Date32),
-            (Some(LogicalType::TIME(t)), _) => match t.unit {
+            (Some(LogicalType::Decimal {..}), _) => Ok(self.to_decimal()),
+            (Some(LogicalType::Date), _) => Ok(DataType::Date32),
+            (Some(LogicalType::Time { unit, .. }), _) => match unit {
                 ParquetTimeUnit::MILLIS(_) => Ok(DataType::Time32(TimeUnit::Millisecond)),
                 _ => Err(ArrowError(format!(
                     "Cannot create INT32 physical type from {:?}",
-                    t.unit
+                    unit
                 ))),
             },
+            // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#unknown-always-null
+            (Some(LogicalType::Unknown), _) => Ok(DataType::Null),
             (None, ConvertedType::UINT_8) => Ok(DataType::UInt8),
             (None, ConvertedType::UINT_16) => Ok(DataType::UInt16),
             (None, ConvertedType::UINT_32) => Ok(DataType::UInt32),
@@ -707,32 +713,33 @@ impl ParquetTypeConverter<'_> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_int64(&self) -> Result<DataType> {
         match (
             self.schema.get_basic_info().logical_type(),
             self.schema.get_basic_info().converted_type(),
         ) {
             (None, ConvertedType::NONE) => Ok(DataType::Int64),
-            (Some(LogicalType::INTEGER(t)), _) if t.bit_width == 64 => {
-                match t.is_signed {
+            (Some(LogicalType::Integer { bit_width, is_signed }), _) if bit_width == 64 => {
+                match is_signed {
                     true => Ok(DataType::Int64),
                     false => Ok(DataType::UInt64),
                 }
             }
-            (Some(LogicalType::TIME(t)), _) => match t.unit {
+            (Some(LogicalType::Time { unit, .. }), _) => match unit {
                 ParquetTimeUnit::MILLIS(_) => Err(ArrowError(
                     "Cannot create INT64 from MILLIS time unit".to_string(),
                 )),
                 ParquetTimeUnit::MICROS(_) => Ok(DataType::Time64(TimeUnit::Microsecond)),
                 ParquetTimeUnit::NANOS(_) => Ok(DataType::Time64(TimeUnit::Nanosecond)),
             },
-            (Some(LogicalType::TIMESTAMP(t)), _) => Ok(DataType::Timestamp(
-                match t.unit {
+            (Some(LogicalType::Timestamp { is_adjusted_to_u_t_c, unit }), _) => Ok(DataType::Timestamp(
+                match unit {
                     ParquetTimeUnit::MILLIS(_) => TimeUnit::Millisecond,
                     ParquetTimeUnit::MICROS(_) => TimeUnit::Microsecond,
                     ParquetTimeUnit::NANOS(_) => TimeUnit::Nanosecond,
                 },
-                if t.is_adjusted_to_u_t_c {
+                if is_adjusted_to_u_t_c {
                     Some("UTC".to_string())
                 } else {
                     None
@@ -749,7 +756,7 @@ impl ParquetTypeConverter<'_> {
             (None, ConvertedType::TIMESTAMP_MICROS) => {
                 Ok(DataType::Timestamp(TimeUnit::Microsecond, None))
             }
-            (Some(LogicalType::DECIMAL(_)), _) => Ok(self.to_decimal()),
+            (Some(LogicalType::Decimal {..}), _) => Ok(self.to_decimal()),
             (None, ConvertedType::DECIMAL) => Ok(self.to_decimal()),
             (logical, converted) => Err(ArrowError(format!(
                 "Unable to convert parquet INT64 logical type {:?} or converted type {}",
@@ -758,12 +765,13 @@ impl ParquetTypeConverter<'_> {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_fixed_len_byte_array(&self) -> Result<DataType> {
         match (
             self.schema.get_basic_info().logical_type(),
             self.schema.get_basic_info().converted_type(),
         ) {
-            (Some(LogicalType::DECIMAL(_)), _) => Ok(self.to_decimal()),
+            (Some(LogicalType::Decimal {..}), _) => Ok(self.to_decimal()),
             (None, ConvertedType::DECIMAL) => Ok(self.to_decimal()),
             (None, ConvertedType::INTERVAL) => {
                 // There is currently no reliable way of determining which IntervalUnit
@@ -796,12 +804,13 @@ impl ParquetTypeConverter<'_> {
         )
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn from_byte_array(&self) -> Result<DataType> {
         match (self.schema.get_basic_info().logical_type(), self.schema.get_basic_info().converted_type()) {
-            (Some(LogicalType::STRING(_)), _) => Ok(DataType::Utf8),
-            (Some(LogicalType::JSON(_)), _) => Ok(DataType::Binary),
-            (Some(LogicalType::BSON(_)), _) => Ok(DataType::Binary),
-            (Some(LogicalType::ENUM(_)), _) => Ok(DataType::Binary),
+            (Some(LogicalType::String), _) => Ok(DataType::Utf8),
+            (Some(LogicalType::Json), _) => Ok(DataType::Binary),
+            (Some(LogicalType::Bson), _) => Ok(DataType::Binary),
+            (Some(LogicalType::Enum), _) => Ok(DataType::Binary),
             (None, ConvertedType::NONE) => Ok(DataType::Binary),
             (None, ConvertedType::JSON) => Ok(DataType::Binary),
             (None, ConvertedType::BSON) => Ok(DataType::Binary),
@@ -824,8 +833,8 @@ impl ParquetTypeConverter<'_> {
             self.schema.get_basic_info().logical_type(),
             self.schema.get_basic_info().converted_type(),
         ) {
-            (Some(LogicalType::LIST(_)), _) | (_, ConvertedType::LIST) => self.to_list(),
-            (Some(LogicalType::MAP(_)), _)
+            (Some(LogicalType::List), _) | (_, ConvertedType::LIST) => self.to_list(),
+            (Some(LogicalType::Map), _)
             | (_, ConvertedType::MAP)
             | (_, ConvertedType::MAP_KEY_VALUE) => self.to_map(),
             (_, _) => {
@@ -1012,7 +1021,7 @@ impl ParquetTypeConverter<'_> {
                         Box::new(Field::new(
                             key_item.name(),
                             DataType::Struct(vec![key, value]),
-                            false,
+                            self.schema.is_optional(),
                         )),
                         false, // There is no information to tell if keys are sorted
                     ))),
@@ -1067,7 +1076,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
 
         let arrow_fields = vec![
             Field::new("boolean", DataType::Boolean, false),
@@ -1099,7 +1108,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
 
         let arrow_fields = vec![
             Field::new("binary", DataType::Binary, false),
@@ -1121,7 +1130,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
 
         let arrow_fields = vec![
             Field::new("boolean", DataType::Boolean, false),
@@ -1132,7 +1141,7 @@ mod tests {
         let converted_arrow_schema = parquet_to_arrow_schema_by_columns(
             &parquet_schema,
             vec![0usize, 1usize],
-            &None,
+            None,
         )
         .unwrap();
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
@@ -1336,7 +1345,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
@@ -1415,7 +1424,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
@@ -1494,7 +1503,7 @@ mod tests {
                             Field::new("str", DataType::Utf8, false),
                             Field::new("num", DataType::Int32, false),
                         ]),
-                        false,
+                        true,
                     )),
                     false,
                 ),
@@ -1519,7 +1528,7 @@ mod tests {
                             Field::new("key", DataType::Utf8, false),
                             Field::new("value", DataType::Int32, true),
                         ]),
-                        false,
+                        true,
                     )),
                     false,
                 ),
@@ -1531,7 +1540,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
@@ -1569,7 +1578,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
@@ -1619,7 +1628,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![0, 3, 4], &None)
+            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![0, 3, 4], None)
                 .unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
@@ -1670,7 +1679,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![3, 4, 0], &None)
+            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![3, 4, 0], None)
                 .unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
@@ -1726,7 +1735,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &None).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
@@ -1957,7 +1966,7 @@ mod tests {
 
         let key_value_metadata = vec![
             KeyValue::new("foo".to_owned(), Some("bar".to_owned())),
-            KeyValue::new("baz".to_owned(), None)
+            KeyValue::new("baz".to_owned(), None),
         ];
 
         let mut expected_metadata: HashMap<String, String> = HashMap::new();
@@ -1965,7 +1974,7 @@ mod tests {
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
         let converted_arrow_schema =
-            parquet_to_arrow_schema(&parquet_schema, &Some(key_value_metadata)).unwrap();
+            parquet_to_arrow_schema(&parquet_schema, Some(&key_value_metadata)).unwrap();
 
         assert_eq!(converted_arrow_schema.metadata(), &expected_metadata);
     }
@@ -2090,7 +2099,7 @@ mod tests {
                                     true,
                                 ),
                             ]),
-                            false,
+                            true,
                         )),
                         false, // fails to roundtrip keys_sorted
                     ),
@@ -2113,11 +2122,34 @@ mod tests {
                                     true,
                                 ),
                             ]),
-                            false,
+                            true,
                         )),
                         false, // fails to roundtrip keys_sorted
                     ),
                     true,
+                ),
+                Field::new(
+                    "c41",
+                    DataType::Map(
+                        Box::new(Field::new(
+                            "my_entries",
+                            DataType::Struct(vec![
+                                Field::new("my_key", DataType::Utf8, false),
+                                Field::new(
+                                    "my_value",
+                                    DataType::List(Box::new(Field::new(
+                                        "item",
+                                        DataType::Utf8,
+                                        true,
+                                    ))),
+                                    true,
+                                ),
+                            ]),
+                            false,
+                        )),
+                        false, // fails to roundtrip keys_sorted
+                    ),
+                    false,
                 ),
             ],
             metadata,

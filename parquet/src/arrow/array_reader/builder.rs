@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType as ArrowType, Field, IntervalUnit, Schema, SchemaRef};
 
+use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::{
     make_byte_array_dictionary_reader, make_byte_array_reader, ArrayReader,
     ComplexObjectArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
@@ -37,7 +38,7 @@ use crate::data_type::{
     Int96Type,
 };
 use crate::errors::ParquetError::ArrowError;
-use crate::errors::{ParquetError, Result};
+use crate::errors::{Result};
 use crate::schema::types::{ColumnDescriptor, ColumnPath, SchemaDescPtr, Type, TypePtr};
 use crate::schema::visitor::TypeVisitor;
 
@@ -62,10 +63,6 @@ where
 
         let root = parquet_schema.get_column_root_ptr(c);
         filtered_root_names.insert(root.name().to_string());
-    }
-
-    if leaves.is_empty() {
-        return Err(general_err!("Can't build array reader without columns!"));
     }
 
     // Only pass root fields that take part in the projection
@@ -152,9 +149,10 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             )?;
 
             if cur_type.get_basic_info().repetition() == Repetition::REPEATED {
-                Err(ArrowError(
-                    "Reading repeated field is not supported yet!".to_string(),
-                ))
+                Err(ArrowError(format!(
+                    "Reading repeated field ({:?}) is not supported yet!",
+                    cur_type.name()
+                )))
             } else {
                 Ok(Some(reader))
             }
@@ -189,9 +187,10 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             if cur_type.get_basic_info().has_repetition()
                 && cur_type.get_basic_info().repetition() == Repetition::REPEATED
             {
-                Err(ArrowError(
-                    "Reading repeated field is not supported yet!".to_string(),
-                ))
+                Err(ArrowError(format!(
+                    "Reading repeated field ({:?}) is not supported yet!",
+                    cur_type.name(),
+                )))
             } else {
                 Ok(Some(reader))
             }
@@ -321,70 +320,71 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
             _ => (),
         }
 
-        let item_reader = self
-            .dispatch(item_type.clone(), &new_context)
-            .unwrap()
-            .unwrap();
+        let reader = self.dispatch(item_type.clone(), &new_context);
+        if let Ok(Some(item_reader)) = reader {
+            let item_reader_type = item_reader.get_data_type().clone();
 
-        let item_reader_type = item_reader.get_data_type().clone();
-
-        match item_reader_type {
-            ArrowType::List(_)
-            | ArrowType::FixedSizeList(_, _)
-            | ArrowType::Dictionary(_, _) => Err(ArrowError(format!(
-                "reading List({:?}) into arrow not supported yet",
-                item_type
-            ))),
-            _ => {
-                // a list is a group type with a single child. The list child's
-                // name comes from the child's field name.
-                // if the child's name is "list" and it has a child, then use this child
-                if list_child.name() == "list" && !list_child.get_fields().is_empty() {
-                    list_child = list_child.get_fields().first().unwrap();
-                }
-                let arrow_type = self
-                    .arrow_schema
-                    .field_with_name(list_type.name())
-                    .ok()
-                    .map(|f| f.data_type().to_owned())
-                    .unwrap_or_else(|| {
-                        ArrowType::List(Box::new(Field::new(
-                            list_child.name(),
-                            item_reader_type.clone(),
-                            list_child.is_optional(),
-                        )))
-                    });
-
-                let list_array_reader: Box<dyn ArrayReader> = match arrow_type {
-                    ArrowType::List(_) => Box::new(ListArrayReader::<i32>::new(
-                        item_reader,
-                        arrow_type,
-                        item_reader_type,
-                        new_context.def_level,
-                        new_context.rep_level,
-                        list_null_def,
-                        list_empty_def,
-                    )),
-                    ArrowType::LargeList(_) => Box::new(ListArrayReader::<i64>::new(
-                        item_reader,
-                        arrow_type,
-                        item_reader_type,
-                        new_context.def_level,
-                        new_context.rep_level,
-                        list_null_def,
-                        list_empty_def,
-                    )),
-
-                    _ => {
-                        return Err(ArrowError(format!(
-                        "creating ListArrayReader with type {:?} should be unreachable",
-                        arrow_type
-                    )))
+            match item_reader_type {
+                ArrowType::List(_)
+                | ArrowType::FixedSizeList(_, _)
+                | ArrowType::Dictionary(_, _) => Err(ArrowError(format!(
+                    "reading List({:?}) into arrow not supported yet",
+                    item_type
+                ))),
+                _ => {
+                    // a list is a group type with a single child. The list child's
+                    // name comes from the child's field name.
+                    // if the child's name is "list" and it has a child, then use this child
+                    if list_child.name() == "list" && !list_child.get_fields().is_empty()
+                    {
+                        list_child = list_child.get_fields().first().unwrap();
                     }
-                };
+                    let arrow_type = self
+                        .arrow_schema
+                        .field_with_name(list_type.name())
+                        .ok()
+                        .map(|f| f.data_type().to_owned())
+                        .unwrap_or_else(|| {
+                            ArrowType::List(Box::new(Field::new(
+                                list_child.name(),
+                                item_reader_type.clone(),
+                                list_child.is_optional(),
+                            )))
+                        });
 
-                Ok(Some(list_array_reader))
+                    let list_array_reader: Box<dyn ArrayReader> = match arrow_type {
+                        ArrowType::List(_) => Box::new(ListArrayReader::<i32>::new(
+                            item_reader,
+                            arrow_type,
+                            item_reader_type,
+                            new_context.def_level,
+                            new_context.rep_level,
+                            list_null_def,
+                            list_empty_def,
+                        )),
+                        ArrowType::LargeList(_) => Box::new(ListArrayReader::<i64>::new(
+                            item_reader,
+                            arrow_type,
+                            item_reader_type,
+                            new_context.def_level,
+                            new_context.rep_level,
+                            list_null_def,
+                            list_empty_def,
+                        )),
+
+                        _ => {
+                            return Err(ArrowError(format!(
+                                "creating ListArrayReader with type {:?} should be unreachable",
+                                arrow_type
+                            )))
+                        }
+                    };
+
+                    Ok(Some(list_array_reader))
+                }
             }
+        } else {
+            reader
         }
     }
 }
@@ -409,10 +409,10 @@ impl<'a> ArrayReaderBuilder {
     fn build_array_reader(&mut self) -> Result<Box<dyn ArrayReader>> {
         let context = ArrayReaderBuilderContext::default();
 
-        self.visit_struct(self.root_schema.clone(), &context)
-            .and_then(|reader_opt| {
-                reader_opt.ok_or_else(|| general_err!("Failed to build array reader!"))
-            })
+        match self.visit_struct(self.root_schema.clone(), &context)? {
+            Some(reader) => Ok(reader),
+            None => Ok(make_empty_array_reader(self.row_groups.num_rows())),
+        }
     }
 
     // Utility functions
@@ -698,7 +698,12 @@ impl<'a> ArrayReaderBuilder {
                         ArrowType::Struct(fields) => {
                             field = fields.iter().find(|f| f.name() == part)
                         }
-                        ArrowType::List(list_field) => field = Some(list_field.as_ref()),
+                        ArrowType::List(list_field) => match list_field.data_type() {
+                            ArrowType::Struct(fields) => {
+                                field = fields.iter().find(|f| f.name() == part)
+                            }
+                            _ => field = Some(list_field.as_ref()),
+                        },
                         _ => field = None,
                     }
                 } else {
@@ -710,14 +715,13 @@ impl<'a> ArrayReaderBuilder {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use super::*;
     use crate::arrow::parquet_to_arrow_schema;
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::util::test_common::get_test_file;
-    use super::*;
+    use std::sync::Arc;
 
     #[test]
     fn test_create_array_reader() {
@@ -730,7 +734,7 @@ mod tests {
             file_metadata.schema_descr(),
             file_metadata.key_value_metadata(),
         )
-            .unwrap();
+        .unwrap();
 
         let array_reader = build_array_reader(
             file_reader.metadata().file_metadata().schema_descr_ptr(),
@@ -738,7 +742,7 @@ mod tests {
             vec![0usize].into_iter(),
             Box::new(file_reader),
         )
-            .unwrap();
+        .unwrap();
 
         // Create arrow types
         let arrow_type = ArrowType::Struct(vec![Field::new(

@@ -188,7 +188,7 @@ impl<W: ParquetWriter> SerializedFileWriter<W> {
                 .iter()
                 .map(|v| v.to_thrift())
                 .collect(),
-            key_value_metadata: self.props.key_value_metadata().to_owned(),
+            key_value_metadata: self.props.key_value_metadata().cloned(),
             created_by: Some(self.props.created_by().to_owned()),
             column_orders: None,
             encryption_algorithm: None,
@@ -541,7 +541,7 @@ mod tests {
 
     use std::{fs::File, io::Cursor};
 
-    use crate::basic::{Compression, Encoding, IntType, LogicalType, Repetition, Type};
+    use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
     use crate::column::page::PageReader;
     use crate::compression::{create_codec, Codec};
     use crate::file::{
@@ -732,10 +732,10 @@ mod tests {
     #[test]
     fn test_file_writer_v2_with_metadata() {
         let file = tempfile::tempfile().unwrap();
-        let field_logical_type = Some(LogicalType::INTEGER(IntType {
+        let field_logical_type = Some(LogicalType::Integer {
             bit_width: 8,
             is_signed: false,
-        }));
+        });
         let field = Arc::new(
             types::Type::primitive_type_builder("col1", Type::INT32)
                 .with_logical_type(field_logical_type.clone())

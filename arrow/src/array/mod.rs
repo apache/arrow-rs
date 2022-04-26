@@ -454,6 +454,7 @@ pub use self::builder::BooleanBuilder;
 pub use self::builder::DecimalBuilder;
 pub use self::builder::FixedSizeBinaryBuilder;
 pub use self::builder::FixedSizeListBuilder;
+pub use self::builder::GenericListBuilder;
 pub use self::builder::GenericStringBuilder;
 pub use self::builder::LargeBinaryBuilder;
 pub use self::builder::LargeListBuilder;

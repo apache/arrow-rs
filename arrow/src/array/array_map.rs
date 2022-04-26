@@ -15,15 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::{StringArray, StructArray};
+use crate::buffer::Buffer;
 use std::any::Any;
 use std::fmt;
 use std::mem;
+use std::sync::Arc;
 
 use super::make_array;
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, ArrayRef,
 };
-use crate::datatypes::{ArrowNativeType, DataType};
+use crate::datatypes::{ArrowNativeType, DataType, Field, ToByteSlice};
 use crate::error::ArrowError;
 
 /// A nested array type where each record is a key-value map.
@@ -151,6 +154,44 @@ impl MapArray {
             values,
             value_offsets,
         })
+    }
+
+    /// Creates map array from provided keys, values and entry_offsets.
+    pub fn new_from_strings<'a>(
+        keys: impl Iterator<Item = &'a str>,
+        values: &dyn Array,
+        entry_offsets: &[u32],
+    ) -> Result<Self, ArrowError> {
+        let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
+        let keys_data = StringArray::from_iter_values(keys);
+
+        let keys_field = Field::new("keys", DataType::Utf8, false);
+        let values_field = Field::new(
+            "values",
+            values.data_type().clone(),
+            values.null_count() > 0,
+        );
+
+        let entry_struct = StructArray::from(vec![
+            (keys_field, Arc::new(keys_data) as ArrayRef),
+            (values_field, make_array(values.data().clone())),
+        ]);
+
+        let map_data_type = DataType::Map(
+            Box::new(Field::new(
+                "entries",
+                entry_struct.data_type().clone(),
+                true,
+            )),
+            false,
+        );
+        let map_data = ArrayData::builder(map_data_type)
+            .len(entry_offsets.len() - 1)
+            .add_buffer(entry_offsets_buffer)
+            .add_child_data(entry_struct.data().clone())
+            .build()?;
+
+        Ok(MapArray::from(map_data))
     }
 }
 
@@ -427,5 +468,55 @@ mod tests {
         let map_array = create_from_buffers();
 
         map_array.value(map_array.len());
+    }
+
+    #[test]
+    fn test_new_from_strings() {
+        let keys = vec!["a", "b", "c", "d", "e", "f", "g", "h"];
+        let values_data = UInt32Array::from(vec![0u32, 10, 20, 30, 40, 50, 60, 70]);
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[a, b, c], [d, e, f], [g, h]]
+        let entry_offsets = [0, 3, 6, 8];
+
+        let map_array = MapArray::new_from_strings(
+            keys.clone().into_iter(),
+            &values_data,
+            &entry_offsets,
+        )
+        .unwrap();
+
+        let values = map_array.values();
+        assert_eq!(
+            &values_data,
+            values.as_any().downcast_ref::<UInt32Array>().unwrap()
+        );
+        assert_eq!(DataType::UInt32, map_array.value_type());
+        assert_eq!(3, map_array.len());
+        assert_eq!(0, map_array.null_count());
+        assert_eq!(6, map_array.value_offsets()[2]);
+        assert_eq!(2, map_array.value_length(2));
+
+        let key_array = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        let value_array = Arc::new(UInt32Array::from(vec![0u32, 10, 20])) as ArrayRef;
+        let keys_field = Field::new("keys", DataType::Utf8, false);
+        let values_field = Field::new("values", DataType::UInt32, false);
+        let struct_array =
+            StructArray::from(vec![(keys_field, key_array), (values_field, value_array)]);
+        assert_eq!(
+            struct_array,
+            StructArray::from(map_array.value(0).data().clone())
+        );
+        assert_eq!(
+            &struct_array,
+            unsafe { map_array.value_unchecked(0) }
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .unwrap()
+        );
+        for i in 0..3 {
+            assert!(map_array.is_valid(i));
+            assert!(!map_array.is_null(i));
+        }
     }
 }

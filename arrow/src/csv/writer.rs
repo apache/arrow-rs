@@ -221,7 +221,7 @@ impl<W: Write> Writer<W> {
                         .to_string()
                 }
                 DataType::Timestamp(time_unit, time_zone) => {
-                    self.handle_timestamp(time_unit, time_zone, row_index, col)?
+                    self.handle_timestamp(time_unit, time_zone.as_ref(), row_index, col)?
                 }
                 DataType::Decimal(..) => make_string_from_decimal(col, row_index)?,
                 t => {
@@ -242,7 +242,7 @@ impl<W: Write> Writer<W> {
     fn handle_timestamp(
         &self,
         time_unit: &TimeUnit,
-        _time_zone: &Option<String>,
+        _time_zone: Option<&String>,
         row_index: usize,
         col: &ArrayRef,
     ) -> Result<String> {
@@ -280,7 +280,7 @@ impl<W: Write> Writer<W> {
     fn handle_timestamp(
         &self,
         time_unit: &TimeUnit,
-        time_zone: &Option<String>,
+        time_zone: Option<&String>,
         row_index: usize,
         col: &ArrayRef,
     ) -> Result<String> {

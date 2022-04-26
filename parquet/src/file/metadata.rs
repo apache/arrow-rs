@@ -139,13 +139,13 @@ impl FileMetaData {
     /// ```shell
     /// parquet-mr version 1.8.0 (build 0fda28af84b9746396014ad6a415b90592a98b3b)
     /// ```
-    pub fn created_by(&self) -> &Option<String> {
-        &self.created_by
+    pub fn created_by(&self) -> Option<&str> {
+        self.created_by.as_deref()
     }
 
     /// Returns key_value_metadata of this file.
-    pub fn key_value_metadata(&self) -> &Option<Vec<KeyValue>> {
-        &self.key_value_metadata
+    pub fn key_value_metadata(&self) -> Option<&Vec<KeyValue>> {
+        self.key_value_metadata.as_ref()
     }
 
     /// Returns Parquet ['Type`] that describes schema in this file.

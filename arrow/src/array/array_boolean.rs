@@ -350,6 +350,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "BooleanArray data should contain a single buffer only \
                                (values buffer)")]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_boolean_array_invalid_buffer_len() {
         let data = unsafe {
             ArrayData::builder(DataType::Boolean)

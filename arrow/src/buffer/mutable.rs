@@ -16,9 +16,10 @@
 // under the License.
 
 use super::Buffer;
+use crate::alloc::Deallocation;
 use crate::{
     alloc,
-    bytes::{Bytes, Deallocation},
+    bytes::Bytes,
     datatypes::{ArrowNativeType, ToByteSlice},
     util::bit_util,
 };
@@ -266,7 +267,7 @@ impl MutableBuffer {
     #[inline]
     pub(super) fn into_buffer(self) -> Buffer {
         let bytes = unsafe {
-            Bytes::new(self.data, self.len, Deallocation::Native(self.capacity))
+            Bytes::new(self.data, self.len, Deallocation::Arrow(self.capacity))
         };
         std::mem::forget(self);
         Buffer::from_bytes(bytes)

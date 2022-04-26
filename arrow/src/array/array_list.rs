@@ -239,15 +239,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 
         let values = make_array(values);
         let value_offsets = data.buffers()[0].as_ptr();
-
         let value_offsets = unsafe { RawPtrBox::<OffsetSize>::new(value_offsets) };
-        unsafe {
-            if !(*value_offsets.as_ptr().offset(0)).is_zero() {
-                return Err(ArrowError::InvalidArgumentError(String::from(
-                    "offsets do not start at zero",
-                )));
-            }
-        }
         Ok(Self {
             data,
             values,
@@ -525,6 +517,32 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_list_array() {
+        // Construct an empty value array
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(0)
+            .add_buffer(Buffer::from([]))
+            .build()
+            .unwrap();
+
+        // Construct an empty offset buffer
+        let value_offsets = Buffer::from([]);
+
+        // Construct a list array from the above two
+        let list_data_type =
+            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+        let list_data = ArrayData::builder(list_data_type)
+            .len(0)
+            .add_buffer(value_offsets)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+
+        let list_array = ListArray::from(list_data);
+        assert_eq!(list_array.len(), 0)
+    }
+
+    #[test]
     fn test_list_array() {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
@@ -777,6 +795,9 @@ mod tests {
     #[should_panic(
         expected = "FixedSizeListArray child array length should be a multiple of 3"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_fixed_size_list_array_unequal_children() {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
@@ -1065,6 +1086,9 @@ mod tests {
     #[should_panic(
         expected = "ListArray data should contain a single buffer only (value offsets)"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_list_array_invalid_buffer_len() {
         let value_data = unsafe {
             ArrayData::builder(DataType::Int32)
@@ -1087,6 +1111,9 @@ mod tests {
     #[should_panic(
         expected = "ListArray should contain a single child array (values array)"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_list_array_invalid_child_array_len() {
         let value_offsets = Buffer::from_slice_ref(&[0, 2, 5, 7]);
         let list_data_type =
@@ -1101,8 +1128,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "offsets do not start at zero")]
-    fn test_list_array_invalid_value_offset_start() {
+    fn test_list_array_offsets_need_not_start_at_zero() {
         let value_data = ArrayData::builder(DataType::Int32)
             .len(8)
             .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]))
@@ -1119,7 +1145,11 @@ mod tests {
             .add_child_data(value_data)
             .build()
             .unwrap();
-        drop(ListArray::from(list_data));
+
+        let list_array = ListArray::from(list_data);
+        assert_eq!(list_array.value_length(0), 0);
+        assert_eq!(list_array.value_length(1), 3);
+        assert_eq!(list_array.value_length(2), 2);
     }
 
     #[test]
@@ -1137,6 +1167,9 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "memory is not aligned")]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_list_array_alignment() {
         let ptr = alloc::allocate_aligned::<u8>(8);
         let buf = unsafe { Buffer::from_raw_parts(ptr, 8, 8) };

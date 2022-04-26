@@ -53,6 +53,21 @@ macro_rules! downcast_dict_take {
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
 ///
+/// ```text
+/// ┌─────────────────┐      ┌─────────┐                              ┌─────────────────┐
+/// │        A        │      │    0    │                              │        A        │
+/// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
+/// │        D        │      │    2    │                              │        B        │
+/// ├─────────────────┤      ├─────────┤   take(values, indicies)     ├─────────────────┤
+/// │        B        │      │    3    │ ─────────────────────────▶   │        C        │
+/// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
+/// │        C        │      │    1    │                              │        D        │
+/// ├─────────────────┤      └─────────┘                              └─────────────────┘
+/// │        E        │
+/// └─────────────────┘
+///    values array            indicies array                              result
+/// ```
+///
 /// # Errors
 /// This function errors whenever:
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
