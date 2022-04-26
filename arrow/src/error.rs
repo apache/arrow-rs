@@ -67,6 +67,13 @@ impl From<tonic::Status> for ArrowError {
     }
 }
 
+#[cfg(feature = "flight-sql-experimental")]
+impl From<tonic::transport::Error> for ArrowError {
+    fn from(error: tonic::transport::Error) -> Self {
+        ArrowError::TonicRequestError(format!("{}", error))
+    }
+}
+
 #[cfg(feature = "csv")]
 impl From<csv_crate::Error> for ArrowError {
     fn from(error: csv_crate::Error) -> Self {

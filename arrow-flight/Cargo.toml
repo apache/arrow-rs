@@ -27,7 +27,7 @@ repository = "https://github.com/apache/arrow-rs"
 license = "Apache-2.0"
 
 [dependencies]
-arrow = { path = "../arrow", version = "13.0.0" }
+arrow = { path = "../arrow", version = "12.0.0", features = ["prettyprint"] }
 base64 = "0.13"
 tonic = "0.7"
 bytes = "1"
@@ -36,6 +36,7 @@ prost-types = { version = "0.10.0", optional = true }
 prost-derive = "0.10"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
 futures = { version = "0.3", default-features = false, features = ["alloc"]}
+clap = { version ="3.1.11", features = ["derive", "cargo"] }
 
 [features]
 default = []
@@ -51,4 +52,9 @@ proc-macro2 = ">1.0.30"
 
 [[example]]
 name = "flight_sql_server"
+required-features = ["flight-sql-experimental"]
+
+[[example]]
+name = "client"
+path = "examples/client.rs"
 required-features = ["flight-sql-experimental"]

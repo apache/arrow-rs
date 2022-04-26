@@ -18,7 +18,7 @@
 use arrow::error::{ArrowError, Result as ArrowResult};
 use prost::Message;
 
-mod gen {
+pub mod gen {
     #![allow(clippy::all)]
     include!("arrow.flight.protocol.sql.rs");
 }

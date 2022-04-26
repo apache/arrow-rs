@@ -23,9 +23,9 @@ use std::{
 use std::ops::Deref;
 
 use arrow::{
-    datatypes::Schema,
+    datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result},
-    ipc::RecordBatch,
+    ipc::{RecordBatch,MessageHeader},
 };
 use futures::{stream, Stream};
 use prost::Message;
@@ -135,16 +135,15 @@ where
     /// stream. Returns record batch stream reader
     pub async fn do_get(
         &mut self,
-        ticket: TicketStatementQuery,
+        ticket: Ticket,
     ) -> Result<Streaming<FlightData>> {
-        Ok(self
+        let xx = self
             .mut_client()
-            .do_get(tonic::Request::new(Ticket {
-                ticket: ticket.statement_handle,
-            }))
+            .do_get(ticket)
             .await
             .map_err(status_to_arrow_error)?
-            .into_inner())
+            .into_inner();
+        Ok(xx)
     }
 
     /// Request a list of tables.
@@ -383,14 +382,63 @@ where
     }
 }
 
-fn decode_error_to_arrow_error(err: prost::DecodeError) -> ArrowError {
+pub fn decode_error_to_arrow_error(err: prost::DecodeError) -> ArrowError {
     ArrowError::IoError(err.to_string())
 }
 
-fn arrow_error_to_status(err: arrow::error::ArrowError) -> tonic::Status {
+pub fn arrow_error_to_status(err: arrow::error::ArrowError) -> tonic::Status {
     tonic::Status::internal(format!("{:?}", err))
 }
 
-fn status_to_arrow_error(status: tonic::Status) -> ArrowError {
+pub fn status_to_arrow_error(status: tonic::Status) -> ArrowError {
     ArrowError::TonicRequestError(format!("{:?}", status))
+}
+
+pub fn transport_error_to_arrow_erorr(error: tonic::transport::Error) -> ArrowError {
+    ArrowError::TonicRequestError(format!("{}", error))
+}
+
+pub fn arrow_schema_from_flight_info(fi: &FlightInfo) -> Result<Schema> {
+
+    let ipc_message = arrow::ipc::size_prefixed_root_as_message(&fi.schema[4..])
+        .map_err(|e| ArrowError::ComputeError(format!("{:?}", e)))?;
+
+    let ipc_schema = ipc_message.header_as_schema()
+        .ok_or(ArrowError::ComputeError("failed to get schema...".to_string()))?;
+
+    let arrow_schema = arrow::ipc::convert::fb_to_schema(ipc_schema);
+
+    Ok(arrow_schema)
+}
+
+pub enum ArrowFlightData {
+    RecordBatch(arrow::record_batch::RecordBatch),
+    Schema(arrow::datatypes::Schema),
+}
+
+pub fn arrow_data_from_flight_data(flight_data: FlightData, arrow_schema_ref: &SchemaRef) -> Result<ArrowFlightData> {
+
+    let ipc_message = arrow::ipc::root_as_message(&flight_data.data_header[..])
+        .map_err(|err| { ArrowError::ParseError(format!("Unable to get root as message: {:?}", err)) })?;
+
+    match ipc_message.header_type() {
+        MessageHeader::RecordBatch => {
+            let ipc_record_batch = ipc_message
+                .header_as_record_batch()
+                .ok_or(ArrowError::ComputeError("Unable to convert flight data header to a record batch".to_string()))?;
+
+            let dictionaries_by_field = &[];
+            let record_batch = arrow::ipc::reader::read_record_batch(&flight_data.data_body, ipc_record_batch, arrow_schema_ref.clone(), dictionaries_by_field, None)?;
+            Ok(ArrowFlightData::RecordBatch(record_batch))
+        }
+        MessageHeader::Schema => {
+            let ipc_schema = ipc_message
+                .header_as_schema()
+                .ok_or(ArrowError::ComputeError("Unable to convert flight data header to a schema".to_string()))?;
+
+            let arrow_schema = arrow::ipc::convert::fb_to_schema(ipc_schema);
+            Ok(ArrowFlightData::Schema(arrow_schema))
+        }
+        _ => Err(ArrowError::ComputeError(format!("Unable to convert message with header_type: '{:?}' to arrow data", ipc_message.header_type())))
+    }
 }
