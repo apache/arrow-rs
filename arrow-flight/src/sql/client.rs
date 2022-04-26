@@ -20,6 +20,7 @@ use std::{
     pin::Pin,
     sync::Arc,
 };
+use std::ops::Deref;
 
 use arrow::{
     datatypes::Schema,
@@ -53,24 +54,24 @@ use super::{
 /// A FlightSQLServiceClient is an endpoint for retrieving or storing Arrow data
 /// by FlightSQL protocol.
 #[derive(Debug, Clone)]
-pub struct FlightSqlServiceClient<T> {
-    inner: RefCell<FlightServiceClient<T>>,
+pub struct FlightSqlServiceClient {
+    inner: RefCell<FlightServiceClient<tonic::transport::Channel>>,
 }
 
-impl<T> FlightSqlServiceClient<T>
+impl FlightSqlServiceClient
 where
-    T: tonic::client::GrpcService<tonic::body::BoxBody>,
-    T::ResponseBody: Body + Send + 'static,
-    T::Error: Into<StdError>,
-    <T::ResponseBody as Body>::Error: Into<StdError> + Send,
+    //T: tonic::client::GrpcService<tonic::body::BoxBody>,
+    //T::ResponseBody: Body + Send + 'static,
+    //T::Error: Into<StdError>,
+    //<T::ResponseBody as Body>::Error: Into<StdError> + Send,
 {
     /// create FlightSqlServiceClient using FlightServiceClient
-    pub fn new(client: RefCell<FlightServiceClient<T>>) -> Self {
+    pub fn new(client: RefCell<FlightServiceClient<tonic::transport::Channel>>) -> Self {
         FlightSqlServiceClient { inner: client }
     }
 
     /// borrow mut FlightServiceClient
-    fn mut_client(&self) -> RefMut<'_, FlightServiceClient<T>> {
+    fn mut_client(&self) -> RefMut<'_, FlightServiceClient<tonic::transport::Channel>> {
         self.inner.borrow_mut()
     }
 
@@ -78,12 +79,12 @@ where
         &mut self,
         cmd: M,
     ) -> Result<FlightInfo> {
-        let request =
-            tonic::Request::new(FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec()));
+        let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
         Ok(self
             .mut_client()
-            .get_flight_info(request)
-            .await?
+            .get_flight_info(descriptor)
+            .await
+            .map_err(status_to_arrow_error)?
             .into_inner())
     }
 
@@ -103,9 +104,13 @@ where
                 flight_descriptor: Some(descriptor),
                 ..Default::default()
             }]))
-            .await?
+            .await
+            .map_err(status_to_arrow_error)?
             .into_inner();
-        let result = result.message().await?.unwrap();
+        let result = result.message()
+            .await
+            .map_err(status_to_arrow_error)?
+            .unwrap();
         let any: prost_types::Any = prost::Message::decode(&*result.app_metadata)
             .map_err(decode_error_to_arrow_error)?;
         let result: DoPutUpdateResult = any.unpack()?.unwrap();
@@ -137,7 +142,8 @@ where
             .do_get(tonic::Request::new(Ticket {
                 ticket: ticket.statement_handle,
             }))
-            .await?
+            .await
+            .map_err(status_to_arrow_error)?
             .into_inner())
     }
 
@@ -196,7 +202,7 @@ where
     }
 
     /// Create a prepared statement object.
-    pub async fn prepare(&mut self, query: String) -> Result<PreparedStatement<'_, T>> {
+    pub async fn prepare(&mut self, query: String) -> Result<PreparedStatement<'_>> {
         let cmd = ActionCreatePreparedStatementRequest { query };
         let action = Action {
             r#type: ACTION_TYPE_CREATE_PREPARED_STATEMENT.to_string(),
@@ -205,9 +211,13 @@ where
         let mut result = self
             .mut_client()
             .do_action(tonic::Request::new(action))
-            .await?
+            .await
+            .map_err(status_to_arrow_error)?
             .into_inner();
-        let result = result.message().await?.unwrap();
+        let result = result.message()
+            .await
+            .map_err(status_to_arrow_error)?
+            .unwrap();
         let any: prost_types::Any =
             prost::Message::decode(&*result.body).map_err(decode_error_to_arrow_error)?;
         let prepared_result: ActionCreatePreparedStatementResult = any.unpack()?.unwrap();
@@ -231,8 +241,8 @@ where
 
 /// A PreparedStatement
 #[derive(Debug, Clone)]
-pub struct PreparedStatement<'a, T> {
-    inner: &'a RefCell<FlightServiceClient<T>>,
+pub struct PreparedStatement<'a> {
+    inner: &'a RefCell<FlightServiceClient<tonic::transport::Channel>>,
     is_closed: bool,
     parameter_binding: Option<RecordBatch<'a>>,
     handle: Vec<u8>,
@@ -240,15 +250,15 @@ pub struct PreparedStatement<'a, T> {
     parameter_schema: Schema,
 }
 
-impl<'a, T> PreparedStatement<'a, T>
+impl<'a> PreparedStatement<'a>
 where
-    T: tonic::client::GrpcService<tonic::body::BoxBody>,
-    T::ResponseBody: Body + Send + 'static,
-    T::Error: Into<StdError>,
-    <T::ResponseBody as Body>::Error: Into<StdError> + Send,
+    //T: tonic::client::GrpcService<tonic::body::BoxBody>,
+    //T::ResponseBody: Body + Send + 'static,
+    //T::Error: Into<StdError>,
+    //<T::ResponseBody as Body>::Error: Into<StdError> + Send,
 {
     pub(crate) fn new(
-        client: &'a RefCell<FlightServiceClient<T>>,
+        client: &'a RefCell<FlightServiceClient<tonic::transport::Channel>>,
         handle: Vec<u8>,
         dataset_schema: Schema,
         parameter_schema: Schema,
@@ -273,17 +283,19 @@ where
             prepared_statement_handle: self.handle.clone(),
         };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+        /* TODO
         let mut result = self
             .mut_client()
             .do_put(stream::iter(vec![FlightData {
                 flight_descriptor: Some(descriptor),
                 ..Default::default()
             }]))
-            .await?
+            .await
+            .map_err(status_to_arrow_error)?
             .into_inner();
         let result = result.message().await?.unwrap();
         let any: prost_types::Any = prost::Message::decode(&*result.app_metadata)
-            .map_err(decode_error_to_arrow_error)?;
+            .map_err(decode_error_to_arrow_error)?;*/
         Err(ArrowError::NotYetImplemented(
             "Not yet implemented".to_string(),
         ))
@@ -300,6 +312,7 @@ where
             prepared_statement_handle: self.handle.clone(),
         };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+        /* TODO
         let mut result = self
             .mut_client()
             .do_put(stream::iter(vec![FlightData {
@@ -312,7 +325,8 @@ where
         let any: prost_types::Any = prost::Message::decode(&*result.app_metadata)
             .map_err(decode_error_to_arrow_error)?;
         let result: DoPutUpdateResult = any.unpack()?.unwrap();
-        Ok(result.record_count)
+        Ok(result.record_count)*/
+        todo!()
     }
 
     /// Retrieve the parameter schema from the query.
@@ -349,11 +363,12 @@ where
             r#type: ACTION_TYPE_CLOSE_PREPARED_STATEMENT.to_string(),
             body: cmd.as_any().encode_to_vec(),
         };
+        /* TODO
         let _ = self
             .mut_client()
-            .do_action(tonic::Request::new(action))
+            .do_action(action)
             .await?;
-        self.is_closed = true;
+        self.is_closed = true;*/
         Ok(())
     }
 
@@ -363,11 +378,19 @@ where
     }
 
     /// borrow mut FlightServiceClient
-    fn mut_client(&self) -> RefMut<'_, FlightServiceClient<T>> {
+    fn mut_client(&self) -> RefMut<'_, FlightServiceClient<tonic::transport::Channel>> {
         self.inner.borrow_mut()
     }
 }
 
 fn decode_error_to_arrow_error(err: prost::DecodeError) -> ArrowError {
     ArrowError::IoError(err.to_string())
+}
+
+fn arrow_error_to_status(err: arrow::error::ArrowError) -> tonic::Status {
+    tonic::Status::internal(format!("{:?}", err))
+}
+
+fn status_to_arrow_error(status: tonic::Status) -> ArrowError {
+    ArrowError::TonicRequestError(format!("{:?}", status))
 }
