@@ -76,9 +76,11 @@ struct GetTablesArgs {
     #[clap(short, long)]
     catalog: Option<String>,
     #[clap(short, long)]
-    schema: Option<String>,
+    db_schema_filter_pattern: Option<String>,
     #[clap(short, long)]
-    table: Option<String>,
+    table_name_filter_pattern: Option<String>,
+    #[clap(short, long)]
+    include_schema: bool,
 }
 
 #[derive(Args, Debug)]
@@ -88,7 +90,7 @@ struct GetExportedKeysArgs {
     #[clap(short, long)]
     catalog: Option<String>,
     #[clap(short, long)]
-    schema: Option<String>,
+    db_schema: Option<String>,
     #[clap(short, long)]
     table: String,
 }
@@ -100,7 +102,7 @@ struct GetImportedKeysArgs {
     #[clap(short, long)]
     catalog: Option<String>,
     #[clap(short, long)]
-    schema: Option<String>,
+    db_schema: Option<String>,
     #[clap(short, long)]
     table: String,
 }
@@ -112,7 +114,7 @@ struct GetPrimaryKeysArgs {
     #[clap(short, long)]
     catalog: Option<String>,
     #[clap(short, long)]
-    schema: Option<String>,
+    db_schema: Option<String>,
     #[clap(short, long)]
     table: String,
 }
@@ -173,63 +175,46 @@ async fn main() -> Result<(), ArrowError> {
             }).await?;
             get_and_print(client, fi).await
         }
-        /*
-        Commands::GetTables (GetTablesArgs { common: Common{hostname, port}, catalog, schema, table}) => {
+        Commands::GetTables (GetTablesArgs { common: Common{hostname, port}, catalog, db_schema_filter_pattern, table_name_filter_pattern, include_schema }) => {
             let mut client = new_client(hostname, port).await?;
-            let fi = client.get_tables().await?;
+            let fi = client.get_tables(CommandGetTables {
+                catalog: catalog.as_deref().map(|x| x.to_string()),
+                db_schema_filter_pattern: db_schema_filter_pattern.as_deref().map(|x| x.to_string()),
+                table_name_filter_pattern: table_name_filter_pattern.as_deref().map(|x| x.to_string()),
+                table_types: vec![],
+                include_schema: *include_schema,
+            }).await?;
             get_and_print(client, fi).await
         }
-        Commands::GetExportedKeys (GetExportedKeysArgs { common: Common{hostname, port}, catalog, schema, table}) => {
-            let client = new_client(hostname.to_string(), port).await?;
-            get_exported_keys(&client,
-                              catalog.as_deref().map(|x| x.to_string()),
-                              schema.as_deref().map(|x|x.to_string()),
-                              table.to_string()
-            ).await
+        Commands::GetExportedKeys (GetExportedKeysArgs { common: Common{hostname, port}, catalog, db_schema, table}) => {
+            let mut client = new_client(hostname, port).await?;
+            let fi = client.get_exported_keys(CommandGetExportedKeys {
+                catalog: catalog.as_deref().map(|x| x.to_string()),
+                db_schema: db_schema.as_deref().map(|x| x.to_string()),
+                table: table.to_string(),
+            }).await?;
+            get_and_print(client, fi).await
         }
-        Commands::GetImportedKeys (GetImportedKeysArgs { common: Common{hostname, port}, catalog, schema, table}) => {
-            let client = new_client(hostname.to_string(), port).await?;
-            get_imported_keys(&client,
-                              catalog.as_deref().map(|x| x.to_string()),
-                              schema.as_deref().map(|x|x.to_string()),
-                              table.to_string()
-            ).await
+        Commands::GetImportedKeys (GetImportedKeysArgs { common: Common{hostname, port}, catalog, db_schema, table}) => {
+            let mut client = new_client(hostname, port).await?;
+            let fi = client.get_imported_keys(CommandGetImportedKeys {
+                catalog: catalog.as_deref().map(|x| x.to_string()),
+                db_schema: db_schema.as_deref().map(|x| x.to_string()),
+                table: table.to_string(),
+            }).await?;
+            get_and_print(client, fi).await
         }
-        Commands::GetPrimaryKeys (GetPrimaryKeysArgs { common: Common{hostname, port}, catalog, schema, table}) => {
-            let client = new_client(hostname.to_string(), port).await?;
-            get_primary_keys(&client,
-                             catalog.as_deref().map(|x| x.to_string()),
-                             schema.as_deref().map(|x|x.to_string()),
-                             table.to_string()
-            ).await
-
-         */
+        Commands::GetPrimaryKeys (GetPrimaryKeysArgs { common: Common{hostname, port}, catalog, db_schema, table}) => {
+            let mut client = new_client(hostname, port).await?;
+            let fi = client.get_primary_keys(CommandGetPrimaryKeys {
+                catalog: catalog.as_deref().map(|x| x.to_string()),
+                db_schema: db_schema.as_deref().map(|x| x.to_string()),
+                table: table.to_string(),
+            }).await?;
+            get_and_print(client, fi).await
+        }
         _ => Err(ArrowError::NotYetImplemented("not implemented yet".to_string()))
     }
-}
-
-async fn print_flight_info_results(client: &FlightServiceClient<Channel>, fi: &FlightInfo) -> Result<(), ArrowError> {
-
-    /*
-    let arrow_schema = arrow_schema_from_flight_info(fi)?;
-    let arrow_schema_ref = SchemaRef::new(arrow_schema);
-
-    let first_endpoint = fi.endpoint.first()
-        .ok_or(ArrowError::ComputeError("Failed to get first endpoint".to_string()))?;
-
-    let first_ticket = first_endpoint.ticket.clone()
-        .ok_or(ArrowError::ComputeError("Failed to get first ticket".to_string()))?;
-
-    let mut flight_data_stream = client
-        .clone()
-        .do_get(first_ticket)
-        .await
-        .map_err(status_to_arrow_error)?
-        .into_inner();
-
-    print_flight_data_stream(arrow_schema_ref, &mut flight_data_stream)
-        .await*/
-    todo!();
 }
 
 async fn print_flight_data_stream(arrow_schema_ref: SchemaRef, flight_data_stream: &mut Streaming<FlightData>) -> Result<(), ArrowError> {
