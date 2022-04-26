@@ -22,6 +22,7 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     Execute(ExecuteArgs),
+    ExecuteUpdate(ExecuteUpdateArgs),
     GetCatalogs(GetCatalogsArgs),
     GetTableTypes(GetTableTypesArgs),
     GetSchemas(GetSchemasArgs),
@@ -41,6 +42,14 @@ struct Common {
 
 #[derive(Args, Debug)]
 struct ExecuteArgs {
+    #[clap(flatten)]
+    common: Common,
+    #[clap(short, long)]
+    query: String
+}
+
+#[derive(Args, Debug)]
+struct ExecuteUpdateArgs {
     #[clap(flatten)]
     common: Common,
     #[clap(short, long)]
@@ -156,6 +165,12 @@ async fn main() -> Result<(), ArrowError> {
             let mut client = new_client(hostname, port).await?;
             let fi = client.execute(query.to_string()).await?;
             get_and_print(client, fi).await
+        }
+        Commands::ExecuteUpdate (ExecuteUpdateArgs { common: Common{hostname, port}, query}) => {
+            let mut client = new_client(hostname, port).await?;
+            let record_count = client.execute_update(query.to_string()).await?;
+            println!("Updated {} records.", record_count);
+            Ok(())
         }
         Commands::GetCatalogs (GetCatalogsArgs { common: Common{hostname, port}}) => {
             let mut client = new_client(hostname, port).await?;
