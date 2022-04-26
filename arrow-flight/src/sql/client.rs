@@ -132,13 +132,12 @@ where
         &mut self,
         ticket: Ticket,
     ) -> Result<Streaming<FlightData>> {
-        let xx = self
+        Ok(self
             .mut_client()
             .do_get(ticket)
             .await
             .map_err(status_to_arrow_error)?
-            .into_inner();
-        Ok(xx)
+            .into_inner())
     }
 
     /// Request a list of tables.
