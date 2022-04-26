@@ -282,7 +282,6 @@ where
             prepared_statement_handle: self.handle.clone(),
         };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
-        /* TODO
         let mut result = self
             .mut_client()
             .do_put(stream::iter(vec![FlightData {
@@ -292,9 +291,12 @@ where
             .await
             .map_err(status_to_arrow_error)?
             .into_inner();
-        let result = result.message().await?.unwrap();
+        let result = result.message()
+            .await
+            .map_err(status_to_arrow_error)?
+            .unwrap();
         let any: prost_types::Any = prost::Message::decode(&*result.app_metadata)
-            .map_err(decode_error_to_arrow_error)?;*/
+            .map_err(decode_error_to_arrow_error)?;
         Err(ArrowError::NotYetImplemented(
             "Not yet implemented".to_string(),
         ))
@@ -311,21 +313,23 @@ where
             prepared_statement_handle: self.handle.clone(),
         };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
-        /* TODO
         let mut result = self
             .mut_client()
             .do_put(stream::iter(vec![FlightData {
                 flight_descriptor: Some(descriptor),
                 ..Default::default()
             }]))
-            .await?
+            .await
+            .map_err(status_to_arrow_error)?
             .into_inner();
-        let result = result.message().await?.unwrap();
+        let result = result.message()
+            .await
+            .map_err(status_to_arrow_error)?
+            .unwrap();
         let any: prost_types::Any = prost::Message::decode(&*result.app_metadata)
             .map_err(decode_error_to_arrow_error)?;
         let result: DoPutUpdateResult = any.unpack()?.unwrap();
-        Ok(result.record_count)*/
-        todo!()
+        Ok(result.record_count)
     }
 
     /// Retrieve the parameter schema from the query.
@@ -438,6 +442,24 @@ pub fn arrow_data_from_flight_data(flight_data: FlightData, arrow_schema_ref: &S
 
             let arrow_schema = arrow::ipc::convert::fb_to_schema(ipc_schema);
             Ok(ArrowFlightData::Schema(arrow_schema))
+        }
+        MessageHeader::DictionaryBatch => {
+            let _ = ipc_message
+                .header_as_dictionary_batch()
+                .ok_or(ArrowError::ComputeError("Unable to convert flight data header to a dictionary batch".to_string()))?;
+            Err(ArrowError::NotYetImplemented("no idea on how to convert an ipc dictionary batch to an arrow type".to_string()))
+        }
+        MessageHeader::Tensor => {
+            let _ = ipc_message
+                .header_as_tensor()
+                .ok_or(ArrowError::ComputeError("Unable to convert flight data header to a tensor".to_string()))?;
+            Err(ArrowError::NotYetImplemented("no idea on how to convert an ipc tensor to an arrow type".to_string()))
+        }
+        MessageHeader::SparseTensor => {
+            let _ = ipc_message
+                .header_as_sparse_tensor()
+                .ok_or(ArrowError::ComputeError("Unable to convert flight data header to a sparse tensor".to_string()))?;
+            Err(ArrowError::NotYetImplemented("no idea on how to convert an ipc sparse tensor to an arrow type".to_string()))
         }
         _ => Err(ArrowError::ComputeError(format!("Unable to convert message with header_type: '{:?}' to arrow data", ipc_message.header_type())))
     }
