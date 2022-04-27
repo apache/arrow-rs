@@ -1031,12 +1031,10 @@ impl<T: DataType> ColumnWriterImpl<T> {
 
             if a_length > b_length {
                 let lead_length = a_length - b_length;
-                not_equal =
-                    Some((&a[0..lead_length]).iter().any(|&x| x != extension));
+                not_equal = Some((&a[0..lead_length]).iter().any(|&x| x != extension));
             } else {
                 let lead_length = b_length - a_length;
-                not_equal =
-                    Some((&b[0..lead_length]).iter().any(|&x| x != extension));
+                not_equal = Some((&b[0..lead_length]).iter().any(|&x| x != extension));
             }
 
             if !not_equal.is_none() && not_equal.unwrap() {
@@ -1068,7 +1066,7 @@ impl<T: DataType> ColumnWriterImpl<T> {
             _ => {}
         };
 
-        if let Some(LogicalType::DECIMAL(_)) = self.descr.logical_type() {
+        if let Some(LogicalType::Decimal { .. }) = self.descr.logical_type() {
             match self.descr.physical_type() {
                 Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
                     return self
@@ -2334,7 +2332,10 @@ mod tests {
         let path = ColumnPath::from("col");
         let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
             .with_length(16)
-            .with_logical_type(Some(LogicalType::DECIMAL(parquet_format::DecimalType::new(2, 3))))
+            .with_logical_type(Some(LogicalType::Decimal {
+                scale: 2,
+                precision: 3,
+            }))
             .with_scale(2)
             .with_precision(3)
             .build()
