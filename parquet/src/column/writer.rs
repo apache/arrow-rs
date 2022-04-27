@@ -1068,7 +1068,7 @@ impl<T: DataType> ColumnWriterImpl<T> {
             _ => {}
         };
 
-        if let Some(LogicalType::Decimal {..}) = self.descr.logical_type() {
+        if let Some(LogicalType::Decimal { .. }) = self.descr.logical_type() {
             match self.descr.physical_type() {
                 Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
                     return self
