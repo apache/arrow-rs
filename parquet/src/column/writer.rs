@@ -998,55 +998,6 @@ impl<T: DataType> ColumnWriterImpl<T> {
         }
     }
 
-    fn compare_greater_byte_array_decimals(&self, a: &[u8], b: &[u8]) -> bool {
-        let a_length = a.len();
-        let b_length = b.len();
-
-        if a_length == 0 || b_length == 0 {
-            return a_length > 0 && b_length == 0;
-        }
-
-        let first_a: u8 = a[0];
-        let first_b: u8 = b[0];
-
-        // We can short circuit for different signed numbers or
-        // for equal length bytes arrays that have different first bytes.
-        // The equality requirement is necessary for sign extension cases.
-        // 0xFF10 should be equal to 0x10 (due to big endian sign extension).
-        if (0x80 & first_a) != (0x80 & first_b)
-            || (a_length == b_length && first_a != first_b)
-        {
-            return (first_a as i8) > (first_b as i8);
-        }
-
-        // When the lengths are unequal and the numbers are of the same
-        // sign we need to do comparison by sign extending the shorter
-        // value first, and once we get to equal sized arrays, lexicographical
-        // unsigned comparison of everything but the first byte is sufficient.
-
-        let extension: u8 = if (first_a as i8) < 0 { 0xFF } else { 0 };
-
-        if a_length != b_length {
-            let not_equal: Option<bool>;
-
-            if a_length > b_length {
-                let lead_length = a_length - b_length;
-                not_equal = Some((&a[0..lead_length]).iter().any(|&x| x != extension));
-            } else {
-                let lead_length = b_length - a_length;
-                not_equal = Some((&b[0..lead_length]).iter().any(|&x| x != extension));
-            }
-
-            if !not_equal.is_none() && not_equal.unwrap() {
-                let negative_values: bool = (first_a as i8) < 0;
-                let a_longer: bool = a_length > b_length;
-                return negative_values != a_longer;
-            }
-        }
-
-        (a[1..]) > (b[1..])
-    }
-
     /// Evaluate `a > b` according to underlying logical type.
     fn compare_greater(&self, a: &T::T, b: &T::T) -> bool {
         if let Some(LogicalType::Integer { is_signed, .. }) = self.descr.logical_type() {
@@ -1069,26 +1020,25 @@ impl<T: DataType> ColumnWriterImpl<T> {
         if let Some(LogicalType::Decimal { .. }) = self.descr.logical_type() {
             match self.descr.physical_type() {
                 Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-                    return self
-                        .compare_greater_byte_array_decimals(a.as_bytes(), b.as_bytes());
+                    return compare_greater_byte_array_decimals(
+                        a.as_bytes(),
+                        b.as_bytes(),
+                    );
                 }
                 _ => {}
             };
         }
 
-        match self.descr.converted_type() {
-            ConvertedType::DECIMAL => {
-                match self.descr.physical_type() {
-                    Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
-                        return self.compare_greater_byte_array_decimals(
-                            a.as_bytes(),
-                            b.as_bytes(),
-                        );
-                    }
-                    _ => {}
-                };
-            }
-            _ => {}
+        if self.descr.converted_type() == ConvertedType::DECIMAL {
+            match self.descr.physical_type() {
+                Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
+                    return compare_greater_byte_array_decimals(
+                        a.as_bytes(),
+                        b.as_bytes(),
+                    );
+                }
+                _ => {}
+            };
         };
 
         a > b
@@ -1132,6 +1082,54 @@ fn has_dictionary_support(kind: Type, props: &WriterProperties) -> bool {
         (Type::FIXED_LEN_BYTE_ARRAY, WriterVersion::PARQUET_2_0) => true,
         _ => true,
     }
+}
+
+/// Signed comparison of bytes arrays
+fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
+    let a_length = a.len();
+    let b_length = b.len();
+
+    if a_length == 0 || b_length == 0 {
+        return a_length > 0 && b_length == 0;
+    }
+
+    let first_a: u8 = a[0];
+    let first_b: u8 = b[0];
+
+    // We can short circuit for different signed numbers or
+    // for equal length bytes arrays that have different first bytes.
+    // The equality requirement is necessary for sign extension cases.
+    // 0xFF10 should be equal to 0x10 (due to big endian sign extension).
+    if (0x80 & first_a) != (0x80 & first_b)
+        || (a_length == b_length && first_a != first_b)
+    {
+        return (first_a as i8) > (first_b as i8);
+    }
+
+    // When the lengths are unequal and the numbers are of the same
+    // sign we need to do comparison by sign extending the shorter
+    // value first, and once we get to equal sized arrays, lexicographical
+    // unsigned comparison of everything but the first byte is sufficient.
+
+    let extension: u8 = if (first_a as i8) < 0 { 0xFF } else { 0 };
+
+    if a_length != b_length {
+        let not_equal: Option<bool> = if a_length > b_length {
+            let lead_length = a_length - b_length;
+            Some((&a[0..lead_length]).iter().any(|&x| x != extension))
+        } else {
+            let lead_length = b_length - a_length;
+            Some((&b[0..lead_length]).iter().any(|&x| x != extension))
+        };
+
+        if not_equal.is_some() && not_equal.unwrap() {
+            let negative_values: bool = (first_a as i8) < 0;
+            let a_longer: bool = a_length > b_length;
+            return negative_values != a_longer;
+        }
+    }
+
+    (a[1..]) > (b[1..])
 }
 
 #[cfg(test)]
@@ -1617,6 +1615,28 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_uint32_converted_type_min_max() {
+        let page_writer = get_test_page_writer();
+        let props = Arc::new(WriterProperties::builder().build());
+        let mut writer = get_test_unsigned_int_given_as_converted_column_writer::<
+            Int32Type,
+        >(page_writer, 0, 0, props);
+        writer.write_batch(&[0, 1, 2, 3, 4, 5], None, None).unwrap();
+        let (_bytes_written, _rows_written, metadata) = writer.close().unwrap();
+        if let Some(stats) = metadata.statistics() {
+            assert!(stats.has_min_max_set());
+            if let Statistics::Int32(stats) = stats {
+                assert_eq!(stats.min(), &0,);
+                assert_eq!(stats.max(), &5,);
+            } else {
+                panic!("expecting Statistics::Int32");
+            }
+        } else {
+            panic!("metadata missing statistics");
+        }
+    }
+
+    #[test]
     fn test_column_writer_precalculated_statistics() {
         let page_writer = get_test_page_writer();
         let props = Arc::new(WriterProperties::builder().build());
@@ -2028,6 +2048,28 @@ mod tests {
         assert!(matches!(stats, Statistics::Double(_)));
     }
 
+    #[test]
+    fn test_compare_greater_byte_array_decimals() {
+        assert!(!compare_greater_byte_array_decimals(&[], &[],),);
+        assert!(compare_greater_byte_array_decimals(&[1u8,], &[],),);
+        assert!(!compare_greater_byte_array_decimals(&[], &[1u8,],),);
+        assert!(compare_greater_byte_array_decimals(&[1u8,], &[0u8,],),);
+        assert!(!compare_greater_byte_array_decimals(&[1u8,], &[1u8,],),);
+        assert!(compare_greater_byte_array_decimals(&[1u8, 0u8,], &[0u8,],),);
+        assert!(!compare_greater_byte_array_decimals(
+            &[0u8, 1u8,],
+            &[1u8, 0u8,],
+        ),);
+        assert!(!compare_greater_byte_array_decimals(
+            &[255u8, 35u8, 0u8, 0u8,],
+            &[0u8,],
+        ),);
+        assert!(compare_greater_byte_array_decimals(
+            &[0u8,],
+            &[255u8, 35u8, 0u8, 0u8,],
+        ),);
+    }
+
     /// Performs write-read roundtrip with randomly generated values and levels.
     /// `max_size` is maximum number of values or levels (if `max_def_level` > 0) to write
     /// for a column.
@@ -2338,6 +2380,48 @@ mod tests {
             }))
             .with_scale(2)
             .with_precision(3)
+            .build()
+            .unwrap();
+        ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+    }
+
+    /// Returns column writer for UINT32 Column (Provided as ConvertedType without specifying the LogicalType).
+    fn get_test_unsigned_int_given_as_converted_column_writer<T: DataType>(
+        page_writer: Box<dyn PageWriter>,
+        max_def_level: i16,
+        max_rep_level: i16,
+        props: WriterPropertiesPtr,
+    ) -> ColumnWriterImpl<T> {
+        let descr = Arc::new(get_test_converted_type_unsigned_integer_column_descr::<T>(
+            max_def_level,
+            max_rep_level,
+        ));
+        let column_writer = get_column_writer(descr, props, page_writer);
+        get_typed_column_writer::<T>(column_writer)
+    }
+
+    ///  Returns column reader for UINT32 Column (Provided as ConvertedType without specifying the LogicalType).
+    fn get_test_unsigned_int_given_as_converted_column_reader<T: DataType>(
+        page_reader: Box<dyn PageReader>,
+        max_def_level: i16,
+        max_rep_level: i16,
+    ) -> ColumnReaderImpl<T> {
+        let descr = Arc::new(get_test_converted_type_unsigned_integer_column_descr::<T>(
+            max_def_level,
+            max_rep_level,
+        ));
+        let column_reader = get_column_reader(descr, page_reader);
+        get_typed_column_reader::<T>(column_reader)
+    }
+
+    /// Returns column descriptor for UINT32 Column (Provided as ConvertedType without specifying the LogicalType).
+    fn get_test_converted_type_unsigned_integer_column_descr<T: DataType>(
+        max_def_level: i16,
+        max_rep_level: i16,
+    ) -> ColumnDescriptor {
+        let path = ColumnPath::from("col");
+        let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
+            .with_converted_type(ConvertedType::UINT_32)
             .build()
             .unwrap();
         ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
