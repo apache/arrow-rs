@@ -141,6 +141,7 @@ impl Display for ArrowError {
             ArrowError::DictionaryKeyOverflowError => {
                 write!(f, "Dictionary key bigger than the key type")
             }
+            #[cfg(feature = "flight-sql-experimental")]
             ArrowError::TonicRequestError(desc) => {
                 write!(f, "tonic request error: {}", desc)
             }
