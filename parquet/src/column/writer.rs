@@ -1114,7 +1114,7 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
     let extension: u8 = if (first_a as i8) < 0 { 0xFF } else { 0 };
 
     if a_length != b_length {
-        let not_equal: Option<bool> = if a_length > b_length {
+        let not_equal = if a_length > b_length {
             let lead_length = a_length - b_length;
             Some((&a[0..lead_length]).iter().any(|&x| x != extension))
         } else {
@@ -1122,10 +1122,10 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
             Some((&b[0..lead_length]).iter().any(|&x| x != extension))
         };
 
-        if not_equal.is_some() && not_equal.unwrap() {
+        if not_equal.unwrap() {
             let negative_values: bool = (first_a as i8) < 0;
             let a_longer: bool = a_length > b_length;
-            return negative_values != a_longer;
+            return if negative_values { !a_longer } else { a_longer };
         }
     }
 
@@ -2385,7 +2385,7 @@ mod tests {
         ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
     }
 
-    /// Returns column writer for UINT32 Column (Provided as ConvertedType without specifying the LogicalType).
+    /// Returns column writer for UINT32 Column provided as ConvertedType only
     fn get_test_unsigned_int_given_as_converted_column_writer<T: DataType>(
         page_writer: Box<dyn PageWriter>,
         max_def_level: i16,
@@ -2400,7 +2400,7 @@ mod tests {
         get_typed_column_writer::<T>(column_writer)
     }
 
-    ///  Returns column reader for UINT32 Column (Provided as ConvertedType without specifying the LogicalType).
+    ///  Returns column reader for UINT32 Column provided as ConvertedType only
     fn get_test_unsigned_int_given_as_converted_column_reader<T: DataType>(
         page_reader: Box<dyn PageReader>,
         max_def_level: i16,
@@ -2414,7 +2414,7 @@ mod tests {
         get_typed_column_reader::<T>(column_reader)
     }
 
-    /// Returns column descriptor for UINT32 Column (Provided as ConvertedType without specifying the LogicalType).
+    /// Returns column descriptor for UINT32 Column provided as ConvertedType only
     fn get_test_converted_type_unsigned_integer_column_descr<T: DataType>(
         max_def_level: i16,
         max_rep_level: i16,
