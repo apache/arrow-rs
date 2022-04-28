@@ -23,7 +23,7 @@ use tonic::Streaming;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow_flight::{FlightData, FlightInfo};
-use arrow_flight::sql::gen::*;
+use arrow_flight::sql::*;
 use arrow_flight::sql::client::*;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use arrow_flight::sql::ProstMessageExt;
