@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::array::{data::count_nulls, ArrayData};
-use crate::buffer::Buffer;
 use crate::datatypes::DataType;
 use crate::util::bit_util::get_bit;
 
@@ -25,8 +24,6 @@ use super::utils::equal_len;
 pub(super) fn fixed_binary_equal(
     lhs: &ArrayData,
     rhs: &ArrayData,
-    lhs_nulls: Option<&Buffer>,
-    rhs_nulls: Option<&Buffer>,
     lhs_start: usize,
     rhs_start: usize,
     len: usize,
@@ -39,8 +36,8 @@ pub(super) fn fixed_binary_equal(
     let lhs_values = &lhs.buffers()[0].as_slice()[lhs.offset() * size..];
     let rhs_values = &rhs.buffers()[0].as_slice()[rhs.offset() * size..];
 
-    let lhs_null_count = count_nulls(lhs_nulls, lhs_start, len);
-    let rhs_null_count = count_nulls(rhs_nulls, rhs_start, len);
+    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
+    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
 
     if lhs_null_count == 0 && rhs_null_count == 0 {
         equal_len(
@@ -52,8 +49,8 @@ pub(super) fn fixed_binary_equal(
         )
     } else {
         // get a ref of the null buffer bytes, to use in testing for nullness
-        let lhs_null_bytes = lhs_nulls.as_ref().unwrap().as_slice();
-        let rhs_null_bytes = rhs_nulls.as_ref().unwrap().as_slice();
+        let lhs_null_bytes = lhs.null_buffer().as_ref().unwrap().as_slice();
+        let rhs_null_bytes = rhs.null_buffer().as_ref().unwrap().as_slice();
         // with nulls, we need to compare item by item whenever it is not null
         (0..len).all(|i| {
             let lhs_pos = lhs_start + i;

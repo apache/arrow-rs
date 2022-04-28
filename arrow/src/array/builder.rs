@@ -1894,23 +1894,19 @@ struct FieldData {
     values_buffer: Option<MutableBuffer>,
     ///  The number of array slots represented by the buffer
     slots: usize,
-    /// A builder for the bitmap if required (for Sparse Unions)
-    bitmap_builder: Option<BooleanBufferBuilder>,
+    /// A builder for the null bitmap
+    bitmap_builder: BooleanBufferBuilder,
 }
 
 impl FieldData {
     /// Creates a new `FieldData`.
-    fn new(
-        type_id: i8,
-        data_type: DataType,
-        bitmap_builder: Option<BooleanBufferBuilder>,
-    ) -> Self {
+    fn new(type_id: i8, data_type: DataType) -> Self {
         Self {
             type_id,
             data_type,
             values_buffer: Some(MutableBuffer::new(1)),
             slots: 0,
-            bitmap_builder,
+            bitmap_builder: BooleanBufferBuilder::new(1),
         }
     }
 
@@ -1931,28 +1927,26 @@ impl FieldData {
         self.values_buffer = Some(mutable_buffer);
 
         self.slots += 1;
-        if let Some(b) = &mut self.bitmap_builder {
-            b.append(true)
-        };
+        self.bitmap_builder.append(true);
         Ok(())
     }
 
     /// Appends a null to this `FieldData`.
     #[allow(clippy::unnecessary_wraps)]
     fn append_null<T: ArrowPrimitiveType>(&mut self) -> Result<()> {
-        if let Some(b) = &mut self.bitmap_builder {
-            let values_buffer = self
-                .values_buffer
-                .take()
-                .expect("Values buffer was never created");
-            let mut builder: BufferBuilder<T::Native> =
-                mutable_buffer_to_builder(values_buffer, self.slots);
-            builder.advance(1);
-            let mutable_buffer = builder_to_mutable_buffer(builder);
-            self.values_buffer = Some(mutable_buffer);
-            self.slots += 1;
-            b.append(false);
-        };
+        let values_buffer = self
+            .values_buffer
+            .take()
+            .expect("Values buffer was never created");
+
+        let mut builder: BufferBuilder<T::Native> =
+            mutable_buffer_to_builder(values_buffer, self.slots);
+
+        builder.advance(1);
+        let mutable_buffer = builder_to_mutable_buffer(builder);
+        self.values_buffer = Some(mutable_buffer);
+        self.slots += 1;
+        self.bitmap_builder.append(false);
         Ok(())
     }
 
@@ -2047,8 +2041,6 @@ pub struct UnionBuilder {
     type_id_builder: Int8BufferBuilder,
     /// Builder to keep track of offsets (`None` for sparse unions)
     value_offset_builder: Option<Int32BufferBuilder>,
-    /// Optional builder for null slots
-    bitmap_builder: Option<BooleanBufferBuilder>,
 }
 
 impl UnionBuilder {
@@ -2059,7 +2051,6 @@ impl UnionBuilder {
             fields: HashMap::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: Some(Int32BufferBuilder::new(capacity)),
-            bitmap_builder: None,
         }
     }
 
@@ -2070,39 +2061,13 @@ impl UnionBuilder {
             fields: HashMap::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: None,
-            bitmap_builder: None,
         }
     }
 
     /// Appends a null to this builder.
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
-        if self.bitmap_builder.is_none() {
-            let mut builder = BooleanBufferBuilder::new(self.len + 1);
-            for _ in 0..self.len {
-                builder.append(true);
-            }
-            self.bitmap_builder = Some(builder)
-        }
-        self.bitmap_builder
-            .as_mut()
-            .expect("Cannot be None")
-            .append(false);
-
-        self.type_id_builder.append(i8::default());
-
-        match &mut self.value_offset_builder {
-            // Handle dense union
-            Some(value_offset_builder) => value_offset_builder.append(i32::default()),
-            // Handle sparse union
-            None => {
-                for (_, fd) in self.fields.iter_mut() {
-                    fd.append_null_dynamic()?;
-                }
-            }
-        };
-        self.len += 1;
-        Ok(())
+    pub fn append_null<T: ArrowPrimitiveType>(&mut self, type_name: &str) -> Result<()> {
+        self.append_option::<T>(type_name, None)
     }
 
     /// Appends a value to this builder.
@@ -2112,21 +2077,27 @@ impl UnionBuilder {
         type_name: &str,
         v: T::Native,
     ) -> Result<()> {
+        self.append_option::<T>(type_name, Some(v))
+    }
+
+    fn append_option<T: ArrowPrimitiveType>(
+        &mut self,
+        type_name: &str,
+        v: Option<T::Native>,
+    ) -> Result<()> {
         let type_name = type_name.to_string();
 
         let mut field_data = match self.fields.remove(&type_name) {
-            Some(data) => data,
-            None => match self.value_offset_builder {
-                Some(_) => {
-                    // For Dense Union, we don't build bitmap in individual field
-                    FieldData::new(self.fields.len() as i8, T::DATA_TYPE, None)
+            Some(data) => {
+                if data.data_type != T::DATA_TYPE {
+                    return Err(ArrowError::InvalidArgumentError(format!("Attempt to write col \"{}\" with type {} doesn't match existing type {}", type_name, T::DATA_TYPE, data.data_type)));
                 }
+                data
+            }
+            None => match self.value_offset_builder {
+                Some(_) => FieldData::new(self.fields.len() as i8, T::DATA_TYPE),
                 None => {
-                    let mut fd = FieldData::new(
-                        self.fields.len() as i8,
-                        T::DATA_TYPE,
-                        Some(BooleanBufferBuilder::new(1)),
-                    );
+                    let mut fd = FieldData::new(self.fields.len() as i8, T::DATA_TYPE);
                     for _ in 0..self.len {
                         fd.append_null::<T>()?;
                     }
@@ -2143,20 +2114,19 @@ impl UnionBuilder {
             }
             // Sparse Union
             None => {
-                for (name, fd) in self.fields.iter_mut() {
-                    if name != &type_name {
-                        fd.append_null_dynamic()?;
-                    }
+                for (_, fd) in self.fields.iter_mut() {
+                    // Append to all bar the FieldData currently being appended to
+                    fd.append_null_dynamic()?;
                 }
             }
         }
-        field_data.append_to_values_buffer::<T>(v)?;
-        self.fields.insert(type_name, field_data);
 
-        // Update the bitmap builder if it exists
-        if let Some(b) = &mut self.bitmap_builder {
-            b.append(true);
+        match v {
+            Some(v) => field_data.append_to_values_buffer::<T>(v)?,
+            None => field_data.append_null::<T>()?,
         }
+
+        self.fields.insert(type_name, field_data);
         self.len += 1;
         Ok(())
     }
@@ -2173,7 +2143,7 @@ impl UnionBuilder {
                 data_type,
                 values_buffer,
                 slots,
-                bitmap_builder,
+                mut bitmap_builder,
             },
         ) in self.fields.into_iter()
         {
@@ -2182,16 +2152,10 @@ impl UnionBuilder {
                 .into();
             let arr_data_builder = ArrayDataBuilder::new(data_type.clone())
                 .add_buffer(buffer)
-                .len(slots);
-            //                .build();
-            let arr_data_ref = unsafe {
-                match bitmap_builder {
-                    Some(mut bb) => arr_data_builder
-                        .null_bit_buffer(bb.finish())
-                        .build_unchecked(),
-                    None => arr_data_builder.build_unchecked(),
-                }
-            };
+                .len(slots)
+                .null_bit_buffer(bitmap_builder.finish());
+
+            let arr_data_ref = unsafe { arr_data_builder.build_unchecked() };
             let array_ref = make_array(arr_data_ref);
             children.push((type_id, (Field::new(&name, data_type, false), array_ref)))
         }
@@ -2201,9 +2165,8 @@ impl UnionBuilder {
                 .expect("This will never be None as type ids are always i8 values.")
         });
         let children: Vec<_> = children.into_iter().map(|(_, b)| b).collect();
-        let bitmap = self.bitmap_builder.map(|mut b| b.finish());
 
-        UnionArray::try_new(type_id_buffer, value_offsets_buffer, children, bitmap)
+        UnionArray::try_new(type_id_buffer, value_offsets_buffer, children)
     }
 }
 
