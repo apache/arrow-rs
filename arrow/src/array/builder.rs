@@ -2064,7 +2064,13 @@ impl UnionBuilder {
         }
     }
 
-    /// Appends a null to this builder.
+    /// Appends a null to this builder, encoding the null in the array
+    /// of the `type_name` child / field.
+    ///
+    /// Since `UnionArray` encodes nulls as an entry in its children
+    /// (it doesn't have a validity bitmap itself), and where the null
+    /// is part of the final array, appending a NULL requires
+    /// specifying which field (child) to use.
     #[inline]
     pub fn append_null<T: ArrowPrimitiveType>(&mut self, type_name: &str) -> Result<()> {
         self.append_option::<T>(type_name, None)
