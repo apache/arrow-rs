@@ -16,7 +16,6 @@
 // under the License.
 
 use std::cell::RefCell;
-use std::ops::Deref;
 use clap::{Args, Parser, Subcommand};
 use tonic::transport::Channel;
 use tonic::Streaming;
@@ -26,7 +25,6 @@ use arrow_flight::{FlightData, FlightInfo};
 use arrow_flight::sql::*;
 use arrow_flight::sql::client::*;
 use arrow_flight::flight_service_client::FlightServiceClient;
-use arrow_flight::sql::ProstMessageExt;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -245,7 +243,6 @@ async fn main() -> Result<(), ArrowError> {
             }).await?;
             get_and_print(client, fi).await
         }
-        _ => Err(ArrowError::NotYetImplemented("not implemented yet".to_string()))
     }
 }
 
