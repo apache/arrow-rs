@@ -54,7 +54,7 @@ proc-macro2 = ">1.0.30"
 name = "flight_sql_server"
 required-features = ["flight-sql-experimental"]
 
-[[example]]
-name = "client"
-path = "examples/client.rs"
+[[bin]]
+name = "flightsqlclient"
+path = "src/bin/flightsqlclient.rs"
 required-features = ["flight-sql-experimental"]
