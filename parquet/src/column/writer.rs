@@ -1090,7 +1090,7 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
     let b_length = b.len();
 
     if a_length == 0 || b_length == 0 {
-        return a_length > 0 && b_length == 0;
+        return a_length > 0;
     }
 
     let first_a: u8 = a[0];
@@ -1116,13 +1116,13 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
     if a_length != b_length {
         let not_equal = if a_length > b_length {
             let lead_length = a_length - b_length;
-            Some((&a[0..lead_length]).iter().any(|&x| x != extension))
+            (&a[0..lead_length]).iter().any(|&x| x != extension)
         } else {
             let lead_length = b_length - a_length;
-            Some((&b[0..lead_length]).iter().any(|&x| x != extension))
+            (&b[0..lead_length]).iter().any(|&x| x != extension)
         };
 
-        if not_equal.unwrap() {
+        if not_equal {
             let negative_values: bool = (first_a as i8) < 0;
             let a_longer: bool = a_length > b_length;
             return if negative_values { !a_longer } else { a_longer };
