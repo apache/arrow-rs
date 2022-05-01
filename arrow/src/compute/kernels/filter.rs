@@ -1671,21 +1671,52 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_run_union_array_dense() {
+        let mut builder = UnionBuilder::new_dense(3);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Int32Type>("A", 3).unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let array = builder.build().unwrap();
+
+        let filter_array = BooleanArray::from(vec![true, true, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(3);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Int32Type>("A", 3).unwrap();
+        let expected = builder.build().unwrap();
+
+        assert_eq!(filtered.data(), expected.data());
+    }
+
+    #[test]
     fn test_filter_union_array_dense_with_nulls() {
         let mut builder = UnionBuilder::new_dense(4);
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append::<Float64Type>("B", 3.2).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null::<Float64Type>("B").unwrap();
         builder.append::<Int32Type>("A", 34).unwrap();
         let array = builder.build().unwrap();
+
+        let filter_array = BooleanArray::from(vec![true, true, false, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(2);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
 
         let filter_array = BooleanArray::from(vec![true, false, true, false]);
         let c = filter(&array, &filter_array).unwrap();
         let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
 
-        let mut builder = UnionBuilder::new_dense(1);
+        let mut builder = UnionBuilder::new_dense(2);
         builder.append::<Int32Type>("A", 1).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null::<Float64Type>("B").unwrap();
         let expected_array = builder.build().unwrap();
 
         compare_union_arrays(filtered, &expected_array);
@@ -1707,7 +1738,7 @@ mod tests {
         let mut builder = UnionBuilder::new_sparse(4);
         builder.append::<Int32Type>("A", 1).unwrap();
         builder.append::<Float64Type>("B", 3.2).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null::<Float64Type>("B").unwrap();
         builder.append::<Int32Type>("A", 34).unwrap();
         let array = builder.build().unwrap();
 
@@ -1715,9 +1746,9 @@ mod tests {
         let c = filter(&array, &filter_array).unwrap();
         let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
 
-        let mut builder = UnionBuilder::new_dense(1);
+        let mut builder = UnionBuilder::new_sparse(2);
         builder.append::<Int32Type>("A", 1).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null::<Float64Type>("B").unwrap();
         let expected_array = builder.build().unwrap();
 
         compare_union_arrays(filtered, &expected_array);
@@ -1732,9 +1763,9 @@ mod tests {
             let slot1 = union1.value(i);
             let slot2 = union2.value(i);
 
-            assert_eq!(union1.is_null(i), union2.is_null(i));
+            assert_eq!(slot1.is_null(0), slot2.is_null(0));
 
-            if !union1.is_null(i) && !union2.is_null(i) {
+            if !slot1.is_null(0) && !slot2.is_null(0) {
                 match type_id {
                     0 => {
                         let slot1 = slot1.as_any().downcast_ref::<Int32Array>().unwrap();
