@@ -509,6 +509,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::type_complexity)]
     fn with_nulls_fixed_size_binary() -> Result<()> {
         let cases: Vec<(Vec<Option<&[u8]>>, i64, Option<u64>, Vec<Option<&[u8]>>)> = vec![
             // all-nulls array is always identical
@@ -636,6 +637,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::type_complexity)]
     fn without_nulls_fixed_size_binary() -> Result<()> {
         let cases: Vec<(Vec<&[u8]>, i64, Option<u64>, Vec<&[u8]>)> = vec![
             // empty array is always identical
