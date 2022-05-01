@@ -127,6 +127,11 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
         Ok(())
     }
 
+    /// Flushes `buffered_rows` from the buffer into a new row group
+    pub fn flush_buffered_rows(&mut self) -> Result<()> {
+        self.flush_row_group(self.buffered_rows)
+    }
+
     /// Flushes `num_rows` from the buffer into a new row group
     fn flush_row_group(&mut self, num_rows: usize) -> Result<()> {
         if num_rows == 0 {
@@ -193,7 +198,7 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
     /// Close and finalize the underlying Parquet writer
     pub fn close(&mut self) -> Result<parquet_format::FileMetaData> {
         self.flush_completed()?;
-        self.flush_row_group(self.buffered_rows)?;
+        self.flush_buffered_rows()?;
         self.writer.close()
     }
 }
