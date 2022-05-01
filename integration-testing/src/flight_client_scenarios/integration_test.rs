@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::{read_json_file, ArrowFile};
+use std::collections::HashMap;
 
 use arrow::{
     array::ArrayRef,
@@ -196,7 +197,7 @@ async fn consume_flight_location(
     // first FlightData. Ignore this one.
     let _schema_again = resp.next().await.unwrap();
 
-    let mut dictionaries_by_field = vec![None; schema.fields().len()];
+    let mut dictionaries_by_field = HashMap::new();
 
     for (counter, expected_batch) in expected_data.iter().enumerate() {
         let data = receive_batch_flight_data(
@@ -247,7 +248,7 @@ async fn consume_flight_location(
 async fn receive_batch_flight_data(
     resp: &mut Streaming<FlightData>,
     schema: SchemaRef,
-    dictionaries_by_field: &mut [Option<ArrayRef>],
+    dictionaries_by_field: &mut HashMap<i64, ArrayRef>,
 ) -> Option<FlightData> {
     let mut data = resp.next().await?.ok()?;
     let mut message = arrow::ipc::root_as_message(&data.data_header[..])

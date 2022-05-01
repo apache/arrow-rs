@@ -284,7 +284,7 @@ async fn record_batch_from_message(
     message: ipc::Message<'_>,
     data_body: &[u8],
     schema_ref: SchemaRef,
-    dictionaries_by_field: &[Option<ArrayRef>],
+    dictionaries_by_field: &HashMap<i64, ArrayRef>,
 ) -> Result<RecordBatch, Status> {
     let ipc_batch = message.header_as_record_batch().ok_or_else(|| {
         Status::internal("Could not parse message header as record batch")
@@ -307,7 +307,7 @@ async fn dictionary_from_message(
     message: ipc::Message<'_>,
     data_body: &[u8],
     schema_ref: SchemaRef,
-    dictionaries_by_field: &mut [Option<ArrayRef>],
+    dictionaries_by_field: &mut HashMap<i64, ArrayRef>,
 ) -> Result<(), Status> {
     let ipc_batch = message.header_as_dictionary_batch().ok_or_else(|| {
         Status::internal("Could not parse message header as dictionary batch")
@@ -331,7 +331,7 @@ async fn save_uploaded_chunks(
     let mut chunks = vec![];
     let mut uploaded_chunks = uploaded_chunks.lock().await;
 
-    let mut dictionaries_by_field = vec![None; schema_ref.fields().len()];
+    let mut dictionaries_by_field = HashMap::new();
 
     while let Some(Ok(data)) = input_stream.next().await {
         let message = arrow::ipc::root_as_message(&data.data_header[..])

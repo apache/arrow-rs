@@ -54,14 +54,15 @@ fn read_buffer(buf: &ipc::Buffer, a_data: &[u8]) -> Buffer {
 ///     - cast the 64-bit array to the appropriate data type
 fn create_array(
     nodes: &[ipc::FieldNode],
-    data_type: &DataType,
+    field: &Field,
     data: &[u8],
     buffers: &[ipc::Buffer],
-    dictionaries: &[Option<ArrayRef>],
+    dictionaries: &HashMap<i64, ArrayRef>,
     mut node_index: usize,
     mut buffer_index: usize,
 ) -> Result<(ArrayRef, usize, usize)> {
     use DataType::*;
+    let data_type = field.data_type();
     let array = match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
             let array = create_primitive_array(
@@ -99,7 +100,7 @@ fn create_array(
             buffer_index += 2;
             let triple = create_array(
                 nodes,
-                list_field.data_type(),
+                list_field,
                 data,
                 buffers,
                 dictionaries,
@@ -121,7 +122,7 @@ fn create_array(
             buffer_index += 1;
             let triple = create_array(
                 nodes,
-                list_field.data_type(),
+                list_field,
                 data,
                 buffers,
                 dictionaries,
@@ -146,7 +147,7 @@ fn create_array(
             for struct_field in struct_fields {
                 let triple = create_array(
                     nodes,
-                    struct_field.data_type(),
+                    struct_field,
                     data,
                     buffers,
                     dictionaries,
@@ -173,7 +174,9 @@ fn create_array(
                 .iter()
                 .map(|buf| read_buffer(buf, data))
                 .collect();
-            let value_array = dictionaries[node_index].clone().unwrap();
+
+            let value_array =
+                dictionaries.get(&field.dict_id().unwrap()).unwrap().clone();
             node_index += 1;
             buffer_index += 2;
 
@@ -210,7 +213,7 @@ fn create_array(
             for field in fields {
                 let triple = create_array(
                     nodes,
-                    field.data_type(),
+                    field,
                     data,
                     buffers,
                     dictionaries,
@@ -464,7 +467,7 @@ pub fn read_record_batch(
     buf: &[u8],
     batch: ipc::RecordBatch,
     schema: SchemaRef,
-    dictionaries: &[Option<ArrayRef>],
+    dictionaries: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
 ) -> Result<RecordBatch> {
     let buffers = batch.buffers().ok_or_else(|| {
@@ -484,7 +487,7 @@ pub fn read_record_batch(
             let field = &fields[index];
             let triple = create_array(
                 field_nodes,
-                field.data_type(),
+                field,
                 buf,
                 buffers,
                 dictionaries,
@@ -502,7 +505,7 @@ pub fn read_record_batch(
         for field in schema.fields() {
             let triple = create_array(
                 field_nodes,
-                field.data_type(),
+                field,
                 buf,
                 buffers,
                 dictionaries,
@@ -523,7 +526,7 @@ pub fn read_dictionary(
     buf: &[u8],
     batch: ipc::DictionaryBatch,
     schema: &Schema,
-    dictionaries_by_field: &mut [Option<ArrayRef>],
+    dictionaries_by_field: &mut HashMap<i64, ArrayRef>,
 ) -> Result<()> {
     if batch.isDelta() {
         return Err(ArrowError::IoError(
@@ -563,16 +566,10 @@ pub fn read_dictionary(
         ArrowError::InvalidArgumentError("dictionary id not found in schema".to_string())
     })?;
 
-    // for all fields with this dictionary id, update the dictionaries vector
-    // in the reader. Note that a dictionary batch may be shared between many fields.
     // We don't currently record the isOrdered field. This could be general
     // attributes of arrays.
-    for (i, field) in schema.all_fields().iter().enumerate() {
-        if field.dict_id() == Some(id) {
-            // Add (possibly multiple) array refs to the dictionaries array.
-            dictionaries_by_field[i] = Some(dictionary_values.clone());
-        }
-    }
+    // Add (possibly multiple) array refs to the dictionaries array.
+    dictionaries_by_field.insert(id, dictionary_values.clone());
 
     Ok(())
 }
@@ -599,7 +596,7 @@ pub struct FileReader<R: Read + Seek> {
     /// Optional dictionaries for each schema field.
     ///
     /// Dictionaries may be appended to in the streaming format.
-    dictionaries_by_field: Vec<Option<ArrayRef>>,
+    dictionaries_by_field: HashMap<i64, ArrayRef>,
 
     /// Metadata version
     metadata_version: ipc::MetadataVersion,
@@ -657,7 +654,7 @@ impl<R: Read + Seek> FileReader<R> {
         let schema = ipc::convert::fb_to_schema(ipc_schema);
 
         // Create an array of optional dictionary value arrays, one per field.
-        let mut dictionaries_by_field = vec![None; schema.all_fields().len()];
+        let mut dictionaries_by_field = HashMap::new();
         for block in footer.dictionaries().unwrap() {
             // read length from end of offset
             let mut message_size: [u8; 4] = [0; 4];
@@ -837,7 +834,7 @@ pub struct StreamReader<R: Read> {
     /// Optional dictionaries for each schema field.
     ///
     /// Dictionaries may be appended to in the streaming format.
-    dictionaries_by_field: Vec<Option<ArrayRef>>,
+    dictionaries_by_field: HashMap<i64, ArrayRef>,
 
     /// An indicator of whether the stream is complete.
     ///
@@ -881,7 +878,7 @@ impl<R: Read> StreamReader<R> {
         let schema = ipc::convert::fb_to_schema(ipc_schema);
 
         // Create an array of optional dictionary value arrays, one per field.
-        let dictionaries_by_field = vec![None; schema.all_fields().len()];
+        let dictionaries_by_field = HashMap::new();
 
         let projection = match projection {
             Some(projection_indices) => {
