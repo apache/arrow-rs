@@ -90,7 +90,7 @@ fn fixed_size_binary_substring(
     array: &FixedSizeBinaryArray,
     old_len: i32,
     start: i32,
-    length: Option<i32>
+    length: Option<i32>,
 ) -> Result<ArrayRef> {
     let new_start = if start >= 0 {
         start.min(old_len)
@@ -101,7 +101,7 @@ fn fixed_size_binary_substring(
         Some(len) => len.min(old_len - new_start),
         None => old_len - new_start,
     };
-    
+
     // build value buffer
     let num_of_elements = array.len();
     let values = array.value_data();
@@ -110,11 +110,12 @@ fn fixed_size_binary_substring(
     (0..num_of_elements)
         .map(|idx| {
             let offset = array.value_offset(idx);
-            ((offset + new_start) as usize, (offset + new_start + new_len) as usize)
+            (
+                (offset + new_start) as usize,
+                (offset + new_start + new_len) as usize,
+            )
         })
-        .for_each(|(start, end)| {
-            new_values.extend_from_slice(&data[start..end])
-        });
+        .for_each(|(start, end)| new_values.extend_from_slice(&data[start..end]));
 
     let array_data = unsafe {
         ArrayData::new_unchecked(
@@ -123,7 +124,7 @@ fn fixed_size_binary_substring(
             None,
             array.data_ref().null_buffer().cloned(),
             0,
-            vec![ new_values.into()],
+            vec![new_values.into()],
             vec![],
         )
     };
@@ -268,9 +269,9 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
             array
                 .as_any()
                 .downcast_ref::<FixedSizeBinaryArray>()
-                .expect("a fixed size binary is expected"), 
+                .expect("a fixed size binary is expected"),
             *old_len,
-            start as i32, 
+            start as i32,
             length.map(|e| e as i32),
         ),
         DataType::LargeUtf8 => utf8_substring(
