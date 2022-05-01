@@ -92,8 +92,6 @@ fn fixed_size_binary_substring(
     start: i32,
     length: Option<i32>
 ) -> Result<ArrayRef> {
-    let null_bit_buffer = array.data_ref().null_buffer().cloned();
-    
     let new_start = if start >= 0 {
         start.min(old_len)
     } else {
@@ -123,7 +121,7 @@ fn fixed_size_binary_substring(
             DataType::FixedSizeBinary(new_len),
             num_of_elements,
             None,
-            null_bit_buffer,
+            array.data_ref().null_buffer().cloned(),
             0,
             vec![ new_values.into()],
             vec![],
