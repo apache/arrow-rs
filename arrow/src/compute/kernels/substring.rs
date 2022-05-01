@@ -508,6 +508,259 @@ mod tests {
         without_nulls_generic_binary::<i64>()
     }
 
+    #[test]
+    fn with_nulls_fixed_size_binary() -> Result<()> {
+        let cases: Vec<(Vec<Option<&[u8]>>, i64, Option<u64>, Vec<Option<&[u8]>>)> = vec![
+            // all-nulls array is always identical
+            (vec![None, None, None], 3, Some(2), vec![None, None, None]),
+            // increase start
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                0,
+                None,
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                1,
+                None,
+                vec![Some(b"at"), None, Some(&[0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                2,
+                None,
+                vec![Some(b"t"), None, Some(&[0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                3,
+                None,
+                vec![Some(b""), None, Some(&[])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                10,
+                None,
+                vec![Some(b""), None, Some(b"")],
+            ),
+            // increase start negatively
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -1,
+                None,
+                vec![Some(b"t"), None, Some(&[0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -2,
+                None,
+                vec![Some(b"at"), None, Some(&[0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -3,
+                None,
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -10,
+                None,
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+            ),
+            // increase length
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                1,
+                Some(1),
+                vec![Some(b"a"), None, Some(&[0xf9])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                1,
+                Some(2),
+                vec![Some(b"at"), None, Some(&[0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                1,
+                Some(3),
+                vec![Some(b"at"), None, Some(&[0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -3,
+                Some(1),
+                vec![Some(b"c"), None, Some(&[0xf8])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -3,
+                Some(2),
+                vec![Some(b"ca"), None, Some(&[0xf8, 0xf9])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -3,
+                Some(3),
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -3,
+                Some(4),
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+            ),
+        ];
+
+        cases.into_iter().try_for_each::<_, Result<()>>(
+            |(array, start, length, expected)| {
+                let array = FixedSizeBinaryArray::try_from_sparse_iter(array.into_iter())
+                    .unwrap();
+                let result = substring(&array, start, length)?;
+                assert_eq!(array.len(), result.len());
+                let result = result
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
+                let expected =
+                    FixedSizeBinaryArray::try_from_sparse_iter(expected.into_iter())
+                        .unwrap();
+                assert_eq!(&expected, result,);
+                Ok(())
+            },
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn without_nulls_fixed_size_binary() -> Result<()> {
+        let cases: Vec<(Vec<&[u8]>, i64, Option<u64>, Vec<&[u8]>)> = vec![
+            // empty array is always identical
+            (vec![b"", b"", &[]], 3, Some(2), vec![b"", b"", &[]]),
+            // increase start
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                0,
+                None,
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                1,
+                None,
+                vec![b"at", b"og", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                2,
+                None,
+                vec![b"t", b"g", &[0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                3,
+                None,
+                vec![b"", b"", &[]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                10,
+                None,
+                vec![b"", b"", b""],
+            ),
+            // increase start negatively
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -1,
+                None,
+                vec![b"t", b"g", &[0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -2,
+                None,
+                vec![b"at", b"og", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -3,
+                None,
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -10,
+                None,
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+            ),
+            // increase length
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                1,
+                Some(1),
+                vec![b"a", b"o", &[0xf9]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                1,
+                Some(2),
+                vec![b"at", b"og", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                1,
+                Some(3),
+                vec![b"at", b"og", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -3,
+                Some(1),
+                vec![b"c", b"d", &[0xf8]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -3,
+                Some(2),
+                vec![b"ca", b"do", &[0xf8, 0xf9]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -3,
+                Some(3),
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -3,
+                Some(4),
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+            ),
+        ];
+
+        cases.into_iter().try_for_each::<_, Result<()>>(
+            |(array, start, length, expected)| {
+                let array =
+                    FixedSizeBinaryArray::try_from_iter(array.into_iter()).unwrap();
+                let result = substring(&array, start, length)?;
+                assert_eq!(array.len(), result.len());
+                let result = result
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
+                let expected =
+                    FixedSizeBinaryArray::try_from_iter(expected.into_iter()).unwrap();
+                assert_eq!(&expected, result,);
+                Ok(())
+            },
+        )?;
+
+        Ok(())
+    }
+
     fn with_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
         let cases = vec![
             // identity
