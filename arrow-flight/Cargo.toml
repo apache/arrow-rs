@@ -27,7 +27,7 @@ repository = "https://github.com/apache/arrow-rs"
 license = "Apache-2.0"
 
 [dependencies]
-arrow = { path = "../arrow", version = "12.0.0", features = ["prettyprint"] }
+arrow = { path = "../arrow", version = "13.0.0", features = ["prettyprint"] }
 base64 = "0.13"
 tonic = "0.7"
 bytes = "1"
