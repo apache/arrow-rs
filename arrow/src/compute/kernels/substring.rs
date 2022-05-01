@@ -304,6 +304,8 @@ mod tests {
     #[allow(clippy::type_complexity)]
     fn with_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
         let cases: Vec<(Vec<Option<&[u8]>>, i64, Option<u64>, Vec<Option<&[u8]>>)> = vec![
+            // all-nulls array is always identical
+            (vec![None, None, None], -1, Some(1), vec![None, None, None]),
             // identity
             (
                 vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
@@ -373,6 +375,8 @@ mod tests {
     #[allow(clippy::type_complexity)]
     fn without_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
         let cases: Vec<(Vec<&[u8]>, i64, Option<u64>, Vec<&[u8]>)> = vec![
+            // empty array is always identical
+            (vec![b"", b"", b""], 2, Some(1), vec![b"", b"", b""]),
             // increase start
             (
                 vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
@@ -765,6 +769,8 @@ mod tests {
 
     fn with_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
         let cases = vec![
+            // all-nulls array is always identical
+            (vec![None, None, None], 0, None, vec![None, None, None]),
             // identity
             (
                 vec![Some("hello"), None, Some("word")],
@@ -833,6 +839,8 @@ mod tests {
 
     fn without_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
         let cases = vec![
+            // empty array is always identical
+            (vec!["", "", ""], 0, None, vec!["", "", ""]),
             // increase start
             (
                 vec!["hello", "", "word"],
