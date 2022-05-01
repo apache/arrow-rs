@@ -310,6 +310,24 @@ impl Array for UnionArray {
     fn data(&self) -> &ArrayData {
         &self.data
     }
+
+    /// Union types always return non null as there is no validity buffer.
+    /// To check validity correctly you must check the underlying vector.
+    fn is_null(&self, _index: usize) -> bool {
+        false
+    }
+
+    /// Union types always return non null as there is no validity buffer.
+    /// To check validity correctly you must check the underlying vector.
+    fn is_valid(&self, _index: usize) -> bool {
+        true
+    }
+
+    /// Union types always return 0 null count as there is no validity buffer.
+    /// To get null count correctly you must check the underlying vector.
+    fn null_count(&self) -> usize {
+        0
+    }
 }
 
 impl fmt::Debug for UnionArray {
@@ -541,7 +559,7 @@ mod tests {
                     let value = slot.value(0);
                     assert_eq!(10_i32, value);
                 }
-                3 => assert!(union.is_null(i)),
+                3 => assert!(!union.is_null(i)),
                 4 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
                     assert!(!union.is_null(i));
@@ -578,7 +596,7 @@ mod tests {
                     let value = slot.value(0);
                     assert_eq!(10_i32, value);
                 }
-                1 => assert!(new_union.is_null(i)),
+                1 => assert!(!new_union.is_null(i)),
                 2 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
                     assert!(!union.is_null(i));
@@ -829,7 +847,7 @@ mod tests {
                     let value = slot.value(0);
                     assert_eq!(1_i32, value);
                 }
-                1 => assert!(union.is_null(i)),
+                1 => assert!(!union.is_null(i)),
                 2 => {
                     let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
                     assert!(!union.is_null(i));
@@ -866,7 +884,7 @@ mod tests {
         for i in 0..new_union.len() {
             let slot = new_union.value(i);
             match i {
-                0 => assert!(new_union.is_null(i)),
+                0 => assert!(!new_union.is_null(i)),
                 1 => {
                     let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
                     assert!(!new_union.is_null(i));
@@ -874,7 +892,7 @@ mod tests {
                     let value = slot.value(0);
                     assert_eq!(value, 3_f64);
                 }
-                2 => assert!(new_union.is_null(i)),
+                2 => assert!(!new_union.is_null(i)),
                 3 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
                     assert!(!new_union.is_null(i));
@@ -885,5 +903,37 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+    }
+
+    fn test_union_validity(union_array: &UnionArray) {
+        assert_eq!(union_array.null_count(), 0);
+
+        for i in 0..union_array.len() {
+            assert!(!union_array.is_null(i));
+            assert!(union_array.is_valid(i));
+        }
+    }
+
+    #[test]
+    fn test_union_array_validaty() {
+        let mut builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int64Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 10).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        let union = builder.build().unwrap();
+
+        test_union_validity(&union);
+
+        let mut builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int64Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 10).unwrap();
+        builder.append_null().unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        let union = builder.build().unwrap();
+
+        test_union_validity(&union);
     }
 }
