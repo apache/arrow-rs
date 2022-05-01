@@ -86,6 +86,53 @@ fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
     Ok(make_array(data))
 }
 
+fn fixed_size_binary_substring(
+    array: &FixedSizeBinaryArray,
+    old_len: i32,
+    start: i32,
+    length: Option<i32>
+) -> Result<ArrayRef> {
+    let null_bit_buffer = array.data_ref().null_buffer().cloned();
+    
+    let new_start = if start >= 0 {
+        start.min(old_len)
+    } else {
+        (old_len + start).max(0)
+    };
+    let new_len = match length {
+        Some(len) => len.min(old_len - new_start),
+        None => old_len - new_start,
+    };
+    
+    // build value buffer
+    let num_of_elements = array.len();
+    let values = array.value_data();
+    let data = values.as_slice();
+    let mut new_values = MutableBuffer::new(num_of_elements * (new_len as usize));
+    (0..num_of_elements)
+        .map(|idx| {
+            let offset = array.value_offset(idx);
+            ((offset + new_start) as usize, (offset + new_start + new_len) as usize)
+        })
+        .for_each(|(start, end)| {
+            new_values.extend_from_slice(&data[start..end])
+        });
+
+    let array_data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::FixedSizeBinary(new_len),
+            num_of_elements,
+            None,
+            null_bit_buffer,
+            0,
+            vec![ new_values.into()],
+            vec![],
+        )
+    };
+
+    Ok(make_array(array_data))
+}
+
 /// substring by byte
 fn utf8_substring<OffsetSize: StringOffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
@@ -217,6 +264,15 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
                 .downcast_ref::<BinaryArray>()
                 .expect("A binary is expected"),
             start as i32,
+            length.map(|e| e as i32),
+        ),
+        DataType::FixedSizeBinary(old_len) => fixed_size_binary_substring(
+            array
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .expect("a fixed size binary is expected"), 
+            *old_len,
+            start as i32, 
             length.map(|e| e as i32),
         ),
         DataType::LargeUtf8 => utf8_substring(
