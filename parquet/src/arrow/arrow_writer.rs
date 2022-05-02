@@ -113,26 +113,26 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
         }
 
         self.buffered_rows += batch.num_rows();
-        self.flush_excess()?;
+        self.flush_completed()?;
 
         Ok(())
     }
 
     /// Flushes buffered data until there are less than `max_row_group_size` rows buffered
-    fn flush_excess(&mut self) -> Result<()> {
+    fn flush_completed(&mut self) -> Result<()> {
         while self.buffered_rows >= self.max_row_group_size {
-            self.flush_batch_into_new_row_group(self.max_row_group_size)?;
+            self.flush_rows(self.max_row_group_size)?;
         }
         Ok(())
     }
 
-    /// Flushes `buffered_rows` from the buffer into a new row group
-    pub fn flush_row_group(&mut self) -> Result<()> {
-        self.flush_batch_into_new_row_group(self.buffered_rows)
+    /// Flushes all buffered rows into a new row group
+    pub fn flush(&mut self) -> Result<()> {
+        self.flush_rows(self.buffered_rows)
     }
 
     /// Flushes `num_rows` from the buffer into a new row group
-    fn flush_batch_into_new_row_group(&mut self, num_rows: usize) -> Result<()> {
+    fn flush_rows(&mut self, num_rows: usize) -> Result<()> {
         if num_rows == 0 {
             return Ok(());
         }
@@ -196,8 +196,7 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
 
     /// Close and finalize the underlying Parquet writer
     pub fn close(&mut self) -> Result<parquet_format::FileMetaData> {
-        self.flush_excess()?;
-        self.flush_row_group()?;
+        self.flush()?;
         self.writer.close()
     }
 }
