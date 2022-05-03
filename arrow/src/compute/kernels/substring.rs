@@ -122,7 +122,10 @@ fn fixed_size_binary_substring(
             DataType::FixedSizeBinary(new_len),
             num_of_elements,
             None,
-            array.data_ref().null_buffer().cloned(),
+            array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(array.offset(), num_of_elements)),
             0,
             vec![new_values.into()],
             vec![],
@@ -763,6 +766,36 @@ mod tests {
                 Ok(())
             },
         )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn offset_fixed_size_binary() -> Result<()> {
+        let values: [u8; 15] = *b"hellotherearrow";
+        // set the first and third element to be valid
+        let bits_v = [0b101_u8];
+
+        let data = ArrayData::builder(DataType::FixedSizeBinary(5))
+            .len(2)
+            .add_buffer(Buffer::from(&values[..]))
+            .offset(1)
+            .null_bit_buffer(Buffer::from(bits_v))
+            .build()
+            .unwrap();
+        // array is `[null, "arrow"]`
+        let array = FixedSizeBinaryArray::from(data);
+        // result is `[null, "rrow"]`
+        let result = substring(&array, 1, None)?;
+        let result = result
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        let expected = FixedSizeBinaryArray::try_from_sparse_iter(
+            vec![None, Some("rrow")].into_iter(),
+        )
+        .unwrap();
+        assert_eq!(result, &expected);
 
         Ok(())
     }
