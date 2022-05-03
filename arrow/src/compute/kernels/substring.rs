@@ -1065,4 +1065,35 @@ mod tests {
         let err = substring(&array, 0, Some(5)).unwrap_err().to_string();
         assert!(err.contains("invalid utf-8 boundary"));
     }
+
+    #[test]
+    fn offset_fixed_size_binary() -> Result<()> {
+        let values = *b"hellotherearrow";
+        let offsets: [i32; 4] = [0, 5, 10, 15];
+        // set the first and third element to be valid
+        let bits_v = [0b101_u8];
+
+        let data = ArrayData::builder(DataType::Binary)
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_buffer(Buffer::from_slice_ref(&values))
+            .offset(1)
+            .null_bit_buffer(Buffer::from(bits_v))
+            .build()
+            .unwrap();
+        // array is `[null, "arrow"]`
+        let array = BinaryArray::from(data);
+        // result is `[null, "rrow"]`
+        let result = substring(&array, 1, None)?;
+        let result = result
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap();
+        let expected = BinaryArray::from_opt_vec(
+            vec![None, Some(b"rrow")],
+        );
+        assert_eq!(result, &expected);
+
+        Ok(())
+    }
 }
