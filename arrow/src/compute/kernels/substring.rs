@@ -792,7 +792,7 @@ mod tests {
             .downcast_ref::<FixedSizeBinaryArray>()
             .unwrap();
         let expected = FixedSizeBinaryArray::try_from_sparse_iter(
-            vec![None, Some("rrow")].into_iter(),
+            vec![None, Some(b"rrow")].into_iter(),
         )
         .unwrap();
         assert_eq!(result, &expected);
