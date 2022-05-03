@@ -27,7 +27,7 @@ Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-arrow-flight = "5.0"
+arrow-flight = "13.0.0"
 ```
 
 Apache Arrow Flight is a gRPC based protocol for exchanging Arrow data between processes. See the blog post [Introducing Apache Arrow Flight: A Framework for Fast Data Transport](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for more information.
