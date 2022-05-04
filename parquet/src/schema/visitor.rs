@@ -27,7 +27,7 @@ pub trait TypeVisitor<R, C> {
 
     /// Default implementation when visiting a list.
     ///
-    /// It checks list type definition and calls [`visit_list_with_item`] with extracted
+    /// It checks list type definition and calls [`Self::visit_list_with_item`] with extracted
     /// item type.
     ///
     /// To fully understand this algorithm, please refer to
@@ -35,7 +35,7 @@ pub trait TypeVisitor<R, C> {
     ///
     /// For example, a standard list type looks like:
     ///
-    /// ```ignore
+    /// ```text
     /// required/optional group my_list (LIST) {
     //    repeated group list {
     //      required/optional binary element (UTF8);
@@ -43,7 +43,7 @@ pub trait TypeVisitor<R, C> {
     //  }
     /// ```
     ///
-    /// In such a case, [`visit_list_with_item`] will be called with `my_list` as the list
+    /// In such a case, [`Self::visit_list_with_item`] will be called with `my_list` as the list
     /// type, and `element` as the `item_type`
     ///
     fn visit_list(&mut self, list_type: TypePtr, context: C) -> Result<R> {
