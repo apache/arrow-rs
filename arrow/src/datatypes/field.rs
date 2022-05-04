@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 
 use serde_derive::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -27,7 +28,7 @@ use super::DataType;
 /// Contains the meta-data for a single relative type.
 ///
 /// The `Schema` object is an ordered collection of `Field` objects.
-#[derive(Serialize, Deserialize, Debug, Clone, Hash, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialOrd, Ord)]
 pub struct Field {
     name: String,
     data_type: DataType,
@@ -49,6 +50,15 @@ impl PartialEq for Field {
 }
 
 impl Eq for Field {}
+
+impl Hash for Field {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.data_type.hash(state);
+        self.nullable.hash(state);
+        self.metadata.hash(state);
+    }
+}
 
 impl Field {
     /// Creates a new field
