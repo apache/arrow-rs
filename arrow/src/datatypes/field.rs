@@ -27,7 +27,7 @@ use super::DataType;
 /// Contains the meta-data for a single relative type.
 ///
 /// The `Schema` object is an ordered collection of `Field` objects.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Clone, Hash, PartialOrd, Ord)]
 pub struct Field {
     name: String,
     data_type: DataType,
@@ -38,6 +38,17 @@ pub struct Field {
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<BTreeMap<String, String>>,
 }
+
+impl PartialEq for Field {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.data_type == other.data_type
+            && self.nullable == other.nullable
+            && self.metadata == other.metadata
+    }
+}
+
+impl Eq for Field {}
 
 impl Field {
     /// Creates a new field
