@@ -20,10 +20,9 @@
 //! depend on dynamic casting of `Array`.
 
 use super::{
-    Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray, DictionaryArray,
-    FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
-    GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
-    StructArray,
+    Array, ArrayData, BooleanArray, DecimalArray, DictionaryArray, FixedSizeBinaryArray,
+    FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
+    MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, StructArray,
 };
 use crate::datatypes::{ArrowPrimitiveType, DataType, IntervalUnit};
 use half::f16;
@@ -98,7 +97,7 @@ impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericStringArray<OffsetSize> {
     }
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> PartialEq for GenericBinaryArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericBinaryArray<OffsetSize> {
     fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
@@ -261,10 +260,10 @@ mod tests {
     use std::sync::Arc;
 
     use crate::array::{
-        array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryOffsetSizeTrait,
-        BooleanArray, FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray,
-        Int32Builder, ListBuilder, NullArray, PrimitiveBuilder, StringArray,
-        StringDictionaryBuilder, StructArray, UnionBuilder,
+        array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BooleanArray,
+        FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray, Int32Builder,
+        ListBuilder, NullArray, PrimitiveBuilder, StringArray, StringDictionaryBuilder,
+        StructArray, UnionBuilder,
     };
     use crate::array::{GenericStringArray, Int32Array};
     use crate::buffer::Buffer;
@@ -528,7 +527,7 @@ mod tests {
         test_generic_string_equal::<i64>()
     }
 
-    fn test_generic_binary_equal<OffsetSize: BinaryOffsetSizeTrait>() {
+    fn test_generic_binary_equal<OffsetSize: OffsetSizeTrait>() {
         let cases = binary_cases();
 
         for (lhs, rhs, expected) in cases {

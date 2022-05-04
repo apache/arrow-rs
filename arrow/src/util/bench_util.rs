@@ -143,7 +143,7 @@ pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
 }
 
 /// Creates an random (but fixed-seeded) binary array of a given size and null density
-pub fn create_binary_array<Offset: BinaryOffsetSizeTrait>(
+pub fn create_binary_array<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
 ) -> GenericBinaryArray<Offset> {

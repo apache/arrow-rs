@@ -18,9 +18,8 @@
 use crate::datatypes::ArrowPrimitiveType;
 
 use super::{
-    Array, ArrayRef, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
-    GenericBinaryArray, GenericListArray, GenericStringArray, OffsetSizeTrait,
-    PrimitiveArray,
+    Array, ArrayRef, BooleanArray, DecimalArray, GenericBinaryArray, GenericListArray,
+    GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 
 /// an iterator that returns Some(T) or None, that can be used on any PrimitiveArray
@@ -246,14 +245,14 @@ impl<'a, T: OffsetSizeTrait> std::iter::ExactSizeIterator for GenericStringIter<
 #[derive(Debug)]
 pub struct GenericBinaryIter<'a, T>
 where
-    T: BinaryOffsetSizeTrait,
+    T: OffsetSizeTrait,
 {
     array: &'a GenericBinaryArray<T>,
     current: usize,
     current_end: usize,
 }
 
-impl<'a, T: BinaryOffsetSizeTrait> GenericBinaryIter<'a, T> {
+impl<'a, T: OffsetSizeTrait> GenericBinaryIter<'a, T> {
     /// create a new iterator
     pub fn new(array: &'a GenericBinaryArray<T>) -> Self {
         GenericBinaryIter::<T> {
@@ -264,7 +263,7 @@ impl<'a, T: BinaryOffsetSizeTrait> GenericBinaryIter<'a, T> {
     }
 }
 
-impl<'a, T: BinaryOffsetSizeTrait> std::iter::Iterator for GenericBinaryIter<'a, T> {
+impl<'a, T: OffsetSizeTrait> std::iter::Iterator for GenericBinaryIter<'a, T> {
     type Item = Option<&'a [u8]>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -293,9 +292,7 @@ impl<'a, T: BinaryOffsetSizeTrait> std::iter::Iterator for GenericBinaryIter<'a,
     }
 }
 
-impl<'a, T: BinaryOffsetSizeTrait> std::iter::DoubleEndedIterator
-    for GenericBinaryIter<'a, T>
-{
+impl<'a, T: OffsetSizeTrait> std::iter::DoubleEndedIterator for GenericBinaryIter<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.current_end == self.current {
             None
@@ -316,10 +313,7 @@ impl<'a, T: BinaryOffsetSizeTrait> std::iter::DoubleEndedIterator
 }
 
 /// all arrays have known size.
-impl<'a, T: BinaryOffsetSizeTrait> std::iter::ExactSizeIterator
-    for GenericBinaryIter<'a, T>
-{
-}
+impl<'a, T: OffsetSizeTrait> std::iter::ExactSizeIterator for GenericBinaryIter<'a, T> {}
 
 #[derive(Debug)]
 pub struct GenericListArrayIter<'a, S>

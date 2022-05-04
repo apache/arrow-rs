@@ -26,7 +26,7 @@ use crate::{
 };
 use std::cmp::Ordering;
 
-fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
+fn binary_substring<OffsetSize: OffsetSizeTrait>(
     array: &GenericBinaryArray<OffsetSize>,
     start: OffsetSize,
     length: Option<OffsetSize>,
@@ -74,7 +74,7 @@ fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            <OffsetSize as BinaryOffsetSizeTrait>::DATA_TYPE,
+            GenericBinaryArray::<OffsetSize>::get_data_type(),
             array.len(),
             None,
             null_bit_buffer,
@@ -247,7 +247,7 @@ mod tests {
     use super::*;
 
     #[allow(clippy::type_complexity)]
-    fn with_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
+    fn with_nulls_generic_binary<O: OffsetSizeTrait>() -> Result<()> {
         let cases: Vec<(Vec<Option<&[u8]>>, i64, Option<u64>, Vec<Option<&[u8]>>)> = vec![
             // identity
             (
@@ -316,7 +316,7 @@ mod tests {
     }
 
     #[allow(clippy::type_complexity)]
-    fn without_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
+    fn without_nulls_generic_binary<O: OffsetSizeTrait>() -> Result<()> {
         let cases: Vec<(Vec<&[u8]>, i64, Option<u64>, Vec<&[u8]>)> = vec![
             // increase start
             (

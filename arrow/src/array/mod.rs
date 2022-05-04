@@ -391,7 +391,6 @@ pub type DurationMillisecondArray = PrimitiveArray<DurationMillisecondType>;
 pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
-pub use self::array_binary::BinaryOffsetSizeTrait;
 pub use self::array_binary::GenericBinaryArray;
 pub use self::array_list::GenericListArray;
 pub use self::array_list::OffsetSizeTrait;

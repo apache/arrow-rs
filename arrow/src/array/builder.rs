@@ -1165,9 +1165,7 @@ pub struct DecimalBuilder {
     scale: usize,
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> ArrayBuilder
-    for GenericBinaryBuilder<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSize> {
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -1296,7 +1294,7 @@ impl ArrayBuilder for DecimalBuilder {
     }
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
     /// Creates a new `GenericBinaryBuilder`, `capacity` is the number of bytes in the values
     /// array
     pub fn new(capacity: usize) -> Self {

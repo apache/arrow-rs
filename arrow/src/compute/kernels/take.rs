@@ -889,7 +889,7 @@ fn take_binary<IndexType, OffsetType>(
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericBinaryArray<OffsetType>>
 where
-    OffsetType: BinaryOffsetSizeTrait,
+    OffsetType: OffsetSizeTrait,
     IndexType: ArrowNumericType,
     IndexType::Native: ToPrimitive,
 {

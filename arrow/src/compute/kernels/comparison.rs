@@ -811,7 +811,7 @@ pub fn neq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray>
 }
 
 /// Perform `left == right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
-pub fn eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
@@ -819,7 +819,7 @@ pub fn eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// Perform `left == right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar
-pub fn eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
@@ -827,7 +827,7 @@ pub fn eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// Perform `left != right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
-pub fn neq_binary<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn neq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
@@ -835,7 +835,7 @@ pub fn neq_binary<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// Perform `left != right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
-pub fn neq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn neq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
@@ -843,7 +843,7 @@ pub fn neq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// Perform `left < right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
-pub fn lt_binary<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn lt_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
@@ -851,7 +851,7 @@ pub fn lt_binary<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// Perform `left < right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
-pub fn lt_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn lt_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
@@ -859,7 +859,7 @@ pub fn lt_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// Perform `left <= right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
-pub fn lt_eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn lt_eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
@@ -867,7 +867,7 @@ pub fn lt_eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// Perform `left <= right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
-pub fn lt_eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn lt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
@@ -875,7 +875,7 @@ pub fn lt_eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// Perform `left > right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
-pub fn gt_binary<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn gt_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
@@ -883,7 +883,7 @@ pub fn gt_binary<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// Perform `left > right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
-pub fn gt_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn gt_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
@@ -891,7 +891,7 @@ pub fn gt_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// Perform `left >= right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
-pub fn gt_eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn gt_eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
@@ -899,7 +899,7 @@ pub fn gt_eq_binary<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// Perform `left >= right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
-pub fn gt_eq_binary_scalar<OffsetSize: BinaryOffsetSizeTrait>(
+pub fn gt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
@@ -2295,7 +2295,7 @@ where
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
 /// `DataType::Binary` or `DataType::LargeBinary`.
-pub fn cmp_dict_binary<K, OffsetSize: BinaryOffsetSizeTrait, F>(
+pub fn cmp_dict_binary<K, OffsetSize: OffsetSizeTrait, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
     op: F,

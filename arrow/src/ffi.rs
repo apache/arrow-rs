@@ -872,10 +872,10 @@ impl<'a> ArrowArrayChild<'a> {
 mod tests {
     use super::*;
     use crate::array::{
-        export_array_into_raw, make_array, Array, ArrayData, BinaryOffsetSizeTrait,
-        BooleanArray, DecimalArray, DictionaryArray, FixedSizeBinaryArray,
-        FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, OffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray,
+        export_array_into_raw, make_array, Array, ArrayData, BooleanArray, DecimalArray,
+        DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray,
+        GenericListArray, GenericStringArray, Int32Array, OffsetSizeTrait,
+        Time32MillisecondArray, TimestampMillisecondArray,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
@@ -1043,7 +1043,7 @@ mod tests {
         test_generic_list::<i64>()
     }
 
-    fn test_generic_binary<Offset: BinaryOffsetSizeTrait>() -> Result<()> {
+    fn test_generic_binary<Offset: OffsetSizeTrait>() -> Result<()> {
         // create an array natively
         let array: Vec<Option<&[u8]>> = vec![Some(b"a"), None, Some(b"aaa")];
         let array = GenericBinaryArray::<Offset>::from(array);
