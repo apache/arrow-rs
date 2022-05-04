@@ -292,32 +292,36 @@ impl<'a> TypeVisitor<Option<Box<dyn ArrayReader>>, &'a ArrayReaderBuilderContext
         item_type: Arc<Type>,
         context: &'a ArrayReaderBuilderContext,
     ) -> Result<Option<Box<dyn ArrayReader>>> {
-        let mut list_child = &list_type
-            .get_fields()
-            .first()
-            .ok_or_else(|| ArrowError("List field must have a child.".to_string()))?
-            .clone();
+        let mut new_context = context.clone();
+        new_context.path.append(vec![list_type.name().to_string()]);
 
-        // If the list can contain nulls
+        // If the list is nullable
         let nullable = match list_type.get_basic_info().repetition() {
             Repetition::REQUIRED => false,
-            Repetition::OPTIONAL => true,
+            Repetition::OPTIONAL => {
+                new_context.def_level += 1;
+                true
+            }
             Repetition::REPEATED => {
                 return Err(general_err!("List type cannot be repeated"))
             }
         };
 
-        let mut new_context = context.clone();
-        new_context.path.append(vec![list_type.name().to_string()]);
+        if list_type.get_fields().len() != 1 {
+            return Err(ArrowError(format!(
+                "List field must have exactly one child, found {}",
+                list_type.get_fields().len()
+            )));
+        }
+        let mut list_child = &list_type.get_fields()[0];
+
+        if list_child.get_basic_info().repetition() != Repetition::REPEATED {
+            return Err(ArrowError("List child must be repeated".to_string()));
+        }
 
         // The repeated field
         new_context.rep_level += 1;
         new_context.def_level += 1;
-
-        // If the list's root is nullable
-        if nullable {
-            new_context.def_level += 1;
-        }
 
         match self.dispatch(item_type, &new_context) {
             Ok(Some(item_reader)) => {
