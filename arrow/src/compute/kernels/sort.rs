@@ -614,7 +614,7 @@ fn insert_valid_values<T>(result_slice: &mut [u32], offset: usize, valids: &[(u3
 }
 
 /// Sort strings
-fn sort_string<Offset: StringOffsetSizeTrait>(
+fn sort_string<Offset: OffsetSizeTrait>(
     values: &ArrayRef,
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,

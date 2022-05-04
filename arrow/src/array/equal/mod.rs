@@ -23,7 +23,7 @@ use super::{
     Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray, DictionaryArray,
     FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
     GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
-    StringOffsetSizeTrait, StructArray,
+    StructArray,
 };
 use crate::datatypes::{ArrowPrimitiveType, DataType, IntervalUnit};
 use half::f16;
@@ -92,7 +92,7 @@ impl PartialEq for BooleanArray {
     }
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> PartialEq for GenericStringArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericStringArray<OffsetSize> {
     fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
@@ -264,7 +264,7 @@ mod tests {
         array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryOffsetSizeTrait,
         BooleanArray, FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray,
         Int32Builder, ListBuilder, NullArray, PrimitiveBuilder, StringArray,
-        StringDictionaryBuilder, StringOffsetSizeTrait, StructArray, UnionBuilder,
+        StringDictionaryBuilder, StructArray, UnionBuilder,
     };
     use crate::array::{GenericStringArray, Int32Array};
     use crate::buffer::Buffer;
@@ -506,7 +506,7 @@ mod tests {
         ]
     }
 
-    fn test_generic_string_equal<OffsetSize: StringOffsetSizeTrait>() {
+    fn test_generic_string_equal<OffsetSize: OffsetSizeTrait>() {
         let cases = binary_cases();
 
         for (lhs, rhs, expected) in cases {

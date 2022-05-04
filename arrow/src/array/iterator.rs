@@ -20,7 +20,7 @@ use crate::datatypes::ArrowPrimitiveType;
 use super::{
     Array, ArrayRef, BinaryOffsetSizeTrait, BooleanArray, DecimalArray,
     GenericBinaryArray, GenericListArray, GenericStringArray, OffsetSizeTrait,
-    PrimitiveArray, StringOffsetSizeTrait,
+    PrimitiveArray,
 };
 
 /// an iterator that returns Some(T) or None, that can be used on any PrimitiveArray
@@ -172,14 +172,14 @@ impl<'a> std::iter::ExactSizeIterator for BooleanIter<'a> {}
 #[derive(Debug)]
 pub struct GenericStringIter<'a, T>
 where
-    T: StringOffsetSizeTrait,
+    T: OffsetSizeTrait,
 {
     array: &'a GenericStringArray<T>,
     current: usize,
     current_end: usize,
 }
 
-impl<'a, T: StringOffsetSizeTrait> GenericStringIter<'a, T> {
+impl<'a, T: OffsetSizeTrait> GenericStringIter<'a, T> {
     /// create a new iterator
     pub fn new(array: &'a GenericStringArray<T>) -> Self {
         GenericStringIter::<T> {
@@ -190,7 +190,7 @@ impl<'a, T: StringOffsetSizeTrait> GenericStringIter<'a, T> {
     }
 }
 
-impl<'a, T: StringOffsetSizeTrait> std::iter::Iterator for GenericStringIter<'a, T> {
+impl<'a, T: OffsetSizeTrait> std::iter::Iterator for GenericStringIter<'a, T> {
     type Item = Option<&'a str>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -219,9 +219,7 @@ impl<'a, T: StringOffsetSizeTrait> std::iter::Iterator for GenericStringIter<'a,
     }
 }
 
-impl<'a, T: StringOffsetSizeTrait> std::iter::DoubleEndedIterator
-    for GenericStringIter<'a, T>
-{
+impl<'a, T: OffsetSizeTrait> std::iter::DoubleEndedIterator for GenericStringIter<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.current_end == self.current {
             None
@@ -242,10 +240,7 @@ impl<'a, T: StringOffsetSizeTrait> std::iter::DoubleEndedIterator
 }
 
 /// all arrays have known size.
-impl<'a, T: StringOffsetSizeTrait> std::iter::ExactSizeIterator
-    for GenericStringIter<'a, T>
-{
-}
+impl<'a, T: OffsetSizeTrait> std::iter::ExactSizeIterator for GenericStringIter<'a, T> {}
 
 /// an iterator that returns `Some(&[u8])` or `None`, for binary arrays
 #[derive(Debug)]

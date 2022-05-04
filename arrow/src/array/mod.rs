@@ -396,7 +396,6 @@ pub use self::array_binary::GenericBinaryArray;
 pub use self::array_list::GenericListArray;
 pub use self::array_list::OffsetSizeTrait;
 pub use self::array_string::GenericStringArray;
-pub use self::array_string::StringOffsetSizeTrait;
 
 // --------------------- Array Builder ---------------------
 

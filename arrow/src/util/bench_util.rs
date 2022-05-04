@@ -91,7 +91,7 @@ where
 }
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
-pub fn create_string_array<Offset: StringOffsetSizeTrait>(
+pub fn create_string_array<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
 ) -> GenericStringArray<Offset> {
@@ -99,7 +99,7 @@ pub fn create_string_array<Offset: StringOffsetSizeTrait>(
 }
 
 /// Creates a random (but fixed-seeded) array of a given size, null density and length
-pub fn create_string_array_with_len<Offset: StringOffsetSizeTrait>(
+pub fn create_string_array_with_len<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
     str_len: usize,

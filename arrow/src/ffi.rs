@@ -875,8 +875,7 @@ mod tests {
         export_array_into_raw, make_array, Array, ArrayData, BinaryOffsetSizeTrait,
         BooleanArray, DecimalArray, DictionaryArray, FixedSizeBinaryArray,
         FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, OffsetSizeTrait, StringOffsetSizeTrait, Time32MillisecondArray,
-        TimestampMillisecondArray,
+        Int32Array, OffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
@@ -932,7 +931,7 @@ mod tests {
     }
     // case with nulls is tested in the docs, through the example on this module.
 
-    fn test_generic_string<Offset: StringOffsetSizeTrait>() -> Result<()> {
+    fn test_generic_string<Offset: OffsetSizeTrait>() -> Result<()> {
         // create an array natively
         let array =
             GenericStringArray::<Offset>::from(vec![Some("a"), None, Some("aaa")]);

@@ -87,7 +87,7 @@ fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
 }
 
 /// substring by byte
-fn utf8_substring<OffsetSize: StringOffsetSizeTrait>(
+fn utf8_substring<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: OffsetSize,
     length: Option<OffsetSize>,
@@ -154,7 +154,7 @@ fn utf8_substring<OffsetSize: StringOffsetSizeTrait>(
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            <OffsetSize as StringOffsetSizeTrait>::DATA_TYPE,
+            GenericStringArray::<OffsetSize>::get_data_type(),
             array.len(),
             None,
             null_bit_buffer,
@@ -453,7 +453,7 @@ mod tests {
         without_nulls_generic_binary::<i64>()
     }
 
-    fn with_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
+    fn with_nulls_generic_string<O: OffsetSizeTrait>() -> Result<()> {
         let cases = vec![
             // identity
             (
@@ -521,7 +521,7 @@ mod tests {
         with_nulls_generic_string::<i64>()
     }
 
-    fn without_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
+    fn without_nulls_generic_string<O: OffsetSizeTrait>() -> Result<()> {
         let cases = vec![
             // increase start
             (
