@@ -304,6 +304,24 @@ impl Array for UnionArray {
     fn data(&self) -> &ArrayData {
         &self.data
     }
+
+    /// Union types always return non null as there is no validity buffer.
+    /// To check validity correctly you must check the underlying vector.
+    fn is_null(&self, _index: usize) -> bool {
+        false
+    }
+
+    /// Union types always return non null as there is no validity buffer.
+    /// To check validity correctly you must check the underlying vector.
+    fn is_valid(&self, _index: usize) -> bool {
+        true
+    }
+
+    /// Union types always return 0 null count as there is no validity buffer.
+    /// To get null count correctly you must check the underlying vector.
+    fn null_count(&self) -> usize {
+        0
+    }
 }
 
 impl fmt::Debug for UnionArray {
@@ -875,6 +893,38 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+    }
+
+    fn test_union_validity(union_array: &UnionArray) {
+        assert_eq!(union_array.null_count(), 0);
+
+        for i in 0..union_array.len() {
+            assert!(!union_array.is_null(i));
+            assert!(union_array.is_valid(i));
+        }
+    }
+
+    #[test]
+    fn test_union_array_validaty() {
+        let mut builder = UnionBuilder::new_sparse(5);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Float64Type>("c", 3.0).unwrap();
+        builder.append_null::<Float64Type>("c").unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        let union = builder.build().unwrap();
+
+        test_union_validity(&union);
+
+        let mut builder = UnionBuilder::new_dense(5);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Float64Type>("c", 3.0).unwrap();
+        builder.append_null::<Float64Type>("c").unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        let union = builder.build().unwrap();
+
+        test_union_validity(&union);
     }
 
     #[test]
