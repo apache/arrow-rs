@@ -621,6 +621,13 @@ impl ArrayData {
         // Check that the data layout conforms to the spec
         let layout = layout(&self.data_type);
 
+        if !layout.can_contain_null_mask && self.null_bitmap.is_some() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Arrays of type {:?} cannot contain a null bitmask",
+                self.data_type,
+            )));
+        }
+
         if self.buffers.len() != layout.buffers.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Expected {} buffers in array of type {:?}, got {}",
@@ -1224,9 +1231,13 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
     // https://github.com/apache/arrow/blob/661c7d749150905a63dd3b52e0a04dac39030d95/cpp/src/arrow/type.h (and .cc)
     use std::mem::size_of;
     match data_type {
-        DataType::Null => DataTypeLayout::new_empty(),
+        DataType::Null => DataTypeLayout {
+            buffers: vec![],
+            can_contain_null_mask: false,
+        },
         DataType::Boolean => DataTypeLayout {
             buffers: vec![BufferSpec::BitMap],
+            can_contain_null_mask: true,
         },
         DataType::Int8 => DataTypeLayout::new_fixed_width(size_of::<i8>()),
         DataType::Int16 => DataTypeLayout::new_fixed_width(size_of::<i16>()),
@@ -1287,6 +1298,7 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
                         ]
                     }
                 },
+                can_contain_null_mask: false,
             }
         }
         DataType::Dictionary(key_type, _value_type) => layout(key_type),
@@ -1308,6 +1320,9 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
 struct DataTypeLayout {
     /// A vector of buffer layout specifications, one for each expected buffer
     pub buffers: Vec<BufferSpec>,
+
+    /// Can contain a null bitmask
+    pub can_contain_null_mask: bool,
 }
 
 impl DataTypeLayout {
@@ -1315,6 +1330,7 @@ impl DataTypeLayout {
     pub fn new_fixed_width(byte_width: usize) -> Self {
         Self {
             buffers: vec![BufferSpec::FixedWidth { byte_width }],
+            can_contain_null_mask: true,
         }
     }
 
@@ -1322,7 +1338,10 @@ impl DataTypeLayout {
     /// (e.g. FixedSizeList). Note such arrays may still have a Null
     /// Bitmap
     pub fn new_empty() -> Self {
-        Self { buffers: vec![] }
+        Self {
+            buffers: vec![],
+            can_contain_null_mask: true,
+        }
     }
 
     /// Describes a basic numeric array where each element has a fixed
@@ -1338,6 +1357,7 @@ impl DataTypeLayout {
                 // values
                 BufferSpec::VariableWidth,
             ],
+            can_contain_null_mask: true,
         }
     }
 }

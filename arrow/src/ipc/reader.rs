@@ -193,11 +193,10 @@ fn create_array(
 
             let len = union_node.length() as usize;
 
-            let null_buffer: Buffer = read_buffer(&buffers[buffer_index], data);
             let type_ids: Buffer =
-                read_buffer(&buffers[buffer_index + 1], data)[..len].into();
+                read_buffer(&buffers[buffer_index], data)[..len].into();
 
-            buffer_index += 2;
+            buffer_index += 1;
 
             let value_offsets = match mode {
                 UnionMode::Dense => {
@@ -227,13 +226,7 @@ fn create_array(
                 children.push((field.clone(), triple.0));
             }
 
-            let array = UnionArray::try_new(
-                type_ids,
-                value_offsets,
-                children,
-                Some(null_buffer),
-            )?;
-
+            let array = UnionArray::try_new(type_ids, value_offsets, children)?;
             Arc::new(array)
         }
         Null => {
@@ -655,43 +648,53 @@ impl<R: Read + Seek> FileReader<R> {
 
         // Create an array of optional dictionary value arrays, one per field.
         let mut dictionaries_by_field = HashMap::new();
-        for block in footer.dictionaries().unwrap() {
-            // read length from end of offset
-            let mut message_size: [u8; 4] = [0; 4];
-            reader.seek(SeekFrom::Start(block.offset() as u64))?;
-            reader.read_exact(&mut message_size)?;
-            if message_size == CONTINUATION_MARKER {
+        if let Some(dictionaries) = footer.dictionaries() {
+            for block in dictionaries {
+                // read length from end of offset
+                let mut message_size: [u8; 4] = [0; 4];
+                reader.seek(SeekFrom::Start(block.offset() as u64))?;
                 reader.read_exact(&mut message_size)?;
+                if message_size == CONTINUATION_MARKER {
+                    reader.read_exact(&mut message_size)?;
+                }
+                let footer_len = i32::from_le_bytes(message_size);
+                let mut block_data = vec![0; footer_len as usize];
+
+                reader.read_exact(&mut block_data)?;
+
+                let message = ipc::root_as_message(&block_data[..]).map_err(|err| {
+                    ArrowError::IoError(format!(
+                        "Unable to get root as message: {:?}",
+                        err
+                    ))
+                })?;
+
+                match message.header_type() {
+                    ipc::MessageHeader::DictionaryBatch => {
+                        let batch = message.header_as_dictionary_batch().unwrap();
+
+                        // read the block that makes up the dictionary batch into a buffer
+                        let mut buf = vec![0; block.bodyLength() as usize];
+                        reader.seek(SeekFrom::Start(
+                            block.offset() as u64 + block.metaDataLength() as u64,
+                        ))?;
+                        reader.read_exact(&mut buf)?;
+
+                        read_dictionary(
+                            &buf,
+                            batch,
+                            &schema,
+                            &mut dictionaries_by_field,
+                        )?;
+                    }
+                    t => {
+                        return Err(ArrowError::IoError(format!(
+                            "Expecting DictionaryBatch in dictionary blocks, found {:?}.",
+                            t
+                        )));
+                    }
+                }
             }
-            let footer_len = i32::from_le_bytes(message_size);
-            let mut block_data = vec![0; footer_len as usize];
-
-            reader.read_exact(&mut block_data)?;
-
-            let message = ipc::root_as_message(&block_data[..]).map_err(|err| {
-                ArrowError::IoError(format!("Unable to get root as message: {:?}", err))
-            })?;
-
-            match message.header_type() {
-                ipc::MessageHeader::DictionaryBatch => {
-                    let batch = message.header_as_dictionary_batch().unwrap();
-
-                    // read the block that makes up the dictionary batch into a buffer
-                    let mut buf = vec![0; block.bodyLength() as usize];
-                    reader.seek(SeekFrom::Start(
-                        block.offset() as u64 + block.metaDataLength() as u64,
-                    ))?;
-                    reader.read_exact(&mut buf)?;
-
-                    read_dictionary(&buf, batch, &schema, &mut dictionaries_by_field)?;
-                }
-                t => {
-                    return Err(ArrowError::IoError(format!(
-                        "Expecting DictionaryBatch in dictionary blocks, found {:?}.",
-                        t
-                    )));
-                }
-            };
         }
         let projection = match projection {
             Some(projection_indices) => {
@@ -1356,7 +1359,7 @@ mod tests {
 
     fn check_union_with_builder(mut builder: UnionBuilder) {
         builder.append::<datatypes::Int32Type>("a", 1).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null::<datatypes::Int32Type>("a").unwrap();
         builder.append::<datatypes::Float64Type>("c", 3.0).unwrap();
         builder.append::<datatypes::Int32Type>("a", 4).unwrap();
         builder.append::<datatypes::Int64Type>("d", 11).unwrap();

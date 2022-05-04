@@ -22,140 +22,50 @@ use super::{Extend, _MutableArrayData};
 pub(super) fn build_extend_sparse(array: &ArrayData) -> Extend {
     let type_ids = array.buffer::<i8>(0);
 
-    if array.null_count() == 0 {
-        Box::new(
-            move |mutable: &mut _MutableArrayData,
-                  index: usize,
-                  start: usize,
-                  len: usize| {
-                // extends type_ids
-                mutable
-                    .buffer1
-                    .extend_from_slice(&type_ids[start..start + len]);
+    Box::new(
+        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
+            // extends type_ids
+            mutable
+                .buffer1
+                .extend_from_slice(&type_ids[start..start + len]);
 
-                mutable
-                    .child_data
-                    .iter_mut()
-                    .for_each(|child| child.extend(index, start, start + len))
-            },
-        )
-    } else {
-        Box::new(
-            move |mutable: &mut _MutableArrayData,
-                  index: usize,
-                  start: usize,
-                  len: usize| {
-                // extends type_ids
-                mutable
-                    .buffer1
-                    .extend_from_slice(&type_ids[start..start + len]);
-
-                (start..start + len).for_each(|i| {
-                    if array.is_valid(i) {
-                        mutable
-                            .child_data
-                            .iter_mut()
-                            .for_each(|child| child.extend(index, i, i + 1))
-                    } else {
-                        mutable
-                            .child_data
-                            .iter_mut()
-                            .for_each(|child| child.extend_nulls(1))
-                    }
-                })
-            },
-        )
-    }
+            mutable
+                .child_data
+                .iter_mut()
+                .for_each(|child| child.extend(index, start, start + len))
+        },
+    )
 }
 
 pub(super) fn build_extend_dense(array: &ArrayData) -> Extend {
     let type_ids = array.buffer::<i8>(0);
     let offsets = array.buffer::<i32>(1);
 
-    if array.null_count() == 0 {
-        Box::new(
-            move |mutable: &mut _MutableArrayData,
-                  index: usize,
-                  start: usize,
-                  len: usize| {
-                // extends type_ids
-                mutable
-                    .buffer1
-                    .extend_from_slice(&type_ids[start..start + len]);
-                // extends offsets
-                mutable
-                    .buffer2
-                    .extend_from_slice(&offsets[start..start + len]);
-
-                (start..start + len).for_each(|i| {
-                    let type_id = type_ids[i] as usize;
-                    let offset_start = offsets[start] as usize;
-
-                    mutable.child_data[type_id].extend(
-                        index,
-                        offset_start,
-                        offset_start + 1,
-                    )
-                })
-            },
-        )
-    } else {
-        Box::new(
-            move |mutable: &mut _MutableArrayData,
-                  index: usize,
-                  start: usize,
-                  len: usize| {
-                // extends type_ids
-                mutable
-                    .buffer1
-                    .extend_from_slice(&type_ids[start..start + len]);
-                // extends offsets
-                mutable
-                    .buffer2
-                    .extend_from_slice(&offsets[start..start + len]);
-
-                (start..start + len).for_each(|i| {
-                    let type_id = type_ids[i] as usize;
-                    let offset_start = offsets[start] as usize;
-
-                    if array.is_valid(i) {
-                        mutable.child_data[type_id].extend(
-                            index,
-                            offset_start,
-                            offset_start + 1,
-                        )
-                    } else {
-                        mutable.child_data[type_id].extend_nulls(1)
-                    }
-                })
-            },
-        )
-    }
-}
-
-pub(super) fn extend_nulls_dense(mutable: &mut _MutableArrayData, len: usize) {
-    let mut count: usize = 0;
-    let num = len / mutable.child_data.len();
-    mutable
-        .child_data
-        .iter_mut()
-        .enumerate()
-        .for_each(|(idx, child)| {
-            let n = if count + num > len { len - count } else { num };
-            count += n;
+    Box::new(
+        move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
+            // extends type_ids
             mutable
                 .buffer1
-                .extend_from_slice(vec![idx as i8; n].as_slice());
-            mutable
-                .buffer2
-                .extend_from_slice(vec![child.len() as i32; n].as_slice());
-            child.extend_nulls(n)
-        })
+                .extend_from_slice(&type_ids[start..start + len]);
+
+            (start..start + len).for_each(|i| {
+                let type_id = type_ids[i] as usize;
+                let src_offset = offsets[i] as usize;
+                let child_data = &mut mutable.child_data[type_id];
+                let dst_offset = child_data.len();
+
+                // Extend offsets
+                mutable.buffer2.push(dst_offset as i32);
+                mutable.child_data[type_id].extend(index, src_offset, src_offset + 1)
+            })
+        },
+    )
 }
 
-pub(super) fn extend_nulls_sparse(mutable: &mut _MutableArrayData, len: usize) {
-    mutable
-        .child_data
-        .iter_mut()
-        .for_each(|child| child.extend_nulls(len))
+pub(super) fn extend_nulls_dense(_mutable: &mut _MutableArrayData, _len: usize) {
+    panic!("cannot call extend_nulls on UnionArray as cannot infer type");
+}
+
+pub(super) fn extend_nulls_sparse(_mutable: &mut _MutableArrayData, _len: usize) {
+    panic!("cannot call extend_nulls on UnionArray as cannot infer type");
 }

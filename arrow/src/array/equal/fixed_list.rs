@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::array::{data::count_nulls, ArrayData};
-use crate::buffer::Buffer;
 use crate::datatypes::DataType;
 use crate::util::bit_util::get_bit;
 
@@ -25,8 +24,6 @@ use super::equal_range;
 pub(super) fn fixed_list_equal(
     lhs: &ArrayData,
     rhs: &ArrayData,
-    lhs_nulls: Option<&Buffer>,
-    rhs_nulls: Option<&Buffer>,
     lhs_start: usize,
     rhs_start: usize,
     len: usize,
@@ -39,23 +36,21 @@ pub(super) fn fixed_list_equal(
     let lhs_values = &lhs.child_data()[0];
     let rhs_values = &rhs.child_data()[0];
 
-    let lhs_null_count = count_nulls(lhs_nulls, lhs_start, len);
-    let rhs_null_count = count_nulls(rhs_nulls, rhs_start, len);
+    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
+    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
 
     if lhs_null_count == 0 && rhs_null_count == 0 {
         equal_range(
             lhs_values,
             rhs_values,
-            lhs_values.null_buffer(),
-            rhs_values.null_buffer(),
-            size * lhs_start,
-            size * rhs_start,
+            (lhs_start + lhs.offset()) * size,
+            (rhs_start + rhs.offset()) * size,
             size * len,
         )
     } else {
         // get a ref of the null buffer bytes, to use in testing for nullness
-        let lhs_null_bytes = lhs_nulls.as_ref().unwrap().as_slice();
-        let rhs_null_bytes = rhs_nulls.as_ref().unwrap().as_slice();
+        let lhs_null_bytes = lhs.null_buffer().as_ref().unwrap().as_slice();
+        let rhs_null_bytes = rhs.null_buffer().as_ref().unwrap().as_slice();
         // with nulls, we need to compare item by item whenever it is not null
         (0..len).all(|i| {
             let lhs_pos = lhs_start + i;
@@ -69,10 +64,8 @@ pub(super) fn fixed_list_equal(
                     && equal_range(
                         lhs_values,
                         rhs_values,
-                        lhs_values.null_buffer(),
-                        rhs_values.null_buffer(),
-                        lhs_pos * size,
-                        rhs_pos * size,
+                        (lhs_pos + lhs.offset()) * size,
+                        (rhs_pos + rhs.offset()) * size,
                         size, // 1 * size since we are comparing a single entry
                     )
         })
