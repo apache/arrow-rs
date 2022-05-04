@@ -108,29 +108,33 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         //
         // The first identifies if the list is null
         // The second identifies if the list is empty
+        //
+        // The child data returned above is padded with a value for each not-fully defined level.
+        // Therefore null and empty lists will correspond to a value in the child array.
+        //
+        // Whilst nulls may have a non-zero slice in the offsets array, empty lists must
+        // be of zero length. As a result we MUST filter out values corresponding to empty
+        // lists, and for consistency we do the same for nulls.
 
-        // Whilst nulls may have a non-zero slice in the offsets array, an empty slice
-        // must not, we must therefore filter out these empty slices
-
-        // The offset of the current element being considered
-        let mut cur_offset = 0;
-
-        // The offsets identifying the list start and end offsets
+        // The output offsets for the computed ListArray
         let mut list_offsets: Vec<OffsetSize> =
             Vec::with_capacity(next_batch_array.len());
 
-        // The validity mask of the final list
+        // The validity mask of the computed ListArray if nullable
         let mut validity = self
             .nullable
             .then(|| BooleanBufferBuilder::new(next_batch_array.len()));
 
-        // The position of the current slice of child data not corresponding to empty lists
-        let mut cur_start_offset = None;
+        // The offset into the filtered child data of the current level being considered
+        let mut cur_offset = 0;
 
-        // The number of child values skipped due to empty lists
+        // Identifies the start of a run of values to copy from the source child data
+        let mut filter_start = None;
+
+        // The number of child values skipped due to empty lists or nulls
         let mut skipped = 0;
 
-        // Builder used to construct child data, skipping empty lists
+        // Builder used to construct the filtered child data, skipping empty lists and nulls
         let mut child_data_builder = MutableArrayData::new(
             vec![next_batch_array.data()],
             false,
@@ -153,30 +157,32 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
                 }
                 Ordering::Less => {
                     // Create new array slice
+                    // Already checked that this cannot overflow
                     list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
 
-                    if *d + 1 == self.def_level {
-                        // Empty list
-                        if let Some(start) = cur_start_offset.take() {
-                            child_data_builder.extend(
-                                0,
-                                start + skipped,
-                                cur_offset + skipped,
-                            );
-                        }
+                    if *d >= self.def_level {
+                        // Fully defined value
+
+                        // Record current offset if it is None
+                        filter_start.get_or_insert_with(|| cur_offset + skipped);
+
+                        cur_offset += 1;
 
                         if let Some(validity) = validity.as_mut() {
                             validity.append(true)
                         }
-
-                        skipped += 1;
                     } else {
-                        cur_start_offset.get_or_insert(cur_offset);
-                        cur_offset += 1;
+                        // Flush the current slice of child values if any
+                        if let Some(start) = filter_start.take() {
+                            child_data_builder.extend(0, start, cur_offset + skipped);
+                        }
 
                         if let Some(validity) = validity.as_mut() {
-                            validity.append(*d >= self.def_level)
+                            // Valid if empty list
+                            validity.append(*d + 1 == self.def_level)
                         }
+
+                        skipped += 1;
                     }
                 }
             }
@@ -190,8 +196,8 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
             next_batch_array.data().clone()
         } else {
             // One or more empty lists - must build new array
-            if let Some(start) = cur_start_offset.take() {
-                child_data_builder.extend(0, start + skipped, cur_offset + skipped)
+            if let Some(start) = filter_start.take() {
+                child_data_builder.extend(0, start, cur_offset + skipped)
             }
 
             child_data_builder.freeze()
