@@ -192,10 +192,10 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
 
         let child_data = if skipped == 0 {
-            // No empty lists - can reuse original array
+            // No filtered values - can reuse original array
             next_batch_array.data().clone()
         } else {
-            // One or more empty lists - must build new array
+            // One or more filtered values - must build new array
             if let Some(start) = filter_start.take() {
                 child_data_builder.extend(0, start, cur_offset + skipped)
             }
