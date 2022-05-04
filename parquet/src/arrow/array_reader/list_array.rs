@@ -164,7 +164,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
                         // Fully defined value
 
                         // Record current offset if it is None
-                        filter_start.get_or_insert_with(|| cur_offset + skipped);
+                        filter_start.get_or_insert(cur_offset + skipped);
 
                         cur_offset += 1;
 
