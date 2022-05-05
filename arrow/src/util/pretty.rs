@@ -731,11 +731,12 @@ mod tests {
     #[test]
     fn test_pretty_format_nested_union() -> Result<()> {
         //Inner UnionArray
-        let mut builder = UnionBuilder::new_dense(4);
+        let mut builder = UnionBuilder::new_dense(5);
         builder.append::<Int32Type>("b", 1).unwrap();
         builder.append::<Float64Type>("c", 3.2234).unwrap();
         builder.append_null::<Float64Type>("c").unwrap();
         builder.append_null::<Int32Type>("b").unwrap();
+        builder.append_null::<Float64Type>("c").unwrap();
         let inner = builder.build().unwrap();
 
         let inner_field = Field::new(
@@ -751,8 +752,8 @@ mod tests {
         );
 
         // Can't use UnionBuilder with non-primitive types, so manually build outer UnionArray
-        let a_array = Int32Array::from(vec![None, None, None, Some(1234)]);
-        let type_ids = Buffer::from_slice_ref(&[1_i8, 1, 0, 0]);
+        let a_array = Int32Array::from(vec![None, None, None, Some(1234), Some(23)]);
+        let type_ids = Buffer::from_slice_ref(&[1_i8, 1, 0, 0, 1]);
 
         let children: Vec<(Field, Arc<dyn Array>)> = vec![
             (Field::new("a", DataType::Int32, true), Arc::new(a_array)),
@@ -782,6 +783,7 @@ mod tests {
             "| {European Union={c=3.2234}} |",
             "| {a=}                        |",
             "| {a=1234}                    |",
+            "| {European Union={c=}}       |",
             "+-----------------------------+",
         ];
         assert_eq!(expected, actual);

@@ -423,11 +423,12 @@ fn union_to_string(
     let name = fields
         .get(type_id as usize)
         .ok_or_else(|| {
-            ArrowError::InvalidArgumentError(
-                "Repl error: could not get field for the corresponding type in union array."
-                .to_string(),
-            )
-        })?.name();
+            ArrowError::InvalidArgumentError(format!(
+                "Repl error: could not get field name for type id: {} in union array.",
+                type_id,
+            ))
+        })?
+        .name();
 
     let value = array_value_to_string(
         &list.child(type_id),
