@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
@@ -28,7 +29,7 @@ use super::DataType;
 /// Contains the meta-data for a single relative type.
 ///
 /// The `Schema` object is an ordered collection of `Field` objects.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Clone, Ord)]
 pub struct Field {
     name: String,
     data_type: DataType,
@@ -50,6 +51,24 @@ impl PartialEq for Field {
 }
 
 impl Eq for Field {}
+
+impl PartialOrd for Field {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let mut ord = self.name.partial_cmp(other.name());
+        if let Some(Ordering::Equal) = ord {
+            ord = self.data_type.partial_cmp(other.data_type());
+
+            if let Some(Ordering::Equal) = ord {
+                ord = self.nullable.partial_cmp(&other.nullable);
+
+                if let Some(Ordering::Equal) = ord {
+                    ord = self.metadata.partial_cmp(&other.metadata);
+                }
+            }
+        }
+        ord
+    }
+}
 
 impl Hash for Field {
     fn hash<H: Hasher>(&self, state: &mut H) {
