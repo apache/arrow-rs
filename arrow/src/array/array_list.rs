@@ -118,8 +118,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 
     #[inline]
     fn get_type(data_type: &DataType) -> Option<&DataType> {
-        match (OffsetSize::is_large(), data_type){
-            (true, DataType::LargeList(child)) | (false, DataType::List(child)) => Some(child.data_type()),
+        match (OffsetSize::is_large(), data_type) {
+            (true, DataType::LargeList(child)) | (false, DataType::List(child)) => {
+                Some(child.data_type())
+            }
             _ => None,
         }
     }
