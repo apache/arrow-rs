@@ -57,7 +57,7 @@ fn create_array(
     field: &Field,
     data: &[u8],
     buffers: &[ipc::Buffer],
-    dictionaries: &HashMap<i64, ArrayRef>,
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
     mut node_index: usize,
     mut buffer_index: usize,
 ) -> Result<(ArrayRef, usize, usize)> {
@@ -103,7 +103,7 @@ fn create_array(
                 list_field,
                 data,
                 buffers,
-                dictionaries,
+                dictionaries_by_id,
                 node_index,
                 buffer_index,
             )?;
@@ -125,7 +125,7 @@ fn create_array(
                 list_field,
                 data,
                 buffers,
-                dictionaries,
+                dictionaries_by_id,
                 node_index,
                 buffer_index,
             )?;
@@ -150,7 +150,7 @@ fn create_array(
                     struct_field,
                     data,
                     buffers,
-                    dictionaries,
+                    dictionaries_by_id,
                     node_index,
                     buffer_index,
                 )?;
@@ -179,7 +179,7 @@ fn create_array(
                 ArrowError::IoError(format!("Field {} does not have dict id", field))
             })?;
 
-            let value_array = dictionaries.get(&dict_id).ok_or_else(|| {
+            let value_array = dictionaries_by_id.get(&dict_id).ok_or_else(|| {
                 ArrowError::IoError(format!(
                     "Cannot find a dictionary batch with dict id: {}",
                     dict_id
@@ -223,7 +223,7 @@ fn create_array(
                     field,
                     data,
                     buffers,
-                    dictionaries,
+                    dictionaries_by_id,
                     node_index,
                     buffer_index,
                 )?;
@@ -468,7 +468,7 @@ pub fn read_record_batch(
     buf: &[u8],
     batch: ipc::RecordBatch,
     schema: SchemaRef,
-    dictionaries: &HashMap<i64, ArrayRef>,
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
 ) -> Result<RecordBatch> {
     let buffers = batch.buffers().ok_or_else(|| {
@@ -491,7 +491,7 @@ pub fn read_record_batch(
                 field,
                 buf,
                 buffers,
-                dictionaries,
+                dictionaries_by_id,
                 node_index,
                 buffer_index,
             )?;
@@ -509,7 +509,7 @@ pub fn read_record_batch(
                 field,
                 buf,
                 buffers,
-                dictionaries,
+                dictionaries_by_id,
                 node_index,
                 buffer_index,
             )?;
