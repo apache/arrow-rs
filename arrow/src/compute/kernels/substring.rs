@@ -18,13 +18,125 @@
 //! Defines kernel to extract a substring of an Array
 //! Supported array types: \[Large\]StringArray, \[Large\]BinaryArray
 
+use crate::array::DictionaryArray;
 use crate::buffer::MutableBuffer;
+use crate::datatypes::{Int32Type, Int64Type};
 use crate::{array::*, buffer::Buffer};
 use crate::{
     datatypes::DataType,
     error::{ArrowError, Result},
 };
 use std::cmp::Ordering;
+use std::sync::Arc;
+
+/// Returns an ArrayRef with substrings of all the elements in `array`.
+///
+/// # Arguments
+///
+/// * `start` - The start index of all substrings.
+/// If `start >= 0`, then count from the start of the string,
+/// otherwise count from the end of the string.
+///
+/// * `length`(option) - The length of all substrings.
+/// If `length` is `None`, then the substring is from `start` to the end of the string.
+///
+/// Attention: Both `start` and `length` are counted by byte, not by char.
+///
+/// # Basic usage
+/// ```
+/// # use arrow::array::StringArray;
+/// # use arrow::compute::kernels::substring::substring;
+/// let array = StringArray::from(vec![Some("arrow"), None, Some("rust")]);
+/// let result = substring(&array, 1, Some(4)).unwrap();
+/// let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+/// assert_eq!(result, &StringArray::from(vec![Some("rrow"), None, Some("ust")]));
+/// ```
+///
+/// # Error
+/// - The function errors when the passed array is not a \[Large\]String array or \[Large\]Binary array.
+/// - The function errors if the offset of a substring in the input array is at invalid char boundary (only for \[Large\]String array).
+///
+/// ## Example of trying to get an invalid utf-8 format substring
+/// ```
+/// # use arrow::array::StringArray;
+/// # use arrow::compute::kernels::substring::substring;
+/// let array = StringArray::from(vec![Some("E=mc²")]);
+/// let error = substring(&array, 0, Some(5)).unwrap_err().to_string();
+/// assert!(error.contains("invalid utf-8 boundary"));
+/// ```
+pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<ArrayRef> {
+    macro_rules! generate_dict_arms {
+        ($kt: ident, $($t: ident: $gt: ident), *) => {
+            match $kt.as_ref() {
+                $(
+                    &DataType::$t => {
+                        let dict = array
+                            .as_any()
+                            .downcast_ref::<DictionaryArray<$gt>>()
+                            .unwrap_or_else(|| {
+                                panic!("Expect 'DictionaryArray<$gt>' but got {:?}", array)
+                            });
+                        let values = substring(dict.values(), start, length)?;
+                        let result = DictionaryArray::try_new(dict.keys(), &values)?;
+                        Ok(Arc::new(result))
+                    },
+                )*
+                    t => panic!("Unsupported dictionary key type: {}", t)
+            }
+        }
+    }
+
+    match array.data_type() {
+        DataType::Dictionary(kt, _) => {
+            generate_dict_arms!(kt, Int32: Int32Type, Int64: Int64Type)
+        }
+        DataType::LargeBinary => binary_substring(
+            array
+                .as_any()
+                .downcast_ref::<LargeBinaryArray>()
+                .expect("A large binary is expected"),
+            start,
+            length.map(|e| e as i64),
+        ),
+        DataType::Binary => binary_substring(
+            array
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .expect("A binary is expected"),
+            start as i32,
+            length.map(|e| e as i32),
+        ),
+        DataType::FixedSizeBinary(old_len) => fixed_size_binary_substring(
+            array
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .expect("a fixed size binary is expected"),
+            *old_len,
+            start as i32,
+            length.map(|e| e as i32),
+        ),
+        DataType::LargeUtf8 => utf8_substring(
+            array
+                .as_any()
+                .downcast_ref::<LargeStringArray>()
+                .expect("A large string is expected"),
+            start,
+            length.map(|e| e as i64),
+        ),
+        DataType::Utf8 => utf8_substring(
+            array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("A string is expected"),
+            start as i32,
+            length.map(|e| e as i32),
+        ),
+        _ => Err(ArrowError::ComputeError(format!(
+            "substring does not support type {:?}",
+            array.data_type()
+        ))),
+    }
+}
 
 fn binary_substring<OffsetSize: OffsetSizeTrait>(
     array: &GenericBinaryArray<OffsetSize>,
@@ -213,91 +325,6 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
         )
     };
     Ok(make_array(data))
-}
-
-/// Returns an ArrayRef with substrings of all the elements in `array`.
-///
-/// # Arguments
-///
-/// * `start` - The start index of all substrings.
-/// If `start >= 0`, then count from the start of the string,
-/// otherwise count from the end of the string.
-///
-/// * `length`(option) - The length of all substrings.
-/// If `length` is `None`, then the substring is from `start` to the end of the string.
-///
-/// Attention: Both `start` and `length` are counted by byte, not by char.
-///
-/// # Basic usage
-/// ```
-/// # use arrow::array::StringArray;
-/// # use arrow::compute::kernels::substring::substring;
-/// let array = StringArray::from(vec![Some("arrow"), None, Some("rust")]);
-/// let result = substring(&array, 1, Some(4)).unwrap();
-/// let result = result.as_any().downcast_ref::<StringArray>().unwrap();
-/// assert_eq!(result, &StringArray::from(vec![Some("rrow"), None, Some("ust")]));
-/// ```
-///
-/// # Error
-/// - The function errors when the passed array is not a \[Large\]String array or \[Large\]Binary array.
-/// - The function errors if the offset of a substring in the input array is at invalid char boundary (only for \[Large\]String array).
-///
-/// ## Example of trying to get an invalid utf-8 format substring
-/// ```
-/// # use arrow::array::StringArray;
-/// # use arrow::compute::kernels::substring::substring;
-/// let array = StringArray::from(vec![Some("E=mc²")]);
-/// let error = substring(&array, 0, Some(5)).unwrap_err().to_string();
-/// assert!(error.contains("invalid utf-8 boundary"));
-/// ```
-pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<ArrayRef> {
-    match array.data_type() {
-        DataType::LargeBinary => binary_substring(
-            array
-                .as_any()
-                .downcast_ref::<LargeBinaryArray>()
-                .expect("A large binary is expected"),
-            start,
-            length.map(|e| e as i64),
-        ),
-        DataType::Binary => binary_substring(
-            array
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .expect("A binary is expected"),
-            start as i32,
-            length.map(|e| e as i32),
-        ),
-        DataType::FixedSizeBinary(old_len) => fixed_size_binary_substring(
-            array
-                .as_any()
-                .downcast_ref::<FixedSizeBinaryArray>()
-                .expect("a fixed size binary is expected"),
-            *old_len,
-            start as i32,
-            length.map(|e| e as i32),
-        ),
-        DataType::LargeUtf8 => utf8_substring(
-            array
-                .as_any()
-                .downcast_ref::<LargeStringArray>()
-                .expect("A large string is expected"),
-            start,
-            length.map(|e| e as i64),
-        ),
-        DataType::Utf8 => utf8_substring(
-            array
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .expect("A string is expected"),
-            start as i32,
-            length.map(|e| e as i32),
-        ),
-        _ => Err(ArrowError::ComputeError(format!(
-            "substring does not support type {:?}",
-            array.data_type()
-        ))),
-    }
 }
 
 #[cfg(test)]
