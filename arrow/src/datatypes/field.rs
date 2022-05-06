@@ -29,7 +29,7 @@ use super::DataType;
 /// Contains the meta-data for a single relative type.
 ///
 /// The `Schema` object is an ordered collection of `Field` objects.
-#[derive(Serialize, Deserialize, Debug, Clone, Ord)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Field {
     name: String,
     data_type: DataType,
@@ -54,15 +54,21 @@ impl Eq for Field {}
 
 impl PartialOrd for Field {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        let mut ord = self.name.partial_cmp(other.name());
-        if let Some(Ordering::Equal) = ord {
-            ord = self.data_type.partial_cmp(other.data_type());
+        Some(self.cmp(other))
+    }
+}
 
-            if let Some(Ordering::Equal) = ord {
-                ord = self.nullable.partial_cmp(&other.nullable);
+impl Ord for Field {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let mut ord = self.name.cmp(other.name());
+        if let Ordering::Equal = ord {
+            ord = self.data_type.cmp(other.data_type());
 
-                if let Some(Ordering::Equal) = ord {
-                    ord = self.metadata.partial_cmp(&other.metadata);
+            if let Ordering::Equal = ord {
+                ord = self.nullable.cmp(&other.nullable);
+
+                if let Ordering::Equal = ord {
+                    ord = self.metadata.cmp(&other.metadata);
                 }
             }
         }
