@@ -197,28 +197,25 @@ async fn consume_flight_location(
     // first FlightData. Ignore this one.
     let _schema_again = resp.next().await.unwrap();
 
-    let mut dictionaries_by_field = HashMap::new();
+    let mut dictionaries_by_id = HashMap::new();
 
     for (counter, expected_batch) in expected_data.iter().enumerate() {
-        let data = receive_batch_flight_data(
-            &mut resp,
-            schema.clone(),
-            &mut dictionaries_by_field,
-        )
-        .await
-        .unwrap_or_else(|| {
-            panic!(
+        let data =
+            receive_batch_flight_data(&mut resp, schema.clone(), &mut dictionaries_by_id)
+                .await
+                .unwrap_or_else(|| {
+                    panic!(
                 "Got fewer batches than expected, received so far: {} expected: {}",
                 counter,
                 expected_data.len(),
             )
-        });
+                });
 
         let metadata = counter.to_string().into_bytes();
         assert_eq!(metadata, data.app_metadata);
 
         let actual_batch =
-            flight_data_to_arrow_batch(&data, schema.clone(), &dictionaries_by_field)
+            flight_data_to_arrow_batch(&data, schema.clone(), &dictionaries_by_id)
                 .expect("Unable to convert flight data to Arrow batch");
 
         assert_eq!(expected_batch.schema(), actual_batch.schema());
@@ -248,7 +245,7 @@ async fn consume_flight_location(
 async fn receive_batch_flight_data(
     resp: &mut Streaming<FlightData>,
     schema: SchemaRef,
-    dictionaries_by_field: &mut HashMap<i64, ArrayRef>,
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
 ) -> Option<FlightData> {
     let mut data = resp.next().await?.ok()?;
     let mut message = arrow::ipc::root_as_message(&data.data_header[..])
@@ -261,7 +258,7 @@ async fn receive_batch_flight_data(
                 .header_as_dictionary_batch()
                 .expect("Error parsing dictionary"),
             &schema,
-            dictionaries_by_field,
+            dictionaries_by_id,
         )
         .expect("Error reading dictionary");
 
