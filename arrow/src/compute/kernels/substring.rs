@@ -26,7 +26,7 @@ use crate::{
 };
 use std::cmp::Ordering;
 
-fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
+fn binary_substring<OffsetSize: OffsetSizeTrait>(
     array: &GenericBinaryArray<OffsetSize>,
     start: OffsetSize,
     length: Option<OffsetSize>,
@@ -74,7 +74,7 @@ fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            <OffsetSize as BinaryOffsetSizeTrait>::DATA_TYPE,
+            GenericBinaryArray::<OffsetSize>::get_data_type(),
             array.len(),
             None,
             null_bit_buffer,
@@ -136,7 +136,7 @@ fn fixed_size_binary_substring(
 }
 
 /// substring by byte
-fn utf8_substring<OffsetSize: StringOffsetSizeTrait>(
+fn utf8_substring<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: OffsetSize,
     length: Option<OffsetSize>,
@@ -203,7 +203,7 @@ fn utf8_substring<OffsetSize: StringOffsetSizeTrait>(
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            <OffsetSize as StringOffsetSizeTrait>::DATA_TYPE,
+            GenericStringArray::<OffsetSize>::get_data_type(),
             array.len(),
             None,
             null_bit_buffer,
@@ -305,7 +305,7 @@ mod tests {
     use super::*;
 
     #[allow(clippy::type_complexity)]
-    fn with_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
+    fn with_nulls_generic_binary<O: OffsetSizeTrait>() -> Result<()> {
         let cases: Vec<(Vec<Option<&[u8]>>, i64, Option<u64>, Vec<Option<&[u8]>>)> = vec![
             // all-nulls array is always identical
             (vec![None, None, None], -1, Some(1), vec![None, None, None]),
@@ -376,7 +376,7 @@ mod tests {
     }
 
     #[allow(clippy::type_complexity)]
-    fn without_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
+    fn without_nulls_generic_binary<O: OffsetSizeTrait>() -> Result<()> {
         let cases: Vec<(Vec<&[u8]>, i64, Option<u64>, Vec<&[u8]>)> = vec![
             // empty array is always identical
             (vec![b"", b"", b""], 2, Some(1), vec![b"", b"", b""]),
@@ -800,7 +800,7 @@ mod tests {
         Ok(())
     }
 
-    fn with_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
+    fn with_nulls_generic_string<O: OffsetSizeTrait>() -> Result<()> {
         let cases = vec![
             // all-nulls array is always identical
             (vec![None, None, None], 0, None, vec![None, None, None]),
@@ -870,7 +870,7 @@ mod tests {
         with_nulls_generic_string::<i64>()
     }
 
-    fn without_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
+    fn without_nulls_generic_string<O: OffsetSizeTrait>() -> Result<()> {
         let cases = vec![
             // empty array is always identical
             (vec!["", "", ""], 0, None, vec!["", "", ""]),

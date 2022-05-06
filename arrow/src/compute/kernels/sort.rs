@@ -614,7 +614,7 @@ fn insert_valid_values<T>(result_slice: &mut [u32], offset: usize, valids: &[(u3
 }
 
 /// Sort strings
-fn sort_string<Offset: StringOffsetSizeTrait>(
+fn sort_string<Offset: OffsetSizeTrait>(
     values: &ArrayRef,
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
@@ -779,7 +779,7 @@ fn sort_binary<S>(
     limit: Option<usize>,
 ) -> UInt32Array
 where
-    S: BinaryOffsetSizeTrait,
+    S: OffsetSizeTrait,
 {
     let mut valids: Vec<(u32, &[u8])> = values
         .as_any()
@@ -1343,7 +1343,7 @@ mod tests {
         }
 
         // Generic size binary array
-        fn make_generic_binary_array<S: BinaryOffsetSizeTrait>(
+        fn make_generic_binary_array<S: OffsetSizeTrait>(
             data: &[Option<Vec<u8>>],
         ) -> Arc<GenericBinaryArray<S>> {
             Arc::new(GenericBinaryArray::<S>::from_opt_vec(

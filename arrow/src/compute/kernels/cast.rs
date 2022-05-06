@@ -1345,7 +1345,7 @@ fn cast_timestamp_to_string<T, OffsetSize>(array: &ArrayRef) -> Result<ArrayRef>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: From<<T as ArrowPrimitiveType>::Native>,
-    OffsetSize: StringOffsetSizeTrait,
+    OffsetSize: OffsetSizeTrait,
 {
     let array = array.as_any().downcast_ref::<PrimitiveArray<T>>().unwrap();
 
@@ -1363,7 +1363,7 @@ where
 }
 
 /// Cast date32 types to Utf8/LargeUtf8
-fn cast_date32_to_string<OffsetSize: StringOffsetSizeTrait>(
+fn cast_date32_to_string<OffsetSize: OffsetSizeTrait>(
     array: &ArrayRef,
 ) -> Result<ArrayRef> {
     let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
@@ -1382,7 +1382,7 @@ fn cast_date32_to_string<OffsetSize: StringOffsetSizeTrait>(
 }
 
 /// Cast date64 types to Utf8/LargeUtf8
-fn cast_date64_to_string<OffsetSize: StringOffsetSizeTrait>(
+fn cast_date64_to_string<OffsetSize: OffsetSizeTrait>(
     array: &ArrayRef,
 ) -> Result<ArrayRef> {
     let array = array.as_any().downcast_ref::<Date64Array>().unwrap();
@@ -1405,7 +1405,7 @@ fn cast_numeric_to_string<FROM, OffsetSize>(array: &ArrayRef) -> Result<ArrayRef
 where
     FROM: ArrowNumericType,
     FROM::Native: lexical_core::ToLexical,
-    OffsetSize: StringOffsetSizeTrait,
+    OffsetSize: OffsetSizeTrait,
 {
     Ok(Arc::new(numeric_to_string_cast::<FROM, OffsetSize>(
         array
@@ -1421,7 +1421,7 @@ fn numeric_to_string_cast<T, OffsetSize>(
 where
     T: ArrowPrimitiveType + ArrowNumericType,
     T::Native: lexical_core::ToLexical,
-    OffsetSize: StringOffsetSizeTrait,
+    OffsetSize: OffsetSizeTrait,
 {
     from.iter()
         .map(|maybe_value| maybe_value.map(lexical_to_string))
@@ -1429,7 +1429,7 @@ where
 }
 
 /// Cast numeric types to Utf8
-fn cast_string_to_numeric<T, Offset: StringOffsetSizeTrait>(
+fn cast_string_to_numeric<T, Offset: OffsetSizeTrait>(
     from: &ArrayRef,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef>
@@ -1445,7 +1445,7 @@ where
     )?))
 }
 
-fn string_to_numeric_cast<T, Offset: StringOffsetSizeTrait>(
+fn string_to_numeric_cast<T, Offset: OffsetSizeTrait>(
     from: &GenericStringArray<Offset>,
     cast_options: &CastOptions,
 ) -> Result<PrimitiveArray<T>>
@@ -1494,7 +1494,7 @@ where
 }
 
 /// Casts generic string arrays to Date32Array
-fn cast_string_to_date32<Offset: StringOffsetSizeTrait>(
+fn cast_string_to_date32<Offset: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
@@ -1556,7 +1556,7 @@ fn cast_string_to_date32<Offset: StringOffsetSizeTrait>(
 }
 
 /// Casts generic string arrays to Date64Array
-fn cast_string_to_date64<Offset: StringOffsetSizeTrait>(
+fn cast_string_to_date64<Offset: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
@@ -1617,7 +1617,7 @@ fn cast_string_to_date64<Offset: StringOffsetSizeTrait>(
 }
 
 /// Casts generic string arrays to TimeStampNanosecondArray
-fn cast_string_to_timestamp_ns<Offset: StringOffsetSizeTrait>(
+fn cast_string_to_timestamp_ns<Offset: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
@@ -2047,8 +2047,8 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
 /// a `Utf8` array it will return an Error.
 fn cast_str_container<OffsetSizeFrom, OffsetSizeTo>(array: &dyn Array) -> Result<ArrayRef>
 where
-    OffsetSizeFrom: StringOffsetSizeTrait + ToPrimitive,
-    OffsetSizeTo: StringOffsetSizeTrait + NumCast + ArrowNativeType,
+    OffsetSizeFrom: OffsetSizeTrait + ToPrimitive,
+    OffsetSizeTo: OffsetSizeTrait + NumCast + ArrowNativeType,
 {
     let str_array = array
         .as_any()

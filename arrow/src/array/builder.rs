@@ -1165,9 +1165,7 @@ pub struct DecimalBuilder {
     scale: usize,
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> ArrayBuilder
-    for GenericBinaryBuilder<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSize> {
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -1199,9 +1197,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> ArrayBuilder
     }
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> ArrayBuilder
-    for GenericStringBuilder<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericStringBuilder<OffsetSize> {
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -1298,7 +1294,7 @@ impl ArrayBuilder for DecimalBuilder {
     }
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
     /// Creates a new `GenericBinaryBuilder`, `capacity` is the number of bytes in the values
     /// array
     pub fn new(capacity: usize) -> Self {
@@ -1347,7 +1343,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
     }
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> GenericStringBuilder<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
     /// Creates a new `StringBuilder`,
     /// `capacity` is the number of bytes of string data to pre-allocate space for in this builder
     pub fn new(capacity: usize) -> Self {
