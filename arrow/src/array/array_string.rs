@@ -38,8 +38,11 @@ pub struct GenericStringArray<OffsetSize: OffsetSizeTrait> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
+    /// Get the data type of the array.
+    // Declare this function as `pub const fn` after
+    // https://github.com/rust-lang/rust/issues/93706 is merged.
     pub fn get_data_type() -> DataType {
-        if OffsetSize::is_large() {
+        if OffsetSize::IS_LARGE {
             DataType::LargeUtf8
         } else {
             DataType::Utf8
@@ -273,7 +276,7 @@ impl<'a, T: OffsetSizeTrait> GenericStringArray<T> {
 
 impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericStringArray<OffsetSize> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let prefix = if OffsetSize::is_large() { "Large" } else { "" };
+        let prefix = if OffsetSize::IS_LARGE { "Large" } else { "" };
 
         write!(f, "{}StringArray\n[\n", prefix)?;
         print_long_array(self, f, |array, index, f| {

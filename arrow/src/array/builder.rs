@@ -983,7 +983,7 @@ where
             values_data.data_type().clone(),
             true, // TODO: find a consistent way of getting this
         ));
-        let data_type = if OffsetSize::is_large() {
+        let data_type = if OffsetSize::IS_LARGE {
             DataType::LargeList(field)
         } else {
             DataType::List(field)
