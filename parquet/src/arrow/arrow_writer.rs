@@ -1058,7 +1058,7 @@ mod tests {
         let stocks_field = Field::new(
             "stocks",
             DataType::Map(
-                Box::new(Field::new("entries", entries_struct_type, false)),
+                Box::new(Field::new("entries", entries_struct_type, true)),
                 false,
             ),
             true,
