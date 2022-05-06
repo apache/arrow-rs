@@ -50,7 +50,7 @@ pub fn flight_data_from_arrow_batch(
 pub fn flight_data_to_arrow_batch(
     data: &FlightData,
     schema: SchemaRef,
-    dictionaries_by_field: &HashMap<i64, ArrayRef>,
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
 ) -> Result<RecordBatch> {
     // check that the data_header is a record batch message
     let message = arrow::ipc::root_as_message(&data.data_header[..]).map_err(|err| {
@@ -69,7 +69,7 @@ pub fn flight_data_to_arrow_batch(
                 &data.data_body,
                 batch,
                 schema,
-                dictionaries_by_field,
+                dictionaries_by_id,
                 None,
             )
         })?

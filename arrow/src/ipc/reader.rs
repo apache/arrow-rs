@@ -175,8 +175,16 @@ fn create_array(
                 .map(|buf| read_buffer(buf, data))
                 .collect();
 
-            let value_array =
-                dictionaries.get(&field.dict_id().unwrap()).unwrap().clone();
+            let dict_id = field.dict_id().ok_or_else(|| {
+                ArrowError::IoError(format!("Field {} does not have dict id", field))
+            })?;
+
+            let value_array = dictionaries.get(&dict_id).ok_or_else(|| {
+                ArrowError::IoError(format!(
+                    "Cannot find a dictionary batch with dict id: {}",
+                    dict_id
+                ))
+            })?;
             node_index += 1;
             buffer_index += 2;
 
@@ -184,7 +192,7 @@ fn create_array(
                 index_node,
                 data_type,
                 &index_buffers[..],
-                value_array,
+                value_array.clone(),
             )
         }
         Union(fields, mode) => {
@@ -514,12 +522,12 @@ pub fn read_record_batch(
 }
 
 /// Read the dictionary from the buffer and provided metadata,
-/// updating the `dictionaries_by_field` with the resulting dictionary
+/// updating the `dictionaries_by_id` with the resulting dictionary
 pub fn read_dictionary(
     buf: &[u8],
     batch: ipc::DictionaryBatch,
     schema: &Schema,
-    dictionaries_by_field: &mut HashMap<i64, ArrayRef>,
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
 ) -> Result<()> {
     if batch.isDelta() {
         return Err(ArrowError::IoError(
@@ -548,7 +556,7 @@ pub fn read_dictionary(
                 buf,
                 batch.data().unwrap(),
                 Arc::new(schema),
-                dictionaries_by_field,
+                dictionaries_by_id,
                 None,
             )?;
             Some(record_batch.column(0).clone())
@@ -562,7 +570,7 @@ pub fn read_dictionary(
     // We don't currently record the isOrdered field. This could be general
     // attributes of arrays.
     // Add (possibly multiple) array refs to the dictionaries array.
-    dictionaries_by_field.insert(id, dictionary_values.clone());
+    dictionaries_by_id.insert(id, dictionary_values.clone());
 
     Ok(())
 }
@@ -589,7 +597,7 @@ pub struct FileReader<R: Read + Seek> {
     /// Optional dictionaries for each schema field.
     ///
     /// Dictionaries may be appended to in the streaming format.
-    dictionaries_by_field: HashMap<i64, ArrayRef>,
+    dictionaries_by_id: HashMap<i64, ArrayRef>,
 
     /// Metadata version
     metadata_version: ipc::MetadataVersion,
@@ -647,7 +655,7 @@ impl<R: Read + Seek> FileReader<R> {
         let schema = ipc::convert::fb_to_schema(ipc_schema);
 
         // Create an array of optional dictionary value arrays, one per field.
-        let mut dictionaries_by_field = HashMap::new();
+        let mut dictionaries_by_id = HashMap::new();
         if let Some(dictionaries) = footer.dictionaries() {
             for block in dictionaries {
                 // read length from end of offset
@@ -680,12 +688,7 @@ impl<R: Read + Seek> FileReader<R> {
                         ))?;
                         reader.read_exact(&mut buf)?;
 
-                        read_dictionary(
-                            &buf,
-                            batch,
-                            &schema,
-                            &mut dictionaries_by_field,
-                        )?;
+                        read_dictionary(&buf, batch, &schema, &mut dictionaries_by_id)?;
                     }
                     t => {
                         return Err(ArrowError::IoError(format!(
@@ -710,7 +713,7 @@ impl<R: Read + Seek> FileReader<R> {
             blocks: blocks.to_vec(),
             current_block: 0,
             total_blocks,
-            dictionaries_by_field,
+            dictionaries_by_id,
             metadata_version: footer.version(),
             projection,
         })
@@ -792,7 +795,7 @@ impl<R: Read + Seek> FileReader<R> {
                     &buf,
                     batch,
                     self.schema(),
-                    &self.dictionaries_by_field,
+                    &self.dictionaries_by_id,
                     self.projection.as_ref().map(|x| x.0.as_ref()),
 
                 ).map(Some)
@@ -837,7 +840,7 @@ pub struct StreamReader<R: Read> {
     /// Optional dictionaries for each schema field.
     ///
     /// Dictionaries may be appended to in the streaming format.
-    dictionaries_by_field: HashMap<i64, ArrayRef>,
+    dictionaries_by_id: HashMap<i64, ArrayRef>,
 
     /// An indicator of whether the stream is complete.
     ///
@@ -881,7 +884,7 @@ impl<R: Read> StreamReader<R> {
         let schema = ipc::convert::fb_to_schema(ipc_schema);
 
         // Create an array of optional dictionary value arrays, one per field.
-        let dictionaries_by_field = HashMap::new();
+        let dictionaries_by_id = HashMap::new();
 
         let projection = match projection {
             Some(projection_indices) => {
@@ -894,7 +897,7 @@ impl<R: Read> StreamReader<R> {
             reader,
             schema: Arc::new(schema),
             finished: false,
-            dictionaries_by_field,
+            dictionaries_by_id,
             projection,
         })
     }
@@ -968,7 +971,7 @@ impl<R: Read> StreamReader<R> {
                 let mut buf = vec![0; message.bodyLength() as usize];
                 self.reader.read_exact(&mut buf)?;
 
-                read_record_batch(&buf, batch, self.schema(), &self.dictionaries_by_field, self.projection.as_ref().map(|x| x.0.as_ref())).map(Some)
+                read_record_batch(&buf, batch, self.schema(), &self.dictionaries_by_id, self.projection.as_ref().map(|x| x.0.as_ref())).map(Some)
             }
             ipc::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().ok_or_else(|| {
@@ -981,7 +984,7 @@ impl<R: Read> StreamReader<R> {
                 self.reader.read_exact(&mut buf)?;
 
                 read_dictionary(
-                    &buf, batch, &self.schema, &mut self.dictionaries_by_field
+                    &buf, batch, &self.schema, &mut self.dictionaries_by_id
                 )?;
 
                 // read the next message until we encounter a RecordBatch
