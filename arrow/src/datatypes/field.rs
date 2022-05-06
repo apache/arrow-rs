@@ -41,6 +41,11 @@ pub struct Field {
     metadata: Option<BTreeMap<String, String>>,
 }
 
+// Auto-derive `PartialEq` traits will pull `dict_id` and `dict_is_ordered`
+// into comparison. However, these properties are only used in IPC context
+// for matching dictionary encoded data. They are not necessary to be same
+// to consider schema equality. For example, in C++ `Field` implementation,
+// it doesn't contain these dictionary properties too.
 impl PartialEq for Field {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
@@ -60,19 +65,11 @@ impl PartialOrd for Field {
 
 impl Ord for Field {
     fn cmp(&self, other: &Self) -> Ordering {
-        let mut ord = self.name.cmp(other.name());
-        if let Ordering::Equal = ord {
-            ord = self.data_type.cmp(other.data_type());
-
-            if let Ordering::Equal = ord {
-                ord = self.nullable.cmp(&other.nullable);
-
-                if let Ordering::Equal = ord {
-                    ord = self.metadata.cmp(&other.metadata);
-                }
-            }
-        }
-        ord
+        self.name
+            .cmp(other.name())
+            .then(self.data_type.cmp(other.data_type()))
+            .then(self.nullable.cmp(&other.nullable))
+            .then(self.metadata.cmp(&other.metadata))
     }
 }
 
@@ -669,6 +666,8 @@ impl std::fmt::Display for Field {
 #[cfg(test)]
 mod test {
     use super::{DataType, Field};
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     #[test]
     fn test_fields_with_dict_id() {
@@ -721,5 +720,44 @@ mod test {
         for field in field.fields_with_dict_id(20) {
             assert_eq!(dict2, *field);
         }
+    }
+
+    fn get_field_hash(field: &Field) -> u64 {
+        let mut s = DefaultHasher::new();
+        field.hash(&mut s);
+        s.finish()
+    }
+
+    #[test]
+    fn test_field_comparison_case() {
+        // dictionary-encoding properties not used for field comparison
+        let dict1 = Field::new_dict(
+            "dict1",
+            DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
+            false,
+            10,
+            false,
+        );
+        let dict2 = Field::new_dict(
+            "dict1",
+            DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
+            false,
+            20,
+            false,
+        );
+
+        assert_eq!(dict1, dict2);
+        assert_eq!(get_field_hash(&dict1), get_field_hash(&dict2));
+
+        let dict1 = Field::new_dict(
+            "dict0",
+            DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
+            false,
+            10,
+            false,
+        );
+
+        assert_ne!(dict1, dict2);
+        assert_ne!(get_field_hash(&dict1), get_field_hash(&dict2));
     }
 }
