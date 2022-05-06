@@ -20,7 +20,7 @@
 
 use crate::array::DictionaryArray;
 use crate::buffer::MutableBuffer;
-use crate::datatypes::{Int32Type, Int64Type};
+use crate::datatypes::*;
 use crate::{array::*, buffer::Buffer};
 use crate::{
     datatypes::DataType,
@@ -65,7 +65,7 @@ use std::sync::Arc;
 /// assert!(error.contains("invalid utf-8 boundary"));
 /// ```
 pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<ArrayRef> {
-    macro_rules! generate_dict_arms {
+    macro_rules! substring_dict {
         ($kt: ident, $($t: ident: $gt: ident), *) => {
             match $kt.as_ref() {
                 $(
@@ -88,7 +88,17 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
 
     match array.data_type() {
         DataType::Dictionary(kt, _) => {
-            generate_dict_arms!(kt, Int32: Int32Type, Int64: Int64Type)
+            substring_dict!(
+                kt,
+                Int8: Int8Type,
+                Int16: Int16Type,
+                Int32: Int32Type,
+                Int64: Int64Type,
+                UInt8: UInt8Type,
+                UInt16: UInt16Type,
+                UInt32: UInt32Type,
+                UInt64: UInt64Type
+            )
         }
         DataType::LargeBinary => binary_substring(
             array
@@ -330,6 +340,7 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datatypes::*;
 
     #[allow(clippy::type_complexity)]
     fn with_nulls_generic_binary<O: OffsetSizeTrait>() -> Result<()> {
@@ -979,6 +990,56 @@ mod tests {
     #[test]
     fn without_nulls_large_string() -> Result<()> {
         without_nulls_generic_string::<i64>()
+    }
+
+    #[test]
+    fn dictionary() -> Result<()> {
+        _dictionary::<Int8Type>()?;
+        _dictionary::<Int16Type>()?;
+        _dictionary::<Int32Type>()?;
+        _dictionary::<Int64Type>()?;
+        _dictionary::<UInt8Type>()?;
+        _dictionary::<UInt16Type>()?;
+        _dictionary::<UInt32Type>()?;
+        _dictionary::<UInt64Type>()?;
+        Ok(())
+    }
+
+    fn _dictionary<K: ArrowDictionaryKeyType>() -> Result<()> {
+        const TOTAL: i32 = 100;
+
+        let v = ["aaa", "bbb", "ccc", "ddd", "eee"];
+        let data: Vec<Option<&str>> = (0..TOTAL)
+            .map(|n| {
+                let i = n % 5;
+                if i == 3 {
+                    None
+                } else {
+                    Some(v[i as usize])
+                }
+            })
+            .collect();
+
+        let dict_array: DictionaryArray<K> = data.clone().into_iter().collect();
+
+        let expected: Vec<Option<&str>> =
+            data.iter().map(|opt| opt.map(|s| &s[1..3])).collect();
+
+        let res = substring(&dict_array, 1, Some(2))?;
+        let actual = res.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
+        let actual: Vec<Option<&str>> = actual
+            .values()
+            .as_any()
+            .downcast_ref::<GenericStringArray<i32>>()
+            .unwrap()
+            .take_iter(actual.keys_iter())
+            .collect();
+
+        for i in 0..TOTAL as usize {
+            assert_eq!(expected[i], actual[i],);
+        }
+
+        Ok(())
     }
 
     #[test]
