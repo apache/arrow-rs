@@ -627,7 +627,10 @@ fn new_null_sized_decimal(data_type: &DataType, length: usize) -> ArrayRef {
             Some(length),
             Some(MutableBuffer::new_null(length).into()),
             0,
-            vec![Buffer::from(vec![0u8; length * std::mem::size_of::<i128>()])],
+            vec![Buffer::from(vec![
+                0u8;
+                length * std::mem::size_of::<i128>()
+            ])],
             vec![],
         )
     })
