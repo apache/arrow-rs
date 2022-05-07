@@ -74,7 +74,8 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
                             .as_any()
                             .downcast_ref::<DictionaryArray<$gt>>()
                             .unwrap_or_else(|| {
-                                panic!("Expect 'DictionaryArray<$gt>' but got {:?}", array)
+                                panic!("Expect 'DictionaryArray<{}>' but got array of data type {:?}",
+                                       stringify!($gt), array.data_type())
                             });
                         let values = substring(dict.values(), start, length)?;
                         let result = DictionaryArray::try_new(dict.keys(), &values)?;
