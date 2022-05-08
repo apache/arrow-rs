@@ -44,8 +44,11 @@ pub struct GenericBinaryArray<OffsetSize: OffsetSizeTrait> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
+    /// Get the data type of the array.
+    // Declare this function as `pub const fn` after
+    // https://github.com/rust-lang/rust/issues/93706 is merged.
     pub fn get_data_type() -> DataType {
-        if OffsetSize::is_large() {
+        if OffsetSize::IS_LARGE {
             DataType::LargeBinary
         } else {
             DataType::Binary
@@ -226,7 +229,7 @@ impl<'a, T: OffsetSizeTrait> GenericBinaryArray<T> {
 
 impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericBinaryArray<OffsetSize> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let prefix = if OffsetSize::is_large() { "Large" } else { "" };
+        let prefix = if OffsetSize::IS_LARGE { "Large" } else { "" };
 
         write!(f, "{}BinaryArray\n[\n", prefix)?;
         print_long_array(self, f, |array, index, f| {

@@ -32,21 +32,15 @@ use crate::{
 
 /// trait declaring an offset size, relevant for i32 vs i64 array types.
 pub trait OffsetSizeTrait: ArrowNativeType + Num + Ord + std::ops::AddAssign {
-    fn is_large() -> bool;
+    const IS_LARGE: bool;
 }
 
 impl OffsetSizeTrait for i32 {
-    #[inline]
-    fn is_large() -> bool {
-        false
-    }
+    const IS_LARGE: bool = false;
 }
 
 impl OffsetSizeTrait for i64 {
-    #[inline]
-    fn is_large() -> bool {
-        true
-    }
+    const IS_LARGE: bool = true;
 }
 
 /// Generic struct for a variable-size list array.
@@ -118,7 +112,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 
     #[inline]
     fn get_type(data_type: &DataType) -> Option<&DataType> {
-        match (OffsetSize::is_large(), data_type) {
+        match (OffsetSize::IS_LARGE, data_type) {
             (true, DataType::LargeList(child)) | (false, DataType::List(child)) => {
                 Some(child.data_type())
             }
@@ -175,7 +169,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
             .collect();
 
         let field = Box::new(Field::new("item", T::DATA_TYPE, true));
-        let data_type = if OffsetSize::is_large() {
+        let data_type = if OffsetSize::IS_LARGE {
             DataType::LargeList(field)
         } else {
             DataType::List(field)
@@ -255,7 +249,7 @@ impl<OffsetSize: 'static + OffsetSizeTrait> Array for GenericListArray<OffsetSiz
 
 impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericListArray<OffsetSize> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let prefix = if OffsetSize::is_large() { "Large" } else { "" };
+        let prefix = if OffsetSize::IS_LARGE { "Large" } else { "" };
 
         write!(f, "{}ListArray\n[\n", prefix)?;
         print_long_array(self, f, |array, index, f| {
