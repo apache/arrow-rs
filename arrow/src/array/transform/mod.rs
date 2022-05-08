@@ -17,9 +17,8 @@
 
 use super::{
     data::{into_buffers, new_buffers},
-    ArrayData, ArrayDataBuilder,
+    ArrayData, ArrayDataBuilder, OffsetSizeTrait,
 };
-use crate::array::StringOffsetSizeTrait;
 use crate::{
     buffer::MutableBuffer,
     datatypes::DataType,
@@ -333,7 +332,7 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
     })
 }
 
-fn preallocate_offset_and_binary_buffer<Offset: StringOffsetSizeTrait>(
+fn preallocate_offset_and_binary_buffer<Offset: OffsetSizeTrait>(
     capacity: usize,
     binary_size: usize,
 ) -> [MutableBuffer; 2] {

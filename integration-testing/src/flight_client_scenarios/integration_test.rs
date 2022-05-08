@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::{read_json_file, ArrowFile};
+use std::collections::HashMap;
 
 use arrow::{
     array::ArrayRef,
@@ -190,13 +191,13 @@ async fn consume_flight_location(
         .unwrap_or_else(|| panic!("Failed to receive flight schema"));
     let actual_schema = Arc::new(flight_schema);
 
-    let mut dictionaries_by_field = vec![None; actual_schema.fields().len()];
+    let mut dictionaries_by_id = HashMap::new();
 
     for (counter, expected_batch) in expected_data.iter().enumerate() {
         let data = receive_batch_flight_data(
             &mut resp,
             actual_schema.clone(),
-            &mut dictionaries_by_field,
+            &mut dictionaries_by_id,
         )
         .await
         .unwrap_or_else(|| {
@@ -210,12 +211,9 @@ async fn consume_flight_location(
         let metadata = counter.to_string().into_bytes();
         assert_eq!(metadata, data.app_metadata);
 
-        let actual_batch = flight_data_to_arrow_batch(
-            &data,
-            actual_schema.clone(),
-            &dictionaries_by_field,
-        )
-        .expect("Unable to convert flight data to Arrow batch");
+        let actual_batch =
+            flight_data_to_arrow_batch(&data, actual_schema.clone(), &dictionaries_by_id)
+                .expect("Unable to convert flight data to Arrow batch");
 
         assert_eq!(expected_batch.schema(), actual_batch.schema());
         assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
@@ -258,7 +256,7 @@ async fn receive_schema_flight_data(resp: &mut Streaming<FlightData>) -> Option<
 async fn receive_batch_flight_data(
     resp: &mut Streaming<FlightData>,
     schema: SchemaRef,
-    dictionaries_by_field: &mut [Option<ArrayRef>],
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
 ) -> Option<FlightData> {
     let mut data = resp.next().await?.ok()?;
     let mut message = arrow::ipc::root_as_message(&data.data_header[..])
@@ -271,7 +269,7 @@ async fn receive_batch_flight_data(
                 .header_as_dictionary_batch()
                 .expect("Error parsing dictionary"),
             &schema,
-            dictionaries_by_field,
+            dictionaries_by_id,
         )
         .expect("Error reading dictionary");
 

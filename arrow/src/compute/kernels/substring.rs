@@ -26,7 +26,7 @@ use crate::{
 };
 use std::cmp::Ordering;
 
-fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
+fn binary_substring<OffsetSize: OffsetSizeTrait>(
     array: &GenericBinaryArray<OffsetSize>,
     start: OffsetSize,
     length: Option<OffsetSize>,
@@ -74,7 +74,7 @@ fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            <OffsetSize as BinaryOffsetSizeTrait>::DATA_TYPE,
+            GenericBinaryArray::<OffsetSize>::get_data_type(),
             array.len(),
             None,
             null_bit_buffer,
@@ -86,8 +86,57 @@ fn binary_substring<OffsetSize: BinaryOffsetSizeTrait>(
     Ok(make_array(data))
 }
 
+fn fixed_size_binary_substring(
+    array: &FixedSizeBinaryArray,
+    old_len: i32,
+    start: i32,
+    length: Option<i32>,
+) -> Result<ArrayRef> {
+    let new_start = if start >= 0 {
+        start.min(old_len)
+    } else {
+        (old_len + start).max(0)
+    };
+    let new_len = match length {
+        Some(len) => len.min(old_len - new_start),
+        None => old_len - new_start,
+    };
+
+    // build value buffer
+    let num_of_elements = array.len();
+    let values = array.value_data();
+    let data = values.as_slice();
+    let mut new_values = MutableBuffer::new(num_of_elements * (new_len as usize));
+    (0..num_of_elements)
+        .map(|idx| {
+            let offset = array.value_offset(idx);
+            (
+                (offset + new_start) as usize,
+                (offset + new_start + new_len) as usize,
+            )
+        })
+        .for_each(|(start, end)| new_values.extend_from_slice(&data[start..end]));
+
+    let array_data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::FixedSizeBinary(new_len),
+            num_of_elements,
+            None,
+            array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(array.offset(), num_of_elements)),
+            0,
+            vec![new_values.into()],
+            vec![],
+        )
+    };
+
+    Ok(make_array(array_data))
+}
+
 /// substring by byte
-fn utf8_substring<OffsetSize: StringOffsetSizeTrait>(
+fn utf8_substring<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: OffsetSize,
     length: Option<OffsetSize>,
@@ -154,7 +203,7 @@ fn utf8_substring<OffsetSize: StringOffsetSizeTrait>(
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            <OffsetSize as StringOffsetSizeTrait>::DATA_TYPE,
+            GenericStringArray::<OffsetSize>::get_data_type(),
             array.len(),
             None,
             null_bit_buffer,
@@ -219,6 +268,15 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
             start as i32,
             length.map(|e| e as i32),
         ),
+        DataType::FixedSizeBinary(old_len) => fixed_size_binary_substring(
+            array
+                .as_any()
+                .downcast_ref::<FixedSizeBinaryArray>()
+                .expect("a fixed size binary is expected"),
+            *old_len,
+            start as i32,
+            length.map(|e| e as i32),
+        ),
         DataType::LargeUtf8 => utf8_substring(
             array
                 .as_any()
@@ -247,8 +305,10 @@ mod tests {
     use super::*;
 
     #[allow(clippy::type_complexity)]
-    fn with_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
+    fn with_nulls_generic_binary<O: OffsetSizeTrait>() -> Result<()> {
         let cases: Vec<(Vec<Option<&[u8]>>, i64, Option<u64>, Vec<Option<&[u8]>>)> = vec![
+            // all-nulls array is always identical
+            (vec![None, None, None], -1, Some(1), vec![None, None, None]),
             // identity
             (
                 vec![Some(b"hello"), None, Some(&[0xf8, 0xf9, 0xff, 0xfa])],
@@ -316,8 +376,10 @@ mod tests {
     }
 
     #[allow(clippy::type_complexity)]
-    fn without_nulls_generic_binary<O: BinaryOffsetSizeTrait>() -> Result<()> {
+    fn without_nulls_generic_binary<O: OffsetSizeTrait>() -> Result<()> {
         let cases: Vec<(Vec<&[u8]>, i64, Option<u64>, Vec<&[u8]>)> = vec![
+            // empty array is always identical
+            (vec![b"", b"", b""], 2, Some(1), vec![b"", b"", b""]),
             // increase start
             (
                 vec![b"hello", b"", &[0xf8, 0xf9, 0xff, 0xfa]],
@@ -453,8 +515,295 @@ mod tests {
         without_nulls_generic_binary::<i64>()
     }
 
-    fn with_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn with_nulls_fixed_size_binary() -> Result<()> {
+        let cases: Vec<(Vec<Option<&[u8]>>, i64, Option<u64>, Vec<Option<&[u8]>>)> = vec![
+            // all-nulls array is always identical
+            (vec![None, None, None], 3, Some(2), vec![None, None, None]),
+            // increase start
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                0,
+                None,
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                1,
+                None,
+                vec![Some(b"at"), None, Some(&[0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                2,
+                None,
+                vec![Some(b"t"), None, Some(&[0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                3,
+                None,
+                vec![Some(b""), None, Some(&[])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                10,
+                None,
+                vec![Some(b""), None, Some(b"")],
+            ),
+            // increase start negatively
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -1,
+                None,
+                vec![Some(b"t"), None, Some(&[0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -2,
+                None,
+                vec![Some(b"at"), None, Some(&[0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -3,
+                None,
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -10,
+                None,
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+            ),
+            // increase length
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                1,
+                Some(1),
+                vec![Some(b"a"), None, Some(&[0xf9])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                1,
+                Some(2),
+                vec![Some(b"at"), None, Some(&[0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                1,
+                Some(3),
+                vec![Some(b"at"), None, Some(&[0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -3,
+                Some(1),
+                vec![Some(b"c"), None, Some(&[0xf8])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -3,
+                Some(2),
+                vec![Some(b"ca"), None, Some(&[0xf8, 0xf9])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -3,
+                Some(3),
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+            ),
+            (
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+                -3,
+                Some(4),
+                vec![Some(b"cat"), None, Some(&[0xf8, 0xf9, 0xff])],
+            ),
+        ];
+
+        cases.into_iter().try_for_each::<_, Result<()>>(
+            |(array, start, length, expected)| {
+                let array = FixedSizeBinaryArray::try_from_sparse_iter(array.into_iter())
+                    .unwrap();
+                let result = substring(&array, start, length)?;
+                assert_eq!(array.len(), result.len());
+                let result = result
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
+                let expected =
+                    FixedSizeBinaryArray::try_from_sparse_iter(expected.into_iter())
+                        .unwrap();
+                assert_eq!(&expected, result,);
+                Ok(())
+            },
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn without_nulls_fixed_size_binary() -> Result<()> {
+        let cases: Vec<(Vec<&[u8]>, i64, Option<u64>, Vec<&[u8]>)> = vec![
+            // empty array is always identical
+            (vec![b"", b"", &[]], 3, Some(2), vec![b"", b"", &[]]),
+            // increase start
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                0,
+                None,
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                1,
+                None,
+                vec![b"at", b"og", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                2,
+                None,
+                vec![b"t", b"g", &[0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                3,
+                None,
+                vec![b"", b"", &[]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                10,
+                None,
+                vec![b"", b"", b""],
+            ),
+            // increase start negatively
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -1,
+                None,
+                vec![b"t", b"g", &[0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -2,
+                None,
+                vec![b"at", b"og", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -3,
+                None,
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -10,
+                None,
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+            ),
+            // increase length
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                1,
+                Some(1),
+                vec![b"a", b"o", &[0xf9]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                1,
+                Some(2),
+                vec![b"at", b"og", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                1,
+                Some(3),
+                vec![b"at", b"og", &[0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -3,
+                Some(1),
+                vec![b"c", b"d", &[0xf8]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -3,
+                Some(2),
+                vec![b"ca", b"do", &[0xf8, 0xf9]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -3,
+                Some(3),
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+            ),
+            (
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+                -3,
+                Some(4),
+                vec![b"cat", b"dog", &[0xf8, 0xf9, 0xff]],
+            ),
+        ];
+
+        cases.into_iter().try_for_each::<_, Result<()>>(
+            |(array, start, length, expected)| {
+                let array =
+                    FixedSizeBinaryArray::try_from_iter(array.into_iter()).unwrap();
+                let result = substring(&array, start, length)?;
+                assert_eq!(array.len(), result.len());
+                let result = result
+                    .as_any()
+                    .downcast_ref::<FixedSizeBinaryArray>()
+                    .unwrap();
+                let expected =
+                    FixedSizeBinaryArray::try_from_iter(expected.into_iter()).unwrap();
+                assert_eq!(&expected, result,);
+                Ok(())
+            },
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn offset_fixed_size_binary() -> Result<()> {
+        let values: [u8; 15] = *b"hellotherearrow";
+        // set the first and third element to be valid
+        let bits_v = [0b101_u8];
+
+        let data = ArrayData::builder(DataType::FixedSizeBinary(5))
+            .len(2)
+            .add_buffer(Buffer::from(&values[..]))
+            .offset(1)
+            .null_bit_buffer(Buffer::from(bits_v))
+            .build()
+            .unwrap();
+        // array is `[null, "arrow"]`
+        let array = FixedSizeBinaryArray::from(data);
+        // result is `[null, "rrow"]`
+        let result = substring(&array, 1, None)?;
+        let result = result
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        let expected = FixedSizeBinaryArray::try_from_sparse_iter(
+            vec![None, Some(b"rrow")].into_iter(),
+        )
+        .unwrap();
+        assert_eq!(result, &expected);
+
+        Ok(())
+    }
+
+    fn with_nulls_generic_string<O: OffsetSizeTrait>() -> Result<()> {
         let cases = vec![
+            // all-nulls array is always identical
+            (vec![None, None, None], 0, None, vec![None, None, None]),
             // identity
             (
                 vec![Some("hello"), None, Some("word")],
@@ -521,8 +870,10 @@ mod tests {
         with_nulls_generic_string::<i64>()
     }
 
-    fn without_nulls_generic_string<O: StringOffsetSizeTrait>() -> Result<()> {
+    fn without_nulls_generic_string<O: OffsetSizeTrait>() -> Result<()> {
         let cases = vec![
+            // empty array is always identical
+            (vec!["", "", ""], 0, None, vec!["", "", ""]),
             // increase start
             (
                 vec!["hello", "", "word"],

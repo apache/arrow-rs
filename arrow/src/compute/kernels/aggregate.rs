@@ -21,7 +21,7 @@ use multiversion::multiversion;
 use std::ops::Add;
 
 use crate::array::{
-    Array, BooleanArray, GenericStringArray, PrimitiveArray, StringOffsetSizeTrait,
+    Array, BooleanArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use crate::datatypes::{ArrowNativeType, ArrowNumericType};
 
@@ -35,7 +35,7 @@ fn is_nan<T: ArrowNativeType + PartialOrd + Copy>(a: T) -> bool {
 /// Helper function to perform min/max of strings
 fn min_max_string<T, F>(array: &GenericStringArray<T>, cmp: F) -> Option<&str>
 where
-    T: StringOffsetSizeTrait,
+    T: OffsetSizeTrait,
     F: Fn(&str, &str) -> bool,
 {
     let null_count = array.null_count();
@@ -80,16 +80,12 @@ where
 }
 
 /// Returns the maximum value in the string array, according to the natural order.
-pub fn max_string<T: StringOffsetSizeTrait>(
-    array: &GenericStringArray<T>,
-) -> Option<&str> {
+pub fn max_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&str> {
     min_max_string(array, |a, b| a < b)
 }
 
 /// Returns the minimum value in the string array, according to the natural order.
-pub fn min_string<T: StringOffsetSizeTrait>(
-    array: &GenericStringArray<T>,
-) -> Option<&str> {
+pub fn min_string<T: OffsetSizeTrait>(array: &GenericStringArray<T>) -> Option<&str> {
     min_max_string(array, |a, b| a > b)
 }
 

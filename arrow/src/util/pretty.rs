@@ -109,17 +109,18 @@ mod tests {
     use crate::{
         array::{
             self, new_null_array, Array, Date32Array, Date64Array,
-            FixedSizeBinaryBuilder, Float16Array, PrimitiveBuilder, StringArray,
-            StringBuilder, StringDictionaryBuilder, StructArray, Time32MillisecondArray,
-            Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-            TimestampMicrosecondArray, TimestampMillisecondArray,
-            TimestampNanosecondArray, TimestampSecondArray,
+            FixedSizeBinaryBuilder, Float16Array, Int32Array, PrimitiveBuilder,
+            StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
+            Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+            Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+            TimestampNanosecondArray, TimestampSecondArray, UnionArray, UnionBuilder,
         },
-        datatypes::{DataType, Field, Int32Type, Schema},
+        buffer::Buffer,
+        datatypes::{DataType, Field, Float64Type, Int32Type, Schema, UnionMode},
     };
 
     use super::*;
-    use crate::array::{DecimalArray, FixedSizeListBuilder, Int32Array};
+    use crate::array::{DecimalArray, FixedSizeListBuilder};
     use std::fmt::Write;
     use std::sync::Arc;
 
@@ -644,6 +645,148 @@ mod tests {
         let actual: Vec<&str> = table.lines().collect();
         assert_eq!(expected, actual, "Actual result:\n{}", table);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_dense_union() -> Result<()> {
+        let mut builder = UnionBuilder::new_dense(4);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Float64Type>("b", 3.2234).unwrap();
+        builder.append_null::<Float64Type>("b").unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        let union = builder.build().unwrap();
+
+        let schema = Schema::new(vec![Field::new(
+            "Teamsters",
+            DataType::Union(
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Float64, false),
+                ],
+                UnionMode::Dense,
+            ),
+            false,
+        )]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap();
+        let table = pretty_format_batches(&[batch])?.to_string();
+        let actual: Vec<&str> = table.lines().collect();
+        let expected = vec![
+            "+------------+",
+            "| Teamsters  |",
+            "+------------+",
+            "| {a=1}      |",
+            "| {b=3.2234} |",
+            "| {b=}       |",
+            "| {a=}       |",
+            "+------------+",
+        ];
+
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_sparse_union() -> Result<()> {
+        let mut builder = UnionBuilder::new_sparse(4);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Float64Type>("b", 3.2234).unwrap();
+        builder.append_null::<Float64Type>("b").unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        let union = builder.build().unwrap();
+
+        let schema = Schema::new(vec![Field::new(
+            "Teamsters",
+            DataType::Union(
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Float64, false),
+                ],
+                UnionMode::Sparse,
+            ),
+            false,
+        )]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap();
+        let table = pretty_format_batches(&[batch])?.to_string();
+        let actual: Vec<&str> = table.lines().collect();
+        let expected = vec![
+            "+------------+",
+            "| Teamsters  |",
+            "+------------+",
+            "| {a=1}      |",
+            "| {b=3.2234} |",
+            "| {b=}       |",
+            "| {a=}       |",
+            "+------------+",
+        ];
+
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn test_pretty_format_nested_union() -> Result<()> {
+        //Inner UnionArray
+        let mut builder = UnionBuilder::new_dense(5);
+        builder.append::<Int32Type>("b", 1).unwrap();
+        builder.append::<Float64Type>("c", 3.2234).unwrap();
+        builder.append_null::<Float64Type>("c").unwrap();
+        builder.append_null::<Int32Type>("b").unwrap();
+        builder.append_null::<Float64Type>("c").unwrap();
+        let inner = builder.build().unwrap();
+
+        let inner_field = Field::new(
+            "European Union",
+            DataType::Union(
+                vec![
+                    Field::new("b", DataType::Int32, false),
+                    Field::new("c", DataType::Float64, false),
+                ],
+                UnionMode::Dense,
+            ),
+            false,
+        );
+
+        // Can't use UnionBuilder with non-primitive types, so manually build outer UnionArray
+        let a_array = Int32Array::from(vec![None, None, None, Some(1234), Some(23)]);
+        let type_ids = Buffer::from_slice_ref(&[1_i8, 1, 0, 0, 1]);
+
+        let children: Vec<(Field, Arc<dyn Array>)> = vec![
+            (Field::new("a", DataType::Int32, true), Arc::new(a_array)),
+            (inner_field.clone(), Arc::new(inner)),
+        ];
+
+        let outer = UnionArray::try_new(type_ids, None, children).unwrap();
+
+        let schema = Schema::new(vec![Field::new(
+            "Teamsters",
+            DataType::Union(
+                vec![Field::new("a", DataType::Int32, true), inner_field],
+                UnionMode::Sparse,
+            ),
+            false,
+        )]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(outer)]).unwrap();
+        let table = pretty_format_batches(&[batch])?.to_string();
+        let actual: Vec<&str> = table.lines().collect();
+        let expected = vec![
+            "+-----------------------------+",
+            "| Teamsters                   |",
+            "+-----------------------------+",
+            "| {European Union={b=1}}      |",
+            "| {European Union={c=3.2234}} |",
+            "| {a=}                        |",
+            "| {a=1234}                    |",
+            "| {European Union={c=}}       |",
+            "+-----------------------------+",
+        ];
+        assert_eq!(expected, actual);
         Ok(())
     }
 
