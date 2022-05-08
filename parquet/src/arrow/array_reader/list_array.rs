@@ -284,7 +284,8 @@ mod tests {
         //         [[1, null], null, [4], []],
         //         [],
         //         [[7]],
-        //         [[]]
+        //         [[]],
+        //         [[1, 2, 3], [4, null, 6], null]
         //     ],
         //     null,
         //     [],
@@ -305,29 +306,35 @@ mod tests {
             None,
             Some(4),
             Some(7),
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            None,
+            Some(6),
             Some(11),
         ]);
 
-        // [[1, null], null, [4], [], [7], [], [11]]
-        let offsets = to_offsets::<OffsetSize>(vec![0, 2, 2, 3, 3, 4, 4, 5]);
+        // [[1, null], null, [4], [], [7], [], [1, 2, 3], [4, null, 6], null, [11]]
+        let offsets = to_offsets::<OffsetSize>(vec![0, 2, 2, 3, 3, 4, 4, 7, 10, 10, 11]);
         let l3 = ArrayDataBuilder::new(l3_type.clone())
-            .len(7)
+            .len(10)
             .add_buffer(offsets)
             .add_child_data(leaf.data().clone())
-            .null_bit_buffer(Buffer::from([0b01111101]))
+            .null_bit_buffer(Buffer::from([0b11111101, 0b00000010]))
             .build()
             .unwrap();
 
-        // [[[1, null], null, [4], []],[], [[7]], [[]], [[11]]]
-        let offsets = to_offsets::<OffsetSize>(vec![0, 4, 4, 5, 6, 7]);
+        // [[[1, null], null, [4], []], [], [[7]], [[]], [[1, 2, 3], [4, null, 6], null], [[11]]]
+        let offsets = to_offsets::<OffsetSize>(vec![0, 4, 4, 5, 6, 9, 10]);
         let l2 = ArrayDataBuilder::new(l2_type.clone())
-            .len(5)
+            .len(6)
             .add_buffer(offsets)
             .add_child_data(l3)
             .build()
             .unwrap();
 
-        let offsets = to_offsets::<OffsetSize>(vec![0, 4, 4, 4, 5]);
+        let offsets = to_offsets::<OffsetSize>(vec![0, 5, 5, 5, 6]);
         let l1 = ArrayDataBuilder::new(l1_type.clone())
             .len(4)
             .add_buffer(offsets)
@@ -347,6 +354,13 @@ mod tests {
             None,
             Some(7),
             None,
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            None,
+            Some(6),
+            None,
             None,
             None,
             Some(11),
@@ -355,8 +369,8 @@ mod tests {
         let item_array_reader = InMemoryArrayReader::new(
             ArrowType::Int32,
             values,
-            Some(vec![6, 5, 3, 6, 4, 2, 6, 4, 0, 1, 6]),
-            Some(vec![0, 3, 2, 2, 2, 1, 1, 1, 0, 0, 0]),
+            Some(vec![6, 5, 3, 6, 4, 2, 6, 4, 6, 6, 6, 6, 5, 6, 3, 0, 1, 6]),
+            Some(vec![0, 3, 2, 2, 2, 1, 1, 1, 1, 3, 3, 2, 3, 3, 2, 0, 0, 0]),
         );
 
         let l3 = ListArrayReader::<OffsetSize>::new(
@@ -386,10 +400,14 @@ mod tests {
             true,
         );
 
-        let actual = l1.next_batch(1024).unwrap();
-        let actual = downcast::<OffsetSize>(&actual);
+        let expected_1 = expected.slice(0, 2);
+        let expected_2 = expected.slice(2, 2);
 
-        assert_eq!(&expected, actual)
+        let actual = l1.next_batch(2).unwrap();
+        assert_eq!(expected_1.as_ref(), actual.as_ref());
+
+        let actual = l1.next_batch(1024).unwrap();
+        assert_eq!(expected_2.as_ref(), actual.as_ref());
     }
 
     fn test_required_list<OffsetSize: OffsetSizeTrait>() {

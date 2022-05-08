@@ -102,6 +102,8 @@ pub struct InMemoryArrayReader {
     array: ArrayRef,
     def_levels: Option<Vec<i16>>,
     rep_levels: Option<Vec<i16>>,
+    last_idx: usize,
+    cur_idx: usize,
 }
 
 impl InMemoryArrayReader {
@@ -126,6 +128,8 @@ impl InMemoryArrayReader {
             array,
             def_levels,
             rep_levels,
+            cur_idx: 0,
+            last_idx: 0,
         }
     }
 }
@@ -139,16 +143,51 @@ impl ArrayReader for InMemoryArrayReader {
         &self.data_type
     }
 
-    fn next_batch(&mut self, _batch_size: usize) -> Result<ArrayRef> {
-        Ok(self.array.clone())
+    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        assert_ne!(batch_size, 0);
+
+        // This replicates the logical normally performed by
+        // RecordReader to delimit semantic records
+        let (levels, records) = match &self.rep_levels {
+            Some(v) => {
+                let mut records = 0;
+                let mut levels = 0;
+                for v in &v[self.cur_idx..] {
+                    if *v == 0 {
+                        // Start of new record
+                        records += 1;
+                        if records == batch_size + 1 {
+                            break;
+                        }
+                    }
+                    levels += 1;
+                }
+                (levels, records - 1)
+            }
+            None => {
+                let records = batch_size.min(self.array.len() - self.cur_idx);
+                (records, records)
+            }
+        };
+
+        let array = self.array.slice(self.cur_idx, records);
+
+        self.last_idx = self.cur_idx;
+        self.cur_idx += levels;
+
+        Ok(array)
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_levels.as_deref()
+        self.def_levels
+            .as_ref()
+            .map(|l| &l[self.last_idx..self.cur_idx])
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_levels.as_deref()
+        self.rep_levels
+            .as_ref()
+            .map(|l| &l[self.last_idx..self.cur_idx])
     }
 }
 
