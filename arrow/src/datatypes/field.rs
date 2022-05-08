@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::hash::{Hash, Hasher};
 
 use serde_derive::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -27,7 +29,7 @@ use super::DataType;
 /// Contains the meta-data for a single relative type.
 ///
 /// The `Schema` object is an ordered collection of `Field` objects.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Field {
     name: String,
     data_type: DataType,
@@ -37,6 +39,47 @@ pub struct Field {
     /// A map of key-value pairs containing additional custom meta data.
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<BTreeMap<String, String>>,
+}
+
+// Auto-derive `PartialEq` traits will pull `dict_id` and `dict_is_ordered`
+// into comparison. However, these properties are only used in IPC context
+// for matching dictionary encoded data. They are not necessary to be same
+// to consider schema equality. For example, in C++ `Field` implementation,
+// it doesn't contain these dictionary properties too.
+impl PartialEq for Field {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.data_type == other.data_type
+            && self.nullable == other.nullable
+            && self.metadata == other.metadata
+    }
+}
+
+impl Eq for Field {}
+
+impl PartialOrd for Field {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Field {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.name
+            .cmp(other.name())
+            .then(self.data_type.cmp(other.data_type()))
+            .then(self.nullable.cmp(&other.nullable))
+            .then(self.metadata.cmp(&other.metadata))
+    }
+}
+
+impl Hash for Field {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.data_type.hash(state);
+        self.nullable.hash(state);
+        self.metadata.hash(state);
+    }
 }
 
 impl Field {
@@ -623,6 +666,8 @@ impl std::fmt::Display for Field {
 #[cfg(test)]
 mod test {
     use super::{DataType, Field};
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     #[test]
     fn test_fields_with_dict_id() {
@@ -675,5 +720,44 @@ mod test {
         for field in field.fields_with_dict_id(20) {
             assert_eq!(dict2, *field);
         }
+    }
+
+    fn get_field_hash(field: &Field) -> u64 {
+        let mut s = DefaultHasher::new();
+        field.hash(&mut s);
+        s.finish()
+    }
+
+    #[test]
+    fn test_field_comparison_case() {
+        // dictionary-encoding properties not used for field comparison
+        let dict1 = Field::new_dict(
+            "dict1",
+            DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
+            false,
+            10,
+            false,
+        );
+        let dict2 = Field::new_dict(
+            "dict1",
+            DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
+            false,
+            20,
+            false,
+        );
+
+        assert_eq!(dict1, dict2);
+        assert_eq!(get_field_hash(&dict1), get_field_hash(&dict2));
+
+        let dict1 = Field::new_dict(
+            "dict0",
+            DataType::Dictionary(DataType::Utf8.into(), DataType::Int32.into()),
+            false,
+            10,
+            false,
+        );
+
+        assert_ne!(dict1, dict2);
+        assert_ne!(get_field_hash(&dict1), get_field_hash(&dict2));
     }
 }
