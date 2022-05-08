@@ -499,6 +499,52 @@ impl DataType {
                         ))
                     }
                 }
+                Some(s) if s == "union" => {
+                    if let Some(Value::String(mode)) = map.get("mode") {
+                        let union_mode = if mode == "SPARSE" {
+                            UnionMode::Sparse
+                        } else if mode == "DENSE" {
+                            UnionMode::Dense
+                        } else {
+                            return Err(ArrowError::ParseError(format!(
+                                "Unknown union mode {:?} for union",
+                                mode
+                            )));
+                        };
+                        if let Some(type_ids) = map.get("typeIds") {
+                            let type_ids = type_ids
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .map(|t| t.as_i64().unwrap())
+                                .collect::<Vec<_>>();
+
+                            let default_fields = type_ids
+                                .iter()
+                                .map(|t| {
+                                    Field::new("", DataType::Boolean, true).with_metadata(
+                                        Some(
+                                            [("type_id".to_string(), t.to_string())]
+                                                .iter()
+                                                .cloned()
+                                                .collect(),
+                                        ),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+
+                            Ok(DataType::Union(default_fields, union_mode))
+                        } else {
+                            Err(ArrowError::ParseError(
+                                "Expecting a typeIds for union ".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(ArrowError::ParseError(
+                            "Expecting a mode for union".to_string(),
+                        ))
+                    }
+                }
                 Some(other) => Err(ArrowError::ParseError(format!(
                     "invalid or unsupported type name: {} in {:?}",
                     other, json

@@ -390,6 +390,30 @@ impl Field {
                             }
                         }
                     }
+                    DataType::Union(fields, mode) => match map.get("children") {
+                        Some(Value::Array(values)) => {
+                            let mut union_fields: Vec<Field> =
+                                values.iter().map(Field::from).collect::<Result<_>>()?;
+                            fields.iter().zip(union_fields.iter_mut()).for_each(
+                                |(f, union_field)| {
+                                    union_field.set_metadata(Some(
+                                        f.metadata().unwrap().clone(),
+                                    ));
+                                },
+                            );
+                            DataType::Union(union_fields, mode)
+                        }
+                        Some(_) => {
+                            return Err(ArrowError::ParseError(
+                                "Field 'children' must be an array".to_string(),
+                            ))
+                        }
+                        None => {
+                            return Err(ArrowError::ParseError(
+                                "Field missing 'children' attribute".to_string(),
+                            ));
+                        }
+                    },
                     _ => data_type,
                 };
 
