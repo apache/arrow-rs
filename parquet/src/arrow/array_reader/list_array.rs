@@ -35,11 +35,11 @@ pub struct ListArrayReader<OffsetSize: OffsetSizeTrait> {
     item_reader: Box<dyn ArrayReader>,
     data_type: ArrowType,
     item_type: ArrowType,
-    // The definition level at which this list is not null
+    /// The definition level at which this list is not null
     def_level: i16,
-    // The repetition level that corresponds to a new value in this array
+    /// The repetition level that corresponds to a new value in this array
     rep_level: i16,
-    // If this list is nullable
+    /// If this list is nullable
     nullable: bool,
     _marker: PhantomData<OffsetSize>,
 }
