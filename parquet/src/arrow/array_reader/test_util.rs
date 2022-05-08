@@ -145,37 +145,32 @@ impl ArrayReader for InMemoryArrayReader {
 
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
         assert_ne!(batch_size, 0);
-
         // This replicates the logical normally performed by
         // RecordReader to delimit semantic records
-        let (levels, records) = match &self.rep_levels {
-            Some(v) => {
-                let mut records = 0;
-                let mut levels = 0;
-                for v in &v[self.cur_idx..] {
-                    if *v == 0 {
-                        // Start of new record
-                        records += 1;
-                        if records == batch_size + 1 {
-                            break;
-                        }
+        let read = match &self.rep_levels {
+            Some(rep_levels) => {
+                let rep_levels = &rep_levels[self.cur_idx..];
+                let mut levels_read = 0;
+                let mut records_read = 0;
+                while levels_read < rep_levels.len() && records_read < batch_size {
+                    if rep_levels[levels_read] == 0 {
+                        records_read += 1; // Start of new record
                     }
-                    levels += 1;
+                    levels_read += 1;
                 }
-                (levels, records - 1)
+
+                // Find end of current record
+                while levels_read < rep_levels.len() && rep_levels[levels_read] != 0 {
+                    levels_read += 1
+                }
+                levels_read
             }
-            None => {
-                let records = batch_size.min(self.array.len() - self.cur_idx);
-                (records, records)
-            }
+            None => batch_size.min(self.array.len() - self.cur_idx),
         };
 
-        let array = self.array.slice(self.cur_idx, records);
-
         self.last_idx = self.cur_idx;
-        self.cur_idx += levels;
-
-        Ok(array)
+        self.cur_idx += read;
+        Ok(self.array.slice(self.last_idx, read))
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {

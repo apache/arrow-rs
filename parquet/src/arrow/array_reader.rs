@@ -1532,7 +1532,7 @@ mod tests {
             ArrowType::Int32,
             array_1.clone(),
             Some(vec![0, 1, 2, 3, 1]),
-            Some(vec![1, 1, 1, 1, 1]),
+            Some(vec![0, 1, 1, 1, 1]),
         );
 
         let array_2 = Arc::new(PrimitiveArray::<ArrowInt32>::from(vec![5, 4, 3, 2, 1]));
@@ -1540,7 +1540,7 @@ mod tests {
             ArrowType::Int32,
             array_2.clone(),
             Some(vec![0, 1, 3, 1, 2]),
-            Some(vec![1, 1, 1, 1, 1]),
+            Some(vec![0, 1, 1, 1, 1]),
         );
 
         let struct_type = ArrowType::Struct(vec![
@@ -1570,7 +1570,7 @@ mod tests {
             struct_array_reader.get_def_levels()
         );
         assert_eq!(
-            Some(vec![1, 1, 1, 1, 1].as_slice()),
+            Some(vec![0, 1, 1, 1, 1].as_slice()),
             struct_array_reader.get_rep_levels()
         );
     }
