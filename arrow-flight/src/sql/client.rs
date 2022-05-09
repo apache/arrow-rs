@@ -15,14 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    cell::{RefCell, RefMut},
-};
+use std::cell::{RefCell, RefMut};
 
 use arrow::{
     datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result},
-    ipc::{RecordBatch,MessageHeader},
+    ipc::{MessageHeader, RecordBatch},
 };
 use futures::stream;
 use prost::Message;
@@ -32,8 +30,8 @@ use tonic::{
 };
 
 use crate::{
-    flight_service_client::FlightServiceClient,
-    Action, FlightData, FlightInfo, IpcMessage, Ticket, FlightDescriptor,
+    flight_service_client::FlightServiceClient, Action, FlightData, FlightDescriptor,
+    FlightInfo, IpcMessage, Ticket,
 };
 
 use super::{
@@ -102,7 +100,8 @@ where
             .await
             .map_err(status_to_arrow_error)?
             .into_inner();
-        let result = result.message()
+        let result = result
+            .message()
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
@@ -128,10 +127,7 @@ where
 
     /// Given a flight ticket and schema, request to be sent the
     /// stream. Returns record batch stream reader
-    pub async fn do_get(
-        &mut self,
-        ticket: Ticket,
-    ) -> Result<Streaming<FlightData>> {
+    pub async fn do_get(&mut self, ticket: Ticket) -> Result<Streaming<FlightData>> {
         Ok(self
             .mut_client()
             .do_get(ticket)
@@ -207,7 +203,8 @@ where
             .await
             .map_err(status_to_arrow_error)?
             .into_inner();
-        let result = result.message()
+        let result = result
+            .message()
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
@@ -285,7 +282,8 @@ where
             .await
             .map_err(status_to_arrow_error)?
             .into_inner();
-        let result = result.message()
+        let result = result
+            .message()
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
@@ -316,7 +314,8 @@ where
             .await
             .map_err(status_to_arrow_error)?
             .into_inner();
-        let result = result.message()
+        let result = result
+            .message()
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
@@ -397,12 +396,14 @@ pub fn transport_error_to_arrow_erorr(error: tonic::transport::Error) -> ArrowEr
 }
 
 pub fn arrow_schema_from_flight_info(fi: &FlightInfo) -> Result<Schema> {
-
     let ipc_message = arrow::ipc::size_prefixed_root_as_message(&fi.schema[4..])
         .map_err(|e| ArrowError::ComputeError(format!("{:?}", e)))?;
 
-    let ipc_schema = ipc_message.header_as_schema()
-        .ok_or(ArrowError::ComputeError("failed to get schema...".to_string()))?;
+    let ipc_schema = ipc_message
+        .header_as_schema()
+        .ok_or(ArrowError::ComputeError(
+            "failed to get schema...".to_string(),
+        ))?;
 
     let arrow_schema = arrow::ipc::convert::fb_to_schema(ipc_schema);
 
@@ -414,47 +415,84 @@ pub enum ArrowFlightData {
     Schema(arrow::datatypes::Schema),
 }
 
-pub fn arrow_data_from_flight_data(flight_data: FlightData, arrow_schema_ref: &SchemaRef) -> Result<ArrowFlightData> {
-
-    let ipc_message = arrow::ipc::root_as_message(&flight_data.data_header[..])
-        .map_err(|err| { ArrowError::ParseError(format!("Unable to get root as message: {:?}", err)) })?;
+pub fn arrow_data_from_flight_data(
+    flight_data: FlightData,
+    arrow_schema_ref: &SchemaRef,
+) -> Result<ArrowFlightData> {
+    let ipc_message =
+        arrow::ipc::root_as_message(&flight_data.data_header[..]).map_err(|err| {
+            ArrowError::ParseError(format!("Unable to get root as message: {:?}", err))
+        })?;
 
     match ipc_message.header_type() {
         MessageHeader::RecordBatch => {
-            let ipc_record_batch = ipc_message
-                .header_as_record_batch()
-                .ok_or(ArrowError::ComputeError("Unable to convert flight data header to a record batch".to_string()))?;
+            let ipc_record_batch =
+                ipc_message
+                    .header_as_record_batch()
+                    .ok_or(ArrowError::ComputeError(
+                        "Unable to convert flight data header to a record batch"
+                            .to_string(),
+                    ))?;
 
             let dictionaries_by_field = &[];
-            let record_batch = arrow::ipc::reader::read_record_batch(&flight_data.data_body, ipc_record_batch, arrow_schema_ref.clone(), dictionaries_by_field, None)?;
+            let record_batch = arrow::ipc::reader::read_record_batch(
+                &flight_data.data_body,
+                ipc_record_batch,
+                arrow_schema_ref.clone(),
+                dictionaries_by_field,
+                None,
+            )?;
             Ok(ArrowFlightData::RecordBatch(record_batch))
         }
         MessageHeader::Schema => {
-            let ipc_schema = ipc_message
-                .header_as_schema()
-                .ok_or(ArrowError::ComputeError("Unable to convert flight data header to a schema".to_string()))?;
+            let ipc_schema =
+                ipc_message
+                    .header_as_schema()
+                    .ok_or(ArrowError::ComputeError(
+                        "Unable to convert flight data header to a schema".to_string(),
+                    ))?;
 
             let arrow_schema = arrow::ipc::convert::fb_to_schema(ipc_schema);
             Ok(ArrowFlightData::Schema(arrow_schema))
         }
         MessageHeader::DictionaryBatch => {
-            let _ = ipc_message
-                .header_as_dictionary_batch()
-                .ok_or(ArrowError::ComputeError("Unable to convert flight data header to a dictionary batch".to_string()))?;
-            Err(ArrowError::NotYetImplemented("no idea on how to convert an ipc dictionary batch to an arrow type".to_string()))
+            let _ = ipc_message.header_as_dictionary_batch().ok_or(
+                ArrowError::ComputeError(
+                    "Unable to convert flight data header to a dictionary batch"
+                        .to_string(),
+                ),
+            )?;
+            Err(ArrowError::NotYetImplemented(
+                "no idea on how to convert an ipc dictionary batch to an arrow type"
+                    .to_string(),
+            ))
         }
         MessageHeader::Tensor => {
             let _ = ipc_message
                 .header_as_tensor()
-                .ok_or(ArrowError::ComputeError("Unable to convert flight data header to a tensor".to_string()))?;
-            Err(ArrowError::NotYetImplemented("no idea on how to convert an ipc tensor to an arrow type".to_string()))
+                .ok_or(ArrowError::ComputeError(
+                    "Unable to convert flight data header to a tensor".to_string(),
+                ))?;
+            Err(ArrowError::NotYetImplemented(
+                "no idea on how to convert an ipc tensor to an arrow type".to_string(),
+            ))
         }
         MessageHeader::SparseTensor => {
-            let _ = ipc_message
-                .header_as_sparse_tensor()
-                .ok_or(ArrowError::ComputeError("Unable to convert flight data header to a sparse tensor".to_string()))?;
-            Err(ArrowError::NotYetImplemented("no idea on how to convert an ipc sparse tensor to an arrow type".to_string()))
+            let _ =
+                ipc_message
+                    .header_as_sparse_tensor()
+                    .ok_or(ArrowError::ComputeError(
+                        "Unable to convert flight data header to a sparse tensor"
+                            .to_string(),
+                    ))?;
+            Err(ArrowError::NotYetImplemented(
+                "no idea on how to convert an ipc sparse tensor to an arrow type"
+                    .to_string(),
+            ))
         }
-        _ => Err(ArrowError::ComputeError(format!("Unable to convert message with header_type: '{:?}' to arrow data", ipc_message.header_type())))
+        _ => Err(ArrowError::ComputeError(format!(
+            "Unable to convert message with header_type: '{:?}' to arrow data",
+            ipc_message.header_type()
+        ))),
     }
 }
