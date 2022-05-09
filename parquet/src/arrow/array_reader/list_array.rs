@@ -16,17 +16,17 @@
 // under the License.
 
 use crate::arrow::array_reader::ArrayReader;
-use crate::errors::ParquetError::ArrowError;
+use crate::errors::ParquetError;
 use crate::errors::Result;
 use arrow::array::{
-    new_empty_array, ArrayData, ArrayRef, GenericListArray,
-    OffsetSizeTrait, UInt32Array,
+    new_empty_array, Array, ArrayData, ArrayRef, BooleanBufferBuilder, GenericListArray,
+    MutableArrayData, OffsetSizeTrait,
 };
-use arrow::buffer::{Buffer, MutableBuffer};
+use arrow::buffer::Buffer;
 use arrow::datatypes::DataType as ArrowType;
 use arrow::datatypes::ToByteSlice;
-use arrow::util::bit_util;
 use std::any::Any;
+use std::cmp::Ordering;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -35,12 +35,12 @@ pub struct ListArrayReader<OffsetSize: OffsetSizeTrait> {
     item_reader: Box<dyn ArrayReader>,
     data_type: ArrowType,
     item_type: ArrowType,
-    list_def_level: i16,
-    list_rep_level: i16,
-    list_empty_def_level: i16,
-    list_null_def_level: i16,
-    def_level_buffer: Option<Buffer>,
-    rep_level_buffer: Option<Buffer>,
+    /// The definition level at which this list is not null
+    def_level: i16,
+    /// The repetition level that corresponds to a new value in this array
+    rep_level: i16,
+    /// If this list is nullable
+    nullable: bool,
     _marker: PhantomData<OffsetSize>,
 }
 
@@ -52,19 +52,15 @@ impl<OffsetSize: OffsetSizeTrait> ListArrayReader<OffsetSize> {
         item_type: ArrowType,
         def_level: i16,
         rep_level: i16,
-        list_null_def_level: i16,
-        list_empty_def_level: i16,
+        nullable: bool,
     ) -> Self {
         Self {
             item_reader,
             data_type,
             item_type,
-            list_def_level: def_level,
-            list_rep_level: rep_level,
-            list_null_def_level,
-            list_empty_def_level,
-            def_level_buffer: None,
-            rep_level_buffer: None,
+            def_level,
+            rep_level,
+            nullable,
             _marker: PhantomData,
         }
     }
@@ -88,97 +84,159 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         if next_batch_array.len() == 0 {
             return Ok(new_empty_array(&self.data_type));
         }
+
         let def_levels = self
             .item_reader
             .get_def_levels()
-            .ok_or_else(|| ArrowError("item_reader def levels are None.".to_string()))?;
+            .ok_or_else(|| general_err!("item_reader def levels are None."))?;
+
         let rep_levels = self
             .item_reader
             .get_rep_levels()
-            .ok_or_else(|| ArrowError("item_reader rep levels are None.".to_string()))?;
+            .ok_or_else(|| general_err!("item_reader rep levels are None."))?;
 
-        if !((def_levels.len() == rep_levels.len())
-            && (rep_levels.len() == next_batch_array.len()))
-        {
-            return Err(ArrowError(
-                format!("Expected item_reader def_levels {} and rep_levels {} to be same length as batch {}", def_levels.len(), rep_levels.len(), next_batch_array.len()),
+        if OffsetSize::from_usize(next_batch_array.len()).is_none() {
+            return Err(general_err!(
+                "offset of {} would overflow list array",
+                next_batch_array.len()
             ));
         }
 
-        // List definitions can be encoded as 4 values:
-        // - n + 0: the list slot is null
-        // - n + 1: the list slot is not null, but is empty (i.e. [])
-        // - n + 2: the list slot is not null, but its child is empty (i.e. [ null ])
-        // - n + 3: the list slot is not null, and its child is not empty
-        // Where n is the max definition level of the list's parent.
-        // If a Parquet schema's only leaf is the list, then n = 0.
-
-        // If the list index is at empty definition, the child slot is null
-        let non_null_list_indices =
-            def_levels.iter().enumerate().filter_map(|(index, def)| {
-                (*def > self.list_empty_def_level).then(|| index as u32)
-            });
-        let indices = UInt32Array::from_iter_values(non_null_list_indices);
-        let batch_values =
-            arrow::compute::take(&*next_batch_array.clone(), &indices, None)?;
-
-        // first item in each list has rep_level = 0, subsequent items have rep_level = 1
-        let mut offsets: Vec<OffsetSize> = Vec::new();
-        let mut cur_offset = OffsetSize::zero();
-        def_levels.iter().zip(rep_levels).for_each(|(d, r)| {
-            if *r == 0 || d == &self.list_empty_def_level {
-                offsets.push(cur_offset);
-            }
-            if d > &self.list_empty_def_level {
-                cur_offset += OffsetSize::one();
-            }
-        });
-
-        offsets.push(cur_offset);
-
-        let num_bytes = bit_util::ceil(offsets.len(), 8);
-        // TODO: A useful optimization is to use the null count to fill with
-        // 0 or null, to reduce individual bits set in a loop.
-        // To favour dense data, set every slot to true, then unset
-        let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
-        let null_slice = null_buf.as_slice_mut();
-        let mut list_index = 0;
-        for i in 0..rep_levels.len() {
-            // If the level is lower than empty, then the slot is null.
-            // When a list is non-nullable, its empty level = null level,
-            // so this automatically factors that in.
-            if rep_levels[i] == 0 && def_levels[i] < self.list_empty_def_level {
-                bit_util::unset_bit(null_slice, list_index);
-            }
-            if rep_levels[i] == 0 {
-                list_index += 1;
-            }
+        if !rep_levels.is_empty() && rep_levels[0] != 0 {
+            // This implies either the source data was invalid, or the leaf column
+            // reader did not correctly delimit semantic records
+            return Err(general_err!("first repetition level of batch must be 0"));
         }
-        let value_offsets = Buffer::from(&offsets.to_byte_slice());
 
-        let list_data = ArrayData::builder(self.get_data_type().clone())
-            .len(offsets.len() - 1)
+        // A non-nullable list has a single definition level indicating if the list is empty
+        //
+        // A nullable list has two definition levels associated with it:
+        //
+        // The first identifies if the list is null
+        // The second identifies if the list is empty
+        //
+        // The child data returned above is padded with a value for each not-fully defined level.
+        // Therefore null and empty lists will correspond to a value in the child array.
+        //
+        // Whilst nulls may have a non-zero slice in the offsets array, empty lists must
+        // be of zero length. As a result we MUST filter out values corresponding to empty
+        // lists, and for consistency we do the same for nulls.
+
+        // The output offsets for the computed ListArray
+        let mut list_offsets: Vec<OffsetSize> =
+            Vec::with_capacity(next_batch_array.len());
+
+        // The validity mask of the computed ListArray if nullable
+        let mut validity = self
+            .nullable
+            .then(|| BooleanBufferBuilder::new(next_batch_array.len()));
+
+        // The offset into the filtered child data of the current level being considered
+        let mut cur_offset = 0;
+
+        // Identifies the start of a run of values to copy from the source child data
+        let mut filter_start = None;
+
+        // The number of child values skipped due to empty lists or nulls
+        let mut skipped = 0;
+
+        // Builder used to construct the filtered child data, skipping empty lists and nulls
+        let mut child_data_builder = MutableArrayData::new(
+            vec![next_batch_array.data()],
+            false,
+            next_batch_array.len(),
+        );
+
+        def_levels.iter().zip(rep_levels).try_for_each(|(d, r)| {
+            match r.cmp(&self.rep_level) {
+                Ordering::Greater => {
+                    // Repetition level greater than current => already handled by inner array
+                    if *d < self.def_level {
+                        return Err(general_err!(
+                            "Encountered repetition level too large for definition level"
+                        ));
+                    }
+                }
+                Ordering::Equal => {
+                    // New value in the current list
+                    cur_offset += 1;
+                }
+                Ordering::Less => {
+                    // Create new array slice
+                    // Already checked that this cannot overflow
+                    list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+
+                    if *d >= self.def_level {
+                        // Fully defined value
+
+                        // Record current offset if it is None
+                        filter_start.get_or_insert(cur_offset + skipped);
+
+                        cur_offset += 1;
+
+                        if let Some(validity) = validity.as_mut() {
+                            validity.append(true)
+                        }
+                    } else {
+                        // Flush the current slice of child values if any
+                        if let Some(start) = filter_start.take() {
+                            child_data_builder.extend(0, start, cur_offset + skipped);
+                        }
+
+                        if let Some(validity) = validity.as_mut() {
+                            // Valid if empty list
+                            validity.append(*d + 1 == self.def_level)
+                        }
+
+                        skipped += 1;
+                    }
+                }
+            }
+            Ok(())
+        })?;
+
+        list_offsets.push(OffsetSize::from_usize(cur_offset).unwrap());
+
+        let child_data = if skipped == 0 {
+            // No filtered values - can reuse original array
+            next_batch_array.data().clone()
+        } else {
+            // One or more filtered values - must build new array
+            if let Some(start) = filter_start.take() {
+                child_data_builder.extend(0, start, cur_offset + skipped)
+            }
+
+            child_data_builder.freeze()
+        };
+
+        if cur_offset != child_data.len() {
+            return Err(general_err!("Failed to reconstruct list from level data"));
+        }
+
+        let value_offsets = Buffer::from(&list_offsets.to_byte_slice());
+
+        let mut data_builder = ArrayData::builder(self.get_data_type().clone())
+            .len(list_offsets.len() - 1)
             .add_buffer(value_offsets)
-            .add_child_data(batch_values.data().clone())
-            .null_bit_buffer(null_buf.into())
-            .offset(next_batch_array.offset());
+            .add_child_data(child_data);
 
-        let list_data = unsafe { list_data.build_unchecked() };
+        if let Some(mut builder) = validity {
+            assert_eq!(builder.len(), list_offsets.len() - 1);
+            data_builder = data_builder.null_bit_buffer(builder.finish())
+        }
+
+        let list_data = unsafe { data_builder.build_unchecked() };
 
         let result_array = GenericListArray::<OffsetSize>::from(list_data);
         Ok(Arc::new(result_array))
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_level_buffer
-            .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+        self.item_reader.get_def_levels()
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_level_buffer
-            .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+        self.item_reader.get_rep_levels()
     }
 }
 
@@ -193,13 +251,183 @@ mod tests {
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
-    use arrow::array::{Array, LargeListArray, ListArray, PrimitiveArray};
-    use arrow::datatypes::{Field, Int32Type as ArrowInt32};
+    use arrow::array::{Array, ArrayDataBuilder, PrimitiveArray};
+    use arrow::datatypes::{Field, Int32Type as ArrowInt32, Int32Type};
     use std::sync::Arc;
 
-    #[test]
-    fn test_list_array_reader() {
-        // [[1, null, 2], null, [3, 4]]
+    fn list_type<OffsetSize: OffsetSizeTrait>(
+        data_type: ArrowType,
+        item_nullable: bool,
+    ) -> ArrowType {
+        let field = Box::new(Field::new("item", data_type, item_nullable));
+        match OffsetSize::is_large() {
+            true => ArrowType::LargeList(field),
+            false => ArrowType::List(field),
+        }
+    }
+
+    fn downcast<OffsetSize: OffsetSizeTrait>(
+        array: &ArrayRef,
+    ) -> &'_ GenericListArray<OffsetSize> {
+        array
+            .as_any()
+            .downcast_ref::<GenericListArray<OffsetSize>>()
+            .unwrap()
+    }
+
+    fn to_offsets<OffsetSize: OffsetSizeTrait>(values: Vec<usize>) -> Buffer {
+        Buffer::from_iter(
+            values
+                .into_iter()
+                .map(|x| OffsetSize::from_usize(x).unwrap()),
+        )
+    }
+
+    fn test_nested_list<OffsetSize: OffsetSizeTrait>() {
+        // 3 lists, with first and third nullable
+        // [
+        //     [
+        //         [[1, null], null, [4], []],
+        //         [],
+        //         [[7]],
+        //         [[]],
+        //         [[1, 2, 3], [4, null, 6], null]
+        //     ],
+        //     null,
+        //     [],
+        //     [[[11]]]
+        // ]
+
+        let l3_item_type = ArrowType::Int32;
+        let l3_type = list_type::<OffsetSize>(l3_item_type.clone(), true);
+
+        let l2_item_type = l3_type.clone();
+        let l2_type = list_type::<OffsetSize>(l2_item_type.clone(), true);
+
+        let l1_item_type = l2_type.clone();
+        let l1_type = list_type::<OffsetSize>(l1_item_type.clone(), false);
+
+        let leaf = PrimitiveArray::<Int32Type>::from_iter(vec![
+            Some(1),
+            None,
+            Some(4),
+            Some(7),
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            None,
+            Some(6),
+            Some(11),
+        ]);
+
+        // [[1, null], null, [4], [], [7], [], [1, 2, 3], [4, null, 6], null, [11]]
+        let offsets = to_offsets::<OffsetSize>(vec![0, 2, 2, 3, 3, 4, 4, 7, 10, 10, 11]);
+        let l3 = ArrayDataBuilder::new(l3_type.clone())
+            .len(10)
+            .add_buffer(offsets)
+            .add_child_data(leaf.data().clone())
+            .null_bit_buffer(Buffer::from([0b11111101, 0b00000010]))
+            .build()
+            .unwrap();
+
+        // [[[1, null], null, [4], []], [], [[7]], [[]], [[1, 2, 3], [4, null, 6], null], [[11]]]
+        let offsets = to_offsets::<OffsetSize>(vec![0, 4, 4, 5, 6, 9, 10]);
+        let l2 = ArrayDataBuilder::new(l2_type.clone())
+            .len(6)
+            .add_buffer(offsets)
+            .add_child_data(l3)
+            .build()
+            .unwrap();
+
+        let offsets = to_offsets::<OffsetSize>(vec![0, 5, 5, 5, 6]);
+        let l1 = ArrayDataBuilder::new(l1_type.clone())
+            .len(4)
+            .add_buffer(offsets)
+            .add_child_data(l2)
+            .null_bit_buffer(Buffer::from([0b00001101]))
+            .build()
+            .unwrap();
+
+        let expected = GenericListArray::<OffsetSize>::from(l1);
+
+        let values = Arc::new(PrimitiveArray::<Int32Type>::from(vec![
+            Some(1),
+            None,
+            None,
+            Some(4),
+            None,
+            None,
+            Some(7),
+            None,
+            Some(1),
+            Some(2),
+            Some(3),
+            Some(4),
+            None,
+            Some(6),
+            None,
+            None,
+            None,
+            Some(11),
+        ]));
+
+        let item_array_reader = InMemoryArrayReader::new(
+            ArrowType::Int32,
+            values,
+            Some(vec![6, 5, 3, 6, 4, 2, 6, 4, 6, 6, 6, 6, 5, 6, 3, 0, 1, 6]),
+            Some(vec![0, 3, 2, 2, 2, 1, 1, 1, 1, 3, 3, 2, 3, 3, 2, 0, 0, 0]),
+        );
+
+        let l3 = ListArrayReader::<OffsetSize>::new(
+            Box::new(item_array_reader),
+            l3_type,
+            l3_item_type,
+            5,
+            3,
+            true,
+        );
+
+        let l2 = ListArrayReader::<OffsetSize>::new(
+            Box::new(l3),
+            l2_type,
+            l2_item_type,
+            3,
+            2,
+            false,
+        );
+
+        let mut l1 = ListArrayReader::<OffsetSize>::new(
+            Box::new(l2),
+            l1_type,
+            l1_item_type,
+            2,
+            1,
+            true,
+        );
+
+        let expected_1 = expected.slice(0, 2);
+        let expected_2 = expected.slice(2, 2);
+
+        let actual = l1.next_batch(2).unwrap();
+        assert_eq!(expected_1.as_ref(), actual.as_ref());
+
+        let actual = l1.next_batch(1024).unwrap();
+        assert_eq!(expected_2.as_ref(), actual.as_ref());
+    }
+
+    fn test_required_list<OffsetSize: OffsetSizeTrait>() {
+        // [[1, null, 2], [], [3, 4], [], [], [null, 1]]
+        let expected =
+            GenericListArray::<OffsetSize>::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(1), None, Some(2)]),
+                Some(vec![]),
+                Some(vec![Some(3), Some(4)]),
+                Some(vec![]),
+                Some(vec![]),
+                Some(vec![None, Some(1)]),
+            ]);
+
         let array = Arc::new(PrimitiveArray::<ArrowInt32>::from(vec![
             Some(1),
             None,
@@ -207,108 +435,101 @@ mod tests {
             None,
             Some(3),
             Some(4),
+            None,
+            None,
+            None,
+            Some(1),
         ]));
 
         let item_array_reader = InMemoryArrayReader::new(
             ArrowType::Int32,
             array,
-            Some(vec![3, 2, 3, 0, 3, 3]),
-            Some(vec![0, 1, 1, 0, 0, 1]),
+            Some(vec![2, 1, 2, 0, 2, 2, 0, 0, 1, 2]),
+            Some(vec![0, 1, 1, 0, 0, 1, 0, 0, 0, 1]),
         );
 
-        let mut list_array_reader = ListArrayReader::<i32>::new(
+        let mut list_array_reader = ListArrayReader::<OffsetSize>::new(
             Box::new(item_array_reader),
-            ArrowType::List(Box::new(Field::new("item", ArrowType::Int32, true))),
+            list_type::<OffsetSize>(ArrowType::Int32, true),
             ArrowType::Int32,
             1,
             1,
-            0,
+            false,
+        );
+
+        let actual = list_array_reader.next_batch(1024).unwrap();
+        let actual = downcast::<OffsetSize>(&actual);
+
+        assert_eq!(&expected, actual)
+    }
+
+    fn test_nullable_list<OffsetSize: OffsetSizeTrait>() {
+        // [[1, null, 2], null, [], [3, 4], [], [], null, [], [null, 1]]
+        let expected =
+            GenericListArray::<OffsetSize>::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(1), None, Some(2)]),
+                None,
+                Some(vec![]),
+                Some(vec![Some(3), Some(4)]),
+                Some(vec![]),
+                Some(vec![]),
+                None,
+                Some(vec![]),
+                Some(vec![None, Some(1)]),
+            ]);
+
+        let array = Arc::new(PrimitiveArray::<ArrowInt32>::from(vec![
+            Some(1),
+            None,
+            Some(2),
+            None,
+            None,
+            Some(3),
+            Some(4),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(1),
+        ]));
+
+        let item_array_reader = InMemoryArrayReader::new(
+            ArrowType::Int32,
+            array,
+            Some(vec![3, 2, 3, 0, 1, 3, 3, 1, 1, 0, 1, 2, 3]),
+            Some(vec![0, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1]),
+        );
+
+        let mut list_array_reader = ListArrayReader::<OffsetSize>::new(
+            Box::new(item_array_reader),
+            list_type::<OffsetSize>(ArrowType::Int32, true),
+            ArrowType::Int32,
+            2,
             1,
+            true,
         );
 
-        let next_batch = list_array_reader.next_batch(1024).unwrap();
-        let list_array = next_batch.as_any().downcast_ref::<ListArray>().unwrap();
+        let actual = list_array_reader.next_batch(1024).unwrap();
+        let actual = downcast::<OffsetSize>(&actual);
 
-        assert_eq!(3, list_array.len());
-        // This passes as I expect
-        assert_eq!(1, list_array.null_count());
+        assert_eq!(&expected, actual)
+    }
 
-        assert_eq!(
-            list_array
-                .value(0)
-                .as_any()
-                .downcast_ref::<PrimitiveArray<ArrowInt32>>()
-                .unwrap(),
-            &PrimitiveArray::<ArrowInt32>::from(vec![Some(1), None, Some(2)])
-        );
+    fn test_list_array<OffsetSize: OffsetSizeTrait>() {
+        test_nullable_list::<OffsetSize>();
+        test_required_list::<OffsetSize>();
+        test_nested_list::<OffsetSize>();
+    }
 
-        assert!(list_array.is_null(1));
-
-        assert_eq!(
-            list_array
-                .value(2)
-                .as_any()
-                .downcast_ref::<PrimitiveArray<ArrowInt32>>()
-                .unwrap(),
-            &PrimitiveArray::<ArrowInt32>::from(vec![Some(3), Some(4)])
-        );
+    #[test]
+    fn test_list_array_reader() {
+        test_list_array::<i32>();
     }
 
     #[test]
     fn test_large_list_array_reader() {
-        // [[1, null, 2], null, [3, 4]]
-        let array = Arc::new(PrimitiveArray::<ArrowInt32>::from(vec![
-            Some(1),
-            None,
-            Some(2),
-            None,
-            Some(3),
-            Some(4),
-        ]));
-        let item_array_reader = InMemoryArrayReader::new(
-            ArrowType::Int32,
-            array,
-            Some(vec![3, 2, 3, 0, 3, 3]),
-            Some(vec![0, 1, 1, 0, 0, 1]),
-        );
-
-        let mut list_array_reader = ListArrayReader::<i64>::new(
-            Box::new(item_array_reader),
-            ArrowType::LargeList(Box::new(Field::new("item", ArrowType::Int32, true))),
-            ArrowType::Int32,
-            1,
-            1,
-            0,
-            1,
-        );
-
-        let next_batch = list_array_reader.next_batch(1024).unwrap();
-        let list_array = next_batch
-            .as_any()
-            .downcast_ref::<LargeListArray>()
-            .unwrap();
-
-        assert_eq!(3, list_array.len());
-
-        assert_eq!(
-            list_array
-                .value(0)
-                .as_any()
-                .downcast_ref::<PrimitiveArray<ArrowInt32>>()
-                .unwrap(),
-            &PrimitiveArray::<ArrowInt32>::from(vec![Some(1), None, Some(2)])
-        );
-
-        assert!(list_array.is_null(1));
-
-        assert_eq!(
-            list_array
-                .value(2)
-                .as_any()
-                .downcast_ref::<PrimitiveArray<ArrowInt32>>()
-                .unwrap(),
-            &PrimitiveArray::<ArrowInt32>::from(vec![Some(3), Some(4)])
-        );
+        test_list_array::<i64>()
     }
 
     #[test]

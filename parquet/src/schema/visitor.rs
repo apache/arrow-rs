@@ -27,17 +27,30 @@ pub trait TypeVisitor<R, C> {
 
     /// Default implementation when visiting a list.
     ///
-    /// It checks list type definition and calls `visit_list_with_item` with extracted
+    /// It checks list type definition and calls [`Self::visit_list_with_item`] with extracted
     /// item type.
     ///
     /// To fully understand this algorithm, please refer to
     /// [parquet doc](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md).
+    ///
+    /// For example, a standard list type looks like:
+    ///
+    /// ```text
+    /// required/optional group my_list (LIST) {
+    //    repeated group list {
+    //      required/optional binary element (UTF8);
+    //    }
+    //  }
+    /// ```
+    ///
+    /// In such a case, [`Self::visit_list_with_item`] will be called with `my_list` as the list
+    /// type, and `element` as the `item_type`
+    ///
     fn visit_list(&mut self, list_type: TypePtr, context: C) -> Result<R> {
         match list_type.as_ref() {
-            Type::PrimitiveType { .. } => panic!(
-                "{:?} is a list type and can't be processed as primitive.",
-                list_type
-            ),
+            Type::PrimitiveType { .. } => {
+                panic!("{:?} is a list type and must be a group type", list_type)
+            }
             Type::GroupType {
                 basic_info: _,
                 fields,

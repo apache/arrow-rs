@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::ArrayRef;
+use arrow::array::{Array, ArrayRef};
 use arrow::datatypes::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
@@ -102,6 +102,8 @@ pub struct InMemoryArrayReader {
     array: ArrayRef,
     def_levels: Option<Vec<i16>>,
     rep_levels: Option<Vec<i16>>,
+    last_idx: usize,
+    cur_idx: usize,
 }
 
 impl InMemoryArrayReader {
@@ -111,11 +113,23 @@ impl InMemoryArrayReader {
         def_levels: Option<Vec<i16>>,
         rep_levels: Option<Vec<i16>>,
     ) -> Self {
+        assert!(def_levels
+            .as_ref()
+            .map(|d| d.len() == array.len())
+            .unwrap_or(true));
+
+        assert!(rep_levels
+            .as_ref()
+            .map(|r| r.len() == array.len())
+            .unwrap_or(true));
+
         Self {
             data_type,
             array,
             def_levels,
             rep_levels,
+            cur_idx: 0,
+            last_idx: 0,
         }
     }
 }
@@ -129,16 +143,46 @@ impl ArrayReader for InMemoryArrayReader {
         &self.data_type
     }
 
-    fn next_batch(&mut self, _batch_size: usize) -> Result<ArrayRef> {
-        Ok(self.array.clone())
+    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        assert_ne!(batch_size, 0);
+        // This replicates the logical normally performed by
+        // RecordReader to delimit semantic records
+        let read = match &self.rep_levels {
+            Some(rep_levels) => {
+                let rep_levels = &rep_levels[self.cur_idx..];
+                let mut levels_read = 0;
+                let mut records_read = 0;
+                while levels_read < rep_levels.len() && records_read < batch_size {
+                    if rep_levels[levels_read] == 0 {
+                        records_read += 1; // Start of new record
+                    }
+                    levels_read += 1;
+                }
+
+                // Find end of current record
+                while levels_read < rep_levels.len() && rep_levels[levels_read] != 0 {
+                    levels_read += 1
+                }
+                levels_read
+            }
+            None => batch_size.min(self.array.len() - self.cur_idx),
+        };
+
+        self.last_idx = self.cur_idx;
+        self.cur_idx += read;
+        Ok(self.array.slice(self.last_idx, read))
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_levels.as_deref()
+        self.def_levels
+            .as_ref()
+            .map(|l| &l[self.last_idx..self.cur_idx])
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_levels.as_deref()
+        self.rep_levels
+            .as_ref()
+            .map(|l| &l[self.last_idx..self.cur_idx])
     }
 }
 
