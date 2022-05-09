@@ -260,7 +260,7 @@ mod tests {
         item_nullable: bool,
     ) -> ArrowType {
         let field = Box::new(Field::new("item", data_type, item_nullable));
-        match OffsetSize::is_large() {
+        match OffsetSize::IS_LARGE {
             true => ArrowType::LargeList(field),
             false => ArrowType::List(field),
         }
