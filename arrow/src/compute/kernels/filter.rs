@@ -743,7 +743,7 @@ struct FilterString<'a, OffsetSize> {
 
 impl<'a, OffsetSize> FilterString<'a, OffsetSize>
 where
-    OffsetSize: Zero + AddAssign + StringOffsetSizeTrait,
+    OffsetSize: Zero + AddAssign + OffsetSizeTrait,
 {
     fn new(capacity: usize, array: &'a GenericStringArray<OffsetSize>) -> Self {
         let num_offsets_bytes = (capacity + 1) * std::mem::size_of::<OffsetSize>();
@@ -815,7 +815,7 @@ fn filter_string<OffsetSize>(
     predicate: &FilterPredicate,
 ) -> GenericStringArray<OffsetSize>
 where
-    OffsetSize: Zero + AddAssign + StringOffsetSizeTrait,
+    OffsetSize: Zero + AddAssign + OffsetSizeTrait,
 {
     let data = array.data();
     assert_eq!(data.buffers().len(), 2);

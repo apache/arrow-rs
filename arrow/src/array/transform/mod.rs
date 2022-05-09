@@ -17,9 +17,8 @@
 
 use super::{
     data::{into_buffers, new_buffers},
-    ArrayData, ArrayDataBuilder,
+    ArrayData, ArrayDataBuilder, OffsetSizeTrait,
 };
-use crate::array::StringOffsetSizeTrait;
 use crate::{
     buffer::MutableBuffer,
     datatypes::DataType,
@@ -333,14 +332,14 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
     })
 }
 
-fn preallocate_offset_and_binary_buffer<Offset: StringOffsetSizeTrait>(
+fn preallocate_offset_and_binary_buffer<Offset: OffsetSizeTrait>(
     capacity: usize,
     binary_size: usize,
 ) -> [MutableBuffer; 2] {
     // offsets
     let mut buffer = MutableBuffer::new((1 + capacity) * mem::size_of::<Offset>());
     // safety: `unsafe` code assumes that this buffer is initialized with one element
-    if Offset::is_large() {
+    if Offset::IS_LARGE {
         buffer.push(0i64);
     } else {
         buffer.push(0i32)

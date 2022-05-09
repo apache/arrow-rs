@@ -71,9 +71,9 @@ where
 
 fn length_binary<O, T>(array: &dyn Array) -> ArrayRef
 where
-    O: BinaryOffsetSizeTrait,
+    O: OffsetSizeTrait,
     T: ArrowPrimitiveType,
-    T::Native: BinaryOffsetSizeTrait,
+    T::Native: OffsetSizeTrait,
 {
     let array = array
         .as_any()
@@ -84,9 +84,9 @@ where
 
 fn length_string<O, T>(array: &dyn Array) -> ArrayRef
 where
-    O: StringOffsetSizeTrait,
+    O: OffsetSizeTrait,
     T: ArrowPrimitiveType,
-    T::Native: StringOffsetSizeTrait,
+    T::Native: OffsetSizeTrait,
 {
     let array = array
         .as_any()
@@ -97,9 +97,9 @@ where
 
 fn bit_length_binary<O, T>(array: &dyn Array) -> ArrayRef
 where
-    O: BinaryOffsetSizeTrait,
+    O: OffsetSizeTrait,
     T: ArrowPrimitiveType,
-    T::Native: BinaryOffsetSizeTrait,
+    T::Native: OffsetSizeTrait,
 {
     let array = array
         .as_any()
@@ -111,9 +111,9 @@ where
 
 fn bit_length_string<O, T>(array: &dyn Array) -> ArrayRef
 where
-    O: StringOffsetSizeTrait,
+    O: OffsetSizeTrait,
     T: ArrowPrimitiveType,
-    T::Native: StringOffsetSizeTrait,
+    T::Native: OffsetSizeTrait,
 {
     let array = array
         .as_any()

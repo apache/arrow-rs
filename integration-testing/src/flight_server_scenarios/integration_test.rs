@@ -284,7 +284,7 @@ async fn record_batch_from_message(
     message: ipc::Message<'_>,
     data_body: &[u8],
     schema_ref: SchemaRef,
-    dictionaries_by_field: &[Option<ArrayRef>],
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
 ) -> Result<RecordBatch, Status> {
     let ipc_batch = message.header_as_record_batch().ok_or_else(|| {
         Status::internal("Could not parse message header as record batch")
@@ -294,7 +294,7 @@ async fn record_batch_from_message(
         data_body,
         ipc_batch,
         schema_ref,
-        dictionaries_by_field,
+        dictionaries_by_id,
         None,
     );
 
@@ -307,14 +307,14 @@ async fn dictionary_from_message(
     message: ipc::Message<'_>,
     data_body: &[u8],
     schema_ref: SchemaRef,
-    dictionaries_by_field: &mut [Option<ArrayRef>],
+    dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
 ) -> Result<(), Status> {
     let ipc_batch = message.header_as_dictionary_batch().ok_or_else(|| {
         Status::internal("Could not parse message header as dictionary batch")
     })?;
 
     let dictionary_batch_result =
-        reader::read_dictionary(data_body, ipc_batch, &schema_ref, dictionaries_by_field);
+        reader::read_dictionary(data_body, ipc_batch, &schema_ref, dictionaries_by_id);
     dictionary_batch_result.map_err(|e| {
         Status::internal(format!("Could not convert to Dictionary: {:?}", e))
     })
@@ -331,7 +331,7 @@ async fn save_uploaded_chunks(
     let mut chunks = vec![];
     let mut uploaded_chunks = uploaded_chunks.lock().await;
 
-    let mut dictionaries_by_field = vec![None; schema_ref.fields().len()];
+    let mut dictionaries_by_id = HashMap::new();
 
     while let Some(Ok(data)) = input_stream.next().await {
         let message = arrow::ipc::root_as_message(&data.data_header[..])
@@ -350,7 +350,7 @@ async fn save_uploaded_chunks(
                     message,
                     &data.data_body,
                     schema_ref.clone(),
-                    &dictionaries_by_field,
+                    &dictionaries_by_id,
                 )
                 .await?;
 
@@ -361,7 +361,7 @@ async fn save_uploaded_chunks(
                     message,
                     &data.data_body,
                     schema_ref.clone(),
-                    &mut dictionaries_by_field,
+                    &mut dictionaries_by_id,
                 )
                 .await?;
             }

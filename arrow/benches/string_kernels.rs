@@ -25,22 +25,27 @@ use arrow::array::*;
 use arrow::compute::kernels::substring::substring;
 use arrow::util::bench_util::*;
 
-fn bench_substring(arr: &StringArray, start: i64, length: Option<u64>) {
+fn bench_substring(arr: &dyn Array, start: i64, length: Option<u64>) {
     substring(criterion::black_box(arr), start, length).unwrap();
 }
 
 fn add_benchmark(c: &mut Criterion) {
     let size = 65536;
-    let str_len = 1000;
+    let val_len = 1000;
 
-    let arr_string = create_string_array_with_len::<i32>(size, 0.0, str_len);
+    let arr_string = create_string_array_with_len::<i32>(size, 0.0, val_len);
+    let arr_fsb = create_fsb_array(size, 0.0, val_len);
 
-    c.bench_function("substring (start = 0, length = None)", |b| {
+    c.bench_function("substring utf8 (start = 0, length = None)", |b| {
         b.iter(|| bench_substring(&arr_string, 0, None))
     });
 
-    c.bench_function("substring (start = 1, length = str_len - 1)", |b| {
-        b.iter(|| bench_substring(&arr_string, 1, Some((str_len - 1) as u64)))
+    c.bench_function("substring utf8 (start = 1, length = str_len - 1)", |b| {
+        b.iter(|| bench_substring(&arr_string, 1, Some((val_len - 1) as u64)))
+    });
+
+    c.bench_function("substring fixed size binary array", |b| {
+        b.iter(|| bench_substring(&arr_fsb, 1, Some((val_len - 1) as u64)))
     });
 }
 

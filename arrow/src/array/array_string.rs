@@ -27,31 +27,28 @@ use crate::buffer::Buffer;
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
-/// Like [`OffsetSizeTrait`], but specialized for Strings.
-/// This allow us to expose a constant datatype for the [`GenericStringArray`].
-pub trait StringOffsetSizeTrait: OffsetSizeTrait {
-    const DATA_TYPE: DataType;
-}
-
-impl StringOffsetSizeTrait for i32 {
-    const DATA_TYPE: DataType = DataType::Utf8;
-}
-
-impl StringOffsetSizeTrait for i64 {
-    const DATA_TYPE: DataType = DataType::LargeUtf8;
-}
-
 /// Generic struct for \[Large\]StringArray
 ///
 /// See [`StringArray`] and [`LargeStringArray`] for storing
 /// specific string data.
-pub struct GenericStringArray<OffsetSize: StringOffsetSizeTrait> {
+pub struct GenericStringArray<OffsetSize: OffsetSizeTrait> {
     data: ArrayData,
     value_offsets: RawPtrBox<OffsetSize>,
     value_data: RawPtrBox<u8>,
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
+    /// Get the data type of the array.
+    // Declare this function as `pub const fn` after
+    // https://github.com/rust-lang/rust/issues/93706 is merged.
+    pub fn get_data_type() -> DataType {
+        if OffsetSize::IS_LARGE {
+            DataType::LargeUtf8
+        } else {
+            DataType::Utf8
+        }
+    }
+
     /// Returns the length for the element at index `i`.
     #[inline]
     pub fn value_length(&self, i: usize) -> OffsetSize {
@@ -134,7 +131,7 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
             "StringArray can only be created from List<u8> arrays, mismatched data types."
         );
 
-        let mut builder = ArrayData::builder(OffsetSize::DATA_TYPE)
+        let mut builder = ArrayData::builder(Self::get_data_type())
             .len(v.len())
             .add_buffer(v.data().buffers()[0].clone())
             .add_buffer(v.data().child_data()[0].buffers()[0].clone());
@@ -174,7 +171,7 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
         assert!(!offsets.is_empty()); // wrote at least one
         let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
 
-        let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
+        let array_data = ArrayData::builder(Self::get_data_type())
             .len(actual_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into());
@@ -202,7 +199,7 @@ impl<OffsetSize: StringOffsetSizeTrait> GenericStringArray<OffsetSize> {
     }
 }
 
-impl<'a, Ptr, OffsetSize: StringOffsetSizeTrait> FromIterator<&'a Option<Ptr>>
+impl<'a, Ptr, OffsetSize: OffsetSizeTrait> FromIterator<&'a Option<Ptr>>
     for GenericStringArray<OffsetSize>
 where
     Ptr: AsRef<str> + 'a,
@@ -216,7 +213,7 @@ where
     }
 }
 
-impl<'a, Ptr, OffsetSize: StringOffsetSizeTrait> FromIterator<Option<Ptr>>
+impl<'a, Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
     for GenericStringArray<OffsetSize>
 where
     Ptr: AsRef<str>,
@@ -251,7 +248,7 @@ where
 
         // calculate actual data_len, which may be different from the iterator's upper bound
         let data_len = (offsets.len() / offset_size) - 1;
-        let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
+        let array_data = ArrayData::builder(Self::get_data_type())
             .len(data_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into())
@@ -261,7 +258,7 @@ where
     }
 }
 
-impl<'a, T: StringOffsetSizeTrait> IntoIterator for &'a GenericStringArray<T> {
+impl<'a, T: OffsetSizeTrait> IntoIterator for &'a GenericStringArray<T> {
     type Item = Option<&'a str>;
     type IntoIter = GenericStringIter<'a, T>;
 
@@ -270,16 +267,16 @@ impl<'a, T: StringOffsetSizeTrait> IntoIterator for &'a GenericStringArray<T> {
     }
 }
 
-impl<'a, T: StringOffsetSizeTrait> GenericStringArray<T> {
+impl<'a, T: OffsetSizeTrait> GenericStringArray<T> {
     /// constructs a new iterator
     pub fn iter(&'a self) -> GenericStringIter<'a, T> {
         GenericStringIter::<'a, T>::new(self)
     }
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> fmt::Debug for GenericStringArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericStringArray<OffsetSize> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let prefix = if OffsetSize::is_large() { "Large" } else { "" };
+        let prefix = if OffsetSize::IS_LARGE { "Large" } else { "" };
 
         write!(f, "{}StringArray\n[\n", prefix)?;
         print_long_array(self, f, |array, index, f| {
@@ -289,7 +286,7 @@ impl<OffsetSize: StringOffsetSizeTrait> fmt::Debug for GenericStringArray<Offset
     }
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> Array for GenericStringArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> Array for GenericStringArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -299,13 +296,11 @@ impl<OffsetSize: StringOffsetSizeTrait> Array for GenericStringArray<OffsetSize>
     }
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> From<ArrayData>
-    for GenericStringArray<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericStringArray<OffsetSize> {
     fn from(data: ArrayData) -> Self {
         assert_eq!(
             data.data_type(),
-            &<OffsetSize as StringOffsetSizeTrait>::DATA_TYPE,
+            &Self::get_data_type(),
             "[Large]StringArray expects Datatype::[Large]Utf8"
         );
         assert_eq!(
@@ -323,7 +318,7 @@ impl<OffsetSize: StringOffsetSizeTrait> From<ArrayData>
     }
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> From<Vec<Option<&str>>>
+impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<&str>>>
     for GenericStringArray<OffsetSize>
 {
     fn from(v: Vec<Option<&str>>) -> Self {
@@ -331,17 +326,13 @@ impl<OffsetSize: StringOffsetSizeTrait> From<Vec<Option<&str>>>
     }
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> From<Vec<&str>>
-    for GenericStringArray<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> From<Vec<&str>> for GenericStringArray<OffsetSize> {
     fn from(v: Vec<&str>) -> Self {
         Self::from_iter_values(v)
     }
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> From<Vec<String>>
-    for GenericStringArray<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<OffsetSize> {
     fn from(v: Vec<String>) -> Self {
         Self::from_iter_values(v)
     }
@@ -371,7 +362,7 @@ pub type StringArray = GenericStringArray<i32>;
 /// ```
 pub type LargeStringArray = GenericStringArray<i64>;
 
-impl<T: StringOffsetSizeTrait> From<GenericListArray<T>> for GenericStringArray<T> {
+impl<T: OffsetSizeTrait> From<GenericListArray<T>> for GenericStringArray<T> {
     fn from(v: GenericListArray<T>) -> Self {
         GenericStringArray::<T>::from_list(v)
     }

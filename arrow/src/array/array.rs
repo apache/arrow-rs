@@ -554,9 +554,7 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                 )
             })
         }
-        DataType::Decimal(_, _) => {
-            unimplemented!("Creating null Decimal array not yet supported")
-        }
+        DataType::Decimal(_, _) => new_null_sized_decimal(data_type, length),
     }
 }
 
@@ -615,6 +613,24 @@ fn new_null_sized_array<T: ArrowPrimitiveType>(
             Some(MutableBuffer::new_null(length).into()),
             0,
             vec![Buffer::from(vec![0u8; length * T::get_byte_width()])],
+            vec![],
+        )
+    })
+}
+
+#[inline]
+fn new_null_sized_decimal(data_type: &DataType, length: usize) -> ArrayRef {
+    make_array(unsafe {
+        ArrayData::new_unchecked(
+            data_type.clone(),
+            length,
+            Some(length),
+            Some(MutableBuffer::new_null(length).into()),
+            0,
+            vec![Buffer::from(vec![
+                0u8;
+                length * std::mem::size_of::<i128>()
+            ])],
             vec![],
         )
     })

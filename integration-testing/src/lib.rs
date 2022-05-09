@@ -578,7 +578,12 @@ fn array_from_json(
                 .get(&dict_id);
             match dictionary {
                 Some(dictionary) => dictionary_array_from_json(
-                    field, json_col, key_type, value_type, dictionary,
+                    field,
+                    json_col,
+                    key_type,
+                    value_type,
+                    dictionary,
+                    dictionaries,
                 ),
                 None => Err(ArrowError::JsonError(format!(
                     "Unable to find dictionary for field {:?}",
@@ -640,6 +645,7 @@ fn dictionary_array_from_json(
     dict_key: &DataType,
     dict_value: &DataType,
     dictionary: &ArrowJsonDictionaryBatch,
+    dictionaries: Option<&HashMap<i64, ArrowJsonDictionaryBatch>>,
 ) -> Result<ArrayRef> {
     match dict_key {
         DataType::Int8
@@ -667,9 +673,11 @@ fn dictionary_array_from_json(
             let keys = array_from_json(&key_field, json_col, None)?;
             // note: not enough info on nullability of dictionary
             let value_field = Field::new("value", dict_value.clone(), true);
-            println!("dictionary value type: {:?}", dict_value);
-            let values =
-                array_from_json(&value_field, dictionary.data.columns[0].clone(), None)?;
+            let values = array_from_json(
+                &value_field,
+                dictionary.data.columns[0].clone(),
+                dictionaries,
+            )?;
 
             // convert key and value to dictionary data
             let dict_data = ArrayData::builder(field.data_type().clone())
