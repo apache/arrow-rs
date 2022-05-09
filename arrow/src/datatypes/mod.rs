@@ -393,6 +393,70 @@ mod tests {
     }
 
     #[test]
+    fn parse_union_from_json() {
+        let json = r#"
+        {
+            "name": "my_union",
+            "nullable": false,
+            "type": {
+                "name": "union",
+                "mode": "SPARSE",
+                "typeIds": [
+                    5,
+                    7
+                ]
+            },
+            "children": [
+                {
+                    "name": "f1",
+                    "type": {
+                        "name": "int",
+                        "isSigned": true,
+                        "bitWidth": 32
+                    },
+                    "nullable": true,
+                    "children": []
+                },
+                {
+                    "name": "f2",
+                    "type": {
+                        "name": "utf8"
+                    },
+                    "nullable": true,
+                    "children": []
+                }
+            ]
+        }
+        "#;
+        let value: Value = serde_json::from_str(json).unwrap();
+        let dt = Field::from(&value).unwrap();
+
+        let expected = Field::new(
+            "my_union",
+            DataType::Union(
+                vec![
+                    Field::new("f1", DataType::Int32, true).with_metadata(Some(
+                        [("type_id".to_string(), "5".to_string())]
+                            .iter()
+                            .cloned()
+                            .collect(),
+                    )),
+                    Field::new("f2", DataType::Utf8, true).with_metadata(Some(
+                        [("type_id".to_string(), "7".to_string())]
+                            .iter()
+                            .cloned()
+                            .collect(),
+                    )),
+                ],
+                UnionMode::Sparse,
+            ),
+            false,
+        );
+
+        assert_eq!(expected, dt);
+    }
+
+    #[test]
     fn parse_utf8_from_json() {
         let json = "{\"name\":\"utf8\"}";
         let value: Value = serde_json::from_str(json).unwrap();
