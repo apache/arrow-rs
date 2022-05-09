@@ -53,7 +53,8 @@ use std::sync::Arc;
 /// ```
 ///
 /// # Error
-/// - The function errors when the passed array is not a \[Large\]String array or \[Large\]Binary array.
+/// - The function errors when the passed array is not a \[Large\]String array, \[Large\]Binary
+///   array, or DictionaryArray with \[Large\]String or \[Large\]Binary as its value type.
 /// - The function errors if the offset of a substring in the input array is at invalid char boundary (only for \[Large\]String array).
 ///
 /// ## Example of trying to get an invalid utf-8 format substring
