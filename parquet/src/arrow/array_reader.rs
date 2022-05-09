@@ -1381,7 +1381,6 @@ mod tests {
     #[test]
     fn test_complex_array_reader_dict_enc_string() {
         use crate::encodings::encoding::{DictEncoder, Encoder};
-        use crate::util::memory::MemTracker;
         // Construct column schema
         let message_type = "
         message test_schema {
@@ -1412,9 +1411,8 @@ mod tests {
         let mut all_values = Vec::with_capacity(num_pages * values_per_page);
 
         for i in 0..num_pages {
-            let mem_tracker = Arc::new(MemTracker::new());
             let mut dict_encoder =
-                DictEncoder::<ByteArrayType>::new(column_desc.clone(), mem_tracker);
+                DictEncoder::<ByteArrayType>::new(column_desc.clone());
             // add data page
             let mut values = Vec::with_capacity(values_per_page);
 

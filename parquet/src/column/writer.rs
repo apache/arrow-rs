@@ -16,7 +16,7 @@
 // under the License.
 
 //! Contains column writer API.
-use std::{cmp, collections::VecDeque, convert::TryFrom, marker::PhantomData, sync::Arc};
+use std::{cmp, collections::VecDeque, convert::TryFrom, marker::PhantomData};
 
 use crate::basic::{Compression, ConvertedType, Encoding, LogicalType, PageType, Type};
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
@@ -36,7 +36,7 @@ use crate::file::{
 };
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::FromBytes;
-use crate::util::memory::{ByteBufferPtr, MemTracker};
+use crate::util::memory::ByteBufferPtr;
 
 /// Column writer for a Parquet type.
 pub enum ColumnWriter {
@@ -213,7 +213,7 @@ impl<T: DataType> ColumnWriterImpl<T> {
         let dict_encoder = if props.dictionary_enabled(descr.path())
             && has_dictionary_support(T::get_physical_type(), &props)
         {
-            Some(DictEncoder::new(descr.clone(), Arc::new(MemTracker::new())))
+            Some(DictEncoder::new(descr.clone()))
         } else {
             None
         };
@@ -227,7 +227,6 @@ impl<T: DataType> ColumnWriterImpl<T> {
             props
                 .encoding(descr.path())
                 .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), &props)),
-            Arc::new(MemTracker::new()),
         )
         .unwrap();
 
@@ -1135,6 +1134,7 @@ fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use rand::distributions::uniform::SampleUniform;
+    use std::sync::Arc;
 
     use crate::column::{
         page::PageReader,
