@@ -1808,6 +1808,90 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_utf8_array_with_empty_offsets_buffer() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from(&[]);
+        ArrayData::try_new(
+            DataType::Utf8,
+            0,
+            None,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_empty_utf8_array_with_single_zero_offset() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from_slice_ref(&[0i32]);
+        ArrayData::try_new(
+            DataType::Utf8,
+            0,
+            None,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "First offset 1 of Utf8 is larger than values length 0")]
+    fn test_empty_utf8_array_with_invalid_offset() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from_slice_ref(&[1i32]);
+        ArrayData::try_new(
+            DataType::Utf8,
+            0,
+            None,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_empty_utf8_array_with_non_zero_offset() {
+        let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
+        let offsets_buffer = Buffer::from_slice_ref(&[0i32, 2, 6, 0]);
+        ArrayData::try_new(
+            DataType::Utf8,
+            0,
+            None,
+            None,
+            3,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Offsets buffer size (bytes): 4 isn't large enough for LargeUtf8. Length 0 needs 1"
+    )]
+    fn test_empty_large_utf8_array_with_wrong_type_offsets() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from_slice_ref(&[0i32]);
+        ArrayData::try_new(
+            DataType::LargeUtf8,
+            0,
+            None,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
     #[should_panic(
         expected = "Offsets buffer size (bytes): 8 isn't large enough for Utf8. Length 2 needs 3"
     )]
