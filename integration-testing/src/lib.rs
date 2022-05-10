@@ -632,6 +632,61 @@ fn array_from_json(
             let array = MapArray::from(array_data);
             Ok(Arc::new(array))
         }
+        DataType::Union(fields, _) => {
+            let field_type_ids = fields
+                .iter()
+                .enumerate()
+                .into_iter()
+                .map(|(idx, f)| {
+                    (
+                        f.metadata()
+                            .and_then(|m| m.get("type_id"))
+                            .unwrap()
+                            .parse::<i8>()
+                            .unwrap(),
+                        idx,
+                    )
+                })
+                .collect::<HashMap<_, _>>();
+
+            let type_ids = if let Some(type_id) = json_col.type_id {
+                type_id
+                    .iter()
+                    .map(|t| {
+                        if field_type_ids.contains_key(t) {
+                            Ok(*(field_type_ids.get(t).unwrap()) as i8)
+                        } else {
+                            Err(ArrowError::JsonError(format!(
+                                "Unable to find type id {:?}",
+                                t
+                            )))
+                        }
+                    })
+                    .collect::<Result<_>>()?
+            } else {
+                vec![]
+            };
+
+            let offset: Option<Buffer> = json_col.offset.map(|offsets| {
+                let offsets: Vec<i32> =
+                    offsets.iter().map(|v| v.as_i64().unwrap() as i32).collect();
+                Buffer::from(&offsets.to_byte_slice())
+            });
+
+            let mut children: Vec<(Field, Arc<dyn Array>)> = vec![];
+            for (field, col) in fields.iter().zip(json_col.children.unwrap()) {
+                let array = array_from_json(field, col, dictionaries)?;
+                children.push((field.clone(), array));
+            }
+
+            let array = UnionArray::try_new(
+                Buffer::from(&type_ids.to_byte_slice()),
+                offset,
+                children,
+            )
+            .unwrap();
+            Ok(Arc::new(array))
+        }
         t => Err(ArrowError::JsonError(format!(
             "data type {:?} not supported",
             t
