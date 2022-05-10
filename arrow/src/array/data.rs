@@ -1033,15 +1033,15 @@ impl ArrayData {
     }
 
     /// Calls the `validate(item_index, range)` function for each of
-    /// the ranges specified in the arrow offset buffer of type
+    /// the ranges specified in the arrow offsets buffer of type
     /// `T`. Also validates that each offset is smaller than
-    /// `max_offset`
+    /// `offset_limit`
     ///
-    /// For example, the offset buffer contained `[1, 2, 4]`, this
+    /// For example, the offsets buffer contained `[1, 2, 4]`, this
     /// function would call `validate([1,2])`, and `validate([2,4])`
     fn validate_each_offset<T, V>(
         &self,
-        offset_buffer: &Buffer,
+        offsets_buffer: &Buffer,
         offset_limit: usize,
         validate: V,
     ) -> Result<()>
@@ -1049,7 +1049,7 @@ impl ArrayData {
         T: ArrowNativeType + std::convert::TryInto<usize> + num::Num + std::fmt::Display,
         V: Fn(usize, Range<usize>) -> Result<()>,
     {
-        let offsets = self.typed_offsets::<T>(offset_buffer)?
+        let offsets = self.typed_offsets::<T>(offsets_buffer)?
             .iter()
             .enumerate()
             .map(|(i, x)| {
@@ -1059,7 +1059,7 @@ impl ArrayData {
                         "Offset invariant failure: Could not convert offset {} to usize at position {}",
                         x, i))}
                     );
-                // check if the offset exceed the limit
+                // check if the offset exceeds the limit
                 match r {
                     Ok(n) if n <= offset_limit => Ok(n),
                     Ok(_) => Err(ArrowError::InvalidArgumentError(format!(
