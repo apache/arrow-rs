@@ -726,7 +726,9 @@ impl ArrayData {
     /// Returns a reference to the data in `buffer` as a typed slice
     /// (typically `&[i32]` or `&[i64]`) after validating. The
     /// returned slice is guaranteed to have at least `self.len + 1`
-    /// entries
+    /// entries.
+    ///
+    /// For an empty array, the `buffer` can also be empty`.
     fn typed_offsets<'a, T: ArrowNativeType + num::Num + std::fmt::Display>(
         &'a self,
         buffer: &'a Buffer,
@@ -1036,6 +1038,9 @@ impl ArrayData {
     /// the ranges specified in the arrow offsets buffer of type
     /// `T`. Also validates that each offset is smaller than
     /// `offset_limit`
+    ///
+    /// For an empty array, the offsets buffer can either be empty
+    /// or contain a single `0`.
     ///
     /// For example, the offsets buffer contained `[1, 2, 4]`, this
     /// function would call `validate([1,2])`, and `validate([2,4])`
