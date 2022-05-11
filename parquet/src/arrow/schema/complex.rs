@@ -32,14 +32,27 @@ fn get_repetition(t: &Type) -> Repetition {
 
 /// Representation of a parquet file, in terms of arrow schema elements
 pub struct ParquetField {
+    /// The level which represents an insertion into the current list
+    /// i.e. guaranteed to be > 0 for a list type
     pub rep_level: i16,
+    /// The level at which this field is fully defined,
+    /// i.e. guaranteed to be > 0 for a nullable type
     pub def_level: i16,
+    /// Whether this field is nullable
     pub nullable: bool,
+    /// The arrow type of the column data
+    ///
+    /// Note: In certain cases the data stored in parquet may have been coerced
+    /// to a different type and will require conversion on read (e.g. Date64 and Interval)
     pub arrow_type: DataType,
+    /// The type of this field
     pub field_type: ParquetFieldType,
 }
 
 impl ParquetField {
+    /// Converts `self` into an arrow list, with its current type as the field type
+    ///
+    /// This is used to convert repeated columns, into their arrow representation
     fn into_list(self, name: &str) -> Self {
         ParquetField {
             rep_level: self.rep_level,
@@ -56,7 +69,8 @@ impl ParquetField {
         }
     }
 
-    pub fn children(&self) -> Option<&[ParquetField]> {
+    /// Returns a list of [`ParquetField`] children if this is a group type
+    pub fn children(&self) -> Option<&[Self]> {
         match &self.field_type {
             ParquetFieldType::Primitive { .. } => None,
             ParquetFieldType::Group { children } => Some(children),
@@ -66,7 +80,9 @@ impl ParquetField {
 
 pub enum ParquetFieldType {
     Primitive {
+        /// The index of the column in parquet
         col_idx: usize,
+        /// The type of the column in parquet
         primitive_type: TypePtr,
     },
     Group {
@@ -74,6 +90,7 @@ pub enum ParquetFieldType {
     },
 }
 
+/// Encodes the context of the parent of the field currently under consideration
 struct VisitorContext {
     rep_level: i16,
     def_level: i16,
@@ -82,6 +99,8 @@ struct VisitorContext {
 }
 
 impl VisitorContext {
+    /// Compute the resulting definition level, repetition level and nullability
+    /// for a child field with the given [`Repetition`]
     fn levels(&self, repetition: Repetition) -> (i16, i16, bool) {
         match repetition {
             Repetition::OPTIONAL => (self.def_level + 1, self.rep_level, true),
@@ -91,8 +110,7 @@ impl VisitorContext {
     }
 }
 
-/// Walks the parquet schema in a depth-first fashion in order to extract the
-/// necessary information to map it to arrow data structures
+/// Walks the parquet schema in a depth-first fashion in order to map it to arrow data structures
 ///
 /// See [Logical Types] for more information on the conversion algorithm
 ///
@@ -231,7 +249,7 @@ impl Visitor {
         context: VisitorContext,
     ) -> Result<Option<ParquetField>> {
         let rep_level = context.rep_level + 1;
-        let (def_level, nullable) = match map_type.get_basic_info().repetition() {
+        let (def_level, nullable) = match get_repetition(&map_type) {
             Repetition::REQUIRED => (context.def_level + 1, false),
             Repetition::OPTIONAL => (context.def_level + 2, true),
             Repetition::REPEATED => return Err(arrow_err!("Map cannot be repeated")),
@@ -395,6 +413,11 @@ impl Visitor {
 
         if repeated_field.is_primitive() {
             // If the repeated field is not a group, then its type is the element type and elements are required.
+            //
+            // required/optional group my_list (LIST) {
+            //   repeated int32 element;
+            // }
+            //
             let context = VisitorContext {
                 rep_level: context.rep_level,
                 def_level,
@@ -403,6 +426,7 @@ impl Visitor {
 
             return match self.visit_primitive(repeated_field, context) {
                 Ok(Some(mut field)) => {
+                    // visit_primitive will infer a non-nullable list, update if necessary
                     field.nullable = nullable;
                     Ok(Some(field))
                 }
@@ -491,6 +515,10 @@ impl Visitor {
     }
 }
 
+/// Computes the [`Field`] for a child column
+///
+/// The resulting [`Field`] will have the type dictated by `field`, a name
+/// dictated by the `parquet_type`, and any metadata from `arrow_hint`
 fn convert_field(
     parquet_type: &Type,
     field: &ParquetField,
@@ -502,6 +530,7 @@ fn convert_field(
 
     match arrow_hint {
         Some(hint) => {
+            // If the inferred type is a dictionary, preserve dictionary metadata
             let field = match (&data_type, hint.dict_id(), hint.dict_is_ordered()) {
                 (DataType::Dictionary(_, _), Some(id), Some(ordered)) => {
                     Field::new_dict(name, data_type, nullable, id, ordered)
