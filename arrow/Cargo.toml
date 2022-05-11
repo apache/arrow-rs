@@ -175,3 +175,7 @@ harness = false
 [[bench]]
 name = "string_kernels"
 harness = false
+
+[[bench]]
+name = "array_data_validate"
+harness = false
