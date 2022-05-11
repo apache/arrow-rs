@@ -89,3 +89,6 @@ harness = false
 name = "arrow_reader"
 required-features = ["test_common", "experimental"]
 harness = false
+
+[lib]
+bench = false
