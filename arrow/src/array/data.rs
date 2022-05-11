@@ -1089,7 +1089,7 @@ impl ArrayData {
                     Err(err) => Some(Err(err)),
                 }
             })
-            .skip(1)// the first element is meaningless
+            .skip(1) // the first element is meaningless
             .try_for_each(|res: Result<(usize, Range<usize>)>| {
                 let (item_index, range) = res?;
                 validate(item_index-1, range)
