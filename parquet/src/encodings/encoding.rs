@@ -28,7 +28,7 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::{
     bit_util::{self, log2, num_required_bits, BitWriter},
     hash_util,
-    memory::{Buffer, ByteBuffer, ByteBufferPtr, MemTrackerPtr},
+    memory::ByteBufferPtr,
 };
 
 // ----------------------------------------------------------------------
@@ -76,10 +76,9 @@ pub trait Encoder<T: DataType> {
 pub fn get_encoder<T: DataType>(
     desc: ColumnDescPtr,
     encoding: Encoding,
-    mem_tracker: MemTrackerPtr,
 ) -> Result<Box<dyn Encoder<T>>> {
     let encoder: Box<dyn Encoder<T>> = match encoding {
-        Encoding::PLAIN => Box::new(PlainEncoder::new(desc, mem_tracker, vec![])),
+        Encoding::PLAIN => Box::new(PlainEncoder::new(desc, vec![])),
         Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
             return Err(general_err!(
                 "Cannot initialize this encoding through this function"
@@ -109,7 +108,7 @@ pub fn get_encoder<T: DataType>(
 /// - BYTE_ARRAY - 4 byte length stored as little endian, followed by bytes.
 /// - FIXED_LEN_BYTE_ARRAY - just the bytes are stored.
 pub struct PlainEncoder<T: DataType> {
-    buffer: ByteBuffer,
+    buffer: Vec<u8>,
     bit_writer: BitWriter,
     desc: ColumnDescPtr,
     _phantom: PhantomData<T>,
@@ -117,11 +116,9 @@ pub struct PlainEncoder<T: DataType> {
 
 impl<T: DataType> PlainEncoder<T> {
     /// Creates new plain encoder.
-    pub fn new(desc: ColumnDescPtr, mem_tracker: MemTrackerPtr, vec: Vec<u8>) -> Self {
-        let mut byte_buffer = ByteBuffer::new().with_mem_tracker(mem_tracker);
-        byte_buffer.set_data(vec);
+    pub fn new(desc: ColumnDescPtr, buffer: Vec<u8>) -> Self {
         Self {
-            buffer: byte_buffer,
+            buffer,
             bit_writer: BitWriter::new(256),
             desc,
             _phantom: PhantomData,
@@ -139,16 +136,15 @@ impl<T: DataType> Encoder<T> for PlainEncoder<T> {
     }
 
     fn estimated_data_encoded_size(&self) -> usize {
-        self.buffer.size() + self.bit_writer.bytes_written()
+        self.buffer.len() + self.bit_writer.bytes_written()
     }
 
     #[inline]
     fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {
-        self.buffer.write_all(self.bit_writer.flush_buffer())?;
-        self.buffer.flush()?;
+        self.buffer
+            .extend_from_slice(self.bit_writer.flush_buffer());
         self.bit_writer.clear();
-
-        Ok(self.buffer.consume())
+        Ok(std::mem::take(&mut self.buffer).into())
     }
 
     #[inline]
@@ -189,35 +185,31 @@ pub struct DictEncoder<T: DataType> {
     // Stores indices which map (many-to-one) to the values in the `uniques` array.
     // Here we are using fix-sized array with linear probing.
     // A slot with `HASH_SLOT_EMPTY` indicates the slot is not currently occupied.
-    hash_slots: Buffer<i32>,
+    hash_slots: Vec<i32>,
 
     // Indices that have not yet be written out by `write_indices()`.
-    buffered_indices: Buffer<i32>,
+    buffered_indices: Vec<i32>,
 
     // The unique observed values.
-    uniques: Buffer<T::T>,
+    uniques: Vec<T::T>,
 
     // Size in bytes needed to encode this dictionary.
     uniques_size_in_bytes: usize,
-
-    // Tracking memory usage for the various data structures in this struct.
-    mem_tracker: MemTrackerPtr,
 }
 
 impl<T: DataType> DictEncoder<T> {
     /// Creates new dictionary encoder.
-    pub fn new(desc: ColumnDescPtr, mem_tracker: MemTrackerPtr) -> Self {
-        let mut slots = Buffer::new().with_mem_tracker(mem_tracker.clone());
+    pub fn new(desc: ColumnDescPtr) -> Self {
+        let mut slots = vec![];
         slots.resize(INITIAL_HASH_TABLE_SIZE, -1);
         Self {
             desc,
             hash_table_size: INITIAL_HASH_TABLE_SIZE,
             mod_bitmask: (INITIAL_HASH_TABLE_SIZE - 1) as u32,
             hash_slots: slots,
-            buffered_indices: Buffer::new().with_mem_tracker(mem_tracker.clone()),
-            uniques: Buffer::new().with_mem_tracker(mem_tracker.clone()),
+            buffered_indices: vec![],
+            uniques: vec![],
             uniques_size_in_bytes: 0,
-            mem_tracker,
         }
     }
 
@@ -230,7 +222,7 @@ impl<T: DataType> DictEncoder<T> {
 
     /// Returns number of unique values (keys) in the dictionary.
     pub fn num_entries(&self) -> usize {
-        self.uniques.size()
+        self.uniques.len()
     }
 
     /// Returns size of unique values (keys) in the dictionary, in bytes.
@@ -242,9 +234,8 @@ impl<T: DataType> DictEncoder<T> {
     /// the result.
     #[inline]
     pub fn write_dict(&self) -> Result<ByteBufferPtr> {
-        let mut plain_encoder =
-            PlainEncoder::<T>::new(self.desc.clone(), self.mem_tracker.clone(), vec![]);
-        plain_encoder.put(self.uniques.data())?;
+        let mut plain_encoder = PlainEncoder::<T>::new(self.desc.clone(), vec![]);
+        plain_encoder.put(&self.uniques)?;
         plain_encoder.flush_buffer()
     }
 
@@ -255,12 +246,11 @@ impl<T: DataType> DictEncoder<T> {
         let buffer_len = self.estimated_data_encoded_size();
         let mut buffer: Vec<u8> = vec![0; buffer_len as usize];
         buffer[0] = self.bit_width() as u8;
-        self.mem_tracker.alloc(buffer.capacity() as i64);
 
         // Write bit width in the first byte
         buffer.write_all((self.bit_width() as u8).as_bytes())?;
         let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer, 1);
-        for index in self.buffered_indices.data() {
+        for index in &self.buffered_indices {
             if !encoder.put(*index as u64)? {
                 return Err(general_err!("Encoder doesn't have enough space"));
             }
@@ -293,7 +283,7 @@ impl<T: DataType> DictEncoder<T> {
 
     #[inline(never)]
     fn insert_fresh_slot(&mut self, slot: usize, value: T::T) -> i32 {
-        let index = self.uniques.size() as i32;
+        let index = self.uniques.len() as i32;
         self.hash_slots[slot] = index;
 
         let (base_size, num_elements) = value.dict_encoding_size();
@@ -307,7 +297,7 @@ impl<T: DataType> DictEncoder<T> {
         self.uniques_size_in_bytes += unique_size;
         self.uniques.push(value);
 
-        if self.uniques.size() > (self.hash_table_size as f32 * MAX_HASH_LOAD) as usize {
+        if self.uniques.len() > (self.hash_table_size as f32 * MAX_HASH_LOAD) as usize {
             self.double_table_size();
         }
 
@@ -316,7 +306,7 @@ impl<T: DataType> DictEncoder<T> {
 
     #[inline]
     fn bit_width(&self) -> u8 {
-        let num_entries = self.uniques.size();
+        let num_entries = self.uniques.len();
         if num_entries == 0 {
             0
         } else if num_entries == 1 {
@@ -328,7 +318,7 @@ impl<T: DataType> DictEncoder<T> {
 
     fn double_table_size(&mut self) {
         let new_size = self.hash_table_size * 2;
-        let mut new_hash_slots = Buffer::new().with_mem_tracker(self.mem_tracker.clone());
+        let mut new_hash_slots = vec![];
         new_hash_slots.resize(new_size, HASH_SLOT_EMPTY);
         for i in 0..self.hash_table_size {
             let index = self.hash_slots[i];
@@ -376,7 +366,7 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
     fn estimated_data_encoded_size(&self) -> usize {
         let bit_width = self.bit_width();
         1 + RleEncoder::min_buffer_size(bit_width)
-            + RleEncoder::max_buffer_size(bit_width, self.buffered_indices.size())
+            + RleEncoder::max_buffer_size(bit_width, self.buffered_indices.len())
     }
 
     #[inline]
@@ -677,10 +667,9 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
         // Write page header with total values
         self.write_page_header();
 
-        let mut buffer = ByteBuffer::new();
-        buffer.write_all(self.page_header_writer.flush_buffer())?;
-        buffer.write_all(self.bit_writer.flush_buffer())?;
-        buffer.flush()?;
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(self.page_header_writer.flush_buffer());
+        buffer.extend_from_slice(self.bit_writer.flush_buffer());
 
         // Reset state
         self.page_header_writer.clear();
@@ -690,7 +679,7 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
         self.current_value = 0;
         self.values_in_block = 0;
 
-        Ok(buffer.consume())
+        Ok(buffer.into())
     }
 }
 
@@ -933,10 +922,7 @@ mod tests {
     use crate::schema::types::{
         ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType,
     };
-    use crate::util::{
-        memory::MemTracker,
-        test_common::{random_bytes, RandGen},
-    };
+    use crate::util::test_common::{random_bytes, RandGen};
 
     const TEST_SET_SIZE: usize = 1024;
 
@@ -1286,8 +1272,7 @@ mod tests {
         err: Option<ParquetError>,
     ) {
         let descr = create_test_col_desc_ptr(-1, T::get_physical_type());
-        let mem_tracker = Arc::new(MemTracker::new());
-        let encoder = get_encoder::<T>(descr, encoding, mem_tracker);
+        let encoder = get_encoder::<T>(descr, encoding);
         match err {
             Some(parquet_error) => {
                 assert!(encoder.is_err());
@@ -1319,8 +1304,7 @@ mod tests {
         enc: Encoding,
     ) -> Box<dyn Encoder<T>> {
         let desc = create_test_col_desc_ptr(type_len, T::get_physical_type());
-        let mem_tracker = Arc::new(MemTracker::new());
-        get_encoder(desc, enc, mem_tracker).unwrap()
+        get_encoder(desc, enc).unwrap()
     }
 
     fn create_test_decoder<T: DataType>(
@@ -1333,8 +1317,7 @@ mod tests {
 
     fn create_test_dict_encoder<T: DataType>(type_len: i32) -> DictEncoder<T> {
         let desc = create_test_col_desc_ptr(type_len, T::get_physical_type());
-        let mem_tracker = Arc::new(MemTracker::new());
-        DictEncoder::<T>::new(desc, mem_tracker)
+        DictEncoder::<T>::new(desc)
     }
 
     fn create_test_dict_decoder<T: DataType>() -> DictDecoder<T> {

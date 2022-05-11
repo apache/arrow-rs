@@ -29,7 +29,7 @@ use crate::errors::Result;
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, Type,
 };
-use crate::util::memory::{ByteBufferPtr, MemTracker};
+use crate::util::memory::ByteBufferPtr;
 
 /// Returns a descriptor for a UTF-8 column
 pub fn utf8_column() -> ColumnDescPtr {
@@ -49,9 +49,7 @@ pub fn utf8_column() -> ColumnDescPtr {
 /// Encode `data` with the provided `encoding`
 pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> ByteBufferPtr {
     let descriptor = utf8_column();
-    let mem_tracker = Arc::new(MemTracker::new());
-    let mut encoder =
-        get_encoder::<ByteArrayType>(descriptor, encoding, mem_tracker).unwrap();
+    let mut encoder = get_encoder::<ByteArrayType>(descriptor, encoding).unwrap();
 
     encoder.put(data).unwrap();
     encoder.flush_buffer().unwrap()
@@ -59,8 +57,7 @@ pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> ByteBufferPt
 
 /// Returns the encoded dictionary and value data
 pub fn encode_dictionary(data: &[ByteArray]) -> (ByteBufferPtr, ByteBufferPtr) {
-    let mut dict_encoder =
-        DictEncoder::<ByteArrayType>::new(utf8_column(), Arc::new(MemTracker::new()));
+    let mut dict_encoder = DictEncoder::<ByteArrayType>::new(utf8_column());
 
     dict_encoder.put(data).unwrap();
     let encoded_rle = dict_encoder.flush_buffer().unwrap();
