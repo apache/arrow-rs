@@ -136,10 +136,10 @@ impl Visitor {
             return Ok(None);
         }
 
-        let repetition = get_repetition(&primitive_type);
+        let repetition = get_repetition(primitive_type);
         let (def_level, rep_level, nullable) = context.levels(repetition);
 
-        let arrow_type = convert_primitive(&primitive_type, context.data_type)?;
+        let arrow_type = convert_primitive(primitive_type, context.data_type)?;
 
         let primitive_field = ParquetField {
             rep_level,
@@ -164,7 +164,7 @@ impl Visitor {
         context: VisitorContext,
     ) -> Result<Option<ParquetField>> {
         // The root type will not have a repetition level
-        let repetition = get_repetition(&struct_type);
+        let repetition = get_repetition(struct_type);
         let (def_level, rep_level, nullable) = context.levels(repetition);
 
         let parquet_fields = struct_type.get_fields();
@@ -249,7 +249,7 @@ impl Visitor {
         context: VisitorContext,
     ) -> Result<Option<ParquetField>> {
         let rep_level = context.rep_level + 1;
-        let (def_level, nullable) = match get_repetition(&map_type) {
+        let (def_level, nullable) = match get_repetition(map_type) {
             Repetition::REQUIRED => (context.def_level + 1, false),
             Repetition::OPTIONAL => (context.def_level + 2, true),
             Repetition::REPEATED => return Err(arrow_err!("Map cannot be repeated")),
@@ -544,8 +544,11 @@ fn convert_field(
     }
 }
 
-/// Computes the [`ParquetField`] for the provided [`FileMetaData`] with `leaf_columns` listing
-/// the indexes of leaf columns to project
+/// Computes the [`ParquetField`] for the provided [`SchemaDescriptor`] with `leaf_columns` listing
+/// the indexes of leaf columns to project, and `embedded_arrow_schema` the optional
+/// [`Schema`] embedded in the parquet metadata
+///
+/// Note: This does not support out of order column projection
 pub fn convert_schema<T: IntoIterator<Item = usize>>(
     schema: &SchemaDescriptor,
     leaf_columns: T,
