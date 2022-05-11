@@ -1084,7 +1084,7 @@ impl ArrayData {
                     }
                     Ok((i, end)) => Some(Err(ArrowError::InvalidArgumentError(format!(
                         "Offset invariant failure: non-monotonic offset at slot {}: {} > {}",
-                        i-1, start, end))
+                        i - 1, start, end))
                     )),
                     Err(err) => Some(Err(err)),
                 }
