@@ -19,10 +19,12 @@ use std::{
     env,
     fs::OpenOptions,
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let descriptor_path = PathBuf::from(env::var("OUT_DIR").unwrap()).join("proto_descriptor.bin");
+
     // override the build location, in order to check in the changes to proto files
     env::set_var("OUT_DIR", "src");
 
@@ -37,6 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let proto_path = Path::new("../format/Flight.proto");
 
         tonic_build::configure()
+            .file_descriptor_set_path(&descriptor_path)
             // protoc in unbuntu builder needs this option
             .protoc_arg("--experimental_allow_proto3_optional")
             .compile(&[proto_path], &[proto_dir])?;
@@ -69,6 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let proto_path = Path::new("../format/FlightSql.proto");
 
         tonic_build::configure()
+            .file_descriptor_set_path(&descriptor_path)
             // protoc in unbuntu builder needs this option
             .protoc_arg("--experimental_allow_proto3_optional")
             .compile(&[proto_path], &[proto_dir])?;
