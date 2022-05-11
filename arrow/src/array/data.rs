@@ -728,7 +728,7 @@ impl ArrayData {
     /// returned slice is guaranteed to have at least `self.len + 1`
     /// entries.
     ///
-    /// For an empty array, the `buffer` can also be empty`.
+    /// For an empty array, the `buffer` can also be empty.
     fn typed_offsets<'a, T: ArrowNativeType + num::Num + std::fmt::Display>(
         &'a self,
         buffer: &'a Buffer,
