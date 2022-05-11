@@ -1054,7 +1054,7 @@ impl ArrayData {
         T: ArrowNativeType + std::convert::TryInto<usize> + num::Num + std::fmt::Display,
         V: Fn(usize, Range<usize>) -> Result<()>,
     {
-        let offsets = self.typed_offsets::<T>(offsets_buffer)?
+        self.typed_offsets::<T>(offsets_buffer)?
             .iter()
             .enumerate()
             .map(|(i, x)| {
@@ -1066,34 +1066,33 @@ impl ArrayData {
                     );
                 // check if the offset exceeds the limit
                 match r {
-                    Ok(n) if n <= offset_limit => Ok(n),
+                    Ok(n) if n <= offset_limit => Ok((i, n)),
                     Ok(_) => Err(ArrowError::InvalidArgumentError(format!(
                         "Offset invariant failure: offset at position {} out of bounds: {} > {}",
                         i, x, offset_limit))
                     ),
-                    err => err,
+                    Err(e) => Err(e),
                 }
             })
-            .collect::<Result<Vec<usize>>>()?;
-
-        offsets
-            .windows(2)
-            .enumerate()
-            .map(|(i, pair)| {
+            .scan(0_usize, |start, end| {
                 // check offsets are monotonically increasing
-                let (start, end) = (pair[0], pair[1]);
-                if start > end {
-                    Err(ArrowError::InvalidArgumentError(format!(
+                match end {
+                    Ok((i, end)) if *start <= end => {
+                        let range = Some(Ok((i, *start..end)));
+                        *start = end;
+                        range
+                    }
+                    Ok((i, end)) => Some(Err(ArrowError::InvalidArgumentError(format!(
                         "Offset invariant failure: non-monotonic offset at slot {}: {} > {}",
-                        i, start, end))
-                    )
-                } else {
-                    Ok((i, start..end))
+                        i-1, start, end))
+                    )),
+                    Err(err) => Some(Err(err)),
                 }
             })
+            .skip(1)// the first element is meaningless
             .try_for_each(|res: Result<(usize, Range<usize>)>| {
                 let (item_index, range) = res?;
-                validate(item_index, range)
+                validate(item_index-1, range)
             })
     }
 
