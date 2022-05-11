@@ -29,7 +29,10 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::ipc::writer;
 
-use crate::basic::{ConvertedType, LogicalType, Repetition, TimeUnit as ParquetTimeUnit, Type as PhysicalType};
+use crate::basic::{
+    ConvertedType, LogicalType, Repetition, TimeUnit as ParquetTimeUnit,
+    Type as PhysicalType,
+};
 use crate::errors::{ParquetError::ArrowError, Result};
 use crate::file::{metadata::KeyValue, properties::WriterProperties};
 use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type, TypePtr};
@@ -261,7 +264,7 @@ fn parse_key_value_metadata(
 
 /// Convert parquet column schema to arrow field.
 pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field> {
-    let field = complex::convert_type(parquet_column.self_type_ptr())?;
+    let field = complex::convert_type(&parquet_column.self_type_ptr())?;
 
     Ok(Field::new(
         parquet_column.name(),

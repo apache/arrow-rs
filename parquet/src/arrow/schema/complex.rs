@@ -108,7 +108,7 @@ struct Visitor {
 impl Visitor {
     fn visit_primitive(
         &mut self,
-        primitive_type: TypePtr,
+        primitive_type: &TypePtr,
         context: VisitorContext,
     ) -> Result<Option<ParquetField>> {
         let col_idx = self.next_col_idx;
@@ -142,7 +142,7 @@ impl Visitor {
 
     fn visit_struct(
         &mut self,
-        struct_type: TypePtr,
+        struct_type: &TypePtr,
         context: VisitorContext,
     ) -> Result<Option<ParquetField>> {
         // The root type will not have a repetition level
@@ -199,7 +199,7 @@ impl Visitor {
                 data_type,
             };
 
-            if let Some(child) = self.dispatch(parquet_field.clone(), child_ctx)? {
+            if let Some(child) = self.dispatch(parquet_field, child_ctx)? {
                 // The child type returned may be different from what is encoded in the arrow
                 // schema in the event of a mismatch or a projection
                 child_fields.push(convert_field(parquet_field, &child, arrow_field));
@@ -227,7 +227,7 @@ impl Visitor {
 
     fn visit_map(
         &mut self,
-        map_type: TypePtr,
+        map_type: &TypePtr,
         context: VisitorContext,
     ) -> Result<Option<ParquetField>> {
         let rep_level = context.rep_level + 1;
@@ -306,7 +306,7 @@ impl Visitor {
                 data_type: arrow_key.map(|x| x.data_type().clone()),
             };
 
-            self.dispatch(map_key.clone(), context)?
+            self.dispatch(map_key, context)?
         };
 
         let maybe_value = {
@@ -316,7 +316,7 @@ impl Visitor {
                 data_type: arrow_value.map(|x| x.data_type().clone()),
             };
 
-            self.dispatch(map_value.clone(), context)?
+            self.dispatch(map_value, context)?
         };
 
         // Need both columns to be projected
@@ -348,7 +348,7 @@ impl Visitor {
 
     fn visit_list(
         &mut self,
-        list_type: TypePtr,
+        list_type: &TypePtr,
         context: VisitorContext,
     ) -> Result<Option<ParquetField>> {
         if list_type.is_primitive() {
@@ -401,7 +401,7 @@ impl Visitor {
                 data_type: arrow_field.map(|f| f.data_type().clone()),
             };
 
-            return match self.visit_primitive(repeated_field.clone(), context) {
+            return match self.visit_primitive(repeated_field, context) {
                 Ok(Some(mut field)) => {
                     field.nullable = nullable;
                     Ok(Some(field))
@@ -425,7 +425,7 @@ impl Visitor {
                 data_type: arrow_field.map(|f| f.data_type().clone()),
             };
 
-            return match self.visit_struct(repeated_field.clone(), context) {
+            return match self.visit_struct(repeated_field, context) {
                 Ok(Some(mut field)) => {
                     field.nullable = nullable;
                     Ok(Some(field))
@@ -445,7 +445,7 @@ impl Visitor {
             data_type: arrow_field.map(|f| f.data_type().clone()),
         };
 
-        match self.dispatch(item_type.clone(), new_context) {
+        match self.dispatch(item_type, new_context) {
             Ok(Some(item)) => {
                 let item_field = Box::new(convert_field(item_type, &item, arrow_field));
 
@@ -474,7 +474,7 @@ impl Visitor {
 
     fn dispatch(
         &mut self,
-        cur_type: TypePtr,
+        cur_type: &TypePtr,
         context: VisitorContext,
     ) -> Result<Option<ParquetField>> {
         if cur_type.is_primitive() {
@@ -543,11 +543,11 @@ pub fn convert_schema<T: IntoIterator<Item = usize>>(
         data_type: embedded_arrow_schema.map(|s| DataType::Struct(s.fields().clone())),
     };
 
-    visitor.dispatch(schema.root_schema_ptr(), context)
+    visitor.dispatch(&schema.root_schema_ptr(), context)
 }
 
 /// Computes the [`ParquetField`] for the provided `parquet_type`
-pub fn convert_type(parquet_type: TypePtr) -> Result<ParquetField> {
+pub fn convert_type(parquet_type: &TypePtr) -> Result<ParquetField> {
     let mut visitor = Visitor {
         next_col_idx: 0,
         column_mask: vec![true],
