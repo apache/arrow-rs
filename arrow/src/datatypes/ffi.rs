@@ -52,6 +52,10 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             "ttm" => DataType::Time32(TimeUnit::Millisecond),
             "ttu" => DataType::Time64(TimeUnit::Microsecond),
             "ttn" => DataType::Time64(TimeUnit::Nanosecond),
+            "tDs" => DataType::Duration(TimeUnit::Second),
+            "tDm" => DataType::Duration(TimeUnit::Millisecond),
+            "tDu" => DataType::Duration(TimeUnit::Microsecond),
+            "tDn" => DataType::Duration(TimeUnit::Nanosecond),
             "+l" => {
                 let c_child = c_schema.child(0);
                 DataType::List(Box::new(Field::try_from(c_child)?))
@@ -251,6 +255,10 @@ fn get_format_string(dtype: &DataType) -> Result<String> {
         DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) => Ok(format!("tsm:{}", tz)),
         DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => Ok(format!("tsu:{}", tz)),
         DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => Ok(format!("tsn:{}", tz)),
+        DataType::Duration(TimeUnit::Second) => Ok("tDs".to_string()),
+        DataType::Duration(TimeUnit::Millisecond) => Ok("tDm".to_string()),
+        DataType::Duration(TimeUnit::Microsecond) => Ok("tDu".to_string()),
+        DataType::Duration(TimeUnit::Nanosecond) => Ok("tDn".to_string()),
         DataType::List(_) => Ok("+l".to_string()),
         DataType::LargeList(_) => Ok("+L".to_string()),
         DataType::Struct(_) => Ok("+s".to_string()),
