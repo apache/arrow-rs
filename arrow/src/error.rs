@@ -41,6 +41,8 @@ pub enum ArrowError {
     /// Error during import or export to/from the C Data Interface
     CDataInterface(String),
     DictionaryKeyOverflowError,
+    #[cfg(feature = "flight-sql-experimental")]
+    TonicRequestError(String),
 }
 
 impl ArrowError {
@@ -55,6 +57,20 @@ impl ArrowError {
 impl From<::std::io::Error> for ArrowError {
     fn from(error: std::io::Error) -> Self {
         ArrowError::IoError(error.to_string())
+    }
+}
+
+#[cfg(feature = "flight-sql-experimental")]
+impl From<tonic::Status> for ArrowError {
+    fn from(status: tonic::Status) -> Self {
+        ArrowError::TonicRequestError(status.message().to_string())
+    }
+}
+
+#[cfg(feature = "flight-sql-experimental")]
+impl From<tonic::transport::Error> for ArrowError {
+    fn from(error: tonic::transport::Error) -> Self {
+        ArrowError::TonicRequestError(format!("{}", error))
     }
 }
 
@@ -124,6 +140,10 @@ impl Display for ArrowError {
             }
             ArrowError::DictionaryKeyOverflowError => {
                 write!(f, "Dictionary key bigger than the key type")
+            }
+            #[cfg(feature = "flight-sql-experimental")]
+            ArrowError::TonicRequestError(desc) => {
+                write!(f, "tonic request error: {}", desc)
             }
         }
     }
