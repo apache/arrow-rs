@@ -35,6 +35,7 @@ rust-version = "1.57"
 [lib]
 name = "arrow"
 path = "src/lib.rs"
+bench = false
 
 [dependencies]
 serde = { version = "1.0" }
