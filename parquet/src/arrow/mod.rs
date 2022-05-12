@@ -121,6 +121,7 @@ pub mod arrow_writer;
 mod bit_util;
 
 #[cfg(feature = "async")]
+#[cfg_attr(doc_cfg, doc(cfg(feature = "async")))]
 pub mod async_reader;
 
 experimental_mod!(converter);
