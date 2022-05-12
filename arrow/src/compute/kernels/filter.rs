@@ -61,11 +61,16 @@ macro_rules! downcast_dict_filter {
     }};
 }
 
-/// An iterator of `(usize, usize)` each representing an interval `[start, end]` whose
-/// slots of a [BooleanArray] are true. Each interval corresponds to a contiguous region of memory
-/// to be "taken" from an array to be filtered.
+/// An iterator of `(usize, usize)` each representing an interval
+/// `[start, end)` whose slots of a [BooleanArray] are true. Each
+/// interval corresponds to a contiguous region of memory to be
+/// "taken" from an array to be filtered.
 ///
-/// This is only performant for filters that copy across long contiguous runs
+/// ## Notes:
+///
+/// 1. Ignores the validity bitmap (ignores nulls)
+///
+/// 2. Only performant for filters that copy across long contiguous runs
 #[derive(Debug)]
 pub struct SlicesIterator<'a> {
     iter: UnalignedBitChunkIterator<'a>,
@@ -738,7 +743,7 @@ struct FilterString<'a, OffsetSize> {
 
 impl<'a, OffsetSize> FilterString<'a, OffsetSize>
 where
-    OffsetSize: Zero + AddAssign + StringOffsetSizeTrait,
+    OffsetSize: Zero + AddAssign + OffsetSizeTrait,
 {
     fn new(capacity: usize, array: &'a GenericStringArray<OffsetSize>) -> Self {
         let num_offsets_bytes = (capacity + 1) * std::mem::size_of::<OffsetSize>();
@@ -810,7 +815,7 @@ fn filter_string<OffsetSize>(
     predicate: &FilterPredicate,
 ) -> GenericStringArray<OffsetSize>
 where
-    OffsetSize: Zero + AddAssign + StringOffsetSizeTrait,
+    OffsetSize: Zero + AddAssign + OffsetSizeTrait,
 {
     let data = array.data();
     assert_eq!(data.buffers().len(), 2);
@@ -1520,5 +1525,273 @@ mod tests {
         let expected = Arc::new(builder.finish()) as ArrayRef;
 
         assert_eq!(&expected, &got);
+    }
+
+    #[test]
+    fn test_filter_fixed_size_list_arrays() {
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(9)
+            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8]))
+            .build()
+            .unwrap();
+        let list_data_type = DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::Int32, false)),
+            3,
+        );
+        let list_data = ArrayData::builder(list_data_type)
+            .len(3)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+        let array = FixedSizeListArray::from(list_data);
+
+        let filter_array = BooleanArray::from(vec![true, false, false]);
+
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+
+        assert_eq!(filtered.len(), 1);
+
+        let list = filtered.value(0);
+        assert_eq!(
+            &[0, 1, 2],
+            list.as_any().downcast_ref::<Int32Array>().unwrap().values()
+        );
+
+        let filter_array = BooleanArray::from(vec![true, false, true]);
+
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+
+        assert_eq!(filtered.len(), 2);
+
+        let list = filtered.value(0);
+        assert_eq!(
+            &[0, 1, 2],
+            list.as_any().downcast_ref::<Int32Array>().unwrap().values()
+        );
+        let list = filtered.value(1);
+        assert_eq!(
+            &[6, 7, 8],
+            list.as_any().downcast_ref::<Int32Array>().unwrap().values()
+        );
+    }
+
+    #[test]
+    fn test_filter_fixed_size_list_arrays_with_null() {
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(10)
+            .add_buffer(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]))
+            .build()
+            .unwrap();
+
+        // Set null buts for the nested array:
+        //  [[0, 1], null, null, [6, 7], [8, 9]]
+        // 01011001 00000001
+        let mut null_bits: [u8; 1] = [0; 1];
+        bit_util::set_bit(&mut null_bits, 0);
+        bit_util::set_bit(&mut null_bits, 3);
+        bit_util::set_bit(&mut null_bits, 4);
+
+        let list_data_type = DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::Int32, false)),
+            2,
+        );
+        let list_data = ArrayData::builder(list_data_type)
+            .len(5)
+            .add_child_data(value_data)
+            .null_bit_buffer(Buffer::from(null_bits))
+            .build()
+            .unwrap();
+        let array = FixedSizeListArray::from(list_data);
+
+        let filter_array = BooleanArray::from(vec![true, true, false, true, false]);
+
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+
+        assert_eq!(filtered.len(), 3);
+
+        let list = filtered.value(0);
+        assert_eq!(
+            &[0, 1],
+            list.as_any().downcast_ref::<Int32Array>().unwrap().values()
+        );
+        assert!(filtered.is_null(1));
+        let list = filtered.value(2);
+        assert_eq!(
+            &[6, 7],
+            list.as_any().downcast_ref::<Int32Array>().unwrap().values()
+        );
+    }
+
+    fn test_filter_union_array(array: UnionArray) {
+        let filter_array = BooleanArray::from(vec![true, false, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(1);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
+
+        let filter_array = BooleanArray::from(vec![true, false, true]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(2);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
+
+        let filter_array = BooleanArray::from(vec![true, true, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(2);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
+    }
+
+    #[test]
+    fn test_filter_union_array_dense() {
+        let mut builder = UnionBuilder::new_dense(3);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let array = builder.build().unwrap();
+
+        test_filter_union_array(array);
+    }
+
+    #[test]
+    fn test_filter_run_union_array_dense() {
+        let mut builder = UnionBuilder::new_dense(3);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Int32Type>("A", 3).unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let array = builder.build().unwrap();
+
+        let filter_array = BooleanArray::from(vec![true, true, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(3);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Int32Type>("A", 3).unwrap();
+        let expected = builder.build().unwrap();
+
+        assert_eq!(filtered.data(), expected.data());
+    }
+
+    #[test]
+    fn test_filter_union_array_dense_with_nulls() {
+        let mut builder = UnionBuilder::new_dense(4);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        builder.append_null::<Float64Type>("B").unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let array = builder.build().unwrap();
+
+        let filter_array = BooleanArray::from(vec![true, true, false, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(2);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
+
+        let filter_array = BooleanArray::from(vec![true, false, true, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_dense(2);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append_null::<Float64Type>("B").unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
+    }
+
+    #[test]
+    fn test_filter_union_array_sparse() {
+        let mut builder = UnionBuilder::new_sparse(3);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let array = builder.build().unwrap();
+
+        test_filter_union_array(array);
+    }
+
+    #[test]
+    fn test_filter_union_array_sparse_with_nulls() {
+        let mut builder = UnionBuilder::new_sparse(4);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append::<Float64Type>("B", 3.2).unwrap();
+        builder.append_null::<Float64Type>("B").unwrap();
+        builder.append::<Int32Type>("A", 34).unwrap();
+        let array = builder.build().unwrap();
+
+        let filter_array = BooleanArray::from(vec![true, false, true, false]);
+        let c = filter(&array, &filter_array).unwrap();
+        let filtered = c.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        let mut builder = UnionBuilder::new_sparse(2);
+        builder.append::<Int32Type>("A", 1).unwrap();
+        builder.append_null::<Float64Type>("B").unwrap();
+        let expected_array = builder.build().unwrap();
+
+        compare_union_arrays(filtered, &expected_array);
+    }
+
+    fn compare_union_arrays(union1: &UnionArray, union2: &UnionArray) {
+        assert_eq!(union1.len(), union2.len());
+
+        for i in 0..union1.len() {
+            let type_id = union1.type_id(i);
+
+            let slot1 = union1.value(i);
+            let slot2 = union2.value(i);
+
+            assert_eq!(slot1.is_null(0), slot2.is_null(0));
+
+            if !slot1.is_null(0) && !slot2.is_null(0) {
+                match type_id {
+                    0 => {
+                        let slot1 = slot1.as_any().downcast_ref::<Int32Array>().unwrap();
+                        assert_eq!(slot1.len(), 1);
+                        let value1 = slot1.value(0);
+
+                        let slot2 = slot2.as_any().downcast_ref::<Int32Array>().unwrap();
+                        assert_eq!(slot2.len(), 1);
+                        let value2 = slot2.value(0);
+                        assert_eq!(value1, value2);
+                    }
+                    1 => {
+                        let slot1 =
+                            slot1.as_any().downcast_ref::<Float64Array>().unwrap();
+                        assert_eq!(slot1.len(), 1);
+                        let value1 = slot1.value(0);
+
+                        let slot2 =
+                            slot2.as_any().downcast_ref::<Float64Array>().unwrap();
+                        assert_eq!(slot2.len(), 1);
+                        let value2 = slot2.value(0);
+                        assert_eq!(value1, value2);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
     }
 }

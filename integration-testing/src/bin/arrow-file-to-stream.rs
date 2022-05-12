@@ -32,7 +32,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let f = File::open(&args.file_name)?;
     let reader = BufReader::new(f);
-    let mut reader = FileReader::try_new(reader)?;
+    let mut reader = FileReader::try_new(reader, None)?;
     let schema = reader.schema();
 
     let mut writer = StreamWriter::try_new(io::stdout(), &schema)?;

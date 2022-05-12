@@ -17,7 +17,7 @@
 
 [package]
 name = "arrow"
-version = "9.1.0"
+version = "13.0.0"
 description = "Rust implementation of Apache Arrow"
 homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
@@ -35,6 +35,7 @@ rust-version = "1.57"
 [lib]
 name = "arrow"
 path = "src/lib.rs"
+bench = false
 
 [dependencies]
 serde = { version = "1.0" }
@@ -50,7 +51,7 @@ lazy_static = "1.4"
 packed_simd = { version = "0.3", optional = true, package = "packed_simd_2" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = {version = "0.6", optional = true}
-flatbuffers = { version = "=2.1.1", optional = true }
+flatbuffers = { version = "2.1.2", optional = true }
 hex = "0.4"
 comfy-table = { version = "5.0", optional = true, default-features = false }
 pyo3 = { version = "0.16", optional = true }
@@ -71,6 +72,10 @@ prettyprint = ["comfy-table"]
 # target without assuming an environment containing JavaScript.
 test_utils = ["rand"]
 pyarrow = ["pyo3"]
+# force_validate runs full data validation for all arrays that are created
+# this is not enabled by default as it is too computationally expensive
+# but is run as part of our CI checks
+force_validate = []
 
 [dev-dependencies]
 rand = "0.8"
@@ -166,4 +171,8 @@ harness = false
 
 [[bench]]
 name = "buffer_create"
+harness = false
+
+[[bench]]
+name = "string_kernels"
 harness = false

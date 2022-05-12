@@ -639,6 +639,7 @@ where
             self.last_value = value;
             buffer[0] = value;
             read += 1;
+            self.values_left -= 1;
         }
 
         while read != to_read {
@@ -652,6 +653,14 @@ where
             let batch_read = self
                 .bit_reader
                 .get_batch(&mut buffer[read..read + batch_to_read], bit_width);
+
+            if batch_read != batch_to_read {
+                return Err(general_err!(
+                    "Expected to read {} values from miniblock got {}",
+                    batch_to_read,
+                    batch_read
+                ));
+            }
 
             // At this point we have read the deltas to `buffer` we now need to offset
             // these to get back to the original values that were encoded
@@ -668,9 +677,9 @@ where
 
             read += batch_read;
             self.mini_block_remaining -= batch_read;
+            self.values_left -= batch_read;
         }
 
-        self.values_left -= to_read;
         Ok(to_read)
     }
 
@@ -927,9 +936,7 @@ mod tests {
     use crate::schema::types::{
         ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType,
     };
-    use crate::util::{
-        bit_util::set_array_bit, memory::MemTracker, test_common::RandGen,
-    };
+    use crate::util::{bit_util::set_array_bit, test_common::RandGen};
 
     #[test]
     fn test_get_decoders() {
@@ -1327,6 +1334,83 @@ mod tests {
     }
 
     #[test]
+    fn test_delta_bit_packed_padding() {
+        // Page header
+        let header = vec![
+            // Page Header
+
+            // Block Size - 256
+            128,
+            2,
+            // Miniblocks in block,
+            4,
+            // Total value count - 419
+            128 + 35,
+            3,
+            // First value - 7
+            7,
+        ];
+
+        // Block Header
+        let block1_header = vec![
+            0, // Min delta
+            0, 1, 0, 0, // Bit widths
+        ];
+
+        // Mini-block 1 - bit width 0 => 0 bytes
+        // Mini-block 2 - bit width 1 => 8 bytes
+        // Mini-block 3 - bit width 0 => 0 bytes
+        // Mini-block 4 - bit width 0 => 0 bytes
+        let block1 = vec![0xFF; 8];
+
+        // Block Header
+        let block2_header = vec![
+            0, // Min delta
+            0, 1, 2, 0xFF, // Bit widths, including non-zero padding
+        ];
+
+        // Mini-block 1 - bit width 0 => 0 bytes
+        // Mini-block 2 - bit width 1 => 8 bytes
+        // Mini-block 3 - bit width 2 => 16 bytes
+        // Mini-block 4 - padding => no bytes
+        let block2 = vec![0xFF; 24];
+
+        let data: Vec<u8> = header
+            .into_iter()
+            .chain(block1_header)
+            .chain(block1)
+            .chain(block2_header)
+            .chain(block2)
+            .collect();
+
+        let length = data.len();
+
+        let ptr = ByteBufferPtr::new(data);
+        let mut reader = BitReader::new(ptr.clone());
+        assert_eq!(reader.get_vlq_int().unwrap(), 256);
+        assert_eq!(reader.get_vlq_int().unwrap(), 4);
+        assert_eq!(reader.get_vlq_int().unwrap(), 419);
+        assert_eq!(reader.get_vlq_int().unwrap(), 7);
+
+        // Test output buffer larger than needed and not exact multiple of block size
+        let mut output = vec![0_i32; 420];
+
+        let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        decoder.set_data(ptr.clone(), 0).unwrap();
+        assert_eq!(decoder.get(&mut output).unwrap(), 419);
+        assert_eq!(decoder.get_offset(), length);
+
+        // Test with truncated buffer
+        decoder.set_data(ptr.range(0, 12), 0).unwrap();
+        let err = decoder.get(&mut output).unwrap_err().to_string();
+        assert!(
+            err.contains("Expected to read 64 values from miniblock got 8"),
+            "{}",
+            err
+        );
+    }
+
+    #[test]
     fn test_delta_byte_array_same_arrays() {
         let data = vec![
             vec![ByteArray::from(vec![1, 2, 3, 4, 5, 6])],
@@ -1384,8 +1468,7 @@ mod tests {
 
         // Encode data
         let mut encoder =
-            get_encoder::<T>(col_descr.clone(), encoding, Arc::new(MemTracker::new()))
-                .expect("get encoder");
+            get_encoder::<T>(col_descr.clone(), encoding).expect("get encoder");
 
         for v in &data[..] {
             encoder.put(&v[..]).expect("ok to encode");

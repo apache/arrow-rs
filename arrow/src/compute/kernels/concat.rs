@@ -34,9 +34,7 @@ use crate::array::*;
 use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
 
-fn compute_str_values_length<Offset: StringOffsetSizeTrait>(
-    arrays: &[&ArrayData],
-) -> usize {
+fn compute_str_values_length<Offset: OffsetSizeTrait>(arrays: &[&ArrayData]) -> usize {
     arrays
         .iter()
         .map(|&data| {

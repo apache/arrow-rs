@@ -207,7 +207,7 @@ impl LevelDecoder {
                 let num_bytes =
                     ceil((num_buffered_values * bit_width as usize) as i64, 8);
                 let data_size = cmp::min(num_bytes as usize, data.len());
-                decoder.reset(data.range(data.start(), data_size));
+                decoder.reset(data.range(0, data_size));
                 data_size
             }
             _ => panic!(),

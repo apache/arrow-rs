@@ -20,15 +20,11 @@
 //! depend on dynamic casting of `Array`.
 
 use super::{
-    Array, ArrayData, BinaryOffsetSizeTrait, BooleanArray, DecimalArray, DictionaryArray,
-    FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
-    GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
-    StringOffsetSizeTrait, StructArray,
+    Array, ArrayData, BooleanArray, DecimalArray, DictionaryArray, FixedSizeBinaryArray,
+    FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
+    MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, StructArray,
 };
-use crate::{
-    buffer::Buffer,
-    datatypes::{ArrowPrimitiveType, DataType, IntervalUnit},
-};
+use crate::datatypes::{ArrowPrimitiveType, DataType, IntervalUnit};
 use half::f16;
 
 mod boolean;
@@ -40,6 +36,7 @@ mod list;
 mod null;
 mod primitive;
 mod structure;
+mod union;
 mod utils;
 mod variable_size;
 
@@ -55,6 +52,7 @@ use list::list_equal;
 use null::null_equal;
 use primitive::primitive_equal;
 use structure::struct_equal;
+use union::union_equal;
 use variable_size::variable_sized_equal;
 
 impl PartialEq for dyn Array {
@@ -93,13 +91,13 @@ impl PartialEq for BooleanArray {
     }
 }
 
-impl<OffsetSize: StringOffsetSizeTrait> PartialEq for GenericStringArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericStringArray<OffsetSize> {
     fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> PartialEq for GenericBinaryArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> PartialEq for GenericBinaryArray<OffsetSize> {
     fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
@@ -142,145 +140,99 @@ impl PartialEq for StructArray {
 }
 
 /// Compares the values of two [ArrayData] starting at `lhs_start` and `rhs_start` respectively
-/// for `len` slots. The null buffers `lhs_nulls` and `rhs_nulls` inherit parent nullability.
-///
-/// If an array is a child of a struct or list, the array's nulls have to be merged with the parent.
-/// This then affects the null count of the array, thus the merged nulls are passed separately
-/// as `lhs_nulls` and `rhs_nulls` variables to functions.
-/// The nulls are merged with a bitwise AND, and null counts are recomputed where necessary.
+/// for `len` slots.
 #[inline]
 fn equal_values(
     lhs: &ArrayData,
     rhs: &ArrayData,
-    lhs_nulls: Option<&Buffer>,
-    rhs_nulls: Option<&Buffer>,
     lhs_start: usize,
     rhs_start: usize,
     len: usize,
 ) -> bool {
     match lhs.data_type() {
         DataType::Null => null_equal(lhs, rhs, lhs_start, rhs_start, len),
-        DataType::Boolean => {
-            boolean_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
-        }
-        DataType::UInt8 => primitive_equal::<u8>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::UInt16 => primitive_equal::<u16>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::UInt32 => primitive_equal::<u32>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::UInt64 => primitive_equal::<u64>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::Int8 => primitive_equal::<i8>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::Int16 => primitive_equal::<i16>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::Int32 => primitive_equal::<i32>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::Int64 => primitive_equal::<i64>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::Float32 => primitive_equal::<f32>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::Float64 => primitive_equal::<f64>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
+        DataType::Boolean => boolean_equal(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::UInt8 => primitive_equal::<u8>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::UInt16 => primitive_equal::<u16>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::UInt32 => primitive_equal::<u32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::UInt64 => primitive_equal::<u64>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Int8 => primitive_equal::<i8>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Int16 => primitive_equal::<i16>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Int32 => primitive_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Int64 => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Float32 => primitive_equal::<f32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Float64 => primitive_equal::<f64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Date32
         | DataType::Time32(_)
-        | DataType::Interval(IntervalUnit::YearMonth) => primitive_equal::<i32>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
+        | DataType::Interval(IntervalUnit::YearMonth) => {
+            primitive_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len)
+        }
         DataType::Date64
         | DataType::Interval(IntervalUnit::DayTime)
         | DataType::Time64(_)
         | DataType::Timestamp(_, _)
-        | DataType::Duration(_) => primitive_equal::<i64>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::Interval(IntervalUnit::MonthDayNano) => primitive_equal::<i128>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::Utf8 | DataType::Binary => variable_sized_equal::<i32>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::LargeUtf8 | DataType::LargeBinary => variable_sized_equal::<i64>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
+        | DataType::Duration(_) => {
+            primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len)
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len)
+        }
+        DataType::Utf8 | DataType::Binary => {
+            variable_sized_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len)
+        }
+        DataType::LargeUtf8 | DataType::LargeBinary => {
+            variable_sized_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len)
+        }
         DataType::FixedSizeBinary(_) => {
-            fixed_binary_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
+            fixed_binary_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
-        DataType::Decimal(_, _) => {
-            decimal_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
-        }
-        DataType::List(_) => {
-            list_equal::<i32>(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
-        }
-        DataType::LargeList(_) => {
-            list_equal::<i64>(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
-        }
+        DataType::Decimal(_, _) => decimal_equal(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::List(_) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::LargeList(_) => list_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::FixedSizeList(_, _) => {
-            fixed_list_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
+            fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
-        DataType::Struct(_) => {
-            struct_equal(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
-        }
-        DataType::Union(_, _) => unimplemented!("See ARROW-8576"),
+        DataType::Struct(_) => struct_equal(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Union(_, _) => union_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Dictionary(data_type, _) => match data_type.as_ref() {
-            DataType::Int8 => dictionary_equal::<i8>(
-                lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-            ),
-            DataType::Int16 => dictionary_equal::<i16>(
-                lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-            ),
-            DataType::Int32 => dictionary_equal::<i32>(
-                lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-            ),
-            DataType::Int64 => dictionary_equal::<i64>(
-                lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-            ),
-            DataType::UInt8 => dictionary_equal::<u8>(
-                lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-            ),
-            DataType::UInt16 => dictionary_equal::<u16>(
-                lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-            ),
-            DataType::UInt32 => dictionary_equal::<u32>(
-                lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-            ),
-            DataType::UInt64 => dictionary_equal::<u64>(
-                lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-            ),
+            DataType::Int8 => dictionary_equal::<i8>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::Int16 => {
+                dictionary_equal::<i16>(lhs, rhs, lhs_start, rhs_start, len)
+            }
+            DataType::Int32 => {
+                dictionary_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len)
+            }
+            DataType::Int64 => {
+                dictionary_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len)
+            }
+            DataType::UInt8 => {
+                dictionary_equal::<u8>(lhs, rhs, lhs_start, rhs_start, len)
+            }
+            DataType::UInt16 => {
+                dictionary_equal::<u16>(lhs, rhs, lhs_start, rhs_start, len)
+            }
+            DataType::UInt32 => {
+                dictionary_equal::<u32>(lhs, rhs, lhs_start, rhs_start, len)
+            }
+            DataType::UInt64 => {
+                dictionary_equal::<u64>(lhs, rhs, lhs_start, rhs_start, len)
+            }
             _ => unreachable!(),
         },
-        DataType::Float16 => primitive_equal::<f16>(
-            lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len,
-        ),
-        DataType::Map(_, _) => {
-            list_equal::<i32>(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
-        }
+        DataType::Float16 => primitive_equal::<f16>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Map(_, _) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
     }
 }
 
 fn equal_range(
     lhs: &ArrayData,
     rhs: &ArrayData,
-    lhs_nulls: Option<&Buffer>,
-    rhs_nulls: Option<&Buffer>,
     lhs_start: usize,
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    utils::base_equal(lhs, rhs)
-        && utils::equal_nulls(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
-        && equal_values(lhs, rhs, lhs_nulls, rhs_nulls, lhs_start, rhs_start, len)
+    utils::equal_nulls(lhs, rhs, lhs_start, rhs_start, len)
+        && equal_values(lhs, rhs, lhs_start, rhs_start, len)
 }
 
 /// Logically compares two [ArrayData].
@@ -296,12 +248,10 @@ fn equal_range(
 /// This function may panic whenever any of the [ArrayData] does not follow the Arrow specification.
 /// (e.g. wrong number of buffers, buffer `len` does not correspond to the declared `len`)
 pub fn equal(lhs: &ArrayData, rhs: &ArrayData) -> bool {
-    let lhs_nulls = lhs.null_buffer();
-    let rhs_nulls = rhs.null_buffer();
     utils::base_equal(lhs, rhs)
         && lhs.null_count() == rhs.null_count()
-        && utils::equal_nulls(lhs, rhs, lhs_nulls, rhs_nulls, 0, 0, lhs.len())
-        && equal_values(lhs, rhs, lhs_nulls, rhs_nulls, 0, 0, lhs.len())
+        && utils::equal_nulls(lhs, rhs, 0, 0, lhs.len())
+        && equal_values(lhs, rhs, 0, 0, lhs.len())
 }
 
 #[cfg(test)]
@@ -310,14 +260,14 @@ mod tests {
     use std::sync::Arc;
 
     use crate::array::{
-        array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BinaryOffsetSizeTrait,
-        BooleanArray, FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray,
-        Int32Builder, ListBuilder, NullArray, PrimitiveBuilder, StringArray,
-        StringDictionaryBuilder, StringOffsetSizeTrait, StructArray,
+        array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BooleanArray,
+        FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray, Int32Builder,
+        ListBuilder, NullArray, PrimitiveBuilder, StringArray, StringDictionaryBuilder,
+        StructArray, UnionBuilder,
     };
     use crate::array::{GenericStringArray, Int32Array};
     use crate::buffer::Buffer;
-    use crate::datatypes::{Field, Int16Type, ToByteSlice};
+    use crate::datatypes::{Field, Int16Type, Int32Type, ToByteSlice};
 
     use super::*;
 
@@ -490,6 +440,13 @@ mod tests {
                 (1, 2),
                 true,
             ),
+            (
+                vec![Some(1), Some(2), None, Some(0)],
+                (2, 2),
+                vec![Some(4), Some(5), Some(0), None],
+                (2, 2),
+                false,
+            ),
         ];
 
         for (lhs, slice_lhs, rhs, slice_rhs, expected) in cases {
@@ -548,7 +505,7 @@ mod tests {
         ]
     }
 
-    fn test_generic_string_equal<OffsetSize: StringOffsetSizeTrait>() {
+    fn test_generic_string_equal<OffsetSize: OffsetSizeTrait>() {
         let cases = binary_cases();
 
         for (lhs, rhs, expected) in cases {
@@ -570,7 +527,7 @@ mod tests {
         test_generic_string_equal::<i64>()
     }
 
-    fn test_generic_binary_equal<OffsetSize: BinaryOffsetSizeTrait>() {
+    fn test_generic_binary_equal<OffsetSize: OffsetSizeTrait>() {
         let cases = binary_cases();
 
         for (lhs, rhs, expected) in cases {
@@ -598,6 +555,19 @@ mod tests {
     #[test]
     fn test_large_binary_equal() {
         test_generic_binary_equal::<i64>()
+    }
+
+    #[test]
+    fn test_fixed_size_binary_array() {
+        let a_input_arg = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
+        let a = FixedSizeBinaryArray::try_from_iter(a_input_arg.into_iter()).unwrap();
+        let a = a.data();
+
+        let b_input_arg = vec![vec![1, 2], vec![3, 4], vec![5, 6]];
+        let b = FixedSizeBinaryArray::try_from_iter(b_input_arg.into_iter()).unwrap();
+        let b = b.data();
+
+        test_equal(a, b, true);
     }
 
     #[test]
@@ -973,6 +943,11 @@ mod tests {
             None,
         ]);
         test_equal(&a, &b, false);
+
+        let b = create_fixed_size_list_array(&[None, Some(&[4, 5, 6]), None, None]);
+
+        test_equal(&a.slice(2, 4), &b, true);
+        test_equal(&a.slice(3, 3), &b.slice(1, 3), true);
     }
 
     #[test]
@@ -1333,5 +1308,99 @@ mod tests {
         // string2 is identical to string1 except that it has no validity buffer since string1 has
         // nulls in it, string1 and string2 are not equal
         test_equal(string1, &string2, false);
+    }
+
+    #[test]
+    fn test_union_equal_dense() {
+        let mut builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union1 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union2 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 5).unwrap();
+        builder.append::<Int32Type>("c", 4).unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union3 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_dense(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null::<Int32Type>("c").unwrap();
+        builder.append_null::<Int32Type>("b").unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union4 = builder.build().unwrap();
+
+        test_equal(union1.data(), union2.data(), true);
+        test_equal(union1.data(), union3.data(), false);
+        test_equal(union1.data(), union4.data(), false);
+    }
+
+    #[test]
+    fn test_union_equal_sparse() {
+        let mut builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union1 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union2 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 5).unwrap();
+        builder.append::<Int32Type>("c", 4).unwrap();
+        builder.append::<Int32Type>("a", 6).unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union3 = builder.build().unwrap();
+
+        builder = UnionBuilder::new_sparse(7);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("c", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Int32Type>("b", 7).unwrap();
+        let union4 = builder.build().unwrap();
+
+        test_equal(union1.data(), union2.data(), true);
+        test_equal(union1.data(), union3.data(), false);
+        test_equal(union1.data(), union4.data(), false);
     }
 }

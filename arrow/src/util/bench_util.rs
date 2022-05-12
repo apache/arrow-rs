@@ -91,9 +91,18 @@ where
 }
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
-pub fn create_string_array<Offset: StringOffsetSizeTrait>(
+pub fn create_string_array<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
+) -> GenericStringArray<Offset> {
+    create_string_array_with_len(size, null_density, 4)
+}
+
+/// Creates a random (but fixed-seeded) array of a given size, null density and length
+pub fn create_string_array_with_len<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    str_len: usize,
 ) -> GenericStringArray<Offset> {
     let rng = &mut seedable_rng();
 
@@ -102,7 +111,7 @@ pub fn create_string_array<Offset: StringOffsetSizeTrait>(
             if rng.gen::<f32>() < null_density {
                 None
             } else {
-                let value = rng.sample_iter(&Alphanumeric).take(4).collect();
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
                 let value = String::from_utf8(value).unwrap();
                 Some(value)
             }
@@ -134,7 +143,7 @@ pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
 }
 
 /// Creates an random (but fixed-seeded) binary array of a given size and null density
-pub fn create_binary_array<Offset: BinaryOffsetSizeTrait>(
+pub fn create_binary_array<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
 ) -> GenericBinaryArray<Offset> {

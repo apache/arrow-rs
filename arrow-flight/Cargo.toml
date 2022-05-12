@@ -18,7 +18,7 @@
 [package]
 name = "arrow-flight"
 description = "Apache Arrow Flight"
-version = "9.1.0"
+version = "13.0.0"
 edition = "2021"
 rust-version = "1.57"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -27,23 +27,28 @@ repository = "https://github.com/apache/arrow-rs"
 license = "Apache-2.0"
 
 [dependencies]
-arrow = { path = "../arrow", version = "9.1.0" }
+arrow = { path = "../arrow", version = "13.0.0" }
 base64 = "0.13"
-tonic = "0.6"
+tonic = "0.7"
 bytes = "1"
-prost = "0.9"
-prost-derive = "0.9"
+prost = "0.10"
+prost-types = { version = "0.10.0", optional = true }
+prost-derive = "0.10"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
-
-[dev-dependencies]
 futures = { version = "0.3", default-features = false, features = ["alloc"]}
 
+[features]
+default = []
+flight-sql-experimental = ["prost-types"]
+
+[dev-dependencies]
+
 [build-dependencies]
-tonic-build = "0.6"
+tonic-build = "0.7"
 # Pin specific version of the tonic-build dependencies to avoid auto-generated
 # (and checked in) arrow.flight.protocol.rs from changing
 proc-macro2 = ">1.0.30"
 
-#[lib]
-#name = "flight"
-#path = "src/lib.rs"
+[[example]]
+name = "flight_sql_server"
+required-features = ["flight-sql-experimental"]

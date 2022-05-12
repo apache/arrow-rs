@@ -554,9 +554,7 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                 )
             })
         }
-        DataType::Decimal(_, _) => {
-            unimplemented!("Creating null Decimal array not yet supported")
-        }
+        DataType::Decimal(_, _) => new_null_sized_decimal(data_type, length),
     }
 }
 
@@ -620,6 +618,24 @@ fn new_null_sized_array<T: ArrowPrimitiveType>(
     })
 }
 
+#[inline]
+fn new_null_sized_decimal(data_type: &DataType, length: usize) -> ArrayRef {
+    make_array(unsafe {
+        ArrayData::new_unchecked(
+            data_type.clone(),
+            length,
+            Some(length),
+            Some(MutableBuffer::new_null(length).into()),
+            0,
+            vec![Buffer::from(vec![
+                0u8;
+                length * std::mem::size_of::<i128>()
+            ])],
+            vec![],
+        )
+    })
+}
+
 /// Creates a new array from two FFI pointers. Used to import arrays from the C Data Interface
 /// # Safety
 /// Assumes that these pointers represent valid C Data Interfaces, both in memory
@@ -632,6 +648,30 @@ pub unsafe fn make_array_from_raw(
     let data = ArrayData::try_from(array)?;
     Ok(make_array(data))
 }
+
+/// Exports an array to raw pointers of the C Data Interface provided by the consumer.
+/// # Safety
+/// Assumes that these pointers represent valid C Data Interfaces, both in memory
+/// representation and lifetime via the `release` mechanism.
+///
+/// This function copies the content of two FFI structs [ffi::FFI_ArrowArray] and
+/// [ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
+/// Usually the raw pointers are provided by the array data consumer.
+pub unsafe fn export_array_into_raw(
+    src: ArrayRef,
+    out_array: *mut ffi::FFI_ArrowArray,
+    out_schema: *mut ffi::FFI_ArrowSchema,
+) -> Result<()> {
+    let data = src.data();
+    let array = ffi::FFI_ArrowArray::new(data);
+    let schema = ffi::FFI_ArrowSchema::try_from(data.data_type())?;
+
+    std::ptr::write_unaligned(out_array, array);
+    std::ptr::write_unaligned(out_schema, schema);
+
+    Ok(())
+}
+
 // Helper function for printing potentially long arrays.
 pub(super) fn print_long_array<A, F>(
     array: &A,

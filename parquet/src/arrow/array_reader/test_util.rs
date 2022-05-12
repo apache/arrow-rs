@@ -15,13 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{Array, ArrayRef};
+use arrow::datatypes::DataType as ArrowType;
+use std::any::Any;
 use std::sync::Arc;
 
+use crate::arrow::array_reader::ArrayReader;
 use crate::basic::{ConvertedType, Encoding, Type as PhysicalType};
+use crate::column::page::{PageIterator, PageReader};
 use crate::data_type::{ByteArray, ByteArrayType};
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
-use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
-use crate::util::memory::{ByteBufferPtr, MemTracker};
+use crate::errors::Result;
+use crate::schema::types::{
+    ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, Type,
+};
+use crate::util::memory::ByteBufferPtr;
 
 /// Returns a descriptor for a UTF-8 column
 pub fn utf8_column() -> ColumnDescPtr {
@@ -41,9 +49,7 @@ pub fn utf8_column() -> ColumnDescPtr {
 /// Encode `data` with the provided `encoding`
 pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> ByteBufferPtr {
     let descriptor = utf8_column();
-    let mem_tracker = Arc::new(MemTracker::new());
-    let mut encoder =
-        get_encoder::<ByteArrayType>(descriptor, encoding, mem_tracker).unwrap();
+    let mut encoder = get_encoder::<ByteArrayType>(descriptor, encoding).unwrap();
 
     encoder.put(data).unwrap();
     encoder.flush_buffer().unwrap()
@@ -51,8 +57,7 @@ pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> ByteBufferPt
 
 /// Returns the encoded dictionary and value data
 pub fn encode_dictionary(data: &[ByteArray]) -> (ByteBufferPtr, ByteBufferPtr) {
-    let mut dict_encoder =
-        DictEncoder::<ByteArrayType>::new(utf8_column(), Arc::new(MemTracker::new()));
+    let mut dict_encoder = DictEncoder::<ByteArrayType>::new(utf8_column());
 
     dict_encoder.put(data).unwrap();
     let encoded_rle = dict_encoder.flush_buffer().unwrap();
@@ -86,4 +91,123 @@ pub fn byte_array_all_encodings(
     ];
 
     (pages, encoded_dictionary)
+}
+
+/// Array reader for test.
+pub struct InMemoryArrayReader {
+    data_type: ArrowType,
+    array: ArrayRef,
+    def_levels: Option<Vec<i16>>,
+    rep_levels: Option<Vec<i16>>,
+    last_idx: usize,
+    cur_idx: usize,
+}
+
+impl InMemoryArrayReader {
+    pub fn new(
+        data_type: ArrowType,
+        array: ArrayRef,
+        def_levels: Option<Vec<i16>>,
+        rep_levels: Option<Vec<i16>>,
+    ) -> Self {
+        assert!(def_levels
+            .as_ref()
+            .map(|d| d.len() == array.len())
+            .unwrap_or(true));
+
+        assert!(rep_levels
+            .as_ref()
+            .map(|r| r.len() == array.len())
+            .unwrap_or(true));
+
+        Self {
+            data_type,
+            array,
+            def_levels,
+            rep_levels,
+            cur_idx: 0,
+            last_idx: 0,
+        }
+    }
+}
+
+impl ArrayReader for InMemoryArrayReader {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn get_data_type(&self) -> &ArrowType {
+        &self.data_type
+    }
+
+    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        assert_ne!(batch_size, 0);
+        // This replicates the logical normally performed by
+        // RecordReader to delimit semantic records
+        let read = match &self.rep_levels {
+            Some(rep_levels) => {
+                let rep_levels = &rep_levels[self.cur_idx..];
+                let mut levels_read = 0;
+                let mut records_read = 0;
+                while levels_read < rep_levels.len() && records_read < batch_size {
+                    if rep_levels[levels_read] == 0 {
+                        records_read += 1; // Start of new record
+                    }
+                    levels_read += 1;
+                }
+
+                // Find end of current record
+                while levels_read < rep_levels.len() && rep_levels[levels_read] != 0 {
+                    levels_read += 1
+                }
+                levels_read
+            }
+            None => batch_size.min(self.array.len() - self.cur_idx),
+        };
+
+        self.last_idx = self.cur_idx;
+        self.cur_idx += read;
+        Ok(self.array.slice(self.last_idx, read))
+    }
+
+    fn get_def_levels(&self) -> Option<&[i16]> {
+        self.def_levels
+            .as_ref()
+            .map(|l| &l[self.last_idx..self.cur_idx])
+    }
+
+    fn get_rep_levels(&self) -> Option<&[i16]> {
+        self.rep_levels
+            .as_ref()
+            .map(|l| &l[self.last_idx..self.cur_idx])
+    }
+}
+
+/// Iterator for testing reading empty columns
+pub struct EmptyPageIterator {
+    schema: SchemaDescPtr,
+}
+
+impl EmptyPageIterator {
+    pub fn new(schema: SchemaDescPtr) -> Self {
+        EmptyPageIterator { schema }
+    }
+}
+
+impl Iterator for EmptyPageIterator {
+    type Item = Result<Box<dyn PageReader>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        None
+    }
+}
+
+impl PageIterator for EmptyPageIterator {
+    fn schema(&mut self) -> Result<SchemaDescPtr> {
+        Ok(self.schema.clone())
+    }
+
+    fn column_schema(&mut self) -> Result<ColumnDescPtr> {
+        Ok(self.schema.column(0))
+    }
 }

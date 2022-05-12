@@ -25,6 +25,7 @@ use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
 };
+pub use crate::array::DecimalIter;
 use crate::buffer::Buffer;
 use crate::datatypes::{
     validate_decimal_precision, DECIMAL_DEFAULT_SCALE, DECIMAL_MAX_PRECISION,
@@ -34,29 +35,26 @@ use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
-/// Like OffsetSizeTrait, but specialized for Binary
-// This allow us to expose a constant datatype for the GenericBinaryArray
-pub trait BinaryOffsetSizeTrait: OffsetSizeTrait {
-    const DATA_TYPE: DataType;
-}
-
-impl BinaryOffsetSizeTrait for i32 {
-    const DATA_TYPE: DataType = DataType::Binary;
-}
-
-impl BinaryOffsetSizeTrait for i64 {
-    const DATA_TYPE: DataType = DataType::LargeBinary;
-}
-
 /// See [`BinaryArray`] and [`LargeBinaryArray`] for storing
 /// binary data.
-pub struct GenericBinaryArray<OffsetSize: BinaryOffsetSizeTrait> {
+pub struct GenericBinaryArray<OffsetSize: OffsetSizeTrait> {
     data: ArrayData,
     value_offsets: RawPtrBox<OffsetSize>,
     value_data: RawPtrBox<u8>,
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
+    /// Get the data type of the array.
+    // Declare this function as `pub const fn` after
+    // https://github.com/rust-lang/rust/issues/93706 is merged.
+    pub fn get_data_type() -> DataType {
+        if OffsetSize::IS_LARGE {
+            DataType::LargeBinary
+        } else {
+            DataType::Binary
+        }
+    }
+
     /// Returns the length for value at index `i`.
     #[inline]
     pub fn value_length(&self, i: usize) -> OffsetSize {
@@ -154,7 +152,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
             "BinaryArray can only be created from List<u8> arrays, mismatched data types."
         );
 
-        let mut builder = ArrayData::builder(OffsetSize::DATA_TYPE)
+        let mut builder = ArrayData::builder(Self::get_data_type())
             .len(v.len())
             .add_buffer(v.data_ref().buffers()[0].clone())
             .add_buffer(v.data_ref().child_data()[0].buffers()[0].clone());
@@ -166,7 +164,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         Self::from(data)
     }
 
-    /// Creates a `GenericBinaryArray` based on an iterator of values without nulls
+    /// Creates a [`GenericBinaryArray`] based on an iterator of values without nulls
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
         Ptr: AsRef<[u8]>,
@@ -194,7 +192,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         assert!(!offsets.is_empty()); // wrote at least one
         let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
 
-        let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
+        let array_data = ArrayData::builder(Self::get_data_type())
             .len(actual_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into());
@@ -213,7 +211,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     /// Returns an iterator that returns the values of `array.value(i)` for an iterator with each element `i`
     /// # Safety
     ///
-    /// caller must ensure that the offsets in the iterator are less than the array len()
+    /// caller must ensure that the indexes in the iterator are less than the `array.len()`
     pub unsafe fn take_iter_unchecked<'a>(
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
@@ -222,16 +220,16 @@ impl<OffsetSize: BinaryOffsetSizeTrait> GenericBinaryArray<OffsetSize> {
     }
 }
 
-impl<'a, T: BinaryOffsetSizeTrait> GenericBinaryArray<T> {
+impl<'a, T: OffsetSizeTrait> GenericBinaryArray<T> {
     /// constructs a new iterator
     pub fn iter(&'a self) -> GenericBinaryIter<'a, T> {
         GenericBinaryIter::<'a, T>::new(self)
     }
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> fmt::Debug for GenericBinaryArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericBinaryArray<OffsetSize> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let prefix = if OffsetSize::is_large() { "Large" } else { "" };
+        let prefix = if OffsetSize::IS_LARGE { "Large" } else { "" };
 
         write!(f, "{}BinaryArray\n[\n", prefix)?;
         print_long_array(self, f, |array, index, f| {
@@ -241,7 +239,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> fmt::Debug for GenericBinaryArray<Offset
     }
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> Array for GenericBinaryArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> Array for GenericBinaryArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -251,13 +249,11 @@ impl<OffsetSize: BinaryOffsetSizeTrait> Array for GenericBinaryArray<OffsetSize>
     }
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> From<ArrayData>
-    for GenericBinaryArray<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericBinaryArray<OffsetSize> {
     fn from(data: ArrayData) -> Self {
         assert_eq!(
             data.data_type(),
-            &<OffsetSize as BinaryOffsetSizeTrait>::DATA_TYPE,
+            &Self::get_data_type(),
             "[Large]BinaryArray expects Datatype::[Large]Binary"
         );
         assert_eq!(
@@ -275,7 +271,7 @@ impl<OffsetSize: BinaryOffsetSizeTrait> From<ArrayData>
     }
 }
 
-impl<Ptr, OffsetSize: BinaryOffsetSizeTrait> FromIterator<Option<Ptr>>
+impl<Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
     for GenericBinaryArray<OffsetSize>
 where
     Ptr: AsRef<[u8]>,
@@ -308,7 +304,7 @@ where
 
         // calculate actual data_len, which may be different from the iterator's upper bound
         let data_len = offsets.len() - 1;
-        let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
+        let array_data = ArrayData::builder(Self::get_data_type())
             .len(data_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
@@ -318,9 +314,10 @@ where
     }
 }
 
-/// An array where each element is a byte whose maximum length is represented by a i32.
+/// An array where each element contains 0 or more bytes.
+/// The byte length of each element is represented by an i32.
 ///
-/// Examples
+/// # Examples
 ///
 /// Create a BinaryArray from a vector of byte slices.
 ///
@@ -357,8 +354,10 @@ where
 ///
 pub type BinaryArray = GenericBinaryArray<i32>;
 
-/// An array where each element is a byte whose maximum length is represented by a i64.
-/// Examples
+/// An array where each element contains 0 or more bytes.
+/// The byte length of each element is represented by an i64.
+///
+/// # Examples
 ///
 /// Create a LargeBinaryArray from a vector of byte slices.
 ///
@@ -395,7 +394,7 @@ pub type BinaryArray = GenericBinaryArray<i32>;
 ///
 pub type LargeBinaryArray = GenericBinaryArray<i64>;
 
-impl<'a, T: BinaryOffsetSizeTrait> IntoIterator for &'a GenericBinaryArray<T> {
+impl<'a, T: OffsetSizeTrait> IntoIterator for &'a GenericBinaryArray<T> {
     type Item = Option<&'a [u8]>;
     type IntoIter = GenericBinaryIter<'a, T>;
 
@@ -404,7 +403,7 @@ impl<'a, T: BinaryOffsetSizeTrait> IntoIterator for &'a GenericBinaryArray<T> {
     }
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> From<Vec<Option<&[u8]>>>
+impl<OffsetSize: OffsetSizeTrait> From<Vec<Option<&[u8]>>>
     for GenericBinaryArray<OffsetSize>
 {
     fn from(v: Vec<Option<&[u8]>>) -> Self {
@@ -412,21 +411,19 @@ impl<OffsetSize: BinaryOffsetSizeTrait> From<Vec<Option<&[u8]>>>
     }
 }
 
-impl<OffsetSize: BinaryOffsetSizeTrait> From<Vec<&[u8]>>
-    for GenericBinaryArray<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> From<Vec<&[u8]>> for GenericBinaryArray<OffsetSize> {
     fn from(v: Vec<&[u8]>) -> Self {
         Self::from_iter_values(v)
     }
 }
 
-impl<T: BinaryOffsetSizeTrait> From<GenericListArray<T>> for GenericBinaryArray<T> {
+impl<T: OffsetSizeTrait> From<GenericListArray<T>> for GenericBinaryArray<T> {
     fn from(v: GenericListArray<T>) -> Self {
         Self::from_list(v)
     }
 }
 
-/// A type of `FixedSizeListArray` whose elements are binaries.
+/// An array where each element is a fixed-size sequence of bytes.
 ///
 /// # Examples
 ///
@@ -471,6 +468,18 @@ impl FixedSizeBinaryArray {
                 (self.value_offset_at(offset + 1) - pos) as usize,
             )
         }
+    }
+
+    /// Returns the element at index `i` as a byte slice.
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
+        let offset = i.checked_add(self.data.offset()).unwrap();
+        let pos = self.value_offset_at(offset);
+        std::slice::from_raw_parts(
+            self.value_data.as_ptr().offset(pos as isize),
+            (self.value_offset_at(offset + 1) - pos) as usize,
+        )
     }
 
     /// Returns the offset for the element at index `i`.
@@ -968,45 +977,6 @@ impl From<DecimalArray> for ArrayData {
     }
 }
 
-/// an iterator that returns Some(i128) or None, that can be used on a
-/// DecimalArray
-#[derive(Debug)]
-pub struct DecimalIter<'a> {
-    array: &'a DecimalArray,
-    current: usize,
-    current_end: usize,
-}
-
-impl<'a> DecimalIter<'a> {
-    pub fn new(array: &'a DecimalArray) -> Self {
-        Self {
-            array,
-            current: 0,
-            current_end: array.len(),
-        }
-    }
-}
-
-impl<'a> std::iter::Iterator for DecimalIter<'a> {
-    type Item = Option<i128>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current == self.current_end {
-            None
-        } else {
-            let old = self.current;
-            self.current += 1;
-            // TODO: Improve performance by avoiding bounds check here
-            // (by using adding a `value_unchecked, for example)
-            if self.array.is_null(old) {
-                Some(None)
-            } else {
-                Some(Some(self.array.value(old)))
-            }
-        }
-    }
-}
-
 impl<'a> IntoIterator for &'a DecimalArray {
     type Item = Option<i128>;
     type IntoIter = DecimalIter<'a>;
@@ -1083,9 +1053,12 @@ impl Array for DecimalArray {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::{
         array::{DecimalBuilder, LargeListArray, ListArray},
-        datatypes::Field,
+        datatypes::{Field, Schema},
+        record_batch::RecordBatch,
     };
 
     use super::*;
@@ -1315,7 +1288,7 @@ mod tests {
         }
     }
 
-    fn test_generic_binary_array_from_opt_vec<T: BinaryOffsetSizeTrait>() {
+    fn test_generic_binary_array_from_opt_vec<T: OffsetSizeTrait>() {
         let values: Vec<Option<&[u8]>> =
             vec![Some(b"one"), Some(b"two"), None, Some(b""), Some(b"three")];
         let array = GenericBinaryArray::<T>::from_opt_vec(values);
@@ -1449,6 +1422,9 @@ mod tests {
     #[should_panic(
         expected = "FixedSizeBinaryArray can only be created from FixedSizeList<u8> arrays"
     )]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_fixed_size_binary_array_from_incorrect_list_array() {
         let values: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         let values_data = ArrayData::builder(DataType::UInt32)
@@ -1592,8 +1568,28 @@ mod tests {
         let data = vec![Some(-100), None, Some(101)];
         let array: DecimalArray = data.clone().into_iter().collect();
 
-        let collected: Vec<_> = array.iter().collect();
+        let collected: Vec<_> = array.into_iter().collect();
         assert_eq!(data, collected);
+    }
+
+    #[test]
+    fn test_decimal_iter_sized() {
+        let data = vec![Some(-100), None, Some(101)];
+        let array: DecimalArray = data.into_iter().collect();
+        let mut iter = array.into_iter();
+
+        // is exact sized
+        assert_eq!(array.len(), 3);
+
+        // size_hint is reported correctly
+        assert_eq!(iter.size_hint(), (3, Some(3)));
+        iter.next().unwrap();
+        assert_eq!(iter.size_hint(), (2, Some(2)));
+        iter.next().unwrap();
+        iter.next().unwrap();
+        assert_eq!(iter.size_hint(), (0, Some(0)));
+        assert!(iter.next().is_none());
+        assert_eq!(iter.size_hint(), (0, Some(0)));
     }
 
     #[test]
@@ -1689,6 +1685,16 @@ mod tests {
     }
 
     #[test]
+    fn test_all_none_fixed_size_binary_array_from_sparse_iter() {
+        let none_option: Option<[u8; 32]> = None;
+        let input_arg = vec![none_option, none_option, none_option];
+        let arr =
+            FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+        assert_eq!(0, arr.value_length());
+        assert_eq!(3, arr.len())
+    }
+
+    #[test]
     fn test_fixed_size_binary_array_from_sparse_iter() {
         let input_arg = vec![
             None,
@@ -1731,5 +1737,24 @@ mod tests {
             .data()
             .validate_full()
             .expect("All null array has valid array data");
+    }
+
+    #[test]
+    // Test for https://github.com/apache/arrow-rs/issues/1390
+    #[should_panic(
+        expected = "column types must match schema types, expected FixedSizeBinary(2) but found FixedSizeBinary(0) at column index 0"
+    )]
+    fn fixed_size_binary_array_all_null_in_batch_with_schema() {
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), false)]);
+
+        let none_option: Option<[u8; 2]> = None;
+        let item = FixedSizeBinaryArray::try_from_sparse_iter(
+            vec![none_option, none_option, none_option].into_iter(),
+        )
+        .unwrap();
+
+        // Should not panic
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(item)]).unwrap();
     }
 }

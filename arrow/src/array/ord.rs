@@ -72,7 +72,7 @@ where
 
 fn compare_string<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
 where
-    T: StringOffsetSizeTrait,
+    T: OffsetSizeTrait,
 {
     let left: StringArray = StringArray::from(left.data().clone());
     let right: StringArray = StringArray::from(right.data().clone());
@@ -225,6 +225,11 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
                 }
             }
         }
+        (Decimal(_, _), Decimal(_, _)) => {
+            let left: DecimalArray = DecimalArray::from(left.data().clone());
+            let right: DecimalArray = DecimalArray::from(right.data().clone());
+            Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
+        }
         (lhs, _) => {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "The data type type {:?} has no natural order",
@@ -290,6 +295,20 @@ pub mod tests {
 
         assert_eq!(Ordering::Equal, (cmp)(0, 1));
         assert_eq!(Ordering::Equal, (cmp)(1, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_decimal() -> Result<()> {
+        let array = vec![Some(5), Some(2), Some(3)]
+            .iter()
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(23, 6)
+            .unwrap();
+
+        let cmp = build_compare(&array, &array)?;
+        assert_eq!(Ordering::Less, (cmp)(1, 0));
+        assert_eq!(Ordering::Greater, (cmp)(0, 2));
         Ok(())
     }
 

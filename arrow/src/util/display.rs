@@ -23,8 +23,9 @@ use std::sync::Arc;
 
 use crate::array::Array;
 use crate::datatypes::{
-    ArrowNativeType, ArrowPrimitiveType, DataType, Int16Type, Int32Type, Int64Type,
-    Int8Type, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowNativeType, ArrowPrimitiveType, DataType, Field, Int16Type, Int32Type,
+    Int64Type, Int8Type, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    UnionMode,
 };
 use crate::{array, datatypes::IntervalUnit};
 
@@ -395,6 +396,7 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
 
             Ok(s)
         }
+        DataType::Union(field_vec, mode) => union_to_string(column, row, field_vec, mode),
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Pretty printing not implemented for {:?} type",
             column.data_type()
@@ -402,6 +404,42 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
     }
 }
 
+/// Converts the value of the union array at `row` to a String
+fn union_to_string(
+    column: &array::ArrayRef,
+    row: usize,
+    fields: &[Field],
+    mode: &UnionMode,
+) -> Result<String> {
+    let list = column
+        .as_any()
+        .downcast_ref::<array::UnionArray>()
+        .ok_or_else(|| {
+            ArrowError::InvalidArgumentError(
+                "Repl error: could not convert union column to union array.".to_string(),
+            )
+        })?;
+    let type_id = list.type_id(row);
+    let name = fields
+        .get(type_id as usize)
+        .ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "Repl error: could not get field name for type id: {} in union array.",
+                type_id,
+            ))
+        })?
+        .name();
+
+    let value = array_value_to_string(
+        &list.child(type_id),
+        match mode {
+            UnionMode::Dense => list.value_offset(row) as usize,
+            UnionMode::Sparse => row,
+        },
+    )?;
+
+    Ok(format!("{{{}={}}}", name, value))
+}
 /// Converts the value of the dictionary array at `row` to a String
 fn dict_array_value_to_string<K: ArrowPrimitiveType>(
     colum: &array::ArrayRef,

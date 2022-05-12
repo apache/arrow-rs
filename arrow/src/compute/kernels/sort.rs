@@ -269,7 +269,9 @@ pub fn sort_to_indices(
         }
         DataType::Utf8 => sort_string::<i32>(values, v, n, &options, limit),
         DataType::LargeUtf8 => sort_string::<i64>(values, v, n, &options, limit),
-        DataType::List(field) => match field.data_type() {
+        DataType::List(field) | DataType::FixedSizeList(field, _) => match field
+            .data_type()
+        {
             DataType::Int8 => sort_list::<i32, Int8Type>(values, v, n, &options, limit),
             DataType::Int16 => sort_list::<i32, Int16Type>(values, v, n, &options, limit),
             DataType::Int32 => sort_list::<i32, Int32Type>(values, v, n, &options, limit),
@@ -317,34 +319,6 @@ pub fn sort_to_indices(
             }
             DataType::Float64 => {
                 sort_list::<i64, Float64Type>(values, v, n, &options, limit)
-            }
-            t => {
-                return Err(ArrowError::ComputeError(format!(
-                    "Sort not supported for list type {:?}",
-                    t
-                )));
-            }
-        },
-        DataType::FixedSizeList(field, _) => match field.data_type() {
-            DataType::Int8 => sort_list::<i32, Int8Type>(values, v, n, &options, limit),
-            DataType::Int16 => sort_list::<i32, Int16Type>(values, v, n, &options, limit),
-            DataType::Int32 => sort_list::<i32, Int32Type>(values, v, n, &options, limit),
-            DataType::Int64 => sort_list::<i32, Int64Type>(values, v, n, &options, limit),
-            DataType::UInt8 => sort_list::<i32, UInt8Type>(values, v, n, &options, limit),
-            DataType::UInt16 => {
-                sort_list::<i32, UInt16Type>(values, v, n, &options, limit)
-            }
-            DataType::UInt32 => {
-                sort_list::<i32, UInt32Type>(values, v, n, &options, limit)
-            }
-            DataType::UInt64 => {
-                sort_list::<i32, UInt64Type>(values, v, n, &options, limit)
-            }
-            DataType::Float32 => {
-                sort_list::<i32, Float32Type>(values, v, n, &options, limit)
-            }
-            DataType::Float64 => {
-                sort_list::<i32, Float64Type>(values, v, n, &options, limit)
             }
             t => {
                 return Err(ArrowError::ComputeError(format!(
@@ -640,7 +614,7 @@ fn insert_valid_values<T>(result_slice: &mut [u32], offset: usize, valids: &[(u3
 }
 
 /// Sort strings
-fn sort_string<Offset: StringOffsetSizeTrait>(
+fn sort_string<Offset: OffsetSizeTrait>(
     values: &ArrayRef,
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
@@ -805,7 +779,7 @@ fn sort_binary<S>(
     limit: Option<usize>,
 ) -> UInt32Array
 where
-    S: BinaryOffsetSizeTrait,
+    S: OffsetSizeTrait,
 {
     let mut valids: Vec<(u32, &[u8])> = values
         .as_any()
@@ -1369,7 +1343,7 @@ mod tests {
         }
 
         // Generic size binary array
-        fn make_generic_binary_array<S: BinaryOffsetSizeTrait>(
+        fn make_generic_binary_array<S: OffsetSizeTrait>(
             data: &[Option<Vec<u8>>],
         ) -> Arc<GenericBinaryArray<S>> {
             Arc::new(GenericBinaryArray::<S>::from_opt_vec(

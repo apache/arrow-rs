@@ -53,6 +53,21 @@ macro_rules! downcast_dict_take {
 
 /// Take elements by index from [Array], creating a new [Array] from those indexes.
 ///
+/// ```text
+/// ┌─────────────────┐      ┌─────────┐                              ┌─────────────────┐
+/// │        A        │      │    0    │                              │        A        │
+/// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
+/// │        D        │      │    2    │                              │        B        │
+/// ├─────────────────┤      ├─────────┤   take(values, indicies)     ├─────────────────┤
+/// │        B        │      │    3    │ ─────────────────────────▶   │        C        │
+/// ├─────────────────┤      ├─────────┤                              ├─────────────────┤
+/// │        C        │      │    1    │                              │        D        │
+/// ├─────────────────┤      └─────────┘                              └─────────────────┘
+/// │        E        │
+/// └─────────────────┘
+///    values array            indicies array                              result
+/// ```
+///
 /// # Errors
 /// This function errors whenever:
 /// * An index cannot be casted to `usize` (typically 32 bit architectures)
@@ -664,7 +679,7 @@ fn take_string<OffsetSize, IndexType>(
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericStringArray<OffsetSize>>
 where
-    OffsetSize: Zero + AddAssign + StringOffsetSizeTrait,
+    OffsetSize: Zero + AddAssign + OffsetSizeTrait,
     IndexType: ArrowNumericType,
     IndexType::Native: ToPrimitive,
 {
@@ -763,7 +778,7 @@ where
     }
 
     let mut array_data =
-        ArrayData::builder(<OffsetSize as StringOffsetSizeTrait>::DATA_TYPE)
+        ArrayData::builder(GenericStringArray::<OffsetSize>::get_data_type())
             .len(data_len)
             .add_buffer(offsets_buffer.into())
             .add_buffer(values.into());
@@ -874,7 +889,7 @@ fn take_binary<IndexType, OffsetType>(
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericBinaryArray<OffsetType>>
 where
-    OffsetType: BinaryOffsetSizeTrait,
+    OffsetType: OffsetSizeTrait,
     IndexType: ArrowNumericType,
     IndexType::Native: ToPrimitive,
 {

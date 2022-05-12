@@ -45,11 +45,14 @@ impl TryFrom<ArrayData> for ffi::ArrowArray {
 
 #[cfg(test)]
 mod tests {
+    use crate::array::{DictionaryArray, FixedSizeListArray, Int32Array, StringArray};
+    use crate::buffer::Buffer;
     use crate::error::Result;
+    use crate::util::bit_util;
     use crate::{
         array::{
-            Array, ArrayData, BooleanArray, Int64Array, StructArray, UInt32Array,
-            UInt64Array,
+            Array, ArrayData, BooleanArray, FixedSizeBinaryArray, Int64Array,
+            StructArray, UInt32Array, UInt64Array,
         },
         datatypes::{DataType, Field},
         ffi::ArrowArray,
@@ -124,6 +127,135 @@ mod tests {
                 Arc::new(UInt32Array::from(vec![42, 28, 19, 31])),
             ),
         ]);
+        let data = array.data();
+        test_round_trip(data)
+    }
+
+    #[test]
+    fn test_dictionary() -> Result<()> {
+        let values = StringArray::from(vec![Some("foo"), Some("bar"), None]);
+        let keys = Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            None,
+            Some(1),
+            Some(1),
+            None,
+            Some(1),
+            Some(2),
+            Some(1),
+            None,
+        ]);
+        let array = DictionaryArray::try_new(&keys, &values)?;
+
+        let data = array.data();
+        test_round_trip(data)
+    }
+
+    #[test]
+    fn test_fixed_size_binary() -> Result<()> {
+        let values = vec![vec![10, 10, 10], vec![20, 20, 20], vec![30, 30, 30]];
+        let array = FixedSizeBinaryArray::try_from_iter(values.into_iter())?;
+
+        let data = array.data();
+        test_round_trip(data)
+    }
+
+    #[test]
+    fn test_fixed_size_binary_with_nulls() -> Result<()> {
+        let values = vec![
+            None,
+            Some(vec![10, 10, 10]),
+            None,
+            Some(vec![20, 20, 20]),
+            Some(vec![30, 30, 30]),
+            None,
+        ];
+        let array = FixedSizeBinaryArray::try_from_sparse_iter(values.into_iter())?;
+
+        let data = array.data();
+        test_round_trip(data)
+    }
+
+    #[test]
+    fn test_fixed_size_list() -> Result<()> {
+        let v: Vec<i64> = (0..9).into_iter().collect();
+        let value_data = ArrayData::builder(DataType::Int64)
+            .len(9)
+            .add_buffer(Buffer::from_slice_ref(&v))
+            .build()?;
+        let list_data_type =
+            DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int64, false)), 3);
+        let list_data = ArrayData::builder(list_data_type)
+            .len(3)
+            .add_child_data(value_data)
+            .build()?;
+        let array = FixedSizeListArray::from(list_data);
+
+        let data = array.data();
+        test_round_trip(data)
+    }
+
+    #[test]
+    fn test_fixed_size_list_with_nulls() -> Result<()> {
+        // 0100 0110
+        let mut validity_bits: [u8; 1] = [0; 1];
+        bit_util::set_bit(&mut validity_bits, 1);
+        bit_util::set_bit(&mut validity_bits, 2);
+        bit_util::set_bit(&mut validity_bits, 6);
+
+        let v: Vec<i16> = (0..16).into_iter().collect();
+        let value_data = ArrayData::builder(DataType::Int16)
+            .len(16)
+            .add_buffer(Buffer::from_slice_ref(&v))
+            .build()?;
+        let list_data_type =
+            DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int16, false)), 2);
+        let list_data = ArrayData::builder(list_data_type)
+            .len(8)
+            .null_bit_buffer(Buffer::from(validity_bits))
+            .add_child_data(value_data)
+            .build()?;
+        let array = FixedSizeListArray::from(list_data);
+
+        let data = array.data();
+        test_round_trip(data)
+    }
+
+    #[test]
+    fn test_fixed_size_list_nested() -> Result<()> {
+        let v: Vec<i32> = (0..16).into_iter().collect();
+        let value_data = ArrayData::builder(DataType::Int32)
+            .len(16)
+            .add_buffer(Buffer::from_slice_ref(&v))
+            .build()?;
+
+        let offsets: Vec<i32> = vec![0, 2, 4, 6, 8, 10, 12, 14, 16];
+        let value_offsets = Buffer::from_slice_ref(&offsets);
+        let inner_list_data_type =
+            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+        let inner_list_data = ArrayData::builder(inner_list_data_type.clone())
+            .len(8)
+            .add_buffer(value_offsets)
+            .add_child_data(value_data)
+            .build()?;
+
+        // 0000 0100
+        let mut validity_bits: [u8; 1] = [0; 1];
+        bit_util::set_bit(&mut validity_bits, 2);
+
+        let list_data_type = DataType::FixedSizeList(
+            Box::new(Field::new("f", inner_list_data_type, false)),
+            2,
+        );
+        let list_data = ArrayData::builder(list_data_type)
+            .len(4)
+            .null_bit_buffer(Buffer::from(validity_bits))
+            .add_child_data(inner_list_data)
+            .build()?;
+
+        let array = FixedSizeListArray::from(list_data);
+
         let data = array.data();
         test_round_trip(data)
     }

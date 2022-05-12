@@ -25,7 +25,10 @@ use std::io::{BufWriter, Write};
 
 use flatbuffers::FlatBufferBuilder;
 
-use crate::array::{as_struct_array, as_union_array, ArrayData, ArrayRef};
+use crate::array::{
+    as_large_list_array, as_list_array, as_map_array, as_struct_array, as_union_array,
+    make_array, Array, ArrayData, ArrayRef, FixedSizeListArray,
+};
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
@@ -137,15 +140,13 @@ impl IpcDataGenerator {
         }
     }
 
-    fn encode_dictionaries(
+    fn _encode_dictionaries(
         &self,
-        field: &Field,
         column: &ArrayRef,
         encoded_dictionaries: &mut Vec<EncodedData>,
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
     ) -> Result<()> {
-        // TODO: Handle other nested types (map, list, etc)
         match column.data_type() {
             DataType::Struct(fields) => {
                 let s = as_struct_array(column);
@@ -158,6 +159,67 @@ impl IpcDataGenerator {
                         write_options,
                     )?;
                 }
+            }
+            DataType::List(field) => {
+                let list = as_list_array(column);
+                self.encode_dictionaries(
+                    field,
+                    &list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
+            DataType::LargeList(field) => {
+                let list = as_large_list_array(column);
+                self.encode_dictionaries(
+                    field,
+                    &list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
+            DataType::FixedSizeList(field, _) => {
+                let list = column
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .expect("Unable to downcast to fixed size list array");
+                self.encode_dictionaries(
+                    field,
+                    &list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
+            DataType::Map(field, _) => {
+                let map_array = as_map_array(column);
+
+                let (keys, values) = match field.data_type() {
+                    DataType::Struct(fields) if fields.len() == 2 => {
+                        (&fields[0], &fields[1])
+                    }
+                    _ => panic!("Incorrect field data type {:?}", field.data_type()),
+                };
+
+                // keys
+                self.encode_dictionaries(
+                    keys,
+                    &map_array.keys(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+
+                // values
+                self.encode_dictionaries(
+                    values,
+                    &map_array.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
             }
             DataType::Union(fields, _) => {
                 let union = as_union_array(column);
@@ -175,12 +237,36 @@ impl IpcDataGenerator {
                     )?;
                 }
             }
+            _ => (),
+        }
+
+        Ok(())
+    }
+
+    fn encode_dictionaries(
+        &self,
+        field: &Field,
+        column: &ArrayRef,
+        encoded_dictionaries: &mut Vec<EncodedData>,
+        dictionary_tracker: &mut DictionaryTracker,
+        write_options: &IpcWriteOptions,
+    ) -> Result<()> {
+        match column.data_type() {
             DataType::Dictionary(_key_type, _value_type) => {
                 let dict_id = field
                     .dict_id()
                     .expect("All Dictionary types have `dict_id`");
                 let dict_data = column.data();
                 let dict_values = &dict_data.child_data()[0];
+
+                let values = make_array(dict_data.child_data()[0].clone());
+
+                self._encode_dictionaries(
+                    &values,
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
 
                 let emit = dictionary_tracker.insert(dict_id, column)?;
 
@@ -192,7 +278,12 @@ impl IpcDataGenerator {
                     ));
                 }
             }
-            _ => (),
+            _ => self._encode_dictionaries(
+                column,
+                encoded_dictionaries,
+                dictionary_tracker,
+                write_options,
+            )?,
         }
 
         Ok(())
@@ -205,7 +296,7 @@ impl IpcDataGenerator {
         write_options: &IpcWriteOptions,
     ) -> Result<(Vec<EncodedData>, EncodedData)> {
         let schema = batch.schema();
-        let mut encoded_dictionaries = Vec::with_capacity(schema.fields().len());
+        let mut encoded_dictionaries = Vec::with_capacity(schema.all_fields().len());
 
         for (i, field) in schema.fields().iter().enumerate() {
             let column = batch.column(i);
@@ -771,7 +862,11 @@ fn write_array_data(
     let mut offset = offset;
     nodes.push(ipc::FieldNode::new(num_rows as i64, null_count as i64));
     // NullArray does not have any buffers, thus the null buffer is not generated
-    if array_data.data_type() != &DataType::Null {
+    // UnionArray does not have a validity buffer
+    if !matches!(
+        array_data.data_type(),
+        DataType::Null | DataType::Union(_, _)
+    ) {
         // write null buffer if exists
         let null_buffer = match array_data.null_buffer() {
             None => {
@@ -881,7 +976,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}.arrow_file", "arrow"))
                     .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
             while let Some(Ok(read_batch)) = reader.next() {
                 read_batch
                     .columns()
@@ -929,7 +1024,7 @@ mod tests {
 
         {
             let file = File::open(&file_name).unwrap();
-            let reader = FileReader::try_new(file).unwrap();
+            let reader = FileReader::try_new(file, None).unwrap();
             reader.for_each(|maybe_batch| {
                 maybe_batch
                     .unwrap()
@@ -999,7 +1094,7 @@ mod tests {
             ))
             .unwrap();
 
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read and rewrite the file to a temp location
             {
@@ -1020,7 +1115,7 @@ mod tests {
                 version, path
             ))
             .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1051,7 +1146,7 @@ mod tests {
             ))
             .unwrap();
 
-            let reader = StreamReader::try_new(file).unwrap();
+            let reader = StreamReader::try_new(file, None).unwrap();
 
             // read and rewrite the stream to a temp location
             {
@@ -1070,7 +1165,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
                     .unwrap();
-            let mut reader = StreamReader::try_new(file).unwrap();
+            let mut reader = StreamReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1108,7 +1203,7 @@ mod tests {
             ))
             .unwrap();
 
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read and rewrite the file to a temp location
             {
@@ -1134,7 +1229,7 @@ mod tests {
                 version, path
             ))
             .unwrap();
-            let mut reader = FileReader::try_new(file).unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1172,7 +1267,7 @@ mod tests {
             ))
             .unwrap();
 
-            let reader = StreamReader::try_new(file).unwrap();
+            let reader = StreamReader::try_new(file, None).unwrap();
 
             // read and rewrite the stream to a temp location
             {
@@ -1195,7 +1290,7 @@ mod tests {
             let file =
                 File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
                     .unwrap();
-            let mut reader = StreamReader::try_new(file).unwrap();
+            let mut reader = StreamReader::try_new(file, None).unwrap();
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
@@ -1233,8 +1328,7 @@ mod tests {
         let offsets = Buffer::from_slice_ref(&[0_i32, 1, 2]);
 
         let union =
-            UnionArray::try_new(types, Some(offsets), vec![(dctfield, array)], None)
-                .unwrap();
+            UnionArray::try_new(types, Some(offsets), vec![(dctfield, array)]).unwrap();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "union",

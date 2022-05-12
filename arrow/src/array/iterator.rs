@@ -18,9 +18,8 @@
 use crate::datatypes::ArrowPrimitiveType;
 
 use super::{
-    Array, ArrayRef, BinaryOffsetSizeTrait, BooleanArray, GenericBinaryArray,
-    GenericListArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
-    StringOffsetSizeTrait,
+    Array, ArrayRef, BooleanArray, DecimalArray, GenericBinaryArray, GenericListArray,
+    GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 
 /// an iterator that returns Some(T) or None, that can be used on any PrimitiveArray
@@ -172,14 +171,14 @@ impl<'a> std::iter::ExactSizeIterator for BooleanIter<'a> {}
 #[derive(Debug)]
 pub struct GenericStringIter<'a, T>
 where
-    T: StringOffsetSizeTrait,
+    T: OffsetSizeTrait,
 {
     array: &'a GenericStringArray<T>,
     current: usize,
     current_end: usize,
 }
 
-impl<'a, T: StringOffsetSizeTrait> GenericStringIter<'a, T> {
+impl<'a, T: OffsetSizeTrait> GenericStringIter<'a, T> {
     /// create a new iterator
     pub fn new(array: &'a GenericStringArray<T>) -> Self {
         GenericStringIter::<T> {
@@ -190,7 +189,7 @@ impl<'a, T: StringOffsetSizeTrait> GenericStringIter<'a, T> {
     }
 }
 
-impl<'a, T: StringOffsetSizeTrait> std::iter::Iterator for GenericStringIter<'a, T> {
+impl<'a, T: OffsetSizeTrait> std::iter::Iterator for GenericStringIter<'a, T> {
     type Item = Option<&'a str>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -219,9 +218,7 @@ impl<'a, T: StringOffsetSizeTrait> std::iter::Iterator for GenericStringIter<'a,
     }
 }
 
-impl<'a, T: StringOffsetSizeTrait> std::iter::DoubleEndedIterator
-    for GenericStringIter<'a, T>
-{
+impl<'a, T: OffsetSizeTrait> std::iter::DoubleEndedIterator for GenericStringIter<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.current_end == self.current {
             None
@@ -242,23 +239,20 @@ impl<'a, T: StringOffsetSizeTrait> std::iter::DoubleEndedIterator
 }
 
 /// all arrays have known size.
-impl<'a, T: StringOffsetSizeTrait> std::iter::ExactSizeIterator
-    for GenericStringIter<'a, T>
-{
-}
+impl<'a, T: OffsetSizeTrait> std::iter::ExactSizeIterator for GenericStringIter<'a, T> {}
 
 /// an iterator that returns `Some(&[u8])` or `None`, for binary arrays
 #[derive(Debug)]
 pub struct GenericBinaryIter<'a, T>
 where
-    T: BinaryOffsetSizeTrait,
+    T: OffsetSizeTrait,
 {
     array: &'a GenericBinaryArray<T>,
     current: usize,
     current_end: usize,
 }
 
-impl<'a, T: BinaryOffsetSizeTrait> GenericBinaryIter<'a, T> {
+impl<'a, T: OffsetSizeTrait> GenericBinaryIter<'a, T> {
     /// create a new iterator
     pub fn new(array: &'a GenericBinaryArray<T>) -> Self {
         GenericBinaryIter::<T> {
@@ -269,7 +263,7 @@ impl<'a, T: BinaryOffsetSizeTrait> GenericBinaryIter<'a, T> {
     }
 }
 
-impl<'a, T: BinaryOffsetSizeTrait> std::iter::Iterator for GenericBinaryIter<'a, T> {
+impl<'a, T: OffsetSizeTrait> std::iter::Iterator for GenericBinaryIter<'a, T> {
     type Item = Option<&'a [u8]>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -298,9 +292,7 @@ impl<'a, T: BinaryOffsetSizeTrait> std::iter::Iterator for GenericBinaryIter<'a,
     }
 }
 
-impl<'a, T: BinaryOffsetSizeTrait> std::iter::DoubleEndedIterator
-    for GenericBinaryIter<'a, T>
-{
+impl<'a, T: OffsetSizeTrait> std::iter::DoubleEndedIterator for GenericBinaryIter<'a, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.current_end == self.current {
             None
@@ -321,10 +313,7 @@ impl<'a, T: BinaryOffsetSizeTrait> std::iter::DoubleEndedIterator
 }
 
 /// all arrays have known size.
-impl<'a, T: BinaryOffsetSizeTrait> std::iter::ExactSizeIterator
-    for GenericBinaryIter<'a, T>
-{
-}
+impl<'a, T: OffsetSizeTrait> std::iter::ExactSizeIterator for GenericBinaryIter<'a, T> {}
 
 #[derive(Debug)]
 pub struct GenericListArrayIter<'a, S>
@@ -402,6 +391,54 @@ impl<'a, S: OffsetSizeTrait> std::iter::ExactSizeIterator
     for GenericListArrayIter<'a, S>
 {
 }
+
+/// an iterator that returns `Some(i128)` or `None`, that can be used on a
+/// [`DecimalArray`]
+#[derive(Debug)]
+pub struct DecimalIter<'a> {
+    array: &'a DecimalArray,
+    current: usize,
+    current_end: usize,
+}
+
+impl<'a> DecimalIter<'a> {
+    pub fn new(array: &'a DecimalArray) -> Self {
+        Self {
+            array,
+            current: 0,
+            current_end: array.len(),
+        }
+    }
+}
+
+impl<'a> std::iter::Iterator for DecimalIter<'a> {
+    type Item = Option<i128>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current == self.current_end {
+            None
+        } else {
+            let old = self.current;
+            self.current += 1;
+            // TODO: Improve performance by avoiding bounds check here
+            // (by using adding a `value_unchecked, for example)
+            if self.array.is_null(old) {
+                Some(None)
+            } else {
+                Some(Some(self.array.value(old)))
+            }
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remain = self.current_end - self.current;
+        (remain, Some(remain))
+    }
+}
+
+/// iterator has known size.
+impl<'a> std::iter::ExactSizeIterator for DecimalIter<'a> {}
 
 #[cfg(test)]
 mod tests {

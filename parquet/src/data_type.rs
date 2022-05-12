@@ -31,7 +31,7 @@ use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
 use crate::util::{
     bit_util::{from_ne_slice, FromBytes},
-    memory::{ByteBuffer, ByteBufferPtr},
+    memory::ByteBufferPtr,
 };
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
@@ -214,14 +214,6 @@ impl<'a> From<&'a str> for ByteArray {
 impl From<ByteBufferPtr> for ByteArray {
     fn from(ptr: ByteBufferPtr) -> ByteArray {
         Self { data: Some(ptr) }
-    }
-}
-
-impl From<ByteBuffer> for ByteArray {
-    fn from(mut buf: ByteBuffer) -> ByteArray {
-        Self {
-            data: Some(buf.consume()),
-        }
     }
 }
 
@@ -1322,8 +1314,7 @@ mod tests {
             ByteArray::from(ByteBufferPtr::new(vec![1u8, 2u8, 3u8, 4u8, 5u8])).data(),
             &[1u8, 2u8, 3u8, 4u8, 5u8]
         );
-        let mut buf = ByteBuffer::new();
-        buf.set_data(vec![6u8, 7u8, 8u8, 9u8, 10u8]);
+        let buf = vec![6u8, 7u8, 8u8, 9u8, 10u8];
         assert_eq!(ByteArray::from(buf).data(), &[6u8, 7u8, 8u8, 9u8, 10u8]);
     }
 

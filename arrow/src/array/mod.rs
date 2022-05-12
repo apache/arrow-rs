@@ -391,12 +391,10 @@ pub type DurationMillisecondArray = PrimitiveArray<DurationMillisecondType>;
 pub type DurationMicrosecondArray = PrimitiveArray<DurationMicrosecondType>;
 pub type DurationNanosecondArray = PrimitiveArray<DurationNanosecondType>;
 
-pub use self::array_binary::BinaryOffsetSizeTrait;
 pub use self::array_binary::GenericBinaryArray;
 pub use self::array_list::GenericListArray;
 pub use self::array_list::OffsetSizeTrait;
 pub use self::array_string::GenericStringArray;
-pub use self::array_string::StringOffsetSizeTrait;
 
 // --------------------- Array Builder ---------------------
 
@@ -454,6 +452,7 @@ pub use self::builder::BooleanBuilder;
 pub use self::builder::DecimalBuilder;
 pub use self::builder::FixedSizeBinaryBuilder;
 pub use self::builder::FixedSizeListBuilder;
+pub use self::builder::GenericListBuilder;
 pub use self::builder::GenericStringBuilder;
 pub use self::builder::LargeBinaryBuilder;
 pub use self::builder::LargeListBuilder;
@@ -521,7 +520,7 @@ pub use self::cast::{
 
 // ------------------------------ C Data Interface ---------------------------
 
-pub use self::array::make_array_from_raw;
+pub use self::array::{export_array_into_raw, make_array_from_raw};
 
 #[cfg(test)]
 mod tests {

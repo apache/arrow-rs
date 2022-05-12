@@ -34,3 +34,5 @@ pub mod test_util;
 
 mod trusted_len;
 pub(crate) use trusted_len::trusted_len_unzip;
+
+pub(crate) mod reader_parser;
