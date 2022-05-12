@@ -40,5 +40,5 @@ docker run -it --rm -e CHANGELOG_GITHUB_TOKEN=$CHANGELOG_GITHUB_TOKEN -v "$(pwd)
     --cache-log=.githubchangeloggenerator.cache.log \
     --http-cache \
     --max-issues=300 \
-    --since-tag 12.0.0 \
-    --future-release 13.0.0
+    --since-tag 13.0.0 \
+    --future-release 14.0.0
