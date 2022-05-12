@@ -61,6 +61,10 @@ lz4 = "1.23"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 arrow = { path = "../arrow", version = "14.0.0", default-features = false, features = ["test_utils", "prettyprint"] }
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "doc_cfg"]
+
 [features]
 default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
 cli = ["serde_json", "base64", "clap"]
