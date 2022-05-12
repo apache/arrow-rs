@@ -63,7 +63,6 @@ arrow = { path = "../arrow", version = "13.0.0", default-features = false, featu
 
 [package.metadata.docs.rs]
 all-features = true
-rustdoc-args = ["--cfg", "doc_cfg"]
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
