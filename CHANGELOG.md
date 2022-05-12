@@ -13,20 +13,20 @@
 
 **Implemented enhancements:**
 
-- Add support for `DataType::Duration` in ffi interface [\#1688](https://github.com/apache/arrow-rs/issues/1688)
-- Fix `generate_unions_case` integration test  [\#1676](https://github.com/apache/arrow-rs/issues/1676)
--  Add `DictionaryArray` support for `bit_length` kernel [\#1673](https://github.com/apache/arrow-rs/issues/1673)
--  Add `DictionaryArray` support for `length` kernel [\#1672](https://github.com/apache/arrow-rs/issues/1672)
+- Add support for `DataType::Duration` in ffi interface [\#1688](https://github.com/apache/arrow-rs/issues/1688) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Fix `generate_unions_case` integration test  [\#1676](https://github.com/apache/arrow-rs/issues/1676) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+-  Add `DictionaryArray` support for `bit_length` kernel [\#1673](https://github.com/apache/arrow-rs/issues/1673) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+-  Add `DictionaryArray` support for `length` kernel [\#1672](https://github.com/apache/arrow-rs/issues/1672) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - flight\_client\_scenarios integration test should receive schema from flight data [\#1669](https://github.com/apache/arrow-rs/issues/1669) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Unpin Flatbuffer version dependency [\#1667](https://github.com/apache/arrow-rs/issues/1667)
-- Add dictionary array support for substring function [\#1656](https://github.com/apache/arrow-rs/issues/1656)
-- Exclude dict\_id and dict\_is\_ordered from equality comparison of `Field` [\#1646](https://github.com/apache/arrow-rs/issues/1646)
-- Remove `StringOffsetTrait` and `BinaryOffsetTrait` [\#1644](https://github.com/apache/arrow-rs/issues/1644)
-- Add tests and examples for `UnionArray::from(data: ArrayData)` [\#1643](https://github.com/apache/arrow-rs/issues/1643)
-- Add methods `pub fn offsets_buffer`, `pub fn types_ids_buffer`and `pub fn data_buffer` for `ArrayDataBuilder` [\#1640](https://github.com/apache/arrow-rs/issues/1640)
-- Fix `generate_nested_dictionary_case` integration test failure for Rust cases [\#1635](https://github.com/apache/arrow-rs/issues/1635)
+- Unpin Flatbuffer version dependency [\#1667](https://github.com/apache/arrow-rs/issues/1667) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add dictionary array support for substring function [\#1656](https://github.com/apache/arrow-rs/issues/1656) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Exclude dict\_id and dict\_is\_ordered from equality comparison of `Field` [\#1646](https://github.com/apache/arrow-rs/issues/1646) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Remove `StringOffsetTrait` and `BinaryOffsetTrait` [\#1644](https://github.com/apache/arrow-rs/issues/1644) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add tests and examples for `UnionArray::from(data: ArrayData)` [\#1643](https://github.com/apache/arrow-rs/issues/1643) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add methods `pub fn offsets_buffer`, `pub fn types_ids_buffer`and `pub fn data_buffer` for `ArrayDataBuilder` [\#1640](https://github.com/apache/arrow-rs/issues/1640) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Fix `generate_nested_dictionary_case` integration test failure for Rust cases [\#1635](https://github.com/apache/arrow-rs/issues/1635) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Expose `ArrowWriter` row group flush in public API [\#1626](https://github.com/apache/arrow-rs/issues/1626) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Add `substring` support for `FixedSizeBinaryArray` [\#1618](https://github.com/apache/arrow-rs/issues/1618)
+- Add `substring` support for `FixedSizeBinaryArray` [\#1618](https://github.com/apache/arrow-rs/issues/1618) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Add PrettyPrint for `UnionArray`s [\#1594](https://github.com/apache/arrow-rs/issues/1594) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Add SIMD support for the `length` kernel [\#1489](https://github.com/apache/arrow-rs/issues/1489) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Support dictionary arrays in length and bit\_length [\#1674](https://github.com/apache/arrow-rs/pull/1674) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
@@ -35,7 +35,8 @@
 
 **Fixed bugs:**
 
-- UnionArray::is\_null incorrect [\#1625](https://github.com/apache/arrow-rs/issues/1625) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- `UnionArray::is_null` incorrect [\#1625](https://github.com/apache/arrow-rs/issues/1625) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Published Parquet documentation missing `arrow::async_reader` [\#1617](https://github.com/apache/arrow-rs/issues/1617)
 - Files written with Julia's Arrow.jl in IPC format cannot be read by arrow-rs [\#1335](https://github.com/apache/arrow-rs/issues/1335) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Documentation updates:**
@@ -68,6 +69,7 @@
 - Fix UnionArray is\_null [\#1632](https://github.com/apache/arrow-rs/pull/1632) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
 - Do not assume dictionaries exists in footer [\#1631](https://github.com/apache/arrow-rs/pull/1631) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([pcjentsch](https://github.com/pcjentsch))
 - Add support for nested list arrays from parquet to arrow arrays \(\#993\) [\#1588](https://github.com/apache/arrow-rs/pull/1588) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- Add `async` into doc features [\#1349](https://github.com/apache/arrow-rs/pull/1349) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([HaoYang670](https://github.com/HaoYang670))
 
 
 
