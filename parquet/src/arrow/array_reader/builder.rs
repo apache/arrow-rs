@@ -151,6 +151,12 @@ fn build_primitive_reader(
 
     let physical_type = primitive_type.get_physical_type();
 
+    // We don't track the column path in ParquetField as it adds a potential source
+    // of bugs when the arrow mapping converts more than one level in the parquet
+    // schema into a single arrow field.
+    //
+    // None of the readers actually use this field, but it is required for this type,
+    // so just stick a placeholder in
     let column_desc = Arc::new(ColumnDescriptor::new(
         primitive_type,
         field.def_level,
@@ -305,7 +311,6 @@ fn build_primitive_reader(
     }
 }
 
-/// Constructs struct array reader without considering repetition.
 fn build_struct_reader(
     field: &ParquetField,
     row_groups: &dyn RowGroupCollection,

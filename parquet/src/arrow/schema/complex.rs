@@ -346,7 +346,7 @@ impl Visitor {
                 let map_field = Field::new(
                     map_key_value.name(),
                     DataType::Struct(vec![key_field, value_field]),
-                    nullable,
+                    false, // The inner map field is always non-nullable (#1697)
                 )
                 .with_metadata(arrow_map.and_then(|f| f.metadata().cloned()));
 
@@ -560,6 +560,10 @@ pub fn convert_schema<T: IntoIterator<Item = usize>>(
         if i < last_idx {
             return Err(general_err!("out of order projection is not supported"));
         }
+        if leaf_mask[i] {
+            return Err(general_err!("repeated column projection is not supported, column {} appeared multiple times", i));
+        }
+
         last_idx = i;
         leaf_mask[i] = true;
     }

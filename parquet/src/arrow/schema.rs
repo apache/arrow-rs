@@ -1128,6 +1128,24 @@ mod tests {
         for i in 0..arrow_fields.len() {
             assert_eq!(arrow_fields[i], converted_fields[i]);
         }
+
+        let err =
+            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![3, 2, 4], None)
+                .unwrap_err()
+                .to_string();
+
+        assert!(
+            err.contains("out of order projection is not supported"),
+            "{}",
+            err
+        );
+
+        let err =
+            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![3, 3, 4], None)
+                .unwrap_err()
+                .to_string();
+
+        assert!(err.contains("repeated column projection is not supported, column 3 appeared multiple times"), "{}", err);
     }
 
     #[test]
