@@ -584,16 +584,25 @@ mod tests {
 
         let mut array_reader = build_array_reader(
             file_reader.metadata().file_metadata().schema_descr_ptr(),
-            Arc::new(arrow_schema.clone()),
+            Arc::new(arrow_schema),
             vec![0usize].into_iter(),
             Box::new(file_reader),
         )
         .unwrap();
 
         let batch = array_reader.next_batch(100).unwrap();
+        assert_eq!(batch.data_type(), array_reader.get_data_type());
         assert_eq!(
             batch.data_type(),
-            &ArrowType::Struct(arrow_schema.fields().clone())
+            &ArrowType::Struct(vec![Field::new(
+                "table_info",
+                ArrowType::List(Box::new(Field::new(
+                    "table_info",
+                    ArrowType::Struct(vec![Field::new("name", ArrowType::Binary, false)]),
+                    false
+                ))),
+                false
+            )])
         );
         assert_eq!(batch.len(), 0);
     }

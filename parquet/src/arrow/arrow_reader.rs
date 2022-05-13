@@ -1050,6 +1050,42 @@ mod tests {
         for batch in record_batch_reader {
             batch.unwrap();
         }
+
+        let projected_reader = arrow_reader
+            .get_record_reader_by_columns(vec![3, 8, 10], 60)
+            .unwrap();
+        let projected_schema = arrow_reader
+            .get_schema_by_columns(vec![3, 8, 10], true)
+            .unwrap();
+
+        let expected_schema = Schema::new(vec![
+            Field::new(
+                "roll_num",
+                ArrowDataType::Struct(vec![Field::new(
+                    "count",
+                    ArrowDataType::UInt64,
+                    false,
+                )]),
+                false,
+            ),
+            Field::new(
+                "PC_CUR",
+                ArrowDataType::Struct(vec![
+                    Field::new("mean", ArrowDataType::Int64, false),
+                    Field::new("sum", ArrowDataType::Int64, false),
+                ]),
+                false,
+            ),
+        ]);
+
+        // Tests for #1652 and #1654
+        assert_eq!(projected_reader.schema().as_ref(), &projected_schema);
+        assert_eq!(expected_schema, projected_schema);
+
+        for batch in projected_reader {
+            let batch = batch.unwrap();
+            assert_eq!(batch.schema().as_ref(), &projected_schema);
+        }
     }
 
     #[test]
