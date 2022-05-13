@@ -995,7 +995,7 @@ mod tests {
                             Field::new("str", DataType::Utf8, false),
                             Field::new("num", DataType::Int32, false),
                         ]),
-                        true,
+                        false, // (#1697)
                     )),
                     false,
                 ),
@@ -1020,7 +1020,7 @@ mod tests {
                             Field::new("key", DataType::Utf8, false),
                             Field::new("value", DataType::Int32, true),
                         ]),
-                        true,
+                        false, // (#1697)
                     )),
                     false,
                 ),
@@ -1609,7 +1609,7 @@ mod tests {
                                     true,
                                 ),
                             ]),
-                            true,
+                            false, // #1697
                         )),
                         false, // fails to roundtrip keys_sorted
                     ),
@@ -1632,7 +1632,7 @@ mod tests {
                                     true,
                                 ),
                             ]),
-                            true,
+                            false, // #1697
                         )),
                         false, // fails to roundtrip keys_sorted
                     ),
