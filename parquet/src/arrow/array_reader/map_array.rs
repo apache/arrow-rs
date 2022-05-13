@@ -17,7 +17,7 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::ParquetError::ArrowError;
-use crate::errors::{Result, ParquetError};
+use crate::errors::{ParquetError, Result};
 use arrow::array::{ArrayDataBuilder, ArrayRef, MapArray};
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::DataType as ArrowType;
@@ -33,8 +33,6 @@ pub struct MapArrayReader {
     data_type: ArrowType,
     map_def_level: i16,
     map_rep_level: i16,
-    def_level_buffer: Option<Buffer>,
-    rep_level_buffer: Option<Buffer>,
 }
 
 impl MapArrayReader {
@@ -51,8 +49,6 @@ impl MapArrayReader {
             data_type,
             map_def_level: rep_level,
             map_rep_level: def_level,
-            def_level_buffer: None,
-            rep_level_buffer: None,
         }
     }
 }
@@ -154,15 +150,15 @@ impl ArrayReader for MapArrayReader {
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_level_buffer
-            .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+        // Children definition levels should describe the same parent structure,
+        // so return key_reader only
+        self.key_reader.get_def_levels()
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_level_buffer
-            .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+        // Children repetition levels should describe the same parent structure,
+        // so return key_reader only
+        self.key_reader.get_rep_levels()
     }
 }
 
