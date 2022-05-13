@@ -18,7 +18,7 @@
 [package]
 name = "arrow-flight"
 description = "Apache Arrow Flight"
-version = "13.0.0"
+version = "14.0.0"
 edition = "2021"
 rust-version = "1.57"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
@@ -27,7 +27,7 @@ repository = "https://github.com/apache/arrow-rs"
 license = "Apache-2.0"
 
 [dependencies]
-arrow = { path = "../arrow", version = "13.0.0" }
+arrow = { path = "../arrow", version = "14.0.0" }
 base64 = "0.13"
 tonic = "0.7"
 bytes = "1"
