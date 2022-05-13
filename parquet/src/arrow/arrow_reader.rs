@@ -1078,6 +1078,7 @@ mod tests {
             ),
         ]);
 
+        // Tests for #1652 and #1654
         assert_eq!(projected_reader.schema().as_ref(), &projected_schema);
         assert_eq!(expected_schema, projected_schema);
 
