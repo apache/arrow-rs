@@ -197,18 +197,23 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
                 }),
             )?;
             let sort_indices = sort_indices.values();
-            let keys = &self.keys;
-            let new_indices = keys
+
+            let mut lookup = vec![0; sort_indices.len()];
+            sort_indices.into_iter().enumerate().for_each(|(i, idx)| {
+                lookup[*idx as usize] = i;
+            });
+
+            let new_indices = &self
+                .keys
                 .iter()
                 .map(|opt_key| {
                     if let Some(key) = opt_key {
                         let key_usize = key.to_usize().unwrap();
                         // Safety:
-                        // sort_indices will have the same length as the dictionary values
-                        // so if the keys were valid for values they will be valid indices into sort_indices
-                        let new_key = unsafe { *sort_indices.get_unchecked(key_usize) };
-                        let new_key_usize = usize::try_from(new_key).unwrap();
-                        Some(K::Native::from_usize(new_key_usize).unwrap())
+                        // lookup has the same length as the dictionary values
+                        // so if the keys were valid for values they will be valid indices into lookup
+                        let new_key = unsafe { *lookup.get_unchecked(key_usize) };
+                        Some(K::Native::from_usize(new_key).unwrap())
                     } else {
                         None
                     }
@@ -557,14 +562,22 @@ mod tests {
 
     #[test]
     fn test_dictionary_make_ordered() {
-        let test = vec![Some("b"), None, Some("a"), Some("d"), Some("c"), Some("a")];
+        let test = vec![
+            Some("b"),
+            Some("b"),
+            None,
+            Some("d"),
+            Some("d"),
+            Some("c"),
+            Some("a"),
+        ];
         let array: DictionaryArray<Int32Type> = test.into_iter().collect();
-
-        let expected_keys = vec![Some(1), None, Some(0), Some(3), Some(2), Some(0)];
 
         let ordered = array.make_ordered().unwrap();
         let actual_keys = ordered.keys.iter().collect::<Vec<_>>();
 
+        let expected_keys =
+            vec![Some(1), Some(1), None, Some(3), Some(3), Some(2), Some(0)];
         assert_eq!(&expected_keys, &actual_keys);
 
         let expected_values = StringArray::from(vec!["a", "b", "c", "d"]);
