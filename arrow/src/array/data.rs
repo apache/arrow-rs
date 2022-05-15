@@ -726,18 +726,20 @@ impl ArrayData {
     /// Returns a reference to the data in `buffer` as a typed slice
     /// (typically `&[i32]` or `&[i64]`) after validating. The
     /// returned slice is guaranteed to have at least `self.len + 1`
-    /// entries
+    /// entries.
+    ///
+    /// For an empty array, the `buffer` can also be empty.
     fn typed_offsets<'a, T: ArrowNativeType + num::Num + std::fmt::Display>(
         &'a self,
         buffer: &'a Buffer,
     ) -> Result<&'a [T]> {
-        // Validate that there are the correct number of offsets for this array's length
-        let required_offsets = self.len + self.offset + 1;
-
         // An empty list-like array can have 0 offsets
-        if buffer.is_empty() {
+        if buffer.is_empty() && self.len == 0 {
             return Ok(&[]);
         }
+
+        // Validate that there are the correct number of offsets for this array's length
+        let required_offsets = self.len + self.offset + 1;
 
         if (buffer.len() / std::mem::size_of::<T>()) < required_offsets {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -1033,15 +1035,18 @@ impl ArrayData {
     }
 
     /// Calls the `validate(item_index, range)` function for each of
-    /// the ranges specified in the arrow offset buffer of type
+    /// the ranges specified in the arrow offsets buffer of type
     /// `T`. Also validates that each offset is smaller than
-    /// `max_offset`
+    /// `offset_limit`
     ///
-    /// For example, the offset buffer contained `[1, 2, 4]`, this
+    /// For an empty array, the offsets buffer can either be empty
+    /// or contain a single `0`.
+    ///
+    /// For example, the offsets buffer contained `[1, 2, 4]`, this
     /// function would call `validate([1,2])`, and `validate([2,4])`
     fn validate_each_offset<T, V>(
         &self,
-        offset_buffer: &Buffer,
+        offsets_buffer: &Buffer,
         offset_limit: usize,
         validate: V,
     ) -> Result<()>
@@ -1049,60 +1054,45 @@ impl ArrayData {
         T: ArrowNativeType + std::convert::TryInto<usize> + num::Num + std::fmt::Display,
         V: Fn(usize, Range<usize>) -> Result<()>,
     {
-        // An empty binary-like array can have 0 offsets
-        if self.len == 0 && offset_buffer.is_empty() {
-            return Ok(());
-        }
-
-        let offsets = self.typed_offsets::<T>(offset_buffer)?;
-
-        offsets
+        self.typed_offsets::<T>(offsets_buffer)?
             .iter()
-            .zip(offsets.iter().skip(1))
             .enumerate()
-            .map(|(i, (&start_offset, &end_offset))| {
-                let start_offset: usize = start_offset
-                    .try_into()
-                    .map_err(|_| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "Offset invariant failure: could not convert start_offset {} to usize in slot {}",
-                            start_offset, i))
-                    })?;
-                let end_offset: usize = end_offset
-                    .try_into()
-                    .map_err(|_| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "Offset invariant failure: Could not convert end_offset {} to usize in slot {}",
-                            end_offset, i+1))
-                    })?;
-
-                if start_offset > offset_limit {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: offset for slot {} out of bounds: {} > {}",
-                        i, start_offset, offset_limit))
+            .map(|(i, x)| {
+                // check if the offset can be converted to usize
+                let r = x.to_usize().ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Offset invariant failure: Could not convert offset {} to usize at position {}",
+                        x, i))}
                     );
+                // check if the offset exceeds the limit
+                match r {
+                    Ok(n) if n <= offset_limit => Ok((i, n)),
+                    Ok(_) => Err(ArrowError::InvalidArgumentError(format!(
+                        "Offset invariant failure: offset at position {} out of bounds: {} > {}",
+                        i, x, offset_limit))
+                    ),
+                    Err(e) => Err(e),
                 }
-
-                if end_offset > offset_limit {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: offset for slot {} out of bounds: {} > {}",
-                        i, end_offset, offset_limit))
-                    );
-                }
-
-                // check range actually is low -> high
-                if start_offset > end_offset {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: non-monotonic offset at slot {}: {} > {}",
-                        i, start_offset, end_offset))
-                    );
-                }
-
-                Ok((i, start_offset..end_offset))
             })
+            .scan(0_usize, |start, end| {
+                // check offsets are monotonically increasing
+                match end {
+                    Ok((i, end)) if *start <= end => {
+                        let range = Some(Ok((i, *start..end)));
+                        *start = end;
+                        range
+                    }
+                    Ok((i, end)) => Some(Err(ArrowError::InvalidArgumentError(format!(
+                        "Offset invariant failure: non-monotonic offset at slot {}: {} > {}",
+                        i - 1, start, end))
+                    )),
+                    Err(err) => Some(Err(err)),
+                }
+            })
+            .skip(1) // the first element is meaningless
             .try_for_each(|res: Result<(usize, Range<usize>)>| {
                 let (item_index, range) = res?;
-                validate(item_index, range)
+                validate(item_index-1, range)
             })
     }
 
@@ -1822,6 +1812,90 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_utf8_array_with_empty_offsets_buffer() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from(&[]);
+        ArrayData::try_new(
+            DataType::Utf8,
+            0,
+            None,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_empty_utf8_array_with_single_zero_offset() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from_slice_ref(&[0i32]);
+        ArrayData::try_new(
+            DataType::Utf8,
+            0,
+            None,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "First offset 1 of Utf8 is larger than values length 0")]
+    fn test_empty_utf8_array_with_invalid_offset() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from_slice_ref(&[1i32]);
+        ArrayData::try_new(
+            DataType::Utf8,
+            0,
+            None,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_empty_utf8_array_with_non_zero_offset() {
+        let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
+        let offsets_buffer = Buffer::from_slice_ref(&[0i32, 2, 6, 0]);
+        ArrayData::try_new(
+            DataType::Utf8,
+            0,
+            None,
+            None,
+            3,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Offsets buffer size (bytes): 4 isn't large enough for LargeUtf8. Length 0 needs 1"
+    )]
+    fn test_empty_large_utf8_array_with_wrong_type_offsets() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from_slice_ref(&[0i32]);
+        ArrayData::try_new(
+            DataType::LargeUtf8,
+            0,
+            None,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
     #[should_panic(
         expected = "Offsets buffer size (bytes): 8 isn't large enough for Utf8. Length 2 needs 3"
     )]
@@ -2110,7 +2184,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 2 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
     )]
     fn test_validate_utf8_out_of_bounds() {
         check_index_out_of_bounds_validation::<i32>(DataType::Utf8);
@@ -2118,7 +2192,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 2 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
     )]
     fn test_validate_large_utf8_out_of_bounds() {
         check_index_out_of_bounds_validation::<i64>(DataType::LargeUtf8);
@@ -2126,7 +2200,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 2 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
     )]
     fn test_validate_binary_out_of_bounds() {
         check_index_out_of_bounds_validation::<i32>(DataType::Binary);
@@ -2134,7 +2208,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 2 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
     )]
     fn test_validate_large_binary_out_of_bounds() {
         check_index_out_of_bounds_validation::<i64>(DataType::LargeBinary);
@@ -2327,7 +2401,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 1 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 2 out of bounds: 5 > 4"
     )]
     fn test_validate_list_offsets() {
         let field_type = Field::new("f", DataType::Int32, true);
@@ -2336,7 +2410,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 1 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 2 out of bounds: 5 > 4"
     )]
     fn test_validate_large_list_offsets() {
         let field_type = Field::new("f", DataType::Int32, true);
@@ -2346,7 +2420,7 @@ mod tests {
     /// Test that the list of type `data_type` generates correct errors for negative offsets
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: Could not convert end_offset -1 to usize in slot 2"
+        expected = "Offset invariant failure: Could not convert offset -1 to usize at position 2"
     )]
     fn test_validate_list_negative_offsets() {
         let values: Int32Array =
