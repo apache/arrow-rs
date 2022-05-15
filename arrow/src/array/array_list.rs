@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::fmt;
 
-use num::Num;
+use num::Integer;
 
 use super::{
     array::print_long_array, make_array, raw_pointer::RawPtrBox, Array, ArrayData,
@@ -31,7 +31,7 @@ use crate::{
 };
 
 /// trait declaring an offset size, relevant for i32 vs i64 array types.
-pub trait OffsetSizeTrait: ArrowNativeType + Num + Ord + std::ops::AddAssign {
+pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
     const IS_LARGE: bool;
 }
 
