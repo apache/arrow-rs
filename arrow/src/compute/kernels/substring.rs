@@ -156,7 +156,6 @@ fn binary_substring<OffsetSize: OffsetSizeTrait>(
     length: Option<OffsetSize>,
 ) -> Result<ArrayRef> {
     let offsets = array.value_offsets();
-    let null_bit_buffer = array.data_ref().null_buffer().cloned();
     let values = array.value_data();
     let data = values.as_slice();
     let zero = OffsetSize::zero();
@@ -201,7 +200,10 @@ fn binary_substring<OffsetSize: OffsetSizeTrait>(
             GenericBinaryArray::<OffsetSize>::get_data_type(),
             array.len(),
             None,
-            null_bit_buffer,
+            array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(array.offset(), array.len())),
             0,
             vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
             vec![],
@@ -811,7 +813,7 @@ mod tests {
     }
 
     #[test]
-    fn offset_fixed_size_binary() -> Result<()> {
+    fn fixed_size_binary_with_non_zero_offset() -> Result<()> {
         let values: [u8; 15] = *b"hellotherearrow";
         // set the first and third element to be valid
         let bits_v = [0b101_u8];
@@ -1066,34 +1068,48 @@ mod tests {
         assert!(err.contains("invalid utf-8 boundary"));
     }
 
-    #[test]
-    fn offset_fixed_size_binary() -> Result<()> {
+    fn generic_binary_with_non_zero_offset<O: OffsetSizeTrait>() -> Result<()> {
         let values = *b"hellotherearrow";
-        let offsets: [i32; 4] = [0, 5, 10, 15];
         // set the first and third element to be valid
         let bits_v = [0b101_u8];
 
-        let data = ArrayData::builder(DataType::Binary)
-            .len(2)
-            .add_buffer(Buffer::from_slice_ref(&offsets))
+        let builder = ArrayData::builder(if O::IS_LARGE {DataType::LargeBinary} else {DataType::Binary})
+            .len(2);
+        // add offsets buffer
+        let builder = if O::IS_LARGE {
+                builder.add_buffer(Buffer::from_slice_ref(&[0_i64, 5, 10, 15]))        
+            } else {
+                builder.add_buffer(Buffer::from_slice_ref(&[0_i32, 5, 10, 15]))
+            };
+        let data = builder
             .add_buffer(Buffer::from_slice_ref(&values))
             .offset(1)
             .null_bit_buffer(Buffer::from(bits_v))
             .build()
             .unwrap();
         // array is `[null, "arrow"]`
-        let array = BinaryArray::from(data);
+        let array = GenericBinaryArray::<O>::from(data);
         // result is `[null, "rrow"]`
         let result = substring(&array, 1, None)?;
         let result = result
             .as_any()
-            .downcast_ref::<BinaryArray>()
+            .downcast_ref::<GenericBinaryArray::<O>>()
             .unwrap();
-        let expected = BinaryArray::from_opt_vec(
+        let expected = GenericBinaryArray::<O>::from_opt_vec(
             vec![None, Some(b"rrow")],
         );
         assert_eq!(result, &expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn binary_with_non_zero_offset() -> Result<()> {
+        generic_binary_with_non_zero_offset::<i32>()
+    }
+
+    #[test]
+    fn large_binary_with_non_zero_offset() -> Result<()> {
+        generic_binary_with_non_zero_offset::<i64>()
     }
 }
