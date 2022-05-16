@@ -561,9 +561,12 @@ mod tests {
 
     fn generic_binary_with_non_zero_offset<O: OffsetSizeTrait>() -> Result<()> {
         let values = 0_u8..15;
-        let one = O::one();
-        let five = one + one + one + one + one;
-        let offsets = &[O::zero(), five, five + five, five + five + five];
+        let offsets = &[
+            O::zero(),
+            O::from_usize(5).unwrap(),
+            O::from_usize(10).unwrap(),
+            O::from_usize(15).unwrap(),
+        ];
         // set the first and third element to be valid
         let bitmap = [0b101_u8];
 
@@ -1040,9 +1043,12 @@ mod tests {
 
     fn generic_string_with_non_zero_offset<O: OffsetSizeTrait>() -> Result<()> {
         let values = "hellotherearrow";
-        let one = O::one();
-        let five = one + one + one + one + one;
-        let offsets = &[O::zero(), five, five + five, five + five + five];
+        let offsets = &[
+            O::zero(),
+            O::from_usize(5).unwrap(),
+            O::from_usize(10).unwrap(),
+            O::from_usize(15).unwrap(),
+        ];
         // set the first and third element to be valid
         let bitmap = [0b101_u8];
 
