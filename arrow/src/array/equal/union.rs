@@ -26,6 +26,8 @@ fn equal_dense(
     rhs_type_ids: &[i8],
     lhs_offsets: &[i32],
     rhs_offsets: &[i32],
+    lhs_field_type_ids: &[i8],
+    rhs_field_type_ids: &[i8],
 ) -> bool {
     let offsets = lhs_offsets.iter().zip(rhs_offsets.iter());
 
@@ -34,8 +36,16 @@ fn equal_dense(
         .zip(rhs_type_ids.iter())
         .zip(offsets)
         .all(|((l_type_id, r_type_id), (l_offset, r_offset))| {
-            let lhs_values = &lhs.child_data()[*l_type_id as usize];
-            let rhs_values = &rhs.child_data()[*r_type_id as usize];
+            let lhs_child_index = lhs_field_type_ids
+                .iter()
+                .position(|r| r == l_type_id)
+                .unwrap();
+            let rhs_child_index = rhs_field_type_ids
+                .iter()
+                .position(|r| r == r_type_id)
+                .unwrap();
+            let lhs_values = &lhs.child_data()[lhs_child_index];
+            let rhs_values = &rhs.child_data()[rhs_child_index];
 
             equal_range(
                 lhs_values,
@@ -77,8 +87,8 @@ pub(super) fn union_equal(
 
     match (lhs.data_type(), rhs.data_type()) {
         (
-            DataType::Union(_, _, UnionMode::Dense),
-            DataType::Union(_, _, UnionMode::Dense),
+            DataType::Union(_, lhs_type_ids, UnionMode::Dense),
+            DataType::Union(_, rhs_type_ids, UnionMode::Dense),
         ) => {
             let lhs_offsets = lhs.buffer::<i32>(1);
             let rhs_offsets = rhs.buffer::<i32>(1);
@@ -94,6 +104,8 @@ pub(super) fn union_equal(
                     rhs_type_id_range,
                     lhs_offsets_range,
                     rhs_offsets_range,
+                    lhs_type_ids,
+                    rhs_type_ids,
                 )
         }
         (
