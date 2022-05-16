@@ -195,7 +195,7 @@ fn create_array(
                 value_array.clone(),
             )
         }
-        Union(fields, mode) => {
+        Union(fields, field_type_ids, mode) => {
             let union_node = nodes[node_index];
             node_index += 1;
 
@@ -234,7 +234,8 @@ fn create_array(
                 children.push((field.clone(), triple.0));
             }
 
-            let array = UnionArray::try_new(type_ids, value_offsets, children)?;
+            let array =
+                UnionArray::try_new(field_type_ids, type_ids, value_offsets, children)?;
             Arc::new(array)
         }
         Null => {

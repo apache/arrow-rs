@@ -194,7 +194,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
         ],
-        DataType::Union(_, mode) => {
+        DataType::Union(_, _, mode) => {
             let type_ids = MutableBuffer::new(capacity * mem::size_of::<i8>());
             match mode {
                 UnionMode::Sparse => [type_ids, empty_buffer],
@@ -220,7 +220,7 @@ pub(crate) fn into_buffers(
         | DataType::Binary
         | DataType::LargeUtf8
         | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
-        DataType::Union(_, mode) => {
+        DataType::Union(_, _, mode) => {
             match mode {
                 // Based on Union's DataTypeLayout
                 UnionMode::Sparse => vec![buffer1.into()],
@@ -581,7 +581,7 @@ impl ArrayData {
             DataType::Map(field, _) => {
                 vec![Self::new_empty(field.data_type())]
             }
-            DataType::Union(fields, _) => fields
+            DataType::Union(fields, _, _) => fields
                 .iter()
                 .map(|field| Self::new_empty(field.data_type()))
                 .collect(),
@@ -854,7 +854,7 @@ impl ArrayData {
                 }
                 Ok(())
             }
-            DataType::Union(fields, mode) => {
+            DataType::Union(fields, _, mode) => {
                 self.validate_num_child_data(fields.len())?;
 
                 for (i, field) in fields.iter().enumerate() {
@@ -1002,7 +1002,7 @@ impl ArrayData {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i64>(child.len + child.offset)
             }
-            DataType::Union(_, _) => {
+            DataType::Union(_, _, _) => {
                 // Validate Union Array as part of implementing new Union semantics
                 // See comments in `ArrayData::validate()`
                 // https://github.com/apache/arrow-rs/issues/85
@@ -1279,7 +1279,7 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i32>()),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
-        DataType::Union(_, mode) => {
+        DataType::Union(_, _, mode) => {
             let type_ids = BufferSpec::FixedWidth {
                 byte_width: size_of::<i8>(),
             };
@@ -2431,6 +2431,7 @@ mod tests {
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true), // data is int32
                 ],
+                vec![0, 1],
                 UnionMode::Sparse,
             ),
             2,
@@ -2462,6 +2463,7 @@ mod tests {
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
+                vec![0, 1],
                 UnionMode::Sparse,
             ),
             2,
@@ -2489,6 +2491,7 @@ mod tests {
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
+                vec![0, 1],
                 UnionMode::Dense,
             ),
             2,
@@ -2519,6 +2522,7 @@ mod tests {
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
+                vec![0, 1],
                 UnionMode::Dense,
             ),
             2,
@@ -2631,8 +2635,8 @@ mod tests {
     #[test]
     fn test_into_buffers() {
         let data_types = vec![
-            DataType::Union(vec![], UnionMode::Dense),
-            DataType::Union(vec![], UnionMode::Sparse),
+            DataType::Union(vec![], vec![], UnionMode::Dense),
+            DataType::Union(vec![], vec![], UnionMode::Sparse),
         ];
 
         for data_type in data_types {

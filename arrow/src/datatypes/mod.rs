@@ -435,19 +435,10 @@ mod tests {
             "my_union",
             DataType::Union(
                 vec![
-                    Field::new("f1", DataType::Int32, true).with_metadata(Some(
-                        [("type_id".to_string(), "5".to_string())]
-                            .iter()
-                            .cloned()
-                            .collect(),
-                    )),
-                    Field::new("f2", DataType::Utf8, true).with_metadata(Some(
-                        [("type_id".to_string(), "7".to_string())]
-                            .iter()
-                            .cloned()
-                            .collect(),
-                    )),
+                    Field::new("f1", DataType::Int32, true),
+                    Field::new("f2", DataType::Utf8, true),
                 ],
+                vec![5, 7],
                 UnionMode::Sparse,
             ),
             false,
@@ -1444,6 +1435,7 @@ mod tests {
                             Field::new("c11", DataType::Utf8, true),
                             Field::new("c12", DataType::Utf8, true),
                         ],
+                        vec![0, 1],
                         UnionMode::Dense
                     ),
                     false
@@ -1455,6 +1447,7 @@ mod tests {
                             Field::new("c12", DataType::Utf8, true),
                             Field::new("c13", DataType::Time64(TimeUnit::Second), true),
                         ],
+                        vec![1, 2],
                         UnionMode::Dense
                     ),
                     false
@@ -1468,6 +1461,7 @@ mod tests {
                         Field::new("c12", DataType::Utf8, true),
                         Field::new("c13", DataType::Time64(TimeUnit::Second), true),
                     ],
+                    vec![0, 1, 2],
                     UnionMode::Dense
                 ),
                 false

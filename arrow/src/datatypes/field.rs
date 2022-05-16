@@ -168,7 +168,7 @@ impl Field {
         let mut collected_fields = vec![];
 
         match dt {
-            DataType::Struct(fields) | DataType::Union(fields, _) => {
+            DataType::Struct(fields) | DataType::Union(fields, _, _) => {
                 collected_fields.extend(fields.iter().flat_map(|f| f.fields()))
             }
             DataType::List(field)
@@ -390,18 +390,11 @@ impl Field {
                             }
                         }
                     }
-                    DataType::Union(fields, mode) => match map.get("children") {
+                    DataType::Union(_, type_ids, mode) => match map.get("children") {
                         Some(Value::Array(values)) => {
-                            let mut union_fields: Vec<Field> =
+                            let union_fields: Vec<Field> =
                                 values.iter().map(Field::from).collect::<Result<_>>()?;
-                            fields.iter().zip(union_fields.iter_mut()).for_each(
-                                |(f, union_field)| {
-                                    union_field.set_metadata(Some(
-                                        f.metadata().unwrap().clone(),
-                                    ));
-                                },
-                            );
-                            DataType::Union(union_fields, mode)
+                            DataType::Union(union_fields, type_ids, mode)
                         }
                         Some(_) => {
                             return Err(ArrowError::ParseError(
@@ -568,18 +561,34 @@ impl Field {
                     ));
                 }
             },
-            DataType::Union(nested_fields, _) => match &from.data_type {
-                DataType::Union(from_nested_fields, _) => {
-                    for from_field in from_nested_fields {
+            DataType::Union(nested_fields, type_ids, _) => match &from.data_type {
+                DataType::Union(from_nested_fields, from_type_ids, _) => {
+                    for (idx, from_field) in from_nested_fields.iter().enumerate() {
                         let mut is_new_field = true;
-                        for self_field in nested_fields.iter_mut() {
+                        let field_type_id = from_type_ids.get(idx).unwrap();
+
+                        for (self_idx, self_field) in nested_fields.iter_mut().enumerate()
+                        {
                             if from_field == self_field {
+                                let self_type_id = type_ids.get(self_idx).unwrap();
+
+                                // If the nested fields in two unions are the same, they must have same
+                                // type id.
+                                if self_type_id != field_type_id {
+                                    return Err(ArrowError::SchemaError(
+                                        "Fail to merge schema Field due to conflicting type ids in union datatype"
+                                            .to_string(),
+                                    ));
+                                }
+
                                 is_new_field = false;
                                 break;
                             }
                         }
+
                         if is_new_field {
                             nested_fields.push(from_field.clone());
+                            type_ids.push(*field_type_id);
                         }
                     }
                 }

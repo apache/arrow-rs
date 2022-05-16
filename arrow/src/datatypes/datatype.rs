@@ -115,7 +115,7 @@ pub enum DataType {
     /// A nested datatype that contains a number of sub-fields.
     Struct(Vec<Field>),
     /// A nested datatype that can represent slots of differing types.
-    Union(Vec<Field>, UnionMode),
+    Union(Vec<Field>, Vec<i8>, UnionMode),
     /// A dictionary encoded array (`key_type`, `value_type`), where
     /// each array element is an index of `key_type` into an
     /// associated dictionary of `value_type`.
@@ -516,24 +516,15 @@ impl DataType {
                                 .as_array()
                                 .unwrap()
                                 .iter()
-                                .map(|t| t.as_i64().unwrap())
+                                .map(|t| t.as_i64().unwrap() as i8)
                                 .collect::<Vec<_>>();
 
                             let default_fields = type_ids
                                 .iter()
-                                .map(|t| {
-                                    Field::new("", DataType::Boolean, true).with_metadata(
-                                        Some(
-                                            [("type_id".to_string(), t.to_string())]
-                                                .iter()
-                                                .cloned()
-                                                .collect(),
-                                        ),
-                                    )
-                                })
+                                .map(|_| default_field.clone())
                                 .collect::<Vec<_>>();
 
-                            Ok(DataType::Union(default_fields, union_mode))
+                            Ok(DataType::Union(default_fields, type_ids, union_mode))
                         } else {
                             Err(ArrowError::ParseError(
                                 "Expecting a typeIds for union ".to_string(),
@@ -581,7 +572,7 @@ impl DataType {
                 json!({"name": "fixedsizebinary", "byteWidth": byte_width})
             }
             DataType::Struct(_) => json!({"name": "struct"}),
-            DataType::Union(_, _) => json!({"name": "union"}),
+            DataType::Union(_, _, _) => json!({"name": "union"}),
             DataType::List(_) => json!({ "name": "list"}),
             DataType::LargeList(_) => json!({ "name": "largelist"}),
             DataType::FixedSizeList(_, length) => {

@@ -76,7 +76,10 @@ pub(super) fn union_equal(
     let rhs_type_id_range = &rhs_type_ids[rhs_start..rhs_start + len];
 
     match (lhs.data_type(), rhs.data_type()) {
-        (DataType::Union(_, UnionMode::Dense), DataType::Union(_, UnionMode::Dense)) => {
+        (
+            DataType::Union(_, _, UnionMode::Dense),
+            DataType::Union(_, _, UnionMode::Dense),
+        ) => {
             let lhs_offsets = lhs.buffer::<i32>(1);
             let rhs_offsets = rhs.buffer::<i32>(1);
 
@@ -94,8 +97,8 @@ pub(super) fn union_equal(
                 )
         }
         (
-            DataType::Union(_, UnionMode::Sparse),
-            DataType::Union(_, UnionMode::Sparse),
+            DataType::Union(_, _, UnionMode::Sparse),
+            DataType::Union(_, _, UnionMode::Sparse),
         ) => {
             lhs_type_id_range == rhs_type_id_range
                 && equal_sparse(lhs, rhs, lhs_start, rhs_start, len)

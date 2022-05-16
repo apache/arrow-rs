@@ -2168,7 +2168,9 @@ impl UnionBuilder {
         });
         let children: Vec<_> = children.into_iter().map(|(_, b)| b).collect();
 
-        UnionArray::try_new(type_id_buffer, value_offsets_buffer, children)
+        let type_ids: Vec<i8> = (0_i8..children.len() as i8).collect();
+
+        UnionArray::try_new(&type_ids, type_id_buffer, value_offsets_buffer, children)
     }
 }
 
