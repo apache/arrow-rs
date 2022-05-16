@@ -19,6 +19,7 @@ use crate::{array::ArrayData, datatypes::DataType, datatypes::UnionMode};
 
 use super::equal_range;
 
+#[allow(clippy::too_many_arguments)]
 fn equal_dense(
     lhs: &ArrayData,
     rhs: &ArrayData,
