@@ -156,7 +156,6 @@ fn binary_substring<OffsetSize: OffsetSizeTrait>(
     length: Option<OffsetSize>,
 ) -> Result<ArrayRef> {
     let offsets = array.value_offsets();
-    let null_bit_buffer = array.data_ref().null_buffer().cloned();
     let values = array.value_data();
     let data = values.as_slice();
     let zero = OffsetSize::zero();
@@ -201,7 +200,10 @@ fn binary_substring<OffsetSize: OffsetSizeTrait>(
             GenericBinaryArray::<OffsetSize>::get_data_type(),
             array.len(),
             None,
-            null_bit_buffer,
+            array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(array.offset(), array.len())),
             0,
             vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
             vec![],
@@ -266,7 +268,6 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
     length: Option<OffsetSize>,
 ) -> Result<ArrayRef> {
     let offsets = array.value_offsets();
-    let null_bit_buffer = array.data_ref().null_buffer().cloned();
     let values = array.value_data();
     let data = values.as_slice();
     let zero = OffsetSize::zero();
@@ -330,7 +331,10 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
             GenericStringArray::<OffsetSize>::get_data_type(),
             array.len(),
             None,
-            null_bit_buffer,
+            array
+                .data_ref()
+                .null_buffer()
+                .map(|b| b.bit_slice(array.offset(), array.len())),
             0,
             vec![Buffer::from_slice_ref(&new_offsets), new_values.into()],
             vec![],
@@ -553,6 +557,49 @@ mod tests {
     #[test]
     fn without_nulls_large_binary() -> Result<()> {
         without_nulls_generic_binary::<i64>()
+    }
+
+    fn generic_binary_with_non_zero_offset<O: OffsetSizeTrait>() -> Result<()> {
+        let values = 0_u8..15;
+        let offsets = &[
+            O::zero(),
+            O::from_usize(5).unwrap(),
+            O::from_usize(10).unwrap(),
+            O::from_usize(15).unwrap(),
+        ];
+        // set the first and third element to be valid
+        let bitmap = [0b101_u8];
+
+        let data = ArrayData::builder(GenericBinaryArray::<O>::get_data_type())
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(offsets))
+            .add_buffer(Buffer::from_iter(values))
+            .null_bit_buffer(Buffer::from(bitmap))
+            .offset(1)
+            .build()?;
+        // array is `[null, [10, 11, 12, 13, 14]]`
+        let array = GenericBinaryArray::<O>::from(data);
+        // result is `[null, [11, 12, 13, 14]]`
+        let result = substring(&array, 1, None)?;
+        let result = result
+            .as_any()
+            .downcast_ref::<GenericBinaryArray<O>>()
+            .unwrap();
+        let expected =
+            GenericBinaryArray::<O>::from_opt_vec(vec![None, Some(&[11_u8, 12, 13, 14])]);
+        assert_eq!(result, &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn binary_with_non_zero_offset() -> Result<()> {
+        generic_binary_with_non_zero_offset::<i32>()
+    }
+
+    #[test]
+    fn large_binary_with_non_zero_offset() -> Result<()> {
+        generic_binary_with_non_zero_offset::<i64>()
     }
 
     #[test]
@@ -811,7 +858,7 @@ mod tests {
     }
 
     #[test]
-    fn offset_fixed_size_binary() -> Result<()> {
+    fn fixed_size_binary_with_non_zero_offset() -> Result<()> {
         let values: [u8; 15] = *b"hellotherearrow";
         // set the first and third element to be valid
         let bits_v = [0b101_u8];
@@ -992,6 +1039,48 @@ mod tests {
     #[test]
     fn without_nulls_large_string() -> Result<()> {
         without_nulls_generic_string::<i64>()
+    }
+
+    fn generic_string_with_non_zero_offset<O: OffsetSizeTrait>() -> Result<()> {
+        let values = "hellotherearrow";
+        let offsets = &[
+            O::zero(),
+            O::from_usize(5).unwrap(),
+            O::from_usize(10).unwrap(),
+            O::from_usize(15).unwrap(),
+        ];
+        // set the first and third element to be valid
+        let bitmap = [0b101_u8];
+
+        let data = ArrayData::builder(GenericStringArray::<O>::get_data_type())
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(offsets))
+            .add_buffer(Buffer::from(values))
+            .null_bit_buffer(Buffer::from(bitmap))
+            .offset(1)
+            .build()?;
+        // array is `[null, "arrow"]`
+        let array = GenericStringArray::<O>::from(data);
+        // result is `[null, "rrow"]`
+        let result = substring(&array, 1, None)?;
+        let result = result
+            .as_any()
+            .downcast_ref::<GenericStringArray<O>>()
+            .unwrap();
+        let expected = GenericStringArray::<O>::from(vec![None, Some("rrow")]);
+        assert_eq!(result, &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn string_with_non_zero_offset() -> Result<()> {
+        generic_string_with_non_zero_offset::<i32>()
+    }
+
+    #[test]
+    fn large_string_with_non_zero_offset() -> Result<()> {
+        generic_string_with_non_zero_offset::<i64>()
     }
 
     #[test]
