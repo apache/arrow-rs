@@ -915,6 +915,18 @@ mod tests {
                     DataType::Union(vec![], vec![], UnionMode::Sparse),
                     true,
                 ),
+                Field::new(
+                    "union<int32, utf8>",
+                    DataType::Union(
+                        vec![
+                            Field::new("int32", DataType::Int32, true),
+                            Field::new("utf8", DataType::Utf8, true),
+                        ],
+                        vec![2, 3], // non-default type ids
+                        UnionMode::Dense,
+                    ),
+                    true,
+                ),
                 Field::new_dict(
                     "dictionary<int32, utf8>",
                     DataType::Dictionary(
