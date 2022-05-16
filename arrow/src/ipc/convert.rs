@@ -671,7 +671,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
-        Union(fields, _, mode) => {
+        Union(fields, type_ids, mode) => {
             let mut children = vec![];
             for field in fields {
                 children.push(build_field(fbb, field));
@@ -682,8 +682,11 @@ pub(crate) fn get_fb_field_type<'a>(
                 UnionMode::Dense => ipc::UnionMode::Dense,
             };
 
+            let fbb_type_ids = fbb
+                .create_vector(&type_ids.iter().map(|t| *t as i32).collect::<Vec<_>>());
             let mut builder = ipc::UnionBuilder::new(fbb);
             builder.add_mode(union_mode);
+            builder.add_typeIds(fbb_type_ids);
 
             FBFieldType {
                 type_type: ipc::Type::Union,

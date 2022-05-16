@@ -114,7 +114,11 @@ pub enum DataType {
     LargeList(Box<Field>),
     /// A nested datatype that contains a number of sub-fields.
     Struct(Vec<Field>),
-    /// A nested datatype that can represent slots of differing types.
+    /// A nested datatype that can represent slots of differing types. Components:
+    ///
+    /// 1. [`Field`] for each possible child type the Union can hold
+    /// 2. The corresponding `type_id` used to identify which Field
+    /// 3. The type of union (Sparse or Dense)
     Union(Vec<Field>, Vec<i8>, UnionMode),
     /// A dictionary encoded array (`key_type`, `value_type`), where
     /// each array element is an index of `key_type` into an
