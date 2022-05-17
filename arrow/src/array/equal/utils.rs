@@ -68,7 +68,7 @@ pub(super) fn equal_nulls(
 #[inline]
 pub(super) fn base_equal(lhs: &ArrayData, rhs: &ArrayData) -> bool {
     let equal_type = match (lhs.data_type(), rhs.data_type()) {
-        (DataType::Union(l_fields, l_mode), DataType::Union(r_fields, r_mode)) => {
+        (DataType::Union(l_fields, _, l_mode), DataType::Union(r_fields, _, r_mode)) => {
             l_fields == r_fields && l_mode == r_mode
         }
         (DataType::Map(l_field, l_sorted), DataType::Map(r_field, r_sorted)) => {

@@ -664,6 +664,7 @@ mod tests {
                     Field::new("a", DataType::Int32, false),
                     Field::new("b", DataType::Float64, false),
                 ],
+                vec![0, 1],
                 UnionMode::Dense,
             ),
             false,
@@ -704,6 +705,7 @@ mod tests {
                     Field::new("a", DataType::Int32, false),
                     Field::new("b", DataType::Float64, false),
                 ],
+                vec![0, 1],
                 UnionMode::Sparse,
             ),
             false,
@@ -746,6 +748,7 @@ mod tests {
                     Field::new("b", DataType::Int32, false),
                     Field::new("c", DataType::Float64, false),
                 ],
+                vec![0, 1],
                 UnionMode::Dense,
             ),
             false,
@@ -760,12 +763,13 @@ mod tests {
             (inner_field.clone(), Arc::new(inner)),
         ];
 
-        let outer = UnionArray::try_new(type_ids, None, children).unwrap();
+        let outer = UnionArray::try_new(&[0, 1], type_ids, None, children).unwrap();
 
         let schema = Schema::new(vec![Field::new(
             "Teamsters",
             DataType::Union(
                 vec![Field::new("a", DataType::Int32, true), inner_field],
+                vec![0, 1],
                 UnionMode::Sparse,
             ),
             false,

@@ -338,7 +338,12 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
                 }
             };
 
-            DataType::Union(fields, union_mode)
+            let type_ids: Vec<i8> = match union.typeIds() {
+                None => (0_i8..fields.len() as i8).collect(),
+                Some(ids) => ids.iter().map(|i| i as i8).collect(),
+            };
+
+            DataType::Union(fields, type_ids, union_mode)
         }
         t => unimplemented!("Type {:?} not supported", t),
     }
@@ -666,7 +671,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
-        Union(fields, mode) => {
+        Union(fields, type_ids, mode) => {
             let mut children = vec![];
             for field in fields {
                 children.push(build_field(fbb, field));
@@ -677,8 +682,11 @@ pub(crate) fn get_fb_field_type<'a>(
                 UnionMode::Dense => ipc::UnionMode::Dense,
             };
 
+            let fbb_type_ids = fbb
+                .create_vector(&type_ids.iter().map(|t| *t as i32).collect::<Vec<_>>());
             let mut builder = ipc::UnionBuilder::new(fbb);
             builder.add_mode(union_mode);
+            builder.add_typeIds(fbb_type_ids);
 
             FBFieldType {
                 type_type: ipc::Type::Union,
@@ -875,6 +883,7 @@ mod tests {
                                                     "union",
                                                     DataType::Union(
                                                         vec![],
+                                                        vec![],
                                                         UnionMode::Sparse,
                                                     ),
                                                     false,
@@ -882,6 +891,7 @@ mod tests {
                                                 false,
                                             ),
                                         ],
+                                        vec![0, 1],
                                         UnionMode::Dense,
                                     ),
                                     false,
@@ -889,13 +899,34 @@ mod tests {
                                 false,
                             ),
                         ],
+                        vec![0, 1],
                         UnionMode::Sparse,
                     ),
                     false,
                 ),
                 Field::new("struct<>", DataType::Struct(vec![]), true),
-                Field::new("union<>", DataType::Union(vec![], UnionMode::Dense), true),
-                Field::new("union<>", DataType::Union(vec![], UnionMode::Sparse), true),
+                Field::new(
+                    "union<>",
+                    DataType::Union(vec![], vec![], UnionMode::Dense),
+                    true,
+                ),
+                Field::new(
+                    "union<>",
+                    DataType::Union(vec![], vec![], UnionMode::Sparse),
+                    true,
+                ),
+                Field::new(
+                    "union<int32, utf8>",
+                    DataType::Union(
+                        vec![
+                            Field::new("int32", DataType::Int32, true),
+                            Field::new("utf8", DataType::Utf8, true),
+                        ],
+                        vec![2, 3], // non-default type ids
+                        UnionMode::Dense,
+                    ),
+                    true,
+                ),
                 Field::new_dict(
                     "dictionary<int32, utf8>",
                     DataType::Dictionary(

@@ -4776,6 +4776,7 @@ mod tests {
                     Field::new("f1", DataType::Int32, false),
                     Field::new("f2", DataType::Utf8, true),
                 ],
+                vec![0, 1],
                 UnionMode::Dense,
             ),
             Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),

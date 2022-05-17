@@ -632,39 +632,13 @@ fn array_from_json(
             let array = MapArray::from(array_data);
             Ok(Arc::new(array))
         }
-        DataType::Union(fields, _) => {
-            let field_type_ids = fields
-                .iter()
-                .enumerate()
-                .into_iter()
-                .map(|(idx, f)| {
-                    (
-                        f.metadata()
-                            .and_then(|m| m.get("type_id"))
-                            .unwrap()
-                            .parse::<i8>()
-                            .unwrap(),
-                        idx,
-                    )
-                })
-                .collect::<HashMap<_, _>>();
-
+        DataType::Union(fields, field_type_ids, _) => {
             let type_ids = if let Some(type_id) = json_col.type_id {
                 type_id
-                    .iter()
-                    .map(|t| {
-                        if field_type_ids.contains_key(t) {
-                            Ok(*(field_type_ids.get(t).unwrap()) as i8)
-                        } else {
-                            Err(ArrowError::JsonError(format!(
-                                "Unable to find type id {:?}",
-                                t
-                            )))
-                        }
-                    })
-                    .collect::<Result<_>>()?
             } else {
-                vec![]
+                return Err(ArrowError::JsonError(
+                    "Cannot find expected type_id in json column".to_string(),
+                ));
             };
 
             let offset: Option<Buffer> = json_col.offset.map(|offsets| {
@@ -680,6 +654,7 @@ fn array_from_json(
             }
 
             let array = UnionArray::try_new(
+                field_type_ids,
                 Buffer::from(&type_ids.to_byte_slice()),
                 offset,
                 children,

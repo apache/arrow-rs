@@ -193,7 +193,7 @@ fn equal_values(
             fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::Struct(_) => struct_equal(lhs, rhs, lhs_start, rhs_start, len),
-        DataType::Union(_, _) => union_equal(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Union(_, _, _) => union_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Dictionary(data_type, _) => match data_type.as_ref() {
             DataType::Int8 => dictionary_equal::<i8>(lhs, rhs, lhs_start, rhs_start, len),
             DataType::Int16 => {

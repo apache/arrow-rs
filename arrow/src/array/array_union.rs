@@ -58,6 +58,7 @@ use std::any::Any;
 /// ];
 ///
 /// let array = UnionArray::try_new(
+///     &vec![0, 1],
 ///     type_id_buffer,
 ///     Some(value_offsets_buffer),
 ///     children,
@@ -90,6 +91,7 @@ use std::any::Any;
 /// ];
 ///
 /// let array = UnionArray::try_new(
+///     &vec![0, 1],
 ///     type_id_buffer,
 ///     None,
 ///     children,
@@ -135,6 +137,7 @@ impl UnionArray {
     /// `i8` and `i32` values respectively.  `Buffer` objects are untyped and no attempt is made
     /// to ensure that the data provided is valid.
     pub unsafe fn new_unchecked(
+        field_type_ids: &[i8],
         type_ids: Buffer,
         value_offsets: Option<Buffer>,
         child_arrays: Vec<(Field, ArrayRef)>,
@@ -149,10 +152,14 @@ impl UnionArray {
             UnionMode::Sparse
         };
 
-        let builder = ArrayData::builder(DataType::Union(field_types, mode))
-            .add_buffer(type_ids)
-            .child_data(field_values.into_iter().map(|a| a.data().clone()).collect())
-            .len(len);
+        let builder = ArrayData::builder(DataType::Union(
+            field_types,
+            Vec::from(field_type_ids),
+            mode,
+        ))
+        .add_buffer(type_ids)
+        .child_data(field_values.into_iter().map(|a| a.data().clone()).collect())
+        .len(len);
 
         let data = match value_offsets {
             Some(b) => builder.add_buffer(b).build_unchecked(),
@@ -163,6 +170,7 @@ impl UnionArray {
 
     /// Attempts to create a new `UnionArray`, validating the inputs provided.
     pub fn try_new(
+        field_type_ids: &[i8],
         type_ids: Buffer,
         value_offsets: Option<Buffer>,
         child_arrays: Vec<(Field, ArrayRef)>,
@@ -209,8 +217,9 @@ impl UnionArray {
 
         // Unsafe Justification: arguments were validated above (and
         // re-revalidated as part of data().validate() below)
-        let new_self =
-            unsafe { Self::new_unchecked(type_ids, value_offsets, child_arrays) };
+        let new_self = unsafe {
+            Self::new_unchecked(field_type_ids, type_ids, value_offsets, child_arrays)
+        };
         new_self.data().validate()?;
 
         Ok(new_self)
@@ -269,7 +278,7 @@ impl UnionArray {
     /// Returns the names of the types in the union.
     pub fn type_names(&self) -> Vec<&str> {
         match self.data.data_type() {
-            DataType::Union(fields, _) => fields
+            DataType::Union(fields, _, _) => fields
                 .iter()
                 .map(|f| f.name().as_str())
                 .collect::<Vec<&str>>(),
@@ -280,7 +289,7 @@ impl UnionArray {
     /// Returns whether the `UnionArray` is dense (or sparse if `false`).
     fn is_dense(&self) -> bool {
         match self.data.data_type() {
-            DataType::Union(_, mode) => mode == &UnionMode::Dense,
+            DataType::Union(_, _, mode) => mode == &UnionMode::Dense,
             _ => unreachable!("Union array's data type is not a union!"),
         }
     }
@@ -626,9 +635,13 @@ mod tests {
                 Arc::new(float_array),
             ),
         ];
-        let array =
-            UnionArray::try_new(type_id_buffer, Some(value_offsets_buffer), children)
-                .unwrap();
+        let array = UnionArray::try_new(
+            &[0, 1, 2],
+            type_id_buffer,
+            Some(value_offsets_buffer),
+            children,
+        )
+        .unwrap();
 
         // Check type ids
         assert_eq!(Buffer::from_slice_ref(&type_ids), array.data().buffers()[0]);

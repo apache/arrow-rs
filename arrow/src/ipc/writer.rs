@@ -221,7 +221,7 @@ impl IpcDataGenerator {
                     write_options,
                 )?;
             }
-            DataType::Union(fields, _) => {
+            DataType::Union(fields, _, _) => {
                 let union = as_union_array(column);
                 for (field, ref column) in fields
                     .iter()
@@ -865,7 +865,7 @@ fn write_array_data(
     // UnionArray does not have a validity buffer
     if !matches!(
         array_data.data_type(),
-        DataType::Null | DataType::Union(_, _)
+        DataType::Null | DataType::Union(_, _, _)
     ) {
         // write null buffer if exists
         let null_buffer = match array_data.null_buffer() {
@@ -1328,7 +1328,8 @@ mod tests {
         let offsets = Buffer::from_slice_ref(&[0_i32, 1, 2]);
 
         let union =
-            UnionArray::try_new(types, Some(offsets), vec![(dctfield, array)]).unwrap();
+            UnionArray::try_new(&[0], types, Some(offsets), vec![(dctfield, array)])
+                .unwrap();
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "union",

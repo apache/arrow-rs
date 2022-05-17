@@ -396,7 +396,9 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
 
             Ok(s)
         }
-        DataType::Union(field_vec, mode) => union_to_string(column, row, field_vec, mode),
+        DataType::Union(field_vec, type_ids, mode) => {
+            union_to_string(column, row, field_vec, type_ids, mode)
+        }
         _ => Err(ArrowError::InvalidArgumentError(format!(
             "Pretty printing not implemented for {:?} type",
             column.data_type()
@@ -409,6 +411,7 @@ fn union_to_string(
     column: &array::ArrayRef,
     row: usize,
     fields: &[Field],
+    type_ids: &[i8],
     mode: &UnionMode,
 ) -> Result<String> {
     let list = column
@@ -420,15 +423,13 @@ fn union_to_string(
             )
         })?;
     let type_id = list.type_id(row);
-    let name = fields
-        .get(type_id as usize)
-        .ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Repl error: could not get field name for type id: {} in union array.",
-                type_id,
-            ))
-        })?
-        .name();
+    let field_idx = type_ids.iter().position(|t| t == &type_id).ok_or_else(|| {
+        ArrowError::InvalidArgumentError(format!(
+            "Repl error: could not get field name for type id: {} in union array.",
+            type_id,
+        ))
+    })?;
+    let name = fields.get(field_idx).unwrap().name();
 
     let value = array_value_to_string(
         &list.child(type_id),
