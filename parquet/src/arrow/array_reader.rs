@@ -1568,12 +1568,12 @@ mod tests {
                 None,
             ]));
 
-        let nulls = Buffer::from([0b00000111]);
+        let validity = Buffer::from([0b00000111]);
         let struct_fields = vec![(
             Field::new("foo", expected_l.data_type().clone(), true),
             expected_l.clone() as ArrayRef,
         )];
-        let expected = StructArray::from((struct_fields, nulls));
+        let expected = StructArray::from((struct_fields, validity));
 
         let array = Arc::new(Int32Array::from_iter(vec![
             Some(1),
