@@ -326,6 +326,7 @@ fn build_struct_reader(
         children_reader,
         field.def_level,
         field.rep_level,
+        field.nullable,
     )) as _)
 }
 
