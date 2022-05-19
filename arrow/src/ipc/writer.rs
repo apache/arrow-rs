@@ -860,7 +860,13 @@ fn write_array_data(
     null_count: usize,
 ) -> i64 {
     let mut offset = offset;
-    nodes.push(ipc::FieldNode::new(num_rows as i64, null_count as i64));
+    if !matches!(array_data.data_type(), DataType::Null) {
+        nodes.push(ipc::FieldNode::new(num_rows as i64, null_count as i64));
+    } else {
+        // NullArray's null_count equals to len, but the `null_count` passed in is from ArrayData
+        // where null_count is always 0.
+        nodes.push(ipc::FieldNode::new(num_rows as i64, num_rows as i64));
+    }
     // NullArray does not have any buffers, thus the null buffer is not generated
     // UnionArray does not have a validity buffer
     if !matches!(
