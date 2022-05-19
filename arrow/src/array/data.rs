@@ -327,6 +327,19 @@ impl ArrayData {
         buffers: Vec<Buffer>,
         child_data: Vec<ArrayData>,
     ) -> Result<Self> {
+        // we must check the length of `null_bit_buffer` first
+        // because we use this buffer to calculate `null_count`
+        // in `Self::new_unchecked`.
+        if let Some(null_bit_buffer) = null_bit_buffer.as_ref() {
+            let needed_len = bit_util::ceil(len + offset, 8);
+            if null_bit_buffer.len() < needed_len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "null_bit_buffer size too small. got {} needed {}",
+                    null_bit_buffer.len(),
+                    needed_len
+                )));
+            }
+        }
         // Safety justification: `validate_full` is called below
         let new_self = unsafe {
             Self::new_unchecked(
@@ -1733,7 +1746,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "null_bit_buffer size too small. got 1 needed 2")]
-    fn test_bitmap_too_small() {
+    fn test_bitmap_too_small_with_null_count() {
         let buffer = make_i32_buffer(9);
         let null_bit_buffer = Buffer::from(vec![0b11111111]);
 
@@ -1741,6 +1754,24 @@ mod tests {
             DataType::Int32,
             9,
             Some(0),
+            Some(null_bit_buffer),
+            0,
+            vec![buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "null_bit_buffer size too small. got 1 needed 2")]
+    fn test_bitmap_too_small_without_null_count() {
+        let buffer = make_i32_buffer(9);
+        let null_bit_buffer = Buffer::from(vec![0b11111111]);
+
+        ArrayData::try_new(
+            DataType::Int32,
+            9,
+            None,
             Some(null_bit_buffer),
             0,
             vec![buffer],
