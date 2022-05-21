@@ -92,6 +92,7 @@ use arrow::record_batch::RecordBatch;
 use crate::arrow::array_reader::{build_array_reader, RowGroupCollection};
 use crate::arrow::arrow_reader::ParquetRecordBatchReader;
 use crate::arrow::schema::parquet_to_arrow_schema;
+use crate::arrow::ProjectionMask;
 use crate::basic::Compression;
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
@@ -119,7 +120,7 @@ pub struct ParquetRecordBatchStreamBuilder<T> {
 
     row_groups: Option<Vec<usize>>,
 
-    projection: Option<Vec<usize>>,
+    projection: ProjectionMask,
 }
 
 impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
@@ -138,7 +139,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
             schema,
             batch_size: 1024,
             row_groups: None,
-            projection: None,
+            projection: ProjectionMask::all(),
         })
     }
 
@@ -166,31 +167,16 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
     }
 
     /// Only read data from the provided column indexes
-    pub fn with_projection(self, projection: Vec<usize>) -> Self {
+    pub fn with_projection(self, mask: ProjectionMask) -> Self {
         Self {
-            projection: Some(projection),
+            projection: mask,
             ..self
         }
     }
 
     /// Build a new [`ParquetRecordBatchStream`]
     pub fn build(self) -> Result<ParquetRecordBatchStream<T>> {
-        let num_columns = self.schema.fields().len();
         let num_row_groups = self.metadata.row_groups().len();
-
-        let columns = match self.projection {
-            Some(projection) => {
-                if let Some(col) = projection.iter().find(|x| **x >= num_columns) {
-                    return Err(general_err!(
-                        "column projection {} outside bounds of schema 0..{}",
-                        col,
-                        num_columns
-                    ));
-                }
-                projection
-            }
-            None => (0..num_columns).collect::<Vec<_>>(),
-        };
 
         let row_groups = match self.row_groups {
             Some(row_groups) => {
@@ -208,7 +194,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin> ParquetRecordBatchStreamBuilder<T> {
 
         Ok(ParquetRecordBatchStream {
             row_groups,
-            columns: columns.into(),
+            projection: self.projection,
             batch_size: self.batch_size,
             metadata: self.metadata,
             schema: self.schema,
@@ -248,7 +234,7 @@ pub struct ParquetRecordBatchStream<T> {
 
     batch_size: usize,
 
-    columns: Arc<[usize]>,
+    projection: ProjectionMask,
 
     row_groups: VecDeque<usize>,
 
@@ -264,7 +250,7 @@ impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
             .field("metadata", &self.metadata)
             .field("schema", &self.schema)
             .field("batch_size", &self.batch_size)
-            .field("columns", &self.columns)
+            .field("projection", &self.projection)
             .field("state", &self.state)
             .finish()
     }
@@ -315,16 +301,19 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send + 'static> Stream
                         }
                     };
 
-                    let columns = Arc::clone(&self.columns);
-
+                    let projection = self.projection.clone();
                     self.state = StreamState::Reading(
                         async move {
                             let row_group_metadata = metadata.row_group(row_group_idx);
                             let mut column_chunks =
                                 vec![None; row_group_metadata.columns().len()];
 
-                            for column_idx in columns.iter() {
-                                let column = row_group_metadata.column(*column_idx);
+                            for (idx, chunk) in column_chunks.iter_mut().enumerate() {
+                                if !projection.leaf_included(idx) {
+                                    continue;
+                                }
+
+                                let column = row_group_metadata.column(idx);
                                 let (start, length) = column.byte_range();
                                 let end = start + length;
 
@@ -333,7 +322,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send + 'static> Stream
                                 let mut buffer = vec![0_u8; (end - start) as usize];
                                 input.read_exact(buffer.as_mut_slice()).await?;
 
-                                column_chunks[*column_idx] = Some(InMemoryColumnChunk {
+                                *chunk = Some(InMemoryColumnChunk {
                                     num_values: column.num_values(),
                                     compression: column.compression(),
                                     physical_type: column.column_type(),
@@ -373,7 +362,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send + 'static> Stream
                     let array_reader = build_array_reader(
                         parquet_schema,
                         self.schema.clone(),
-                        self.columns.iter().cloned(),
+                        self.projection.clone(),
                         row_group,
                     )?;
 
