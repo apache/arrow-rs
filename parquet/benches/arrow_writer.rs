@@ -17,7 +17,9 @@
 
 #[macro_use]
 extern crate criterion;
+
 use criterion::{Criterion, Throughput};
+use std::io::Cursor;
 
 extern crate arrow;
 extern crate parquet;
@@ -26,9 +28,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::*;
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
-use parquet::{
-    arrow::ArrowWriter, errors::Result, file::writer::InMemoryWriteableCursor,
-};
+use parquet::{arrow::ArrowWriter, errors::Result};
 
 fn create_primitive_bench_batch(
     size: usize,
@@ -278,7 +278,7 @@ fn _create_nested_bench_batch(
 #[inline]
 fn write_batch(batch: &RecordBatch) -> Result<()> {
     // Write batch to an in-memory writer
-    let cursor = InMemoryWriteableCursor::default();
+    let cursor = Cursor::new(vec![]);
     let mut writer = ArrowWriter::try_new(cursor, batch.schema(), None)?;
 
     writer.write(batch)?;
