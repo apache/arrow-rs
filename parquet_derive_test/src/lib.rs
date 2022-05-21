@@ -131,9 +131,13 @@ mod tests {
         let mut writer =
             SerializedFileWriter::new(file, generated_schema, props).unwrap();
 
-        let mut row_group = writer.next_row_group().unwrap();
-        drs.as_slice().write_to_row_group(&mut row_group).unwrap();
-        writer.close_row_group(row_group).unwrap();
+        {
+            let mut row_group = writer.next_row_group().unwrap();
+            drs.as_slice()
+                .write_to_row_group(row_group.as_mut())
+                .unwrap();
+            row_group.close().unwrap();
+        }
         writer.close().unwrap();
     }
 

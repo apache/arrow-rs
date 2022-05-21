@@ -100,7 +100,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
     impl #generics RecordWriter<#derived_for #generics> for &[#derived_for #generics] {
       fn write_to_row_group(
         &self,
-        row_group_writer: &mut Box<dyn parquet::file::writer::RowGroupWriter>
+        row_group_writer: &mut dyn parquet::file::writer::RowGroupWriter
       ) -> Result<(), parquet::errors::ParquetError> {
         let mut row_group_writer = row_group_writer;
         let records = &self; // Used by all the writer snippets to be more clear
@@ -110,7 +110,7 @@ pub fn parquet_record_writer(input: proc_macro::TokenStream) -> proc_macro::Toke
               let mut some_column_writer = row_group_writer.next_column().unwrap();
               if let Some(mut column_writer) = some_column_writer {
                   #writer_snippets
-                  row_group_writer.close_column(column_writer)?;
+                  column_writer.close()?;
               } else {
                   return Err(parquet::errors::ParquetError::General("Failed to get next column".into()))
               }
