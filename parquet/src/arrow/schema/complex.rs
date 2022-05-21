@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::arrow::schema::primitive::convert_primitive;
+use crate::arrow::ProjectionMask;
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
@@ -120,7 +121,7 @@ struct Visitor {
     next_col_idx: usize,
 
     /// Mask of columns to include
-    column_mask: Vec<bool>,
+    mask: ProjectionMask,
 }
 
 impl Visitor {
@@ -132,7 +133,7 @@ impl Visitor {
         let col_idx = self.next_col_idx;
         self.next_col_idx += 1;
 
-        if !self.column_mask[col_idx] {
+        if !self.mask.leaf_included(col_idx) {
             return Ok(None);
         }
 
@@ -549,28 +550,14 @@ fn convert_field(
 /// [`Schema`] embedded in the parquet metadata
 ///
 /// Note: This does not support out of order column projection
-pub fn convert_schema<T: IntoIterator<Item = usize>>(
+pub fn convert_schema(
     schema: &SchemaDescriptor,
-    leaf_columns: T,
+    mask: ProjectionMask,
     embedded_arrow_schema: Option<&Schema>,
 ) -> Result<Option<ParquetField>> {
-    let mut leaf_mask = vec![false; schema.num_columns()];
-    let mut last_idx = 0;
-    for i in leaf_columns {
-        if i < last_idx {
-            return Err(general_err!("out of order projection is not supported"));
-        }
-        if leaf_mask[i] {
-            return Err(general_err!("repeated column projection is not supported, column {} appeared multiple times", i));
-        }
-
-        last_idx = i;
-        leaf_mask[i] = true;
-    }
-
     let mut visitor = Visitor {
         next_col_idx: 0,
-        column_mask: leaf_mask,
+        mask,
     };
 
     let context = VisitorContext {
@@ -586,7 +573,7 @@ pub fn convert_schema<T: IntoIterator<Item = usize>>(
 pub fn convert_type(parquet_type: &TypePtr) -> Result<ParquetField> {
     let mut visitor = Visitor {
         next_col_idx: 0,
-        column_mask: vec![true],
+        mask: ProjectionMask::all(),
     };
 
     let context = VisitorContext {

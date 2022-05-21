@@ -246,7 +246,7 @@ mod tests {
     use crate::arrow::array_reader::build_array_reader;
     use crate::arrow::array_reader::list_array::ListArrayReader;
     use crate::arrow::array_reader::test_util::InMemoryArrayReader;
-    use crate::arrow::{parquet_to_arrow_schema, ArrowWriter};
+    use crate::arrow::{parquet_to_arrow_schema, ArrowWriter, ProjectionMask};
     use crate::file::properties::WriterProperties;
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::schema::parser::parse_message_type;
@@ -582,10 +582,13 @@ mod tests {
         )
         .unwrap();
 
+        let schema = file_metadata.schema_descr_ptr();
+        let mask = ProjectionMask::leaves(&schema, vec![0]);
+
         let mut array_reader = build_array_reader(
-            file_reader.metadata().file_metadata().schema_descr_ptr(),
+            schema,
             Arc::new(arrow_schema),
-            vec![0usize].into_iter(),
+            mask,
             Box::new(file_reader),
         )
         .unwrap();
