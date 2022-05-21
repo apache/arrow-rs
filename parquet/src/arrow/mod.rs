@@ -157,12 +157,12 @@ pub struct ProjectionMask {
 }
 
 impl ProjectionMask {
-    /// Create a [`ColumnMask`] which selects all columns
+    /// Create a [`ProjectionMask`] which selects all columns
     pub fn all() -> Self {
         Self { mask: None }
     }
 
-    /// Create a [`ColumnMask`] which selects only the specified leaf columns
+    /// Create a [`ProjectionMask`] which selects only the specified leaf columns
     ///
     /// Note: repeated or out of order indices will not impact the final mask
     ///
@@ -178,7 +178,7 @@ impl ProjectionMask {
         Self { mask: Some(mask) }
     }
 
-    /// Create a [`ColumnMask`] which selects only the specified root columns
+    /// Create a [`ProjectionMask`] which selects only the specified root columns
     ///
     /// Note: repeated or out of order indices will not impact the final mask
     ///
