@@ -102,6 +102,25 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef> {
     Ok(make_array(mutable.freeze()))
 }
 
+// Elementwise concatenation of StringArrays
+pub fn string_concat<Offset: OffsetSizeTrait>(
+    left: &GenericStringArray<Offset>,
+    right: &GenericStringArray<Offset>,
+) -> Result<GenericStringArray<Offset>> {
+    let left_bitmap = left.data().null_bitmap().unwrap();
+    let right_bitmap = right.data().null_bitmap().unwrap();
+    let concat_bitmap = (left_bitmap & right_bitmap).unwrap();
+    Ok((0..left.len().max(right.len()))
+        .map(|i| {
+            if concat_bitmap.is_set(i) {
+                Some(left.value(i).to_owned() + right.value(i))
+            } else {
+                None
+            }
+        })
+        .collect::<GenericStringArray<Offset>>())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,5 +587,24 @@ mod tests {
         assert!(!array.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
         assert!(!copy.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
         assert!(!new.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
+    }
+
+    #[cfg(feature = "test_utils")]
+    #[test]
+    fn test_string_concat() {
+        let left = [Some("foo"), Some("bar"), None]
+            .into_iter()
+            .collect::<StringArray>();
+        let right = [None, Some("yyy"), Some("zzz")]
+            .into_iter()
+            .collect::<StringArray>();
+
+        let res = string_concat(&left, &right).unwrap();
+
+        let expected = [None, Some("baryyy"), None]
+            .into_iter()
+            .collect::<StringArray>();
+
+        assert_eq!(res, expected);
     }
 }
