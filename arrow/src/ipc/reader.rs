@@ -239,9 +239,18 @@ fn create_array(
             Arc::new(array)
         }
         Null => {
-            let length = nodes[node_index].length() as usize;
+            let length = nodes[node_index].length();
+            let null_count = nodes[node_index].null_count();
+
+            if length != null_count {
+                return Err(ArrowError::IoError(format!(
+                    "Field {} of NullArray has unequal null_count {} and len {}",
+                    field, null_count, length
+                )));
+            }
+
             let data = ArrayData::builder(data_type.clone())
-                .len(length)
+                .len(length as usize)
                 .offset(0)
                 .build()
                 .unwrap();
