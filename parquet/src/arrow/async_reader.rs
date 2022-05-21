@@ -27,7 +27,7 @@
 //! use futures::TryStreamExt;
 //! use tokio::fs::File;
 //!
-//! use parquet::arrow::ParquetRecordBatchStreamBuilder;
+//! use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
 //!
 //! # fn assert_batches_eq(batches: &[RecordBatch], expected_lines: &[&str]) {
 //! #     let formatted = pretty_format_batches(batches).unwrap().to_string();
@@ -41,16 +41,17 @@
 //!
 //! let testdata = arrow::util::test_util::parquet_test_data();
 //! let path = format!("{}/alltypes_plain.parquet", testdata);
-//! let file = tokio::fs::File::open(path).await.unwrap();
+//! let file = File::open(path).await.unwrap();
 //!
 //! let builder = ParquetRecordBatchStreamBuilder::new(file)
 //!     .await
 //!     .unwrap()
-//!     .with_projection(vec![1, 2, 6])
 //!     .with_batch_size(3);
 //!
-//! let stream = builder.build().unwrap();
+//! let file_metadata = builder.metadata().file_metadata();
+//! let mask = ProjectionMask::roots(file_metadata.schema_descr(), [1, 2, 6]);
 //!
+//! let stream = builder.with_projection(mask).build().unwrap();
 //! let results = stream.try_collect::<Vec<_>>().await.unwrap();
 //! assert_eq!(results.len(), 3);
 //!
