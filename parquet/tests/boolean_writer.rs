@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use parquet::column::writer::ColumnWriter;
+use parquet::data_type::BoolType;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
@@ -53,25 +53,16 @@ fn it_writes_data_without_hanging() {
         while let Some(mut col_writer) =
             row_group_writer.next_column().expect("next column")
         {
-            match col_writer {
-                ColumnWriter::BoolColumnWriter(ref mut typed_writer) => {
-                    typed_writer
-                        .write_batch(&my_bool_values, None, None)
-                        .expect("writing bool column");
-                }
-                _ => {
-                    panic!("only test boolean values");
-                }
-            }
-            row_group_writer
-                .close_column(col_writer)
-                .expect("close column");
+            col_writer
+                .typed::<BoolType>()
+                .write_batch(&my_bool_values, None, None)
+                .expect("writing bool column");
+
+            col_writer.close().expect("close column");
         }
         let rg_md = row_group_writer.close().expect("close row group");
         println!("total rows written: {}", rg_md.num_rows());
-        writer
-            .close_row_group(row_group_writer)
-            .expect("close row groups");
+        row_group_writer.close().expect("close row groups");
     }
     writer.close().expect("close writer");
 

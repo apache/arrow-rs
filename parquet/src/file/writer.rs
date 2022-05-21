@@ -18,33 +18,59 @@
 //! Contains file writer API, and provides methods to write row groups and columns by
 //! using row group writers and column writers respectively.
 
-use std::{
-    io::{Seek, SeekFrom, Write},
-    sync::Arc,
-};
+use std::{io::Write, sync::Arc};
 
 use byteorder::{ByteOrder, LittleEndian};
 use parquet_format as parquet;
 use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
 
 use crate::basic::PageType;
+use crate::column::writer::{get_typed_column_writer_mut, ColumnWriterImpl};
 use crate::column::{
     page::{CompressedPage, Page, PageWriteSpec, PageWriter},
     writer::{get_column_writer, ColumnWriter},
 };
+use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::file::{
     metadata::*, properties::WriterPropertiesPtr,
     statistics::to_thrift as statistics_to_thrift, FOOTER_SIZE, PARQUET_MAGIC,
 };
 use crate::schema::types::{self, SchemaDescPtr, SchemaDescriptor, TypePtr};
-use crate::util::io::{FileSink, Position};
 
-// Exposed publically so client code can implement [`ParquetWriter`]
-pub use crate::util::io::TryClone;
+/// A wrapper around a [`Write`] that keeps track of the number
+/// of bytes that have been written
+pub struct TrackedWrite<W> {
+    inner: W,
+    bytes_written: usize,
+}
 
-// Exposed publically for convenience of writing Parquet to a buffer of bytes
-pub use crate::util::cursor::InMemoryWriteableCursor;
+impl<W: Write> TrackedWrite<W> {
+    /// Create a new [`TrackedWrite`] from a [`Write`]
+    pub fn new(inner: W) -> Self {
+        Self {
+            inner,
+            bytes_written: 0,
+        }
+    }
+
+    /// Returns the number of bytes written to this instance
+    pub fn bytes_written(&self) -> usize {
+        self.bytes_written
+    }
+}
+
+impl<W: Write> Write for TrackedWrite<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let bytes = self.inner.write(buf)?;
+        self.bytes_written += bytes;
+        Ok(bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
 
 // ----------------------------------------------------------------------
 // APIs for file & row group writers
@@ -65,15 +91,8 @@ pub trait FileWriter {
     ///
     /// There is no limit on a number of row groups in a file; however, row groups have
     /// to be written sequentially. Every time the next row group is requested, the
-    /// previous row group must be finalised and closed using `close_row_group` method.
-    fn next_row_group(&mut self) -> Result<Box<dyn RowGroupWriter>>;
-
-    /// Finalises and closes row group that was created using `next_row_group` method.
-    /// After calling this method, the next row group is available for writes.
-    fn close_row_group(
-        &mut self,
-        row_group_writer: Box<dyn RowGroupWriter>,
-    ) -> Result<()>;
+    /// previous row group must be finalised and closed using `RowGroupWriter::close` method.
+    fn next_row_group(&mut self) -> Result<Box<dyn RowGroupWriter + '_>>;
 
     /// Closes and finalises file writer, returning the file metadata.
     ///
@@ -92,102 +111,90 @@ pub trait FileWriter {
 /// All columns should be written sequentially; the main workflow is:
 /// - Request the next column using `next_column` method - this will return `None` if no
 /// more columns are available to write.
-/// - Once done writing a column, close column writer with `close_column` method - this
-/// will finalise column chunk metadata and update row group metrics.
+/// - Once done writing a column, close column writer with `close`
 /// - Once all columns have been written, close row group writer with `close` method -
 /// it will return row group metadata and is no-op on already closed row group.
 pub trait RowGroupWriter {
     /// Returns the next column writer, if available; otherwise returns `None`.
     /// In case of any IO error or Thrift error, or if row group writer has already been
     /// closed returns `Err`.
-    ///
-    /// To request the next column writer, the previous one must be finalised and closed
-    /// using `close_column`.
-    fn next_column(&mut self) -> Result<Option<ColumnWriter>>;
-
-    /// Closes column writer that was created using `next_column` method.
-    /// This should be called before requesting the next column writer.
-    fn close_column(&mut self, column_writer: ColumnWriter) -> Result<()>;
+    fn next_column(&mut self) -> Result<Option<SerializedColumnWriter<'_>>>;
 
     /// Closes this row group writer and returns row group metadata.
     /// After calling this method row group writer must not be used.
-    ///
-    /// It is recommended to call this method before requesting another row group, but it
-    /// will be closed automatically before returning a new row group.
     ///
     /// Can be called multiple times. In subsequent calls will result in no-op and return
     /// already created row group metadata.
     fn close(&mut self) -> Result<RowGroupMetaDataPtr>;
 }
 
+/// Callback invoked on closing a column chunk, arguments are:
+///
+/// - the number of bytes written
+/// - the number of rows written
+/// - the column chunk metadata
+///
+pub type OnCloseColumnChunk<'a> =
+    Box<dyn FnOnce(u64, u64, ColumnChunkMetaData) -> Result<()> + 'a>;
+
+/// Callback invoked on closing a row group, arguments are:
+///
+/// - the row group metadata
+pub type OnCloseRowGroup<'a> = Box<dyn FnOnce(RowGroupMetaDataPtr) -> Result<()> + 'a>;
+
 // ----------------------------------------------------------------------
 // Serialized impl for file & row group writers
 
-pub trait ParquetWriter: Write + Seek + TryClone {}
-impl<T: Write + Seek + TryClone> ParquetWriter for T {}
-
 /// A serialized implementation for Parquet [`FileWriter`].
 /// See documentation on file writer for more information.
-pub struct SerializedFileWriter<W: ParquetWriter> {
-    buf: W,
+pub struct SerializedFileWriter<W: Write> {
+    buf: TrackedWrite<W>,
     schema: TypePtr,
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
-    total_num_rows: i64,
     row_groups: Vec<RowGroupMetaDataPtr>,
-    previous_writer_closed: bool,
+    row_group_index: usize,
     is_closed: bool,
 }
 
-impl<W: ParquetWriter> SerializedFileWriter<W> {
+impl<W: Write> SerializedFileWriter<W> {
     /// Creates new file writer.
-    pub fn new(
-        mut buf: W,
-        schema: TypePtr,
-        properties: WriterPropertiesPtr,
-    ) -> Result<Self> {
+    pub fn new(buf: W, schema: TypePtr, properties: WriterPropertiesPtr) -> Result<Self> {
+        let mut buf = TrackedWrite::new(buf);
         Self::start_file(&mut buf)?;
         Ok(Self {
             buf,
             schema: schema.clone(),
             descr: Arc::new(SchemaDescriptor::new(schema)),
             props: properties,
-            total_num_rows: 0,
-            row_groups: Vec::new(),
-            previous_writer_closed: true,
+            row_groups: vec![],
+            row_group_index: 0,
             is_closed: false,
         })
     }
 
     /// Writes magic bytes at the beginning of the file.
-    fn start_file(buf: &mut W) -> Result<()> {
+    fn start_file(buf: &mut TrackedWrite<W>) -> Result<()> {
         buf.write_all(&PARQUET_MAGIC)?;
-        Ok(())
-    }
-
-    /// Finalises active row group writer, otherwise no-op.
-    fn finalise_row_group_writer(
-        &mut self,
-        mut row_group_writer: Box<dyn RowGroupWriter>,
-    ) -> Result<()> {
-        let row_group_metadata = row_group_writer.close()?;
-        self.total_num_rows += row_group_metadata.num_rows();
-        self.row_groups.push(row_group_metadata);
         Ok(())
     }
 
     /// Assembles and writes metadata at the end of the file.
     fn write_metadata(&mut self) -> Result<parquet::FileMetaData> {
+        let num_rows = self.row_groups.iter().map(|x| x.num_rows()).sum();
+
+        let row_groups = self
+            .row_groups
+            .as_slice()
+            .iter()
+            .map(|v| v.to_thrift())
+            .collect();
+
         let file_metadata = parquet::FileMetaData {
+            num_rows,
+            row_groups,
             version: self.props.writer_version().as_num(),
             schema: types::to_thrift(self.schema.as_ref())?,
-            num_rows: self.total_num_rows as i64,
-            row_groups: self
-                .row_groups
-                .as_slice()
-                .iter()
-                .map(|v| v.to_thrift())
-                .collect(),
             key_value_metadata: self.props.key_value_metadata().cloned(),
             created_by: Some(self.props.created_by().to_owned()),
             column_orders: None,
@@ -196,13 +203,13 @@ impl<W: ParquetWriter> SerializedFileWriter<W> {
         };
 
         // Write file metadata
-        let start_pos = self.buf.seek(SeekFrom::Current(0))?;
+        let start_pos = self.buf.bytes_written();
         {
             let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
             file_metadata.write_to_out_protocol(&mut protocol)?;
             protocol.flush()?;
         }
-        let end_pos = self.buf.seek(SeekFrom::Current(0))?;
+        let end_pos = self.buf.bytes_written();
 
         // Write footer
         let mut footer_buffer: [u8; FOOTER_SIZE] = [0; FOOTER_SIZE];
@@ -214,7 +221,7 @@ impl<W: ParquetWriter> SerializedFileWriter<W> {
     }
 
     #[inline]
-    fn assert_closed(&self) -> Result<()> {
+    fn assert_not_closed(&self) -> Result<()> {
         if self.is_closed {
             Err(general_err!("File writer is closed"))
         } else {
@@ -224,7 +231,7 @@ impl<W: ParquetWriter> SerializedFileWriter<W> {
 
     #[inline]
     fn assert_previous_writer_closed(&self) -> Result<()> {
-        if !self.previous_writer_closed {
+        if self.row_group_index != self.row_groups.len() {
             Err(general_err!("Previous row group writer was not closed"))
         } else {
             Ok(())
@@ -232,34 +239,30 @@ impl<W: ParquetWriter> SerializedFileWriter<W> {
     }
 }
 
-impl<W: 'static + ParquetWriter> FileWriter for SerializedFileWriter<W> {
+impl<W: Write> FileWriter for SerializedFileWriter<W> {
     #[inline]
-    fn next_row_group(&mut self) -> Result<Box<dyn RowGroupWriter>> {
-        self.assert_closed()?;
+    fn next_row_group(&mut self) -> Result<Box<dyn RowGroupWriter + '_>> {
+        self.assert_not_closed()?;
         self.assert_previous_writer_closed()?;
+        self.row_group_index += 1;
+
+        let row_groups = &mut self.row_groups;
+        let on_close = |metadata| {
+            row_groups.push(metadata);
+            Ok(())
+        };
+
         let row_group_writer = SerializedRowGroupWriter::new(
             self.descr.clone(),
             self.props.clone(),
-            &self.buf,
+            &mut self.buf,
+            Some(Box::new(on_close)),
         );
-        self.previous_writer_closed = false;
         Ok(Box::new(row_group_writer))
     }
 
-    #[inline]
-    fn close_row_group(
-        &mut self,
-        row_group_writer: Box<dyn RowGroupWriter>,
-    ) -> Result<()> {
-        self.assert_closed()?;
-        let res = self.finalise_row_group_writer(row_group_writer);
-        self.previous_writer_closed = res.is_ok();
-        res
-    }
-
-    #[inline]
     fn close(&mut self) -> Result<parquet::FileMetaData> {
-        self.assert_closed()?;
+        self.assert_not_closed()?;
         self.assert_previous_writer_closed()?;
         let metadata = self.write_metadata()?;
         self.is_closed = true;
@@ -270,67 +273,43 @@ impl<W: 'static + ParquetWriter> FileWriter for SerializedFileWriter<W> {
 /// A serialized implementation for Parquet [`RowGroupWriter`].
 /// Coordinates writing of a row group with column writers.
 /// See documentation on row group writer for more information.
-pub struct SerializedRowGroupWriter<W: ParquetWriter> {
+pub struct SerializedRowGroupWriter<'a, W: Write> {
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
-    buf: W,
+    buf: &'a mut TrackedWrite<W>,
     total_rows_written: Option<u64>,
     total_bytes_written: u64,
     column_index: usize,
-    previous_writer_closed: bool,
     row_group_metadata: Option<RowGroupMetaDataPtr>,
     column_chunks: Vec<ColumnChunkMetaData>,
+    on_close: Option<OnCloseRowGroup<'a>>,
 }
 
-impl<W: 'static + ParquetWriter> SerializedRowGroupWriter<W> {
+impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
+    /// Creates a new `SerializedRowGroupWriter` with:
+    ///
+    /// - `schema_descr` - the schema to write
+    /// - `properties` - writer properties
+    /// - `buf` - the buffer to write data to
+    /// - `on_close` - an optional callback that will invoked on [`Self::close`]
     pub fn new(
         schema_descr: SchemaDescPtr,
         properties: WriterPropertiesPtr,
-        buf: &W,
+        buf: &'a mut TrackedWrite<W>,
+        on_close: Option<OnCloseRowGroup<'a>>,
     ) -> Self {
         let num_columns = schema_descr.num_columns();
         Self {
+            buf,
+            on_close,
+            total_rows_written: None,
             descr: schema_descr,
             props: properties,
-            buf: buf.try_clone().unwrap(),
-            total_rows_written: None,
-            total_bytes_written: 0,
             column_index: 0,
-            previous_writer_closed: true,
             row_group_metadata: None,
             column_chunks: Vec::with_capacity(num_columns),
+            total_bytes_written: 0,
         }
-    }
-
-    /// Checks and finalises current column writer.
-    fn finalise_column_writer(&mut self, writer: ColumnWriter) -> Result<()> {
-        let (bytes_written, rows_written, metadata) = match writer {
-            ColumnWriter::BoolColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int32ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int64ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int96ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::FloatColumnWriter(typed) => typed.close()?,
-            ColumnWriter::DoubleColumnWriter(typed) => typed.close()?,
-            ColumnWriter::ByteArrayColumnWriter(typed) => typed.close()?,
-            ColumnWriter::FixedLenByteArrayColumnWriter(typed) => typed.close()?,
-        };
-
-        // Update row group writer metrics
-        self.total_bytes_written += bytes_written;
-        self.column_chunks.push(metadata);
-        if let Some(rows) = self.total_rows_written {
-            if rows != rows_written {
-                return Err(general_err!(
-                    "Incorrect number of rows, expected {} != {} rows",
-                    rows,
-                    rows_written
-                ));
-            }
-        } else {
-            self.total_rows_written = Some(rows_written);
-        }
-
-        Ok(())
     }
 
     #[inline]
@@ -344,7 +323,7 @@ impl<W: 'static + ParquetWriter> SerializedRowGroupWriter<W> {
 
     #[inline]
     fn assert_previous_writer_closed(&self) -> Result<()> {
-        if !self.previous_writer_closed {
+        if self.column_index != self.column_chunks.len() {
             Err(general_err!("Previous column writer was not closed"))
         } else {
             Ok(())
@@ -352,36 +331,51 @@ impl<W: 'static + ParquetWriter> SerializedRowGroupWriter<W> {
     }
 }
 
-impl<W: 'static + ParquetWriter> RowGroupWriter for SerializedRowGroupWriter<W> {
-    #[inline]
-    fn next_column(&mut self) -> Result<Option<ColumnWriter>> {
+impl<'a, W: Write> RowGroupWriter for SerializedRowGroupWriter<'a, W> {
+    fn next_column(&mut self) -> Result<Option<SerializedColumnWriter<'_>>> {
         self.assert_closed()?;
         self.assert_previous_writer_closed()?;
 
         if self.column_index >= self.descr.num_columns() {
             return Ok(None);
         }
-        let sink = FileSink::new(&self.buf);
-        let page_writer = Box::new(SerializedPageWriter::new(sink));
+        let page_writer = Box::new(SerializedPageWriter::new(self.buf));
         let column_writer = get_column_writer(
             self.descr.column(self.column_index),
             self.props.clone(),
             page_writer,
         );
         self.column_index += 1;
-        self.previous_writer_closed = false;
 
-        Ok(Some(column_writer))
+        let total_bytes_written = &mut self.total_bytes_written;
+        let total_rows_written = &mut self.total_rows_written;
+        let column_chunks = &mut self.column_chunks;
+
+        let on_close = |bytes_written, rows_written, metadata| {
+            // Update row group writer metrics
+            *total_bytes_written += bytes_written;
+            column_chunks.push(metadata);
+            if let Some(rows) = *total_rows_written {
+                if rows != rows_written {
+                    return Err(general_err!(
+                        "Incorrect number of rows, expected {} != {} rows",
+                        rows,
+                        rows_written
+                    ));
+                }
+            } else {
+                *total_rows_written = Some(rows_written);
+            }
+
+            Ok(())
+        };
+
+        Ok(Some(SerializedColumnWriter::new(
+            column_writer,
+            Some(Box::new(on_close)),
+        )))
     }
 
-    #[inline]
-    fn close_column(&mut self, column_writer: ColumnWriter) -> Result<()> {
-        let res = self.finalise_column_writer(column_writer);
-        self.previous_writer_closed = res.is_ok();
-        res
-    }
-
-    #[inline]
     fn close(&mut self) -> Result<RowGroupMetaDataPtr> {
         if self.row_group_metadata.is_none() {
             self.assert_previous_writer_closed()?;
@@ -393,7 +387,12 @@ impl<W: 'static + ParquetWriter> RowGroupWriter for SerializedRowGroupWriter<W> 
                 .set_num_rows(self.total_rows_written.unwrap_or(0) as i64)
                 .build()?;
 
-            self.row_group_metadata = Some(Arc::new(row_group_metadata));
+            let metadata = Arc::new(row_group_metadata);
+            self.row_group_metadata = Some(metadata.clone());
+
+            if let Some(on_close) = self.on_close.take() {
+                on_close(metadata)?
+            }
         }
 
         let metadata = self.row_group_metadata.as_ref().unwrap().clone();
@@ -401,17 +400,64 @@ impl<W: 'static + ParquetWriter> RowGroupWriter for SerializedRowGroupWriter<W> 
     }
 }
 
+/// A wrapper around a [`ColumnWriter`] that invokes a callback on [`Self::close`]
+pub struct SerializedColumnWriter<'a> {
+    inner: ColumnWriter<'a>,
+    on_close: Option<OnCloseColumnChunk<'a>>,
+}
+
+impl<'a> SerializedColumnWriter<'a> {
+    /// Create a new [`SerializedColumnWriter`] from a `[`ColumnWriter`] and an
+    /// optional callback to be invoked on [`Self::close`]
+    pub fn new(
+        inner: ColumnWriter<'a>,
+        on_close: Option<OnCloseColumnChunk<'a>>,
+    ) -> Self {
+        Self { inner, on_close }
+    }
+
+    /// Returns a reference to an untyped [`ColumnWriter`]
+    pub fn untyped(&mut self) -> &mut ColumnWriter<'a> {
+        &mut self.inner
+    }
+
+    /// Returns a reference to a typed [`ColumnWriterImpl`]
+    pub fn typed<T: DataType>(&mut self) -> &mut ColumnWriterImpl<'a, T> {
+        get_typed_column_writer_mut(&mut self.inner)
+    }
+
+    /// Close this [`SerializedColumnWriter]
+    pub fn close(mut self) -> Result<()> {
+        let (bytes_written, rows_written, metadata) = match self.inner {
+            ColumnWriter::BoolColumnWriter(typed) => typed.close()?,
+            ColumnWriter::Int32ColumnWriter(typed) => typed.close()?,
+            ColumnWriter::Int64ColumnWriter(typed) => typed.close()?,
+            ColumnWriter::Int96ColumnWriter(typed) => typed.close()?,
+            ColumnWriter::FloatColumnWriter(typed) => typed.close()?,
+            ColumnWriter::DoubleColumnWriter(typed) => typed.close()?,
+            ColumnWriter::ByteArrayColumnWriter(typed) => typed.close()?,
+            ColumnWriter::FixedLenByteArrayColumnWriter(typed) => typed.close()?,
+        };
+
+        if let Some(on_close) = self.on_close.take() {
+            on_close(bytes_written, rows_written, metadata)?
+        }
+
+        Ok(())
+    }
+}
+
 /// A serialized implementation for Parquet [`PageWriter`].
 /// Writes and serializes pages and metadata into output stream.
 ///
 /// `SerializedPageWriter` should not be used after calling `close()`.
-pub struct SerializedPageWriter<T: Write + Position> {
-    sink: T,
+pub struct SerializedPageWriter<'a, W> {
+    sink: &'a mut TrackedWrite<W>,
 }
 
-impl<T: Write + Position> SerializedPageWriter<T> {
+impl<'a, W: Write> SerializedPageWriter<'a, W> {
     /// Creates new page writer.
-    pub fn new(sink: T) -> Self {
+    pub fn new(sink: &'a mut TrackedWrite<W>) -> Self {
         Self { sink }
     }
 
@@ -419,13 +465,13 @@ impl<T: Write + Position> SerializedPageWriter<T> {
     /// Returns number of bytes that have been written into the sink.
     #[inline]
     fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
-        let start_pos = self.sink.pos();
+        let start_pos = self.sink.bytes_written();
         {
             let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
             header.write_to_out_protocol(&mut protocol)?;
             protocol.flush()?;
         }
-        Ok((self.sink.pos() - start_pos) as usize)
+        Ok(self.sink.bytes_written() - start_pos)
     }
 
     /// Serializes column chunk into Thrift.
@@ -439,7 +485,7 @@ impl<T: Write + Position> SerializedPageWriter<T> {
     }
 }
 
-impl<T: Write + Position> PageWriter for SerializedPageWriter<T> {
+impl<'a, W: Write> PageWriter for SerializedPageWriter<'a, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
         let uncompressed_size = page.uncompressed_size();
         let compressed_size = page.compressed_size();
@@ -506,7 +552,7 @@ impl<T: Write + Position> PageWriter for SerializedPageWriter<T> {
             }
         }
 
-        let start_pos = self.sink.pos();
+        let start_pos = self.sink.bytes_written() as u64;
 
         let header_size = self.serialize_page_header(page_header)?;
         self.sink.write_all(page.data())?;
@@ -516,7 +562,7 @@ impl<T: Write + Position> PageWriter for SerializedPageWriter<T> {
         spec.uncompressed_size = uncompressed_size + header_size;
         spec.compressed_size = compressed_size + header_size;
         spec.offset = start_pos;
-        spec.bytes_written = self.sink.pos() - start_pos;
+        spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
         // Number of values is incremented for data pages only
         if page_type == PageType::DATA_PAGE || page_type == PageType::DATA_PAGE_V2 {
             spec.num_values = num_values;
@@ -544,6 +590,7 @@ mod tests {
     use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
     use crate::column::page::PageReader;
     use crate::compression::{create_codec, Codec};
+    use crate::data_type::Int32Type;
     use crate::file::{
         properties::{WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
@@ -647,24 +694,23 @@ mod tests {
         let mut row_group_writer = writer.next_row_group().unwrap();
 
         let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
-        if let ColumnWriter::Int32ColumnWriter(ref mut typed) = col_writer {
-            typed.write_batch(&[1, 2, 3], None, None).unwrap();
-        }
-        row_group_writer.close_column(col_writer).unwrap();
+        col_writer
+            .typed::<Int32Type>()
+            .write_batch(&[1, 2, 3], None, None)
+            .unwrap();
+        col_writer.close().unwrap();
 
         let mut col_writer = row_group_writer.next_column().unwrap().unwrap();
-        if let ColumnWriter::Int32ColumnWriter(ref mut typed) = col_writer {
-            typed.write_batch(&[1, 2], None, None).unwrap();
-        }
+        col_writer
+            .typed::<Int32Type>()
+            .write_batch(&[1, 2], None, None)
+            .unwrap();
 
-        let res = row_group_writer.close_column(col_writer);
-        assert!(res.is_err());
-        if let Err(err) = res {
-            assert_eq!(
-                format!("{}", err),
-                "Parquet error: Incorrect number of rows, expected 3 != 2 rows"
-            );
-        }
+        let err = col_writer.close().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Incorrect number of rows, expected 3 != 2 rows"
+        );
     }
 
     #[test]
@@ -971,8 +1017,8 @@ mod tests {
         let mut buffer: Vec<u8> = vec![];
         let mut result_pages: Vec<Page> = vec![];
         {
-            let cursor = Cursor::new(&mut buffer);
-            let mut page_writer = SerializedPageWriter::new(cursor);
+            let mut writer = TrackedWrite::new(&mut buffer);
+            let mut page_writer = SerializedPageWriter::new(&mut writer);
 
             for page in compressed_pages {
                 page_writer.write_page(page).unwrap();
@@ -1041,22 +1087,15 @@ mod tests {
 
         for subset in &data {
             let mut row_group_writer = file_writer.next_row_group().unwrap();
-            let col_writer = row_group_writer.next_column().unwrap();
-            if let Some(mut writer) = col_writer {
-                match writer {
-                    ColumnWriter::Int32ColumnWriter(ref mut typed) => {
-                        rows +=
-                            typed.write_batch(&subset[..], None, None).unwrap() as i64;
-                    }
-                    _ => {
-                        unimplemented!();
-                    }
-                }
-                row_group_writer.close_column(writer).unwrap();
+            if let Some(mut writer) = row_group_writer.next_column().unwrap() {
+                rows += writer
+                    .typed::<Int32Type>()
+                    .write_batch(&subset[..], None, None)
+                    .unwrap() as i64;
+                writer.close().unwrap();
             }
-            file_writer.close_row_group(row_group_writer).unwrap();
+            row_group_writer.close().unwrap();
         }
-
         file_writer.close().unwrap();
 
         let reader = assert_send(SerializedFileReader::new(file).unwrap());
@@ -1101,7 +1140,7 @@ mod tests {
     }
 
     fn test_bytes_roundtrip(data: Vec<Vec<i32>>) {
-        let cursor = InMemoryWriteableCursor::default();
+        let mut cursor = Cursor::new(vec![]);
 
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
@@ -1119,30 +1158,24 @@ mod tests {
         {
             let props = Arc::new(WriterProperties::builder().build());
             let mut writer =
-                SerializedFileWriter::new(cursor.clone(), schema, props).unwrap();
+                SerializedFileWriter::new(&mut cursor, schema, props).unwrap();
 
             for subset in &data {
                 let mut row_group_writer = writer.next_row_group().unwrap();
-                let col_writer = row_group_writer.next_column().unwrap();
-                if let Some(mut writer) = col_writer {
-                    match writer {
-                        ColumnWriter::Int32ColumnWriter(ref mut typed) => {
-                            rows += typed.write_batch(&subset[..], None, None).unwrap()
-                                as i64;
-                        }
-                        _ => {
-                            unimplemented!();
-                        }
-                    }
-                    row_group_writer.close_column(writer).unwrap();
-                }
-                writer.close_row_group(row_group_writer).unwrap();
-            }
+                if let Some(mut writer) = row_group_writer.next_column().unwrap() {
+                    rows += writer
+                        .typed::<Int32Type>()
+                        .write_batch(&subset[..], None, None)
+                        .unwrap() as i64;
 
+                    writer.close().unwrap();
+                }
+                row_group_writer.close().unwrap();
+            }
             writer.close().unwrap();
         }
 
-        let buffer = cursor.into_inner().unwrap();
+        let buffer = cursor.into_inner();
 
         let reading_cursor = crate::file::serialized_reader::SliceableCursor::new(buffer);
         let reader = SerializedFileReader::new(reading_cursor).unwrap();

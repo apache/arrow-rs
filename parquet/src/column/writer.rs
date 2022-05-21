@@ -39,15 +39,15 @@ use crate::util::bit_util::FromBytes;
 use crate::util::memory::ByteBufferPtr;
 
 /// Column writer for a Parquet type.
-pub enum ColumnWriter {
-    BoolColumnWriter(ColumnWriterImpl<BoolType>),
-    Int32ColumnWriter(ColumnWriterImpl<Int32Type>),
-    Int64ColumnWriter(ColumnWriterImpl<Int64Type>),
-    Int96ColumnWriter(ColumnWriterImpl<Int96Type>),
-    FloatColumnWriter(ColumnWriterImpl<FloatType>),
-    DoubleColumnWriter(ColumnWriterImpl<DoubleType>),
-    ByteArrayColumnWriter(ColumnWriterImpl<ByteArrayType>),
-    FixedLenByteArrayColumnWriter(ColumnWriterImpl<FixedLenByteArrayType>),
+pub enum ColumnWriter<'a> {
+    BoolColumnWriter(ColumnWriterImpl<'a, BoolType>),
+    Int32ColumnWriter(ColumnWriterImpl<'a, Int32Type>),
+    Int64ColumnWriter(ColumnWriterImpl<'a, Int64Type>),
+    Int96ColumnWriter(ColumnWriterImpl<'a, Int96Type>),
+    FloatColumnWriter(ColumnWriterImpl<'a, FloatType>),
+    DoubleColumnWriter(ColumnWriterImpl<'a, DoubleType>),
+    ByteArrayColumnWriter(ColumnWriterImpl<'a, ByteArrayType>),
+    FixedLenByteArrayColumnWriter(ColumnWriterImpl<'a, FixedLenByteArrayType>),
 }
 
 pub enum Level {
@@ -76,11 +76,11 @@ macro_rules! gen_stats_section {
 }
 
 /// Gets a specific column writer corresponding to column descriptor `descr`.
-pub fn get_column_writer(
+pub fn get_column_writer<'a>(
     descr: ColumnDescPtr,
     props: WriterPropertiesPtr,
-    page_writer: Box<dyn PageWriter>,
-) -> ColumnWriter {
+    page_writer: Box<dyn PageWriter + 'a>,
+) -> ColumnWriter<'a> {
     match descr.physical_type() {
         Type::BOOLEAN => ColumnWriter::BoolColumnWriter(ColumnWriterImpl::new(
             descr,
@@ -139,9 +139,9 @@ pub fn get_typed_column_writer<T: DataType>(
 }
 
 /// Similar to `get_typed_column_writer` but returns a reference.
-pub fn get_typed_column_writer_ref<T: DataType>(
-    col_writer: &ColumnWriter,
-) -> &ColumnWriterImpl<T> {
+pub fn get_typed_column_writer_ref<'a, 'b: 'a, T: DataType>(
+    col_writer: &'b ColumnWriter<'a>,
+) -> &'b ColumnWriterImpl<'a, T> {
     T::get_column_writer_ref(col_writer).unwrap_or_else(|| {
         panic!(
             "Failed to convert column writer into a typed column writer for `{}` type",
@@ -151,9 +151,9 @@ pub fn get_typed_column_writer_ref<T: DataType>(
 }
 
 /// Similar to `get_typed_column_writer` but returns a reference.
-pub fn get_typed_column_writer_mut<T: DataType>(
-    col_writer: &mut ColumnWriter,
-) -> &mut ColumnWriterImpl<T> {
+pub fn get_typed_column_writer_mut<'a, 'b: 'a, T: DataType>(
+    col_writer: &'a mut ColumnWriter<'b>,
+) -> &'a mut ColumnWriterImpl<'b, T> {
     T::get_column_writer_mut(col_writer).unwrap_or_else(|| {
         panic!(
             "Failed to convert column writer into a typed column writer for `{}` type",
@@ -163,11 +163,11 @@ pub fn get_typed_column_writer_mut<T: DataType>(
 }
 
 /// Typed column writer for a primitive column.
-pub struct ColumnWriterImpl<T: DataType> {
+pub struct ColumnWriterImpl<'a, T: DataType> {
     // Column writer properties
     descr: ColumnDescPtr,
     props: WriterPropertiesPtr,
-    page_writer: Box<dyn PageWriter>,
+    page_writer: Box<dyn PageWriter + 'a>,
     has_dictionary: bool,
     dict_encoder: Option<DictEncoder<T>>,
     encoder: Box<dyn Encoder<T>>,
@@ -200,11 +200,11 @@ pub struct ColumnWriterImpl<T: DataType> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: DataType> ColumnWriterImpl<T> {
+impl<'a, T: DataType> ColumnWriterImpl<'a, T> {
     pub fn new(
         descr: ColumnDescPtr,
         props: WriterPropertiesPtr,
-        page_writer: Box<dyn PageWriter>,
+        page_writer: Box<dyn PageWriter + 'a>,
     ) -> Self {
         let codec = props.compression(descr.path());
         let compressor = create_codec(codec).unwrap();
@@ -1140,15 +1140,13 @@ mod tests {
         page::PageReader,
         reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
     };
+    use crate::file::writer::TrackedWrite;
     use crate::file::{
         properties::WriterProperties, reader::SerializedPageReader,
         writer::SerializedPageWriter,
     };
     use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
-    use crate::util::{
-        io::{FileSink, FileSource},
-        test_common::random_numbers_range,
-    };
+    use crate::util::{io::FileSource, test_common::random_numbers_range};
 
     use super::*;
 
@@ -1825,9 +1823,9 @@ mod tests {
     fn test_column_writer_add_data_pages_with_dict() {
         // ARROW-5129: Test verifies that we add data page in case of dictionary encoding
         // and no fallback occurred so far.
-        let file = tempfile::tempfile().unwrap();
-        let sink = FileSink::new(&file);
-        let page_writer = Box::new(SerializedPageWriter::new(sink));
+        let mut file = tempfile::tempfile().unwrap();
+        let mut writer = TrackedWrite::new(&mut file);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut writer));
         let props = Arc::new(
             WriterProperties::builder()
                 .set_data_pagesize_limit(15) // actually each page will have size 15-18 bytes
@@ -2120,9 +2118,9 @@ mod tests {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) {
-        let file = tempfile::tempfile().unwrap();
-        let sink = FileSink::new(&file);
-        let page_writer = Box::new(SerializedPageWriter::new(sink));
+        let mut file = tempfile::tempfile().unwrap();
+        let mut writer = TrackedWrite::new(&mut file);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut writer));
 
         let max_def_level = match def_levels {
             Some(buf) => *buf.iter().max().unwrap_or(&0i16),
@@ -2257,12 +2255,12 @@ mod tests {
     }
 
     /// Returns column writer.
-    fn get_test_column_writer<T: DataType>(
-        page_writer: Box<dyn PageWriter>,
+    fn get_test_column_writer<'a, T: DataType>(
+        page_writer: Box<dyn PageWriter + 'a>,
         max_def_level: i16,
         max_rep_level: i16,
         props: WriterPropertiesPtr,
-    ) -> ColumnWriterImpl<T> {
+    ) -> ColumnWriterImpl<'a, T> {
         let descr = Arc::new(get_test_column_descr::<T>(max_def_level, max_rep_level));
         let column_writer = get_column_writer(descr, props, page_writer);
         get_typed_column_writer::<T>(column_writer)
@@ -2343,7 +2341,7 @@ mod tests {
         max_def_level: i16,
         max_rep_level: i16,
         props: WriterPropertiesPtr,
-    ) -> ColumnWriterImpl<T> {
+    ) -> ColumnWriterImpl<'static, T> {
         let descr = Arc::new(get_test_decimals_column_descr::<T>(
             max_def_level,
             max_rep_level,
@@ -2386,12 +2384,12 @@ mod tests {
     }
 
     /// Returns column writer for UINT32 Column provided as ConvertedType only
-    fn get_test_unsigned_int_given_as_converted_column_writer<T: DataType>(
-        page_writer: Box<dyn PageWriter>,
+    fn get_test_unsigned_int_given_as_converted_column_writer<'a, T: DataType>(
+        page_writer: Box<dyn PageWriter + 'a>,
         max_def_level: i16,
         max_rep_level: i16,
         props: WriterPropertiesPtr,
-    ) -> ColumnWriterImpl<T> {
+    ) -> ColumnWriterImpl<'a, T> {
         let descr = Arc::new(get_test_converted_type_unsigned_integer_column_descr::<T>(
             max_def_level,
             max_rep_level,
