@@ -568,41 +568,37 @@ impl BitReader {
             }
         }
 
-        unsafe {
-            let in_buf = &self.buffer.data()[self.byte_offset..];
-            let mut in_ptr = in_buf as *const [u8] as *const u8 as *const u32;
-            if size_of::<T>() == 4 {
-                while values_to_read - i >= 32 {
-                    let out_ptr = &mut batch[i..] as *mut [T] as *mut T as *mut u32;
-                    in_ptr = unpack32(in_ptr, out_ptr, num_bits);
-                    self.byte_offset += 4 * num_bits;
-                    i += 32;
-                }
-            } else {
-                let mut out_buf = [0u32; 32];
-                let out_ptr = &mut out_buf as &mut [u32] as *mut [u32] as *mut u32;
-                while values_to_read - i >= 32 {
-                    in_ptr = unpack32(in_ptr, out_ptr, num_bits);
-                    self.byte_offset += 4 * num_bits;
-                    for n in 0..32 {
-                        // We need to copy from smaller size to bigger size to avoid
-                        // overwriting other memory regions.
-                        if size_of::<T>() > size_of::<u32>() {
-                            std::ptr::copy_nonoverlapping(
-                                out_buf[n..].as_ptr() as *const u32,
-                                &mut batch[i] as *mut T as *mut u32,
-                                1,
-                            );
-                        } else {
-                            std::ptr::copy_nonoverlapping(
-                                out_buf[n..].as_ptr() as *const T,
-                                &mut batch[i] as *mut T,
-                                1,
-                            );
-                        }
-                        i += 1;
+        let in_buf = &self.buffer.data()[self.byte_offset..];
+        let mut in_ptr = in_buf as *const [u8] as *const u8 as *const u32;
+        if size_of::<T>() == 4 {
+            while values_to_read - i >= 32 {
+                let out_ptr = &mut batch[i..] as *mut [T] as *mut T as *mut u32;
+                in_ptr = unsafe { unpack32(in_ptr, out_ptr, num_bits) };
+                self.byte_offset += 4 * num_bits;
+                i += 32;
+            }
+        } else {
+            let mut out_buf = [0u32; 32];
+            let out_ptr = &mut out_buf as &mut [u32] as *mut [u32] as *mut u32;
+            while values_to_read - i >= 32 {
+                in_ptr = unsafe { unpack32(in_ptr, out_ptr, num_bits) };
+                self.byte_offset += 4 * num_bits;
+
+                for (batch, out) in batch.iter_mut().zip(out_buf) {
+                    // Zero-allocate buffer
+                    let mut out_bytes = T::Buffer::default();
+                    let in_bytes = out.to_ne_bytes();
+
+                    {
+                        let out_bytes = out_bytes.as_mut();
+                        let len = out_bytes.len().min(in_bytes.len());
+                        (&mut out_bytes[..len]).copy_from_slice(&in_bytes[..len]);
                     }
+
+                    *batch = T::from_ne_bytes(out_bytes);
                 }
+
+                i += 32;
             }
         }
 
@@ -1192,5 +1188,20 @@ mod tests {
                 i, values[i], v
             );
         });
+    }
+
+    #[test]
+    fn test_get_batch_zero_extend() {
+        let to_read = vec![0xFF; 4];
+        let mut reader = BitReader::new(ByteBufferPtr::new(to_read));
+
+        // Create a non-zeroed output buffer
+        let mut output = [u64::MAX; 32];
+        reader.get_batch(&mut output, 1);
+
+        for v in output {
+            // Values should be read correctly
+            assert_eq!(v, 1);
+        }
     }
 }
