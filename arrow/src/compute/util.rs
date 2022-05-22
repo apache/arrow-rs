@@ -190,7 +190,6 @@ pub(super) mod tests {
             ArrayData::try_new(
                 DataType::UInt8,
                 len,
-                None,
                 null_bit_buffer,
                 offset,
                 vec![buffer],
