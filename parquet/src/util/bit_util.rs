@@ -584,10 +584,10 @@ impl BitReader {
                 in_ptr = unsafe { unpack32(in_ptr, out_ptr, num_bits) };
                 self.byte_offset += 4 * num_bits;
 
-                for (batch, out) in batch.iter_mut().zip(out_buf) {
+                for out in out_buf {
                     // Zero-allocate buffer
                     let mut out_bytes = T::Buffer::default();
-                    let in_bytes = out.to_ne_bytes();
+                    let in_bytes = out.to_le_bytes();
 
                     {
                         let out_bytes = out_bytes.as_mut();
@@ -595,10 +595,9 @@ impl BitReader {
                         (&mut out_bytes[..len]).copy_from_slice(&in_bytes[..len]);
                     }
 
-                    *batch = T::from_ne_bytes(out_bytes);
+                    batch[i] = T::from_le_bytes(out_bytes);
+                    i += 1;
                 }
-
-                i += 32;
             }
         }
 
