@@ -287,7 +287,7 @@ jobs:
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cargo check --benches --workspace
+          cargo check --benches --workspace --features test_common,prettyprint,async,experimental 
 
   lint:
     name: Lint (cargo fmt)
