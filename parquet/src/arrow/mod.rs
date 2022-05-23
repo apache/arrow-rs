@@ -150,9 +150,36 @@ pub use self::schema::{
 pub const ARROW_SCHEMA_META_KEY: &str = "ARROW:schema";
 
 /// A [`ProjectionMask`] identifies a set of columns within a potentially nested schema to project
+///
+/// In particular, a [`ProjectionMask`] can be constructed from a list of leaf column indices
+/// or root column indices where:
+///
+/// * Root columns are the direct children of the root schema, enumerated in order
+/// * Leaf columns are the child-less leaves of the schema as enumerated by a depth-first search
+///
+/// For example, the schema
+///
+/// ```ignore
+/// message schema {
+///   REQUIRED boolean         leaf_1;
+///   REQUIRED GROUP group {
+///     OPTIONAL int32 leaf_2;
+///     OPTIONAL int64 leaf_3;
+///   }
+/// }
+/// ```
+///
+/// Has roots `["leaf_1", "group"]` and leaves `["leaf_1", "leaf_2", "leaf_3"]`
+///
+/// For non-nested schemas, i.e. those containing only primitive columns, the root
+/// and leaves are the same
+///
 #[derive(Debug, Clone)]
 pub struct ProjectionMask {
-    /// A mask of
+    /// If present a leaf column should be included if the value at
+    /// the corresponding index is true
+    ///
+    /// If `None`, include all columns
     mask: Option<Vec<bool>>,
 }
 
