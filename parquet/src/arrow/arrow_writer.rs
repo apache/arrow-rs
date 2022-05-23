@@ -695,7 +695,6 @@ mod tests {
     use super::*;
 
     use std::fs::File;
-    use std::io::Cursor;
     use std::sync::Arc;
 
     use arrow::datatypes::ToByteSlice;
@@ -748,15 +747,13 @@ mod tests {
         let expected_batch =
             RecordBatch::try_new(schema.clone(), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
-        let mut cursor = Cursor::new(vec![]);
+        let mut buffer = vec![];
 
         {
-            let mut writer = ArrowWriter::try_new(&mut cursor, schema, None).unwrap();
+            let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).unwrap();
             writer.write(&expected_batch).unwrap();
             writer.close().unwrap();
         }
-
-        let buffer = cursor.into_inner();
 
         let cursor = crate::file::serialized_reader::SliceableCursor::new(buffer);
         let reader = SerializedFileReader::new(cursor).unwrap();
