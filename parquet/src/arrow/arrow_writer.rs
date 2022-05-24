@@ -187,7 +187,7 @@ impl<W: Write> ArrowWriter<W> {
             write_leaves(&mut row_group_writer, &arrays, &mut levels)?;
         }
 
-        row_group_writer.close().unwrap();
+        row_group_writer.close()?;
         self.buffered_rows -= num_rows;
 
         Ok(())
