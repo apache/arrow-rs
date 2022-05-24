@@ -36,11 +36,8 @@ use super::schema::{
 use crate::column::writer::ColumnWriter;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::WriterProperties;
-use crate::file::writer::SerializedColumnWriter;
-use crate::{
-    data_type::*,
-    file::writer::{FileWriter, RowGroupWriter, SerializedFileWriter},
-};
+use crate::file::writer::{SerializedColumnWriter, SerializedRowGroupWriter};
+use crate::{data_type::*, file::writer::SerializedFileWriter};
 
 /// Arrow writer
 ///
@@ -187,7 +184,7 @@ impl<W: Write> ArrowWriter<W> {
                 })
                 .collect();
 
-            write_leaves(row_group_writer.as_mut(), &arrays, &mut levels)?;
+            write_leaves(&mut row_group_writer, &arrays, &mut levels)?;
         }
 
         row_group_writer.close().unwrap();
@@ -197,7 +194,7 @@ impl<W: Write> ArrowWriter<W> {
     }
 
     /// Close and finalize the underlying Parquet writer
-    pub fn close(&mut self) -> Result<parquet_format::FileMetaData> {
+    pub fn close(mut self) -> Result<parquet_format::FileMetaData> {
         self.flush()?;
         self.writer.close()
     }
@@ -205,17 +202,17 @@ impl<W: Write> ArrowWriter<W> {
 
 /// Convenience method to get the next ColumnWriter from the RowGroupWriter
 #[inline]
-fn get_col_writer(
-    row_group_writer: &mut dyn RowGroupWriter,
-) -> Result<SerializedColumnWriter<'_>> {
+fn get_col_writer<'a, W: Write>(
+    row_group_writer: &'a mut SerializedRowGroupWriter<'_, W>,
+) -> Result<SerializedColumnWriter<'a>> {
     let col_writer = row_group_writer
         .next_column()?
         .expect("Unable to get column writer");
     Ok(col_writer)
 }
 
-fn write_leaves(
-    row_group_writer: &mut dyn RowGroupWriter,
+fn write_leaves<W: Write>(
+    row_group_writer: &mut SerializedRowGroupWriter<'_, W>,
     arrays: &[ArrayRef],
     levels: &mut [Vec<LevelInfo>],
 ) -> Result<()> {

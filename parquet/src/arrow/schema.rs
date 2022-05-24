@@ -1591,7 +1591,7 @@ mod tests {
 
         // write to an empty parquet file so that schema is serialized
         let file = tempfile::tempfile().unwrap();
-        let mut writer = ArrowWriter::try_new(
+        let writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
             Arc::new(schema.clone()),
             None,
@@ -1660,7 +1660,7 @@ mod tests {
 
         // write to an empty parquet file so that schema is serialized
         let file = tempfile::tempfile().unwrap();
-        let mut writer = ArrowWriter::try_new(
+        let writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
             Arc::new(schema.clone()),
             None,

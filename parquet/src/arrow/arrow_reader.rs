@@ -270,7 +270,7 @@ mod tests {
     use crate::errors::Result;
     use crate::file::properties::{WriterProperties, WriterVersion};
     use crate::file::reader::{FileReader, SerializedFileReader};
-    use crate::file::writer::{FileWriter, SerializedFileWriter};
+    use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
     use crate::util::cursor::SliceableCursor;
@@ -952,7 +952,7 @@ mod tests {
         writer.close()
     }
 
-    fn get_test_reader(file_name: &str) -> Arc<dyn FileReader> {
+    fn get_test_reader(file_name: &str) -> Arc<SerializedFileReader<File>> {
         let file = get_test_file(file_name);
 
         let reader =

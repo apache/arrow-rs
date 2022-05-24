@@ -19,7 +19,6 @@ use parquet::data_type::BoolType;
 use parquet::file::properties::WriterProperties;
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
-use parquet::file::writer::FileWriter;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
 use std::fs;
@@ -62,7 +61,6 @@ fn it_writes_data_without_hanging() {
         }
         let rg_md = row_group_writer.close().expect("close row group");
         println!("total rows written: {}", rg_md.num_rows());
-        row_group_writer.close().expect("close row groups");
     }
     writer.close().expect("close writer");
 

@@ -37,6 +37,7 @@ use crate::file::{
     statistics::to_thrift as statistics_to_thrift, FOOTER_SIZE, PARQUET_MAGIC,
 };
 use crate::schema::types::{self, SchemaDescPtr, SchemaDescriptor, TypePtr};
+use crate::util::io::TryClone;
 
 /// A wrapper around a [`Write`] that keeps track of the number
 /// of bytes that have been written
@@ -72,62 +73,6 @@ impl<W: Write> Write for TrackedWrite<W> {
     }
 }
 
-// ----------------------------------------------------------------------
-// APIs for file & row group writers
-
-/// Parquet file writer API.
-/// Provides methods to write row groups sequentially.
-///
-/// The main workflow should be as following:
-/// - Create file writer, this will open a new file and potentially write some metadata.
-/// - Request a new row group writer by calling `next_row_group`.
-/// - Once finished writing row group, close row group writer by passing it into
-/// `close_row_group` method - this will finalise row group metadata and update metrics.
-/// - Write subsequent row groups, if necessary.
-/// - After all row groups have been written, close the file writer using `close` method.
-pub trait FileWriter {
-    /// Creates new row group from this file writer.
-    /// In case of IO error or Thrift error, returns `Err`.
-    ///
-    /// There is no limit on a number of row groups in a file; however, row groups have
-    /// to be written sequentially. Every time the next row group is requested, the
-    /// previous row group must be finalised and closed using `RowGroupWriter::close` method.
-    fn next_row_group(&mut self) -> Result<Box<dyn RowGroupWriter + '_>>;
-
-    /// Closes and finalises file writer, returning the file metadata.
-    ///
-    /// All row groups must be appended before this method is called.
-    /// No writes are allowed after this point.
-    ///
-    /// Can be called multiple times. It is up to implementation to either result in
-    /// no-op, or return an `Err` for subsequent calls.
-    fn close(&mut self) -> Result<parquet::FileMetaData>;
-}
-
-/// Parquet row group writer API.
-/// Provides methods to access column writers in an iterator-like fashion, order is
-/// guaranteed to match the order of schema leaves (column descriptors).
-///
-/// All columns should be written sequentially; the main workflow is:
-/// - Request the next column using `next_column` method - this will return `None` if no
-/// more columns are available to write.
-/// - Once done writing a column, close column writer with `close`
-/// - Once all columns have been written, close row group writer with `close` method -
-/// it will return row group metadata and is no-op on already closed row group.
-pub trait RowGroupWriter {
-    /// Returns the next column writer, if available; otherwise returns `None`.
-    /// In case of any IO error or Thrift error, or if row group writer has already been
-    /// closed returns `Err`.
-    fn next_column(&mut self) -> Result<Option<SerializedColumnWriter<'_>>>;
-
-    /// Closes this row group writer and returns row group metadata.
-    /// After calling this method row group writer must not be used.
-    ///
-    /// Can be called multiple times. In subsequent calls will result in no-op and return
-    /// already created row group metadata.
-    fn close(&mut self) -> Result<RowGroupMetaDataPtr>;
-}
-
 /// Callback invoked on closing a column chunk, arguments are:
 ///
 /// - the number of bytes written
@@ -142,11 +87,23 @@ pub type OnCloseColumnChunk<'a> =
 /// - the row group metadata
 pub type OnCloseRowGroup<'a> = Box<dyn FnOnce(RowGroupMetaDataPtr) -> Result<()> + 'a>;
 
+#[deprecated = "use std::io::Write"]
+pub trait ParquetWriter: Write + std::io::Seek + TryClone {}
+#[allow(deprecated)]
+impl<T: Write + std::io::Seek + TryClone> ParquetWriter for T {}
+
 // ----------------------------------------------------------------------
 // Serialized impl for file & row group writers
 
-/// A serialized implementation for Parquet [`FileWriter`].
-/// See documentation on file writer for more information.
+/// Parquet file writer API.
+/// Provides methods to write row groups sequentially.
+///
+/// The main workflow should be as following:
+/// - Create file writer, this will open a new file and potentially write some metadata.
+/// - Request a new row group writer by calling `next_row_group`.
+/// - Once finished writing row group, close row group writer by calling `close`
+/// - Write subsequent row groups, if necessary.
+/// - After all row groups have been written, close the file writer using `close` method.
 pub struct SerializedFileWriter<W: Write> {
     buf: TrackedWrite<W>,
     schema: TypePtr,
@@ -154,7 +111,6 @@ pub struct SerializedFileWriter<W: Write> {
     props: WriterPropertiesPtr,
     row_groups: Vec<RowGroupMetaDataPtr>,
     row_group_index: usize,
-    is_closed: bool,
 }
 
 impl<W: Write> SerializedFileWriter<W> {
@@ -169,8 +125,45 @@ impl<W: Write> SerializedFileWriter<W> {
             props: properties,
             row_groups: vec![],
             row_group_index: 0,
-            is_closed: false,
         })
+    }
+
+    /// Creates new row group from this file writer.
+    /// In case of IO error or Thrift error, returns `Err`.
+    ///
+    /// There is no limit on a number of row groups in a file; however, row groups have
+    /// to be written sequentially. Every time the next row group is requested, the
+    /// previous row group must be finalised and closed using `RowGroupWriter::close` method.
+    pub fn next_row_group(&mut self) -> Result<SerializedRowGroupWriter<'_, W>> {
+        self.assert_previous_writer_closed()?;
+        self.row_group_index += 1;
+
+        let row_groups = &mut self.row_groups;
+        let on_close = |metadata| {
+            row_groups.push(metadata);
+            Ok(())
+        };
+
+        let row_group_writer = SerializedRowGroupWriter::new(
+            self.descr.clone(),
+            self.props.clone(),
+            &mut self.buf,
+            Some(Box::new(on_close)),
+        );
+        Ok(row_group_writer)
+    }
+
+    /// Closes and finalises file writer, returning the file metadata.
+    ///
+    /// All row groups must be appended before this method is called.
+    /// No writes are allowed after this point.
+    ///
+    /// Can be called multiple times. It is up to implementation to either result in
+    /// no-op, or return an `Err` for subsequent calls.
+    pub fn close(mut self) -> Result<parquet::FileMetaData> {
+        self.assert_previous_writer_closed()?;
+        let metadata = self.write_metadata()?;
+        Ok(metadata)
     }
 
     /// Writes magic bytes at the beginning of the file.
@@ -221,15 +214,6 @@ impl<W: Write> SerializedFileWriter<W> {
     }
 
     #[inline]
-    fn assert_not_closed(&self) -> Result<()> {
-        if self.is_closed {
-            Err(general_err!("File writer is closed"))
-        } else {
-            Ok(())
-        }
-    }
-
-    #[inline]
     fn assert_previous_writer_closed(&self) -> Result<()> {
         if self.row_group_index != self.row_groups.len() {
             Err(general_err!("Previous row group writer was not closed"))
@@ -239,40 +223,16 @@ impl<W: Write> SerializedFileWriter<W> {
     }
 }
 
-impl<W: Write> FileWriter for SerializedFileWriter<W> {
-    #[inline]
-    fn next_row_group(&mut self) -> Result<Box<dyn RowGroupWriter + '_>> {
-        self.assert_not_closed()?;
-        self.assert_previous_writer_closed()?;
-        self.row_group_index += 1;
-
-        let row_groups = &mut self.row_groups;
-        let on_close = |metadata| {
-            row_groups.push(metadata);
-            Ok(())
-        };
-
-        let row_group_writer = SerializedRowGroupWriter::new(
-            self.descr.clone(),
-            self.props.clone(),
-            &mut self.buf,
-            Some(Box::new(on_close)),
-        );
-        Ok(Box::new(row_group_writer))
-    }
-
-    fn close(&mut self) -> Result<parquet::FileMetaData> {
-        self.assert_not_closed()?;
-        self.assert_previous_writer_closed()?;
-        let metadata = self.write_metadata()?;
-        self.is_closed = true;
-        Ok(metadata)
-    }
-}
-
-/// A serialized implementation for Parquet [`RowGroupWriter`].
-/// Coordinates writing of a row group with column writers.
-/// See documentation on row group writer for more information.
+/// Parquet row group writer API.
+/// Provides methods to access column writers in an iterator-like fashion, order is
+/// guaranteed to match the order of schema leaves (column descriptors).
+///
+/// All columns should be written sequentially; the main workflow is:
+/// - Request the next column using `next_column` method - this will return `None` if no
+/// more columns are available to write.
+/// - Once done writing a column, close column writer with `close`
+/// - Once all columns have been written, close row group writer with `close` method -
+/// it will return row group metadata and is no-op on already closed row group.
 pub struct SerializedRowGroupWriter<'a, W: Write> {
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
@@ -312,28 +272,10 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         }
     }
 
-    #[inline]
-    fn assert_closed(&self) -> Result<()> {
-        if self.row_group_metadata.is_some() {
-            Err(general_err!("Row group writer is closed"))
-        } else {
-            Ok(())
-        }
-    }
-
-    #[inline]
-    fn assert_previous_writer_closed(&self) -> Result<()> {
-        if self.column_index != self.column_chunks.len() {
-            Err(general_err!("Previous column writer was not closed"))
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl<'a, W: Write> RowGroupWriter for SerializedRowGroupWriter<'a, W> {
-    fn next_column(&mut self) -> Result<Option<SerializedColumnWriter<'_>>> {
-        self.assert_closed()?;
+    /// Returns the next column writer, if available; otherwise returns `None`.
+    /// In case of any IO error or Thrift error, or if row group writer has already been
+    /// closed returns `Err`.
+    pub fn next_column(&mut self) -> Result<Option<SerializedColumnWriter<'_>>> {
         self.assert_previous_writer_closed()?;
 
         if self.column_index >= self.descr.num_columns() {
@@ -376,7 +318,12 @@ impl<'a, W: Write> RowGroupWriter for SerializedRowGroupWriter<'a, W> {
         )))
     }
 
-    fn close(&mut self) -> Result<RowGroupMetaDataPtr> {
+    /// Closes this row group writer and returns row group metadata.
+    /// After calling this method row group writer must not be used.
+    ///
+    /// Can be called multiple times. In subsequent calls will result in no-op and return
+    /// already created row group metadata.
+    pub fn close(mut self) -> Result<RowGroupMetaDataPtr> {
         if self.row_group_metadata.is_none() {
             self.assert_previous_writer_closed()?;
 
@@ -397,6 +344,15 @@ impl<'a, W: Write> RowGroupWriter for SerializedRowGroupWriter<'a, W> {
 
         let metadata = self.row_group_metadata.as_ref().unwrap().clone();
         Ok(metadata)
+    }
+
+    #[inline]
+    fn assert_previous_writer_closed(&self) -> Result<()> {
+        if self.column_index != self.column_chunks.len() {
+            Err(general_err!("Previous column writer was not closed"))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -600,48 +556,6 @@ mod tests {
     use crate::util::memory::ByteBufferPtr;
 
     #[test]
-    fn test_file_writer_error_after_close() {
-        let file = tempfile::tempfile().unwrap();
-        let schema = Arc::new(types::Type::group_type_builder("schema").build().unwrap());
-        let props = Arc::new(WriterProperties::builder().build());
-        let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
-        writer.close().unwrap();
-        {
-            let res = writer.next_row_group();
-            assert!(res.is_err());
-            if let Err(err) = res {
-                assert_eq!(format!("{}", err), "Parquet error: File writer is closed");
-            }
-        }
-        {
-            let res = writer.close();
-            assert!(res.is_err());
-            if let Err(err) = res {
-                assert_eq!(format!("{}", err), "Parquet error: File writer is closed");
-            }
-        }
-    }
-
-    #[test]
-    fn test_row_group_writer_error_after_close() {
-        let file = tempfile::tempfile().unwrap();
-        let schema = Arc::new(types::Type::group_type_builder("schema").build().unwrap());
-        let props = Arc::new(WriterProperties::builder().build());
-        let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
-        let mut row_group_writer = writer.next_row_group().unwrap();
-        row_group_writer.close().unwrap();
-
-        let res = row_group_writer.next_column();
-        assert!(res.is_err());
-        if let Err(err) = res {
-            assert_eq!(
-                format!("{}", err),
-                "Parquet error: Row group writer is closed"
-            );
-        }
-    }
-
-    #[test]
     fn test_row_group_writer_error_not_all_columns_written() {
         let file = tempfile::tempfile().unwrap();
         let schema = Arc::new(
@@ -656,7 +570,7 @@ mod tests {
         );
         let props = Arc::new(WriterProperties::builder().build());
         let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
-        let mut row_group_writer = writer.next_row_group().unwrap();
+        let row_group_writer = writer.next_row_group().unwrap();
         let res = row_group_writer.close();
         assert!(res.is_err());
         if let Err(err) = res {
@@ -728,7 +642,7 @@ mod tests {
                 .unwrap(),
         );
         let props = Arc::new(WriterProperties::builder().build());
-        let mut writer =
+        let writer =
             SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
         writer.close().unwrap();
 
@@ -758,7 +672,7 @@ mod tests {
                 )]))
                 .build(),
         );
-        let mut writer =
+        let writer =
             SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
         writer.close().unwrap();
 
@@ -804,7 +718,7 @@ mod tests {
                 .set_writer_version(WriterVersion::PARQUET_2_0)
                 .build(),
         );
-        let mut writer =
+        let writer =
             SerializedFileWriter::new(file.try_clone().unwrap(), schema, props).unwrap();
         writer.close().unwrap();
 
