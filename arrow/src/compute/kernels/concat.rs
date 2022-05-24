@@ -31,7 +31,6 @@
 //! ```
 
 use crate::array::*;
-use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
 
@@ -101,64 +100,6 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef> {
     }
 
     Ok(make_array(mutable.freeze()))
-}
-
-// Elementwise concatenation of StringArrays
-pub fn string_concat<Offset: OffsetSizeTrait>(
-    left: &GenericStringArray<Offset>,
-    right: &GenericStringArray<Offset>,
-) -> Result<GenericStringArray<Offset>> {
-    if left.len() != right.len() {
-        return Err(ArrowError::ComputeError(
-            format!(
-                "Arrays must have the same length: {} != {}",
-                left.len(),
-                right.len()
-            )
-            .to_string(),
-        ));
-    }
-
-    let output_bitmap = combine_option_bitmap(left.data(), right.data(), left.len())?;
-
-    let left_offsets = left.value_offsets();
-    let right_offsets = right.value_offsets();
-
-    let left_buffer = left.value_data();
-    let right_buffer = right.value_data();
-    let left_values = left_buffer.as_slice();
-    let right_values = right_buffer.as_slice();
-
-    let mut output_values = BufferBuilder::<u8>::new(
-        left_values.len() + right_values.len()
-            - left_offsets[0].to_usize().unwrap()
-            - right_offsets[0].to_usize().unwrap(),
-    );
-
-    let mut output_offsets = BufferBuilder::<Offset>::new(left_offsets.len());
-    output_offsets.append(Offset::zero());
-    for (l, r) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
-        output_values.append_slice(
-            &left_values[l[0].to_usize().unwrap()..l[1].to_usize().unwrap()],
-        );
-        output_values.append_slice(
-            &right_values[r[0].to_usize().unwrap()..r[1].to_usize().unwrap()],
-        );
-        output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
-    }
-
-    let mut builder =
-        ArrayDataBuilder::new(GenericStringArray::<Offset>::get_data_type())
-            .len(left.len())
-            .add_buffer(output_offsets.finish())
-            .add_buffer(output_values.finish());
-
-    if let Some(null_bitmap) = output_bitmap {
-        builder = builder.null_bit_buffer(null_bitmap);
-    }
-
-    // SAFETY - offsets valid by construction
-    Ok(unsafe { builder.build_unchecked() }.into())
 }
 
 #[cfg(test)]
@@ -627,24 +568,5 @@ mod tests {
         assert!(!array.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
         assert!(!copy.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
         assert!(!new.data().child_data()[0].ptr_eq(&combined.data().child_data()[0]));
-    }
-
-    #[cfg(feature = "test_utils")]
-    #[test]
-    fn test_string_concat() {
-        let left = [Some("foo"), Some("bar"), None]
-            .into_iter()
-            .collect::<StringArray>();
-        let right = [None, Some("yyy"), Some("zzz")]
-            .into_iter()
-            .collect::<StringArray>();
-
-        let res = string_concat(&left, &right).unwrap();
-
-        let expected = [None, Some("baryyy"), None]
-            .into_iter()
-            .collect::<StringArray>();
-
-        assert_eq!(res, expected);
     }
 }
