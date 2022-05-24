@@ -128,6 +128,28 @@ mod tests {
     }
 
     #[test]
+    fn test_string_concat_no_null() {
+        let left = StringArray::from(vec!["foo", "bar"]);
+        let right = StringArray::from(vec!["bar", "baz"]);
+
+        let output = string_concat(&left, &right).unwrap();
+
+        let expected = StringArray::from(vec!["foobar", "barbaz"]);
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_string_concat_error() {
+        let left = StringArray::from(vec!["foo", "bar"]);
+        let right = StringArray::from(vec!["baz"]);
+
+        let output = string_concat(&left, &right);
+
+        assert!(output.is_err());
+    }
+
+    #[test]
     fn test_string_concat_slice() {
         let left = &StringArray::from(vec![None, Some("foo"), Some("bar"), Some("baz")]);
         let right = &StringArray::from(vec![Some("boo"), None, Some("far"), Some("faz")]);
