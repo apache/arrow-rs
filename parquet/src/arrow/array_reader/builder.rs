@@ -32,6 +32,7 @@ use crate::arrow::converter::{
     IntervalYearMonthArrayConverter, IntervalYearMonthConverter,
 };
 use crate::arrow::schema::{convert_schema, ParquetField, ParquetFieldType};
+use crate::arrow::ProjectionMask;
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{
     BoolType, DoubleType, FixedLenByteArrayType, FloatType, Int32Type, Int64Type,
@@ -40,21 +41,15 @@ use crate::data_type::{
 use crate::errors::Result;
 use crate::schema::types::{ColumnDescriptor, ColumnPath, SchemaDescPtr, Type};
 
-/// Create array reader from parquet schema, column indices, and parquet file reader.
-pub fn build_array_reader<T>(
+/// Create array reader from parquet schema, projection mask, and parquet file reader.
+pub fn build_array_reader(
     parquet_schema: SchemaDescPtr,
     arrow_schema: SchemaRef,
-    column_indices: T,
+    mask: ProjectionMask,
     row_groups: Box<dyn RowGroupCollection>,
-) -> Result<Box<dyn ArrayReader>>
-where
-    T: IntoIterator<Item = usize>,
-{
-    let field = convert_schema(
-        parquet_schema.as_ref(),
-        column_indices,
-        Some(arrow_schema.as_ref()),
-    )?;
+) -> Result<Box<dyn ArrayReader>> {
+    let field =
+        convert_schema(parquet_schema.as_ref(), mask, Some(arrow_schema.as_ref()))?;
 
     match &field {
         Some(field) => build_reader(field, row_groups.as_ref()),
@@ -346,6 +341,7 @@ mod tests {
             Arc::new(SerializedFileReader::new(file).unwrap());
 
         let file_metadata = file_reader.metadata().file_metadata();
+        let mask = ProjectionMask::leaves(file_metadata.schema_descr(), [0]);
         let arrow_schema = parquet_to_arrow_schema(
             file_metadata.schema_descr(),
             file_metadata.key_value_metadata(),
@@ -355,7 +351,7 @@ mod tests {
         let array_reader = build_array_reader(
             file_reader.metadata().file_metadata().schema_descr_ptr(),
             Arc::new(arrow_schema),
-            vec![0usize].into_iter(),
+            mask,
             Box::new(file_reader),
         )
         .unwrap();

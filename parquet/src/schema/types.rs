@@ -847,13 +847,13 @@ pub struct SchemaDescriptor {
     // `schema` in DFS order.
     leaves: Vec<ColumnDescPtr>,
 
-    // Mapping from a leaf column's index to the root column type that it
+    // Mapping from a leaf column's index to the root column index that it
     // comes from. For instance: the leaf `a.b.c.d` would have a link back to `a`:
     // -- a  <-----+
     // -- -- b     |
     // -- -- -- c  |
     // -- -- -- -- d
-    leaf_to_base: Vec<TypePtr>,
+    leaf_to_base: Vec<usize>,
 }
 
 impl fmt::Debug for SchemaDescriptor {
@@ -871,9 +871,9 @@ impl SchemaDescriptor {
         assert!(tp.is_group(), "SchemaDescriptor should take a GroupType");
         let mut leaves = vec![];
         let mut leaf_to_base = Vec::new();
-        for f in tp.get_fields() {
+        for (root_idx, f) in tp.get_fields().iter().enumerate() {
             let mut path = vec![];
-            build_tree(f, f, 0, 0, &mut leaves, &mut leaf_to_base, &mut path);
+            build_tree(f, root_idx, 0, 0, &mut leaves, &mut leaf_to_base, &mut path);
         }
 
         Self {
@@ -904,30 +904,35 @@ impl SchemaDescriptor {
         self.leaves.len()
     }
 
-    /// Returns column root [`Type`](crate::schema::types::Type) for a field position.
+    /// Returns column root [`Type`](crate::schema::types::Type) for a leaf position.
     pub fn get_column_root(&self, i: usize) -> &Type {
         let result = self.column_root_of(i);
         result.as_ref()
     }
 
-    /// Returns column root [`Type`](crate::schema::types::Type) pointer for a field
+    /// Returns column root [`Type`](crate::schema::types::Type) pointer for a leaf
     /// position.
     pub fn get_column_root_ptr(&self, i: usize) -> TypePtr {
         let result = self.column_root_of(i);
         result.clone()
     }
 
-    fn column_root_of(&self, i: usize) -> &Arc<Type> {
+    /// Returns the index of the root column for a field position
+    pub fn get_column_root_idx(&self, leaf: usize) -> usize {
         assert!(
-            i < self.leaves.len(),
+            leaf < self.leaves.len(),
             "Index out of bound: {} not in [0, {})",
-            i,
+            leaf,
             self.leaves.len()
         );
 
-        self.leaf_to_base
-            .get(i)
-            .unwrap_or_else(|| panic!("Expected a value for index {} but found None", i))
+        *self.leaf_to_base.get(leaf).unwrap_or_else(|| {
+            panic!("Expected a value for index {} but found None", leaf)
+        })
+    }
+
+    fn column_root_of(&self, i: usize) -> &TypePtr {
+        &self.schema.get_fields()[self.get_column_root_idx(i)]
     }
 
     /// Returns schema as [`Type`](crate::schema::types::Type).
@@ -947,11 +952,11 @@ impl SchemaDescriptor {
 
 fn build_tree<'a>(
     tp: &'a TypePtr,
-    base_tp: &TypePtr,
+    root_idx: usize,
     mut max_rep_level: i16,
     mut max_def_level: i16,
     leaves: &mut Vec<ColumnDescPtr>,
-    leaf_to_base: &mut Vec<TypePtr>,
+    leaf_to_base: &mut Vec<usize>,
     path_so_far: &mut Vec<&'a str>,
 ) {
     assert!(tp.get_basic_info().has_repetition());
@@ -978,13 +983,13 @@ fn build_tree<'a>(
                 max_rep_level,
                 ColumnPath::new(path),
             )));
-            leaf_to_base.push(base_tp.clone());
+            leaf_to_base.push(root_idx);
         }
         Type::GroupType { ref fields, .. } => {
             for f in fields {
                 build_tree(
                     f,
-                    base_tp,
+                    root_idx,
                     max_rep_level,
                     max_def_level,
                     leaves,
