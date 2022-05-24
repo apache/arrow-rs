@@ -31,6 +31,7 @@
 //! ```
 
 use crate::array::*;
+use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
 
@@ -107,20 +108,18 @@ pub fn string_concat<Offset: OffsetSizeTrait>(
     left: &GenericStringArray<Offset>,
     right: &GenericStringArray<Offset>,
 ) -> Result<GenericStringArray<Offset>> {
-    // TODO: Handle non-zero offset in source ArrayData
-
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
-            "StringArrays must have the same length".to_string(),
+            format!(
+                "Arrays must have the same length: {} != {}",
+                left.len(),
+                right.len()
+            )
+            .to_string(),
         ));
     }
 
-    let output_bitmap = match (left.data().null_bitmap(), right.data().null_bitmap()) {
-        (Some(left_bitmap), Some(right_bitmap)) => Some((left_bitmap & right_bitmap)?),
-        (Some(left_bitmap), None) => Some(left_bitmap.clone()),
-        (None, Some(right_bitmap)) => Some(right_bitmap.clone()),
-        (None, None) => None,
-    };
+    let output_bitmap = combine_option_bitmap(left.data(), right.data(), left.len())?;
 
     let left_offsets = left.value_offsets();
     let right_offsets = right.value_offsets();
@@ -130,27 +129,21 @@ pub fn string_concat<Offset: OffsetSizeTrait>(
     let left_values = left_buffer.as_slice();
     let right_values = right_buffer.as_slice();
 
-    let mut output_offsets = BufferBuilder::<Offset>::new(left_offsets.len());
-    let mut output_values =
-        BufferBuilder::<u8>::new(left_values.len() + right_values.len());
+    let mut output_values = BufferBuilder::<u8>::new(
+        left_values.len() + right_values.len()
+            - left_offsets[0].to_usize().unwrap()
+            - right_offsets[0].to_usize().unwrap(),
+    );
 
+    let mut output_offsets = BufferBuilder::<Offset>::new(left_offsets.len());
     output_offsets.append(Offset::zero());
-    for (idx, (l, r)) in left_offsets
-        .windows(2)
-        .zip(right_offsets.windows(2))
-        .enumerate()
-    {
-        match &output_bitmap {
-            Some(bitmap) if { bitmap.is_set(idx) } => {
-                output_values.append_slice(
-                    &left_values[l[0].to_usize().unwrap()..l[1].to_usize().unwrap()],
-                );
-                output_values.append_slice(
-                    &right_values[r[0].to_usize().unwrap()..r[1].to_usize().unwrap()],
-                )
-            }
-            _ => (),
-        }
+    for (l, r) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
+        output_values.append_slice(
+            &left_values[l[0].to_usize().unwrap()..l[1].to_usize().unwrap()],
+        );
+        output_values.append_slice(
+            &right_values[r[0].to_usize().unwrap()..r[1].to_usize().unwrap()],
+        );
         output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
     }
 
@@ -160,8 +153,8 @@ pub fn string_concat<Offset: OffsetSizeTrait>(
             .add_buffer(output_offsets.finish())
             .add_buffer(output_values.finish());
 
-    if let Some(output_bitmap) = output_bitmap {
-        builder = builder.null_bit_buffer(output_bitmap.into_buffer());
+    if let Some(null_bitmap) = output_bitmap {
+        builder = builder.null_bit_buffer(null_bitmap);
     }
 
     // SAFETY - offsets valid by construction
