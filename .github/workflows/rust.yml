@@ -141,7 +141,7 @@ jobs:
     strategy:
       matrix:
         arch: [amd64]
-        rust: [nightly]
+        rust: [nightly-2022-05-23]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -355,7 +355,7 @@ jobs:
     strategy:
       matrix:
         arch: [amd64]
-        rust: [nightly]
+        rust: [nightly-2022-05-23]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -400,7 +400,7 @@ jobs:
     strategy:
       matrix:
         arch: [amd64]
-        rust: [nightly]
+        rust: [nightly-2022-05-23]
     container:
       image: ${{ matrix.arch }}/rust
       env:
