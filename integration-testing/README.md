@@ -82,6 +82,21 @@ You can run the Archery tool using a command such as the following:
 archery integration --with-cpp=true --with-rust=true
 ```
 
+Above command will run producer and consumer for the matrix of enabled Arrow implementations (e.g. C++ and Rust),
+and compare the results.
+
+In C++ Arrow repo's CI, for integration test, it also runs consumer test with golden files specified by `--gold-dirs`:
+
+```shell
+archery integration --with-cpp=true --with-rust=true --gold-dirs=/path/to/arrow/testing/data/arrow-ipc-stream/integration/0.14.1 --gold-dirs=/path/to/arrow/testing/data/arrow-ipc-stream/integration/0.17.1
+```
+
+Actually C++ Arrow repo's CI runs with more implementations other than just C++ and Rust. This is the command to reproduce test result of CI:
+
+```shell
+archery integration --run-flight --with-cpp=1 --with-csharp=1 --with-java=1 --with-js=1 --with-go=1 --gold-dirs=/arrow/testing/data/arrow-ipc-stream/integration/0.14.1 --gold-dirs=/arrow/testing/data/arrow-ipc-stream/integration/0.17.1 --gold-dirs=/arrow/testing/data/arrow-ipc-stream/integration/1.0.0-bigendian --gold-dirs=/arrow/testing/data/arrow-ipc-stream/integration/1.0.0-littleendian --gold-dirs=/arrow/testing/data/arrow-ipc-stream/integration/2.0.0-compression --gold-dirs=/arrow/testing/data/arrow-ipc-stream/integration/4.0.0-shareddict
+```
+
 To debug an individual test scenario, it is also possible to run the binaries directly:
 
 ```shell
