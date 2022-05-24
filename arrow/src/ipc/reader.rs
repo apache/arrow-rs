@@ -275,6 +275,120 @@ fn create_array(
     Ok((array, node_index, buffer_index))
 }
 
+/// Skip fields based on data types to advance `node_index` and `buffer_index`.
+/// This function should be called when doing projection in fn `read_record_batch`.
+/// The advancement logic references fn `create_array`.
+fn skip_filed(
+    nodes: &[ipc::FieldNode],
+    field: &Field,
+    data: &[u8],
+    buffers: &[ipc::Buffer],
+    dictionaries_by_id: &HashMap<i64, ArrayRef>,
+    mut node_index: usize,
+    mut buffer_index: usize,
+) -> Result<(usize, usize)> {
+    use DataType::*;
+    let data_type = field.data_type();
+    match data_type {
+        Utf8 | Binary | LargeBinary | LargeUtf8 => {
+            node_index += 1;
+            buffer_index += 3;
+        }
+        FixedSizeBinary(_) => {
+            node_index += 1;
+            buffer_index += 2;
+        }
+        List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
+            node_index += 1;
+            buffer_index += 2;
+            let tuple = skip_filed(
+                nodes,
+                list_field,
+                data,
+                buffers,
+                dictionaries_by_id,
+                node_index,
+                buffer_index,
+            )?;
+            node_index = tuple.0;
+            buffer_index = tuple.1;
+        }
+        FixedSizeList(ref list_field, _) => {
+            node_index += 1;
+            buffer_index += 1;
+            let tuple = skip_filed(
+                nodes,
+                list_field,
+                data,
+                buffers,
+                dictionaries_by_id,
+                node_index,
+                buffer_index,
+            )?;
+            node_index = tuple.0;
+            buffer_index = tuple.1;
+        }
+        Struct(struct_fields) => {
+            node_index += 1;
+            buffer_index += 1;
+
+            // skip for each field
+            for struct_field in struct_fields {
+                let tuple = skip_filed(
+                    nodes,
+                    struct_field,
+                    data,
+                    buffers,
+                    dictionaries_by_id,
+                    node_index,
+                    buffer_index,
+                )?;
+                node_index = tuple.0;
+                buffer_index = tuple.1;
+            }
+        }
+        Dictionary(_, _) => {
+            node_index += 1;
+            buffer_index += 2;
+        }
+        Union(fields, _field_type_ids, mode) => {
+            node_index += 1;
+            buffer_index += 1;
+
+            match mode {
+                UnionMode::Dense => {
+                    buffer_index += 1;
+                }
+                UnionMode::Sparse => {}
+            };
+
+            for field in fields {
+                let tuple = skip_filed(
+                    nodes,
+                    field,
+                    data,
+                    buffers,
+                    dictionaries_by_id,
+                    node_index,
+                    buffer_index,
+                )?;
+
+                node_index = tuple.0;
+                buffer_index = tuple.1;
+            }
+        }
+        Null => {
+            node_index += 1;
+            // no buffer increases
+        }
+        _ => {
+            node_index += 1;
+            buffer_index += 2;
+        }
+    };
+    Ok((node_index, buffer_index))
+}
+
 /// Reads the correct number of buffers based on data type and null_count, and creates a
 /// primitive array ref
 fn create_primitive_array(
@@ -493,21 +607,37 @@ pub fn read_record_batch(
     let mut arrays = vec![];
 
     if let Some(projection) = projection {
-        let fields = schema.fields();
-        for &index in projection {
-            let field = &fields[index];
-            let triple = create_array(
-                field_nodes,
-                field,
-                buf,
-                buffers,
-                dictionaries_by_id,
-                node_index,
-                buffer_index,
-            )?;
-            node_index = triple.1;
-            buffer_index = triple.2;
-            arrays.push(triple.0);
+        // project fields
+        for (idx, field) in schema.fields().iter().enumerate() {
+            // Create array for projected field
+            if projection.contains(&idx) {
+                let triple = create_array(
+                    field_nodes,
+                    field,
+                    buf,
+                    buffers,
+                    dictionaries_by_id,
+                    node_index,
+                    buffer_index,
+                )?;
+                node_index = triple.1;
+                buffer_index = triple.2;
+                arrays.push(triple.0);
+            } else {
+                // Skip field.
+                // This must be called to advance `node_index` and `buffer_index`.
+                let tuple = skip_filed(
+                    field_nodes,
+                    field,
+                    buf,
+                    buffers,
+                    dictionaries_by_id,
+                    node_index,
+                    buffer_index,
+                )?;
+                node_index = tuple.0;
+                buffer_index = tuple.1;
+            }
         }
 
         RecordBatch::try_new(Arc::new(schema.project(projection)?), arrays)
