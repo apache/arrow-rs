@@ -662,7 +662,7 @@ fn filter_boolean(values: &BooleanArray, predicate: &FilterPredicate) -> Boolean
         .add_buffer(values);
 
     if let Some((null_count, nulls)) = filter_null_mask(data, predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(nulls);
+        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
     }
 
     let data = unsafe { builder.build_unchecked() };
@@ -722,7 +722,7 @@ where
         .add_buffer(buffer.into());
 
     if let Some((null_count, nulls)) = filter_null_mask(data, predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(nulls);
+        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
     }
 
     let data = unsafe { builder.build_unchecked() };
@@ -840,7 +840,7 @@ where
         .add_buffer(filter.dst_values.into());
 
     if let Some((null_count, nulls)) = filter_null_mask(data, predicate) {
-        builder = builder.null_count(null_count).null_bit_buffer(nulls);
+        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
     }
 
     let data = unsafe { builder.build_unchecked() };
@@ -1149,7 +1149,7 @@ mod tests {
             .len(4)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .null_bit_buffer(Buffer::from([0b00000111]))
+            .null_bit_buffer(Some(Buffer::from([0b00000111])))
             .build()
             .unwrap();
 
@@ -1173,7 +1173,7 @@ mod tests {
             .len(2)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .null_bit_buffer(Buffer::from([0b00000001]))
+            .null_bit_buffer(Some(Buffer::from([0b00000001])))
             .build()
             .unwrap();
 
@@ -1600,7 +1600,7 @@ mod tests {
         let list_data = ArrayData::builder(list_data_type)
             .len(5)
             .add_child_data(value_data)
-            .null_bit_buffer(Buffer::from(null_bits))
+            .null_bit_buffer(Some(Buffer::from(null_bits)))
             .build()
             .unwrap();
         let array = FixedSizeListArray::from(list_data);

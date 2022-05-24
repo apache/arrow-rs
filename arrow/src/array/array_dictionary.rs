@@ -99,19 +99,12 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
 
         // Note: This use the ArrayDataBuilder::build_unchecked and afterwards
         // call the new function which only validates that the keys are in bounds.
-        let mut data = ArrayData::builder(dict_data_type)
+        let data = ArrayData::builder(dict_data_type)
             .len(keys.len())
             .add_buffer(keys.data().buffers()[0].clone())
-            .add_child_data(values.data().clone());
-
-        match keys.data().null_buffer() {
-            Some(buffer) if keys.data().null_count() > 0 => {
-                data = data
-                    .null_bit_buffer(buffer.clone())
-                    .null_count(keys.data().null_count());
-            }
-            _ => data = data.null_count(0),
-        }
+            .add_child_data(values.data().clone())
+            .null_bit_buffer(keys.data().null_buffer().cloned())
+            .null_count(keys.data().null_count());
 
         // Safety: `validate` ensures key type is correct, and
         //  `validate_dictionary_offset` ensures all offsets are within range

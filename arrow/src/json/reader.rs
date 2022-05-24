@@ -1064,7 +1064,7 @@ impl Decoder {
                     ArrayData::builder(list_field.data_type().clone())
                         .len(valid_len)
                         .add_buffer(bool_values.into())
-                        .null_bit_buffer(bool_nulls.into())
+                        .null_bit_buffer(Some(bool_nulls.into()))
                         .build_unchecked()
                 }
             }
@@ -1143,7 +1143,7 @@ impl Decoder {
                 unsafe {
                     ArrayDataBuilder::new(data_type)
                         .len(rows.len())
-                        .null_bit_buffer(buf)
+                        .null_bit_buffer(Some(buf))
                         .child_data(
                             arrays.into_iter().map(|a| a.data().clone()).collect(),
                         )
@@ -1162,7 +1162,7 @@ impl Decoder {
             .len(list_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_child_data(array_data)
-            .null_bit_buffer(list_nulls.into());
+            .null_bit_buffer(Some(list_nulls.into()));
         let list_data = unsafe { list_data.build_unchecked() };
         Ok(Arc::new(GenericListArray::<OffsetSize>::from(list_data)))
     }
@@ -1351,7 +1351,7 @@ impl Decoder {
                         let data_type = DataType::Struct(fields.clone());
                         let data = ArrayDataBuilder::new(data_type)
                             .len(len)
-                            .null_bit_buffer(null_buffer.into())
+                            .null_bit_buffer(Some(null_buffer.into()))
                             .child_data(
                                 arrays.into_iter().map(|a| a.data().clone()).collect(),
                             );
@@ -2235,7 +2235,7 @@ mod tests {
         let c = ArrayDataBuilder::new(c_field.data_type().clone())
             .len(4)
             .add_child_data(d.data().clone())
-            .null_bit_buffer(Buffer::from(vec![0b00000101]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
             .build()
             .unwrap();
         let b = BooleanArray::from(vec![Some(true), Some(false), Some(true), None]);
@@ -2243,7 +2243,7 @@ mod tests {
             .len(4)
             .add_child_data(b.data().clone())
             .add_child_data(c)
-            .null_bit_buffer(Buffer::from(vec![0b00000111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00000111])))
             .build()
             .unwrap();
         let expected = make_array(a);
@@ -2301,7 +2301,7 @@ mod tests {
         let c = ArrayDataBuilder::new(c_field.data_type().clone())
             .len(7)
             .add_child_data(d.data().clone())
-            .null_bit_buffer(Buffer::from(vec![0b00111011]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00111011])))
             .build()
             .unwrap();
         let b = BooleanArray::from(vec![
@@ -2317,14 +2317,14 @@ mod tests {
             .len(7)
             .add_child_data(b.data().clone())
             .add_child_data(c.clone())
-            .null_bit_buffer(Buffer::from(vec![0b00111111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00111111])))
             .build()
             .unwrap();
         let a_list = ArrayDataBuilder::new(a_field.data_type().clone())
             .len(6)
             .add_buffer(Buffer::from_slice_ref(&[0i32, 2, 3, 6, 6, 6, 7]))
             .add_child_data(a)
-            .null_bit_buffer(Buffer::from(vec![0b00110111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00110111])))
             .build()
             .unwrap();
         let expected = make_array(a_list);
@@ -2423,7 +2423,7 @@ mod tests {
                 vec![0i32, 2, 4, 7, 7, 8, 8, 9].to_byte_slice(),
             ))
             .add_child_data(expected_value_array_data)
-            .null_bit_buffer(Buffer::from(vec![0b01010111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b01010111])))
             .build()
             .unwrap();
         let expected_stocks_entries_data = ArrayDataBuilder::new(entries_struct_type)

@@ -287,24 +287,30 @@ fn create_primitive_array(
     let array_data = match data_type {
         Utf8 | Binary | LargeBinary | LargeUtf8 => {
             // read 3 buffers
-            let mut builder = ArrayData::builder(data_type.clone())
+            ArrayData::builder(data_type.clone())
                 .len(length)
                 .buffers(buffers[1..3].to_vec())
-                .offset(0);
-            if null_count > 0 {
-                builder = builder.null_bit_buffer(buffers[0].clone())
-            }
-            builder.build().unwrap()
+                .offset(0)
+                .null_bit_buffer(if null_count > 0 {
+                    Some(buffers[0].clone())
+                } else {
+                    None
+                })
+                .build()
+                .unwrap()
         }
         FixedSizeBinary(_) => {
             // read 3 buffers
-            let mut builder = ArrayData::builder(data_type.clone())
+            let builder = ArrayData::builder(data_type.clone())
                 .len(length)
                 .buffers(buffers[1..2].to_vec())
-                .offset(0);
-            if null_count > 0 {
-                builder = builder.null_bit_buffer(buffers[0].clone())
-            }
+                .offset(0)
+                .null_bit_buffer(if null_count > 0 {
+                    Some(buffers[0].clone())
+                } else {
+                    None
+                });
+
             unsafe { builder.build_unchecked() }
         }
         Int8
@@ -318,52 +324,64 @@ fn create_primitive_array(
         | Interval(IntervalUnit::YearMonth) => {
             if buffers[1].len() / 8 == length && length != 1 {
                 // interpret as a signed i64, and cast appropriately
-                let mut builder = ArrayData::builder(DataType::Int64)
+                let builder = ArrayData::builder(DataType::Int64)
                     .len(length)
                     .buffers(buffers[1..].to_vec())
-                    .offset(0);
-                if null_count > 0 {
-                    builder = builder.null_bit_buffer(buffers[0].clone())
-                }
+                    .offset(0)
+                    .null_bit_buffer(if null_count > 0 {
+                        Some(buffers[0].clone())
+                    } else {
+                        None
+                    });
+
                 let data = unsafe { builder.build_unchecked() };
                 let values = Arc::new(Int64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.data().clone()
             } else {
-                let mut builder = ArrayData::builder(data_type.clone())
+                let builder = ArrayData::builder(data_type.clone())
                     .len(length)
                     .buffers(buffers[1..].to_vec())
-                    .offset(0);
-                if null_count > 0 {
-                    builder = builder.null_bit_buffer(buffers[0].clone())
-                }
+                    .offset(0)
+                    .null_bit_buffer(if null_count > 0 {
+                        Some(buffers[0].clone())
+                    } else {
+                        None
+                    });
+
                 unsafe { builder.build_unchecked() }
             }
         }
         Float32 => {
             if buffers[1].len() / 8 == length && length != 1 {
                 // interpret as a f64, and cast appropriately
-                let mut builder = ArrayData::builder(DataType::Float64)
+                let builder = ArrayData::builder(DataType::Float64)
                     .len(length)
                     .buffers(buffers[1..].to_vec())
-                    .offset(0);
-                if null_count > 0 {
-                    builder = builder.null_bit_buffer(buffers[0].clone())
-                }
+                    .offset(0)
+                    .null_bit_buffer(if null_count > 0 {
+                        Some(buffers[0].clone())
+                    } else {
+                        None
+                    });
+
                 let data = unsafe { builder.build_unchecked() };
                 let values = Arc::new(Float64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
                 casted.data().clone()
             } else {
-                let mut builder = ArrayData::builder(data_type.clone())
+                let builder = ArrayData::builder(data_type.clone())
                     .len(length)
                     .buffers(buffers[1..].to_vec())
-                    .offset(0);
-                if null_count > 0 {
-                    builder = builder.null_bit_buffer(buffers[0].clone())
-                }
+                    .offset(0)
+                    .null_bit_buffer(if null_count > 0 {
+                        Some(buffers[0].clone())
+                    } else {
+                        None
+                    });
+
                 unsafe { builder.build_unchecked() }
             }
         }
@@ -377,24 +395,30 @@ fn create_primitive_array(
         | Duration(_)
         | Interval(IntervalUnit::DayTime)
         | Interval(IntervalUnit::MonthDayNano) => {
-            let mut builder = ArrayData::builder(data_type.clone())
+            let builder = ArrayData::builder(data_type.clone())
                 .len(length)
                 .buffers(buffers[1..].to_vec())
-                .offset(0);
-            if null_count > 0 {
-                builder = builder.null_bit_buffer(buffers[0].clone())
-            }
+                .offset(0)
+                .null_bit_buffer(if null_count > 0 {
+                    Some(buffers[0].clone())
+                } else {
+                    None
+                });
+
             unsafe { builder.build_unchecked() }
         }
         Decimal(_, _) => {
             // read 3 buffers
-            let mut builder = ArrayData::builder(data_type.clone())
+            let builder = ArrayData::builder(data_type.clone())
                 .len(length)
                 .buffers(buffers[1..2].to_vec())
-                .offset(0);
-            if null_count > 0 {
-                builder = builder.null_bit_buffer(buffers[0].clone())
-            }
+                .offset(0)
+                .null_bit_buffer(if null_count > 0 {
+                    Some(buffers[0].clone())
+                } else {
+                    None
+                });
+
             unsafe { builder.build_unchecked() }
         }
         t => panic!("Data type {:?} either unsupported or not primitive", t),
@@ -413,36 +437,45 @@ fn create_list_array(
 ) -> ArrayRef {
     if let DataType::List(_) | DataType::LargeList(_) = *data_type {
         let null_count = field_node.null_count() as usize;
-        let mut builder = ArrayData::builder(data_type.clone())
+        let builder = ArrayData::builder(data_type.clone())
             .len(field_node.length() as usize)
             .buffers(buffers[1..2].to_vec())
             .offset(0)
-            .child_data(vec![child_array.data().clone()]);
-        if null_count > 0 {
-            builder = builder.null_bit_buffer(buffers[0].clone())
-        }
+            .child_data(vec![child_array.data().clone()])
+            .null_bit_buffer(if null_count > 0 {
+                Some(buffers[0].clone())
+            } else {
+                None
+            });
+
         make_array(unsafe { builder.build_unchecked() })
     } else if let DataType::FixedSizeList(_, _) = *data_type {
         let null_count = field_node.null_count() as usize;
-        let mut builder = ArrayData::builder(data_type.clone())
+        let builder = ArrayData::builder(data_type.clone())
             .len(field_node.length() as usize)
             .buffers(buffers[1..1].to_vec())
             .offset(0)
-            .child_data(vec![child_array.data().clone()]);
-        if null_count > 0 {
-            builder = builder.null_bit_buffer(buffers[0].clone())
-        }
+            .child_data(vec![child_array.data().clone()])
+            .null_bit_buffer(if null_count > 0 {
+                Some(buffers[0].clone())
+            } else {
+                None
+            });
+
         make_array(unsafe { builder.build_unchecked() })
     } else if let DataType::Map(_, _) = *data_type {
         let null_count = field_node.null_count() as usize;
-        let mut builder = ArrayData::builder(data_type.clone())
+        let builder = ArrayData::builder(data_type.clone())
             .len(field_node.length() as usize)
             .buffers(buffers[1..2].to_vec())
             .offset(0)
-            .child_data(vec![child_array.data().clone()]);
-        if null_count > 0 {
-            builder = builder.null_bit_buffer(buffers[0].clone())
-        }
+            .child_data(vec![child_array.data().clone()])
+            .null_bit_buffer(if null_count > 0 {
+                Some(buffers[0].clone())
+            } else {
+                None
+            });
+
         make_array(unsafe { builder.build_unchecked() })
     } else {
         panic!("Cannot create list or map array from {:?}", data_type)
@@ -459,14 +492,17 @@ fn create_dictionary_array(
 ) -> ArrayRef {
     if let DataType::Dictionary(_, _) = *data_type {
         let null_count = field_node.null_count() as usize;
-        let mut builder = ArrayData::builder(data_type.clone())
+        let builder = ArrayData::builder(data_type.clone())
             .len(field_node.length() as usize)
             .buffers(buffers[1..2].to_vec())
             .offset(0)
-            .child_data(vec![value_array.data().clone()]);
-        if null_count > 0 {
-            builder = builder.null_bit_buffer(buffers[0].clone())
-        }
+            .child_data(vec![value_array.data().clone()])
+            .null_bit_buffer(if null_count > 0 {
+                Some(buffers[0].clone())
+            } else {
+                None
+            });
+
         make_array(unsafe { builder.build_unchecked() })
     } else {
         unreachable!("Cannot create dictionary array from {:?}", data_type)
