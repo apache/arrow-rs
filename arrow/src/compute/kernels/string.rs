@@ -110,6 +110,24 @@ mod tests {
     }
 
     #[test]
+    fn test_string_concat_empty_string() {
+        let left = [Some("foo"), Some(""), Some("bar")]
+            .into_iter()
+            .collect::<StringArray>();
+        let right = [Some("baz"), Some(""), Some("")]
+            .into_iter()
+            .collect::<StringArray>();
+
+        let output = string_concat(&left, &right).unwrap();
+
+        let expected = [Some("foobaz"), Some(""), Some("bar")]
+            .into_iter()
+            .collect::<StringArray>();
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
     fn test_string_concat_slice() {
         let left = &StringArray::from(vec![None, Some("foo"), Some("bar"), Some("baz")]);
         let right = &StringArray::from(vec![Some("boo"), None, Some("far"), Some("faz")]);
