@@ -23,7 +23,7 @@
 //! ```
 //! cargo install parquet --features=cli
 //! ```
-//! After this `parquet-read` should be globally available:
+//! After this `parquet-read` should be available:
 //! ```
 //! parquet-read XYZ.parquet
 //! ```
