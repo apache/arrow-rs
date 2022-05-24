@@ -30,7 +30,6 @@ fn create_binary_array_data(length: i32) -> ArrayData {
         DataType::Binary,
         length as usize,
         None,
-        None,
         0,
         vec![offsets_buffer, value_buffer],
         vec![],

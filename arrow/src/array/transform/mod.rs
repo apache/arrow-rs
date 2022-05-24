@@ -1252,7 +1252,6 @@ mod tests {
             DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
             8,
             None,
-            None,
             0,
             vec![list_value_offsets],
             vec![expected_int_array.data().clone()],
@@ -1333,7 +1332,6 @@ mod tests {
         let expected_list_data = ArrayData::try_new(
             DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
             12,
-            None,
             Some(Buffer::from(&[0b11011011, 0b1110])),
             0,
             vec![list_value_offsets],
@@ -1484,7 +1482,6 @@ mod tests {
                 false,
             ),
             12,
-            None,
             Some(Buffer::from(&[0b11011011, 0b1110])),
             0,
             vec![map_offsets],
@@ -1556,7 +1553,6 @@ mod tests {
         let expected_list_data = ArrayData::try_new(
             DataType::List(Box::new(Field::new("item", DataType::Utf8, true))),
             6,
-            None,
             None,
             0,
             vec![list_value_offsets],

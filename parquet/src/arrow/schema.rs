@@ -33,13 +33,14 @@ use crate::basic::{
     ConvertedType, LogicalType, Repetition, TimeUnit as ParquetTimeUnit,
     Type as PhysicalType,
 };
-use crate::errors::{ParquetError::ArrowError, Result};
+use crate::errors::{ParquetError, Result};
 use crate::file::{metadata::KeyValue, properties::WriterProperties};
 use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type, TypePtr};
 
 mod complex;
 mod primitive;
 
+use crate::arrow::ProjectionMask;
 pub(crate) use complex::{convert_schema, ParquetField, ParquetFieldType};
 
 /// Convert Parquet schema to Arrow schema including optional metadata.
@@ -51,74 +52,18 @@ pub fn parquet_to_arrow_schema(
 ) -> Result<Schema> {
     parquet_to_arrow_schema_by_columns(
         parquet_schema,
-        0..parquet_schema.columns().len(),
+        ProjectionMask::all(),
         key_value_metadata,
     )
 }
 
 /// Convert parquet schema to arrow schema including optional metadata,
-/// only preserving some root columns.
-/// This is useful if we have columns `a.b`, `a.c.e` and `a.d`,
-/// and want `a` with all its child fields
-pub fn parquet_to_arrow_schema_by_root_columns<T>(
-    parquet_schema: &SchemaDescriptor,
-    column_indices: T,
-    key_value_metadata: Option<&Vec<KeyValue>>,
-) -> Result<Schema>
-where
-    T: IntoIterator<Item = usize>,
-{
-    // Reconstruct the index ranges of the parent columns
-    // An Arrow struct gets represented by 1+ columns based on how many child fields the
-    // struct has. This means that getting fields 1 and 2 might return the struct twice,
-    // if field 1 is the struct having say 3 fields, and field 2 is a primitive.
-    //
-    // The below gets the parent columns, and counts the number of child fields in each parent,
-    // such that we would end up with:
-    // - field 1 - columns: [0, 1, 2]
-    // - field 2 - columns: [3]
-    let mut parent_columns = vec![];
-    let mut curr_name = "";
-    let mut prev_name = "";
-    let mut indices = vec![];
-    (0..(parquet_schema.num_columns())).for_each(|i| {
-        let p_type = parquet_schema.get_column_root(i);
-        curr_name = p_type.get_basic_info().name();
-        if prev_name.is_empty() {
-            // first index
-            indices.push(i);
-            prev_name = curr_name;
-        } else if curr_name != prev_name {
-            prev_name = curr_name;
-            parent_columns.push((curr_name.to_string(), indices.clone()));
-            indices = vec![i];
-        } else {
-            indices.push(i);
-        }
-    });
-    // push the last column if indices has values
-    if !indices.is_empty() {
-        parent_columns.push((curr_name.to_string(), indices));
-    }
-
-    // gather the required leaf columns
-    let leaf_columns = column_indices
-        .into_iter()
-        .flat_map(|i| parent_columns[i].1.clone());
-
-    parquet_to_arrow_schema_by_columns(parquet_schema, leaf_columns, key_value_metadata)
-}
-
-/// Convert parquet schema to arrow schema including optional metadata,
 /// only preserving some leaf columns.
-pub fn parquet_to_arrow_schema_by_columns<T>(
+pub fn parquet_to_arrow_schema_by_columns(
     parquet_schema: &SchemaDescriptor,
-    column_indices: T,
+    mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
-) -> Result<Schema>
-where
-    T: IntoIterator<Item = usize>,
-{
+) -> Result<Schema> {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
     let maybe_schema = metadata
         .remove(super::ARROW_SCHEMA_META_KEY)
@@ -132,7 +77,7 @@ where
         });
     }
 
-    match convert_schema(parquet_schema, column_indices, maybe_schema.as_ref())? {
+    match convert_schema(parquet_schema, mask, maybe_schema.as_ref())? {
         Some(field) => match field.arrow_type {
             DataType::Struct(fields) => Ok(Schema::new_with_metadata(fields, metadata)),
             _ => unreachable!(),
@@ -155,24 +100,24 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
                 Ok(message) => message
                     .header_as_schema()
                     .map(arrow::ipc::convert::fb_to_schema)
-                    .ok_or(ArrowError("the message is not Arrow Schema".to_string())),
+                    .ok_or(arrow_err!("the message is not Arrow Schema")),
                 Err(err) => {
                     // The flatbuffers implementation returns an error on verification error.
-                    Err(ArrowError(format!(
+                    Err(arrow_err!(
                         "Unable to get root as message stored in {}: {:?}",
                         super::ARROW_SCHEMA_META_KEY,
                         err
-                    )))
+                    ))
                 }
             }
         }
         Err(err) => {
             // The C++ implementation returns an error if the schema can't be parsed.
-            Err(ArrowError(format!(
+            Err(arrow_err!(
                 "Unable to decode the encoded schema stored in {}, {:?}",
                 super::ARROW_SCHEMA_META_KEY,
                 err
-            )))
+            ))
         }
     }
 }
@@ -342,7 +287,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             }))
             .with_repetition(repetition)
             .build(),
-        DataType::Float16 => Err(ArrowError("Float16 arrays not supported".to_string())),
+        DataType::Float16 => Err(arrow_err!("Float16 arrays not supported")),
         DataType::Float32 => Type::primitive_type_builder(name, PhysicalType::FLOAT)
             .with_repetition(repetition)
             .build(),
@@ -411,9 +356,9 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
             }))
             .with_repetition(repetition)
             .build(),
-        DataType::Duration(_) => Err(ArrowError(
-            "Converting Duration to parquet not supported".to_string(),
-        )),
+        DataType::Duration(_) => {
+            Err(arrow_err!("Converting Duration to parquet not supported",))
+        }
         DataType::Interval(_) => {
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_converted_type(ConvertedType::INTERVAL)
@@ -477,9 +422,9 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
         }
         DataType::Struct(fields) => {
             if fields.is_empty() {
-                return Err(ArrowError(
-                    "Parquet does not support writing empty structs".to_string(),
-                ));
+                return Err(
+                    arrow_err!("Parquet does not support writing empty structs",),
+                );
             }
             // recursively convert children to types/nodes
             let fields: Result<Vec<TypePtr>> = fields
@@ -515,8 +460,8 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                     .with_repetition(repetition)
                     .build()
             } else {
-                Err(ArrowError(
-                    "DataType::Map should contain a struct field child".to_string(),
+                Err(arrow_err!(
+                    "DataType::Map should contain a struct field child",
                 ))
             }
         }
@@ -626,12 +571,9 @@ mod tests {
         ];
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
 
-        let converted_arrow_schema = parquet_to_arrow_schema_by_columns(
-            &parquet_schema,
-            vec![0usize, 1usize],
-            None,
-        )
-        .unwrap();
+        let converted_arrow_schema =
+            parquet_to_arrow_schema_by_columns(&parquet_schema, ProjectionMask::all(), None)
+                .unwrap();
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
     }
 
@@ -1119,33 +1061,15 @@ mod tests {
         // required int64 leaf5;
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+        let mask = ProjectionMask::leaves(&parquet_schema, [3, 0, 4, 4]);
         let converted_arrow_schema =
-            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![0, 3, 4], None)
-                .unwrap();
+            parquet_to_arrow_schema_by_columns(&parquet_schema, mask, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
         for i in 0..arrow_fields.len() {
             assert_eq!(arrow_fields[i], converted_fields[i]);
         }
-
-        let err =
-            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![3, 2, 4], None)
-                .unwrap_err()
-                .to_string();
-
-        assert!(
-            err.contains("out of order projection is not supported"),
-            "{}",
-            err
-        );
-
-        let err =
-            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![3, 3, 4], None)
-                .unwrap_err()
-                .to_string();
-
-        assert!(err.contains("repeated column projection is not supported, column 3 appeared multiple times"), "{}", err);
     }
 
     #[test]
@@ -1188,9 +1112,9 @@ mod tests {
         // required int64 leaf5;
 
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+        let mask = ProjectionMask::leaves(&parquet_schema, [3, 0, 4]);
         let converted_arrow_schema =
-            parquet_to_arrow_schema_by_columns(&parquet_schema, vec![0, 3, 4], None)
-                .unwrap();
+            parquet_to_arrow_schema_by_columns(&parquet_schema, mask, None).unwrap();
         let converted_fields = converted_arrow_schema.fields();
 
         assert_eq!(arrow_fields.len(), converted_fields.len());
@@ -1681,8 +1605,7 @@ mod tests {
         assert_eq!(schema, read_schema);
 
         // read all fields by columns
-        let partial_read_schema =
-            arrow_reader.get_schema_by_columns(0..(schema.fields().len()), false)?;
+        let partial_read_schema = arrow_reader.get_schema_by_columns(ProjectionMask::all())?;
         assert_eq!(schema, partial_read_schema);
 
         Ok(())
@@ -1751,8 +1674,7 @@ mod tests {
         assert_eq!(schema, read_schema);
 
         // read all fields by columns
-        let partial_read_schema =
-            arrow_reader.get_schema_by_columns(0..(schema.fields().len()), false)?;
+        let partial_read_schema = arrow_reader.get_schema_by_columns(ProjectionMask::all())?;
         assert_eq!(schema, partial_read_schema);
 
         Ok(())
