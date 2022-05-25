@@ -564,7 +564,7 @@ mod tests {
             .set_max_row_group_size(200)
             .build();
 
-        let mut writer = ArrowWriter::try_new(
+        let writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
             Arc::new(arrow_schema),
             Some(props),

@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::util::io::TryClone;
 use std::io::{self, Cursor, Error, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex};
 use std::{cmp, fmt};
-
-use crate::file::writer::TryClone;
 
 /// This is object to use if your file is already in memory.
 /// The sliceable cursor is similar to std::io::Cursor, except that it makes it easy to create "cursor slices".
@@ -134,11 +133,13 @@ impl Seek for SliceableCursor {
 }
 
 /// Use this type to write Parquet to memory rather than a file.
+#[deprecated = "use Vec<u8> instead"]
 #[derive(Debug, Default, Clone)]
 pub struct InMemoryWriteableCursor {
     buffer: Arc<Mutex<Cursor<Vec<u8>>>>,
 }
 
+#[allow(deprecated)]
 impl InMemoryWriteableCursor {
     /// Consume this instance and return the underlying buffer as long as there are no other
     /// references to this instance.
@@ -168,6 +169,7 @@ impl InMemoryWriteableCursor {
     }
 }
 
+#[allow(deprecated)]
 impl TryClone for InMemoryWriteableCursor {
     fn try_clone(&self) -> std::io::Result<Self> {
         Ok(Self {
@@ -176,6 +178,7 @@ impl TryClone for InMemoryWriteableCursor {
     }
 }
 
+#[allow(deprecated)]
 impl Write for InMemoryWriteableCursor {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut inner = self.buffer.lock().unwrap();
@@ -188,6 +191,7 @@ impl Write for InMemoryWriteableCursor {
     }
 }
 
+#[allow(deprecated)]
 impl Seek for InMemoryWriteableCursor {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let mut inner = self.buffer.lock().unwrap();

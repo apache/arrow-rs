@@ -40,10 +40,11 @@
 //!
 //! use parquet::{
 //!     column::{reader::ColumnReader, writer::ColumnWriter},
+//!     data_type::Int32Type,
 //!     file::{
 //!         properties::WriterProperties,
 //!         reader::{FileReader, SerializedFileReader},
-//!         writer::{FileWriter, SerializedFileWriter},
+//!         writer::SerializedFileWriter,
 //!     },
 //!     schema::parser::parse_message_type,
 //! };
@@ -65,20 +66,17 @@
 //! let props = Arc::new(WriterProperties::builder().build());
 //! let file = fs::File::create(path).unwrap();
 //! let mut writer = SerializedFileWriter::new(file, schema, props).unwrap();
+//!
 //! let mut row_group_writer = writer.next_row_group().unwrap();
 //! while let Some(mut col_writer) = row_group_writer.next_column().unwrap() {
-//!     match col_writer {
-//!         // You can also use `get_typed_column_writer` method to extract typed writer.
-//!         ColumnWriter::Int32ColumnWriter(ref mut typed_writer) => {
-//!             typed_writer
-//!                 .write_batch(&[1, 2, 3], Some(&[3, 3, 3, 2, 2]), Some(&[0, 1, 0, 1, 1]))
-//!                 .unwrap();
-//!         }
-//!         _ => {}
-//!     }
-//!     row_group_writer.close_column(col_writer).unwrap();
+//!     col_writer
+//!         .typed::<Int32Type>()
+//!         .write_batch(&[1, 2, 3], Some(&[3, 3, 3, 2, 2]), Some(&[0, 1, 0, 1, 1]))
+//!         .unwrap();
+//!     col_writer.close().unwrap();
 //! }
-//! writer.close_row_group(row_group_writer).unwrap();
+//! row_group_writer.close().unwrap();
+//!
 //! writer.close().unwrap();
 //!
 //! // Reading data using column reader API.

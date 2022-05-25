@@ -18,12 +18,12 @@
 use crate::schema::types::TypePtr;
 
 use super::super::errors::ParquetError;
-use super::super::file::writer::RowGroupWriter;
+use super::super::file::writer::SerializedRowGroupWriter;
 
 pub trait RecordWriter<T> {
-    fn write_to_row_group(
+    fn write_to_row_group<W: std::io::Write>(
         &self,
-        row_group_writer: &mut Box<dyn RowGroupWriter>,
+        row_group_writer: &mut SerializedRowGroupWriter<W>,
     ) -> Result<(), ParquetError>;
 
     /// Generated schema

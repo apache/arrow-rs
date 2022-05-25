@@ -263,7 +263,6 @@ mod tests {
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
-    use crate::column::writer::get_typed_column_writer_mut;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray,
         FixedLenByteArrayType, Int32Type, Int64Type,
@@ -271,7 +270,7 @@ mod tests {
     use crate::errors::Result;
     use crate::file::properties::{WriterProperties, WriterVersion};
     use crate::file::reader::{FileReader, SerializedFileReader};
-    use crate::file::writer::{FileWriter, SerializedFileWriter};
+    use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
     use crate::util::cursor::SliceableCursor;
@@ -936,21 +935,24 @@ mod tests {
         for (idx, v) in values.iter().enumerate() {
             let def_levels = def_levels.map(|d| d[idx].as_slice());
             let mut row_group_writer = writer.next_row_group()?;
-            let mut column_writer = row_group_writer
-                .next_column()?
-                .expect("Column writer is none!");
+            {
+                let mut column_writer = row_group_writer
+                    .next_column()?
+                    .expect("Column writer is none!");
 
-            get_typed_column_writer_mut::<T>(&mut column_writer)
-                .write_batch(v, def_levels, None)?;
+                column_writer
+                    .typed::<T>()
+                    .write_batch(v, def_levels, None)?;
 
-            row_group_writer.close_column(column_writer)?;
-            writer.close_row_group(row_group_writer)?
+                column_writer.close()?;
+            }
+            row_group_writer.close()?;
         }
 
         writer.close()
     }
 
-    fn get_test_reader(file_name: &str) -> Arc<dyn FileReader> {
+    fn get_test_reader(file_name: &str) -> Arc<SerializedFileReader<File>> {
         let file = get_test_file(file_name);
 
         let reader =
@@ -1094,15 +1096,18 @@ mod tests {
             )
             .unwrap();
 
-            let mut row_group_writer = writer.next_row_group().unwrap();
-            let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+            {
+                let mut row_group_writer = writer.next_row_group().unwrap();
+                let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
 
-            get_typed_column_writer_mut::<Int32Type>(&mut column_writer)
-                .write_batch(&[34, 76], Some(&[0, 1, 0, 1]), None)
-                .unwrap();
+                column_writer
+                    .typed::<Int32Type>()
+                    .write_batch(&[34, 76], Some(&[0, 1, 0, 1]), None)
+                    .unwrap();
 
-            row_group_writer.close_column(column_writer).unwrap();
-            writer.close_row_group(row_group_writer).unwrap();
+                column_writer.close().unwrap();
+                row_group_writer.close().unwrap();
+            }
 
             writer.close().unwrap();
         }

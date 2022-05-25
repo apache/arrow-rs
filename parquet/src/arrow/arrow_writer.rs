@@ -18,6 +18,7 @@
 //! Contains writer which writes arrow data into parquet data.
 
 use std::collections::VecDeque;
+use std::io::Write;
 use std::sync::Arc;
 
 use arrow::array as arrow_array;
@@ -35,10 +36,8 @@ use super::schema::{
 use crate::column::writer::ColumnWriter;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::WriterProperties;
-use crate::{
-    data_type::*,
-    file::writer::{FileWriter, ParquetWriter, RowGroupWriter, SerializedFileWriter},
-};
+use crate::file::writer::{SerializedColumnWriter, SerializedRowGroupWriter};
+use crate::{data_type::*, file::writer::SerializedFileWriter};
 
 /// Arrow writer
 ///
@@ -46,7 +45,7 @@ use crate::{
 /// to produce row groups with `max_row_group_size` rows. Any remaining rows will be
 /// flushed on close, leading the final row group in the output file to potentially
 /// contain fewer than `max_row_group_size` rows
-pub struct ArrowWriter<W: ParquetWriter> {
+pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
     writer: SerializedFileWriter<W>,
 
@@ -65,7 +64,7 @@ pub struct ArrowWriter<W: ParquetWriter> {
     max_row_group_size: usize,
 }
 
-impl<W: 'static + ParquetWriter> ArrowWriter<W> {
+impl<W: Write> ArrowWriter<W> {
     /// Try to create a new Arrow writer
     ///
     /// The writer will fail if:
@@ -185,17 +184,17 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
                 })
                 .collect();
 
-            write_leaves(row_group_writer.as_mut(), &arrays, &mut levels)?;
+            write_leaves(&mut row_group_writer, &arrays, &mut levels)?;
         }
 
-        self.writer.close_row_group(row_group_writer)?;
+        row_group_writer.close()?;
         self.buffered_rows -= num_rows;
 
         Ok(())
     }
 
     /// Close and finalize the underlying Parquet writer
-    pub fn close(&mut self) -> Result<parquet_format::FileMetaData> {
+    pub fn close(mut self) -> Result<parquet_format::FileMetaData> {
         self.flush()?;
         self.writer.close()
     }
@@ -203,15 +202,17 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
 
 /// Convenience method to get the next ColumnWriter from the RowGroupWriter
 #[inline]
-fn get_col_writer(row_group_writer: &mut dyn RowGroupWriter) -> Result<ColumnWriter> {
+fn get_col_writer<'a, W: Write>(
+    row_group_writer: &'a mut SerializedRowGroupWriter<'_, W>,
+) -> Result<SerializedColumnWriter<'a>> {
     let col_writer = row_group_writer
         .next_column()?
         .expect("Unable to get column writer");
     Ok(col_writer)
 }
 
-fn write_leaves(
-    row_group_writer: &mut dyn RowGroupWriter,
+fn write_leaves<W: Write>(
+    row_group_writer: &mut SerializedRowGroupWriter<'_, W>,
     arrays: &[ArrayRef],
     levels: &mut [Vec<LevelInfo>],
 ) -> Result<()> {
@@ -250,12 +251,12 @@ fn write_leaves(
             let mut col_writer = get_col_writer(row_group_writer)?;
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
                 write_leaf(
-                    &mut col_writer,
+                    col_writer.untyped(),
                     array,
                     levels.pop().expect("Levels exhausted"),
                 )?;
             }
-            row_group_writer.close_column(col_writer)?;
+            col_writer.close()?;
             Ok(())
         }
         ArrowDataType::List(_) | ArrowDataType::LargeList(_) => {
@@ -313,12 +314,12 @@ fn write_leaves(
                 // cast dictionary to a primitive
                 let array = arrow::compute::cast(array, value_type)?;
                 write_leaf(
-                    &mut col_writer,
+                    col_writer.untyped(),
                     &array,
                     levels.pop().expect("Levels exhausted"),
                 )?;
             }
-            row_group_writer.close_column(col_writer)?;
+            col_writer.close()?;
             Ok(())
         }
         ArrowDataType::Float16 => Err(ParquetError::ArrowError(
@@ -336,8 +337,8 @@ fn write_leaves(
 }
 
 fn write_leaf(
-    writer: &mut ColumnWriter,
-    column: &arrow_array::ArrayRef,
+    writer: &mut ColumnWriter<'_>,
+    column: &ArrayRef,
     levels: LevelInfo,
 ) -> Result<i64> {
     let indices = levels.filter_array_indices();
@@ -705,7 +706,6 @@ mod tests {
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
         statistics::Statistics,
-        writer::InMemoryWriteableCursor,
     };
 
     #[test]
@@ -744,15 +744,13 @@ mod tests {
         let expected_batch =
             RecordBatch::try_new(schema.clone(), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
-        let cursor = InMemoryWriteableCursor::default();
+        let mut buffer = vec![];
 
         {
-            let mut writer = ArrowWriter::try_new(cursor.clone(), schema, None).unwrap();
+            let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).unwrap();
             writer.write(&expected_batch).unwrap();
             writer.close().unwrap();
         }
-
-        let buffer = cursor.into_inner().unwrap();
 
         let cursor = crate::file::serialized_reader::SliceableCursor::new(buffer);
         let reader = SerializedFileReader::new(cursor).unwrap();
