@@ -1391,6 +1391,46 @@ mod tests {
     }
 
     #[test]
+    fn test_projection_array_values() {
+        let schema = Schema::new(vec![
+            Field::new("f0", DataType::UInt32, false),
+            Field::new("f1", DataType::Utf8, false),
+            Field::new("f2", DataType::Boolean, false),
+        ]);
+
+        let array0 = UInt32Array::from(vec![1, 2, 3]);
+        let array1 = StringArray::from(vec!["foo", "bar", "baz"]);
+        let array2 = BooleanArray::from(vec![true, false, true]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(array0), Arc::new(array1), Arc::new(array2)],
+        )
+        .unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = ipc::writer::FileWriter::try_new(&mut buf, &schema).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // project the 2nd field to test indices of node and buffer
+        // are advanced correctly.
+        let projection = vec![1];
+        let reader =
+            FileReader::try_new(std::io::Cursor::new(buf), Some(projection.clone()));
+        let read_batch = reader.unwrap().next().unwrap().unwrap();
+        let read_array = read_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let expected_array = StringArray::from(vec!["foo", "bar", "baz"]);
+        assert_eq!(read_array, &expected_array);
+    }
+
+    #[test]
     fn test_arrow_single_float_row() {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Float32, false),
