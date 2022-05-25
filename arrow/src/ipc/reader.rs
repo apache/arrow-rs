@@ -1418,8 +1418,7 @@ mod tests {
         // project the 2nd field to test indices of node and buffer
         // are advanced correctly.
         let projection = vec![1];
-        let reader =
-            FileReader::try_new(std::io::Cursor::new(buf), Some(projection.clone()));
+        let reader = FileReader::try_new(std::io::Cursor::new(buf), Some(projection));
         let read_batch = reader.unwrap().next().unwrap().unwrap();
         let read_array = read_batch
             .column(0)
