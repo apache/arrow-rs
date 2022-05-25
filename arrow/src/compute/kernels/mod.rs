@@ -31,6 +31,7 @@ pub mod limit;
 pub mod partition;
 pub mod regexp;
 pub mod sort;
+pub mod string;
 pub mod substring;
 pub mod take;
 pub mod temporal;
