@@ -278,7 +278,7 @@ fn create_array(
 /// Skip fields based on data types to advance `node_index` and `buffer_index`.
 /// This function should be called when doing projection in fn `read_record_batch`.
 /// The advancement logic references fn `create_array`.
-fn skip_filed(
+fn skip_field(
     nodes: &[ipc::FieldNode],
     field: &Field,
     data: &[u8],
@@ -301,7 +301,7 @@ fn skip_filed(
         List(ref list_field) | LargeList(ref list_field) | Map(ref list_field, _) => {
             node_index += 1;
             buffer_index += 2;
-            let tuple = skip_filed(
+            let tuple = skip_field(
                 nodes,
                 list_field,
                 data,
@@ -316,7 +316,7 @@ fn skip_filed(
         FixedSizeList(ref list_field, _) => {
             node_index += 1;
             buffer_index += 1;
-            let tuple = skip_filed(
+            let tuple = skip_field(
                 nodes,
                 list_field,
                 data,
@@ -334,7 +334,7 @@ fn skip_filed(
 
             // skip for each field
             for struct_field in struct_fields {
-                let tuple = skip_filed(
+                let tuple = skip_field(
                     nodes,
                     struct_field,
                     data,
@@ -363,7 +363,7 @@ fn skip_filed(
             };
 
             for field in fields {
-                let tuple = skip_filed(
+                let tuple = skip_field(
                     nodes,
                     field,
                     data,
@@ -626,7 +626,7 @@ pub fn read_record_batch(
             } else {
                 // Skip field.
                 // This must be called to advance `node_index` and `buffer_index`.
-                let tuple = skip_filed(
+                let tuple = skip_field(
                     field_nodes,
                     field,
                     buf,
