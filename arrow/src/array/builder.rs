@@ -633,11 +633,7 @@ impl BooleanBuilder {
         let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
             .add_buffer(self.values_builder.finish())
-            .null_bit_buffer(if null_count > 0 {
-                Some(null_bit_buffer)
-            } else {
-                None
-            });
+            .null_bit_buffer((null_count > 0).then(|| null_bit_buffer));
 
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)

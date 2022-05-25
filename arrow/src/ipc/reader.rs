@@ -291,11 +291,7 @@ fn create_primitive_array(
                 .len(length)
                 .buffers(buffers[1..3].to_vec())
                 .offset(0)
-                .null_bit_buffer(if null_count > 0 {
-                    Some(buffers[0].clone())
-                } else {
-                    None
-                })
+                .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()))
                 .build()
                 .unwrap()
         }
@@ -305,11 +301,7 @@ fn create_primitive_array(
                 .len(length)
                 .buffers(buffers[1..2].to_vec())
                 .offset(0)
-                .null_bit_buffer(if null_count > 0 {
-                    Some(buffers[0].clone())
-                } else {
-                    None
-                });
+                .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
             unsafe { builder.build_unchecked() }
         }
@@ -328,11 +320,7 @@ fn create_primitive_array(
                     .len(length)
                     .buffers(buffers[1..].to_vec())
                     .offset(0)
-                    .null_bit_buffer(if null_count > 0 {
-                        Some(buffers[0].clone())
-                    } else {
-                        None
-                    });
+                    .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
                 let data = unsafe { builder.build_unchecked() };
                 let values = Arc::new(Int64Array::from(data)) as ArrayRef;
@@ -344,11 +332,7 @@ fn create_primitive_array(
                     .len(length)
                     .buffers(buffers[1..].to_vec())
                     .offset(0)
-                    .null_bit_buffer(if null_count > 0 {
-                        Some(buffers[0].clone())
-                    } else {
-                        None
-                    });
+                    .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
                 unsafe { builder.build_unchecked() }
             }
@@ -360,11 +344,7 @@ fn create_primitive_array(
                     .len(length)
                     .buffers(buffers[1..].to_vec())
                     .offset(0)
-                    .null_bit_buffer(if null_count > 0 {
-                        Some(buffers[0].clone())
-                    } else {
-                        None
-                    });
+                    .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
                 let data = unsafe { builder.build_unchecked() };
                 let values = Arc::new(Float64Array::from(data)) as ArrayRef;
@@ -376,11 +356,7 @@ fn create_primitive_array(
                     .len(length)
                     .buffers(buffers[1..].to_vec())
                     .offset(0)
-                    .null_bit_buffer(if null_count > 0 {
-                        Some(buffers[0].clone())
-                    } else {
-                        None
-                    });
+                    .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
                 unsafe { builder.build_unchecked() }
             }
@@ -399,11 +375,7 @@ fn create_primitive_array(
                 .len(length)
                 .buffers(buffers[1..].to_vec())
                 .offset(0)
-                .null_bit_buffer(if null_count > 0 {
-                    Some(buffers[0].clone())
-                } else {
-                    None
-                });
+                .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
             unsafe { builder.build_unchecked() }
         }
@@ -413,11 +385,7 @@ fn create_primitive_array(
                 .len(length)
                 .buffers(buffers[1..2].to_vec())
                 .offset(0)
-                .null_bit_buffer(if null_count > 0 {
-                    Some(buffers[0].clone())
-                } else {
-                    None
-                });
+                .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
             unsafe { builder.build_unchecked() }
         }
@@ -442,11 +410,7 @@ fn create_list_array(
             .buffers(buffers[1..2].to_vec())
             .offset(0)
             .child_data(vec![child_array.data().clone()])
-            .null_bit_buffer(if null_count > 0 {
-                Some(buffers[0].clone())
-            } else {
-                None
-            });
+            .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
         make_array(unsafe { builder.build_unchecked() })
     } else if let DataType::FixedSizeList(_, _) = *data_type {
@@ -456,11 +420,7 @@ fn create_list_array(
             .buffers(buffers[1..1].to_vec())
             .offset(0)
             .child_data(vec![child_array.data().clone()])
-            .null_bit_buffer(if null_count > 0 {
-                Some(buffers[0].clone())
-            } else {
-                None
-            });
+            .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
         make_array(unsafe { builder.build_unchecked() })
     } else if let DataType::Map(_, _) = *data_type {
@@ -470,11 +430,7 @@ fn create_list_array(
             .buffers(buffers[1..2].to_vec())
             .offset(0)
             .child_data(vec![child_array.data().clone()])
-            .null_bit_buffer(if null_count > 0 {
-                Some(buffers[0].clone())
-            } else {
-                None
-            });
+            .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
         make_array(unsafe { builder.build_unchecked() })
     } else {
@@ -497,11 +453,7 @@ fn create_dictionary_array(
             .buffers(buffers[1..2].to_vec())
             .offset(0)
             .child_data(vec![value_array.data().clone()])
-            .null_bit_buffer(if null_count > 0 {
-                Some(buffers[0].clone())
-            } else {
-                None
-            });
+            .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
         make_array(unsafe { builder.build_unchecked() })
     } else {
