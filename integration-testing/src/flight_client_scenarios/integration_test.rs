@@ -215,7 +215,7 @@ async fn consume_flight_location(
             flight_data_to_arrow_batch(&data, actual_schema.clone(), &dictionaries_by_id)
                 .expect("Unable to convert flight data to Arrow batch");
 
-        assert_eq!(expected_batch.schema(), actual_batch.schema());
+        assert_eq!(actual_schema, actual_batch.schema());
         assert_eq!(expected_batch.num_columns(), actual_batch.num_columns());
         assert_eq!(expected_batch.num_rows(), actual_batch.num_rows());
         let schema = expected_batch.schema();
