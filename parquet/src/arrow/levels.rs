@@ -488,6 +488,156 @@ mod tests {
     use arrow::util::pretty::pretty_format_columns;
 
     #[test]
+    fn test_calculate_array_levels_twitter_example() {
+        // based on the example at https://blog.twitter.com/engineering/en_us/a/2013/dremel-made-simple-with-parquet.html
+        // [[a, b, c], [d, e, f, g]], [[h], [i,j]]
+
+        let leaf_type = Field::new("item", DataType::Int32, false);
+        let inner_type = DataType::List(Box::new(leaf_type));
+        let inner_field = Field::new("l2", inner_type.clone(), false);
+        let outer_type = DataType::List(Box::new(inner_field));
+        let outer_field = Field::new("l1", outer_type.clone(), false);
+
+        let primitives = Int32Array::from_iter(0..10);
+
+        // Cannot use from_iter_primitive as always infers nullable
+        let offsets = Buffer::from_iter([0_i32, 3, 7, 8, 10]);
+        let inner_list = ArrayDataBuilder::new(inner_type)
+            .len(4)
+            .add_buffer(offsets)
+            .add_child_data(primitives.data().clone())
+            .build()
+            .unwrap();
+
+        let offsets = Buffer::from_iter([0_i32, 2, 4]);
+        let outer_list = ArrayDataBuilder::new(outer_type)
+            .len(2)
+            .add_buffer(offsets)
+            .add_child_data(inner_list)
+            .build()
+            .unwrap();
+        let outer_list = make_array(outer_list);
+
+        let levels = calculate_array_levels(&outer_list, &outer_field).unwrap();
+        assert_eq!(levels.len(), 1);
+
+        let expected = LevelInfo {
+            def_levels: Some(vec![2; 10]),
+            rep_levels: Some(vec![0, 2, 2, 1, 2, 2, 2, 0, 1, 2]),
+            non_null_indices: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+            max_def_level: 2,
+            max_rep_level: 2,
+        };
+        assert_eq!(&levels[0], &expected);
+    }
+
+    #[test]
+    fn test_calculate_one_level_1() {
+        // This test calculates the levels for a non-null primitive array
+        let array = Arc::new(Int32Array::from_iter(0..10)) as ArrayRef;
+        let field = Field::new("item", DataType::Int32, false);
+
+        let levels = calculate_array_levels(&array, &field).unwrap();
+        assert_eq!(levels.len(), 1);
+
+        let expected_levels = LevelInfo {
+            def_levels: None,
+            rep_levels: None,
+            non_null_indices: (0..10).collect(),
+            max_def_level: 0,
+            max_rep_level: 0,
+        };
+        assert_eq!(&levels[0], &expected_levels);
+    }
+
+    #[test]
+    fn test_calculate_one_level_2() {
+        // This test calculates the levels for a nullable primitive array
+        let array = Arc::new(Int32Array::from_iter([
+            Some(0),
+            None,
+            Some(0),
+            Some(0),
+            None,
+        ])) as ArrayRef;
+        let field = Field::new("item", DataType::Int32, true);
+
+        let levels = calculate_array_levels(&array, &field).unwrap();
+        assert_eq!(levels.len(), 1);
+
+        let expected_levels = LevelInfo {
+            def_levels: Some(vec![1, 0, 1, 1, 0]),
+            rep_levels: None,
+            non_null_indices: vec![0, 2, 3],
+            max_def_level: 1,
+            max_rep_level: 0,
+        };
+        assert_eq!(&levels[0], &expected_levels);
+    }
+
+    #[test]
+    fn test_calculate_array_levels_1() {
+        let leaf_field = Field::new("item", DataType::Int32, false);
+        let list_field = Field::new("list", DataType::List(Box::new(leaf_field)), false);
+
+        // if all array values are defined (e.g. batch<list<_>>)
+        // [[0], [1], [2], [3], [4]]
+
+        let leaf_array = Int32Array::from_iter(0..5);
+        // Cannot use from_iter_primitive as always infers nullable
+        let offsets = Buffer::from_iter(0_i32..6);
+        let list = ArrayDataBuilder::new(list_field.data_type().clone())
+            .len(5)
+            .add_buffer(offsets)
+            .add_child_data(leaf_array.data().clone())
+            .build()
+            .unwrap();
+        let list = make_array(list);
+
+        let levels = calculate_array_levels(&list, &list_field).unwrap();
+        assert_eq!(levels.len(), 1);
+
+        let expected_levels = LevelInfo {
+            def_levels: Some(vec![1; 5]),
+            rep_levels: Some(vec![0; 5]),
+            non_null_indices: (0..5).collect(),
+            max_def_level: 1,
+            max_rep_level: 1,
+        };
+        assert_eq!(&levels[0], &expected_levels);
+
+        // array: [[0, 0], NULL, [2, 2], [3, 3, 3, 3], [4, 4, 4]]
+        // all values are defined as we do not have nulls on the root (batch)
+        // repetition:
+        //   0: 0, 1
+        //   1: 0
+        //   2: 0, 1
+        //   3: 0, 1, 1, 1
+        //   4: 0, 1, 1
+        let leaf_array = Int32Array::from_iter([0, 0, 2, 2, 3, 3, 3, 3, 4, 4, 4]);
+        let offsets = Buffer::from_iter([0_i32, 2, 2, 4, 8, 11]);
+        let list = ArrayDataBuilder::new(list_field.data_type().clone())
+            .len(5)
+            .add_buffer(offsets)
+            .add_child_data(leaf_array.data().clone())
+            .build()
+            .unwrap();
+        let list = make_array(list);
+
+        let levels = calculate_array_levels(&list, &list_field).unwrap();
+        assert_eq!(levels.len(), 1);
+
+        let expected_levels = LevelInfo {
+            def_levels: Some(vec![1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
+            rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1]),
+            non_null_indices: (0..11).collect(),
+            max_def_level: 1,
+            max_rep_level: 1,
+        };
+        assert_eq!(&levels[0], &expected_levels);
+    }
+
+    #[test]
     fn list_single_column() {
         // this tests the level generation from the arrow_writer equivalent test
 
