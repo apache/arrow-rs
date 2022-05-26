@@ -147,7 +147,10 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
 
 #[cfg(test)]
 mod tests {
-    use crate::array::{Int64Builder, ListBuilder};
+    use crate::{
+        array::{Array, Int64Builder, ListArray, ListBuilder},
+        datatypes::Int32Type,
+    };
 
     #[test]
     fn list_array_non_zero_nulls() {
@@ -171,5 +174,22 @@ mod tests {
         let array2 = builder.finish();
 
         assert_eq!(array1, array2);
+    }
+
+    #[test]
+    fn test_list_different_offsets() {
+        let a = ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some([Some(0), Some(0)]),
+            Some([Some(1), Some(2)]),
+            Some([None, None]),
+        ]);
+        let b = ListArray::from_iter_primitive::<Int32Type, _, _>([
+            Some([Some(1), Some(2)]),
+            Some([None, None]),
+            Some([None, None]),
+        ]);
+        let a_slice = a.slice(1, 2);
+        let b_slice = b.slice(0, 2);
+        assert_eq!(&a_slice, &b_slice);
     }
 }
