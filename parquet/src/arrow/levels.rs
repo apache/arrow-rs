@@ -308,16 +308,10 @@ impl LevelInfoBuilder {
                     let len = range.end - range.start;
 
                     let def_levels = info.def_levels.as_mut().unwrap();
-                    def_levels.reserve(len);
-                    for _ in 0..len {
-                        def_levels.push(ctx.def_level - 1);
-                    }
+                    def_levels.extend(std::iter::repeat(ctx.def_level - 1).take(len));
 
                     if let Some(rep_levels) = info.rep_levels.as_mut() {
-                        rep_levels.reserve(len);
-                        for _ in 0..len {
-                            rep_levels.push(ctx.rep_level)
-                        }
+                        rep_levels.extend(std::iter::repeat(ctx.rep_level).take(len));
                     }
                 })
             }
@@ -1174,7 +1168,7 @@ mod tests {
 
     #[test]
     fn test_struct_mask_list() {
-        // Test a struct array masking a list
+        // Test the null mask of a struct array masking out non-empty slices of a child ListArray
         let inner = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
             Some(vec![Some(1), Some(2)]),
             Some(vec![None]),
@@ -1212,6 +1206,9 @@ mod tests {
 
     #[test]
     fn test_list_mask_struct() {
+        // Test the null mask of a struct array and the null mask of a list array
+        // masking out non-null elements of their children
+
         let a1 = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
             Some(vec![None]), // Masked by list array
             Some(vec![]),     // Masked by list array
