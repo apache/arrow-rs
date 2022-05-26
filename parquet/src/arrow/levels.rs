@@ -483,8 +483,9 @@ mod tests {
 
     use arrow::array::*;
     use arrow::buffer::Buffer;
-    use arrow::datatypes::{Schema, ToByteSlice};
+    use arrow::datatypes::{Int32Type, Schema, ToByteSlice};
     use arrow::record_batch::RecordBatch;
+    use arrow::util::pretty::pretty_format_columns;
 
     #[test]
     fn list_single_column() {
@@ -870,5 +871,133 @@ mod tests {
         };
 
         assert_eq!(list_level, &expected_level);
+    }
+
+    #[test]
+    fn test_struct_mask_list() {
+        // Test a struct array masking a list
+        let inner = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2)]),
+            Some(vec![None]),
+            Some(vec![]),
+            Some(vec![Some(3), None]), // Masked by struct array
+            Some(vec![Some(4), Some(5)]),
+            None, // Masked by struct array
+            None,
+        ]);
+
+        // This test assumes that nulls don't take up space
+        assert_eq!(inner.data().child_data()[0].len(), 7);
+
+        let field = Field::new("list", inner.data_type().clone(), true);
+        let array = Arc::new(inner) as ArrayRef;
+        let nulls = Buffer::from([0b01010111]);
+        let struct_a = StructArray::try_from((vec![(field, array)], nulls)).unwrap();
+
+        let field = Field::new("struct", struct_a.data_type().clone(), true);
+        let array = Arc::new(struct_a) as ArrayRef;
+        let levels = calculate_array_levels(&array, &field).unwrap();
+
+        assert_eq!(levels.len(), 1);
+
+        let expected_level = LevelInfo {
+            def_levels: Some(vec![4, 4, 3, 2, 0, 4, 4, 0, 1]),
+            rep_levels: Some(vec![0, 1, 0, 0, 0, 0, 1, 0, 0]),
+            non_null_indices: vec![0, 1, 5, 6],
+            max_def_level: 4,
+            max_rep_level: 1,
+        };
+
+        assert_eq!(&levels[0], &expected_level);
+    }
+
+    #[test]
+    fn test_list_mask_struct() {
+        let a1 = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![None]), // Masked by list array
+            Some(vec![]),     // Masked by list array
+            Some(vec![Some(3), None]),
+            Some(vec![Some(4), Some(5), None, Some(6)]), // Masked by struct array
+            None,
+            None,
+        ])) as ArrayRef;
+
+        let a2 = Arc::new(Int32Array::from_iter(vec![
+            Some(1), // Masked by list array
+            Some(2), // Masked by list array
+            None,
+            Some(4), // Masked by struct array
+            Some(5),
+            None,
+        ])) as ArrayRef;
+
+        let field_a1 = Field::new("list", a1.data_type().clone(), true);
+        let field_a2 = Field::new("integers", a2.data_type().clone(), true);
+
+        let nulls = Buffer::from([0b00110111]);
+        let struct_a = Arc::new(
+            StructArray::try_from((vec![(field_a1, a1), (field_a2, a2)], nulls)).unwrap(),
+        ) as ArrayRef;
+
+        let offsets = Buffer::from_iter([0_i32, 0, 2, 2, 3, 5, 5]);
+        let nulls = Buffer::from([0b00111100]);
+
+        let list_type = DataType::List(Box::new(Field::new(
+            "struct",
+            struct_a.data_type().clone(),
+            true,
+        )));
+
+        let data = ArrayDataBuilder::new(list_type.clone())
+            .len(6)
+            .null_bit_buffer(nulls)
+            .add_buffer(offsets)
+            .add_child_data(struct_a.data().clone())
+            .build()
+            .unwrap();
+
+        let list = make_array(data);
+        let list_field = Field::new("col", list_type, true);
+
+        let expected = vec![
+            r#"+-------------------------------------+"#,
+            r#"| col                                 |"#,
+            r#"+-------------------------------------+"#,
+            r#"|                                     |"#,
+            r#"|                                     |"#,
+            r#"| []                                  |"#,
+            r#"| [{"list": [3, ], "integers": null}] |"#,
+            r#"| [, {"list": null, "integers": 5}]   |"#,
+            r#"| []                                  |"#,
+            r#"+-------------------------------------+"#,
+        ]
+        .join("\n");
+
+        let pretty = pretty_format_columns(list_field.name(), &[list.clone()]).unwrap();
+        assert_eq!(pretty.to_string(), expected);
+
+        let levels = calculate_array_levels(&list, &list_field).unwrap();
+
+        assert_eq!(levels.len(), 2);
+
+        let expected_level = LevelInfo {
+            def_levels: Some(vec![0, 0, 1, 6, 5, 2, 3, 1]),
+            rep_levels: Some(vec![0, 0, 0, 0, 2, 0, 1, 0]),
+            non_null_indices: vec![1],
+            max_def_level: 6,
+            max_rep_level: 2,
+        };
+
+        assert_eq!(&levels[0], &expected_level);
+
+        let expected_level = LevelInfo {
+            def_levels: Some(vec![0, 0, 1, 3, 2, 4, 1]),
+            rep_levels: Some(vec![0, 0, 0, 0, 0, 1, 0]),
+            non_null_indices: vec![4],
+            max_def_level: 4,
+            max_rep_level: 1,
+        };
+
+        assert_eq!(&levels[1], &expected_level);
     }
 }
