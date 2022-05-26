@@ -572,7 +572,7 @@ mod tests {
     #[test]
     fn test_calculate_array_levels_1() {
         let leaf_field = Field::new("item", DataType::Int32, false);
-        let list_field = Field::new("list", DataType::List(Box::new(leaf_field)), false);
+        let list_type = DataType::List(Box::new(leaf_field));
 
         // if all array values are defined (e.g. batch<list<_>>)
         // [[0], [1], [2], [3], [4]]
@@ -580,7 +580,7 @@ mod tests {
         let leaf_array = Int32Array::from_iter(0..5);
         // Cannot use from_iter_primitive as always infers nullable
         let offsets = Buffer::from_iter(0_i32..6);
-        let list = ArrayDataBuilder::new(list_field.data_type().clone())
+        let list = ArrayDataBuilder::new(list_type.clone())
             .len(5)
             .add_buffer(offsets)
             .add_child_data(leaf_array.data().clone())
@@ -588,6 +588,7 @@ mod tests {
             .unwrap();
         let list = make_array(list);
 
+        let list_field = Field::new("list", list_type.clone(), false);
         let levels = calculate_array_levels(&list, &list_field).unwrap();
         assert_eq!(levels.len(), 1);
 
@@ -610,22 +611,24 @@ mod tests {
         //   4: 0, 1, 1
         let leaf_array = Int32Array::from_iter([0, 0, 2, 2, 3, 3, 3, 3, 4, 4, 4]);
         let offsets = Buffer::from_iter([0_i32, 2, 2, 4, 8, 11]);
-        let list = ArrayDataBuilder::new(list_field.data_type().clone())
+        let list = ArrayDataBuilder::new(list_type.clone())
             .len(5)
             .add_buffer(offsets)
             .add_child_data(leaf_array.data().clone())
+            .null_bit_buffer(Buffer::from([0b00011101]))
             .build()
             .unwrap();
         let list = make_array(list);
 
+        let list_field = Field::new("list", list_type.clone(), true);
         let levels = calculate_array_levels(&list, &list_field).unwrap();
         assert_eq!(levels.len(), 1);
 
         let expected_levels = LevelInfo {
-            def_levels: Some(vec![1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1]),
+            def_levels: Some(vec![2, 2, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2]),
             rep_levels: Some(vec![0, 1, 0, 0, 1, 0, 1, 1, 1, 0, 1, 1]),
             non_null_indices: (0..11).collect(),
-            max_def_level: 1,
+            max_def_level: 2,
             max_rep_level: 1,
         };
         assert_eq!(&levels[0], &expected_levels);
@@ -787,7 +790,7 @@ mod tests {
         let a_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
         let a_value_offsets = arrow::buffer::Buffer::from_iter([0_i32, 1, 3, 3, 6, 10]);
         let a_list_type =
-            DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
         let a_list_data = ArrayData::builder(a_list_type.clone())
             .len(5)
             .add_buffer(a_value_offsets)
@@ -799,31 +802,23 @@ mod tests {
         assert_eq!(a_list_data.null_count(), 1);
 
         let a = ListArray::from(a_list_data);
-        let values = Arc::new(a);
+        let values = Arc::new(a) as _;
 
-        let schema = Schema::new(vec![Field::new("item", a_list_type, true)]);
+        let item_field = Field::new("item", a_list_type, true);
+        let mut builder =
+            LevelInfoBuilder::try_new(&item_field, Default::default()).unwrap();
+        builder.write(&values, 2..4);
+        let levels = builder.finish();
 
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
-
-        // calculate the list's level
-        let mut levels = vec![];
-        batch
-            .columns()
-            .iter()
-            .zip(batch.schema().fields())
-            .for_each(|(array, field)| {
-                let mut array_levels = calculate_array_levels(array, field).unwrap();
-                levels.append(&mut array_levels);
-            });
         assert_eq!(levels.len(), 1);
 
         let list_level = levels.get(0).unwrap();
 
         let expected_level = LevelInfo {
-            def_levels: Some(vec![2, 2, 2, 0, 2, 2, 2, 2, 2, 2, 2]),
-            rep_levels: Some(vec![0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 1]),
-            non_null_indices: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-            max_def_level: 2,
+            def_levels: Some(vec![0, 3, 3, 3]),
+            rep_levels: Some(vec![0, 0, 1, 1]),
+            non_null_indices: vec![3, 4, 5],
+            max_def_level: 3,
             max_rep_level: 1,
         };
         assert_eq!(list_level, &expected_level);
