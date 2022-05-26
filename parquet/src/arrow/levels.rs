@@ -104,8 +104,13 @@ struct LevelContext {
 
 /// A helper to construct [`LevelInfo`] from a potentially nested [`Field`]
 enum LevelInfoBuilder {
+    /// A primitive, leaf array
     Primitive(LevelInfo),
+    /// A list array, contains the [`LevelInfoBuilder`] of the child and
+    /// the [`LevelContext`] of this list
     List(Box<LevelInfoBuilder>, LevelContext),
+    /// A list array, contains the [`LevelInfoBuilder`] of its children and
+    /// the [`LevelContext`] of this struct array
     Struct(Vec<LevelInfoBuilder>, LevelContext),
 }
 
@@ -268,6 +273,7 @@ impl LevelInfoBuilder {
         match list_data.null_bitmap() {
             Some(nulls) => {
                 let null_offset = list_data.offset() + range.start;
+                // TODO: Faster bitmask iteration (#1757)
                 for (idx, w) in offsets.windows(2).enumerate() {
                     let is_valid = nulls.is_set(idx + null_offset);
                     let start_idx = w[0].to_usize().unwrap();
@@ -329,7 +335,7 @@ impl LevelInfoBuilder {
                 let mut last_non_null_idx = None;
                 let mut last_null_idx = None;
 
-                // TODO: BitChunkIterator
+                // TODO: Faster bitmask iteration (#1757)
                 for i in range.clone() {
                     match validity.is_set(i + null_offset) {
                         true => {
@@ -376,6 +382,7 @@ impl LevelInfoBuilder {
                 match array.data().null_bitmap() {
                     Some(nulls) => {
                         let nulls_offset = array.data().offset();
+                        // TODO: Faster bitmask iteration (#1757)
                         for i in range {
                             match nulls.is_set(i + nulls_offset) {
                                 true => {

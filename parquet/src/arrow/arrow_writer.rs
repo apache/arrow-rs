@@ -341,7 +341,6 @@ fn write_leaf(
     column: &ArrayRef,
     levels: LevelInfo,
 ) -> Result<i64> {
-    // TODO: Avoid filtering if no need
     let indices = levels.non_null_indices();
     let written = match writer {
         ColumnWriter::Int32ColumnWriter(ref mut typed) => {
