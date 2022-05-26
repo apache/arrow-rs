@@ -148,7 +148,7 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
 #[cfg(test)]
 mod tests {
     use crate::{
-        array::{Int64Builder, ListArray, ListBuilder},
+        array::{Array, Int64Builder, ListArray, ListBuilder},
         datatypes::Int32Type,
     };
 
