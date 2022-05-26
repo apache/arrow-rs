@@ -132,12 +132,13 @@ pub struct SerializedFileReader<R: ChunkReader> {
 /// they will be chained using 'AND' to filter the row groups.
 pub struct ReadOptionsBuilder {
     predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
+    enable_page_index: bool,
 }
 
 impl ReadOptionsBuilder {
     /// New builder
     pub fn new() -> Self {
-        ReadOptionsBuilder { predicates: vec![] }
+        ReadOptionsBuilder { predicates: vec![], enable_page_index: false }
     }
 
     /// Add a predicate on row group metadata to the reading option,
@@ -147,6 +148,16 @@ impl ReadOptionsBuilder {
         predicate: Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>,
     ) -> Self {
         self.predicates.push(predicate);
+        self
+    }
+
+    /// Add a predicate on column chunk metadata to the reading option,
+    /// Filter pages that match the predicate criteria
+    pub fn with_page_index_pushdown(
+        mut self,
+        enable_page_index: bool,
+    ) -> Self {
+        self.enable_page_index = enable_page_index;
         self
     }
 
@@ -166,6 +177,7 @@ impl ReadOptionsBuilder {
     pub fn build(self) -> ReadOptions {
         ReadOptions {
             predicates: self.predicates,
+            enable_page_index: self.enable_page_index,
         }
     }
 }
@@ -176,6 +188,7 @@ impl ReadOptionsBuilder {
 /// All predicates will be chained using 'AND' to filter the row groups.
 pub struct ReadOptions {
     predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
+    enable_page_index: bool,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -605,9 +618,9 @@ mod tests {
         let file_metadata = metadata.file_metadata();
         assert!(file_metadata.created_by().is_some());
         assert_eq!(
-      file_metadata.created_by().unwrap(),
-      "impala version 1.3.0-INTERNAL (build 8a48ddb1eff84592b3fc06bc6f51ec120e1fffc9)"
-    );
+            file_metadata.created_by().unwrap(),
+            "impala version 1.3.0-INTERNAL (build 8a48ddb1eff84592b3fc06bc6f51ec120e1fffc9)"
+        );
         assert!(file_metadata.key_value_metadata().is_none());
         assert_eq!(file_metadata.num_rows(), 8);
         assert_eq!(file_metadata.version(), 1);
