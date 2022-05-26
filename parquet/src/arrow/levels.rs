@@ -635,6 +635,104 @@ mod tests {
     }
 
     #[test]
+    fn test_calculate_array_levels_2() {
+        // If some values are null
+        //
+        // This emulates an array in the form: <struct<list<?>>
+        // with values:
+        // - 0: [0, 1], but is null because of the struct
+        // - 1: []
+        // - 2: [2, 3], but is null because of the struct
+        // - 3: [4, 5, 6, 7]
+        // - 4: [8, 9, 10]
+        //
+        // If the first values of a list are null due to a parent, we have to still account for them
+        // while indexing, because they would affect the way the child is indexed
+        // i.e. in the above example, we have to know that [0, 1] has to be skipped
+        let leaf = Int32Array::from_iter(0..11);
+        let leaf_field = Field::new("leaf", DataType::Int32, false);
+
+        let list_type = DataType::List(Box::new(leaf_field.clone()));
+        let list = ArrayData::builder(list_type.clone())
+            .len(5)
+            .add_child_data(leaf.data().clone())
+            .add_buffer(Buffer::from_iter([0_i32, 2, 2, 4, 8, 11]))
+            .build()
+            .unwrap();
+
+        let list = make_array(list);
+        let list_field = Field::new("list", list_type, true);
+
+        let struct_array =
+            StructArray::from((vec![(list_field, list)], Buffer::from([0b00011010])));
+        let array = Arc::new(struct_array) as ArrayRef;
+
+        let struct_field = Field::new("struct", array.data_type().clone(), true);
+
+        let levels = calculate_array_levels(&array, &struct_field).unwrap();
+        assert_eq!(levels.len(), 1);
+
+        let expected_levels = LevelInfo {
+            def_levels: Some(vec![0, 2, 0, 3, 3, 3, 3, 3, 3, 3]),
+            rep_levels: Some(vec![0, 0, 0, 0, 1, 1, 1, 0, 1, 1]),
+            non_null_indices: (4..11).collect(),
+            max_def_level: 3,
+            max_rep_level: 1,
+        };
+
+        assert_eq!(&levels[0], &expected_levels);
+
+        // nested lists
+
+        // 0: [[100, 101], [102, 103]]
+        // 1: []
+        // 2: [[104, 105], [106, 107]]
+        // 3: [[108, 109], [110, 111], [112, 113], [114, 115]]
+        // 4: [[116, 117], [118, 119], [120, 121]]
+
+        let leaf = Int32Array::from_iter(100..122);
+        let leaf_field = Field::new("leaf", DataType::Int32, true);
+
+        let l1_type = DataType::List(Box::new(leaf_field.clone()));
+        let offsets = Buffer::from_iter([0_i32, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]);
+        let l1 = ArrayData::builder(l1_type.clone())
+            .len(11)
+            .add_child_data(leaf.data().clone())
+            .add_buffer(offsets)
+            .build()
+            .unwrap();
+
+        let l1_field = Field::new("l1", l1_type, true);
+        let l2_type = DataType::List(Box::new(l1_field.clone()));
+        let l2 = ArrayData::builder(l2_type.clone())
+            .len(5)
+            .add_child_data(l1)
+            .add_buffer(Buffer::from_iter([0, 2, 2, 4, 8, 11]))
+            .build()
+            .unwrap();
+
+        let l2 = make_array(l2);
+        let l2_field = Field::new("l2", l2.data_type().clone(), true);
+
+        let levels = calculate_array_levels(&l2, &l2_field).unwrap();
+        assert_eq!(levels.len(), 1);
+
+        let expected_levels = LevelInfo {
+            def_levels: Some(vec![
+                5, 5, 5, 5, 1, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5,
+            ]),
+            rep_levels: Some(vec![
+                0, 2, 1, 2, 0, 0, 2, 1, 2, 0, 2, 1, 2, 1, 2, 1, 2, 0, 2, 1, 2, 1, 2,
+            ]),
+            non_null_indices: (0..22).collect(),
+            max_def_level: 5,
+            max_rep_level: 2,
+        };
+
+        assert_eq!(&levels[0], &expected_levels);
+    }
+
+    #[test]
     fn test_calculate_array_levels_nested_list() {
         let leaf_field = Field::new("leaf", DataType::Int32, false);
         let list_type = DataType::List(Box::new(leaf_field.clone()));
@@ -668,7 +766,7 @@ mod tests {
         };
         assert_eq!(&levels[0], &expected_levels);
 
-        // 0: [null]
+        // 0: null
         // 1: [1, 2, 3]
         // 2: [4, 5]
         // 3: [6, 7]
@@ -681,16 +779,20 @@ mod tests {
             .build()
             .unwrap();
         let list = make_array(list);
-
         let list_field = Field::new("list", list_type.clone(), true);
-        let levels = calculate_array_levels(&list, &list_field).unwrap();
+
+        let struct_array = StructArray::from(vec![(list_field, list)]);
+        let array = Arc::new(struct_array) as ArrayRef;
+
+        let struct_field = Field::new("struct", array.data_type().clone(), true);
+        let levels = calculate_array_levels(&array, &struct_field).unwrap();
         assert_eq!(levels.len(), 1);
 
         let expected_levels = LevelInfo {
-            def_levels: Some(vec![0, 2, 2, 2, 2, 2, 2, 2]),
+            def_levels: Some(vec![1, 3, 3, 3, 3, 3, 3, 3]),
             rep_levels: Some(vec![0, 0, 1, 1, 0, 1, 0, 1]),
             non_null_indices: (0..7).collect(),
-            max_def_level: 2,
+            max_def_level: 3,
             max_rep_level: 1,
         };
         assert_eq!(&levels[0], &expected_levels);
