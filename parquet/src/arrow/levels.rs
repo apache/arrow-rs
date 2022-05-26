@@ -627,7 +627,7 @@ mod tests {
             .unwrap();
         let list = make_array(list);
 
-        let list_field = Field::new("list", list_type.clone(), true);
+        let list_field = Field::new("list", list_type, true);
         let levels = calculate_array_levels(&list, &list_field).unwrap();
         assert_eq!(levels.len(), 1);
 
@@ -659,7 +659,7 @@ mod tests {
         let leaf = Int32Array::from_iter(0..11);
         let leaf_field = Field::new("leaf", DataType::Int32, false);
 
-        let list_type = DataType::List(Box::new(leaf_field.clone()));
+        let list_type = DataType::List(Box::new(leaf_field));
         let list = ArrayData::builder(list_type.clone())
             .len(5)
             .add_child_data(leaf.data().clone())
@@ -700,7 +700,7 @@ mod tests {
         let leaf = Int32Array::from_iter(100..122);
         let leaf_field = Field::new("leaf", DataType::Int32, true);
 
-        let l1_type = DataType::List(Box::new(leaf_field.clone()));
+        let l1_type = DataType::List(Box::new(leaf_field));
         let offsets = Buffer::from_iter([0_i32, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]);
         let l1 = ArrayData::builder(l1_type.clone())
             .len(11)
@@ -710,8 +710,8 @@ mod tests {
             .unwrap();
 
         let l1_field = Field::new("l1", l1_type, true);
-        let l2_type = DataType::List(Box::new(l1_field.clone()));
-        let l2 = ArrayData::builder(l2_type.clone())
+        let l2_type = DataType::List(Box::new(l1_field));
+        let l2 = ArrayData::builder(l2_type)
             .len(5)
             .add_child_data(l1)
             .add_buffer(Buffer::from_iter([0, 2, 2, 4, 8, 11]))
@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn test_calculate_array_levels_nested_list() {
         let leaf_field = Field::new("leaf", DataType::Int32, false);
-        let list_type = DataType::List(Box::new(leaf_field.clone()));
+        let list_type = DataType::List(Box::new(leaf_field));
 
         // if all array values are defined (e.g. batch<list<_>>)
         // The array at this level looks like:
@@ -786,7 +786,7 @@ mod tests {
             .build()
             .unwrap();
         let list = make_array(list);
-        let list_field = Field::new("list", list_type.clone(), true);
+        let list_field = Field::new("list", list_type, true);
 
         let struct_array = StructArray::from(vec![(list_field, list)]);
         let array = Arc::new(struct_array) as ArrayRef;
@@ -821,7 +821,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let list_1_field = Field::new("l1", list_1_type.clone(), true);
+        let list_1_field = Field::new("l1", list_1_type, true);
         let list_2_type = DataType::List(Box::new(list_1_field));
         let list_2 = ArrayData::builder(list_2_type.clone())
             .len(4)
