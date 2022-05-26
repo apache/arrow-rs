@@ -33,7 +33,7 @@ use crate::error::{ArrowError, Result};
 /// ```
 ///
 /// An error will be returned if `left` and `right` have different lengths
-pub fn concat_elements_string<Offset: OffsetSizeTrait>(
+pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
     left: &GenericStringArray<Offset>,
     right: &GenericStringArray<Offset>,
 ) -> Result<GenericStringArray<Offset>> {
@@ -101,7 +101,7 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        let output = concat_elements_string(&left, &right).unwrap();
+        let output = concat_elements_utf8(&left, &right).unwrap();
 
         let expected = [None, Some("baryyy"), None]
             .into_iter()
@@ -119,7 +119,7 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        let output = concat_elements_string(&left, &right).unwrap();
+        let output = concat_elements_utf8(&left, &right).unwrap();
 
         let expected = [Some("foobaz"), Some(""), Some("bar")]
             .into_iter()
@@ -133,7 +133,7 @@ mod tests {
         let left = StringArray::from(vec!["foo", "bar"]);
         let right = StringArray::from(vec!["bar", "baz"]);
 
-        let output = concat_elements_string(&left, &right).unwrap();
+        let output = concat_elements_utf8(&left, &right).unwrap();
 
         let expected = StringArray::from(vec!["foobar", "barbaz"]);
 
@@ -145,7 +145,7 @@ mod tests {
         let left = StringArray::from(vec!["foo", "bar"]);
         let right = StringArray::from(vec!["baz"]);
 
-        let output = concat_elements_string(&left, &right);
+        let output = concat_elements_utf8(&left, &right);
 
         assert!(output.is_err());
     }
@@ -157,7 +157,7 @@ mod tests {
 
         let left_slice = left.slice(0, 3);
         let right_slice = right.slice(1, 3);
-        let output = concat_elements_string(
+        let output = concat_elements_utf8(
             left_slice
                 .as_any()
                 .downcast_ref::<GenericStringArray<i32>>()
@@ -178,7 +178,7 @@ mod tests {
         let left_slice = left.slice(2, 2);
         let right_slice = right.slice(1, 2);
 
-        let output = concat_elements_string(
+        let output = concat_elements_utf8(
             left_slice
                 .as_any()
                 .downcast_ref::<GenericStringArray<i32>>()
