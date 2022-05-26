@@ -26,9 +26,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::*;
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
-use parquet::{
-    arrow::ArrowWriter, errors::Result, file::writer::InMemoryWriteableCursor,
-};
+use parquet::{arrow::ArrowWriter, errors::Result};
 
 fn create_primitive_bench_batch(
     size: usize,
@@ -278,8 +276,8 @@ fn _create_nested_bench_batch(
 #[inline]
 fn write_batch(batch: &RecordBatch) -> Result<()> {
     // Write batch to an in-memory writer
-    let cursor = InMemoryWriteableCursor::default();
-    let mut writer = ArrowWriter::try_new(cursor, batch.schema(), None)?;
+    let buffer = vec![];
+    let mut writer = ArrowWriter::try_new(buffer, batch.schema(), None)?;
 
     writer.write(batch)?;
     writer.close()?;

@@ -32,7 +32,7 @@
 //! use parquet::{
 //!     file::{
 //!         properties::WriterProperties,
-//!         writer::{FileWriter, SerializedFileWriter},
+//!         writer::SerializedFileWriter,
 //!     },
 //!     schema::parser::parse_message_type,
 //! };
@@ -51,9 +51,9 @@
 //! let mut row_group_writer = writer.next_row_group().unwrap();
 //! while let Some(mut col_writer) = row_group_writer.next_column().unwrap() {
 //!     // ... write values to a column writer
-//!     row_group_writer.close_column(col_writer).unwrap();
+//!     col_writer.close().unwrap()
 //! }
-//! writer.close_row_group(row_group_writer).unwrap();
+//! row_group_writer.close().unwrap();
 //! writer.close().unwrap();
 //!
 //! let bytes = fs::read(&path).unwrap();

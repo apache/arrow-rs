@@ -54,10 +54,7 @@ mod tests {
     use super::*;
 
     use parquet::{
-        file::{
-            properties::WriterProperties,
-            writer::{FileWriter, SerializedFileWriter},
-        },
+        file::{properties::WriterProperties, writer::SerializedFileWriter},
         schema::parser::parse_message_type,
     };
     use std::{env, fs, io::Write, sync::Arc};
@@ -133,7 +130,7 @@ mod tests {
 
         let mut row_group = writer.next_row_group().unwrap();
         drs.as_slice().write_to_row_group(&mut row_group).unwrap();
-        writer.close_row_group(row_group).unwrap();
+        row_group.close().unwrap();
         writer.close().unwrap();
     }
 

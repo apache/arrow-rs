@@ -23,7 +23,7 @@
 //! ```
 //! cargo install parquet --features=cli
 //! ```
-//! After this `parquet-rowcount` should be globally available:
+//! After this `parquet-rowcount` should be available:
 //! ```
 //! parquet-rowcount XYZ.parquet
 //! ```

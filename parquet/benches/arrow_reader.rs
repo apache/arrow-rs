@@ -130,8 +130,7 @@ where
     let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
     for _i in 0..NUM_ROW_GROUPS {
         let mut column_chunk_pages = VecDeque::new();
-        let mem_tracker = Arc::new(parquet::memory::MemTracker::new());
-        let mut dict_encoder = DictEncoder::<T>::new(column_desc.clone(), mem_tracker);
+        let mut dict_encoder = DictEncoder::<T>::new(column_desc.clone());
         // add data pages
         for _j in 0..PAGES_PER_GROUP {
             // generate page
@@ -239,9 +238,7 @@ fn build_dictionary_encoded_string_page_iterator(
     let mut pages: Vec<Vec<parquet::column::page::Page>> = Vec::new();
     for _i in 0..NUM_ROW_GROUPS {
         let mut column_chunk_pages = VecDeque::new();
-        let mem_tracker = Arc::new(parquet::memory::MemTracker::new());
-        let mut dict_encoder =
-            DictEncoder::<ByteArrayType>::new(column_desc.clone(), mem_tracker);
+        let mut dict_encoder = DictEncoder::<ByteArrayType>::new(column_desc.clone());
         // add data pages
         for _j in 0..PAGES_PER_GROUP {
             // generate page

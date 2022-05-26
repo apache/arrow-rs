@@ -17,7 +17,9 @@
 
 use std::{cell::RefCell, cmp, fmt, io::*};
 
-use crate::file::{reader::Length, writer::ParquetWriter};
+use crate::file::reader::Length;
+#[allow(deprecated)]
+use crate::file::writer::ParquetWriter;
 
 const DEFAULT_BUF_SIZE: usize = 8 * 1024;
 
@@ -156,6 +158,8 @@ impl<R: ParquetReader> Length for FileSource<R> {
 
 /// Struct that represents `File` output stream with position tracking.
 /// Used as a sink in file writer.
+#[deprecated = "use TrackedWrite instead"]
+#[allow(deprecated)]
 pub struct FileSink<W: ParquetWriter> {
     buf: BufWriter<W>,
     // This is not necessarily position in the underlying file,
@@ -163,6 +167,7 @@ pub struct FileSink<W: ParquetWriter> {
     pos: u64,
 }
 
+#[allow(deprecated)]
 impl<W: ParquetWriter> FileSink<W> {
     /// Creates new file sink.
     /// Position is set to whatever position file has.
@@ -176,6 +181,7 @@ impl<W: ParquetWriter> FileSink<W> {
     }
 }
 
+#[allow(deprecated)]
 impl<W: ParquetWriter> Write for FileSink<W> {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
         let num_bytes = self.buf.write(buf)?;
@@ -188,6 +194,7 @@ impl<W: ParquetWriter> Write for FileSink<W> {
     }
 }
 
+#[allow(deprecated)]
 impl<W: ParquetWriter> Position for FileSink<W> {
     fn pos(&self) -> u64 {
         self.pos
@@ -271,6 +278,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_io_write_with_pos() {
         let mut file = tempfile::tempfile().unwrap();
         file.write_all(&[b'a', b'b', b'c']).unwrap();
