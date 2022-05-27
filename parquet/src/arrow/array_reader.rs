@@ -362,13 +362,10 @@ where
             record_data = boolean_buffer.finish();
         }
 
-        let mut array_data = ArrayDataBuilder::new(arrow_data_type)
+        let array_data = ArrayDataBuilder::new(arrow_data_type)
             .len(self.record_reader.num_values())
-            .add_buffer(record_data);
-
-        if let Some(b) = self.record_reader.consume_bitmap_buffer()? {
-            array_data = array_data.null_bit_buffer(b);
-        }
+            .add_buffer(record_data)
+            .null_bit_buffer(self.record_reader.consume_bitmap_buffer()?);
 
         let array_data = unsafe { array_data.build_unchecked() };
         let array = match T::get_physical_type() {
@@ -773,7 +770,7 @@ impl ArrayReader for StructArrayReader {
             }
 
             array_data_builder =
-                array_data_builder.null_bit_buffer(bitmap_builder.finish());
+                array_data_builder.null_bit_buffer(Some(bitmap_builder.finish()));
         }
 
         let array_data = unsafe { array_data_builder.build_unchecked() };

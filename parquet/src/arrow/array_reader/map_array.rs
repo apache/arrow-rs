@@ -141,7 +141,7 @@ impl ArrayReader for MapArrayReader {
         let array_data = ArrayDataBuilder::new(self.data_type.clone())
             .len(entry_len)
             .add_buffer(value_offsets)
-            .null_bit_buffer(null_buf.into())
+            .null_bit_buffer(Some(null_buf.into()))
             .add_child_data(entry_data);
 
         let array_data = unsafe { array_data.build_unchecked() };

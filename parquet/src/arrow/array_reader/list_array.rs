@@ -222,7 +222,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 
         if let Some(mut builder) = validity {
             assert_eq!(builder.len(), list_offsets.len() - 1);
-            data_builder = data_builder.null_bit_buffer(builder.finish())
+            data_builder = data_builder.null_bit_buffer(Some(builder.finish()))
         }
 
         let list_data = unsafe { data_builder.build_unchecked() };
@@ -327,7 +327,7 @@ mod tests {
             .len(10)
             .add_buffer(offsets)
             .add_child_data(leaf.data().clone())
-            .null_bit_buffer(Buffer::from([0b11111101, 0b00000010]))
+            .null_bit_buffer(Some(Buffer::from([0b11111101, 0b00000010])))
             .build()
             .unwrap();
 
@@ -345,7 +345,7 @@ mod tests {
             .len(4)
             .add_buffer(offsets)
             .add_child_data(l2)
-            .null_bit_buffer(Buffer::from([0b00001101]))
+            .null_bit_buffer(Some(Buffer::from([0b00001101])))
             .build()
             .unwrap();
 

@@ -877,7 +877,7 @@ mod tests {
         let empty_with_bitmap = PrimitiveArray::<Int64Type>::from(
             ArrayData::builder(arr.data_type().clone())
                 .add_buffer(MutableBuffer::new(0).into())
-                .null_bit_buffer(MutableBuffer::new_null(0).into())
+                .null_bit_buffer(Some(MutableBuffer::new_null(0).into()))
                 .build()
                 .unwrap(),
         );

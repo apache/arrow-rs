@@ -1119,7 +1119,7 @@ mod tests {
             .len(5)
             .add_buffer(a_value_offsets)
             .add_child_data(a_values.data().clone())
-            .null_bit_buffer(Buffer::from(vec![0b00011111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00011111])))
             .build()
             .unwrap();
         let a = ListArray::from(a_list_data);
@@ -1170,7 +1170,7 @@ mod tests {
         let a_list_data = ArrayData::builder(list_inner_type.data_type().clone())
             .len(3)
             .add_buffer(a_value_offsets)
-            .null_bit_buffer(Buffer::from(vec![0b00000111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00000111])))
             .add_child_data(a_values.data().clone())
             .build()
             .unwrap();
@@ -1254,7 +1254,7 @@ mod tests {
             .len(3)
             .add_buffer(c1_value_offsets)
             .add_child_data(struct_values.data().clone())
-            .null_bit_buffer(Buffer::from(vec![0b00000101]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
             .build()
             .unwrap();
         let c1 = ListArray::from(c1_list_data);
@@ -1436,7 +1436,7 @@ mod tests {
 
         let map_data = ArrayData::builder(map_data_type.clone())
             .len(6)
-            .null_bit_buffer(valid_buffer)
+            .null_bit_buffer(Some(valid_buffer))
             .add_buffer(entry_offsets)
             .add_child_data(entry_struct.data().clone())
             .build()

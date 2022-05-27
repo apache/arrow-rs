@@ -550,7 +550,7 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
             ArrayData::builder(DataType::Timestamp(T::get_time_unit(), timezone))
                 .len(data_len)
                 .add_buffer(val_buf.into())
-                .null_bit_buffer(null_buf.into());
+                .null_bit_buffer(Some(null_buf.into()));
         let array_data = unsafe { array_data.build_unchecked() };
         PrimitiveArray::from(array_data)
     }

@@ -1256,7 +1256,7 @@ mod tests {
             DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int32, false)), 3);
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
-            .null_bit_buffer(Buffer::from(validity_bits))
+            .null_bit_buffer(Some(Buffer::from(validity_bits)))
             .add_child_data(value_data)
             .build()?;
 
@@ -1287,7 +1287,7 @@ mod tests {
 
         let expected_list_data = ArrayData::builder(list_data_type)
             .len(6)
-            .null_bit_buffer(Buffer::from(expected_validity_bits))
+            .null_bit_buffer(Some(Buffer::from(expected_validity_bits)))
             .add_child_data(expected_value_data)
             .build()?;
         let expected_array = FixedSizeListArray::from(expected_list_data);

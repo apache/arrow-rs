@@ -630,12 +630,11 @@ impl BooleanBuilder {
         let len = self.len();
         let null_bit_buffer = self.bitmap_builder.finish();
         let null_count = len - null_bit_buffer.count_set_bits();
-        let mut builder = ArrayData::builder(DataType::Boolean)
+        let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
-            .add_buffer(self.values_builder.finish());
-        if null_count > 0 {
-            builder = builder.null_bit_buffer(null_bit_buffer);
-        }
+            .add_buffer(self.values_builder.finish())
+            .null_bit_buffer((null_count > 0).then(|| null_bit_buffer));
+
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
     }
@@ -829,12 +828,15 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
                 .as_ref()
                 .map(|b| b.count_set_bits())
                 .unwrap_or(len);
-        let mut builder = ArrayData::builder(T::DATA_TYPE)
+        let builder = ArrayData::builder(T::DATA_TYPE)
             .len(len)
-            .add_buffer(self.values_builder.finish());
-        if null_count > 0 {
-            builder = builder.null_bit_buffer(null_bit_buffer.unwrap());
-        }
+            .add_buffer(self.values_builder.finish())
+            .null_bit_buffer(if null_count > 0 {
+                null_bit_buffer
+            } else {
+                None
+            });
+
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
     }
@@ -856,7 +858,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .len(len)
             .add_buffer(self.values_builder.finish());
         if null_count > 0 {
-            builder = builder.null_bit_buffer(null_bit_buffer.unwrap());
+            builder = builder.null_bit_buffer(null_bit_buffer);
         }
         builder = builder.add_child_data(values.data().clone());
         let array_data = unsafe { builder.build_unchecked() };
@@ -992,7 +994,7 @@ where
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(values_data.clone())
-            .null_bit_buffer(null_bit_buffer);
+            .null_bit_buffer(Some(null_bit_buffer));
 
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -1123,7 +1125,7 @@ where
         ))
         .len(len)
         .add_child_data(values_data.clone())
-        .null_bit_buffer(null_bit_buffer);
+        .null_bit_buffer(Some(null_bit_buffer));
 
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -1710,7 +1712,7 @@ impl StructBuilder {
             .len(self.len)
             .child_data(child_data);
         if null_count > 0 {
-            builder = builder.null_bit_buffer(null_bit_buffer);
+            builder = builder.null_bit_buffer(Some(null_bit_buffer));
         }
 
         self.len = 0;
@@ -1845,7 +1847,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(struct_array.data().clone())
-            .null_bit_buffer(null_bit_buffer);
+            .null_bit_buffer(Some(null_bit_buffer));
 
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -2155,7 +2157,7 @@ impl UnionBuilder {
             let arr_data_builder = ArrayDataBuilder::new(data_type.clone())
                 .add_buffer(buffer)
                 .len(slots)
-                .null_bit_buffer(bitmap_builder.finish());
+                .null_bit_buffer(Some(bitmap_builder.finish()));
 
             let arr_data_ref = unsafe { arr_data_builder.build_unchecked() };
             let array_ref = make_array(arr_data_ref);
@@ -3534,7 +3536,7 @@ mod tests {
 
         let expected_string_data = ArrayData::builder(DataType::Utf8)
             .len(4)
-            .null_bit_buffer(Buffer::from(&[9_u8]))
+            .null_bit_buffer(Some(Buffer::from(&[9_u8])))
             .add_buffer(Buffer::from_slice_ref(&[0, 3, 3, 3, 7]))
             .add_buffer(Buffer::from_slice_ref(b"joemark"))
             .build()
@@ -3542,7 +3544,7 @@ mod tests {
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
             .len(4)
-            .null_bit_buffer(Buffer::from_slice_ref(&[11_u8]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[11_u8])))
             .add_buffer(Buffer::from_slice_ref(&[1, 2, 0, 4]))
             .build()
             .unwrap();
@@ -3648,7 +3650,7 @@ mod tests {
 
         let expected_string_data = ArrayData::builder(DataType::Utf8)
             .len(4)
-            .null_bit_buffer(Buffer::from(&[9_u8]))
+            .null_bit_buffer(Some(Buffer::from(&[9_u8])))
             .add_buffer(Buffer::from_slice_ref(&[0, 3, 3, 3, 7]))
             .add_buffer(Buffer::from_slice_ref(b"joemark"))
             .build()
@@ -3656,7 +3658,7 @@ mod tests {
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
             .len(4)
-            .null_bit_buffer(Buffer::from_slice_ref(&[11_u8]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[11_u8])))
             .add_buffer(Buffer::from_slice_ref(&[1, 2, 0, 4]))
             .build()
             .unwrap();

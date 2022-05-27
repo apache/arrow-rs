@@ -86,7 +86,7 @@ impl<'a> _MutableArrayData<'a> {
             .child_data(child_data);
         if self.null_count > 0 {
             array_data_builder =
-                array_data_builder.null_bit_buffer(self.null_buffer.into());
+                array_data_builder.null_bit_buffer(Some(self.null_buffer.into()));
         }
 
         array_data_builder
