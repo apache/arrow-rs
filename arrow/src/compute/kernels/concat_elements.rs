@@ -19,9 +19,10 @@ use crate::array::*;
 use crate::compute::util::combine_option_bitmap;
 use crate::error::{ArrowError, Result};
 
-/// Returns the elementwise concatenation of `StringArray`.
+/// Returns the elementwise concatenation of a [`StringArray`].
 ///
-/// An index of the resulting `StringArray` is null if any of `StringArray` are null at that location.
+/// An index of the resulting [`StringArray`] is null if any of
+/// `StringArray` are null at that location.
 ///
 /// ```text
 /// e.g:
@@ -31,8 +32,8 @@ use crate::error::{ArrowError, Result};
 ///   ["a", "b"] + [None, "c"] = [None, "bc"]
 /// ```
 ///
-/// Attention: `left` and `right` must have the same length.
-pub fn string_concat<Offset: OffsetSizeTrait>(
+/// An error will be returned if `left` and `right` have different lengths
+pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
     left: &GenericStringArray<Offset>,
     right: &GenericStringArray<Offset>,
 ) -> Result<GenericStringArray<Offset>> {
@@ -96,7 +97,7 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        let output = string_concat(&left, &right).unwrap();
+        let output = concat_elements_utf8(&left, &right).unwrap();
 
         let expected = [None, Some("baryyy"), None]
             .into_iter()
@@ -114,7 +115,7 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        let output = string_concat(&left, &right).unwrap();
+        let output = concat_elements_utf8(&left, &right).unwrap();
 
         let expected = [Some("foobaz"), Some(""), Some("bar")]
             .into_iter()
@@ -128,7 +129,7 @@ mod tests {
         let left = StringArray::from(vec!["foo", "bar"]);
         let right = StringArray::from(vec!["bar", "baz"]);
 
-        let output = string_concat(&left, &right).unwrap();
+        let output = concat_elements_utf8(&left, &right).unwrap();
 
         let expected = StringArray::from(vec!["foobar", "barbaz"]);
 
@@ -140,7 +141,7 @@ mod tests {
         let left = StringArray::from(vec!["foo", "bar"]);
         let right = StringArray::from(vec!["baz"]);
 
-        let output = string_concat(&left, &right);
+        let output = concat_elements_utf8(&left, &right);
 
         assert!(output.is_err());
     }
@@ -152,7 +153,7 @@ mod tests {
 
         let left_slice = left.slice(0, 3);
         let right_slice = right.slice(1, 3);
-        let output = string_concat(
+        let output = concat_elements_utf8(
             left_slice
                 .as_any()
                 .downcast_ref::<GenericStringArray<i32>>()
@@ -173,7 +174,7 @@ mod tests {
         let left_slice = left.slice(2, 2);
         let right_slice = right.slice(1, 2);
 
-        let output = string_concat(
+        let output = concat_elements_utf8(
             left_slice
                 .as_any()
                 .downcast_ref::<GenericStringArray<i32>>()
