@@ -25,6 +25,7 @@ pub mod cast;
 pub mod cast_utils;
 pub mod comparison;
 pub mod concat;
+pub mod concat_elements;
 pub mod filter;
 pub mod length;
 pub mod limit;

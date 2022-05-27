@@ -622,7 +622,7 @@ mod tests {
             .len(5)
             .add_buffer(offsets)
             .add_child_data(leaf_array.data().clone())
-            .null_bit_buffer(Buffer::from([0b00011101]))
+            .null_bit_buffer(Some(Buffer::from([0b00011101])))
             .build()
             .unwrap();
         let list = make_array(list);
@@ -781,7 +781,7 @@ mod tests {
         let list = ArrayData::builder(list_type.clone())
             .len(4)
             .add_buffer(Buffer::from_iter([0_i32, 0, 3, 5, 7]))
-            .null_bit_buffer(Buffer::from([0b00001110]))
+            .null_bit_buffer(Some(Buffer::from([0b00001110])))
             .add_child_data(leaf.data().clone())
             .build()
             .unwrap();
@@ -826,7 +826,7 @@ mod tests {
         let list_2 = ArrayData::builder(list_2_type.clone())
             .len(4)
             .add_buffer(Buffer::from_iter([0_i32, 0, 3, 5, 7]))
-            .null_bit_buffer(Buffer::from([0b00001110]))
+            .null_bit_buffer(Some(Buffer::from([0b00001110])))
             .add_child_data(list_1)
             .build()
             .unwrap();
@@ -903,7 +903,7 @@ mod tests {
         let a_list_data = ArrayData::builder(a_list_type.clone())
             .len(5)
             .add_buffer(a_value_offsets)
-            .null_bit_buffer(Buffer::from(vec![0b00011011]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
             .add_child_data(a_values.data().clone())
             .build()
             .unwrap();
@@ -1289,7 +1289,7 @@ mod tests {
         let field = Field::new("list", inner.data_type().clone(), true);
         let array = Arc::new(inner) as ArrayRef;
         let nulls = Buffer::from([0b01010111]);
-        let struct_a = StructArray::try_from((vec![(field, array)], nulls)).unwrap();
+        let struct_a = StructArray::from((vec![(field, array)], nulls));
 
         let field = Field::new("struct", struct_a.data_type().clone(), true);
         let array = Arc::new(struct_a) as ArrayRef;
@@ -1350,7 +1350,7 @@ mod tests {
 
         let data = ArrayDataBuilder::new(list_type.clone())
             .len(6)
-            .null_bit_buffer(nulls)
+            .null_bit_buffer(Some(nulls))
             .add_buffer(offsets)
             .add_child_data(struct_a.data().clone())
             .build()

@@ -131,13 +131,11 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
             "StringArray can only be created from List<u8> arrays, mismatched data types."
         );
 
-        let mut builder = ArrayData::builder(Self::get_data_type())
+        let builder = ArrayData::builder(Self::get_data_type())
             .len(v.len())
             .add_buffer(v.data().buffers()[0].clone())
-            .add_buffer(v.data().child_data()[0].buffers()[0].clone());
-        if let Some(bitmap) = v.data().null_bitmap() {
-            builder = builder.null_bit_buffer(bitmap.bits.clone())
-        }
+            .add_buffer(v.data().child_data()[0].buffers()[0].clone())
+            .null_bit_buffer(v.data().null_buffer().cloned());
 
         let array_data = unsafe { builder.build_unchecked() };
         Self::from(array_data)
@@ -252,7 +250,7 @@ where
             .len(data_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into())
-            .null_bit_buffer(null_buf.into());
+            .null_bit_buffer(Some(null_buf.into()));
         let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
     }

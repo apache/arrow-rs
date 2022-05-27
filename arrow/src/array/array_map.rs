@@ -296,7 +296,7 @@ mod tests {
             .add_buffer(Buffer::from(
                 &[0u32, 10, 20, 0, 40, 0, 60, 70].to_byte_slice(),
             ))
-            .null_bit_buffer(Buffer::from(&[0b11010110]))
+            .null_bit_buffer(Some(Buffer::from(&[0b11010110])))
             .build()
             .unwrap();
 

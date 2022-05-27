@@ -152,13 +152,11 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
             "BinaryArray can only be created from List<u8> arrays, mismatched data types."
         );
 
-        let mut builder = ArrayData::builder(Self::get_data_type())
+        let builder = ArrayData::builder(Self::get_data_type())
             .len(v.len())
             .add_buffer(v.data_ref().buffers()[0].clone())
-            .add_buffer(v.data_ref().child_data()[0].buffers()[0].clone());
-        if let Some(bitmap) = v.data_ref().null_bitmap() {
-            builder = builder.null_bit_buffer(bitmap.bits.clone())
-        }
+            .add_buffer(v.data_ref().child_data()[0].buffers()[0].clone())
+            .null_bit_buffer(v.data_ref().null_buffer().cloned());
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)
@@ -308,7 +306,7 @@ where
             .len(data_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
-            .null_bit_buffer(null_buf.into());
+            .null_bit_buffer(Some(null_buf.into()));
         let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
     }
@@ -692,12 +690,10 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
             "FixedSizeBinaryArray can only be created from FixedSizeList<u8> arrays, mismatched data types."
         );
 
-        let mut builder = ArrayData::builder(DataType::FixedSizeBinary(v.value_length()))
+        let builder = ArrayData::builder(DataType::FixedSizeBinary(v.value_length()))
             .len(v.len())
-            .add_buffer(v.data_ref().child_data()[0].buffers()[0].clone());
-        if let Some(bitmap) = v.data_ref().null_bitmap() {
-            builder = builder.null_bit_buffer(bitmap.bits.clone())
-        }
+            .add_buffer(v.data_ref().child_data()[0].buffers()[0].clone())
+            .null_bit_buffer(v.data_ref().null_buffer().cloned());
 
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)
@@ -849,12 +845,10 @@ impl DecimalArray {
             "DecimalArray can only be created from FixedSizeList<u8> arrays, mismatched data types."
         );
 
-        let mut builder = ArrayData::builder(DataType::Decimal(precision, scale))
+        let builder = ArrayData::builder(DataType::Decimal(precision, scale))
             .len(v.len())
-            .add_buffer(v.data_ref().child_data()[0].buffers()[0].clone());
-        if let Some(bitmap) = v.data_ref().null_bitmap() {
-            builder = builder.null_bit_buffer(bitmap.bits.clone())
-        }
+            .add_buffer(v.data_ref().child_data()[0].buffers()[0].clone())
+            .null_bit_buffer(v.data_ref().null_buffer().cloned());
 
         let array_data = unsafe { builder.build_unchecked() };
         Self::from(array_data)
