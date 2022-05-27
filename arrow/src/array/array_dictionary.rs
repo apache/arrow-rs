@@ -107,7 +107,7 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         match keys.data().null_buffer() {
             Some(buffer) if keys.data().null_count() > 0 => {
                 data = data
-                    .null_bit_buffer(buffer.clone())
+                    .null_bit_buffer(Some(buffer.clone()))
                     .null_count(keys.data().null_count());
             }
             _ => data = data.null_count(0),

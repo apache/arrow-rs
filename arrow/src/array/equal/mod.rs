@@ -662,7 +662,7 @@ mod tests {
         .len(6)
         .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
         .add_child_data(c_values.data().clone())
-        .null_bit_buffer(Buffer::from(vec![0b00001001]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
         .build()
         .unwrap();
 
@@ -684,7 +684,7 @@ mod tests {
         .len(6)
         .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
         .add_child_data(d_values.data().clone())
-        .null_bit_buffer(Buffer::from(vec![0b00001001]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
         .build()
         .unwrap();
         test_equal(&c, &d, true);
@@ -1033,7 +1033,7 @@ mod tests {
             Field::new("f1", DataType::Utf8, true),
             Field::new("f2", DataType::Int32, true),
         ]))
-        .null_bit_buffer(Buffer::from(vec![0b00001011]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
         .len(5)
         .add_child_data(strings.data_ref().clone())
         .add_child_data(ints.data_ref().clone())
@@ -1045,7 +1045,7 @@ mod tests {
             Field::new("f1", DataType::Utf8, true),
             Field::new("f2", DataType::Int32, true),
         ]))
-        .null_bit_buffer(Buffer::from(vec![0b00001011]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
         .len(5)
         .add_child_data(strings.data_ref().clone())
         .add_child_data(ints_non_null.data_ref().clone())
@@ -1061,7 +1061,7 @@ mod tests {
             Field::new("f1", DataType::Utf8, true),
             Field::new("f2", DataType::Int32, true),
         ]))
-        .null_bit_buffer(Buffer::from(vec![0b00001011]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
         .len(5)
         .add_child_data(strings.data_ref().clone())
         .add_child_data(c_ints_non_null.data_ref().clone())
@@ -1077,7 +1077,7 @@ mod tests {
             a.data_type().clone(),
             true,
         )]))
-        .null_bit_buffer(Buffer::from(vec![0b00011110]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00011110])))
         .len(5)
         .add_child_data(a.data_ref().clone())
         .build()
@@ -1096,7 +1096,7 @@ mod tests {
             Field::new("f1", DataType::Utf8, true),
             Field::new("f2", DataType::Int32, true),
         ]))
-        .null_bit_buffer(Buffer::from(vec![0b00001011]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
         .len(5)
         .add_child_data(strings.data_ref().clone())
         .add_child_data(ints_non_null.data_ref().clone())
@@ -1108,7 +1108,7 @@ mod tests {
             b.data_type().clone(),
             true,
         )]))
-        .null_bit_buffer(Buffer::from(vec![0b00011110]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00011110])))
         .len(5)
         .add_child_data(b)
         .build()
@@ -1141,7 +1141,7 @@ mod tests {
             DataType::Utf8,
             true,
         )]))
-        .null_bit_buffer(Buffer::from(vec![0b00001010]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00001010])))
         .len(5)
         .add_child_data(strings1.data_ref().clone())
         .build()
@@ -1153,7 +1153,7 @@ mod tests {
             DataType::Utf8,
             true,
         )]))
-        .null_bit_buffer(Buffer::from(vec![0b00001010]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00001010])))
         .len(5)
         .add_child_data(strings2.data_ref().clone())
         .build()
@@ -1175,7 +1175,7 @@ mod tests {
             DataType::Utf8,
             true,
         )]))
-        .null_bit_buffer(Buffer::from(vec![0b00001011]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00001011])))
         .len(5)
         .add_child_data(strings3.data_ref().clone())
         .build()

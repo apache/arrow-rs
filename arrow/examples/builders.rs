@@ -81,7 +81,7 @@ fn main() {
         .len(3)
         .add_buffer(Buffer::from(offsets.to_byte_slice()))
         .add_buffer(Buffer::from(&values[..]))
-        .null_bit_buffer(Buffer::from([0b00000101]))
+        .null_bit_buffer(Some(Buffer::from([0b00000101])))
         .build()
         .unwrap();
     let binary_array = StringArray::from(array_data);

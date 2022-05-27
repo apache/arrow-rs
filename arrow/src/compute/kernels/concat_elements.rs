@@ -75,15 +75,11 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
         output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
     }
 
-    let mut builder =
-        ArrayDataBuilder::new(GenericStringArray::<Offset>::get_data_type())
-            .len(left.len())
-            .add_buffer(output_offsets.finish())
-            .add_buffer(output_values.finish());
-
-    if let Some(null_bitmap) = output_bitmap {
-        builder = builder.null_bit_buffer(null_bitmap);
-    }
+    let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::get_data_type())
+        .len(left.len())
+        .add_buffer(output_offsets.finish())
+        .add_buffer(output_values.finish())
+        .null_bit_buffer(output_bitmap);
 
     // SAFETY - offsets valid by construction
     Ok(unsafe { builder.build_unchecked() }.into())

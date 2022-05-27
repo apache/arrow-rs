@@ -574,7 +574,7 @@ mod tests {
             .len(2)
             .add_buffer(Buffer::from_slice_ref(offsets))
             .add_buffer(Buffer::from_iter(values))
-            .null_bit_buffer(Buffer::from(bitmap))
+            .null_bit_buffer(Some(Buffer::from(bitmap)))
             .offset(1)
             .build()?;
         // array is `[null, [10, 11, 12, 13, 14]]`
@@ -867,7 +867,7 @@ mod tests {
             .len(2)
             .add_buffer(Buffer::from(&values[..]))
             .offset(1)
-            .null_bit_buffer(Buffer::from(bits_v))
+            .null_bit_buffer(Some(Buffer::from(bits_v)))
             .build()
             .unwrap();
         // array is `[null, "arrow"]`
@@ -1056,7 +1056,7 @@ mod tests {
             .len(2)
             .add_buffer(Buffer::from_slice_ref(offsets))
             .add_buffer(Buffer::from(values))
-            .null_bit_buffer(Buffer::from(bitmap))
+            .null_bit_buffer(Some(Buffer::from(bitmap)))
             .offset(1)
             .build()?;
         // array is `[null, "arrow"]`

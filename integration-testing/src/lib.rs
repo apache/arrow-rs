@@ -496,7 +496,7 @@ fn array_from_json(
                 .offset(0)
                 .add_buffer(Buffer::from(&offsets.to_byte_slice()))
                 .add_child_data(child_array.data().clone())
-                .null_bit_buffer(null_buf)
+                .null_bit_buffer(Some(null_buf))
                 .build()
                 .unwrap();
             Ok(Arc::new(ListArray::from(list_data)))
@@ -524,7 +524,7 @@ fn array_from_json(
                 .offset(0)
                 .add_buffer(Buffer::from(&offsets.to_byte_slice()))
                 .add_child_data(child_array.data().clone())
-                .null_bit_buffer(null_buf)
+                .null_bit_buffer(Some(null_buf))
                 .build()
                 .unwrap();
             Ok(Arc::new(LargeListArray::from(list_data)))
@@ -540,7 +540,7 @@ fn array_from_json(
             let list_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
                 .add_child_data(child_array.data().clone())
-                .null_bit_buffer(null_buf)
+                .null_bit_buffer(Some(null_buf))
                 .build()
                 .unwrap();
             Ok(Arc::new(FixedSizeListArray::from(list_data)))
@@ -550,7 +550,7 @@ fn array_from_json(
             let null_buf = create_null_buf(&json_col);
             let mut array_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
-                .null_bit_buffer(null_buf);
+                .null_bit_buffer(Some(null_buf));
 
             for (field, col) in fields.iter().zip(json_col.children.unwrap()) {
                 let array = array_from_json(field, col, dictionaries)?;
@@ -625,7 +625,7 @@ fn array_from_json(
                 .len(json_col.count)
                 .add_buffer(Buffer::from(&offsets.to_byte_slice()))
                 .add_child_data(child_array.data().clone())
-                .null_bit_buffer(null_buf)
+                .null_bit_buffer(Some(null_buf))
                 .build()
                 .unwrap();
 
@@ -713,7 +713,7 @@ fn dictionary_array_from_json(
             let dict_data = ArrayData::builder(field.data_type().clone())
                 .len(keys.len())
                 .add_buffer(keys.data().buffers()[0].clone())
-                .null_bit_buffer(null_buf)
+                .null_bit_buffer(Some(null_buf))
                 .add_child_data(values.data().clone())
                 .build()
                 .unwrap();

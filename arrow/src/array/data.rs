@@ -1424,8 +1424,8 @@ impl ArrayDataBuilder {
         self
     }
 
-    pub fn null_bit_buffer(mut self, buf: Buffer) -> Self {
-        self.null_bit_buffer = Some(buf);
+    pub fn null_bit_buffer(mut self, buf: Option<Buffer>) -> Self {
+        self.null_bit_buffer = buf;
         self
     }
 
@@ -1508,9 +1508,9 @@ mod tests {
             .len(20)
             .offset(5)
             .add_buffer(b1)
-            .null_bit_buffer(Buffer::from(vec![
+            .null_bit_buffer(Some(Buffer::from(vec![
                 0b01011111, 0b10110101, 0b01100011, 0b00011110,
-            ]))
+            ])))
             .build()
             .unwrap();
 
@@ -1559,7 +1559,7 @@ mod tests {
         let arr_data = ArrayData::builder(DataType::Int32)
             .len(16)
             .add_buffer(make_i32_buffer(16))
-            .null_bit_buffer(Buffer::from(bit_v))
+            .null_bit_buffer(Some(Buffer::from(bit_v)))
             .build()
             .unwrap();
         assert_eq!(13, arr_data.null_count());
@@ -1573,7 +1573,7 @@ mod tests {
             .len(12)
             .offset(2)
             .add_buffer(make_i32_buffer(14)) // requires at least 14 bytes of space,
-            .null_bit_buffer(Buffer::from(bit_v))
+            .null_bit_buffer(Some(Buffer::from(bit_v)))
             .build()
             .unwrap();
         assert_eq!(10, arr_data.null_count());
@@ -1588,7 +1588,7 @@ mod tests {
         let arr_data = ArrayData::builder(DataType::Int32)
             .len(16)
             .add_buffer(make_i32_buffer(16))
-            .null_bit_buffer(Buffer::from(bit_v))
+            .null_bit_buffer(Some(Buffer::from(bit_v)))
             .build()
             .unwrap();
         assert!(arr_data.null_buffer().is_some());
@@ -1604,7 +1604,7 @@ mod tests {
         let data = ArrayData::builder(DataType::Int32)
             .len(16)
             .add_buffer(make_i32_buffer(16))
-            .null_bit_buffer(Buffer::from(bit_v))
+            .null_bit_buffer(Some(Buffer::from(bit_v)))
             .build()
             .unwrap();
         let new_data = data.slice(1, 15);

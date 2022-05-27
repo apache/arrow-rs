@@ -178,7 +178,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
             .len(null_buf.len())
             .add_buffer(offsets.into())
             .add_child_data(values.data().clone())
-            .null_bit_buffer(null_buf.into());
+            .null_bit_buffer(Some(null_buf.into()));
         let array_data = unsafe { array_data.build_unchecked() };
 
         Self::from(array_data)
@@ -836,7 +836,7 @@ mod tests {
             .len(9)
             .add_buffer(value_offsets)
             .add_child_data(value_data.clone())
-            .null_bit_buffer(Buffer::from(null_bits))
+            .null_bit_buffer(Some(Buffer::from(null_bits)))
             .build()
             .unwrap();
         let list_array = ListArray::from(list_data);
@@ -900,7 +900,7 @@ mod tests {
             .len(9)
             .add_buffer(value_offsets)
             .add_child_data(value_data.clone())
-            .null_bit_buffer(Buffer::from(null_bits))
+            .null_bit_buffer(Some(Buffer::from(null_bits)))
             .build()
             .unwrap();
         let list_array = LargeListArray::from(list_data);
@@ -967,7 +967,7 @@ mod tests {
             .len(9)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .null_bit_buffer(Buffer::from(null_bits))
+            .null_bit_buffer(Some(Buffer::from(null_bits)))
             .build()
             .unwrap();
         let list_array = LargeListArray::from(list_data);
@@ -1001,7 +1001,7 @@ mod tests {
         let list_data = ArrayData::builder(list_data_type)
             .len(5)
             .add_child_data(value_data.clone())
-            .null_bit_buffer(Buffer::from(null_bits))
+            .null_bit_buffer(Some(Buffer::from(null_bits)))
             .build()
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
@@ -1063,7 +1063,7 @@ mod tests {
         let list_data = ArrayData::builder(list_data_type)
             .len(5)
             .add_child_data(value_data)
-            .null_bit_buffer(Buffer::from(null_bits))
+            .null_bit_buffer(Some(Buffer::from(null_bits)))
             .build()
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);

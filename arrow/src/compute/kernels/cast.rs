@@ -2078,15 +2078,13 @@ where
         DataType::Utf8
     };
 
-    let mut builder = ArrayData::builder(dtype)
+    let builder = ArrayData::builder(dtype)
         .offset(array.offset())
         .len(array.len())
         .add_buffer(offset_buffer)
-        .add_buffer(str_values_buf);
+        .add_buffer(str_values_buf)
+        .null_bit_buffer(list_data.null_buffer().cloned());
 
-    if let Some(buf) = list_data.null_buffer() {
-        builder = builder.null_bit_buffer(buf.clone())
-    }
     let array_data = unsafe { builder.build_unchecked() };
 
     Ok(Arc::new(GenericStringArray::<OffsetSizeTo>::from(
@@ -2157,15 +2155,13 @@ where
     let offset_buffer = unsafe { Buffer::from_trusted_len_iter(iter) };
 
     // wrap up
-    let mut builder = ArrayData::builder(out_dtype)
+    let builder = ArrayData::builder(out_dtype)
         .offset(array.offset())
         .len(array.len())
         .add_buffer(offset_buffer)
-        .add_child_data(value_data);
+        .add_child_data(value_data)
+        .null_bit_buffer(data.null_buffer().cloned());
 
-    if let Some(buf) = data.null_buffer() {
-        builder = builder.null_bit_buffer(buf.clone())
-    }
     let array_data = unsafe { builder.build_unchecked() };
     Ok(make_array(array_data))
 }

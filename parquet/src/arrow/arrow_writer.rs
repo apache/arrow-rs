@@ -813,7 +813,7 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.data().clone())
-        .null_bit_buffer(Buffer::from(vec![0b00011011]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
         .build()
         .unwrap();
         let a = ListArray::from(a_list_data);
@@ -976,7 +976,7 @@ mod tests {
             .len(5)
             .add_buffer(g_value_offsets)
             .add_child_data(g_value.data().clone())
-            .null_bit_buffer(Buffer::from(vec![0b00011011]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
             .build()
             .unwrap();
         let h = ListArray::from(h_list_data);
@@ -1083,14 +1083,14 @@ mod tests {
         let c = Int32Array::from(vec![Some(1), None, Some(3), None, None, Some(6)]);
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
-            .null_bit_buffer(Buffer::from(vec![0b00100111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
             .add_child_data(c.data().clone())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
-            .null_bit_buffer(Buffer::from(vec![0b00101111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00101111])))
             .add_child_data(b.data().clone())
             .build()
             .unwrap();
@@ -1149,7 +1149,7 @@ mod tests {
         let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
-            .null_bit_buffer(Buffer::from(vec![0b00100111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
             .add_child_data(c.data().clone())
             .build()
             .unwrap();
@@ -1532,7 +1532,7 @@ mod tests {
         ))))
         .len(3)
         .add_buffer(a_value_offsets)
-        .null_bit_buffer(Buffer::from(vec![0b00000101]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
         .add_child_data(a_values.data().clone())
         .build()
         .unwrap();
@@ -1563,7 +1563,7 @@ mod tests {
         ))))
         .len(5)
         .add_buffer(a_value_offsets)
-        .null_bit_buffer(Buffer::from(vec![0b00011011]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
         .add_child_data(a_values.data().clone())
         .build()
         .unwrap();
@@ -1589,7 +1589,7 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.data().clone())
-        .null_bit_buffer(Buffer::from(vec![0b00011011]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
         .build()
         .unwrap();
 
@@ -1986,7 +1986,9 @@ mod tests {
             .add_buffer(Buffer::from_iter(vec![
                 0_i32, 1_i32, 1_i32, 3_i32, 3_i32, 5_i32,
             ]))
-            .null_bit_buffer(Buffer::from_iter(vec![true, false, true, false, true]))
+            .null_bit_buffer(Some(Buffer::from_iter(vec![
+                true, false, true, false, true,
+            ])))
             .child_data(vec![struct_a_array.data().clone()])
             .build()
             .unwrap();

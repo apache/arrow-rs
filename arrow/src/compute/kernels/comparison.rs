@@ -3327,7 +3327,7 @@ mod tests {
             .len(4)
             .add_buffer(value_offsets)
             .add_child_data(value_data)
-            .null_bit_buffer(Buffer::from([0b00001011]))
+            .null_bit_buffer(Some(Buffer::from([0b00001011])))
             .build()
             .unwrap();
 

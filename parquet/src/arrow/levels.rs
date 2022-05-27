@@ -1317,7 +1317,7 @@ mod tests {
         let a_list_data = ArrayData::builder(a_list_type.clone())
             .len(5)
             .add_buffer(a_value_offsets)
-            .null_bit_buffer(Buffer::from(vec![0b00011011]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
             .add_child_data(a_values.data().clone())
             .build()
             .unwrap();
