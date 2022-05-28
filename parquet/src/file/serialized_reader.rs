@@ -27,8 +27,8 @@ use crate::basic::{Compression, Encoding, Type};
 use crate::column::page::{Page, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
+use crate::file::page_index::index_reader;
 use crate::file::{footer, metadata::*, reader::*, statistics};
-use crate::file::page_index::{index_reader};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
@@ -139,7 +139,10 @@ pub struct ReadOptionsBuilder {
 impl ReadOptionsBuilder {
     /// New builder
     pub fn new() -> Self {
-        ReadOptionsBuilder { predicates: vec![], enable_page_index: false }
+        ReadOptionsBuilder {
+            predicates: vec![],
+            enable_page_index: false,
+        }
     }
 
     /// Add a predicate on row group metadata to the reading option,
@@ -154,10 +157,7 @@ impl ReadOptionsBuilder {
 
     /// Add a predicate on column chunk metadata to the reading option,
     /// Filter pages that match the predicate criteria
-    pub fn with_page_index_pushdown(
-        mut self,
-        enable_page_index: bool,
-    ) -> Self {
+    pub fn with_page_index_pushdown(mut self, enable_page_index: bool) -> Self {
         self.enable_page_index = enable_page_index;
         self
     }
@@ -207,12 +207,20 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     /// Returns error if Parquet file does not exist or is corrupt.
     pub fn new_with_page_index(chunk_reader: R) -> Result<Self> {
         let metadata = footer::parse_metadata(&chunk_reader)?;
+        //Todo for now test data `data_index_bloom_encoding_stats.parquet` only have one rowgroup
+        //support multi after create multi-RG test data.
         let cols = metadata.row_group(0);
-        let columns_indexes = index_reader::read_columns_indexes(&chunk_reader, cols.columns())?;
-        let pages_locations = index_reader::read_pages_locations(&chunk_reader, cols.columns())?;
+        let columns_indexes =
+            index_reader::read_columns_indexes(&chunk_reader, cols.columns())?;
+        let pages_locations =
+            index_reader::read_pages_locations(&chunk_reader, cols.columns())?;
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
-            metadata: ParquetMetaData::new_with_page_index(metadata, Some(columns_indexes), Some(pages_locations)),
+            metadata: ParquetMetaData::new_with_page_index(
+                metadata,
+                Some(columns_indexes),
+                Some(pages_locations),
+            ),
         })
     }
 
@@ -235,8 +243,6 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                 filtered_row_groups.push(rg_meta);
             }
         }
-        //Todo Maybe check predicates type
-        if options.enable_page_index && predicates.len() > 0 {}
 
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
@@ -504,12 +510,12 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
 mod tests {
     use super::*;
     use crate::basic::{self, ColumnOrder};
+    use crate::file::page_index::index::ByteIndex;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::{get_test_file, get_test_path};
-    use std::sync::Arc;
     use parquet_format::BoundaryOrder;
-    use crate::file::page_index::index::ByteIndex;
+    use std::sync::Arc;
 
     #[test]
     fn test_cursor_and_file_has_the_same_behaviour() {

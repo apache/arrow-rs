@@ -71,7 +71,7 @@ impl ParquetMetaData {
     pub fn new_with_page_index(
         metadata: ParquetMetaData,
         page_indexes: Option<Vec<Arc<dyn Index>>>,
-        offset_indexes: Option<Vec<Vec<PageLocation>>>
+        offset_indexes: Option<Vec<Vec<PageLocation>>>,
     ) -> Self {
         ParquetMetaData {
             file_metadata: metadata.file_metadata,

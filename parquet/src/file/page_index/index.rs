@@ -47,9 +47,7 @@ impl<T> PageIndex<T> {
     }
 }
 
-/// Trait object representing a [`ColumnIndex`] 
-///
-/// See [`NativeIndex`], [`ByteIndex`] and [`FixedLenByteIndex`] for concrete implementations.
+/// Trait object representing a [`ColumnIndex`]
 pub trait Index: Send + Sync + Debug {
     fn as_any(&self) -> &dyn Any;
 
@@ -83,13 +81,8 @@ fn equal(lhs: &dyn Index, rhs: &dyn Index) -> bool {
                 == rhs.as_any().downcast_ref::<NativeIndex<i64>>().unwrap()
         }
         Type::INT96 => {
-            lhs.as_any()
-                .downcast_ref::<NativeIndex<Int96>>()
-                .unwrap()
-                == rhs
-                .as_any()
-                .downcast_ref::<NativeIndex<Int96>>()
-                .unwrap()
+            lhs.as_any().downcast_ref::<NativeIndex<Int96>>().unwrap()
+                == rhs.as_any().downcast_ref::<NativeIndex<Int96>>().unwrap()
         }
         Type::FLOAT => {
             lhs.as_any().downcast_ref::<NativeIndex<f32>>().unwrap()
@@ -110,7 +103,7 @@ fn equal(lhs: &dyn Index, rhs: &dyn Index) -> bool {
     }
 }
 
-/// An index of a column of [`DataType`] physical representation
+/// An index of a column of [`Type`] physical representation
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NativeIndex<T: ParquetValueType> {
     /// The physical type
@@ -174,7 +167,7 @@ impl<T: ParquetValueType> Index for NativeIndex<T> {
     }
 }
 
-/// An index of a column of bytes physical type
+/// An index of a column of bytes type
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ByteIndex {
     /// The physical type
@@ -234,7 +227,7 @@ impl Index for ByteIndex {
     }
 }
 
-/// An index of a column of fixed len byte physical type
+/// An index of a column of fixed length bytes type
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FixedLenByteIndex {
     /// The physical type

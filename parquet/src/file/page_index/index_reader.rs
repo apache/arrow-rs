@@ -15,32 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::io::{Cursor, Read};
-use std::sync::Arc;
-use parquet_format::{ColumnIndex, OffsetIndex, PageLocation};
-use thrift::protocol::TCompactInputProtocol;
 use crate::basic::Type;
 use crate::data_type::Int96;
 use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
-use crate::file::page_index::index::{BooleanIndex, ByteIndex, FixedLenByteIndex, Index, NativeIndex};
+use crate::file::page_index::index::{
+    BooleanIndex, ByteIndex, FixedLenByteIndex, Index, NativeIndex,
+};
 use crate::file::reader::ChunkReader;
-
+use parquet_format::{ColumnIndex, OffsetIndex, PageLocation};
+use std::io::{Cursor, Read};
+use std::sync::Arc;
+use thrift::protocol::TCompactInputProtocol;
 
 /// Read on row group's all columns indexes and change into  [`Index`]
 /// If not the format not available return an empty vector.
 pub fn read_columns_indexes<R: ChunkReader>(
-    reader: & R,
+    reader: &R,
     chunks: &[ColumnChunkMetaData],
 ) -> Result<Vec<Arc<dyn Index>>, ParquetError> {
     let (offset, lengths) = get_index_offset_and_lengths(chunks)?;
-
     let length = lengths.iter().sum::<usize>();
 
-    //reader.seek(SeekFrom::Start(offset))?;
+    //read all need data into buffer
     let mut reader = reader.get_read(offset, reader.len() as usize)?;
     let mut data = vec![0; length];
-    //reader.read_exact(&mut data)?;
     reader.read_exact(&mut data)?;
 
     let mut start = 0;
@@ -60,20 +59,18 @@ pub fn read_columns_indexes<R: ChunkReader>(
         .collect()
 }
 
-/// Read on row group's all  indexes and change into  [`Index`]
+/// Read on row group's all indexes and change into  [`Index`]
 /// If not the format not available return an empty vector.
 pub fn read_pages_locations<R: ChunkReader>(
-    reader: & R,
+    reader: &R,
     chunks: &[ColumnChunkMetaData],
 ) -> Result<Vec<Vec<PageLocation>>, ParquetError> {
     let (offset, lengths) = get_location_offset_and_lengths(chunks)?;
-
     let total_length = lengths.iter().sum::<usize>();
 
-    //reader.seek(SeekFrom::Start(offset))?;
+    //read all need data into buffer
     let mut reader = reader.get_read(offset, reader.len() as usize)?;
     let mut data = vec![0; total_length];
-    //reader.read_exact(&mut data)?;
     reader.read_exact(&mut data)?;
 
     let mut d = Cursor::new(data);
@@ -87,8 +84,9 @@ pub fn read_pages_locations<R: ChunkReader>(
     Ok(result)
 }
 
-
-fn get_index_offset_and_lengths(chunks: &[ColumnChunkMetaData]) -> Result<(u64, Vec<usize>), ParquetError> {
+fn get_index_offset_and_lengths(
+    chunks: &[ColumnChunkMetaData],
+) -> Result<(u64, Vec<usize>), ParquetError> {
     let first_col_metadata = if let Some(chunk) = chunks.first() {
         chunk
     } else {
@@ -106,7 +104,10 @@ fn get_index_offset_and_lengths(chunks: &[ColumnChunkMetaData]) -> Result<(u64, 
         .map(|x| x.column_index_length())
         .map(|maybe_length| {
             let index_length = maybe_length.ok_or_else(|| {
-                ParquetError::General("The column_index_length must exist if offset_index_offset exists".to_string())
+                ParquetError::General(
+                    "The column_index_length must exist if offset_index_offset exists"
+                        .to_string(),
+                )
             })?;
 
             Ok(index_length.try_into().unwrap())
@@ -116,7 +117,9 @@ fn get_index_offset_and_lengths(chunks: &[ColumnChunkMetaData]) -> Result<(u64, 
     Ok((offset, lengths))
 }
 
-fn get_location_offset_and_lengths(chunks: &[ColumnChunkMetaData]) -> Result<(u64, Vec<usize>), ParquetError> {
+fn get_location_offset_and_lengths(
+    chunks: &[ColumnChunkMetaData],
+) -> Result<(u64, Vec<usize>), ParquetError> {
     let metadata = if let Some(chunk) = chunks.first() {
         chunk
     } else {
@@ -134,7 +137,10 @@ fn get_location_offset_and_lengths(chunks: &[ColumnChunkMetaData]) -> Result<(u6
         .map(|x| x.offset_index_length())
         .map(|maybe_length| {
             let index_length = maybe_length.ok_or_else(|| {
-                ParquetError::General("The offset_index_length must exist if offset_index_offset exists".to_string())
+                ParquetError::General(
+                    "The offset_index_length must exist if offset_index_offset exists"
+                        .to_string(),
+                )
             })?;
 
             Ok(index_length.try_into().unwrap())
@@ -143,7 +149,6 @@ fn get_location_offset_and_lengths(chunks: &[ColumnChunkMetaData]) -> Result<(u6
 
     Ok((offset, lengths))
 }
-
 
 fn deserialize(data: &[u8], column_type: Type) -> Result<Arc<dyn Index>, ParquetError> {
     let mut d = Cursor::new(data);

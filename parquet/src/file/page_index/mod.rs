@@ -16,5 +16,4 @@
 // under the License.
 
 pub mod index;
-pub mod row_range;
 pub mod index_reader;
