@@ -19,9 +19,7 @@ use crate::basic::Type;
 use crate::data_type::Int96;
 use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
-use crate::file::page_index::index::{
-    BooleanIndex, ByteIndex, FixedLenByteIndex, Index, NativeIndex,
-};
+use crate::file::page_index::index::{BooleanIndex, ByteIndex, Index, NativeIndex};
 use crate::file::reader::ChunkReader;
 use parquet_format::{ColumnIndex, OffsetIndex, PageLocation};
 use std::io::{Cursor, Read};
@@ -164,9 +162,7 @@ fn deserialize(data: &[u8], column_type: Type) -> Result<Arc<dyn Index>, Parquet
         Type::FLOAT => Arc::new(NativeIndex::<f32>::try_new(index, column_type)?),
         Type::DOUBLE => Arc::new(NativeIndex::<f64>::try_new(index, column_type)?),
         Type::BYTE_ARRAY => Arc::new(ByteIndex::try_new(index, column_type)?),
-        Type::FIXED_LEN_BYTE_ARRAY => {
-            Arc::new(FixedLenByteIndex::try_new(index, column_type)?)
-        }
+        Type::FIXED_LEN_BYTE_ARRAY => Arc::new(ByteIndex::try_new(index, column_type)?),
     };
 
     Ok(index)

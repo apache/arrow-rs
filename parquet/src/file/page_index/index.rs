@@ -97,8 +97,8 @@ fn equal(lhs: &dyn Index, rhs: &dyn Index) -> bool {
                 == rhs.as_any().downcast_ref::<ByteIndex>().unwrap()
         }
         Type::FIXED_LEN_BYTE_ARRAY => {
-            lhs.as_any().downcast_ref::<FixedLenByteIndex>().unwrap()
-                == rhs.as_any().downcast_ref::<FixedLenByteIndex>().unwrap()
+            lhs.as_any().downcast_ref::<ByteIndex>().unwrap()
+                == rhs.as_any().downcast_ref::<ByteIndex>().unwrap()
         }
     }
 }
@@ -218,66 +218,6 @@ impl ByteIndex {
 }
 
 impl Index for ByteIndex {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn physical_type(&self) -> &Type {
-        &self.physical_type
-    }
-}
-
-/// An index of a column of fixed length bytes type
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct FixedLenByteIndex {
-    /// The physical type
-    pub physical_type: Type,
-    /// The indexes, one item per page
-    pub indexes: Vec<PageIndex<Vec<u8>>>,
-    pub boundary_order: BoundaryOrder,
-}
-
-impl FixedLenByteIndex {
-    pub(crate) fn try_new(
-        index: ColumnIndex,
-        physical_type: Type,
-    ) -> Result<Self, ParquetError> {
-        let len = index.min_values.len();
-
-        let null_counts = index
-            .null_counts
-            .map(|x| x.into_iter().map(Some).collect::<Vec<_>>())
-            .unwrap_or_else(|| vec![None; len]);
-
-        let indexes = index
-            .min_values
-            .into_iter()
-            .zip(index.max_values.into_iter())
-            .zip(index.null_pages.into_iter())
-            .zip(null_counts.into_iter())
-            .map(|(((min, max), is_null), null_count)| {
-                let (min, max) = if is_null {
-                    (None, None)
-                } else {
-                    (Some(min), Some(max))
-                };
-                Ok(PageIndex {
-                    min,
-                    max,
-                    null_count,
-                })
-            })
-            .collect::<Result<Vec<_>, ParquetError>>()?;
-
-        Ok(Self {
-            physical_type,
-            indexes,
-            boundary_order: index.boundary_order,
-        })
-    }
-}
-
-impl Index for FixedLenByteIndex {
     fn as_any(&self) -> &dyn Any {
         self
     }
