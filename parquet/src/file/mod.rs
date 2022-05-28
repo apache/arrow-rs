@@ -103,6 +103,7 @@ pub mod reader;
 pub mod serialized_reader;
 pub mod statistics;
 pub mod writer;
+pub mod page_index;
 
 const FOOTER_SIZE: usize = 8;
 pub(crate) const PARQUET_MAGIC: [u8; 4] = [b'P', b'A', b'R', b'1'];

@@ -40,6 +40,8 @@ use parquet_format::{ColumnChunk, ColumnMetaData, RowGroup};
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
+use crate::file::page_index::index::Index;
+use crate::file::page_index::row_range::Range;
 use crate::file::statistics::{self, Statistics};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
@@ -51,6 +53,9 @@ use crate::schema::types::{
 pub struct ParquetMetaData {
     file_metadata: FileMetaData,
     row_groups: Vec<RowGroupMetaData>,
+    page_indexes:Option<Vec<Arc<dyn Index>>>,
+    offset_indexes:Option<Vec<Range>>,
+
 }
 
 impl ParquetMetaData {
@@ -60,6 +65,8 @@ impl ParquetMetaData {
         ParquetMetaData {
             file_metadata,
             row_groups,
+            page_indexes: None,
+            offset_indexes: None
         }
     }
 

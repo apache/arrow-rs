@@ -221,6 +221,10 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                 filtered_row_groups.push(rg_meta);
             }
         }
+        //Todo Maybe check predicates type
+        if options.enable_page_index && predicates.len() > 0{
+
+        }
 
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
