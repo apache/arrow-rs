@@ -35,13 +35,12 @@
 
 use std::sync::Arc;
 
-use parquet_format::{ColumnChunk, ColumnMetaData, RowGroup};
+use parquet_format::{ColumnChunk, ColumnMetaData, PageLocation, RowGroup};
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_encoding_stats::{self, PageEncodingStats};
 use crate::file::page_index::index::Index;
-use crate::file::page_index::row_range::Range;
 use crate::file::statistics::{self, Statistics};
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
@@ -53,9 +52,8 @@ use crate::schema::types::{
 pub struct ParquetMetaData {
     file_metadata: FileMetaData,
     row_groups: Vec<RowGroupMetaData>,
-    page_indexes:Option<Vec<Arc<dyn Index>>>,
-    offset_indexes:Option<Vec<Range>>,
-
+    page_indexes: Option<Vec<Arc<dyn Index>>>,
+    offset_indexes: Option<Vec<Vec<PageLocation>>>,
 }
 
 impl ParquetMetaData {
@@ -66,7 +64,20 @@ impl ParquetMetaData {
             file_metadata,
             row_groups,
             page_indexes: None,
-            offset_indexes: None
+            offset_indexes: None,
+        }
+    }
+
+    pub fn new_with_page_index(
+        metadata: ParquetMetaData,
+        page_indexes: Option<Vec<Arc<dyn Index>>>,
+        offset_indexes: Option<Vec<Vec<PageLocation>>>
+    ) -> Self {
+        ParquetMetaData {
+            file_metadata: metadata.file_metadata,
+            row_groups: metadata.row_groups,
+            page_indexes,
+            offset_indexes,
         }
     }
 
@@ -89,6 +100,16 @@ impl ParquetMetaData {
     /// Returns slice of row groups in this file.
     pub fn row_groups(&self) -> &[RowGroupMetaData] {
         &self.row_groups
+    }
+
+    /// Returns page indexes in this file.
+    pub fn page_indexes(&self) -> &Option<Vec<Arc<dyn Index>>> {
+        &self.page_indexes
+    }
+
+    /// Returns offset indexes in this file.
+    pub fn offset_indexes(&self) -> &Option<Vec<Vec<PageLocation>>> {
+        &self.offset_indexes
     }
 }
 

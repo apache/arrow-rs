@@ -28,6 +28,7 @@ use crate::column::page::{Page, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::{footer, metadata::*, reader::*, statistics};
+use crate::file::page_index::{index_reader};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
@@ -202,6 +203,19 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
         })
     }
 
+    /// Creates file reader from a Parquet file with page Index.
+    /// Returns error if Parquet file does not exist or is corrupt.
+    pub fn new_with_page_index(chunk_reader: R) -> Result<Self> {
+        let metadata = footer::parse_metadata(&chunk_reader)?;
+        let cols = metadata.row_group(0);
+        let columns_indexes = index_reader::read_columns_indexes(&chunk_reader, cols.columns())?;
+        let pages_locations = index_reader::read_pages_locations(&chunk_reader, cols.columns())?;
+        Ok(Self {
+            chunk_reader: Arc::new(chunk_reader),
+            metadata: ParquetMetaData::new_with_page_index(metadata, Some(columns_indexes), Some(pages_locations)),
+        })
+    }
+
     /// Creates file reader from a Parquet file with read options.
     /// Returns error if Parquet file does not exist or is corrupt.
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
@@ -222,9 +236,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
             }
         }
         //Todo Maybe check predicates type
-        if options.enable_page_index && predicates.len() > 0{
-
-        }
+        if options.enable_page_index && predicates.len() > 0 {}
 
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
@@ -496,6 +508,8 @@ mod tests {
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::{get_test_file, get_test_path};
     use std::sync::Arc;
+    use parquet_format::BoundaryOrder;
+    use crate::file::page_index::index::ByteIndex;
 
     #[test]
     fn test_cursor_and_file_has_the_same_behaviour() {
@@ -971,5 +985,61 @@ mod tests {
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
         Ok(())
+    }
+
+    #[test]
+    // Use java parquet-tools get below pageIndex info
+    // !```
+    // parquet-tools column-index ./data_index_bloom_encoding_stats.parquet
+    // row group 0:
+    // column index for column String:
+    // Boudary order: ASCENDING
+    // page-0  :
+    // null count                 min                                  max
+    // 0                          Hello                                today
+    //
+    // offset index for column String:
+    // page-0   :
+    // offset   compressed size       first row index
+    // 4               152                     0
+    ///```
+    //
+    fn test_page_index_reader() {
+        let test_file = get_test_file("data_index_bloom_encoding_stats.parquet");
+        let reader_result = SerializedFileReader::new_with_page_index(test_file);
+        let reader = reader_result.unwrap();
+
+        // Test contents in Parquet metadata
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        let page_indexes = metadata.page_indexes().clone().unwrap();
+
+        // only one row group
+        assert_eq!(page_indexes.len(), 1);
+        let page_indexes = page_indexes.get(0).unwrap();
+        let index = page_indexes.as_any().downcast_ref::<ByteIndex>().unwrap();
+
+        assert_eq!(index.boundary_order, BoundaryOrder::Ascending);
+        let index_in_pages = &index.indexes;
+
+        //only one page group
+        assert_eq!(index_in_pages.len(), 1);
+
+        let page0 = index_in_pages.get(0).unwrap();
+        let min = page0.min.as_ref().unwrap();
+        let max = page0.max.as_ref().unwrap();
+        assert_eq!("Hello", std::str::from_utf8(min.as_slice()).unwrap());
+        assert_eq!("today", std::str::from_utf8(max.as_slice()).unwrap());
+
+        let offset_indexes = metadata.offset_indexes().clone().unwrap();
+        // only one row group
+        assert_eq!(offset_indexes.len(), 1);
+        let offset_index = offset_indexes.get(0).unwrap();
+        let page_offset = offset_index.get(0).unwrap();
+
+        assert_eq!(4, page_offset.offset);
+        assert_eq!(152, page_offset.compressed_page_size);
+        assert_eq!(0, page_offset.first_row_index);
     }
 }

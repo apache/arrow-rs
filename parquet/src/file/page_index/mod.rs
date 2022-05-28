@@ -17,4 +17,4 @@
 
 pub mod index;
 pub mod row_range;
-mod index_reader;
+pub mod index_reader;

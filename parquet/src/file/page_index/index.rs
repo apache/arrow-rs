@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::fmt::Debug;
-use parquet_format::{BoundaryOrder, ColumnIndex};
 use crate::basic::Type;
-use crate::data_type::{Int96};
 use crate::data_type::private::ParquetValueType;
+use crate::data_type::Int96;
 use crate::errors::ParquetError;
 use crate::util::bit_util::from_ne_slice;
-
+use parquet_format::{BoundaryOrder, ColumnIndex};
+use std::any::Any;
+use std::fmt::Debug;
 
 /// The static in one page
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -34,6 +33,18 @@ pub struct PageIndex<T> {
     pub max: Option<T>,
     /// Null values in the page
     pub null_count: Option<i64>,
+}
+
+impl<T> PageIndex<T> {
+    pub fn min(&self) -> &Option<T> {
+        &self.min
+    }
+    pub fn max(&self) -> &Option<T> {
+        &self.max
+    }
+    pub fn null_count(&self) -> &Option<i64> {
+        &self.null_count
+    }
 }
 
 /// Trait object representing a [`ColumnIndex`] 

@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use std::io::{Cursor, Read};
+use std::sync::Arc;
 use parquet_format::{ColumnIndex, OffsetIndex, PageLocation};
 use thrift::protocol::TCompactInputProtocol;
 use crate::basic::Type;
@@ -23,20 +24,23 @@ use crate::data_type::Int96;
 use crate::errors::ParquetError;
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::page_index::index::{BooleanIndex, ByteIndex, FixedLenByteIndex, Index, NativeIndex};
+use crate::file::reader::ChunkReader;
 
 
 /// Read on row group's all columns indexes and change into  [`Index`]
 /// If not the format not available return an empty vector.
-pub fn read_columns_indexes<R: Read + Seek>(
-    reader: &mut R,
+pub fn read_columns_indexes<R: ChunkReader>(
+    reader: & R,
     chunks: &[ColumnChunkMetaData],
-) -> Result<Vec<Box<dyn Index>>, ParquetError> {
+) -> Result<Vec<Arc<dyn Index>>, ParquetError> {
     let (offset, lengths) = get_index_offset_and_lengths(chunks)?;
 
     let length = lengths.iter().sum::<usize>();
 
-    reader.seek(SeekFrom::Start(offset))?;
+    //reader.seek(SeekFrom::Start(offset))?;
+    let mut reader = reader.get_read(offset, reader.len() as usize)?;
     let mut data = vec![0; length];
+    //reader.read_exact(&mut data)?;
     reader.read_exact(&mut data)?;
 
     let mut start = 0;
@@ -58,16 +62,18 @@ pub fn read_columns_indexes<R: Read + Seek>(
 
 /// Read on row group's all  indexes and change into  [`Index`]
 /// If not the format not available return an empty vector.
-pub fn read_pages_locations<R: Read + Seek>(
-    reader: &mut R,
+pub fn read_pages_locations<R: ChunkReader>(
+    reader: & R,
     chunks: &[ColumnChunkMetaData],
 ) -> Result<Vec<Vec<PageLocation>>, ParquetError> {
     let (offset, lengths) = get_location_offset_and_lengths(chunks)?;
 
     let total_length = lengths.iter().sum::<usize>();
 
-    reader.seek(SeekFrom::Start(offset))?;
+    //reader.seek(SeekFrom::Start(offset))?;
+    let mut reader = reader.get_read(offset, reader.len() as usize)?;
     let mut data = vec![0; total_length];
+    //reader.read_exact(&mut data)?;
     reader.read_exact(&mut data)?;
 
     let mut d = Cursor::new(data);
@@ -83,13 +89,13 @@ pub fn read_pages_locations<R: Read + Seek>(
 
 
 fn get_index_offset_and_lengths(chunks: &[ColumnChunkMetaData]) -> Result<(u64, Vec<usize>), ParquetError> {
-    let metadata = if let Some(chunk) = chunks.first() {
+    let first_col_metadata = if let Some(chunk) = chunks.first() {
         chunk
     } else {
         return Ok((0, vec![]));
     };
 
-    let offset: u64 = if let Some(offset) = metadata.offset_index_offset() {
+    let offset: u64 = if let Some(offset) = first_col_metadata.column_index_offset() {
         offset.try_into().unwrap()
     } else {
         return Ok((0, vec![]));
@@ -139,22 +145,22 @@ fn get_location_offset_and_lengths(chunks: &[ColumnChunkMetaData]) -> Result<(u6
 }
 
 
-fn deserialize(data: &[u8], column_type: Type) -> Result<Box<dyn Index>, ParquetError> {
+fn deserialize(data: &[u8], column_type: Type) -> Result<Arc<dyn Index>, ParquetError> {
     let mut d = Cursor::new(data);
     let mut prot = TCompactInputProtocol::new(&mut d);
 
     let index = ColumnIndex::read_from_in_protocol(&mut prot)?;
 
     let index = match column_type {
-        Type::BOOLEAN => Box::new(BooleanIndex::try_new(index)?) as Box<dyn Index>,
-        Type::INT32 => Box::new(NativeIndex::<i32>::try_new(index, column_type)?),
-        Type::INT64 => Box::new(NativeIndex::<i64>::try_new(index, column_type)?),
-        Type::INT96 => Box::new(NativeIndex::<Int96>::try_new(index, column_type)?),
-        Type::FLOAT => Box::new(NativeIndex::<f32>::try_new(index, column_type)?),
-        Type::DOUBLE => Box::new(NativeIndex::<f64>::try_new(index, column_type)?),
-        Type::BYTE_ARRAY => Box::new(ByteIndex::try_new(index, column_type)?),
+        Type::BOOLEAN => Arc::new(BooleanIndex::try_new(index)?) as Arc<dyn Index>,
+        Type::INT32 => Arc::new(NativeIndex::<i32>::try_new(index, column_type)?),
+        Type::INT64 => Arc::new(NativeIndex::<i64>::try_new(index, column_type)?),
+        Type::INT96 => Arc::new(NativeIndex::<Int96>::try_new(index, column_type)?),
+        Type::FLOAT => Arc::new(NativeIndex::<f32>::try_new(index, column_type)?),
+        Type::DOUBLE => Arc::new(NativeIndex::<f64>::try_new(index, column_type)?),
+        Type::BYTE_ARRAY => Arc::new(ByteIndex::try_new(index, column_type)?),
         Type::FIXED_LEN_BYTE_ARRAY => {
-            Box::new(FixedLenByteIndex::try_new(index, column_type)?)
+            Arc::new(FixedLenByteIndex::try_new(index, column_type)?)
         }
     };
 
