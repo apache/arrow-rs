@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::buffer::Buffer;
 use crate::compute::{sort_to_indices, take, TakeOptions};
 use std::any::Any;
 use std::fmt;
@@ -28,8 +29,7 @@ use super::{
 use crate::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, ArrowPrimitiveType, DataType,
 };
-use crate::error::ArrowError;
-use crate::error::Result;
+use crate::error::{ArrowError, Result};
 
 /// A dictionary array where each element is a single value indexed by an integer key.
 /// This is mostly used to represent strings or a limited set of primitive types as integers,
@@ -178,58 +178,71 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
     }
 
     pub fn make_ordered(&self) -> Result<Self> {
-        if self.is_ordered {
+        let values = self.values();
+        if self.is_ordered || values.is_empty() {
             Ok(self.as_ordered())
         } else {
-            // validate up front that we can do all of the conversions needed below
-            u32::try_from(self.values.len())
-                .and_then(usize::try_from)
-                .ok()
-                .and_then(K::Native::from_usize)
+            // validate up front that we can do conversions from/to usize for the whole range of keys
+            // this allows using faster unchecked conversions below
+            K::Native::from_usize(values.len())
                 .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+            // sort indices are u32 so we cannot sort larger dictionaries
+            u32::try_from(values.len())
+                .map_err(|_| ArrowError::DictionaryKeyOverflowError)?;
 
-            let sort_indices = sort_to_indices(self.values(), None, None)?;
+            // sort the dictionary values
+            let sort_indices = sort_to_indices(values, None, None)?;
             let sorted_dictionary = take(
-                self.values().as_ref(),
+                values.as_ref(),
                 &sort_indices,
                 Some(TakeOptions {
                     check_bounds: false,
                 }),
             )?;
-            let sort_indices = sort_indices.values();
 
+            // build a lookup table from old to new key
             let mut lookup = vec![0; sort_indices.len()];
-            sort_indices.into_iter().enumerate().for_each(|(i, idx)| {
-                lookup[*idx as usize] = i;
+            sort_indices
+                .values()
+                .iter()
+                .enumerate()
+                .for_each(|(i, idx)| {
+                    lookup[*idx as usize] = i;
+                });
+
+            let mapped_keys_iter = self.keys_iter().map(|opt_key| {
+                if let Some(key) = opt_key {
+                    // Safety:
+                    // lookup has the same length as the dictionary values
+                    // so if the keys were valid for values they will be valid indices into lookup
+                    unsafe {
+                        debug_assert!(key < lookup.len());
+                        let new_key = *lookup.get_unchecked(key);
+                        debug_assert!(new_key < values.len());
+                        K::Native::from_usize(new_key).unwrap_unchecked()
+                    }
+                } else {
+                    K::default_value()
+                }
             });
 
-            let new_indices = &self
-                .keys
-                .iter()
-                .map(|opt_key| {
-                    if let Some(key) = opt_key {
-                        let key_usize = key.to_usize().unwrap();
-                        // Safety:
-                        // lookup has the same length as the dictionary values
-                        // so if the keys were valid for values they will be valid indices into lookup
-                        let new_key = unsafe { *lookup.get_unchecked(key_usize) };
-                        Some(K::Native::from_usize(new_key).unwrap())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<PrimitiveArray<K>>();
+            // Safety:
+            // PrimitiveIter has a trusted len
+            let new_key_buffer =
+                unsafe { Buffer::from_trusted_len_iter(mapped_keys_iter) };
 
             // Safety:
             // after remapping the keys will be in the same range as before
             let new_data = unsafe {
                 ArrayData::new_unchecked(
                     self.data_type().clone(),
-                    new_indices.len(),
-                    Some(new_indices.null_count()),
-                    new_indices.data().null_buffer().cloned(),
+                    self.len(),
+                    Some(self.data.null_count()),
+                    self.data
+                        .null_buffer()
+                        .map(|b| b.bit_slice(self.data.offset(), self.len())),
                     0,
-                    new_indices.data().buffers().to_vec(),
+                    vec![new_key_buffer],
                     vec![sorted_dictionary.data().clone()],
                 )
             };
