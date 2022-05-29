@@ -22,9 +22,9 @@ use crate::buffer::MutableBuffer;
 use crate::compute::take;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
+use crate::util::bit_util::get_bit_raw;
 use std::cmp::Ordering;
 use TimeUnit::*;
-use crate::util::bit_util::get_bit_raw;
 
 /// Sort the `ArrayRef` using `SortOptions`.
 ///
@@ -154,9 +154,14 @@ fn partition_validity(array: &ArrayRef) -> (Vec<u32>, Vec<u32>) {
         _ => {
             let validity = array.data().null_buffer().unwrap();
             let offset = array.data().offset();
-            let mut vecs = [Vec::with_capacity(array.null_count()), Vec::with_capacity(array.len() - array.null_count())];
+            let mut vecs = [
+                Vec::with_capacity(array.null_count()),
+                Vec::with_capacity(array.len() - array.null_count()),
+            ];
             for i in 0..array.len() {
-                let bit = unsafe { get_bit_raw(validity.as_ptr(), offset + i ) };
+                // Safety:
+                // Index is in bounds for this array and raw access to the validity needs to take offset into account
+                let bit = unsafe { get_bit_raw(validity.as_ptr(), offset + i) };
                 vecs[bit as usize].push(i as u32);
             }
             let nulls = std::mem::take(&mut vecs[0]);
