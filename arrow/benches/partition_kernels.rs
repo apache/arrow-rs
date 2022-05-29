@@ -67,7 +67,6 @@ where
     let data = ArrayData::try_new(
         DataType::Dictionary(Box::new(T::DATA_TYPE), Box::new(DataType::Utf8)),
         size,
-        None,
         keys.data().null_buffer().cloned(),
         0,
         keys.data().buffers().to_vec(),
