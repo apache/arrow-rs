@@ -15,25 +15,33 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Computation kernels on Arrow Arrays
+#[macro_use]
+extern crate criterion;
+use criterion::Criterion;
 
-pub mod aggregate;
-pub mod arithmetic;
-pub mod arity;
-pub mod boolean;
-pub mod cast;
-pub mod cast_utils;
-pub mod comparison;
-pub mod concat;
-pub mod concat_elements;
-pub mod filter;
-pub mod length;
-pub mod limit;
-pub mod partition;
-pub mod regexp;
-pub mod sort;
-pub mod substring;
-pub mod take;
-pub mod temporal;
-pub mod window;
-pub mod zip;
+extern crate arrow;
+
+use arrow::{array::*, buffer::Buffer, datatypes::DataType};
+
+fn create_binary_array_data(length: i32) -> ArrayData {
+    let value_buffer = Buffer::from_iter(0_i32..length);
+    let offsets_buffer = Buffer::from_iter(0_i32..length + 1);
+    ArrayData::try_new(
+        DataType::Binary,
+        length as usize,
+        None,
+        0,
+        vec![offsets_buffer, value_buffer],
+        vec![],
+    )
+    .unwrap()
+}
+
+fn array_slice_benchmark(c: &mut Criterion) {
+    c.bench_function("validate_binary_array_data 20000", |b| {
+        b.iter(|| create_binary_array_data(20000))
+    });
+}
+
+criterion_group!(benches, array_slice_benchmark);
+criterion_main!(benches);

@@ -679,7 +679,7 @@ fn take_string<OffsetSize, IndexType>(
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericStringArray<OffsetSize>>
 where
-    OffsetSize: Zero + AddAssign + StringOffsetSizeTrait,
+    OffsetSize: Zero + AddAssign + OffsetSizeTrait,
     IndexType: ArrowNumericType,
     IndexType::Native: ToPrimitive,
 {
@@ -777,14 +777,13 @@ where
         };
     }
 
-    let mut array_data =
-        ArrayData::builder(<OffsetSize as StringOffsetSizeTrait>::DATA_TYPE)
+    let array_data =
+        ArrayData::builder(GenericStringArray::<OffsetSize>::get_data_type())
             .len(data_len)
             .add_buffer(offsets_buffer.into())
-            .add_buffer(values.into());
-    if let Some(null_buffer) = nulls {
-        array_data = array_data.null_bit_buffer(null_buffer);
-    }
+            .add_buffer(values.into())
+            .null_bit_buffer(nulls);
+
     let array_data = unsafe { array_data.build_unchecked() };
 
     Ok(GenericStringArray::<OffsetSize>::from(array_data))
@@ -832,7 +831,7 @@ where
     // create a new list with taken data and computed null information
     let list_data = ArrayDataBuilder::new(values.data_type().clone())
         .len(indices.len())
-        .null_bit_buffer(null_buf.into())
+        .null_bit_buffer(Some(null_buf.into()))
         .offset(0)
         .add_child_data(taken.data().clone())
         .add_buffer(value_offsets);
@@ -875,7 +874,7 @@ where
 
     let list_data = ArrayDataBuilder::new(values.data_type().clone())
         .len(indices.len())
-        .null_bit_buffer(null_buf.into())
+        .null_bit_buffer(Some(null_buf.into()))
         .offset(0)
         .add_child_data(taken.data().clone());
 
@@ -889,7 +888,7 @@ fn take_binary<IndexType, OffsetType>(
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<GenericBinaryArray<OffsetType>>
 where
-    OffsetType: BinaryOffsetSizeTrait,
+    OffsetType: OffsetSizeTrait,
     IndexType: ArrowNumericType,
     IndexType::Native: ToPrimitive,
 {
@@ -1573,9 +1572,7 @@ mod tests {
             let expected_list_data = ArrayData::builder(list_data_type)
                 .len(5)
                 // null buffer remains the same as only the indices have nulls
-                .null_bit_buffer(
-                    index.data().null_bitmap().as_ref().unwrap().bits.clone(),
-                )
+                .null_bit_buffer(index.data().null_buffer().cloned())
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
                 .build()
@@ -1614,7 +1611,7 @@ mod tests {
             let list_data = ArrayData::builder(list_data_type.clone())
                 .len(4)
                 .add_buffer(value_offsets)
-                .null_bit_buffer(Buffer::from([0b10111101, 0b00000000]))
+                .null_bit_buffer(Some(Buffer::from([0b10111101, 0b00000000])))
                 .add_child_data(value_data)
                 .build()
                 .unwrap();
@@ -1649,9 +1646,7 @@ mod tests {
             let expected_list_data = ArrayData::builder(list_data_type)
                 .len(5)
                 // null buffer remains the same as only the indices have nulls
-                .null_bit_buffer(
-                    index.data().null_bitmap().as_ref().unwrap().bits.clone(),
-                )
+                .null_bit_buffer(index.data().null_buffer().cloned())
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
                 .build()
@@ -1689,7 +1684,7 @@ mod tests {
             let list_data = ArrayData::builder(list_data_type.clone())
                 .len(4)
                 .add_buffer(value_offsets)
-                .null_bit_buffer(Buffer::from([0b01111101]))
+                .null_bit_buffer(Some(Buffer::from([0b01111101])))
                 .add_child_data(value_data)
                 .build()
                 .unwrap();
@@ -1727,7 +1722,7 @@ mod tests {
             let expected_list_data = ArrayData::builder(list_data_type)
                 .len(5)
                 // null buffer must be recalculated as both values and indices have nulls
-                .null_bit_buffer(Buffer::from(null_bits))
+                .null_bit_buffer(Some(Buffer::from(null_bits)))
                 .add_buffer(expected_offsets)
                 .add_child_data(expected_data)
                 .build()

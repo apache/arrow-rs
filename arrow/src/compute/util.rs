@@ -190,7 +190,6 @@ pub(super) mod tests {
             ArrayData::try_new(
                 DataType::UInt8,
                 len,
-                None,
                 null_bit_buffer,
                 offset,
                 vec![buffer],
@@ -334,7 +333,7 @@ pub(super) mod tests {
 
         let list_data = ArrayData::builder(list_data_type)
             .len(list_len)
-            .null_bit_buffer(list_bitmap.into())
+            .null_bit_buffer(Some(list_bitmap.into()))
             .add_buffer(value_offsets)
             .add_child_data(value_data)
             .build()
@@ -379,7 +378,7 @@ pub(super) mod tests {
 
         let list_data = ArrayData::builder(list_data_type)
             .len(list_len)
-            .null_bit_buffer(list_bitmap.into())
+            .null_bit_buffer(Some(list_bitmap.into()))
             .add_child_data(child_data)
             .build()
             .unwrap();

@@ -16,9 +16,9 @@
 // under the License.
 
 //! Contains column writer API.
-use std::{cmp, collections::VecDeque, convert::TryFrom, marker::PhantomData, sync::Arc};
+use std::{cmp, collections::VecDeque, convert::TryFrom, marker::PhantomData};
 
-use crate::basic::{Compression, Encoding, LogicalType, PageType, Type};
+use crate::basic::{Compression, ConvertedType, Encoding, LogicalType, PageType, Type};
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::compression::{create_codec, Codec};
 use crate::data_type::private::ParquetValueType;
@@ -36,18 +36,18 @@ use crate::file::{
 };
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::FromBytes;
-use crate::util::memory::{ByteBufferPtr, MemTracker};
+use crate::util::memory::ByteBufferPtr;
 
 /// Column writer for a Parquet type.
-pub enum ColumnWriter {
-    BoolColumnWriter(ColumnWriterImpl<BoolType>),
-    Int32ColumnWriter(ColumnWriterImpl<Int32Type>),
-    Int64ColumnWriter(ColumnWriterImpl<Int64Type>),
-    Int96ColumnWriter(ColumnWriterImpl<Int96Type>),
-    FloatColumnWriter(ColumnWriterImpl<FloatType>),
-    DoubleColumnWriter(ColumnWriterImpl<DoubleType>),
-    ByteArrayColumnWriter(ColumnWriterImpl<ByteArrayType>),
-    FixedLenByteArrayColumnWriter(ColumnWriterImpl<FixedLenByteArrayType>),
+pub enum ColumnWriter<'a> {
+    BoolColumnWriter(ColumnWriterImpl<'a, BoolType>),
+    Int32ColumnWriter(ColumnWriterImpl<'a, Int32Type>),
+    Int64ColumnWriter(ColumnWriterImpl<'a, Int64Type>),
+    Int96ColumnWriter(ColumnWriterImpl<'a, Int96Type>),
+    FloatColumnWriter(ColumnWriterImpl<'a, FloatType>),
+    DoubleColumnWriter(ColumnWriterImpl<'a, DoubleType>),
+    ByteArrayColumnWriter(ColumnWriterImpl<'a, ByteArrayType>),
+    FixedLenByteArrayColumnWriter(ColumnWriterImpl<'a, FixedLenByteArrayType>),
 }
 
 pub enum Level {
@@ -76,11 +76,11 @@ macro_rules! gen_stats_section {
 }
 
 /// Gets a specific column writer corresponding to column descriptor `descr`.
-pub fn get_column_writer(
+pub fn get_column_writer<'a>(
     descr: ColumnDescPtr,
     props: WriterPropertiesPtr,
-    page_writer: Box<dyn PageWriter>,
-) -> ColumnWriter {
+    page_writer: Box<dyn PageWriter + 'a>,
+) -> ColumnWriter<'a> {
     match descr.physical_type() {
         Type::BOOLEAN => ColumnWriter::BoolColumnWriter(ColumnWriterImpl::new(
             descr,
@@ -139,9 +139,9 @@ pub fn get_typed_column_writer<T: DataType>(
 }
 
 /// Similar to `get_typed_column_writer` but returns a reference.
-pub fn get_typed_column_writer_ref<T: DataType>(
-    col_writer: &ColumnWriter,
-) -> &ColumnWriterImpl<T> {
+pub fn get_typed_column_writer_ref<'a, 'b: 'a, T: DataType>(
+    col_writer: &'b ColumnWriter<'a>,
+) -> &'b ColumnWriterImpl<'a, T> {
     T::get_column_writer_ref(col_writer).unwrap_or_else(|| {
         panic!(
             "Failed to convert column writer into a typed column writer for `{}` type",
@@ -151,9 +151,9 @@ pub fn get_typed_column_writer_ref<T: DataType>(
 }
 
 /// Similar to `get_typed_column_writer` but returns a reference.
-pub fn get_typed_column_writer_mut<T: DataType>(
-    col_writer: &mut ColumnWriter,
-) -> &mut ColumnWriterImpl<T> {
+pub fn get_typed_column_writer_mut<'a, 'b: 'a, T: DataType>(
+    col_writer: &'a mut ColumnWriter<'b>,
+) -> &'a mut ColumnWriterImpl<'b, T> {
     T::get_column_writer_mut(col_writer).unwrap_or_else(|| {
         panic!(
             "Failed to convert column writer into a typed column writer for `{}` type",
@@ -163,11 +163,11 @@ pub fn get_typed_column_writer_mut<T: DataType>(
 }
 
 /// Typed column writer for a primitive column.
-pub struct ColumnWriterImpl<T: DataType> {
+pub struct ColumnWriterImpl<'a, T: DataType> {
     // Column writer properties
     descr: ColumnDescPtr,
     props: WriterPropertiesPtr,
-    page_writer: Box<dyn PageWriter>,
+    page_writer: Box<dyn PageWriter + 'a>,
     has_dictionary: bool,
     dict_encoder: Option<DictEncoder<T>>,
     encoder: Box<dyn Encoder<T>>,
@@ -200,11 +200,11 @@ pub struct ColumnWriterImpl<T: DataType> {
     _phantom: PhantomData<T>,
 }
 
-impl<T: DataType> ColumnWriterImpl<T> {
+impl<'a, T: DataType> ColumnWriterImpl<'a, T> {
     pub fn new(
         descr: ColumnDescPtr,
         props: WriterPropertiesPtr,
-        page_writer: Box<dyn PageWriter>,
+        page_writer: Box<dyn PageWriter + 'a>,
     ) -> Self {
         let codec = props.compression(descr.path());
         let compressor = create_codec(codec).unwrap();
@@ -213,7 +213,7 @@ impl<T: DataType> ColumnWriterImpl<T> {
         let dict_encoder = if props.dictionary_enabled(descr.path())
             && has_dictionary_support(T::get_physical_type(), &props)
         {
-            Some(DictEncoder::new(descr.clone(), Arc::new(MemTracker::new())))
+            Some(DictEncoder::new(descr.clone()))
         } else {
             None
         };
@@ -227,7 +227,6 @@ impl<T: DataType> ColumnWriterImpl<T> {
             props
                 .encoding(descr.path())
                 .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), &props)),
-            Arc::new(MemTracker::new()),
         )
         .unwrap();
 
@@ -1000,12 +999,47 @@ impl<T: DataType> ColumnWriterImpl<T> {
 
     /// Evaluate `a > b` according to underlying logical type.
     fn compare_greater(&self, a: &T::T, b: &T::T) -> bool {
-        if let Some(LogicalType::INTEGER(int_type)) = self.descr.logical_type() {
-            if !int_type.is_signed {
+        if let Some(LogicalType::Integer { is_signed, .. }) = self.descr.logical_type() {
+            if !is_signed {
                 // need to compare unsigned
                 return a.as_u64().unwrap() > b.as_u64().unwrap();
             }
         }
+
+        match self.descr.converted_type() {
+            ConvertedType::UINT_8
+            | ConvertedType::UINT_16
+            | ConvertedType::UINT_32
+            | ConvertedType::UINT_64 => {
+                return a.as_u64().unwrap() > b.as_u64().unwrap();
+            }
+            _ => {}
+        };
+
+        if let Some(LogicalType::Decimal { .. }) = self.descr.logical_type() {
+            match self.descr.physical_type() {
+                Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
+                    return compare_greater_byte_array_decimals(
+                        a.as_bytes(),
+                        b.as_bytes(),
+                    );
+                }
+                _ => {}
+            };
+        }
+
+        if self.descr.converted_type() == ConvertedType::DECIMAL {
+            match self.descr.physical_type() {
+                Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
+                    return compare_greater_byte_array_decimals(
+                        a.as_bytes(),
+                        b.as_bytes(),
+                    );
+                }
+                _ => {}
+            };
+        };
+
         a > b
     }
 }
@@ -1049,23 +1083,70 @@ fn has_dictionary_support(kind: Type, props: &WriterProperties) -> bool {
     }
 }
 
+/// Signed comparison of bytes arrays
+fn compare_greater_byte_array_decimals(a: &[u8], b: &[u8]) -> bool {
+    let a_length = a.len();
+    let b_length = b.len();
+
+    if a_length == 0 || b_length == 0 {
+        return a_length > 0;
+    }
+
+    let first_a: u8 = a[0];
+    let first_b: u8 = b[0];
+
+    // We can short circuit for different signed numbers or
+    // for equal length bytes arrays that have different first bytes.
+    // The equality requirement is necessary for sign extension cases.
+    // 0xFF10 should be equal to 0x10 (due to big endian sign extension).
+    if (0x80 & first_a) != (0x80 & first_b)
+        || (a_length == b_length && first_a != first_b)
+    {
+        return (first_a as i8) > (first_b as i8);
+    }
+
+    // When the lengths are unequal and the numbers are of the same
+    // sign we need to do comparison by sign extending the shorter
+    // value first, and once we get to equal sized arrays, lexicographical
+    // unsigned comparison of everything but the first byte is sufficient.
+
+    let extension: u8 = if (first_a as i8) < 0 { 0xFF } else { 0 };
+
+    if a_length != b_length {
+        let not_equal = if a_length > b_length {
+            let lead_length = a_length - b_length;
+            (&a[0..lead_length]).iter().any(|&x| x != extension)
+        } else {
+            let lead_length = b_length - a_length;
+            (&b[0..lead_length]).iter().any(|&x| x != extension)
+        };
+
+        if not_equal {
+            let negative_values: bool = (first_a as i8) < 0;
+            let a_longer: bool = a_length > b_length;
+            return if negative_values { !a_longer } else { a_longer };
+        }
+    }
+
+    (a[1..]) > (b[1..])
+}
+
 #[cfg(test)]
 mod tests {
     use rand::distributions::uniform::SampleUniform;
+    use std::sync::Arc;
 
     use crate::column::{
         page::PageReader,
         reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
     };
+    use crate::file::writer::TrackedWrite;
     use crate::file::{
         properties::WriterProperties, reader::SerializedPageReader,
         writer::SerializedPageWriter,
     };
     use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
-    use crate::util::{
-        io::{FileSink, FileSource},
-        test_common::random_numbers_range,
-    };
+    use crate::util::{io::FileSource, test_common::random_numbers_range};
 
     use super::*;
 
@@ -1476,6 +1557,84 @@ mod tests {
     }
 
     #[test]
+    fn test_column_writer_check_byte_array_min_max() {
+        let page_writer = get_test_page_writer();
+        let props = Arc::new(WriterProperties::builder().build());
+        let mut writer =
+            get_test_decimals_column_writer::<ByteArrayType>(page_writer, 0, 0, props);
+        writer
+            .write_batch(
+                &[
+                    ByteArray::from(vec![
+                        255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 179u8,
+                        172u8, 19u8, 35u8, 231u8, 90u8, 0u8, 0u8,
+                    ]),
+                    ByteArray::from(vec![
+                        255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 228u8,
+                        62u8, 146u8, 152u8, 177u8, 56u8, 0u8, 0u8,
+                    ]),
+                    ByteArray::from(vec![
+                        0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8,
+                        0u8, 0u8, 0u8,
+                    ]),
+                    ByteArray::from(vec![
+                        0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 41u8, 162u8, 36u8, 26u8,
+                        246u8, 44u8, 0u8, 0u8,
+                    ]),
+                ],
+                None,
+                None,
+            )
+            .unwrap();
+        let (_bytes_written, _rows_written, metadata) = writer.close().unwrap();
+        if let Some(stats) = metadata.statistics() {
+            assert!(stats.has_min_max_set());
+            if let Statistics::ByteArray(stats) = stats {
+                assert_eq!(
+                    stats.min(),
+                    &ByteArray::from(vec![
+                        255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 255u8, 179u8,
+                        172u8, 19u8, 35u8, 231u8, 90u8, 0u8, 0u8,
+                    ])
+                );
+                assert_eq!(
+                    stats.max(),
+                    &ByteArray::from(vec![
+                        0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 0u8, 41u8, 162u8, 36u8, 26u8,
+                        246u8, 44u8, 0u8, 0u8,
+                    ])
+                );
+            } else {
+                panic!("expecting Statistics::ByteArray");
+            }
+        } else {
+            panic!("metadata missing statistics");
+        }
+    }
+
+    #[test]
+    fn test_column_writer_uint32_converted_type_min_max() {
+        let page_writer = get_test_page_writer();
+        let props = Arc::new(WriterProperties::builder().build());
+        let mut writer = get_test_unsigned_int_given_as_converted_column_writer::<
+            Int32Type,
+        >(page_writer, 0, 0, props);
+        writer.write_batch(&[0, 1, 2, 3, 4, 5], None, None).unwrap();
+        let (_bytes_written, _rows_written, metadata) = writer.close().unwrap();
+        if let Some(stats) = metadata.statistics() {
+            assert!(stats.has_min_max_set());
+            if let Statistics::Int32(stats) = stats {
+                assert_eq!(stats.min(), &0,);
+                assert_eq!(stats.max(), &5,);
+            } else {
+                panic!("expecting Statistics::Int32");
+            }
+        } else {
+            panic!("metadata missing statistics");
+        }
+    }
+
+    #[test]
     fn test_column_writer_precalculated_statistics() {
         let page_writer = get_test_page_writer();
         let props = Arc::new(WriterProperties::builder().build());
@@ -1664,9 +1823,9 @@ mod tests {
     fn test_column_writer_add_data_pages_with_dict() {
         // ARROW-5129: Test verifies that we add data page in case of dictionary encoding
         // and no fallback occurred so far.
-        let file = tempfile::tempfile().unwrap();
-        let sink = FileSink::new(&file);
-        let page_writer = Box::new(SerializedPageWriter::new(sink));
+        let mut file = tempfile::tempfile().unwrap();
+        let mut writer = TrackedWrite::new(&mut file);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut writer));
         let props = Arc::new(
             WriterProperties::builder()
                 .set_data_pagesize_limit(15) // actually each page will have size 15-18 bytes
@@ -1887,6 +2046,28 @@ mod tests {
         assert!(matches!(stats, Statistics::Double(_)));
     }
 
+    #[test]
+    fn test_compare_greater_byte_array_decimals() {
+        assert!(!compare_greater_byte_array_decimals(&[], &[],),);
+        assert!(compare_greater_byte_array_decimals(&[1u8,], &[],),);
+        assert!(!compare_greater_byte_array_decimals(&[], &[1u8,],),);
+        assert!(compare_greater_byte_array_decimals(&[1u8,], &[0u8,],),);
+        assert!(!compare_greater_byte_array_decimals(&[1u8,], &[1u8,],),);
+        assert!(compare_greater_byte_array_decimals(&[1u8, 0u8,], &[0u8,],),);
+        assert!(!compare_greater_byte_array_decimals(
+            &[0u8, 1u8,],
+            &[1u8, 0u8,],
+        ),);
+        assert!(!compare_greater_byte_array_decimals(
+            &[255u8, 35u8, 0u8, 0u8,],
+            &[0u8,],
+        ),);
+        assert!(compare_greater_byte_array_decimals(
+            &[0u8,],
+            &[255u8, 35u8, 0u8, 0u8,],
+        ),);
+    }
+
     /// Performs write-read roundtrip with randomly generated values and levels.
     /// `max_size` is maximum number of values or levels (if `max_def_level` > 0) to write
     /// for a column.
@@ -1937,9 +2118,9 @@ mod tests {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) {
-        let file = tempfile::tempfile().unwrap();
-        let sink = FileSink::new(&file);
-        let page_writer = Box::new(SerializedPageWriter::new(sink));
+        let mut file = tempfile::tempfile().unwrap();
+        let mut writer = TrackedWrite::new(&mut file);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut writer));
 
         let max_def_level = match def_levels {
             Some(buf) => *buf.iter().max().unwrap_or(&0i16),
@@ -2074,12 +2255,12 @@ mod tests {
     }
 
     /// Returns column writer.
-    fn get_test_column_writer<T: DataType>(
-        page_writer: Box<dyn PageWriter>,
+    fn get_test_column_writer<'a, T: DataType>(
+        page_writer: Box<dyn PageWriter + 'a>,
         max_def_level: i16,
         max_rep_level: i16,
         props: WriterPropertiesPtr,
-    ) -> ColumnWriterImpl<T> {
+    ) -> ColumnWriterImpl<'a, T> {
         let descr = Arc::new(get_test_column_descr::<T>(max_def_level, max_rep_level));
         let column_writer = get_column_writer(descr, props, page_writer);
         get_typed_column_writer::<T>(column_writer)
@@ -2152,5 +2333,95 @@ mod tests {
         } else {
             panic!("metadata missing statistics");
         }
+    }
+
+    /// Returns Decimals column writer.
+    fn get_test_decimals_column_writer<T: DataType>(
+        page_writer: Box<dyn PageWriter>,
+        max_def_level: i16,
+        max_rep_level: i16,
+        props: WriterPropertiesPtr,
+    ) -> ColumnWriterImpl<'static, T> {
+        let descr = Arc::new(get_test_decimals_column_descr::<T>(
+            max_def_level,
+            max_rep_level,
+        ));
+        let column_writer = get_column_writer(descr, props, page_writer);
+        get_typed_column_writer::<T>(column_writer)
+    }
+
+    /// Returns decimals column reader.
+    fn get_test_decimals_column_reader<T: DataType>(
+        page_reader: Box<dyn PageReader>,
+        max_def_level: i16,
+        max_rep_level: i16,
+    ) -> ColumnReaderImpl<T> {
+        let descr = Arc::new(get_test_decimals_column_descr::<T>(
+            max_def_level,
+            max_rep_level,
+        ));
+        let column_reader = get_column_reader(descr, page_reader);
+        get_typed_column_reader::<T>(column_reader)
+    }
+
+    /// Returns descriptor for Decimal type with primitive column.
+    fn get_test_decimals_column_descr<T: DataType>(
+        max_def_level: i16,
+        max_rep_level: i16,
+    ) -> ColumnDescriptor {
+        let path = ColumnPath::from("col");
+        let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
+            .with_length(16)
+            .with_logical_type(Some(LogicalType::Decimal {
+                scale: 2,
+                precision: 3,
+            }))
+            .with_scale(2)
+            .with_precision(3)
+            .build()
+            .unwrap();
+        ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
+    }
+
+    /// Returns column writer for UINT32 Column provided as ConvertedType only
+    fn get_test_unsigned_int_given_as_converted_column_writer<'a, T: DataType>(
+        page_writer: Box<dyn PageWriter + 'a>,
+        max_def_level: i16,
+        max_rep_level: i16,
+        props: WriterPropertiesPtr,
+    ) -> ColumnWriterImpl<'a, T> {
+        let descr = Arc::new(get_test_converted_type_unsigned_integer_column_descr::<T>(
+            max_def_level,
+            max_rep_level,
+        ));
+        let column_writer = get_column_writer(descr, props, page_writer);
+        get_typed_column_writer::<T>(column_writer)
+    }
+
+    ///  Returns column reader for UINT32 Column provided as ConvertedType only
+    fn get_test_unsigned_int_given_as_converted_column_reader<T: DataType>(
+        page_reader: Box<dyn PageReader>,
+        max_def_level: i16,
+        max_rep_level: i16,
+    ) -> ColumnReaderImpl<T> {
+        let descr = Arc::new(get_test_converted_type_unsigned_integer_column_descr::<T>(
+            max_def_level,
+            max_rep_level,
+        ));
+        let column_reader = get_column_reader(descr, page_reader);
+        get_typed_column_reader::<T>(column_reader)
+    }
+
+    /// Returns column descriptor for UINT32 Column provided as ConvertedType only
+    fn get_test_converted_type_unsigned_integer_column_descr<T: DataType>(
+        max_def_level: i16,
+        max_rep_level: i16,
+    ) -> ColumnDescriptor {
+        let path = ColumnPath::from("col");
+        let tpe = SchemaType::primitive_type_builder("col", T::get_physical_type())
+            .with_converted_type(ConvertedType::UINT_32)
+            .build()
+            .unwrap();
+        ColumnDescriptor::new(Arc::new(tpe), max_def_level, max_rep_level, path)
     }
 }

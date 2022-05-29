@@ -936,11 +936,7 @@ mod tests {
     use crate::schema::types::{
         ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType,
     };
-    use crate::util::{
-        bit_util::set_array_bit,
-        memory::{BufferPtr, MemTracker},
-        test_common::RandGen,
-    };
+    use crate::util::{bit_util::set_array_bit, test_common::RandGen};
 
     #[test]
     fn test_get_decoders() {
@@ -1389,7 +1385,7 @@ mod tests {
 
         let length = data.len();
 
-        let ptr = BufferPtr::new(data);
+        let ptr = ByteBufferPtr::new(data);
         let mut reader = BitReader::new(ptr.clone());
         assert_eq!(reader.get_vlq_int().unwrap(), 256);
         assert_eq!(reader.get_vlq_int().unwrap(), 4);
@@ -1472,8 +1468,7 @@ mod tests {
 
         // Encode data
         let mut encoder =
-            get_encoder::<T>(col_descr.clone(), encoding, Arc::new(MemTracker::new()))
-                .expect("get encoder");
+            get_encoder::<T>(col_descr.clone(), encoding).expect("get encoder");
 
         for v in &data[..] {
             encoder.put(&v[..]).expect("ok to encode");

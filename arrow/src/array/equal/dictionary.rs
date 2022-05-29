@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::array::{data::count_nulls, ArrayData};
-use crate::buffer::Buffer;
 use crate::datatypes::ArrowNativeType;
 use crate::util::bit_util::get_bit;
 
@@ -25,8 +24,6 @@ use super::equal_range;
 pub(super) fn dictionary_equal<T: ArrowNativeType>(
     lhs: &ArrayData,
     rhs: &ArrayData,
-    lhs_nulls: Option<&Buffer>,
-    rhs_nulls: Option<&Buffer>,
     lhs_start: usize,
     rhs_start: usize,
     len: usize,
@@ -37,8 +34,8 @@ pub(super) fn dictionary_equal<T: ArrowNativeType>(
     let lhs_values = &lhs.child_data()[0];
     let rhs_values = &rhs.child_data()[0];
 
-    let lhs_null_count = count_nulls(lhs_nulls, lhs_start, len);
-    let rhs_null_count = count_nulls(rhs_nulls, rhs_start, len);
+    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
+    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
 
     if lhs_null_count == 0 && rhs_null_count == 0 {
         (0..len).all(|i| {
@@ -48,8 +45,6 @@ pub(super) fn dictionary_equal<T: ArrowNativeType>(
             equal_range(
                 lhs_values,
                 rhs_values,
-                lhs_values.null_buffer(),
-                rhs_values.null_buffer(),
                 lhs_keys[lhs_pos].to_usize().unwrap(),
                 rhs_keys[rhs_pos].to_usize().unwrap(),
                 1,
@@ -57,8 +52,8 @@ pub(super) fn dictionary_equal<T: ArrowNativeType>(
         })
     } else {
         // get a ref of the null buffer bytes, to use in testing for nullness
-        let lhs_null_bytes = lhs_nulls.as_ref().unwrap().as_slice();
-        let rhs_null_bytes = rhs_nulls.as_ref().unwrap().as_slice();
+        let lhs_null_bytes = lhs.null_buffer().as_ref().unwrap().as_slice();
+        let rhs_null_bytes = rhs.null_buffer().as_ref().unwrap().as_slice();
         (0..len).all(|i| {
             let lhs_pos = lhs_start + i;
             let rhs_pos = rhs_start + i;
@@ -71,8 +66,6 @@ pub(super) fn dictionary_equal<T: ArrowNativeType>(
                     && equal_range(
                         lhs_values,
                         rhs_values,
-                        lhs_values.null_buffer(),
-                        rhs_values.null_buffer(),
                         lhs_keys[lhs_pos].to_usize().unwrap(),
                         rhs_keys[rhs_pos].to_usize().unwrap(),
                         1,

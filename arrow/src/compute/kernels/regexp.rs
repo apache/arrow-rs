@@ -19,8 +19,7 @@
 //! expression of a \[Large\]StringArray
 
 use crate::array::{
-    ArrayRef, GenericStringArray, GenericStringBuilder, ListBuilder,
-    StringOffsetSizeTrait,
+    ArrayRef, GenericStringArray, GenericStringBuilder, ListBuilder, OffsetSizeTrait,
 };
 use crate::error::{ArrowError, Result};
 use std::collections::HashMap;
@@ -30,7 +29,7 @@ use std::sync::Arc;
 use regex::Regex;
 
 /// Extract all groups matched by a regular expression for a given String array.
-pub fn regexp_match<OffsetSize: StringOffsetSizeTrait>(
+pub fn regexp_match<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     regex_array: &GenericStringArray<OffsetSize>,
     flags_array: Option<&GenericStringArray<OffsetSize>>,

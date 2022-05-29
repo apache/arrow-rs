@@ -58,10 +58,10 @@ use std::any::Any;
 /// ];
 ///
 /// let array = UnionArray::try_new(
+///     &vec![0, 1],
 ///     type_id_buffer,
 ///     Some(value_offsets_buffer),
 ///     children,
-///     None,
 /// ).unwrap();
 ///
 /// let value = array.value(0).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
@@ -91,10 +91,10 @@ use std::any::Any;
 /// ];
 ///
 /// let array = UnionArray::try_new(
+///     &vec![0, 1],
 ///     type_id_buffer,
 ///     None,
 ///     children,
-///     None,
 /// ).unwrap();
 ///
 /// let value = array.value(0).as_any().downcast_ref::<Int32Array>().unwrap().value(0);
@@ -137,10 +137,10 @@ impl UnionArray {
     /// `i8` and `i32` values respectively.  `Buffer` objects are untyped and no attempt is made
     /// to ensure that the data provided is valid.
     pub unsafe fn new_unchecked(
+        field_type_ids: &[i8],
         type_ids: Buffer,
         value_offsets: Option<Buffer>,
         child_arrays: Vec<(Field, ArrayRef)>,
-        bitmap_data: Option<Buffer>,
     ) -> Self {
         let (field_types, field_values): (Vec<_>, Vec<_>) =
             child_arrays.into_iter().unzip();
@@ -152,13 +152,15 @@ impl UnionArray {
             UnionMode::Sparse
         };
 
-        let mut builder = ArrayData::builder(DataType::Union(field_types, mode))
-            .add_buffer(type_ids)
-            .child_data(field_values.into_iter().map(|a| a.data().clone()).collect())
-            .len(len);
-        if let Some(bitmap) = bitmap_data {
-            builder = builder.null_bit_buffer(bitmap)
-        }
+        let builder = ArrayData::builder(DataType::Union(
+            field_types,
+            Vec::from(field_type_ids),
+            mode,
+        ))
+        .add_buffer(type_ids)
+        .child_data(field_values.into_iter().map(|a| a.data().clone()).collect())
+        .len(len);
+
         let data = match value_offsets {
             Some(b) => builder.add_buffer(b).build_unchecked(),
             None => builder.build_unchecked(),
@@ -168,10 +170,10 @@ impl UnionArray {
 
     /// Attempts to create a new `UnionArray`, validating the inputs provided.
     pub fn try_new(
+        field_type_ids: &[i8],
         type_ids: Buffer,
         value_offsets: Option<Buffer>,
         child_arrays: Vec<(Field, ArrayRef)>,
-        bitmap: Option<Buffer>,
     ) -> Result<Self> {
         if let Some(b) = &value_offsets {
             if ((type_ids.len()) * 4) != b.len() {
@@ -215,8 +217,9 @@ impl UnionArray {
 
         // Unsafe Justification: arguments were validated above (and
         // re-revalidated as part of data().validate() below)
-        let new_self =
-            unsafe { Self::new_unchecked(type_ids, value_offsets, child_arrays, bitmap) };
+        let new_self = unsafe {
+            Self::new_unchecked(field_type_ids, type_ids, value_offsets, child_arrays)
+        };
         new_self.data().validate()?;
 
         Ok(new_self)
@@ -275,7 +278,7 @@ impl UnionArray {
     /// Returns the names of the types in the union.
     pub fn type_names(&self) -> Vec<&str> {
         match self.data.data_type() {
-            DataType::Union(fields, _) => fields
+            DataType::Union(fields, _, _) => fields
                 .iter()
                 .map(|f| f.name().as_str())
                 .collect::<Vec<&str>>(),
@@ -286,7 +289,7 @@ impl UnionArray {
     /// Returns whether the `UnionArray` is dense (or sparse if `false`).
     fn is_dense(&self) -> bool {
         match self.data.data_type() {
-            DataType::Union(_, mode) => mode == &UnionMode::Dense,
+            DataType::Union(_, _, mode) => mode == &UnionMode::Dense,
             _ => unreachable!("Union array's data type is not a union!"),
         }
     }
@@ -309,6 +312,24 @@ impl Array for UnionArray {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    /// Union types always return non null as there is no validity buffer.
+    /// To check validity correctly you must check the underlying vector.
+    fn is_null(&self, _index: usize) -> bool {
+        false
+    }
+
+    /// Union types always return non null as there is no validity buffer.
+    /// To check validity correctly you must check the underlying vector.
+    fn is_valid(&self, _index: usize) -> bool {
+        true
+    }
+
+    /// Union types always return 0 null count as there is no validity buffer.
+    /// To get null count correctly you must check the underlying vector.
+    fn null_count(&self) -> usize {
+        0
     }
 }
 
@@ -512,7 +533,7 @@ mod tests {
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int64Type>("c", 3).unwrap();
         builder.append::<Int32Type>("a", 10).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
         builder.append::<Int32Type>("a", 6).unwrap();
         let union = builder.build().unwrap();
 
@@ -522,29 +543,29 @@ mod tests {
             match i {
                 0 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert!(!union.is_null(i));
+                    assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(1_i32, value);
                 }
                 1 => {
                     let slot = slot.as_any().downcast_ref::<Int64Array>().unwrap();
-                    assert!(!union.is_null(i));
+                    assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(3_i64, value);
                 }
                 2 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert!(!union.is_null(i));
+                    assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(10_i32, value);
                 }
-                3 => assert!(union.is_null(i)),
+                3 => assert!(slot.is_null(0)),
                 4 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert!(!union.is_null(i));
+                    assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(6_i32, value);
@@ -560,7 +581,7 @@ mod tests {
         builder.append::<Int32Type>("a", 1).unwrap();
         builder.append::<Int64Type>("c", 3).unwrap();
         builder.append::<Int32Type>("a", 10).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
         builder.append::<Int32Type>("a", 6).unwrap();
         let union = builder.build().unwrap();
 
@@ -573,15 +594,15 @@ mod tests {
             match i {
                 0 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert!(!union.is_null(i));
+                    assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(10_i32, value);
                 }
-                1 => assert!(new_union.is_null(i)),
+                1 => assert!(slot.is_null(0)),
                 2 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert!(!union.is_null(i));
+                    assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(6_i32, value);
@@ -615,10 +636,10 @@ mod tests {
             ),
         ];
         let array = UnionArray::try_new(
+            &[0, 1, 2],
             type_id_buffer,
             Some(value_offsets_buffer),
             children,
-            None,
         )
         .unwrap();
 
@@ -800,7 +821,7 @@ mod tests {
     fn test_sparse_mixed_with_nulls() {
         let mut builder = UnionBuilder::new_sparse(5);
         builder.append::<Int32Type>("a", 1).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
         builder.append::<Float64Type>("c", 3.0).unwrap();
         builder.append::<Int32Type>("a", 4).unwrap();
         let union = builder.build().unwrap();
@@ -824,22 +845,22 @@ mod tests {
             match i {
                 0 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert!(!union.is_null(i));
+                    assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(1_i32, value);
                 }
-                1 => assert!(union.is_null(i)),
+                1 => assert!(slot.is_null(0)),
                 2 => {
                     let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
-                    assert!(!union.is_null(i));
+                    assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(value, 3_f64);
                 }
                 3 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert!(!union.is_null(i));
+                    assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(4_i32, value);
@@ -853,9 +874,9 @@ mod tests {
     fn test_sparse_mixed_with_nulls_and_offset() {
         let mut builder = UnionBuilder::new_sparse(5);
         builder.append::<Int32Type>("a", 1).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
         builder.append::<Float64Type>("c", 3.0).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null::<Float64Type>("c").unwrap();
         builder.append::<Int32Type>("a", 4).unwrap();
         let union = builder.build().unwrap();
 
@@ -866,18 +887,18 @@ mod tests {
         for i in 0..new_union.len() {
             let slot = new_union.value(i);
             match i {
-                0 => assert!(new_union.is_null(i)),
+                0 => assert!(slot.is_null(0)),
                 1 => {
                     let slot = slot.as_any().downcast_ref::<Float64Array>().unwrap();
-                    assert!(!new_union.is_null(i));
+                    assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(value, 3_f64);
                 }
-                2 => assert!(new_union.is_null(i)),
+                2 => assert!(slot.is_null(0)),
                 3 => {
                     let slot = slot.as_any().downcast_ref::<Int32Array>().unwrap();
-                    assert!(!new_union.is_null(i));
+                    assert!(!slot.is_null(0));
                     assert_eq!(slot.len(), 1);
                     let value = slot.value(0);
                     assert_eq!(4_i32, value);
@@ -885,5 +906,45 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+    }
+
+    fn test_union_validity(union_array: &UnionArray) {
+        assert_eq!(union_array.null_count(), 0);
+
+        for i in 0..union_array.len() {
+            assert!(!union_array.is_null(i));
+            assert!(union_array.is_valid(i));
+        }
+    }
+
+    #[test]
+    fn test_union_array_validaty() {
+        let mut builder = UnionBuilder::new_sparse(5);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Float64Type>("c", 3.0).unwrap();
+        builder.append_null::<Float64Type>("c").unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        let union = builder.build().unwrap();
+
+        test_union_validity(&union);
+
+        let mut builder = UnionBuilder::new_dense(5);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Float64Type>("c", 3.0).unwrap();
+        builder.append_null::<Float64Type>("c").unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        let union = builder.build().unwrap();
+
+        test_union_validity(&union);
+    }
+
+    #[test]
+    fn test_type_check() {
+        let mut builder = UnionBuilder::new_sparse(2);
+        builder.append::<Float32Type>("a", 1.0).unwrap();
+        let err = builder.append::<Int32Type>("a", 1).unwrap_err().to_string();
+        assert!(err.contains("Attempt to write col \"a\" with type Int32 doesn't match existing type Float32"), "{}", err);
     }
 }

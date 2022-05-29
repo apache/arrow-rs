@@ -131,14 +131,11 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
         null_buffer: Option<Buffer>,
         data_type: ArrowType,
     ) -> ArrayRef {
-        let mut array_data_builder = ArrayDataBuilder::new(data_type)
+        let array_data_builder = ArrayDataBuilder::new(data_type)
             .len(self.len())
             .add_buffer(self.offsets.into())
-            .add_buffer(self.values.into());
-
-        if let Some(buffer) = null_buffer {
-            array_data_builder = array_data_builder.null_bit_buffer(buffer);
-        }
+            .add_buffer(self.values.into())
+            .null_bit_buffer(null_buffer);
 
         let data = match cfg!(debug_assertions) {
             true => array_data_builder.build().unwrap(),

@@ -26,7 +26,8 @@ use std::io::{BufWriter, Write};
 use flatbuffers::FlatBufferBuilder;
 
 use crate::array::{
-    as_list_array, as_struct_array, as_union_array, make_array, ArrayData, ArrayRef,
+    as_large_list_array, as_list_array, as_map_array, as_struct_array, as_union_array,
+    make_array, Array, ArrayData, ArrayRef, FixedSizeListArray,
 };
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::*;
@@ -146,7 +147,6 @@ impl IpcDataGenerator {
         dictionary_tracker: &mut DictionaryTracker,
         write_options: &IpcWriteOptions,
     ) -> Result<()> {
-        // TODO: Handle other nested types (map, etc)
         match column.data_type() {
             DataType::Struct(fields) => {
                 let s = as_struct_array(column);
@@ -170,7 +170,58 @@ impl IpcDataGenerator {
                     write_options,
                 )?;
             }
-            DataType::Union(fields, _) => {
+            DataType::LargeList(field) => {
+                let list = as_large_list_array(column);
+                self.encode_dictionaries(
+                    field,
+                    &list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
+            DataType::FixedSizeList(field, _) => {
+                let list = column
+                    .as_any()
+                    .downcast_ref::<FixedSizeListArray>()
+                    .expect("Unable to downcast to fixed size list array");
+                self.encode_dictionaries(
+                    field,
+                    &list.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
+            DataType::Map(field, _) => {
+                let map_array = as_map_array(column);
+
+                let (keys, values) = match field.data_type() {
+                    DataType::Struct(fields) if fields.len() == 2 => {
+                        (&fields[0], &fields[1])
+                    }
+                    _ => panic!("Incorrect field data type {:?}", field.data_type()),
+                };
+
+                // keys
+                self.encode_dictionaries(
+                    keys,
+                    &map_array.keys(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+
+                // values
+                self.encode_dictionaries(
+                    values,
+                    &map_array.values(),
+                    encoded_dictionaries,
+                    dictionary_tracker,
+                    write_options,
+                )?;
+            }
+            DataType::Union(fields, _, _) => {
                 let union = as_union_array(column);
                 for (field, ref column) in fields
                     .iter()
@@ -809,9 +860,19 @@ fn write_array_data(
     null_count: usize,
 ) -> i64 {
     let mut offset = offset;
-    nodes.push(ipc::FieldNode::new(num_rows as i64, null_count as i64));
+    if !matches!(array_data.data_type(), DataType::Null) {
+        nodes.push(ipc::FieldNode::new(num_rows as i64, null_count as i64));
+    } else {
+        // NullArray's null_count equals to len, but the `null_count` passed in is from ArrayData
+        // where null_count is always 0.
+        nodes.push(ipc::FieldNode::new(num_rows as i64, num_rows as i64));
+    }
     // NullArray does not have any buffers, thus the null buffer is not generated
-    if array_data.data_type() != &DataType::Null {
+    // UnionArray does not have a validity buffer
+    if !matches!(
+        array_data.data_type(),
+        DataType::Null | DataType::Union(_, _, _)
+    ) {
         // write null buffer if exists
         let null_buffer = match array_data.null_buffer() {
             None => {
@@ -1273,7 +1334,7 @@ mod tests {
         let offsets = Buffer::from_slice_ref(&[0_i32, 1, 2]);
 
         let union =
-            UnionArray::try_new(types, Some(offsets), vec![(dctfield, array)], None)
+            UnionArray::try_new(&[0], types, Some(offsets), vec![(dctfield, array)])
                 .unwrap();
 
         let schema = Arc::new(Schema::new(vec![Field::new(

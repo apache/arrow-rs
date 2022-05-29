@@ -176,12 +176,10 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
         }
         let len = len.unwrap();
 
-        let mut builder = ArrayData::builder(DataType::Struct(fields))
+        let builder = ArrayData::builder(DataType::Struct(fields))
             .len(len)
+            .null_bit_buffer(null)
             .child_data(child_data);
-        if let Some(null_buffer) = null {
-            builder = builder.null_bit_buffer(null_buffer);
-        }
 
         let array_data = unsafe { builder.build_unchecked() };
 
@@ -270,7 +268,7 @@ impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
         }
 
         let array_data = ArrayData::builder(DataType::Struct(field_types))
-            .null_bit_buffer(pair.1)
+            .null_bit_buffer(Some(pair.1))
             .child_data(field_values.into_iter().map(|a| a.data().clone()).collect())
             .len(length);
         let array_data = unsafe { array_data.build_unchecked() };
@@ -366,7 +364,7 @@ mod tests {
 
         let expected_string_data = ArrayData::builder(DataType::Utf8)
             .len(4)
-            .null_bit_buffer(Buffer::from(&[9_u8]))
+            .null_bit_buffer(Some(Buffer::from(&[9_u8])))
             .add_buffer(Buffer::from(&[0, 3, 3, 3, 7].to_byte_slice()))
             .add_buffer(Buffer::from(b"joemark"))
             .build()
@@ -374,7 +372,7 @@ mod tests {
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
             .len(4)
-            .null_bit_buffer(Buffer::from(&[11_u8]))
+            .null_bit_buffer(Some(Buffer::from(&[11_u8])))
             .add_buffer(Buffer::from(&[1, 2, 0, 4].to_byte_slice()))
             .build()
             .unwrap();
@@ -428,13 +426,13 @@ mod tests {
         let boolean_data = ArrayData::builder(DataType::Boolean)
             .len(5)
             .add_buffer(Buffer::from([0b00010000]))
-            .null_bit_buffer(Buffer::from([0b00010001]))
+            .null_bit_buffer(Some(Buffer::from([0b00010001])))
             .build()
             .unwrap();
         let int_data = ArrayData::builder(DataType::Int32)
             .len(5)
             .add_buffer(Buffer::from([0, 28, 42, 0, 0].to_byte_slice()))
-            .null_bit_buffer(Buffer::from([0b00000110]))
+            .null_bit_buffer(Some(Buffer::from([0b00000110])))
             .build()
             .unwrap();
 
@@ -446,7 +444,7 @@ mod tests {
             .len(5)
             .add_child_data(boolean_data.clone())
             .add_child_data(int_data.clone())
-            .null_bit_buffer(Buffer::from([0b00010111]))
+            .null_bit_buffer(Some(Buffer::from([0b00010111])))
             .build()
             .unwrap();
         let struct_array = StructArray::from(struct_array_data);

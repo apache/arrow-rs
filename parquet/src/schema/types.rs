@@ -22,7 +22,7 @@ use std::{collections::HashMap, convert::From, fmt, sync::Arc};
 use parquet_format::SchemaElement;
 
 use crate::basic::{
-    ConvertedType, LogicalType, Repetition, TimeType, TimeUnit, Type as PhysicalType,
+    ConvertedType, LogicalType, Repetition, TimeUnit, Type as PhysicalType,
 };
 use crate::errors::{ParquetError, Result};
 
@@ -306,57 +306,57 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 }
                 // Check that logical type and physical type are compatible
                 match (logical_type, self.physical_type) {
-                    (LogicalType::MAP(_), _) | (LogicalType::LIST(_), _) => {
+                    (LogicalType::Map, _) | (LogicalType::List, _) => {
                         return Err(general_err!(
                             "{:?} cannot be applied to a primitive type",
                             logical_type
                         ));
                     }
-                    (LogicalType::ENUM(_), PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::DECIMAL(t), _) => {
+                    (LogicalType::Enum, PhysicalType::BYTE_ARRAY) => {}
+                    (LogicalType::Decimal { scale, precision }, _) => {
                         // Check that scale and precision are consistent with legacy values
-                        if t.scale != self.scale {
+                        if *scale != self.scale {
                             return Err(general_err!(
                                 "DECIMAL logical type scale {} must match self.scale {}",
-                                t.scale,
+                                scale,
                                 self.scale
                             ));
                         }
-                        if t.precision != self.precision {
+                        if *precision != self.precision {
                             return Err(general_err!(
                                 "DECIMAL logical type precision {} must match self.precision {}",
-                                t.precision,
+                                precision,
                                 self.precision
                             ));
                         }
                         self.check_decimal_precision_scale()?;
                     }
-                    (LogicalType::DATE(_), PhysicalType::INT32) => {}
+                    (LogicalType::Date, PhysicalType::INT32) => {}
                     (
-                        LogicalType::TIME(TimeType {
+                        LogicalType::Time {
                             unit: TimeUnit::MILLIS(_),
                             ..
-                        }),
+                        },
                         PhysicalType::INT32,
                     ) => {}
-                    (LogicalType::TIME(t), PhysicalType::INT64) => {
-                        if t.unit == TimeUnit::MILLIS(Default::default()) {
+                    (LogicalType::Time { unit, .. }, PhysicalType::INT64) => {
+                        if *unit == TimeUnit::MILLIS(Default::default()) {
                             return Err(general_err!(
                                 "Cannot use millisecond unit on INT64 type"
                             ));
                         }
                     }
-                    (LogicalType::TIMESTAMP(_), PhysicalType::INT64) => {}
-                    (LogicalType::INTEGER(t), PhysicalType::INT32)
-                        if t.bit_width <= 32 => {}
-                    (LogicalType::INTEGER(t), PhysicalType::INT64)
-                        if t.bit_width == 64 => {}
+                    (LogicalType::Timestamp { .. }, PhysicalType::INT64) => {}
+                    (LogicalType::Integer { bit_width, .. }, PhysicalType::INT32)
+                        if *bit_width <= 32 => {}
+                    (LogicalType::Integer { bit_width, .. }, PhysicalType::INT64)
+                        if *bit_width == 64 => {}
                     // Null type
-                    (LogicalType::UNKNOWN(_), PhysicalType::INT32) => {}
-                    (LogicalType::STRING(_), PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::JSON(_), PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::BSON(_), PhysicalType::BYTE_ARRAY) => {}
-                    (LogicalType::UUID(_), PhysicalType::FIXED_LEN_BYTE_ARRAY) => {}
+                    (LogicalType::Unknown, PhysicalType::INT32) => {}
+                    (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
+                    (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
+                    (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
+                    (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {}
                     (a, b) => {
                         return Err(general_err!(
                             "Cannot annotate {:?} from {} fields",
@@ -467,13 +467,13 @@ impl<'a> PrimitiveTypeBuilder<'a> {
             return Err(general_err!("Invalid DECIMAL scale: {}", self.scale));
         }
 
-        if self.scale >= self.precision {
+        if self.scale > self.precision {
             return Err(general_err!(
-            "Invalid DECIMAL: scale ({}) cannot be greater than or equal to precision \
+                "Invalid DECIMAL: scale ({}) cannot be greater than precision \
              ({})",
-            self.scale,
-            self.precision
-        ));
+                self.scale,
+                self.precision
+            ));
         }
 
         // Check precision and scale based on physical type limitations.
@@ -847,13 +847,13 @@ pub struct SchemaDescriptor {
     // `schema` in DFS order.
     leaves: Vec<ColumnDescPtr>,
 
-    // Mapping from a leaf column's index to the root column type that it
+    // Mapping from a leaf column's index to the root column index that it
     // comes from. For instance: the leaf `a.b.c.d` would have a link back to `a`:
     // -- a  <-----+
     // -- -- b     |
     // -- -- -- c  |
     // -- -- -- -- d
-    leaf_to_base: Vec<TypePtr>,
+    leaf_to_base: Vec<usize>,
 }
 
 impl fmt::Debug for SchemaDescriptor {
@@ -871,9 +871,9 @@ impl SchemaDescriptor {
         assert!(tp.is_group(), "SchemaDescriptor should take a GroupType");
         let mut leaves = vec![];
         let mut leaf_to_base = Vec::new();
-        for f in tp.get_fields() {
+        for (root_idx, f) in tp.get_fields().iter().enumerate() {
             let mut path = vec![];
-            build_tree(f, f, 0, 0, &mut leaves, &mut leaf_to_base, &mut path);
+            build_tree(f, root_idx, 0, 0, &mut leaves, &mut leaf_to_base, &mut path);
         }
 
         Self {
@@ -904,30 +904,35 @@ impl SchemaDescriptor {
         self.leaves.len()
     }
 
-    /// Returns column root [`Type`](crate::schema::types::Type) for a field position.
+    /// Returns column root [`Type`](crate::schema::types::Type) for a leaf position.
     pub fn get_column_root(&self, i: usize) -> &Type {
         let result = self.column_root_of(i);
         result.as_ref()
     }
 
-    /// Returns column root [`Type`](crate::schema::types::Type) pointer for a field
+    /// Returns column root [`Type`](crate::schema::types::Type) pointer for a leaf
     /// position.
     pub fn get_column_root_ptr(&self, i: usize) -> TypePtr {
         let result = self.column_root_of(i);
         result.clone()
     }
 
-    fn column_root_of(&self, i: usize) -> &Arc<Type> {
+    /// Returns the index of the root column for a field position
+    pub fn get_column_root_idx(&self, leaf: usize) -> usize {
         assert!(
-            i < self.leaves.len(),
+            leaf < self.leaves.len(),
             "Index out of bound: {} not in [0, {})",
-            i,
+            leaf,
             self.leaves.len()
         );
 
-        self.leaf_to_base
-            .get(i)
-            .unwrap_or_else(|| panic!("Expected a value for index {} but found None", i))
+        *self.leaf_to_base.get(leaf).unwrap_or_else(|| {
+            panic!("Expected a value for index {} but found None", leaf)
+        })
+    }
+
+    fn column_root_of(&self, i: usize) -> &TypePtr {
+        &self.schema.get_fields()[self.get_column_root_idx(i)]
     }
 
     /// Returns schema as [`Type`](crate::schema::types::Type).
@@ -947,11 +952,11 @@ impl SchemaDescriptor {
 
 fn build_tree<'a>(
     tp: &'a TypePtr,
-    base_tp: &TypePtr,
+    root_idx: usize,
     mut max_rep_level: i16,
     mut max_def_level: i16,
     leaves: &mut Vec<ColumnDescPtr>,
-    leaf_to_base: &mut Vec<TypePtr>,
+    leaf_to_base: &mut Vec<usize>,
     path_so_far: &mut Vec<&'a str>,
 ) {
     assert!(tp.get_basic_info().has_repetition());
@@ -978,13 +983,13 @@ fn build_tree<'a>(
                 max_rep_level,
                 ColumnPath::new(path),
             )));
-            leaf_to_base.push(base_tp.clone());
+            leaf_to_base.push(root_idx);
         }
         Type::GroupType { ref fields, .. } => {
             for f in fields {
                 build_tree(
                     f,
-                    base_tp,
+                    root_idx,
                     max_rep_level,
                     max_def_level,
                     leaves,
@@ -1198,7 +1203,6 @@ fn to_thrift_helper(schema: &Type, elements: &mut Vec<SchemaElement>) {
 mod tests {
     use super::*;
 
-    use crate::basic::{DecimalType, IntType};
     use crate::schema::parser::parse_message_type;
 
     // TODO: add tests for v2 types
@@ -1206,10 +1210,10 @@ mod tests {
     #[test]
     fn test_primitive_type() {
         let mut result = Type::primitive_type_builder("foo", PhysicalType::INT32)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 bit_width: 32,
                 is_signed: true,
-            })))
+            }))
             .with_id(0)
             .build();
         assert!(result.is_ok());
@@ -1221,10 +1225,10 @@ mod tests {
             assert_eq!(basic_info.repetition(), Repetition::OPTIONAL);
             assert_eq!(
                 basic_info.logical_type(),
-                Some(LogicalType::INTEGER(IntType {
+                Some(LogicalType::Integer {
                     bit_width: 32,
                     is_signed: true
-                }))
+                })
             );
             assert_eq!(basic_info.converted_type(), ConvertedType::INT_32);
             assert_eq!(basic_info.id(), 0);
@@ -1239,16 +1243,16 @@ mod tests {
         // Test illegal inputs with logical type
         result = Type::primitive_type_builder("foo", PhysicalType::INT64)
             .with_repetition(Repetition::REPEATED)
-            .with_logical_type(Some(LogicalType::INTEGER(IntType {
+            .with_logical_type(Some(LogicalType::Integer {
                 is_signed: true,
                 bit_width: 8,
-            })))
+            }))
             .build();
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: Cannot annotate INTEGER(IntType { bit_width: 8, is_signed: true }) from INT64 fields"
+                "Parquet error: Cannot annotate Integer { bit_width: 8, is_signed: true } from INT64 fields"
             );
         }
 
@@ -1281,10 +1285,10 @@ mod tests {
 
         result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
             .with_repetition(Repetition::REQUIRED)
-            .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+            .with_logical_type(Some(LogicalType::Decimal {
                 scale: 32,
                 precision: 12,
-            })))
+            }))
             .with_precision(-1)
             .with_scale(-1)
             .build();
@@ -1345,9 +1349,18 @@ mod tests {
         if let Err(e) = result {
             assert_eq!(
                 format!("{}", e),
-                "Parquet error: Invalid DECIMAL: scale (2) cannot be greater than or equal to precision (1)"
+                "Parquet error: Invalid DECIMAL: scale (2) cannot be greater than precision (1)"
             );
         }
+
+        // It is OK if precision == scale
+        result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
+            .with_repetition(Repetition::REQUIRED)
+            .with_converted_type(ConvertedType::DECIMAL)
+            .with_precision(1)
+            .with_scale(1)
+            .build();
+        assert!(result.is_ok());
 
         result = Type::primitive_type_builder("foo", PhysicalType::INT32)
             .with_repetition(Repetition::REQUIRED)
@@ -1496,7 +1509,7 @@ mod tests {
 
         let result = Type::group_type_builder("foo")
             .with_repetition(Repetition::REPEATED)
-            .with_logical_type(Some(LogicalType::LIST(Default::default())))
+            .with_logical_type(Some(LogicalType::List))
             .with_fields(&mut fields)
             .with_id(1)
             .build();
@@ -1507,10 +1520,7 @@ mod tests {
         assert!(tp.is_group());
         assert!(!tp.is_primitive());
         assert_eq!(basic_info.repetition(), Repetition::REPEATED);
-        assert_eq!(
-            basic_info.logical_type(),
-            Some(LogicalType::LIST(Default::default()))
-        );
+        assert_eq!(basic_info.logical_type(), Some(LogicalType::List));
         assert_eq!(basic_info.converted_type(), ConvertedType::LIST);
         assert_eq!(basic_info.id(), 1);
         assert_eq!(tp.get_fields().len(), 2);

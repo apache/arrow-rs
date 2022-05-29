@@ -23,7 +23,7 @@
 //! ```
 //! cargo install parquet --features=cli
 //! ```
-//! After this `parquet-schema` should be globally available:
+//! After this `parquet-schema` should be available:
 //! ```
 //! parquet-schema XYZ.parquet
 //! ```

@@ -314,6 +314,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Float64, 1) => size_of::<f64>() * 8,
         (DataType::Decimal(..), 1) => size_of::<i128>() * 8,
         (DataType::Timestamp(..), 1) => size_of::<i64>() * 8,
+        (DataType::Duration(..), 1) => size_of::<i64>() * 8,
         // primitive types have a single buffer
         (DataType::Boolean, _) |
         (DataType::UInt8, _) |
@@ -327,7 +328,8 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Float32, _) |
         (DataType::Float64, _) |
         (DataType::Decimal(..), _) |
-        (DataType::Timestamp(..), _) => {
+        (DataType::Timestamp(..), _) |
+        (DataType::Duration(..), _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{:?}\" expects 2 buffers, but requested {}. Please verify that the C data interface is correctly implemented.",
                 data_type, i
@@ -872,11 +874,10 @@ impl<'a> ArrowArrayChild<'a> {
 mod tests {
     use super::*;
     use crate::array::{
-        export_array_into_raw, make_array, Array, ArrayData, BinaryOffsetSizeTrait,
-        BooleanArray, DecimalArray, DictionaryArray, FixedSizeBinaryArray,
-        FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, OffsetSizeTrait, StringOffsetSizeTrait, Time32MillisecondArray,
-        TimestampMillisecondArray,
+        export_array_into_raw, make_array, Array, ArrayData, BooleanArray, DecimalArray,
+        DictionaryArray, DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray,
+        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array,
+        OffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
@@ -932,7 +933,7 @@ mod tests {
     }
     // case with nulls is tested in the docs, through the example on this module.
 
-    fn test_generic_string<Offset: StringOffsetSizeTrait>() -> Result<()> {
+    fn test_generic_string<Offset: OffsetSizeTrait>() -> Result<()> {
         // create an array natively
         let array =
             GenericStringArray::<Offset>::from(vec![Some("a"), None, Some("aaa")]);
@@ -1044,7 +1045,7 @@ mod tests {
         test_generic_list::<i64>()
     }
 
-    fn test_generic_binary<Offset: BinaryOffsetSizeTrait>() -> Result<()> {
+    fn test_generic_binary<Offset: OffsetSizeTrait>() -> Result<()> {
         // create an array natively
         let array: Vec<Option<&[u8]>> = vec![Some(b"a"), None, Some(b"aaa")];
         let array = GenericBinaryArray::<Offset>::from(array);
@@ -1255,7 +1256,7 @@ mod tests {
             DataType::FixedSizeList(Box::new(Field::new("f", DataType::Int32, false)), 3);
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
-            .null_bit_buffer(Buffer::from(validity_bits))
+            .null_bit_buffer(Some(Buffer::from(validity_bits)))
             .add_child_data(value_data)
             .build()?;
 
@@ -1286,7 +1287,7 @@ mod tests {
 
         let expected_list_data = ArrayData::builder(list_data_type)
             .len(6)
-            .null_bit_buffer(Buffer::from(expected_validity_bits))
+            .null_bit_buffer(Some(Buffer::from(expected_validity_bits)))
             .add_child_data(expected_value_data)
             .build()?;
         let expected_array = FixedSizeListArray::from(expected_list_data);
@@ -1357,6 +1358,42 @@ mod tests {
             Box::from_raw(out_array_ptr);
             Box::from_raw(out_schema_ptr);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_duration() -> Result<()> {
+        // create an array natively
+        let array = DurationSecondArray::from(vec![None, Some(1), Some(2)]);
+
+        // export it
+        let array = ArrowArray::try_from(array.data().clone())?;
+
+        // (simulate consumer) import it
+        let data = ArrayData::try_from(array)?;
+        let array = make_array(data);
+
+        // perform some operation
+        let array = kernels::concat::concat(&[array.as_ref(), array.as_ref()]).unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<DurationSecondArray>()
+            .unwrap();
+
+        // verify
+        assert_eq!(
+            array,
+            &DurationSecondArray::from(vec![
+                None,
+                Some(1),
+                Some(2),
+                None,
+                Some(1),
+                Some(2)
+            ])
+        );
+
+        // (drop/release)
         Ok(())
     }
 }

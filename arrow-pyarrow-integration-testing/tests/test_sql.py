@@ -55,6 +55,10 @@ _supported_pyarrow_types = [
     pa.timestamp("us"),
     pa.timestamp("us", tz="UTC"),
     pa.timestamp("us", tz="Europe/Paris"),
+    pa.duration("s"),
+    pa.duration("ms"),
+    pa.duration("us"),
+    pa.duration("ns"),
     pa.float16(),
     pa.float32(),
     pa.float64(),
@@ -86,7 +90,6 @@ _supported_pyarrow_types = [
 
 _unsupported_pyarrow_types = [
     pa.decimal256(76, 38),
-    pa.duration("s"),
     pa.map_(pa.string(), pa.int32()),
     pa.union(
         [pa.field("a", pa.binary(10)), pa.field("b", pa.string())],

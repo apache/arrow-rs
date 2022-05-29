@@ -18,6 +18,7 @@
 //! Contains writer which writes arrow data into parquet data.
 
 use std::collections::VecDeque;
+use std::io::Write;
 use std::sync::Arc;
 
 use arrow::array as arrow_array;
@@ -32,13 +33,12 @@ use super::schema::{
     decimal_length_from_precision,
 };
 
+use crate::arrow::levels::calculate_array_levels;
 use crate::column::writer::ColumnWriter;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::WriterProperties;
-use crate::{
-    data_type::*,
-    file::writer::{FileWriter, ParquetWriter, RowGroupWriter, SerializedFileWriter},
-};
+use crate::file::writer::{SerializedColumnWriter, SerializedRowGroupWriter};
+use crate::{data_type::*, file::writer::SerializedFileWriter};
 
 /// Arrow writer
 ///
@@ -46,7 +46,7 @@ use crate::{
 /// to produce row groups with `max_row_group_size` rows. Any remaining rows will be
 /// flushed on close, leading the final row group in the output file to potentially
 /// contain fewer than `max_row_group_size` rows
-pub struct ArrowWriter<W: ParquetWriter> {
+pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
     writer: SerializedFileWriter<W>,
 
@@ -65,7 +65,7 @@ pub struct ArrowWriter<W: ParquetWriter> {
     max_row_group_size: usize,
 }
 
-impl<W: 'static + ParquetWriter> ArrowWriter<W> {
+impl<W: Write> ArrowWriter<W> {
     /// Try to create a new Arrow writer
     ///
     /// The writer will fail if:
@@ -113,7 +113,6 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
         }
 
         self.buffered_rows += batch.num_rows();
-
         self.flush_completed()?;
 
         Ok(())
@@ -122,13 +121,18 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
     /// Flushes buffered data until there are less than `max_row_group_size` rows buffered
     fn flush_completed(&mut self) -> Result<()> {
         while self.buffered_rows >= self.max_row_group_size {
-            self.flush_row_group(self.max_row_group_size)?;
+            self.flush_rows(self.max_row_group_size)?;
         }
         Ok(())
     }
 
+    /// Flushes all buffered rows into a new row group
+    pub fn flush(&mut self) -> Result<()> {
+        self.flush_rows(self.buffered_rows)
+    }
+
     /// Flushes `num_rows` from the buffer into a new row group
-    fn flush_row_group(&mut self, num_rows: usize) -> Result<()> {
+    fn flush_rows(&mut self, num_rows: usize) -> Result<()> {
         if num_rows == 0 {
             return Ok(());
         }
@@ -170,45 +174,45 @@ impl<W: 'static + ParquetWriter> ArrowWriter<W> {
                 }
             }
 
-            let mut levels: Vec<_> = arrays
+            let mut levels = arrays
                 .iter()
                 .map(|array| {
-                    let batch_level = LevelInfo::new(0, array.len());
-                    let mut levels = batch_level.calculate_array_levels(array, field);
+                    let mut levels = calculate_array_levels(array, field)?;
                     // Reverse levels as we pop() them when writing arrays
                     levels.reverse();
-                    levels
+                    Ok(levels)
                 })
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
 
-            write_leaves(row_group_writer.as_mut(), &arrays, &mut levels)?;
+            write_leaves(&mut row_group_writer, &arrays, &mut levels)?;
         }
 
-        self.writer.close_row_group(row_group_writer)?;
+        row_group_writer.close()?;
         self.buffered_rows -= num_rows;
 
         Ok(())
     }
 
     /// Close and finalize the underlying Parquet writer
-    pub fn close(&mut self) -> Result<parquet_format::FileMetaData> {
-        self.flush_completed()?;
-        self.flush_row_group(self.buffered_rows)?;
+    pub fn close(mut self) -> Result<parquet_format::FileMetaData> {
+        self.flush()?;
         self.writer.close()
     }
 }
 
 /// Convenience method to get the next ColumnWriter from the RowGroupWriter
 #[inline]
-fn get_col_writer(row_group_writer: &mut dyn RowGroupWriter) -> Result<ColumnWriter> {
+fn get_col_writer<'a, W: Write>(
+    row_group_writer: &'a mut SerializedRowGroupWriter<'_, W>,
+) -> Result<SerializedColumnWriter<'a>> {
     let col_writer = row_group_writer
         .next_column()?
         .expect("Unable to get column writer");
     Ok(col_writer)
 }
 
-fn write_leaves(
-    row_group_writer: &mut dyn RowGroupWriter,
+fn write_leaves<W: Write>(
+    row_group_writer: &mut SerializedRowGroupWriter<'_, W>,
     arrays: &[ArrayRef],
     levels: &mut [Vec<LevelInfo>],
 ) -> Result<()> {
@@ -247,12 +251,12 @@ fn write_leaves(
             let mut col_writer = get_col_writer(row_group_writer)?;
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
                 write_leaf(
-                    &mut col_writer,
+                    col_writer.untyped(),
                     array,
                     levels.pop().expect("Levels exhausted"),
                 )?;
             }
-            row_group_writer.close_column(col_writer)?;
+            col_writer.close()?;
             Ok(())
         }
         ArrowDataType::List(_) | ArrowDataType::LargeList(_) => {
@@ -310,18 +314,18 @@ fn write_leaves(
                 // cast dictionary to a primitive
                 let array = arrow::compute::cast(array, value_type)?;
                 write_leaf(
-                    &mut col_writer,
+                    col_writer.untyped(),
                     &array,
                     levels.pop().expect("Levels exhausted"),
                 )?;
             }
-            row_group_writer.close_column(col_writer)?;
+            col_writer.close()?;
             Ok(())
         }
         ArrowDataType::Float16 => Err(ParquetError::ArrowError(
             "Float16 arrays not supported".to_string(),
         )),
-        ArrowDataType::FixedSizeList(_, _) | ArrowDataType::Union(_, _) => {
+        ArrowDataType::FixedSizeList(_, _) | ArrowDataType::Union(_, _, _) => {
             Err(ParquetError::NYI(
                 format!(
                     "Attempting to write an Arrow type {:?} to parquet that is not yet implemented",
@@ -333,30 +337,27 @@ fn write_leaves(
 }
 
 fn write_leaf(
-    writer: &mut ColumnWriter,
-    column: &arrow_array::ArrayRef,
+    writer: &mut ColumnWriter<'_>,
+    column: &ArrayRef,
     levels: LevelInfo,
 ) -> Result<i64> {
-    let indices = levels.filter_array_indices();
-    // Slice array according to computed offset and length
-    let column = column.slice(levels.offset, levels.length);
+    let indices = levels.non_null_indices();
     let written = match writer {
         ColumnWriter::Int32ColumnWriter(ref mut typed) => {
             let values = match column.data_type() {
                 ArrowDataType::Date64 => {
                     // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
                     let array = if let ArrowDataType::Date64 = column.data_type() {
-                        let array =
-                            arrow::compute::cast(&column, &ArrowDataType::Date32)?;
+                        let array = arrow::compute::cast(column, &ArrowDataType::Date32)?;
                         arrow::compute::cast(&array, &ArrowDataType::Int32)?
                     } else {
-                        arrow::compute::cast(&column, &ArrowDataType::Int32)?
+                        arrow::compute::cast(column, &ArrowDataType::Int32)?
                     };
                     let array = array
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
                         .expect("Unable to get int32 array");
-                    get_numeric_array_slice::<Int32Type, _>(array, &indices)
+                    get_numeric_array_slice::<Int32Type, _>(array, indices)
                 }
                 ArrowDataType::UInt32 => {
                     // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
@@ -369,21 +370,21 @@ fn write_leaf(
                         array,
                         |x| x as i32,
                     );
-                    get_numeric_array_slice::<Int32Type, _>(&array, &indices)
+                    get_numeric_array_slice::<Int32Type, _>(&array, indices)
                 }
                 _ => {
-                    let array = arrow::compute::cast(&column, &ArrowDataType::Int32)?;
+                    let array = arrow::compute::cast(column, &ArrowDataType::Int32)?;
                     let array = array
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
                         .expect("Unable to get i32 array");
-                    get_numeric_array_slice::<Int32Type, _>(array, &indices)
+                    get_numeric_array_slice::<Int32Type, _>(array, indices)
                 }
             };
             typed.write_batch(
                 values.as_slice(),
-                Some(levels.definition.as_slice()),
-                levels.repetition.as_deref(),
+                levels.def_levels(),
+                levels.rep_levels(),
             )?
         }
         ColumnWriter::BoolColumnWriter(ref mut typed) => {
@@ -392,9 +393,9 @@ fn write_leaf(
                 .downcast_ref::<arrow_array::BooleanArray>()
                 .expect("Unable to get boolean array");
             typed.write_batch(
-                get_bool_array_slice(array, &indices).as_slice(),
-                Some(levels.definition.as_slice()),
-                levels.repetition.as_deref(),
+                get_bool_array_slice(array, indices).as_slice(),
+                levels.def_levels(),
+                levels.rep_levels(),
             )?
         }
         ColumnWriter::Int64ColumnWriter(ref mut typed) => {
@@ -404,7 +405,7 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
                         .expect("Unable to get i64 array");
-                    get_numeric_array_slice::<Int64Type, _>(array, &indices)
+                    get_numeric_array_slice::<Int64Type, _>(array, indices)
                 }
                 ArrowDataType::UInt64 => {
                     // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
@@ -417,21 +418,21 @@ fn write_leaf(
                         array,
                         |x| x as i64,
                     );
-                    get_numeric_array_slice::<Int64Type, _>(&array, &indices)
+                    get_numeric_array_slice::<Int64Type, _>(&array, indices)
                 }
                 _ => {
-                    let array = arrow::compute::cast(&column, &ArrowDataType::Int64)?;
+                    let array = arrow::compute::cast(column, &ArrowDataType::Int64)?;
                     let array = array
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
                         .expect("Unable to get i64 array");
-                    get_numeric_array_slice::<Int64Type, _>(array, &indices)
+                    get_numeric_array_slice::<Int64Type, _>(array, indices)
                 }
             };
             typed.write_batch(
                 values.as_slice(),
-                Some(levels.definition.as_slice()),
-                levels.repetition.as_deref(),
+                levels.def_levels(),
+                levels.rep_levels(),
             )?
         }
         ColumnWriter::Int96ColumnWriter(ref mut _typed) => {
@@ -443,9 +444,9 @@ fn write_leaf(
                 .downcast_ref::<arrow_array::Float32Array>()
                 .expect("Unable to get Float32 array");
             typed.write_batch(
-                get_numeric_array_slice::<FloatType, _>(array, &indices).as_slice(),
-                Some(levels.definition.as_slice()),
-                levels.repetition.as_deref(),
+                get_numeric_array_slice::<FloatType, _>(array, indices).as_slice(),
+                levels.def_levels(),
+                levels.rep_levels(),
             )?
         }
         ColumnWriter::DoubleColumnWriter(ref mut typed) => {
@@ -454,9 +455,9 @@ fn write_leaf(
                 .downcast_ref::<arrow_array::Float64Array>()
                 .expect("Unable to get Float64 array");
             typed.write_batch(
-                get_numeric_array_slice::<DoubleType, _>(array, &indices).as_slice(),
-                Some(levels.definition.as_slice()),
-                levels.repetition.as_deref(),
+                get_numeric_array_slice::<DoubleType, _>(array, indices).as_slice(),
+                levels.def_levels(),
+                levels.rep_levels(),
             )?
         }
         ColumnWriter::ByteArrayColumnWriter(ref mut typed) => match column.data_type() {
@@ -467,8 +468,8 @@ fn write_leaf(
                     .expect("Unable to get BinaryArray array");
                 typed.write_batch(
                     get_binary_array(array).as_slice(),
-                    Some(levels.definition.as_slice()),
-                    levels.repetition.as_deref(),
+                    levels.def_levels(),
+                    levels.rep_levels(),
                 )?
             }
             ArrowDataType::Utf8 => {
@@ -478,8 +479,8 @@ fn write_leaf(
                     .expect("Unable to get LargeBinaryArray array");
                 typed.write_batch(
                     get_string_array(array).as_slice(),
-                    Some(levels.definition.as_slice()),
-                    levels.repetition.as_deref(),
+                    levels.def_levels(),
+                    levels.rep_levels(),
                 )?
             }
             ArrowDataType::LargeBinary => {
@@ -489,8 +490,8 @@ fn write_leaf(
                     .expect("Unable to get LargeBinaryArray array");
                 typed.write_batch(
                     get_large_binary_array(array).as_slice(),
-                    Some(levels.definition.as_slice()),
-                    levels.repetition.as_deref(),
+                    levels.def_levels(),
+                    levels.rep_levels(),
                 )?
             }
             ArrowDataType::LargeUtf8 => {
@@ -500,8 +501,8 @@ fn write_leaf(
                     .expect("Unable to get LargeUtf8 array");
                 typed.write_batch(
                     get_large_string_array(array).as_slice(),
-                    Some(levels.definition.as_slice()),
-                    levels.repetition.as_deref(),
+                    levels.def_levels(),
+                    levels.rep_levels(),
                 )?
             }
             _ => unreachable!("Currently unreachable because data type not supported"),
@@ -514,14 +515,14 @@ fn write_leaf(
                             .as_any()
                             .downcast_ref::<arrow_array::IntervalYearMonthArray>()
                             .unwrap();
-                        get_interval_ym_array_slice(array, &indices)
+                        get_interval_ym_array_slice(array, indices)
                     }
                     IntervalUnit::DayTime => {
                         let array = column
                             .as_any()
                             .downcast_ref::<arrow_array::IntervalDayTimeArray>()
                             .unwrap();
-                        get_interval_dt_array_slice(array, &indices)
+                        get_interval_dt_array_slice(array, indices)
                     }
                     _ => {
                         return Err(ParquetError::NYI(
@@ -537,14 +538,14 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::FixedSizeBinaryArray>()
                         .unwrap();
-                    get_fsb_array_slice(array, &indices)
+                    get_fsb_array_slice(array, indices)
                 }
                 ArrowDataType::Decimal(_, _) => {
                     let array = column
                         .as_any()
                         .downcast_ref::<arrow_array::DecimalArray>()
                         .unwrap();
-                    get_decimal_array_slice(array, &indices)
+                    get_decimal_array_slice(array, indices)
                 }
                 _ => {
                     return Err(ParquetError::NYI(
@@ -555,8 +556,8 @@ fn write_leaf(
             };
             typed.write_batch(
                 bytes.as_slice(),
-                Some(levels.definition.as_slice()),
-                levels.repetition.as_deref(),
+                levels.def_levels(),
+                levels.rep_levels(),
             )?
         }
     };
@@ -589,6 +590,7 @@ macro_rules! def_get_binary_array_fn {
     };
 }
 
+// TODO: These methods don't handle non null indices correctly (#1753)
 def_get_binary_array_fn!(get_binary_array, arrow_array::BinaryArray);
 def_get_binary_array_fn!(get_string_array, arrow_array::StringArray);
 def_get_binary_array_fn!(get_large_binary_array, arrow_array::LargeBinaryArray);
@@ -702,7 +704,6 @@ mod tests {
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
         statistics::Statistics,
-        writer::InMemoryWriteableCursor,
     };
 
     #[test]
@@ -741,15 +742,13 @@ mod tests {
         let expected_batch =
             RecordBatch::try_new(schema.clone(), vec![Arc::new(a), Arc::new(b)]).unwrap();
 
-        let cursor = InMemoryWriteableCursor::default();
+        let mut buffer = vec![];
 
         {
-            let mut writer = ArrowWriter::try_new(cursor.clone(), schema, None).unwrap();
+            let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).unwrap();
             writer.write(&expected_batch).unwrap();
             writer.close().unwrap();
         }
-
-        let buffer = cursor.into_inner().unwrap();
 
         let cursor = crate::file::serialized_reader::SliceableCursor::new(buffer);
         let reader = SerializedFileReader::new(cursor).unwrap();
@@ -812,7 +811,7 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.data().clone())
-        .null_bit_buffer(Buffer::from(vec![0b00011011]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
         .build()
         .unwrap();
         let a = ListArray::from(a_list_data);
@@ -975,7 +974,7 @@ mod tests {
             .len(5)
             .add_buffer(g_value_offsets)
             .add_child_data(g_value.data().clone())
-            .null_bit_buffer(Buffer::from(vec![0b00011011]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
             .build()
             .unwrap();
         let h = ListArray::from(h_list_data);
@@ -1082,14 +1081,14 @@ mod tests {
         let c = Int32Array::from(vec![Some(1), None, Some(3), None, None, Some(6)]);
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
-            .null_bit_buffer(Buffer::from(vec![0b00100111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
             .add_child_data(c.data().clone())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
-            .null_bit_buffer(Buffer::from(vec![0b00101111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00101111])))
             .add_child_data(b.data().clone())
             .build()
             .unwrap();
@@ -1148,7 +1147,7 @@ mod tests {
         let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
-            .null_bit_buffer(Buffer::from(vec![0b00100111]))
+            .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
             .add_child_data(c.data().clone())
             .build()
             .unwrap();
@@ -1531,7 +1530,7 @@ mod tests {
         ))))
         .len(3)
         .add_buffer(a_value_offsets)
-        .null_bit_buffer(Buffer::from(vec![0b00000101]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
         .add_child_data(a_values.data().clone())
         .build()
         .unwrap();
@@ -1562,7 +1561,7 @@ mod tests {
         ))))
         .len(5)
         .add_buffer(a_value_offsets)
-        .null_bit_buffer(Buffer::from(vec![0b00011011]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
         .add_child_data(a_values.data().clone())
         .build()
         .unwrap();
@@ -1588,7 +1587,7 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .add_child_data(a_values.data().clone())
-        .null_bit_buffer(Buffer::from(vec![0b00011011]))
+        .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
         .build()
         .unwrap();
 
@@ -1985,7 +1984,9 @@ mod tests {
             .add_buffer(Buffer::from_iter(vec![
                 0_i32, 1_i32, 1_i32, 3_i32, 3_i32, 5_i32,
             ]))
-            .null_bit_buffer(Buffer::from_iter(vec![true, false, true, false, true]))
+            .null_bit_buffer(Some(Buffer::from_iter(vec![
+                true, false, true, false, true,
+            ])))
             .child_data(vec![struct_a_array.data().clone()])
             .build()
             .unwrap();

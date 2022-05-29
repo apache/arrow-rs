@@ -49,8 +49,6 @@ Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect th
 
 See [#1141](https://github.com/apache/arrow-rs/pull/1141) for an example.
 
-Here are the commands that could be used to prepare the 5.1.0 release:
-
 ```bash
 git checkout master
 git pull
@@ -63,7 +61,7 @@ CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
 git commit -a -m 'Create changelog'
 
 # update versions
-sed -i '' -e 's/5.0.0-SNAPSHOT/5.1.0/g' `find . -name 'Cargo.toml' -or -name '*.md'`
+sed -i '' -e 's/14.0.0/15.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
 git commit -a -m 'Update version'
 ```
 

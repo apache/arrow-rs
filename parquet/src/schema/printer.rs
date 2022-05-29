@@ -238,35 +238,40 @@ fn print_logical_and_converted(
 ) -> String {
     match logical_type {
         Some(logical_type) => match logical_type {
-            LogicalType::INTEGER(t) => {
-                format!("INTEGER({},{})", t.bit_width, t.is_signed)
+            LogicalType::Integer {
+                bit_width,
+                is_signed,
+            } => {
+                format!("INTEGER({},{})", bit_width, is_signed)
             }
-            LogicalType::DECIMAL(t) => {
-                format!("DECIMAL({},{})", t.precision, t.scale)
+            LogicalType::Decimal { scale, precision } => {
+                format!("DECIMAL({},{})", precision, scale)
             }
-            LogicalType::TIMESTAMP(t) => {
+            LogicalType::Timestamp {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => {
                 format!(
                     "TIMESTAMP({},{})",
-                    print_timeunit(&t.unit),
-                    t.is_adjusted_to_u_t_c
+                    print_timeunit(unit),
+                    is_adjusted_to_u_t_c
                 )
             }
-            LogicalType::TIME(t) => {
-                format!(
-                    "TIME({},{})",
-                    print_timeunit(&t.unit),
-                    t.is_adjusted_to_u_t_c
-                )
+            LogicalType::Time {
+                is_adjusted_to_u_t_c,
+                unit,
+            } => {
+                format!("TIME({},{})", print_timeunit(unit), is_adjusted_to_u_t_c)
             }
-            LogicalType::DATE(_) => "DATE".to_string(),
-            LogicalType::BSON(_) => "BSON".to_string(),
-            LogicalType::JSON(_) => "JSON".to_string(),
-            LogicalType::STRING(_) => "STRING".to_string(),
-            LogicalType::UUID(_) => "UUID".to_string(),
-            LogicalType::ENUM(_) => "ENUM".to_string(),
-            LogicalType::LIST(_) => "LIST".to_string(),
-            LogicalType::MAP(_) => "MAP".to_string(),
-            LogicalType::UNKNOWN(_) => "UNKNOWN".to_string(),
+            LogicalType::Date => "DATE".to_string(),
+            LogicalType::Bson => "BSON".to_string(),
+            LogicalType::Json => "JSON".to_string(),
+            LogicalType::String => "STRING".to_string(),
+            LogicalType::Uuid => "UUID".to_string(),
+            LogicalType::Enum => "ENUM".to_string(),
+            LogicalType::List => "LIST".to_string(),
+            LogicalType::Map => "MAP".to_string(),
+            LogicalType::Unknown => "UNKNOWN".to_string(),
         },
         None => {
             // Also print converted type if it is available
@@ -379,10 +384,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::basic::{
-        DateType, DecimalType, IntType, LogicalType, Repetition, TimeType, TimestampType,
-        Type as PhysicalType,
-    };
+    use crate::basic::{LogicalType, Repetition, Type as PhysicalType};
     use crate::errors::Result;
     use crate::schema::{parser::parse_message_type, types::Type};
 
@@ -434,10 +436,10 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT32,
-                    Some(LogicalType::INTEGER(IntType {
+                    Some(LogicalType::Integer {
                         bit_width: 32,
                         is_signed: true,
-                    })),
+                    }),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
                 )
@@ -448,10 +450,10 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT32,
-                    Some(LogicalType::INTEGER(IntType {
+                    Some(LogicalType::Integer {
                         bit_width: 8,
                         is_signed: false,
-                    })),
+                    }),
                     ConvertedType::NONE,
                     Repetition::OPTIONAL,
                 )
@@ -462,10 +464,10 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT32,
-                    Some(LogicalType::INTEGER(IntType {
+                    Some(LogicalType::Integer {
                         bit_width: 16,
                         is_signed: true,
-                    })),
+                    }),
                     ConvertedType::INT_16,
                     Repetition::REPEATED,
                 )
@@ -509,10 +511,10 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT64,
-                    Some(LogicalType::TIMESTAMP(TimestampType {
+                    Some(LogicalType::Timestamp {
                         is_adjusted_to_u_t_c: true,
                         unit: TimeUnit::MILLIS(Default::default()),
-                    })),
+                    }),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
                 )
@@ -523,7 +525,7 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT32,
-                    Some(LogicalType::DATE(DateType {})),
+                    Some(LogicalType::Date),
                     ConvertedType::NONE,
                     Repetition::OPTIONAL,
                 )
@@ -534,10 +536,10 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::INT32,
-                    Some(LogicalType::TIME(TimeType {
+                    Some(LogicalType::Time {
                         unit: TimeUnit::MILLIS(Default::default()),
                         is_adjusted_to_u_t_c: false,
-                    })),
+                    }),
                     ConvertedType::TIME_MILLIS,
                     Repetition::REQUIRED,
                 )
@@ -570,7 +572,7 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::BYTE_ARRAY,
-                    Some(LogicalType::JSON(Default::default())),
+                    Some(LogicalType::Json),
                     ConvertedType::JSON,
                     Repetition::REQUIRED,
                 )
@@ -581,7 +583,7 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::BYTE_ARRAY,
-                    Some(LogicalType::BSON(Default::default())),
+                    Some(LogicalType::Bson),
                     ConvertedType::BSON,
                     Repetition::REQUIRED,
                 )
@@ -592,7 +594,7 @@ mod tests {
                 build_primitive_type(
                     "field",
                     PhysicalType::BYTE_ARRAY,
-                    Some(LogicalType::STRING(Default::default())),
+                    Some(LogicalType::String),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
                 )
@@ -634,7 +636,7 @@ mod tests {
             ),
             (
                 Type::primitive_type_builder("field", PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                    .with_logical_type(Some(LogicalType::UUID(Default::default())))
+                    .with_logical_type(Some(LogicalType::Uuid))
                     .with_length(16)
                     .with_repetition(Repetition::REQUIRED)
                     .build()
@@ -646,10 +648,10 @@ mod tests {
                     "decimal",
                     PhysicalType::FIXED_LEN_BYTE_ARRAY,
                 )
-                .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+                .with_logical_type(Some(LogicalType::Decimal {
                     precision: 32,
                     scale: 20,
-                })))
+                }))
                 .with_precision(32)
                 .with_scale(20)
                 .with_length(decimal_length_from_precision(32))
@@ -699,7 +701,7 @@ mod tests {
                 .with_id(1)
                 .build();
             let f3 = Type::primitive_type_builder("f3", PhysicalType::BYTE_ARRAY)
-                .with_logical_type(Some(LogicalType::STRING(Default::default())))
+                .with_logical_type(Some(LogicalType::String))
                 .with_id(1)
                 .build();
             let f4 =
@@ -751,7 +753,7 @@ mod tests {
 
         let a1 = Type::group_type_builder("a1")
             .with_repetition(Repetition::OPTIONAL)
-            .with_logical_type(Some(LogicalType::LIST(Default::default())))
+            .with_logical_type(Some(LogicalType::List))
             .with_converted_type(ConvertedType::LIST)
             .with_fields(&mut vec![Arc::new(a2)])
             .build()
@@ -776,7 +778,7 @@ mod tests {
 
         let b1 = Type::group_type_builder("b1")
             .with_repetition(Repetition::OPTIONAL)
-            .with_logical_type(Some(LogicalType::LIST(Default::default())))
+            .with_logical_type(Some(LogicalType::List))
             .with_converted_type(ConvertedType::LIST)
             .with_fields(&mut vec![Arc::new(b2)])
             .build()
@@ -835,10 +837,10 @@ mod tests {
     fn test_print_and_parse_decimal() {
         let f1 = Type::primitive_type_builder("f1", PhysicalType::INT32)
             .with_repetition(Repetition::OPTIONAL)
-            .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+            .with_logical_type(Some(LogicalType::Decimal {
                 precision: 9,
                 scale: 2,
-            })))
+            }))
             .with_converted_type(ConvertedType::DECIMAL)
             .with_precision(9)
             .with_scale(2)
@@ -847,10 +849,10 @@ mod tests {
 
         let f2 = Type::primitive_type_builder("f2", PhysicalType::INT32)
             .with_repetition(Repetition::OPTIONAL)
-            .with_logical_type(Some(LogicalType::DECIMAL(DecimalType {
+            .with_logical_type(Some(LogicalType::Decimal {
                 precision: 9,
                 scale: 0,
-            })))
+            }))
             .with_converted_type(ConvertedType::DECIMAL)
             .with_precision(9)
             .with_scale(0)

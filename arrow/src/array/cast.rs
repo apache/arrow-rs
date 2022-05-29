@@ -63,7 +63,7 @@ pub fn as_large_list_array(arr: &dyn Array) -> &LargeListArray {
 
 #[doc = "Force downcast ArrayRef to GenericBinaryArray"]
 #[inline]
-pub fn as_generic_binary_array<S: BinaryOffsetSizeTrait>(
+pub fn as_generic_binary_array<S: OffsetSizeTrait>(
     arr: &dyn Array,
 ) -> &GenericBinaryArray<S> {
     arr.as_any()

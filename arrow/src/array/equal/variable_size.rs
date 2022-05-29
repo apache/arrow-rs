@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::buffer::Buffer;
 use crate::util::bit_util::get_bit;
 use crate::{
     array::data::count_nulls,
@@ -51,8 +50,6 @@ fn offset_value_equal<T: OffsetSizeTrait>(
 pub(super) fn variable_sized_equal<T: OffsetSizeTrait>(
     lhs: &ArrayData,
     rhs: &ArrayData,
-    lhs_nulls: Option<&Buffer>,
-    rhs_nulls: Option<&Buffer>,
     lhs_start: usize,
     rhs_start: usize,
     len: usize,
@@ -64,8 +61,8 @@ pub(super) fn variable_sized_equal<T: OffsetSizeTrait>(
     let lhs_values = lhs.buffers()[1].as_slice();
     let rhs_values = rhs.buffers()[1].as_slice();
 
-    let lhs_null_count = count_nulls(lhs_nulls, lhs_start, len);
-    let rhs_null_count = count_nulls(rhs_nulls, rhs_start, len);
+    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
+    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
 
     if lhs_null_count == 0
         && rhs_null_count == 0
@@ -87,10 +84,13 @@ pub(super) fn variable_sized_equal<T: OffsetSizeTrait>(
             let rhs_pos = rhs_start + i;
 
             // the null bits can still be `None`, indicating that the value is valid.
-            let lhs_is_null = !lhs_nulls
+            let lhs_is_null = !lhs
+                .null_buffer()
                 .map(|v| get_bit(v.as_slice(), lhs.offset() + lhs_pos))
                 .unwrap_or(true);
-            let rhs_is_null = !rhs_nulls
+
+            let rhs_is_null = !rhs
+                .null_buffer()
                 .map(|v| get_bit(v.as_slice(), rhs.offset() + rhs_pos))
                 .unwrap_or(true);
 

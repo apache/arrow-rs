@@ -114,8 +114,12 @@ pub enum DataType {
     LargeList(Box<Field>),
     /// A nested datatype that contains a number of sub-fields.
     Struct(Vec<Field>),
-    /// A nested datatype that can represent slots of differing types.
-    Union(Vec<Field>, UnionMode),
+    /// A nested datatype that can represent slots of differing types. Components:
+    ///
+    /// 1. [`Field`] for each possible child type the Union can hold
+    /// 2. The corresponding `type_id` used to identify which Field
+    /// 3. The type of union (Sparse or Dense)
+    Union(Vec<Field>, Vec<i8>, UnionMode),
     /// A dictionary encoded array (`key_type`, `value_type`), where
     /// each array element is an index of `key_type` into an
     /// associated dictionary of `value_type`.
@@ -499,6 +503,43 @@ impl DataType {
                         ))
                     }
                 }
+                Some(s) if s == "union" => {
+                    if let Some(Value::String(mode)) = map.get("mode") {
+                        let union_mode = if mode == "SPARSE" {
+                            UnionMode::Sparse
+                        } else if mode == "DENSE" {
+                            UnionMode::Dense
+                        } else {
+                            return Err(ArrowError::ParseError(format!(
+                                "Unknown union mode {:?} for union",
+                                mode
+                            )));
+                        };
+                        if let Some(type_ids) = map.get("typeIds") {
+                            let type_ids = type_ids
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .map(|t| t.as_i64().unwrap() as i8)
+                                .collect::<Vec<_>>();
+
+                            let default_fields = type_ids
+                                .iter()
+                                .map(|_| default_field.clone())
+                                .collect::<Vec<_>>();
+
+                            Ok(DataType::Union(default_fields, type_ids, union_mode))
+                        } else {
+                            Err(ArrowError::ParseError(
+                                "Expecting a typeIds for union ".to_string(),
+                            ))
+                        }
+                    } else {
+                        Err(ArrowError::ParseError(
+                            "Expecting a mode for union".to_string(),
+                        ))
+                    }
+                }
                 Some(other) => Err(ArrowError::ParseError(format!(
                     "invalid or unsupported type name: {} in {:?}",
                     other, json
@@ -535,7 +576,7 @@ impl DataType {
                 json!({"name": "fixedsizebinary", "byteWidth": byte_width})
             }
             DataType::Struct(_) => json!({"name": "struct"}),
-            DataType::Union(_, _) => json!({"name": "union"}),
+            DataType::Union(_, _, _) => json!({"name": "union"}),
             DataType::List(_) => json!({ "name": "list"}),
             DataType::LargeList(_) => json!({ "name": "largelist"}),
             DataType::FixedSizeList(_, length) => {

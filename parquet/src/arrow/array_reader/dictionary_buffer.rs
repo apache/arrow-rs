@@ -158,14 +158,11 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                     }
                 }
 
-                let mut builder = ArrayDataBuilder::new(data_type.clone())
+                let builder = ArrayDataBuilder::new(data_type.clone())
                     .len(keys.len())
                     .add_buffer(keys.into())
-                    .add_child_data(values.data().clone());
-
-                if let Some(buffer) = null_buffer {
-                    builder = builder.null_bit_buffer(buffer);
-                }
+                    .add_child_data(values.data().clone())
+                    .null_bit_buffer(null_buffer);
 
                 let data = match cfg!(debug_assertions) {
                     true => builder.build().unwrap(),

@@ -25,13 +25,10 @@ use crate::encodings::levels::LevelEncoder;
 use crate::errors::Result;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 use crate::util::memory::ByteBufferPtr;
-use crate::util::memory::MemTracker;
-use crate::util::memory::MemTrackerPtr;
 use crate::util::test_common::random_numbers_range;
 use rand::distributions::uniform::SampleUniform;
 use std::collections::VecDeque;
 use std::mem;
-use std::sync::Arc;
 
 pub trait DataPageBuilder {
     fn add_rep_levels(&mut self, max_level: i16, rep_levels: &[i16]);
@@ -50,7 +47,6 @@ pub trait DataPageBuilder {
 pub struct DataPageBuilderImpl {
     desc: ColumnDescPtr,
     encoding: Option<Encoding>,
-    mem_tracker: MemTrackerPtr,
     num_values: u32,
     buffer: Vec<u8>,
     rep_levels_byte_len: u32,
@@ -66,7 +62,6 @@ impl DataPageBuilderImpl {
         DataPageBuilderImpl {
             desc,
             encoding: None,
-            mem_tracker: Arc::new(MemTracker::new()),
             num_values,
             buffer: vec![],
             rep_levels_byte_len: 0,
@@ -122,7 +117,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
         );
         self.encoding = Some(encoding);
         let mut encoder: Box<dyn Encoder<T>> =
-            get_encoder::<T>(self.desc.clone(), encoding, self.mem_tracker.clone())
+            get_encoder::<T>(self.desc.clone(), encoding)
                 .expect("get_encoder() should be OK");
         encoder.put(values).expect("put() should be OK");
         let encoded_values = encoder
@@ -252,8 +247,7 @@ pub fn make_pages<T: DataType>(
     let max_def_level = desc.max_def_level();
     let max_rep_level = desc.max_rep_level();
 
-    let mem_tracker = Arc::new(MemTracker::new());
-    let mut dict_encoder = DictEncoder::<T>::new(desc.clone(), mem_tracker);
+    let mut dict_encoder = DictEncoder::<T>::new(desc.clone());
 
     for i in 0..num_pages {
         let mut num_values_cur_page = 0;

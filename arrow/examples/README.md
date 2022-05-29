@@ -17,19 +17,11 @@
   under the License.
 -->
 
-# Apache Arrow Flight
+# Examples
 
-[![Crates.io](https://img.shields.io/crates/v/arrow-flight.svg)](https://crates.io/crates/arrow-flight)
-
-## Usage
-
-Add this to your Cargo.toml:
-
-```toml
-[dependencies]
-arrow-flight = "15.0.0"
-```
-
-Apache Arrow Flight is a gRPC based protocol for exchanging Arrow data between processes. See the blog post [Introducing Apache Arrow Flight: A Framework for Fast Data Transport](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for more information.
-
-This crate provides a Rust implementation of the [Flight.proto](../../format/Flight.proto) gRPC protocol and provides an example that demonstrates how to build a Flight server implemented with Tonic.
+- [`builders.rs`](builders.rs): Using the Builder API
+- `collect` (TODO): Using the `FromIter` API
+- [`dynamic_types.rs`](dynamic_types.rs):
+- [`read_csv.rs`](read_csv.rs): Reading CSV files with explict schema, pretty printing Arrays
+- [`read_csv_infer_schema.rs`](read_csv_infer_schema.rs): Reading CSV files, pretty printing Arrays
+- [`tensor_builder.rs`](tensor_builder.rs): Using tensor builder

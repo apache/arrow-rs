@@ -135,6 +135,14 @@ macro_rules! eof_err {
     ($fmt:expr, $($args:expr),*) => (ParquetError::EOF(format!($fmt, $($args),*)));
 }
 
+macro_rules! arrow_err {
+    ($fmt:expr) => (ParquetError::ArrowError($fmt.to_owned()));
+    ($fmt:expr, $($args:expr),*) => (ParquetError::ArrowError(format!($fmt, $($args),*)));
+    ($e:expr, $fmt:expr) => (ParquetError::ArrowError($fmt.to_owned(), $e));
+    ($e:ident, $fmt:expr, $($args:tt),*) => (
+        ParquetError::ArrowError(&format!($fmt, $($args),*), $e));
+}
+
 // ----------------------------------------------------------------------
 // Convert parquet error into other errors
 

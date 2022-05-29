@@ -194,7 +194,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
         ],
-        DataType::Union(_, mode) => {
+        DataType::Union(_, _, mode) => {
             let type_ids = MutableBuffer::new(capacity * mem::size_of::<i8>());
             match mode {
                 UnionMode::Sparse => [type_ids, empty_buffer],
@@ -220,7 +220,7 @@ pub(crate) fn into_buffers(
         | DataType::Binary
         | DataType::LargeUtf8
         | DataType::LargeBinary => vec![buffer1.into(), buffer2.into()],
-        DataType::Union(_, mode) => {
+        DataType::Union(_, _, mode) => {
             match mode {
                 // Based on Union's DataTypeLayout
                 UnionMode::Sparse => vec![buffer1.into()],
@@ -312,27 +312,36 @@ impl ArrayData {
     /// Create a new ArrayData, validating that the provided buffers
     /// form a valid Arrow array of the specified data type.
     ///
-    /// If `null_count` is not specified, the number of nulls in
-    /// null_bit_buffer is calculated
-    ///
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
     /// module.
     pub fn try_new(
         data_type: DataType,
         len: usize,
-        null_count: Option<usize>,
         null_bit_buffer: Option<Buffer>,
         offset: usize,
         buffers: Vec<Buffer>,
         child_data: Vec<ArrayData>,
     ) -> Result<Self> {
+        // we must check the length of `null_bit_buffer` first
+        // because we use this buffer to calculate `null_count`
+        // in `Self::new_unchecked`.
+        if let Some(null_bit_buffer) = null_bit_buffer.as_ref() {
+            let needed_len = bit_util::ceil(len + offset, 8);
+            if null_bit_buffer.len() < needed_len {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "null_bit_buffer size too small. got {} needed {}",
+                    null_bit_buffer.len(),
+                    needed_len
+                )));
+            }
+        }
         // Safety justification: `validate_full` is called below
         let new_self = unsafe {
             Self::new_unchecked(
                 data_type,
                 len,
-                null_count,
+                None,
                 null_bit_buffer,
                 offset,
                 buffers,
@@ -581,7 +590,7 @@ impl ArrayData {
             DataType::Map(field, _) => {
                 vec![Self::new_empty(field.data_type())]
             }
-            DataType::Union(fields, _) => fields
+            DataType::Union(fields, _, _) => fields
                 .iter()
                 .map(|field| Self::new_empty(field.data_type()))
                 .collect(),
@@ -620,6 +629,13 @@ impl ArrayData {
 
         // Check that the data layout conforms to the spec
         let layout = layout(&self.data_type);
+
+        if !layout.can_contain_null_mask && self.null_bitmap.is_some() {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Arrays of type {:?} cannot contain a null bitmask",
+                self.data_type,
+            )));
+        }
 
         if self.buffers.len() != layout.buffers.len() {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -719,18 +735,20 @@ impl ArrayData {
     /// Returns a reference to the data in `buffer` as a typed slice
     /// (typically `&[i32]` or `&[i64]`) after validating. The
     /// returned slice is guaranteed to have at least `self.len + 1`
-    /// entries
+    /// entries.
+    ///
+    /// For an empty array, the `buffer` can also be empty.
     fn typed_offsets<'a, T: ArrowNativeType + num::Num + std::fmt::Display>(
         &'a self,
         buffer: &'a Buffer,
     ) -> Result<&'a [T]> {
-        // Validate that there are the correct number of offsets for this array's length
-        let required_offsets = self.len + self.offset + 1;
-
         // An empty list-like array can have 0 offsets
-        if buffer.is_empty() {
+        if buffer.is_empty() && self.len == 0 {
             return Ok(&[]);
         }
+
+        // Validate that there are the correct number of offsets for this array's length
+        let required_offsets = self.len + self.offset + 1;
 
         if (buffer.len() / std::mem::size_of::<T>()) < required_offsets {
             return Err(ArrowError::InvalidArgumentError(format!(
@@ -847,7 +865,7 @@ impl ArrayData {
                 }
                 Ok(())
             }
-            DataType::Union(fields, mode) => {
+            DataType::Union(fields, _, mode) => {
                 self.validate_num_child_data(fields.len())?;
 
                 for (i, field) in fields.iter().enumerate() {
@@ -995,7 +1013,7 @@ impl ArrayData {
                 let child = &self.child_data[0];
                 self.validate_offsets_full::<i64>(child.len + child.offset)
             }
-            DataType::Union(_, _) => {
+            DataType::Union(_, _, _) => {
                 // Validate Union Array as part of implementing new Union semantics
                 // See comments in `ArrayData::validate()`
                 // https://github.com/apache/arrow-rs/issues/85
@@ -1026,15 +1044,18 @@ impl ArrayData {
     }
 
     /// Calls the `validate(item_index, range)` function for each of
-    /// the ranges specified in the arrow offset buffer of type
+    /// the ranges specified in the arrow offsets buffer of type
     /// `T`. Also validates that each offset is smaller than
-    /// `max_offset`
+    /// `offset_limit`
     ///
-    /// For example, the offset buffer contained `[1, 2, 4]`, this
+    /// For an empty array, the offsets buffer can either be empty
+    /// or contain a single `0`.
+    ///
+    /// For example, the offsets buffer contained `[1, 2, 4]`, this
     /// function would call `validate([1,2])`, and `validate([2,4])`
     fn validate_each_offset<T, V>(
         &self,
-        offset_buffer: &Buffer,
+        offsets_buffer: &Buffer,
         offset_limit: usize,
         validate: V,
     ) -> Result<()>
@@ -1042,60 +1063,45 @@ impl ArrayData {
         T: ArrowNativeType + std::convert::TryInto<usize> + num::Num + std::fmt::Display,
         V: Fn(usize, Range<usize>) -> Result<()>,
     {
-        // An empty binary-like array can have 0 offsets
-        if self.len == 0 && offset_buffer.is_empty() {
-            return Ok(());
-        }
-
-        let offsets = self.typed_offsets::<T>(offset_buffer)?;
-
-        offsets
+        self.typed_offsets::<T>(offsets_buffer)?
             .iter()
-            .zip(offsets.iter().skip(1))
             .enumerate()
-            .map(|(i, (&start_offset, &end_offset))| {
-                let start_offset: usize = start_offset
-                    .try_into()
-                    .map_err(|_| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "Offset invariant failure: could not convert start_offset {} to usize in slot {}",
-                            start_offset, i))
-                    })?;
-                let end_offset: usize = end_offset
-                    .try_into()
-                    .map_err(|_| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "Offset invariant failure: Could not convert end_offset {} to usize in slot {}",
-                            end_offset, i+1))
-                    })?;
-
-                if start_offset > offset_limit {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: offset for slot {} out of bounds: {} > {}",
-                        i, start_offset, offset_limit))
+            .map(|(i, x)| {
+                // check if the offset can be converted to usize
+                let r = x.to_usize().ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "Offset invariant failure: Could not convert offset {} to usize at position {}",
+                        x, i))}
                     );
+                // check if the offset exceeds the limit
+                match r {
+                    Ok(n) if n <= offset_limit => Ok((i, n)),
+                    Ok(_) => Err(ArrowError::InvalidArgumentError(format!(
+                        "Offset invariant failure: offset at position {} out of bounds: {} > {}",
+                        i, x, offset_limit))
+                    ),
+                    Err(e) => Err(e),
                 }
-
-                if end_offset > offset_limit {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: offset for slot {} out of bounds: {} > {}",
-                        i, end_offset, offset_limit))
-                    );
-                }
-
-                // check range actually is low -> high
-                if start_offset > end_offset {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Offset invariant failure: non-monotonic offset at slot {}: {} > {}",
-                        i, start_offset, end_offset))
-                    );
-                }
-
-                Ok((i, start_offset..end_offset))
             })
+            .scan(0_usize, |start, end| {
+                // check offsets are monotonically increasing
+                match end {
+                    Ok((i, end)) if *start <= end => {
+                        let range = Some(Ok((i, *start..end)));
+                        *start = end;
+                        range
+                    }
+                    Ok((i, end)) => Some(Err(ArrowError::InvalidArgumentError(format!(
+                        "Offset invariant failure: non-monotonic offset at slot {}: {} > {}",
+                        i - 1, start, end))
+                    )),
+                    Err(err) => Some(Err(err)),
+                }
+            })
+            .skip(1) // the first element is meaningless
             .try_for_each(|res: Result<(usize, Range<usize>)>| {
                 let (item_index, range) = res?;
-                validate(item_index, range)
+                validate(item_index-1, range)
             })
     }
 
@@ -1224,9 +1230,13 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
     // https://github.com/apache/arrow/blob/661c7d749150905a63dd3b52e0a04dac39030d95/cpp/src/arrow/type.h (and .cc)
     use std::mem::size_of;
     match data_type {
-        DataType::Null => DataTypeLayout::new_empty(),
+        DataType::Null => DataTypeLayout {
+            buffers: vec![],
+            can_contain_null_mask: false,
+        },
         DataType::Boolean => DataTypeLayout {
             buffers: vec![BufferSpec::BitMap],
+            can_contain_null_mask: true,
         },
         DataType::Int8 => DataTypeLayout::new_fixed_width(size_of::<i8>()),
         DataType::Int16 => DataTypeLayout::new_fixed_width(size_of::<i16>()),
@@ -1268,7 +1278,7 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
         DataType::FixedSizeList(_, _) => DataTypeLayout::new_empty(), // all in child data
         DataType::LargeList(_) => DataTypeLayout::new_fixed_width(size_of::<i32>()),
         DataType::Struct(_) => DataTypeLayout::new_empty(), // all in child data,
-        DataType::Union(_, mode) => {
+        DataType::Union(_, _, mode) => {
             let type_ids = BufferSpec::FixedWidth {
                 byte_width: size_of::<i8>(),
             };
@@ -1287,6 +1297,7 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
                         ]
                     }
                 },
+                can_contain_null_mask: false,
             }
         }
         DataType::Dictionary(key_type, _value_type) => layout(key_type),
@@ -1308,6 +1319,9 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
 struct DataTypeLayout {
     /// A vector of buffer layout specifications, one for each expected buffer
     pub buffers: Vec<BufferSpec>,
+
+    /// Can contain a null bitmask
+    pub can_contain_null_mask: bool,
 }
 
 impl DataTypeLayout {
@@ -1315,6 +1329,7 @@ impl DataTypeLayout {
     pub fn new_fixed_width(byte_width: usize) -> Self {
         Self {
             buffers: vec![BufferSpec::FixedWidth { byte_width }],
+            can_contain_null_mask: true,
         }
     }
 
@@ -1322,7 +1337,10 @@ impl DataTypeLayout {
     /// (e.g. FixedSizeList). Note such arrays may still have a Null
     /// Bitmap
     pub fn new_empty() -> Self {
-        Self { buffers: vec![] }
+        Self {
+            buffers: vec![],
+            can_contain_null_mask: true,
+        }
     }
 
     /// Describes a basic numeric array where each element has a fixed
@@ -1338,6 +1356,7 @@ impl DataTypeLayout {
                 // values
                 BufferSpec::VariableWidth,
             ],
+            can_contain_null_mask: true,
         }
     }
 }
@@ -1405,8 +1424,8 @@ impl ArrayDataBuilder {
         self
     }
 
-    pub fn null_bit_buffer(mut self, buf: Buffer) -> Self {
-        self.null_bit_buffer = Some(buf);
+    pub fn null_bit_buffer(mut self, buf: Option<Buffer>) -> Self {
+        self.null_bit_buffer = buf;
         self
     }
 
@@ -1459,7 +1478,6 @@ impl ArrayDataBuilder {
         ArrayData::try_new(
             self.data_type,
             self.len,
-            self.null_count,
             self.null_bit_buffer,
             self.offset,
             self.buffers,
@@ -1490,9 +1508,9 @@ mod tests {
             .len(20)
             .offset(5)
             .add_buffer(b1)
-            .null_bit_buffer(Buffer::from(vec![
+            .null_bit_buffer(Some(Buffer::from(vec![
                 0b01011111, 0b10110101, 0b01100011, 0b00011110,
-            ]))
+            ])))
             .build()
             .unwrap();
 
@@ -1511,7 +1529,6 @@ mod tests {
         let child_arr_data = ArrayData::try_new(
             DataType::Int32,
             5,
-            Some(0),
             None,
             0,
             vec![Buffer::from_slice_ref(&[1i32, 2, 3, 4, 5])],
@@ -1542,7 +1559,7 @@ mod tests {
         let arr_data = ArrayData::builder(DataType::Int32)
             .len(16)
             .add_buffer(make_i32_buffer(16))
-            .null_bit_buffer(Buffer::from(bit_v))
+            .null_bit_buffer(Some(Buffer::from(bit_v)))
             .build()
             .unwrap();
         assert_eq!(13, arr_data.null_count());
@@ -1556,7 +1573,7 @@ mod tests {
             .len(12)
             .offset(2)
             .add_buffer(make_i32_buffer(14)) // requires at least 14 bytes of space,
-            .null_bit_buffer(Buffer::from(bit_v))
+            .null_bit_buffer(Some(Buffer::from(bit_v)))
             .build()
             .unwrap();
         assert_eq!(10, arr_data.null_count());
@@ -1571,7 +1588,7 @@ mod tests {
         let arr_data = ArrayData::builder(DataType::Int32)
             .len(16)
             .add_buffer(make_i32_buffer(16))
-            .null_bit_buffer(Buffer::from(bit_v))
+            .null_bit_buffer(Some(Buffer::from(bit_v)))
             .build()
             .unwrap();
         assert!(arr_data.null_buffer().is_some());
@@ -1587,7 +1604,7 @@ mod tests {
         let data = ArrayData::builder(DataType::Int32)
             .len(16)
             .add_buffer(make_i32_buffer(16))
-            .null_bit_buffer(Buffer::from(bit_v))
+            .null_bit_buffer(Some(Buffer::from(bit_v)))
             .build()
             .unwrap();
         let new_data = data.slice(1, 15);
@@ -1634,7 +1651,6 @@ mod tests {
         let string_data = ArrayData::try_new(
             DataType::Utf8,
             3,
-            Some(1),
             Some(Buffer::from_iter(vec![true, false, true])),
             0,
             vec![offsets_buffer, data_buffer],
@@ -1673,8 +1689,7 @@ mod tests {
     fn test_buffer_too_small() {
         let buffer = Buffer::from_slice_ref(&[0i32, 2i32]);
         // should fail as the declared size (10*8 = 80) is larger than the underlying bfufer (8)
-        ArrayData::try_new(DataType::Int64, 10, Some(0), None, 0, vec![buffer], vec![])
-            .unwrap();
+        ArrayData::try_new(DataType::Int64, 10, None, 0, vec![buffer], vec![]).unwrap();
     }
 
     #[test]
@@ -1684,8 +1699,7 @@ mod tests {
     fn test_buffer_too_small_offset() {
         let buffer = Buffer::from_slice_ref(&[0i32, 2i32]);
         // should fail -- size is ok, but also has offset
-        ArrayData::try_new(DataType::Int64, 1, Some(0), None, 1, vec![buffer], vec![])
-            .unwrap();
+        ArrayData::try_new(DataType::Int64, 1, None, 1, vec![buffer], vec![]).unwrap();
     }
 
     #[test]
@@ -1693,32 +1707,16 @@ mod tests {
     fn test_bad_number_of_buffers() {
         let buffer1 = Buffer::from_slice_ref(&[0i32, 2i32]);
         let buffer2 = Buffer::from_slice_ref(&[0i32, 2i32]);
-        ArrayData::try_new(
-            DataType::Int64,
-            1,
-            Some(0),
-            None,
-            0,
-            vec![buffer1, buffer2],
-            vec![],
-        )
-        .unwrap();
+        ArrayData::try_new(DataType::Int64, 1, None, 0, vec![buffer1, buffer2], vec![])
+            .unwrap();
     }
 
     #[test]
     #[should_panic(expected = "integer overflow computing min buffer size")]
     fn test_fixed_width_overflow() {
         let buffer = Buffer::from_slice_ref(&[0i32, 2i32]);
-        ArrayData::try_new(
-            DataType::Int64,
-            usize::MAX,
-            Some(0),
-            None,
-            0,
-            vec![buffer],
-            vec![],
-        )
-        .unwrap();
+        ArrayData::try_new(DataType::Int64, usize::MAX, None, 0, vec![buffer], vec![])
+            .unwrap();
     }
 
     #[test]
@@ -1730,21 +1728,12 @@ mod tests {
         ArrayData::try_new(
             DataType::Int32,
             9,
-            Some(0),
             Some(null_bit_buffer),
             0,
             vec![buffer],
             vec![],
         )
         .unwrap();
-    }
-
-    #[test]
-    #[should_panic(expected = "null_count 3 for an array exceeds length of 2 elements")]
-    fn test_bad_null_count() {
-        let buffer = Buffer::from_slice_ref(&[0i32, 2i32]);
-        ArrayData::try_new(DataType::Int32, 2, Some(3), None, 0, vec![buffer], vec![])
-            .unwrap();
     }
 
     // Test creating a dictionary with a non integer type
@@ -1757,7 +1746,6 @@ mod tests {
         let child_data = ArrayData::try_new(
             DataType::Int32,
             1,
-            Some(0),
             None,
             0,
             vec![i32_buffer.clone()],
@@ -1767,7 +1755,6 @@ mod tests {
         ArrayData::try_new(
             data_type,
             1,
-            Some(0),
             None,
             0,
             vec![i32_buffer.clone(), i32_buffer],
@@ -1789,14 +1776,85 @@ mod tests {
             Box::new(DataType::LargeUtf8),
         );
         let child_data = string_array.data().clone();
+        ArrayData::try_new(data_type, 1, None, 0, vec![i32_buffer], vec![child_data])
+            .unwrap();
+    }
+
+    #[test]
+    fn test_empty_utf8_array_with_empty_offsets_buffer() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from(&[]);
         ArrayData::try_new(
-            data_type,
-            1,
-            Some(0),
+            DataType::Utf8,
+            0,
             None,
             0,
-            vec![i32_buffer],
-            vec![child_data],
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_empty_utf8_array_with_single_zero_offset() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from_slice_ref(&[0i32]);
+        ArrayData::try_new(
+            DataType::Utf8,
+            0,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "First offset 1 of Utf8 is larger than values length 0")]
+    fn test_empty_utf8_array_with_invalid_offset() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from_slice_ref(&[1i32]);
+        ArrayData::try_new(
+            DataType::Utf8,
+            0,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_empty_utf8_array_with_non_zero_offset() {
+        let data_buffer = Buffer::from_slice_ref(&"abcdef".as_bytes());
+        let offsets_buffer = Buffer::from_slice_ref(&[0i32, 2, 6, 0]);
+        ArrayData::try_new(
+            DataType::Utf8,
+            0,
+            None,
+            3,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Offsets buffer size (bytes): 4 isn't large enough for LargeUtf8. Length 0 needs 1"
+    )]
+    fn test_empty_large_utf8_array_with_wrong_type_offsets() {
+        let data_buffer = Buffer::from(&[]);
+        let offsets_buffer = Buffer::from_slice_ref(&[0i32]);
+        ArrayData::try_new(
+            DataType::LargeUtf8,
+            0,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
         )
         .unwrap();
     }
@@ -1811,7 +1869,6 @@ mod tests {
         ArrayData::try_new(
             DataType::Utf8,
             2,
-            None,
             None,
             0,
             vec![offsets_buffer, data_buffer],
@@ -1831,7 +1888,6 @@ mod tests {
             DataType::LargeUtf8,
             2,
             None,
-            None,
             0,
             vec![offsets_buffer, data_buffer],
             vec![],
@@ -1848,7 +1904,6 @@ mod tests {
             DataType::Utf8,
             2,
             None,
-            None,
             0,
             vec![offsets_buffer, data_buffer],
             vec![],
@@ -1864,7 +1919,6 @@ mod tests {
         ArrayData::try_new(
             DataType::Utf8,
             2,
-            None,
             None,
             0,
             vec![offsets_buffer, data_buffer],
@@ -1883,7 +1937,6 @@ mod tests {
             DataType::Utf8,
             2,
             None,
-            None,
             0,
             vec![offsets_buffer, data_buffer],
             vec![],
@@ -1900,7 +1953,6 @@ mod tests {
         ArrayData::try_new(
             DataType::Utf8,
             2,
-            None,
             None,
             0,
             vec![offsets_buffer, data_buffer],
@@ -1919,7 +1971,6 @@ mod tests {
             DataType::Utf8,
             2,
             None,
-            None,
             0,
             vec![offsets_buffer, data_buffer],
             vec![],
@@ -1935,7 +1986,6 @@ mod tests {
         let data = ArrayData::try_new(
             DataType::Utf8,
             2,
-            None,
             None,
             1,
             vec![offsets_buffer, data_buffer],
@@ -1956,7 +2006,6 @@ mod tests {
         ArrayData::try_new(
             DataType::Utf8,
             2,
-            None,
             None,
             0,
             vec![offsets_buffer, data_buffer],
@@ -1982,7 +2031,6 @@ mod tests {
             DataType::FixedSizeList(Box::new(field), 2),
             3,
             None,
-            None,
             0,
             vec![],
             vec![child_array.data().clone()],
@@ -2001,7 +2049,6 @@ mod tests {
         ArrayData::try_new(
             DataType::Struct(vec![Field::new("field1", DataType::Int64, true)]),
             3,
-            None,
             None,
             0,
             vec![],
@@ -2024,7 +2071,6 @@ mod tests {
             DataType::Struct(vec![Field::new("field1", DataType::Int32, true)]),
             6,
             None,
-            None,
             0,
             vec![],
             vec![field1.data().clone()],
@@ -2045,7 +2091,6 @@ mod tests {
         ArrayData::try_new(
             data_type,
             2,
-            None,
             None,
             0,
             vec![offsets_buffer, data_buffer],
@@ -2080,7 +2125,6 @@ mod tests {
             data_type,
             4,
             None,
-            None,
             0,
             vec![offsets_buffer, data_buffer],
             vec![],
@@ -2090,7 +2134,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 2 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
     )]
     fn test_validate_utf8_out_of_bounds() {
         check_index_out_of_bounds_validation::<i32>(DataType::Utf8);
@@ -2098,7 +2142,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 2 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
     )]
     fn test_validate_large_utf8_out_of_bounds() {
         check_index_out_of_bounds_validation::<i64>(DataType::LargeUtf8);
@@ -2106,7 +2150,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 2 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
     )]
     fn test_validate_binary_out_of_bounds() {
         check_index_out_of_bounds_validation::<i32>(DataType::Binary);
@@ -2114,7 +2158,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 2 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
     )]
     fn test_validate_large_binary_out_of_bounds() {
         check_index_out_of_bounds_validation::<i64>(DataType::LargeBinary);
@@ -2133,7 +2177,6 @@ mod tests {
         ArrayData::try_new(
             data_type,
             4,
-            None,
             None,
             0,
             vec![offsets_buffer, data_buffer],
@@ -2193,7 +2236,6 @@ mod tests {
             data_type,
             2,
             None,
-            None,
             0,
             vec![keys.data().buffers[0].clone()],
             vec![values.data().clone()],
@@ -2220,7 +2262,6 @@ mod tests {
             data_type,
             2,
             None,
-            None,
             0,
             vec![keys.data().buffers[0].clone()],
             vec![values.data().clone()],
@@ -2245,7 +2286,6 @@ mod tests {
         ArrayData::try_new(
             data_type,
             1,
-            None,
             None,
             0,
             vec![keys.data().buffers[0].clone()],
@@ -2273,7 +2313,6 @@ mod tests {
             data_type,
             2,
             None,
-            None,
             0,
             vec![keys.data().buffers[0].clone()],
             vec![values.data().clone()],
@@ -2297,7 +2336,6 @@ mod tests {
             data_type,
             3,
             None,
-            None,
             0,
             vec![offsets_buffer],
             vec![values.data().clone()],
@@ -2307,7 +2345,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 1 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 2 out of bounds: 5 > 4"
     )]
     fn test_validate_list_offsets() {
         let field_type = Field::new("f", DataType::Int32, true);
@@ -2316,7 +2354,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: offset for slot 1 out of bounds: 5 > 4"
+        expected = "Offset invariant failure: offset at position 2 out of bounds: 5 > 4"
     )]
     fn test_validate_large_list_offsets() {
         let field_type = Field::new("f", DataType::Int32, true);
@@ -2326,7 +2364,7 @@ mod tests {
     /// Test that the list of type `data_type` generates correct errors for negative offsets
     #[test]
     #[should_panic(
-        expected = "Offset invariant failure: Could not convert end_offset -1 to usize in slot 2"
+        expected = "Offset invariant failure: Could not convert offset -1 to usize at position 2"
     )]
     fn test_validate_list_negative_offsets() {
         let values: Int32Array =
@@ -2341,7 +2379,6 @@ mod tests {
         ArrayData::try_new(
             data_type,
             3,
-            None,
             None,
             0,
             vec![offsets_buffer],
@@ -2383,7 +2420,7 @@ mod tests {
         let data_type =
             DataType::Struct(vec![Field::new("d", dict_data.data_type().clone(), true)]);
 
-        ArrayData::try_new(data_type, 1, None, None, 0, vec![], vec![dict_data]).unwrap();
+        ArrayData::try_new(data_type, 1, None, 0, vec![], vec![dict_data]).unwrap();
     }
 
     /// returns a buffer initialized with some constant value for tests
@@ -2411,10 +2448,10 @@ mod tests {
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true), // data is int32
                 ],
+                vec![0, 1],
                 UnionMode::Sparse,
             ),
             2,
-            None,
             None,
             0,
             vec![type_ids],
@@ -2442,10 +2479,10 @@ mod tests {
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
+                vec![0, 1],
                 UnionMode::Sparse,
             ),
             2,
-            None,
             None,
             0,
             vec![type_ids],
@@ -2469,10 +2506,10 @@ mod tests {
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
+                vec![0, 1],
                 UnionMode::Dense,
             ),
             2,
-            None,
             None,
             0,
             vec![type_ids], // need offsets buffer here too
@@ -2499,10 +2536,10 @@ mod tests {
                     Field::new("field1", DataType::Int32, true),
                     Field::new("field2", DataType::Int64, true),
                 ],
+                vec![0, 1],
                 UnionMode::Dense,
             ),
             2,
-            None,
             None,
             0,
             vec![type_ids, offsets],
@@ -2596,7 +2633,6 @@ mod tests {
         let cloned_data = ArrayData::try_new(
             struct_array_slice.data_type().clone(),
             struct_array_slice.len(),
-            None, // force new to compute the number of null bits
             struct_array_data.null_buffer().cloned(),
             struct_array_slice.offset(),
             struct_array_data.buffers().to_vec(),
@@ -2611,8 +2647,8 @@ mod tests {
     #[test]
     fn test_into_buffers() {
         let data_types = vec![
-            DataType::Union(vec![], UnionMode::Dense),
-            DataType::Union(vec![], UnionMode::Sparse),
+            DataType::Union(vec![], vec![], UnionMode::Dense),
+            DataType::Union(vec![], vec![], UnionMode::Sparse),
         ];
 
         for data_type in data_types {
@@ -2656,7 +2692,6 @@ mod tests {
         let data = ArrayData::try_new(
             DataType::Utf8,
             4,
-            None,
             Some(null_buffer),
             0,
             vec![offsets_buffer, strings_buffer],

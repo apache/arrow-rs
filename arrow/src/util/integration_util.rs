@@ -132,6 +132,8 @@ pub struct ArrowJsonColumn {
     pub data: Option<Vec<Value>>,
     #[serde(rename = "OFFSET")]
     pub offset: Option<Vec<Value>>, // leaving as Value as 64-bit offsets are strings
+    #[serde(rename = "TYPE_ID")]
+    pub type_id: Option<Vec<i8>>,
     pub children: Option<Vec<ArrowJsonColumn>>,
 }
 
@@ -472,6 +474,7 @@ impl ArrowJsonBatch {
                         validity: Some(validity),
                         data: Some(data),
                         offset: None,
+                        type_id: None,
                         children: None,
                     }
                 }
@@ -481,6 +484,7 @@ impl ArrowJsonBatch {
                     validity: None,
                     data: None,
                     offset: None,
+                    type_id: None,
                     children: None,
                 },
             };

@@ -364,7 +364,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::LargeList(_) => Arc::new(LargeListArray::from(data)) as ArrayRef,
         DataType::Struct(_) => Arc::new(StructArray::from(data)) as ArrayRef,
         DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
-        DataType::Union(_, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
+        DataType::Union(_, _, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
         DataType::FixedSizeList(_, _) => {
             Arc::new(FixedSizeListArray::from(data)) as ArrayRef
         }
@@ -535,7 +535,7 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
         DataType::Map(field, _keys_sorted) => {
             new_null_list_array::<i32>(data_type, field.data_type(), length)
         }
-        DataType::Union(_, _) => {
+        DataType::Union(_, _, _) => {
             unimplemented!("Creating null Union array not yet supported")
         }
         DataType::Dictionary(key, value) => {
@@ -554,9 +554,7 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                 )
             })
         }
-        DataType::Decimal(_, _) => {
-            unimplemented!("Creating null Decimal array not yet supported")
-        }
+        DataType::Decimal(_, _) => new_null_sized_decimal(data_type, length),
     }
 }
 
@@ -615,6 +613,24 @@ fn new_null_sized_array<T: ArrowPrimitiveType>(
             Some(MutableBuffer::new_null(length).into()),
             0,
             vec![Buffer::from(vec![0u8; length * T::get_byte_width()])],
+            vec![],
+        )
+    })
+}
+
+#[inline]
+fn new_null_sized_decimal(data_type: &DataType, length: usize) -> ArrayRef {
+    make_array(unsafe {
+        ArrayData::new_unchecked(
+            data_type.clone(),
+            length,
+            Some(length),
+            Some(MutableBuffer::new_null(length).into()),
+            0,
+            vec![Buffer::from(vec![
+                0u8;
+                length * std::mem::size_of::<i128>()
+            ])],
             vec![],
         )
     })
@@ -861,7 +877,7 @@ mod tests {
         let empty_with_bitmap = PrimitiveArray::<Int64Type>::from(
             ArrayData::builder(arr.data_type().clone())
                 .add_buffer(MutableBuffer::new(0).into())
-                .null_bit_buffer(MutableBuffer::new_null(0).into())
+                .null_bit_buffer(Some(MutableBuffer::new_null(0).into()))
                 .build()
                 .unwrap(),
         );

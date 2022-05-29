@@ -338,13 +338,13 @@ where
                             let mut offset = 0;
 
                             if max_rep_level > 0 {
-                                let level_data = parse_v1_level(
+                                let (bytes_read, level_data) = parse_v1_level(
                                     max_rep_level,
                                     num_values,
                                     rep_level_encoding,
                                     buf.start_from(offset),
                                 )?;
-                                offset = level_data.end();
+                                offset += bytes_read;
 
                                 let decoder =
                                     R::new(max_rep_level, rep_level_encoding, level_data);
@@ -353,13 +353,13 @@ where
                             }
 
                             if max_def_level > 0 {
-                                let level_data = parse_v1_level(
+                                let (bytes_read, level_data) = parse_v1_level(
                                     max_def_level,
                                     num_values,
                                     def_level_encoding,
                                     buf.start_from(offset),
                                 )?;
-                                offset = level_data.end();
+                                offset += bytes_read;
 
                                 let decoder =
                                     D::new(max_def_level, def_level_encoding, level_data);
@@ -460,20 +460,20 @@ fn parse_v1_level(
     num_buffered_values: u32,
     encoding: Encoding,
     buf: ByteBufferPtr,
-) -> Result<ByteBufferPtr> {
+) -> Result<(usize, ByteBufferPtr)> {
     match encoding {
         Encoding::RLE => {
             let i32_size = std::mem::size_of::<i32>();
             let data_size = read_num_bytes!(i32, i32_size, buf.as_ref()) as usize;
-            Ok(buf.range(i32_size, data_size))
+            Ok((i32_size + data_size, buf.range(i32_size, data_size)))
         }
         Encoding::BIT_PACKED => {
             let bit_width = crate::util::bit_util::log2(max_level as u64 + 1) as u8;
             let num_bytes = ceil(
                 (num_buffered_values as usize * bit_width as usize) as i64,
                 8,
-            );
-            Ok(buf.range(0, num_bytes as usize))
+            ) as usize;
+            Ok((num_bytes, buf.range(0, num_bytes)))
         }
         _ => Err(general_err!("invalid level encoding: {}", encoding)),
     }

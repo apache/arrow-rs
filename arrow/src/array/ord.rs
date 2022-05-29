@@ -72,7 +72,7 @@ where
 
 fn compare_string<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
 where
-    T: StringOffsetSizeTrait,
+    T: OffsetSizeTrait,
 {
     let left: StringArray = StringArray::from(left.data().clone());
     let right: StringArray = StringArray::from(right.data().clone());

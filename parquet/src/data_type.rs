@@ -31,7 +31,7 @@ use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
 use crate::util::{
     bit_util::{from_ne_slice, FromBytes},
-    memory::{ByteBuffer, ByteBufferPtr},
+    memory::ByteBufferPtr,
 };
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
@@ -214,14 +214,6 @@ impl<'a> From<&'a str> for ByteArray {
 impl From<ByteBufferPtr> for ByteArray {
     fn from(ptr: ByteBufferPtr) -> ByteArray {
         Self { data: Some(ptr) }
-    }
-}
-
-impl From<ByteBuffer> for ByteArray {
-    fn from(mut buf: ByteBuffer) -> ByteArray {
-        Self {
-            data: Some(buf.consume()),
-        }
     }
 }
 
@@ -1045,19 +1037,21 @@ pub trait DataType: 'static + Send {
     where
         Self: Sized;
 
-    fn get_column_writer(column_writer: ColumnWriter) -> Option<ColumnWriterImpl<Self>>
+    fn get_column_writer(
+        column_writer: ColumnWriter<'_>,
+    ) -> Option<ColumnWriterImpl<'_, Self>>
     where
         Self: Sized;
 
-    fn get_column_writer_ref(
-        column_writer: &ColumnWriter,
-    ) -> Option<&ColumnWriterImpl<Self>>
+    fn get_column_writer_ref<'a, 'b: 'a>(
+        column_writer: &'b ColumnWriter<'a>,
+    ) -> Option<&'b ColumnWriterImpl<'a, Self>>
     where
         Self: Sized;
 
-    fn get_column_writer_mut(
-        column_writer: &mut ColumnWriter,
-    ) -> Option<&mut ColumnWriterImpl<Self>>
+    fn get_column_writer_mut<'a, 'b: 'a>(
+        column_writer: &'a mut ColumnWriter<'b>,
+    ) -> Option<&'a mut ColumnWriterImpl<'b, Self>>
     where
         Self: Sized;
 }
@@ -1102,26 +1096,26 @@ macro_rules! make_type {
             }
 
             fn get_column_writer(
-                column_writer: ColumnWriter,
-            ) -> Option<ColumnWriterImpl<Self>> {
+                column_writer: ColumnWriter<'_>,
+            ) -> Option<ColumnWriterImpl<'_, Self>> {
                 match column_writer {
                     ColumnWriter::$writer_ident(w) => Some(w),
                     _ => None,
                 }
             }
 
-            fn get_column_writer_ref(
-                column_writer: &ColumnWriter,
-            ) -> Option<&ColumnWriterImpl<Self>> {
+            fn get_column_writer_ref<'a, 'b: 'a>(
+                column_writer: &'a ColumnWriter<'b>,
+            ) -> Option<&'a ColumnWriterImpl<'b, Self>> {
                 match column_writer {
                     ColumnWriter::$writer_ident(w) => Some(w),
                     _ => None,
                 }
             }
 
-            fn get_column_writer_mut(
-                column_writer: &mut ColumnWriter,
-            ) -> Option<&mut ColumnWriterImpl<Self>> {
+            fn get_column_writer_mut<'a, 'b: 'a>(
+                column_writer: &'a mut ColumnWriter<'b>,
+            ) -> Option<&'a mut ColumnWriterImpl<'b, Self>> {
                 match column_writer {
                     ColumnWriter::$writer_ident(w) => Some(w),
                     _ => None,
@@ -1322,8 +1316,7 @@ mod tests {
             ByteArray::from(ByteBufferPtr::new(vec![1u8, 2u8, 3u8, 4u8, 5u8])).data(),
             &[1u8, 2u8, 3u8, 4u8, 5u8]
         );
-        let mut buf = ByteBuffer::new();
-        buf.set_data(vec![6u8, 7u8, 8u8, 9u8, 10u8]);
+        let buf = vec![6u8, 7u8, 8u8, 9u8, 10u8];
         assert_eq!(ByteArray::from(buf).data(), &[6u8, 7u8, 8u8, 9u8, 10u8]);
     }
 
