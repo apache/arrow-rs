@@ -108,7 +108,7 @@ impl ParquetMetaData {
     }
 
     /// Returns offset indexes in this file.
-    pub fn offset_indexes(&self) -> &Option<Vec<Vec<PageLocation>>> {
+    pub fn offset_indexes(&self) -> Option<&Vec<Vec<PageLocation>>> {
         &self.offset_indexes
     }
 }

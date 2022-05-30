@@ -24,7 +24,7 @@ use parquet_format::{BoundaryOrder, ColumnIndex};
 use std::any::Any;
 use std::fmt::Debug;
 
-/// The static in one page
+/// The statistics in one page
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PageIndex<T> {
     /// The minimum value, It is None when all values are null
@@ -169,7 +169,7 @@ impl<T: ParquetValueType> Index for NativeIndex<T> {
 
 /// An index of a column of bytes type
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ByteIndex {
+pub struct ByteArrayIndex {
     /// The physical type
     pub physical_type: Type,
     /// The indexes, one item per page
@@ -254,7 +254,7 @@ impl BooleanIndex {
                 let (min, max) = if is_null {
                     (None, None)
                 } else {
-                    let min = min[0] == 1;
+                    let min = min[0] != 0;
                     let max = max[0] == 1;
                     (Some(min), Some(max))
                 };
