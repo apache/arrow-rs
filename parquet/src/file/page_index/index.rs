@@ -21,7 +21,6 @@ use crate::data_type::Int96;
 use crate::errors::ParquetError;
 use crate::util::bit_util::from_ne_slice;
 use parquet_format::{BoundaryOrder, ColumnIndex};
-use std::any::Any;
 use std::fmt::Debug;
 
 /// The statistics in one page
@@ -47,60 +46,16 @@ impl<T> PageIndex<T> {
     }
 }
 
-/// Trait object representing a [`ColumnIndex`]
-pub trait Index: Send + Sync + Debug {
-    fn as_any(&self) -> &dyn Any;
-
-    fn physical_type(&self) -> &Type;
-}
-
-impl PartialEq for dyn Index + '_ {
-    fn eq(&self, that: &dyn Index) -> bool {
-        equal(self, that)
-    }
-}
-
-impl Eq for dyn Index + '_ {}
-
-fn equal(lhs: &dyn Index, rhs: &dyn Index) -> bool {
-    if lhs.physical_type() != rhs.physical_type() {
-        return false;
-    }
-
-    match lhs.physical_type() {
-        Type::BOOLEAN => {
-            lhs.as_any().downcast_ref::<BooleanIndex>().unwrap()
-                == rhs.as_any().downcast_ref::<BooleanIndex>().unwrap()
-        }
-        Type::INT32 => {
-            lhs.as_any().downcast_ref::<NativeIndex<i32>>().unwrap()
-                == rhs.as_any().downcast_ref::<NativeIndex<i32>>().unwrap()
-        }
-        Type::INT64 => {
-            lhs.as_any().downcast_ref::<NativeIndex<i64>>().unwrap()
-                == rhs.as_any().downcast_ref::<NativeIndex<i64>>().unwrap()
-        }
-        Type::INT96 => {
-            lhs.as_any().downcast_ref::<NativeIndex<Int96>>().unwrap()
-                == rhs.as_any().downcast_ref::<NativeIndex<Int96>>().unwrap()
-        }
-        Type::FLOAT => {
-            lhs.as_any().downcast_ref::<NativeIndex<f32>>().unwrap()
-                == rhs.as_any().downcast_ref::<NativeIndex<f32>>().unwrap()
-        }
-        Type::DOUBLE => {
-            lhs.as_any().downcast_ref::<NativeIndex<f64>>().unwrap()
-                == rhs.as_any().downcast_ref::<NativeIndex<f64>>().unwrap()
-        }
-        Type::BYTE_ARRAY => {
-            lhs.as_any().downcast_ref::<ByteArrayIndex>().unwrap()
-                == rhs.as_any().downcast_ref::<ByteArrayIndex>().unwrap()
-        }
-        Type::FIXED_LEN_BYTE_ARRAY => {
-            lhs.as_any().downcast_ref::<ByteArrayIndex>().unwrap()
-                == rhs.as_any().downcast_ref::<ByteArrayIndex>().unwrap()
-        }
-    }
+#[derive(Debug, Clone, PartialEq)]
+pub enum Index {
+    BOOLEAN(BooleanIndex),
+    INT32(NativeIndex<i32>),
+    INT64(NativeIndex<i64>),
+    INT96(NativeIndex<Int96>),
+    FLOAT(NativeIndex<f32>),
+    DOUBLE(NativeIndex<f64>),
+    BYTE_ARRAY(ByteArrayIndex),
+    FIXED_LEN_BYTE_ARRAY(ByteArrayIndex),
 }
 
 /// An index of a column of [`Type`] physical representation
@@ -157,16 +112,6 @@ impl<T: ParquetValueType> NativeIndex<T> {
     }
 }
 
-impl<T: ParquetValueType> Index for NativeIndex<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn physical_type(&self) -> &Type {
-        &self.physical_type
-    }
-}
-
 /// An index of a column of bytes type
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ByteArrayIndex {
@@ -217,16 +162,6 @@ impl ByteArrayIndex {
     }
 }
 
-impl Index for ByteArrayIndex {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn physical_type(&self) -> &Type {
-        &self.physical_type
-    }
-}
-
 /// An index of a column of boolean physical type
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BooleanIndex {
@@ -270,15 +205,5 @@ impl BooleanIndex {
             indexes,
             boundary_order: index.boundary_order,
         })
-    }
-}
-
-impl Index for BooleanIndex {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn physical_type(&self) -> &Type {
-        &Type::BOOLEAN
     }
 }

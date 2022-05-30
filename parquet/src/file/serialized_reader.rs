@@ -497,7 +497,7 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
 mod tests {
     use super::*;
     use crate::basic::{self, ColumnOrder};
-    use crate::file::page_index::index::ByteArrayIndex;
+    use crate::file::page_index::index::Index;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::{get_test_file, get_test_path};
@@ -1010,11 +1010,11 @@ mod tests {
 
         // only one row group
         assert_eq!(page_indexes.len(), 1);
-        let page_indexes = page_indexes.get(0).unwrap();
-        let index = page_indexes
-            .as_any()
-            .downcast_ref::<ByteArrayIndex>()
-            .unwrap();
+        let index = if let Index::BYTE_ARRAY(index) = page_indexes.get(0).unwrap() {
+            index
+        } else {
+            unreachable!()
+        };
 
         assert_eq!(index.boundary_order, BoundaryOrder::Ascending);
         let index_in_pages = &index.indexes;

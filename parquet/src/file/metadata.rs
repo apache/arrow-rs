@@ -52,7 +52,7 @@ use crate::schema::types::{
 pub struct ParquetMetaData {
     file_metadata: FileMetaData,
     row_groups: Vec<RowGroupMetaData>,
-    page_indexes: Option<Vec<Arc<dyn Index>>>,
+    page_indexes: Option<Vec<Index>>,
     offset_indexes: Option<Vec<Vec<PageLocation>>>,
 }
 
@@ -70,7 +70,7 @@ impl ParquetMetaData {
 
     pub fn new_with_page_index(
         metadata: ParquetMetaData,
-        page_indexes: Option<Vec<Arc<dyn Index>>>,
+        page_indexes: Option<Vec<Index>>,
         offset_indexes: Option<Vec<Vec<PageLocation>>>,
     ) -> Self {
         ParquetMetaData {
@@ -103,7 +103,7 @@ impl ParquetMetaData {
     }
 
     /// Returns page indexes in this file.
-    pub fn page_indexes(&self) -> Option<&Vec<Arc<dyn Index>>> {
+    pub fn page_indexes(&self) -> Option<&Vec<Index>> {
         self.page_indexes.as_ref()
     }
 

@@ -23,7 +23,6 @@ use crate::file::page_index::index::{BooleanIndex, ByteArrayIndex, Index, Native
 use crate::file::reader::ChunkReader;
 use parquet_format::{ColumnIndex, OffsetIndex, PageLocation};
 use std::io::{Cursor, Read};
-use std::sync::Arc;
 use thrift::protocol::TCompactInputProtocol;
 
 /// Read on row group's all columns indexes and change into  [`Index`]
@@ -31,7 +30,7 @@ use thrift::protocol::TCompactInputProtocol;
 pub fn read_columns_indexes<R: ChunkReader>(
     reader: &R,
     chunks: &[ColumnChunkMetaData],
-) -> Result<Vec<Arc<dyn Index>>, ParquetError> {
+) -> Result<Vec<Index>, ParquetError> {
     let (offset, lengths) = get_index_offset_and_lengths(chunks)?;
     let length = lengths.iter().sum::<usize>();
 
@@ -150,22 +149,24 @@ fn get_location_offset_and_total_length(
 fn deserialize_column_index(
     data: &[u8],
     column_type: Type,
-) -> Result<Arc<dyn Index>, ParquetError> {
+) -> Result<Index, ParquetError> {
     let mut d = Cursor::new(data);
     let mut prot = TCompactInputProtocol::new(&mut d);
 
     let index = ColumnIndex::read_from_in_protocol(&mut prot)?;
 
     let index = match column_type {
-        Type::BOOLEAN => Arc::new(BooleanIndex::try_new(index)?) as Arc<dyn Index>,
-        Type::INT32 => Arc::new(NativeIndex::<i32>::try_new(index, column_type)?),
-        Type::INT64 => Arc::new(NativeIndex::<i64>::try_new(index, column_type)?),
-        Type::INT96 => Arc::new(NativeIndex::<Int96>::try_new(index, column_type)?),
-        Type::FLOAT => Arc::new(NativeIndex::<f32>::try_new(index, column_type)?),
-        Type::DOUBLE => Arc::new(NativeIndex::<f64>::try_new(index, column_type)?),
-        Type::BYTE_ARRAY => Arc::new(ByteArrayIndex::try_new(index, column_type)?),
+        Type::BOOLEAN => Index::BOOLEAN(BooleanIndex::try_new(index)?),
+        Type::INT32 => Index::INT32(NativeIndex::<i32>::try_new(index, column_type)?),
+        Type::INT64 => Index::INT64(NativeIndex::<i64>::try_new(index, column_type)?),
+        Type::INT96 => Index::INT96(NativeIndex::<Int96>::try_new(index, column_type)?),
+        Type::FLOAT => Index::FLOAT(NativeIndex::<f32>::try_new(index, column_type)?),
+        Type::DOUBLE => Index::DOUBLE(NativeIndex::<f64>::try_new(index, column_type)?),
+        Type::BYTE_ARRAY => {
+            Index::BYTE_ARRAY(ByteArrayIndex::try_new(index, column_type)?)
+        }
         Type::FIXED_LEN_BYTE_ARRAY => {
-            Arc::new(ByteArrayIndex::try_new(index, column_type)?)
+            Index::FIXED_LEN_BYTE_ARRAY(ByteArrayIndex::try_new(index, column_type)?)
         }
     };
 
