@@ -103,13 +103,13 @@ impl ParquetMetaData {
     }
 
     /// Returns page indexes in this file.
-    pub fn page_indexes(&self) -> &Option<Vec<Arc<dyn Index>>> {
-        &self.page_indexes
+    pub fn page_indexes(&self) -> Option<&Vec<Arc<dyn Index>>> {
+        self.page_indexes.as_ref()
     }
 
     /// Returns offset indexes in this file.
     pub fn offset_indexes(&self) -> Option<&Vec<Vec<PageLocation>>> {
-        &self.offset_indexes
+        self.offset_indexes.as_ref()
     }
 }
 

@@ -36,14 +36,14 @@ pub struct PageIndex<T> {
 }
 
 impl<T> PageIndex<T> {
-    pub fn min(&self) -> &Option<T> {
-        &self.min
+    pub fn min(&self) -> Option<&T> {
+        self.min.as_ref()
     }
-    pub fn max(&self) -> &Option<T> {
-        &self.max
+    pub fn max(&self) -> Option<&T> {
+        self.max.as_ref()
     }
-    pub fn null_count(&self) -> &Option<i64> {
-        &self.null_count
+    pub fn null_count(&self) -> Option<i64> {
+        self.null_count
     }
 }
 
@@ -93,12 +93,12 @@ fn equal(lhs: &dyn Index, rhs: &dyn Index) -> bool {
                 == rhs.as_any().downcast_ref::<NativeIndex<f64>>().unwrap()
         }
         Type::BYTE_ARRAY => {
-            lhs.as_any().downcast_ref::<ByteIndex>().unwrap()
-                == rhs.as_any().downcast_ref::<ByteIndex>().unwrap()
+            lhs.as_any().downcast_ref::<ByteArrayIndex>().unwrap()
+                == rhs.as_any().downcast_ref::<ByteArrayIndex>().unwrap()
         }
         Type::FIXED_LEN_BYTE_ARRAY => {
-            lhs.as_any().downcast_ref::<ByteIndex>().unwrap()
-                == rhs.as_any().downcast_ref::<ByteIndex>().unwrap()
+            lhs.as_any().downcast_ref::<ByteArrayIndex>().unwrap()
+                == rhs.as_any().downcast_ref::<ByteArrayIndex>().unwrap()
         }
     }
 }
@@ -177,7 +177,7 @@ pub struct ByteArrayIndex {
     pub boundary_order: BoundaryOrder,
 }
 
-impl ByteIndex {
+impl ByteArrayIndex {
     pub(crate) fn try_new(
         index: ColumnIndex,
         physical_type: Type,
@@ -217,7 +217,7 @@ impl ByteIndex {
     }
 }
 
-impl Index for ByteIndex {
+impl Index for ByteArrayIndex {
     fn as_any(&self) -> &dyn Any {
         self
     }

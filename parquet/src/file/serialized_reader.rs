@@ -133,16 +133,12 @@ pub struct SerializedFileReader<R: ChunkReader> {
 /// they will be chained using 'AND' to filter the row groups.
 pub struct ReadOptionsBuilder {
     predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
-    enable_page_index: bool,
 }
 
 impl ReadOptionsBuilder {
     /// New builder
     pub fn new() -> Self {
-        ReadOptionsBuilder {
-            predicates: vec![],
-            enable_page_index: false,
-        }
+        ReadOptionsBuilder { predicates: vec![] }
     }
 
     /// Add a predicate on row group metadata to the reading option,
@@ -152,13 +148,6 @@ impl ReadOptionsBuilder {
         predicate: Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>,
     ) -> Self {
         self.predicates.push(predicate);
-        self
-    }
-
-    /// Add a predicate on column chunk metadata to the reading option,
-    /// Filter pages that match the predicate criteria
-    pub fn with_page_index_pushdown(mut self, enable_page_index: bool) -> Self {
-        self.enable_page_index = enable_page_index;
         self
     }
 
@@ -178,7 +167,6 @@ impl ReadOptionsBuilder {
     pub fn build(self) -> ReadOptions {
         ReadOptions {
             predicates: self.predicates,
-            enable_page_index: self.enable_page_index,
         }
     }
 }
@@ -189,7 +177,6 @@ impl ReadOptionsBuilder {
 /// All predicates will be chained using 'AND' to filter the row groups.
 pub struct ReadOptions {
     predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
-    enable_page_index: bool,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -510,7 +497,7 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
 mod tests {
     use super::*;
     use crate::basic::{self, ColumnOrder};
-    use crate::file::page_index::index::ByteIndex;
+    use crate::file::page_index::index::ByteArrayIndex;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::{get_test_file, get_test_path};
@@ -1019,12 +1006,15 @@ mod tests {
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 1);
 
-        let page_indexes = metadata.page_indexes().clone().unwrap();
+        let page_indexes = metadata.page_indexes().unwrap();
 
         // only one row group
         assert_eq!(page_indexes.len(), 1);
         let page_indexes = page_indexes.get(0).unwrap();
-        let index = page_indexes.as_any().downcast_ref::<ByteIndex>().unwrap();
+        let index = page_indexes
+            .as_any()
+            .downcast_ref::<ByteArrayIndex>()
+            .unwrap();
 
         assert_eq!(index.boundary_order, BoundaryOrder::Ascending);
         let index_in_pages = &index.indexes;
@@ -1038,7 +1028,7 @@ mod tests {
         assert_eq!("Hello", std::str::from_utf8(min.as_slice()).unwrap());
         assert_eq!("today", std::str::from_utf8(max.as_slice()).unwrap());
 
-        let offset_indexes = metadata.offset_indexes().clone().unwrap();
+        let offset_indexes = metadata.offset_indexes().unwrap();
         // only one row group
         assert_eq!(offset_indexes.len(), 1);
         let offset_index = offset_indexes.get(0).unwrap();
