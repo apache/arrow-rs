@@ -2731,6 +2731,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal_full_validation() {
         let values_builder = UInt8Builder::new(10);
         let byte_width = 16;

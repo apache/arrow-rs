@@ -1498,6 +1498,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal_append_error_value() {
         let mut decimal_builder = DecimalBuilder::new(10, 5, 3);
         let mut result = decimal_builder.append_value(123456);

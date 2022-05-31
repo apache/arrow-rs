@@ -3417,14 +3417,14 @@ mod tests {
 
     #[test]
     fn test_decimal_builder() {
-        let mut builder = DecimalBuilder::new(30, 23, 6);
+        let mut builder = DecimalBuilder::new(30, 38, 6);
 
         builder.append_value(8_887_000_000).unwrap();
         builder.append_null().unwrap();
         builder.append_value(-8_887_000_000).unwrap();
         let decimal_array: DecimalArray = builder.finish();
 
-        assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
+        assert_eq!(&DataType::Decimal(38, 6), decimal_array.data_type());
         assert_eq!(3, decimal_array.len());
         assert_eq!(1, decimal_array.null_count());
         assert_eq!(32, decimal_array.value_offset(2));

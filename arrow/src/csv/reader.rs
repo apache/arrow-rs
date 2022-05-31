@@ -1203,8 +1203,8 @@ mod tests {
     fn test_csv_reader_with_decimal() {
         let schema = Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
-            Field::new("lat", DataType::Decimal(26, 6), false),
-            Field::new("lng", DataType::Decimal(26, 6), false),
+            Field::new("lat", DataType::Decimal(38, 6), false),
+            Field::new("lng", DataType::Decimal(38, 6), false),
         ]);
 
         let file = File::open("test/data/decimal_test.csv").unwrap();
