@@ -1486,7 +1486,7 @@ mod tests {
             192, 219, 180, 17, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 36, 75, 238, 253,
             255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
         ];
-        let array_data = ArrayData::builder(DataType::Decimal(23, 6))
+        let array_data = ArrayData::builder(DataType::Decimal(38, 6))
             .len(2)
             .add_buffer(Buffer::from(&values[..]))
             .build()
