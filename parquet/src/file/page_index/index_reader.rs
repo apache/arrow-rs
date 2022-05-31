@@ -80,6 +80,8 @@ pub fn read_pages_locations<R: ChunkReader>(
     Ok(result)
 }
 
+//Get File offsets of every ColumnChunk's page_index
+//If there are invalid offset return a zero offset with empty lengths.
 fn get_index_offset_and_lengths(
     chunks: &[ColumnChunkMetaData],
 ) -> Result<(u64, Vec<usize>), ParquetError> {
@@ -113,6 +115,8 @@ fn get_index_offset_and_lengths(
     Ok((offset, lengths))
 }
 
+//Get File offset of ColumnChunk's pages_locations
+//If there are invalid offset return a zero offset with zero length.
 fn get_location_offset_and_total_length(
     chunks: &[ColumnChunkMetaData],
 ) -> Result<(u64, usize), ParquetError> {
@@ -128,22 +132,11 @@ fn get_location_offset_and_total_length(
         return Ok((0, 0));
     };
 
-    let lengths = chunks
+    let total_length = chunks
         .iter()
-        .map(|x| x.offset_index_length())
-        .map(|maybe_length| {
-            let index_length = maybe_length.ok_or_else(|| {
-                ParquetError::General(
-                    "The offset_index_length must exist if offset_index_offset exists"
-                        .to_string(),
-                )
-            })?;
-
-            Ok(index_length.try_into().unwrap())
-        })
-        .collect::<Result<Vec<_>, ParquetError>>()?;
-
-    Ok((offset, lengths.iter().sum()))
+        .map(|x| x.offset_index_length().unwrap())
+        .sum::<i32>() as usize;
+    Ok((offset, total_length))
 }
 
 fn deserialize_column_index(
