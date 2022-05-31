@@ -133,12 +133,16 @@ pub struct SerializedFileReader<R: ChunkReader> {
 /// they will be chained using 'AND' to filter the row groups.
 pub struct ReadOptionsBuilder {
     predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
+    enable_page_index: bool,
 }
 
 impl ReadOptionsBuilder {
     /// New builder
     pub fn new() -> Self {
-        ReadOptionsBuilder { predicates: vec![] }
+        ReadOptionsBuilder {
+            predicates: vec![],
+            enable_page_index: false,
+        }
     }
 
     /// Add a predicate on row group metadata to the reading option,
@@ -163,10 +167,17 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Enable page index in the reading option,
+    pub fn with_page_index(mut self) -> Self {
+        self.enable_page_index = true;
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         ReadOptions {
             predicates: self.predicates,
+            enable_page_index: self.enable_page_index,
         }
     }
 }
@@ -177,6 +188,7 @@ impl ReadOptionsBuilder {
 /// All predicates will be chained using 'AND' to filter the row groups.
 pub struct ReadOptions {
     predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
+    enable_page_index: bool,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -187,27 +199,6 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
             metadata,
-        })
-    }
-
-    /// Creates file reader from a Parquet file with page Index.
-    /// Returns error if Parquet file does not exist or is corrupt.
-    pub fn new_with_page_index(chunk_reader: R) -> Result<Self> {
-        let metadata = footer::parse_metadata(&chunk_reader)?;
-        //Todo for now test data `data_index_bloom_encoding_stats.parquet` only have one rowgroup
-        //support multi after create multi-RG test data.
-        let cols = metadata.row_group(0);
-        let columns_indexes =
-            index_reader::read_columns_indexes(&chunk_reader, cols.columns())?;
-        let pages_locations =
-            index_reader::read_pages_locations(&chunk_reader, cols.columns())?;
-        Ok(Self {
-            chunk_reader: Arc::new(chunk_reader),
-            metadata: ParquetMetaData::new_with_page_index(
-                metadata,
-                Some(columns_indexes),
-                Some(pages_locations),
-            ),
         })
     }
 
@@ -231,13 +222,33 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
             }
         }
 
-        Ok(Self {
-            chunk_reader: Arc::new(chunk_reader),
-            metadata: ParquetMetaData::new(
-                metadata.file_metadata().clone(),
-                filtered_row_groups,
-            ),
-        })
+        if options.enable_page_index {
+            //Todo for now test data `data_index_bloom_encoding_stats.parquet` only have one rowgroup
+            //support multi after create multi-RG test data.
+            let cols = metadata.row_group(0);
+            let columns_indexes =
+                index_reader::read_columns_indexes(&chunk_reader, cols.columns())?;
+            let pages_locations =
+                index_reader::read_pages_locations(&chunk_reader, cols.columns())?;
+
+            Ok(Self {
+                chunk_reader: Arc::new(chunk_reader),
+                metadata: ParquetMetaData::new_with_page_index(
+                    metadata.file_metadata().clone(),
+                    filtered_row_groups,
+                    Some(columns_indexes),
+                    Some(pages_locations),
+                ),
+            })
+        } else {
+            Ok(Self {
+                chunk_reader: Arc::new(chunk_reader),
+                metadata: ParquetMetaData::new(
+                    metadata.file_metadata().clone(),
+                    filtered_row_groups,
+                ),
+            })
+        }
     }
 }
 
@@ -999,7 +1010,10 @@ mod tests {
     //
     fn test_page_index_reader() {
         let test_file = get_test_file("data_index_bloom_encoding_stats.parquet");
-        let reader_result = SerializedFileReader::new_with_page_index(test_file);
+        let builder = ReadOptionsBuilder::new();
+        //enable read page index
+        let options = builder.with_page_index().build();
+        let reader_result = SerializedFileReader::new_with_options(test_file, options);
         let reader = reader_result.unwrap();
 
         // Test contents in Parquet metadata
