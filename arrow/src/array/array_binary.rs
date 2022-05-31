@@ -1056,7 +1056,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        array::{LargeListArray, ListArray},
+        array::{DecimalBuilder, LargeListArray, ListArray},
         datatypes::{Field, Schema},
         record_batch::RecordBatch,
     };
@@ -1495,6 +1495,27 @@ mod tests {
         assert_eq!(8_887_000_000, decimal_array.value(0));
         assert_eq!(-8_887_000_000, decimal_array.value(1));
         assert_eq!(16, decimal_array.value_length());
+    }
+
+    #[test]
+    fn test_decimal_append_error_value() {
+        let mut decimal_builder = DecimalBuilder::new(10, 5, 3);
+        let mut result = decimal_builder.append_value(123456);
+        assert!(result.is_ok());
+        decimal_builder.append_value(12345).unwrap();
+        let arr = decimal_builder.finish();
+        assert_eq!("12.345", arr.value_as_string(1));
+
+        decimal_builder = DecimalBuilder::new(10, 2, 1);
+        result = decimal_builder.append_value(100);
+        assert!(result.is_ok());
+        decimal_builder.append_value(99).unwrap();
+        result = decimal_builder.append_value(-100);
+        assert!(result.is_ok());
+        decimal_builder.append_value(-99).unwrap();
+        let arr = decimal_builder.finish();
+        assert_eq!("9.9", arr.value_as_string(1));
+        assert_eq!("-9.9", arr.value_as_string(3));
     }
 
     #[test]

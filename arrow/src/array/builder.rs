@@ -1477,7 +1477,7 @@ impl DecimalBuilder {
         self.builder.append(true)
     }
 
-    fn from_i128_to_fixed_size_bytes(v: i128, size: usize) -> Result<Vec<u8>> {
+    pub(crate) fn from_i128_to_fixed_size_bytes(v: i128, size: usize) -> Result<Vec<u8>> {
         if size > 16 {
             return Err(ArrowError::InvalidArgumentError(
                 "DecimalBuilder only supports values up to 16 bytes.".to_string(),

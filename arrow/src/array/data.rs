@@ -18,7 +18,7 @@
 //! Contains `ArrayData`, a generic representation of Arrow array data which encapsulates
 //! common attributes and operations for Arrow array.
 
-use crate::datatypes::{DataType, IntervalUnit, UnionMode};
+use crate::datatypes::{validate_decimal_precision, DataType, IntervalUnit, UnionMode};
 use crate::error::{ArrowError, Result};
 use crate::{bitmap::Bitmap, datatypes::ArrowNativeType};
 use crate::{
@@ -999,6 +999,27 @@ impl ArrayData {
 
     pub fn validate_dictionary_offset(&self) -> Result<()> {
         match &self.data_type {
+            DataType::Decimal(p, _) => {
+                let values_buffer = &self.buffers[0];
+
+                for pos in 0..values_buffer.len() {
+                    let raw_val = unsafe {
+                        std::slice::from_raw_parts(
+                            values_buffer.as_ptr().offset(pos as isize),
+                            16 as usize,
+                        )
+                    };
+                    let as_array = raw_val.try_into();
+                    match as_array {
+                        Ok(v) if raw_val.len() == 16 => {
+                            let value = i128::from_le_bytes(v);
+                            validate_decimal_precision(value, *p)?;
+                        },
+                        _ => panic!("The elements of ArrayData with Decimal type are not 128bit integers."),
+                    }
+                }
+                Ok(())
+            }
             DataType::Utf8 => self.validate_utf8::<i32>(),
             DataType::LargeUtf8 => self.validate_utf8::<i64>(),
             DataType::Binary => self.validate_offsets_full::<i32>(self.buffers[1].len()),
@@ -1492,8 +1513,9 @@ mod tests {
     use std::ptr::NonNull;
 
     use crate::array::{
-        make_array, Array, BooleanBuilder, Int32Array, Int32Builder, Int64Array,
-        StringArray, StructBuilder, UInt64Array,
+        make_array, Array, BooleanBuilder, DecimalBuilder, FixedSizeListBuilder,
+        Int32Array, Int32Builder, Int64Array, StringArray, StructBuilder, UInt64Array,
+        UInt8Builder,
     };
     use crate::buffer::Buffer;
     use crate::datatypes::Field;
@@ -2706,5 +2728,36 @@ mod tests {
             StringArray::from(vec![None, Some("foo"), Some("bar"), Some("foobar")]);
 
         assert_eq!(array, &expected);
+    }
+
+    #[test]
+    fn test_decimal_full_validation() {
+        let values_builder = UInt8Builder::new(10);
+        let byte_width = 16;
+        let mut fixed_size_builder =
+            FixedSizeListBuilder::new(values_builder, byte_width);
+        let value_as_bytes = DecimalBuilder::from_i128_to_fixed_size_bytes(
+            123456,
+            fixed_size_builder.value_length() as usize,
+        )
+        .unwrap();
+        fixed_size_builder
+            .values()
+            .append_slice(value_as_bytes.as_slice())
+            .unwrap();
+        fixed_size_builder.append(true).unwrap();
+        let fixed_size_array = fixed_size_builder.finish();
+
+        // Build ArrayData for Decimal
+        let builder = ArrayData::builder(DataType::Decimal(5, 3))
+            .len(fixed_size_array.len())
+            .add_buffer(fixed_size_array.data_ref().child_data()[0].buffers()[0].clone());
+        let array_data = unsafe { builder.build_unchecked() };
+        let validation_result = array_data.validate_full();
+        let error = validation_result.unwrap_err();
+        assert_eq!(
+            "Invalid argument error: 123456 is too large to store in a Decimal of precision 5. Max is 99999",
+            error.to_string()
+        );
     }
 }
