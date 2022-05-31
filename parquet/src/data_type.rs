@@ -591,8 +591,6 @@ pub(crate) mod private {
         + super::SliceAsBytes
         + PartialOrd
         + Send
-        + Sync
-        + 'static
         + crate::encodings::decoding::private::GetDecoder
     {
         /// Encode the value directly from a higher level encoder
