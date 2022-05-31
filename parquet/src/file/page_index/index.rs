@@ -19,7 +19,7 @@ use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::Int96;
 use crate::errors::ParquetError;
-use crate::util::bit_util::from_ne_slice;
+use crate::util::bit_util::from_le_slice;
 use parquet_format::{BoundaryOrder, ColumnIndex};
 use std::fmt::Debug;
 
@@ -94,7 +94,7 @@ impl<T: ParquetValueType> NativeIndex<T> {
                 } else {
                     let min = min.as_slice();
                     let max = max.as_slice();
-                    (Some(from_ne_slice::<T>(min)), Some(from_ne_slice::<T>(max)))
+                    (Some(from_le_slice::<T>(min)), Some(from_le_slice::<T>(max)))
                 };
                 Ok(PageIndex {
                     min,

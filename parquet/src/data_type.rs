@@ -1196,8 +1196,8 @@ make_type!(
 
 impl FromBytes for Int96 {
     type Buffer = [u8; 12];
-    fn from_le_bytes(_bs: Self::Buffer) -> Self {
-        unimplemented!()
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        Self::from_ne_bytes(bs)
     }
     fn from_be_bytes(_bs: Self::Buffer) -> Self {
         unimplemented!()
@@ -1217,8 +1217,8 @@ impl FromBytes for Int96 {
 // appear to actual be converted directly from bytes
 impl FromBytes for ByteArray {
     type Buffer = [u8; 8];
-    fn from_le_bytes(_bs: Self::Buffer) -> Self {
-        unreachable!()
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        ByteArray::from(bs.to_vec())
     }
     fn from_be_bytes(_bs: Self::Buffer) -> Self {
         unreachable!()
@@ -1231,8 +1231,8 @@ impl FromBytes for ByteArray {
 impl FromBytes for FixedLenByteArray {
     type Buffer = [u8; 8];
 
-    fn from_le_bytes(_bs: Self::Buffer) -> Self {
-        unreachable!()
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        Self(ByteArray::from(bs.to_vec()))
     }
     fn from_be_bytes(_bs: Self::Buffer) -> Self {
         unreachable!()
