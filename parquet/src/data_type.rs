@@ -30,7 +30,7 @@ use crate::column::reader::{ColumnReader, ColumnReaderImpl};
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
 use crate::util::{
-    bit_util::{from_ne_slice, FromBytes},
+    bit_util::{from_le_slice, from_ne_slice, FromBytes},
     memory::ByteBufferPtr,
 };
 
@@ -1194,8 +1194,14 @@ make_type!(
 
 impl FromBytes for Int96 {
     type Buffer = [u8; 12];
-    fn from_le_bytes(_bs: Self::Buffer) -> Self {
-        unimplemented!()
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        let mut i = Int96::new();
+        i.set_data(
+            from_le_slice(&bs[0..4]),
+            from_le_slice(&bs[4..8]),
+            from_le_slice(&bs[8..12]),
+        );
+        i
     }
     fn from_be_bytes(_bs: Self::Buffer) -> Self {
         unimplemented!()
@@ -1215,8 +1221,8 @@ impl FromBytes for Int96 {
 // appear to actual be converted directly from bytes
 impl FromBytes for ByteArray {
     type Buffer = [u8; 8];
-    fn from_le_bytes(_bs: Self::Buffer) -> Self {
-        unreachable!()
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        ByteArray::from(bs.to_vec())
     }
     fn from_be_bytes(_bs: Self::Buffer) -> Self {
         unreachable!()
@@ -1229,8 +1235,8 @@ impl FromBytes for ByteArray {
 impl FromBytes for FixedLenByteArray {
     type Buffer = [u8; 8];
 
-    fn from_le_bytes(_bs: Self::Buffer) -> Self {
-        unreachable!()
+    fn from_le_bytes(bs: Self::Buffer) -> Self {
+        Self(ByteArray::from(bs.to_vec()))
     }
     fn from_be_bytes(_bs: Self::Buffer) -> Self {
         unreachable!()

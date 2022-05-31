@@ -41,7 +41,7 @@ pub use parquet_format::{
 /// control the on disk storage format.
 /// For example INT16 is not included as a type since a good encoding of INT32
 /// would handle this.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Type {
     BOOLEAN,
     INT32,

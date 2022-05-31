@@ -32,6 +32,17 @@ pub fn from_ne_slice<T: FromBytes>(bs: &[u8]) -> T {
     T::from_ne_bytes(b)
 }
 
+#[inline]
+pub fn from_le_slice<T: FromBytes>(bs: &[u8]) -> T {
+    let mut b = T::Buffer::default();
+    {
+        let b = b.as_mut();
+        let bs = &bs[..b.len()];
+        b.copy_from_slice(bs);
+    }
+    T::from_le_bytes(b)
+}
+
 pub trait FromBytes: Sized {
     type Buffer: AsMut<[u8]> + Default;
     fn from_le_bytes(bs: Self::Buffer) -> Self;
