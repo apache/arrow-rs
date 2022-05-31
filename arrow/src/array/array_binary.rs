@@ -1056,7 +1056,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        array::{DecimalBuilder, LargeListArray, ListArray},
+        array::{LargeListArray, ListArray},
         datatypes::{Field, Schema},
         record_batch::RecordBatch,
     };
