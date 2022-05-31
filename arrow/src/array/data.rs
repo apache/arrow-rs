@@ -1005,8 +1005,8 @@ impl ArrayData {
                 for pos in 0..values_buffer.len() {
                     let raw_val = unsafe {
                         std::slice::from_raw_parts(
-                            values_buffer.as_ptr().offset(pos as isize),
-                            16 as usize,
+                            values_buffer.as_ptr().add(pos),
+                            16_usize,
                         )
                     };
                     let as_array = raw_val.try_into();
