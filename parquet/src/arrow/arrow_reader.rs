@@ -32,6 +32,7 @@ use crate::arrow::ProjectionMask;
 use crate::errors::Result;
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::reader::FileReader;
+use crate::schema::types::SchemaDescriptor;
 
 /// Arrow reader api.
 /// With this api, user can get arrow schema from parquet file, and read parquet data
@@ -164,8 +165,19 @@ impl ParquetFileArrowReader {
     }
 
     /// Expose the reader metadata
+    #[deprecated = "use metadata() instead"]
     pub fn get_metadata(&mut self) -> ParquetMetaData {
         self.file_reader.metadata().clone()
+    }
+
+    /// Returns the parquet metadata
+    pub fn metadata(&self) -> &ParquetMetaData {
+        self.file_reader.metadata()
+    }
+
+    /// Returns the parquet schema
+    pub fn parquet_schema(&self) -> &SchemaDescriptor {
+        self.file_reader.metadata().file_metadata().schema_descr()
     }
 
     /// Returns the key value metadata, returns `None` if [`ArrowReaderOptions::skip_arrow_metadata`]
