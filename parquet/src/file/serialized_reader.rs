@@ -18,6 +18,7 @@
 //! Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
+use bytes::{Buf, Bytes};
 use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
 
 use parquet_format::{PageHeader, PageType};
@@ -36,6 +37,7 @@ use crate::util::{io::TryClone, memory::ByteBufferPtr};
 
 // export `SliceableCursor` and `FileSource` publically so clients can
 // re-use the logic in their own ParquetFileWriter wrappers
+#[allow(deprecated)]
 pub use crate::util::{cursor::SliceableCursor, io::FileSource};
 
 // ----------------------------------------------------------------------
@@ -61,12 +63,35 @@ impl ChunkReader for File {
     }
 }
 
+impl Length for Bytes {
+    fn len(&self) -> u64 {
+        self.len() as u64
+    }
+}
+
+impl TryClone for Bytes {
+    fn try_clone(&self) -> std::io::Result<Self> {
+        Ok(self.clone())
+    }
+}
+
+impl ChunkReader for Bytes {
+    type T = bytes::buf::Reader<Bytes>;
+
+    fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
+        let start = start as usize;
+        Ok(self.slice(start..start + length).reader())
+    }
+}
+
+#[allow(deprecated)]
 impl Length for SliceableCursor {
     fn len(&self) -> u64 {
         SliceableCursor::len(self)
     }
 }
 
+#[allow(deprecated)]
 impl ChunkReader for SliceableCursor {
     type T = SliceableCursor;
 
@@ -521,7 +546,7 @@ mod tests {
         get_test_file("alltypes_plain.parquet")
             .read_to_end(&mut buf)
             .unwrap();
-        let cursor = SliceableCursor::new(buf);
+        let cursor = Bytes::from(buf);
         let read_from_cursor = SerializedFileReader::new(cursor).unwrap();
 
         let test_file = get_test_file("alltypes_plain.parquet");

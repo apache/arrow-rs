@@ -689,6 +689,7 @@ fn get_fsb_array_slice(
 mod tests {
     use super::*;
 
+    use bytes::Bytes;
     use std::fs::File;
     use std::sync::Arc;
 
@@ -750,7 +751,7 @@ mod tests {
             writer.close().unwrap();
         }
 
-        let cursor = crate::file::serialized_reader::SliceableCursor::new(buffer);
+        let cursor = Bytes::from(buffer);
         let reader = SerializedFileReader::new(cursor).unwrap();
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
         let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
