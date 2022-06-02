@@ -153,6 +153,11 @@ impl<W: Write> SerializedFileWriter<W> {
         Ok(row_group_writer)
     }
 
+    /// Returns metadata for any flushed row groups
+    pub fn flushed_row_groups(&self) -> &[RowGroupMetaDataPtr] {
+        &self.row_groups
+    }
+
     /// Closes and finalises file writer, returning the file metadata.
     ///
     /// All row groups must be appended before this method is called.
