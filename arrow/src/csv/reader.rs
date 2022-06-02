@@ -137,11 +137,12 @@ pub fn infer_file_schema<R: Read + Seek>(
 
 fn infer_file_schema_with_csv_options<R: Read + Seek>(
     mut reader: R,
-    roptoins: ReaderOptions,
+    roptions: ReaderOptions,
 ) -> Result<(Schema, usize)> {
     let saved_offset = reader.seek(SeekFrom::Current(0))?;
 
-    let (schema, records_count) = infer_reader_schema_with_csv_options(reader, roptoins)?;
+    let (schema, records_count) =
+        infer_reader_schema_with_csv_options(&mut reader, roptions)?;
     // return the reader seek back to the start
     reader.seek(SeekFrom::Start(saved_offset))?;
 
