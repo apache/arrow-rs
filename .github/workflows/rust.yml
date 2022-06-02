@@ -41,14 +41,14 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Cache Cargo
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           # these represent dependencies downloaded by cargo
           # and thus do not depend on the OS, arch nor rust version.
           path: /github/home/.cargo
           key: cargo-cache3-
       - name: Cache Rust dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           # these represent compiled steps of both dependencies and arrow
           # and thus are specific for a particular OS, arch and rust version.
@@ -86,13 +86,13 @@ jobs:
         with:
           submodules: true
       - name: Cache Cargo
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
           key: cargo-cache3-
       - name: Cache Rust dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
@@ -154,12 +154,12 @@ jobs:
         with:
           submodules: true
       - name: Cache Cargo
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/.cargo
           key: cargo-nightly-cache3-
       - name: Cache Rust dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
@@ -226,13 +226,13 @@ jobs:
         with:
           submodules: true
       - name: Cache Cargo
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
           key: cargo-cache3-
       - name: Cache Rust dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
@@ -268,13 +268,13 @@ jobs:
         with:
           submodules: true
       - name: Cache Cargo
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
           key: cargo-cache3-
       - name: Cache Rust dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
@@ -321,13 +321,13 @@ jobs:
           rustup default ${{ matrix.rust }}
           rustup component add rustfmt clippy
       - name: Cache Cargo
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /home/runner/.cargo
           # this key is not equal because the user is different than on a container (runner vs github)
           key: cargo-coverage-cache3-
       - name: Cache Rust dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /home/runner/target
           # this key is not equal because coverage uses different compilation flags.
@@ -369,12 +369,12 @@ jobs:
         with:
           submodules: true
       - name: Cache Cargo
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/.cargo
           key: cargo-wasm32-cache3-
       - name: Cache Rust dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-wasm32-cache3-${{ matrix.rust }}
@@ -416,12 +416,12 @@ jobs:
           apt update
           apt install -y libpython3.9-dev
       - name: Cache Cargo
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/.cargo
           key: cargo-nightly-cache3-
       - name: Cache Rust dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/target
           key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
@@ -453,13 +453,13 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Cache Cargo
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/.cargo
           # this key equals the ones on `linux-build-lib` for re-use
           key: cargo-cache3-
       - name: Cache Rust dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
