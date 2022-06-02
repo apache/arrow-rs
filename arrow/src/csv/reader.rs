@@ -120,7 +120,7 @@ pub struct ReaderOptions {
 /// Return inferred schema and number of records used for inference. This function does not change
 /// reader cursor offset.
 pub fn infer_file_schema<R: Read + Seek>(
-    reader: &mut R,
+    reader: R,
     delimiter: u8,
     max_read_records: Option<usize>,
     has_header: bool,
@@ -136,7 +136,7 @@ pub fn infer_file_schema<R: Read + Seek>(
 }
 
 fn infer_file_schema_with_csv_options<R: Read + Seek>(
-    reader: &mut R,
+    mut reader: R,
     roptoins: ReaderOptions,
 ) -> Result<(Schema, usize)> {
     let saved_offset = reader.seek(SeekFrom::Current(0))?;
@@ -155,7 +155,7 @@ fn infer_file_schema_with_csv_options<R: Read + Seek>(
 ///
 /// Return infered schema and number of records used for inference.
 pub fn infer_reader_schema<R: Read>(
-    reader: &mut R,
+    reader: R,
     delimiter: u8,
     max_read_records: Option<usize>,
     has_header: bool,
@@ -170,7 +170,7 @@ pub fn infer_reader_schema<R: Read>(
 }
 
 fn infer_reader_schema_with_csv_options<R: Read>(
-    reader: &mut R,
+    reader: R,
     roptions: ReaderOptions,
 ) -> Result<(Schema, usize)> {
     let mut csv_reader = Reader::build_csv_reader(
