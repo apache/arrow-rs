@@ -146,6 +146,18 @@ impl ArrowReader for ParquetFileArrowReader {
 
 impl ParquetFileArrowReader {
     /// Create a new [`ParquetFileArrowReader`] with the provided [`ChunkReader`]
+    ///
+    /// ```no_run
+    /// # use std::fs::File;
+    /// # use bytes::Bytes;
+    /// # use parquet::arrow::ParquetFileArrowReader;
+    ///
+    /// let file = File::open("file.parquet").unwrap();
+    /// let reader = ParquetFileArrowReader::try_new(file).unwrap();
+    ///
+    /// let bytes = Bytes::from(vec![]);
+    /// let reader = ParquetFileArrowReader::try_new(bytes).unwrap();
+    /// ```
     pub fn try_new<R: ChunkReader + 'static>(chunk_reader: R) -> Result<Self> {
         Self::try_new_with_options(chunk_reader, Default::default())
     }
