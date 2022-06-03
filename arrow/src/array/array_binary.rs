@@ -1502,12 +1502,32 @@ mod tests {
     fn test_decimal_append_error_value() {
         let mut decimal_builder = DecimalBuilder::new(10, 5, 3);
         let mut result = decimal_builder.append_value(123456);
+        let mut error = result.unwrap_err();
+        assert_eq!(
+            "Invalid argument error: 123456 is too large to store in a Decimal of precision 5. Max is 99999",
+            error.to_string()
+        );
+
+        unsafe {
+            decimal_builder.disable_value_validation();
+        }
+        result = decimal_builder.append_value(123456);
         assert!(result.is_ok());
         decimal_builder.append_value(12345).unwrap();
         let arr = decimal_builder.finish();
         assert_eq!("12.345", arr.value_as_string(1));
 
         decimal_builder = DecimalBuilder::new(10, 2, 1);
+        result = decimal_builder.append_value(100);
+        error = result.unwrap_err();
+        assert_eq!(
+            "Invalid argument error: 100 is too large to store in a Decimal of precision 2. Max is 99",
+            error.to_string()
+        );
+
+        unsafe {
+            decimal_builder.disable_value_validation();
+        }
         result = decimal_builder.append_value(100);
         assert!(result.is_ok());
         decimal_builder.append_value(99).unwrap();
