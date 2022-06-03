@@ -96,12 +96,9 @@
 //! # writer.close().unwrap();
 //!
 //! let file = File::open("data.parquet").unwrap();
-//! let file_reader = SerializedFileReader::new(file).unwrap();
 //!
-//! let file_metadata = file_reader.metadata().file_metadata();
-//! let mask = ProjectionMask::leaves(file_metadata.schema_descr(), [0]);
-//!
-//! let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
+//! let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
+//! let mask = ProjectionMask::leaves(arrow_reader.parquet_schema(), [0]);
 //!
 //! println!("Converted arrow schema is: {}", arrow_reader.get_schema().unwrap());
 //! println!("Arrow schema after projection is: {}",
