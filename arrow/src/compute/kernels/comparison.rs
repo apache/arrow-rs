@@ -1676,7 +1676,8 @@ where
         ));
     }
 
-    let null_bit_buffer = combine_option_bitmap(&[left.data_ref(), right.data_ref()], len)?;
+    let null_bit_buffer =
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], len)?;
 
     // we process the data in chunks so that each iteration results in one u64 of comparison result bits
     const CHUNK_SIZE: usize = 64;

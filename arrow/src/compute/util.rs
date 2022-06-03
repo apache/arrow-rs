@@ -32,33 +32,40 @@ pub(super) fn combine_option_bitmap(
     arrays: &[&ArrayData],
     len_in_bits: usize,
 ) -> Result<Option<Buffer>> {
-
     if arrays.is_empty() {
         return Err(ArrowError::ComputeError(format!(
             "Arrays must not be empty"
         )));
     }
-    
-    let mut buffers = arrays.iter().map(|array| (array.null_buffer(), array.offset()));
+
+    let mut buffers = arrays
+        .iter()
+        .map(|array| (array.null_buffer(), array.offset()));
 
     let init = buffers.next().unwrap();
-    Ok(buffers.fold(
-        (init.0.map(|b| b.clone()), init.1), |acc, buffer| {
+    Ok(buffers
+        .fold((init.0.map(|b| b.clone()), init.1), |acc, buffer| {
             match (acc, buffer) {
                 ((None, _), (None, _)) => (None, 0),
                 ((Some(buffer), offset), (None, _)) => (Some(buffer), offset),
                 ((None, _), (Some(buffer), offset)) => (Some(buffer.clone()), offset),
-                ((Some(buffer_left), offset_left), (Some(buffer_right), offset_right)) =>
-                (Some(buffer_bin_and(
-                    &buffer_left,
-                    offset_left,
-                    buffer_right,
-                    offset_right,
-                    len_in_bits
-                )), 0)
+                (
+                    (Some(buffer_left), offset_left),
+                    (Some(buffer_right), offset_right),
+                ) => (
+                    Some(buffer_bin_and(
+                        &buffer_left,
+                        offset_left,
+                        buffer_right,
+                        offset_right,
+                        len_in_bits,
+                    )),
+                    0,
+                ),
             }
-        }).0)
-    }
+        })
+        .0)
+}
 
 /// Takes/filters a list array's inner data using the offsets of the list array.
 ///
@@ -210,7 +217,7 @@ pub(super) mod tests {
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b10110101])));
         let some_other_bitmap =
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b11010111])));
-        
+
         assert!(combine_option_bitmap(&[], 8).is_err());
         assert_eq!(
             Some(Buffer::from([0b01001010])),
@@ -238,7 +245,8 @@ pub(super) mod tests {
         );
         assert_eq!(
             Some(Buffer::from([0b01000010])),
-            combine_option_bitmap(&[&some_bitmap, &some_other_bitmap, &none_bitmap], 8,).unwrap()
+            combine_option_bitmap(&[&some_bitmap, &some_other_bitmap, &none_bitmap], 8,)
+                .unwrap()
         );
     }
 
