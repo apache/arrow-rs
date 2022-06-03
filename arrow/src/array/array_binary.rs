@@ -1480,7 +1480,7 @@ mod tests {
             192, 219, 180, 17, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 36, 75, 238, 253,
             255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
         ];
-        let array_data = ArrayData::builder(DataType::Decimal(23, 6))
+        let array_data = ArrayData::builder(DataType::Decimal(38, 6))
             .len(2)
             .add_buffer(Buffer::from(&values[..]))
             .build()
@@ -1492,6 +1492,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal_append_error_value() {
         let mut decimal_builder = DecimalBuilder::new(10, 5, 3);
         let mut result = decimal_builder.append_value(123456);
@@ -1500,9 +1501,15 @@ mod tests {
             "Invalid argument error: 123456 is too large to store in a Decimal of precision 5. Max is 99999",
             error.to_string()
         );
+
+        unsafe {
+            decimal_builder.disable_value_validation();
+        }
+        result = decimal_builder.append_value(123456);
+        assert!(result.is_ok());
         decimal_builder.append_value(12345).unwrap();
         let arr = decimal_builder.finish();
-        assert_eq!("12.345", arr.value_as_string(0));
+        assert_eq!("12.345", arr.value_as_string(1));
 
         decimal_builder = DecimalBuilder::new(10, 2, 1);
         result = decimal_builder.append_value(100);
@@ -1511,18 +1518,21 @@ mod tests {
             "Invalid argument error: 100 is too large to store in a Decimal of precision 2. Max is 99",
             error.to_string()
         );
+
+        unsafe {
+            decimal_builder.disable_value_validation();
+        }
+        result = decimal_builder.append_value(100);
+        assert!(result.is_ok());
         decimal_builder.append_value(99).unwrap();
         result = decimal_builder.append_value(-100);
-        error = result.unwrap_err();
-        assert_eq!(
-            "Invalid argument error: -100 is too small to store in a Decimal of precision 2. Min is -99",
-            error.to_string()
-        );
+        assert!(result.is_ok());
         decimal_builder.append_value(-99).unwrap();
         let arr = decimal_builder.finish();
-        assert_eq!("9.9", arr.value_as_string(0));
-        assert_eq!("-9.9", arr.value_as_string(1));
+        assert_eq!("9.9", arr.value_as_string(1));
+        assert_eq!("-9.9", arr.value_as_string(3));
     }
+
     #[test]
     fn test_decimal_from_iter_values() {
         let array = DecimalArray::from_iter_values(vec![-100, 0, 101].into_iter());

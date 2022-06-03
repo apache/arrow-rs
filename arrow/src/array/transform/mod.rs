@@ -693,6 +693,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal() {
         let decimal_array =
             create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
@@ -706,6 +707,7 @@ mod tests {
         assert_eq!(array, expected);
     }
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal_offset() {
         let decimal_array =
             create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
@@ -720,6 +722,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal_null_offset_nulls() {
         let decimal_array =
             create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);

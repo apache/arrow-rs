@@ -1154,6 +1154,7 @@ mod tests {
     use crate::{datatypes, util::integration_util::*};
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn read_generated_files_014() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "0.14.1";
@@ -1274,6 +1275,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn read_generated_streams_014() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "0.14.1";

@@ -261,6 +261,7 @@ impl ParquetRecordBatchReader {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use std::cmp::min;
     use std::convert::TryFrom;
     use std::fs::File;
@@ -298,7 +299,6 @@ mod tests {
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
-    use crate::util::cursor::SliceableCursor;
     use crate::util::test_common::RandGen;
 
     #[test]
@@ -1164,7 +1164,7 @@ mod tests {
             114, 111, 119, 0, 130, 0, 0, 0, 80, 65, 82, 49,
         ];
 
-        let file = SliceableCursor::new(data);
+        let file = Bytes::from(data);
         let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
         let mut record_batch_reader = arrow_reader
             .get_record_reader_by_columns(ProjectionMask::all(), 10)
