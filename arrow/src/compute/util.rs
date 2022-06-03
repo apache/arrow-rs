@@ -33,9 +33,9 @@ pub(super) fn combine_option_bitmap(
     len_in_bits: usize,
 ) -> Result<Option<Buffer>> {
     if arrays.is_empty() {
-        return Err(ArrowError::ComputeError(format!(
-            "Arrays must not be empty"
-        )));
+        return Err(ArrowError::ComputeError(
+            "Arrays must not be empty".to_string(),
+        ));
     }
 
     let mut buffers = arrays
@@ -44,7 +44,7 @@ pub(super) fn combine_option_bitmap(
 
     let init = buffers.next().unwrap();
     Ok(buffers
-        .fold((init.0.map(|b| b.clone()), init.1), |acc, buffer| {
+        .fold((init.0.cloned(), init.1), |acc, buffer| {
             match (acc, buffer) {
                 ((None, _), (None, _)) => (None, 0),
                 ((Some(buffer), offset), (None, _)) => (Some(buffer), offset),
@@ -247,6 +247,18 @@ pub(super) mod tests {
             Some(Buffer::from([0b01000010])),
             combine_option_bitmap(&[&some_bitmap, &some_other_bitmap, &none_bitmap], 8,)
                 .unwrap()
+        );
+        assert_eq!(
+            Some(Buffer::from([0b00001001])),
+            combine_option_bitmap(
+                &[
+                    &some_bitmap.slice(3, 5),
+                    &inverse_bitmap.slice(2, 5),
+                    &some_other_bitmap.slice(1, 5)
+                ],
+                5,
+            )
+            .unwrap()
         );
     }
 
