@@ -752,8 +752,7 @@ mod tests {
         }
 
         let cursor = Bytes::from(buffer);
-        let reader = SerializedFileReader::new(cursor).unwrap();
-        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
+        let mut arrow_reader = ParquetFileArrowReader::try_new(cursor).unwrap();
         let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
 
         let actual_batch = record_batch_reader
@@ -1188,8 +1187,8 @@ mod tests {
         writer.write(&expected_batch).unwrap();
         writer.close().unwrap();
 
-        let reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
-        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
+        let mut arrow_reader =
+            ParquetFileArrowReader::try_new(file.try_clone().unwrap()).unwrap();
         let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
 
         let actual_batch = record_batch_reader
@@ -1918,10 +1917,9 @@ mod tests {
 
         writer.close().unwrap();
 
-        let reader = SerializedFileReader::new(file).unwrap();
-        assert_eq!(&row_group_sizes(reader.metadata()), &[200, 200, 50]);
+        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
+        assert_eq!(&row_group_sizes(arrow_reader.metadata()), &[200, 200, 50]);
 
-        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
         let batches = arrow_reader
             .get_record_reader(100)
             .unwrap()
@@ -2061,13 +2059,12 @@ mod tests {
         writer.close().unwrap();
 
         // Read Data
-        let reader = SerializedFileReader::new(file).unwrap();
-
         // Should have written entire first batch and first row of second to the first row group
         // leaving a single row in the second row group
-        assert_eq!(&row_group_sizes(reader.metadata()), &[6, 1]);
 
-        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
+        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
+        assert_eq!(&row_group_sizes(arrow_reader.metadata()), &[6, 1]);
+
         let batches = arrow_reader
             .get_record_reader(2)
             .unwrap()
