@@ -1165,6 +1165,10 @@ pub struct DecimalBuilder {
     builder: FixedSizeListBuilder<UInt8Builder>,
     precision: usize,
     scale: usize,
+
+    /// Should i128 values be validated for compatibility with scale and precision?
+    /// defaults to true
+    value_validation: bool,
 }
 
 impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSize> {
@@ -1455,7 +1459,18 @@ impl DecimalBuilder {
             builder: FixedSizeListBuilder::new(values_builder, byte_width),
             precision,
             scale,
+            value_validation: true,
         }
+    }
+
+    /// Disable validation
+    ///
+    /// # Safety
+    ///
+    /// After disabling validation, caller must ensure that appended values are compatible
+    /// for the specified precision and scale.
+    pub unsafe fn disable_value_validation(&mut self) {
+        self.value_validation = false;
     }
 
     /// Appends a byte slice into the builder.
@@ -1464,7 +1479,12 @@ impl DecimalBuilder {
     /// distinct array element.
     #[inline]
     pub fn append_value(&mut self, value: i128) -> Result<()> {
-        let value = validate_decimal_precision(value, self.precision)?;
+        let value = if self.value_validation {
+            validate_decimal_precision(value, self.precision)?
+        } else {
+            value
+        };
+
         let value_as_bytes = Self::from_i128_to_fixed_size_bytes(
             value,
             self.builder.value_length() as usize,
@@ -1480,7 +1500,7 @@ impl DecimalBuilder {
         self.builder.append(true)
     }
 
-    fn from_i128_to_fixed_size_bytes(v: i128, size: usize) -> Result<Vec<u8>> {
+    pub(crate) fn from_i128_to_fixed_size_bytes(v: i128, size: usize) -> Result<Vec<u8>> {
         if size > 16 {
             return Err(ArrowError::InvalidArgumentError(
                 "DecimalBuilder only supports values up to 16 bytes.".to_string(),
@@ -3420,14 +3440,14 @@ mod tests {
 
     #[test]
     fn test_decimal_builder() {
-        let mut builder = DecimalBuilder::new(30, 23, 6);
+        let mut builder = DecimalBuilder::new(30, 38, 6);
 
         builder.append_value(8_887_000_000).unwrap();
         builder.append_null().unwrap();
         builder.append_value(-8_887_000_000).unwrap();
         let decimal_array: DecimalArray = builder.finish();
 
-        assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
+        assert_eq!(&DataType::Decimal(38, 6), decimal_array.data_type());
         assert_eq!(3, decimal_array.len());
         assert_eq!(1, decimal_array.null_count());
         assert_eq!(32, decimal_array.value_offset(2));

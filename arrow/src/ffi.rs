@@ -907,6 +907,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal_round_trip() -> Result<()> {
         // create an array natively
         let original_array = [Some(12345_i128), Some(-12345_i128), None]
