@@ -1009,14 +1009,8 @@ impl ArrayData {
                             16_usize,
                         )
                     };
-                    let as_array = raw_val.try_into();
-                    match as_array {
-                        Ok(v) if raw_val.len() == 16 => {
-                            let value = i128::from_le_bytes(v);
-                            validate_decimal_precision(value, *p)?;
-                        },
-                        _ => panic!("The elements of ArrayData with Decimal type are not 128bit integers."),
-                    }
+                    let value = i128::from_le_bytes(raw_val.try_into().unwrap());
+                    validate_decimal_precision(value, *p)?;
                 }
                 Ok(())
             }
