@@ -1163,6 +1163,10 @@ pub struct DecimalBuilder {
     builder: FixedSizeListBuilder<UInt8Builder>,
     precision: usize,
     scale: usize,
+
+    /// Should i128 values be validated for compatibility with scale and precision?
+    /// defaults to true
+    value_validation: bool,
 }
 
 impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSize> {
@@ -1453,7 +1457,18 @@ impl DecimalBuilder {
             builder: FixedSizeListBuilder::new(values_builder, byte_width),
             precision,
             scale,
+            value_validation: true,
         }
+    }
+
+    /// Disable validation
+    ///
+    /// # Safety
+    ///
+    /// After disabling validation, caller must ensure that appended values are compatible
+    /// for the specified precision and scale.
+    pub unsafe fn disable_value_validation(&mut self) {
+        self.value_validation = false;
     }
 
     /// Appends a byte slice into the builder.
@@ -1462,6 +1477,12 @@ impl DecimalBuilder {
     /// distinct array element.
     #[inline]
     pub fn append_value(&mut self, value: i128) -> Result<()> {
+        let value = if self.value_validation {
+            validate_decimal_precision(value, self.precision)?
+        } else {
+            value
+        };
+
         let value_as_bytes = Self::from_i128_to_fixed_size_bytes(
             value,
             self.builder.value_length() as usize,
