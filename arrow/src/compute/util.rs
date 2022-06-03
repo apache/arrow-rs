@@ -32,6 +32,12 @@ pub(super) fn combine_option_bitmap(
     arrays: &[&ArrayData],
     len_in_bits: usize,
 ) -> Result<Option<Buffer>> {
+
+    if arrays.is_empty() {
+        return Err(ArrowError::ComputeError(format!(
+            "Arrays must not be empty"
+        )));
+    }
     
     let mut buffers = arrays.iter().map(|array| (array.null_buffer(), array.offset()));
 
@@ -202,10 +208,14 @@ pub(super) mod tests {
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b01001010])));
         let inverse_bitmap =
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b10110101])));
-        
         let some_other_bitmap =
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b11010111])));
         
+        assert!(combine_option_bitmap(&[], 8).is_err());
+        assert_eq!(
+            Some(Buffer::from([0b01001010])),
+            combine_option_bitmap(&[&some_bitmap], 8).unwrap()
+        );
         assert_eq!(
             None,
             combine_option_bitmap(&[&none_bitmap, &none_bitmap], 8).unwrap()
