@@ -29,34 +29,30 @@ use std::ops::Add;
 /// This function is useful when implementing operations on higher level arrays.
 #[allow(clippy::unnecessary_wraps)]
 pub(super) fn combine_option_bitmap(
-    left_data: &ArrayData,
-    right_data: &ArrayData,
+    arrays: &[&ArrayData],
     len_in_bits: usize,
 ) -> Result<Option<Buffer>> {
-    let left_offset_in_bits = left_data.offset();
-    let right_offset_in_bits = right_data.offset();
+    
+    let mut buffers = arrays.iter().map(|array| (array.null_buffer(), array.offset()));
 
-    let left = left_data.null_buffer();
-    let right = right_data.null_buffer();
-
-    match left {
-        None => match right {
-            None => Ok(None),
-            Some(r) => Ok(Some(r.bit_slice(right_offset_in_bits, len_in_bits))),
-        },
-        Some(l) => match right {
-            None => Ok(Some(l.bit_slice(left_offset_in_bits, len_in_bits))),
-
-            Some(r) => Ok(Some(buffer_bin_and(
-                l,
-                left_offset_in_bits,
-                r,
-                right_offset_in_bits,
-                len_in_bits,
-            ))),
-        },
+    let init = buffers.next().unwrap();
+    Ok(buffers.fold(
+        (init.0.map(|b| b.clone()), init.1), |acc, buffer| {
+            match (acc, buffer) {
+                ((None, _), (None, _)) => (None, 0),
+                ((Some(buffer), offset), (None, _)) => (Some(buffer), offset),
+                ((None, _), (Some(buffer), offset)) => (Some(buffer.clone()), offset),
+                ((Some(buffer_left), offset_left), (Some(buffer_right), offset_right)) =>
+                (Some(buffer_bin_and(
+                    &buffer_left,
+                    offset_left,
+                    buffer_right,
+                    offset_right,
+                    len_in_bits
+                )), 0)
+            }
+        }).0)
     }
-}
 
 /// Takes/filters a list array's inner data using the offsets of the list array.
 ///
@@ -206,25 +202,33 @@ pub(super) mod tests {
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b01001010])));
         let inverse_bitmap =
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b10110101])));
+        
+        let some_other_bitmap =
+            make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b11010111])));
+        
         assert_eq!(
             None,
-            combine_option_bitmap(&none_bitmap, &none_bitmap, 8).unwrap()
+            combine_option_bitmap(&[&none_bitmap, &none_bitmap], 8).unwrap()
         );
         assert_eq!(
             Some(Buffer::from([0b01001010])),
-            combine_option_bitmap(&some_bitmap, &none_bitmap, 8).unwrap()
+            combine_option_bitmap(&[&some_bitmap, &none_bitmap], 8).unwrap()
+        );
+        assert_eq!(
+            Some(Buffer::from([0b11010111])),
+            combine_option_bitmap(&[&none_bitmap, &some_other_bitmap], 8).unwrap()
         );
         assert_eq!(
             Some(Buffer::from([0b01001010])),
-            combine_option_bitmap(&none_bitmap, &some_bitmap, 8,).unwrap()
-        );
-        assert_eq!(
-            Some(Buffer::from([0b01001010])),
-            combine_option_bitmap(&some_bitmap, &some_bitmap, 8,).unwrap()
+            combine_option_bitmap(&[&some_bitmap, &some_bitmap], 8,).unwrap()
         );
         assert_eq!(
             Some(Buffer::from([0b0])),
-            combine_option_bitmap(&some_bitmap, &inverse_bitmap, 8,).unwrap()
+            combine_option_bitmap(&[&some_bitmap, &inverse_bitmap], 8,).unwrap()
+        );
+        assert_eq!(
+            Some(Buffer::from([0b01000010])),
+            combine_option_bitmap(&[&some_bitmap, &some_other_bitmap, &none_bitmap], 8,).unwrap()
         );
     }
 
