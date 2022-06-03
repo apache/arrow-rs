@@ -26,6 +26,7 @@ use std::{cmp, fmt};
 /// because the lack of Generic Associated Type implies that you would require complex lifetime propagation when
 /// returning such a cursor.
 #[allow(clippy::rc_buffer)]
+#[deprecated = "use bytes::Bytes instead"]
 pub struct SliceableCursor {
     inner: Arc<Vec<u8>>,
     start: u64,
@@ -33,6 +34,7 @@ pub struct SliceableCursor {
     pos: u64,
 }
 
+#[allow(deprecated)]
 impl fmt::Debug for SliceableCursor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SliceableCursor")
@@ -44,6 +46,7 @@ impl fmt::Debug for SliceableCursor {
     }
 }
 
+#[allow(deprecated)]
 impl SliceableCursor {
     pub fn new(content: impl Into<Arc<Vec<u8>>>) -> Self {
         let inner = content.into();
@@ -90,6 +93,7 @@ impl SliceableCursor {
 }
 
 /// Implementation inspired by std::io::Cursor
+#[allow(deprecated)]
 impl Read for SliceableCursor {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let n = Read::read(&mut self.remaining_slice(), buf)?;
@@ -98,6 +102,7 @@ impl Read for SliceableCursor {
     }
 }
 
+#[allow(deprecated)]
 impl Seek for SliceableCursor {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         let new_pos = match pos {
@@ -204,12 +209,14 @@ mod tests {
     use super::*;
 
     /// Create a SliceableCursor of all u8 values in ascending order
+    #[allow(deprecated)]
     fn get_u8_range() -> SliceableCursor {
         let data: Vec<u8> = (0u8..=255).collect();
         SliceableCursor::new(data)
     }
 
     /// Reads all the bytes in the slice and checks that it matches the u8 range from start to end_included
+    #[allow(deprecated)]
     fn check_read_all(mut cursor: SliceableCursor, start: u8, end_included: u8) {
         let mut target = vec![];
         let cursor_res = cursor.read_to_end(&mut target);

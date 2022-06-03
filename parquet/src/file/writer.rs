@@ -541,6 +541,7 @@ impl<'a, W: Write> PageWriter for SerializedPageWriter<'a, W> {
 mod tests {
     use super::*;
 
+    use bytes::Bytes;
     use std::{fs::File, io::Cursor};
 
     use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
@@ -1054,7 +1055,7 @@ mod tests {
     }
 
     fn test_bytes_roundtrip(data: Vec<Vec<i32>>) {
-        let mut cursor = Cursor::new(vec![]);
+        let mut buffer = vec![];
 
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
@@ -1072,7 +1073,7 @@ mod tests {
         {
             let props = Arc::new(WriterProperties::builder().build());
             let mut writer =
-                SerializedFileWriter::new(&mut cursor, schema, props).unwrap();
+                SerializedFileWriter::new(&mut buffer, schema, props).unwrap();
 
             for subset in &data {
                 let mut row_group_writer = writer.next_row_group().unwrap();
@@ -1089,9 +1090,7 @@ mod tests {
             writer.close().unwrap();
         }
 
-        let buffer = cursor.into_inner();
-
-        let reading_cursor = crate::file::serialized_reader::SliceableCursor::new(buffer);
+        let reading_cursor = Bytes::from(buffer);
         let reader = SerializedFileReader::new(reading_cursor).unwrap();
 
         assert_eq!(reader.num_row_groups(), data.len());
