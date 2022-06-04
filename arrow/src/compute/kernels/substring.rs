@@ -16,7 +16,8 @@
 // under the License.
 
 //! Defines kernel to extract a substring of an Array
-//! Supported array types: \[Large\]StringArray, \[Large\]BinaryArray
+//! Supported array types:
+//! [GenericStringArray], [GenericBinaryArray], [FixedSizeBinaryArray], [DictionaryArray]
 
 use crate::array::DictionaryArray;
 use crate::buffer::MutableBuffer;
@@ -29,7 +30,7 @@ use crate::{
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-/// Returns an ArrayRef with substrings of all the elements in `array`.
+/// Returns an [ArrayRef] with substrings of all the elements in `array`.
 ///
 /// # Arguments
 ///
@@ -38,7 +39,7 @@ use std::sync::Arc;
 /// otherwise count from the end of the string.
 ///
 /// * `length`(option) - The length of all substrings.
-/// If `length` is `None`, then the substring is from `start` to the end of the string.
+/// If `length` is [None], then the substring is from `start` to the end of the string.
 ///
 /// Attention: Both `start` and `length` are counted by byte, not by char.
 ///
@@ -53,10 +54,10 @@ use std::sync::Arc;
 /// ```
 ///
 /// # Error
-/// - The function errors when the passed array is not a \[Large\]String array, \[Large\]Binary
-///   array, or DictionaryArray with \[Large\]String or \[Large\]Binary as its value type.
+/// - The function errors when the passed array is not a [GenericStringArray], [GenericBinaryArray], [FixedSizeBinaryArray]
+///   or [DictionaryArray] with supported array type as its value type.
 /// - The function errors if the offset of a substring in the input array is at invalid char boundary (only for \[Large\]String array).
-/// - It is recommended to use [substring_by_char] if the input array contains non-ASCII chars.
+/// It is recommended to use [substring_by_char] if the input array contains non-ASCII chars.
 ///
 /// ## Example of trying to get an invalid utf-8 format substring
 /// ```
