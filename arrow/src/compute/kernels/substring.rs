@@ -150,6 +150,31 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
     }
 }
 
+pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
+    array: &GenericStringArray<OffsetSize>,
+    start: i64,
+    length: Option<u64>,
+) -> Result<GenericStringArray<OffsetSize>> {
+    Ok(array
+        .iter()
+        .map(|val| {
+            val.map(|val| {
+                let char_count = val.chars().count();
+                let start = if start >= 0 {
+                    start.to_usize().unwrap().min(char_count)
+                } else {
+                    char_count - (-start).to_usize().unwrap().min(char_count)
+                };
+                let length = length.map_or(char_count - start, |length| {
+                    length.to_usize().unwrap().min(char_count - start)
+                });
+
+                val.chars().skip(start).take(length).collect::<String>()
+            })
+        })
+        .collect::<GenericStringArray<OffsetSize>>())
+}
+
 fn binary_substring<OffsetSize: OffsetSizeTrait>(
     array: &GenericBinaryArray<OffsetSize>,
     start: OffsetSize,
@@ -1081,6 +1106,164 @@ mod tests {
     #[test]
     fn large_string_with_non_zero_offset() -> Result<()> {
         generic_string_with_non_zero_offset::<i64>()
+    }
+
+    fn with_nulls_generic_string_by_char<O: OffsetSizeTrait>() -> Result<()> {
+        let input_vals = vec![Some("hello"), None, Some("Γ ⊢x:T")];
+        let cases = vec![
+            // all-nulls array is always identical
+            (vec![None, None, None], 0, None, vec![None, None, None]),
+            // identity
+            (
+                input_vals.clone(),
+                0,
+                None,
+                vec![Some("hello"), None, Some("Γ ⊢x:T")],
+            ),
+            // 0 length -> Nothing
+            (
+                input_vals.clone(),
+                0,
+                Some(0),
+                vec![Some(""), None, Some("")],
+            ),
+            // high start -> Nothing
+            (
+                input_vals.clone(),
+                1000,
+                Some(0),
+                vec![Some(""), None, Some("")],
+            ),
+            // high negative start -> identity
+            (
+                input_vals.clone(),
+                -1000,
+                None,
+                vec![Some("hello"), None, Some("Γ ⊢x:T")],
+            ),
+            // high length -> identity
+            (
+                input_vals.clone(),
+                0,
+                Some(1000),
+                vec![Some("hello"), None, Some("Γ ⊢x:T")],
+            ),
+        ];
+
+        cases.into_iter().try_for_each::<_, Result<()>>(
+            |(array, start, length, expected)| {
+                let array = GenericStringArray::<O>::from(array);
+                let result = substring_by_char(&array, start, length)?;
+                assert_eq!(array.len(), result.len());
+
+                let expected = GenericStringArray::<O>::from(expected);
+                assert_eq!(expected, result);
+                Ok(())
+            },
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn with_nulls_string_by_char() -> Result<()> {
+        with_nulls_generic_string_by_char::<i32>()
+    }
+
+    #[test]
+    fn with_nulls_large_string_by_char() -> Result<()> {
+        with_nulls_generic_string_by_char::<i64>()
+    }
+
+    fn without_nulls_generic_string_by_char<O: OffsetSizeTrait>() -> Result<()> {
+        let input_vals = vec!["hello", "", "Γ ⊢x:T"];
+        let cases = vec![
+            // empty array is always identical
+            (vec!["", "", ""], 0, None, vec!["", "", ""]),
+            // increase start
+            (input_vals.clone(), 0, None, vec!["hello", "", "Γ ⊢x:T"]),
+            (input_vals.clone(), 1, None, vec!["ello", "", " ⊢x:T"]),
+            (input_vals.clone(), 2, None, vec!["llo", "", "⊢x:T"]),
+            (input_vals.clone(), 3, None, vec!["lo", "", "x:T"]),
+            (input_vals.clone(), 10, None, vec!["", "", ""]),
+            // increase start negatively
+            (input_vals.clone(), -1, None, vec!["o", "", "T"]),
+            (input_vals.clone(), -2, None, vec!["lo", "", ":T"]),
+            (input_vals.clone(), -4, None, vec!["ello", "", "⊢x:T"]),
+            (input_vals.clone(), -10, None, vec!["hello", "", "Γ ⊢x:T"]),
+            // increase length
+            (input_vals.clone(), 1, Some(1), vec!["e", "", " "]),
+            (input_vals.clone(), 1, Some(2), vec!["el", "", " ⊢"]),
+            (input_vals.clone(), 1, Some(3), vec!["ell", "", " ⊢x"]),
+            (input_vals.clone(), 1, Some(6), vec!["ello", "", " ⊢x:T"]),
+            (input_vals.clone(), -4, Some(1), vec!["e", "", "⊢"]),
+            (input_vals.clone(), -4, Some(2), vec!["el", "", "⊢x"]),
+            (input_vals.clone(), -4, Some(3), vec!["ell", "", "⊢x:"]),
+            (input_vals.clone(), -4, Some(4), vec!["ello", "", "⊢x:T"]),
+        ];
+
+        cases.into_iter().try_for_each::<_, Result<()>>(
+            |(array, start, length, expected)| {
+                let array = GenericStringArray::<O>::from(array);
+                let result = substring_by_char(&array, start, length)?;
+                assert_eq!(array.len(), result.len());
+                let expected = GenericStringArray::<O>::from(expected);
+                assert_eq!(expected, result);
+                Ok(())
+            },
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn without_nulls_string_by_char() -> Result<()> {
+        without_nulls_generic_string_by_char::<i32>()
+    }
+
+    #[test]
+    fn without_nulls_large_string_by_char() -> Result<()> {
+        without_nulls_generic_string_by_char::<i64>()
+    }
+
+    fn generic_string_by_char_with_non_zero_offset<O: OffsetSizeTrait>() -> Result<()> {
+        let values = "S→T = Πx:S.T";
+        let offsets = &[
+            O::zero(),
+            O::from_usize(values.char_indices().nth(3).map(|(pos, _)| pos).unwrap())
+                .unwrap(),
+            O::from_usize(values.char_indices().nth(6).map(|(pos, _)| pos).unwrap())
+                .unwrap(),
+            O::from_usize(values.len()).unwrap(),
+        ];
+        // set the first and third element to be valid
+        let bitmap = [0b101_u8];
+
+        let data = ArrayData::builder(GenericStringArray::<O>::get_data_type())
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(offsets))
+            .add_buffer(Buffer::from(values))
+            .null_bit_buffer(Some(Buffer::from(bitmap)))
+            .offset(1)
+            .build()?;
+        // array is `[null, "Πx:S.T"]`
+        let array = GenericStringArray::<O>::from(data);
+        // result is `[null, "x:S.T"]`
+        let result = substring_by_char(&array, 1, None)?;
+        let expected = GenericStringArray::<O>::from(vec![None, Some("x:S.T")]);
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn string_with_non_zero_offset_by_char() -> Result<()> {
+        generic_string_by_char_with_non_zero_offset::<i32>()
+    }
+
+    #[test]
+    fn large_string_with_non_zero_offset_by_char() -> Result<()> {
+        generic_string_by_char_with_non_zero_offset::<i64>()
     }
 
     #[test]
