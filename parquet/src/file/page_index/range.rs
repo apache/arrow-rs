@@ -17,6 +17,8 @@
 
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use parquet_format::PageLocation;
+use crate::errors::ParquetError;
 
 /// A row range
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -103,6 +105,22 @@ impl RowRanges {
 
     pub fn count(&self) -> usize {
         self.ranges.len()
+    }
+
+    pub fn filter_with_mask(&self, mask: &[bool]) -> Result<RowRanges, ParquetError> {
+        if self.ranges.len() != mask.len() {
+            return Err(ParquetError::General(format!("Mask size{} is not equal to page size {}", mask.len(), self.count())));
+        }
+        let vec_range = mask.iter().zip(self.ranges.clone()).filter_map(
+            |(&f, r)| {
+                if f {
+                    Some(r)
+                } else {
+                    None
+                }
+            }
+        ).collect();
+        Ok(RowRanges { ranges: vec_range })
     }
 
     //Add a range to the end of the list of ranges. It maintains the disjunctive ascending order of the ranges by
@@ -215,6 +233,35 @@ impl RowRanges {
     }
 }
 
+/// Return the row ranges `Vec(start, len)` of all the selected pages
+pub fn compute_row_ranges(
+    mask: &[bool],
+    locations: &[PageLocation],
+    total_rows: usize,
+) -> Result<RowRanges, ParquetError> {
+    let row_ranges = page_locations_to_row_ranges(locations, total_rows)?;
+    row_ranges.filter_with_mask(mask)
+}
+
+fn page_locations_to_row_ranges(
+    locations: &[PageLocation],
+    total_rows: usize,
+) -> Result<RowRanges, ParquetError> {
+    if locations.is_empty() {
+        return Ok(RowRanges::new_empty());
+    }
+
+    let mut vec_range: VecDeque<Range> = locations.windows(2).map(|x| {
+        let start = x[0].first_row_index as usize;
+        let end = (x[1].first_row_index - 1) as usize;
+        Range { from: start, to: end }
+    }).collect();
+
+    let last = Range { from: locations.last().unwrap().first_row_index as usize, to: total_rows };
+    vec_range.push_back(last);
+
+    Ok(RowRanges { ranges: vec_range })
+}
 
 #[cfg(test)]
 mod tests {
