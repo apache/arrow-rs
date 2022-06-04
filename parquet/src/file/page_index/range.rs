@@ -95,7 +95,7 @@ pub struct RowRanges {
 
 impl RowRanges {
     //create an empty RowRanges
-    pub fn new() -> Self {
+    pub fn new_empty() -> Self {
         RowRanges {
             ranges: VecDeque::new(),
         }
@@ -105,17 +105,18 @@ impl RowRanges {
         self.ranges.len()
     }
 
-    //Adds a range to the end of the list of ranges. It maintains the disjunctive ascending order of the ranges by
+    //Add a range to the end of the list of ranges. It maintains the disjunctive ascending order of the ranges by
     //trying to union the specified range to the last ranges in the list. The specified range shall be larger than
     //the last one or might be overlapped with some of the last ones.
     // [a, b] < [c, d] if b < c
     pub fn add(&mut self, range: Range) {
         let mut to_add = range;
-        let f: i32 = (self.count() as i32) - 1;
-        if f >= 0 {
-            for i in f as usize..0 {
-                let last = self.ranges.get(i).unwrap();
-                assert!(!last.is_after(&range));
+        let count = self.count();
+        if count > 0 {
+            for i in 1..(count + 1) {
+                let index = count - i;
+                let last = self.ranges.get(index).unwrap();
+                assert!(!last.is_after(&range), "Must add range in ascending!");
                 // try to merge range
                 match Range::union(last, &to_add) {
                     None => {
@@ -123,7 +124,7 @@ impl RowRanges {
                     }
                     Some(r) => {
                         to_add = r;
-                        self.ranges.remove(i);
+                        self.ranges.remove(index);
                     }
                 }
             }
@@ -143,7 +144,7 @@ impl RowRanges {
     pub fn union(mut left: RowRanges, mut right: RowRanges) -> RowRanges {
         let v1 = &mut left.ranges;
         let v2 = &mut right.ranges;
-        let mut result = RowRanges::new();
+        let mut result = RowRanges::new_empty();
         if v2.is_empty() {
             left.clone()
         } else {
@@ -153,12 +154,16 @@ impl RowRanges {
                 if range1.is_after(&range2) {
                     result.add(range2);
                     range2 = range1;
-                    std::mem::swap(v1,v2);
+                    std::mem::swap(v1, v2);
                 } else {
                     result.add(range1);
                 }
             }
-            if !v2.is_empty() { result.ranges.append( v2) }
+
+            result.add(range2);
+            while !v2.is_empty() {
+                result.add(v2.pop_front().unwrap())
+            }
 
             result
         }
@@ -174,7 +179,7 @@ impl RowRanges {
     /// The result RowRanges object will contain all the row indexes there were contained in both of the specified objects
     #[allow(clippy::mut_range_bound)]
     pub fn intersection(left: RowRanges, right: RowRanges) -> RowRanges {
-        let mut result = RowRanges::new();
+        let mut result = RowRanges::new_empty();
         let mut right_index = 0;
         for l in left.ranges.iter() {
             for i in right_index..right.ranges.len() {
@@ -217,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_binary_search_overlap() {
-        let mut ranges = RowRanges::new();
+        let mut ranges = RowRanges::new_empty();
         ranges.add(Range { from: 1, to: 3 });
         ranges.add(Range { from: 6, to: 7 });
 
@@ -232,4 +237,115 @@ mod tests {
         assert!(!ranges.is_overlapping(&Range { from: 4, to: 5 }));
     }
 
+    #[test]
+    fn test_add_func_ascending_disjunctive() {
+        let mut ranges_1 = RowRanges::new_empty();
+        ranges_1.add(Range { from: 1, to: 3 });
+        ranges_1.add(Range { from: 5, to: 6 });
+        ranges_1.add(Range { from: 8, to: 9 });
+        assert_eq!(ranges_1.count(), 3);
+    }
+
+    #[test]
+    fn test_add_func_ascending_merge() {
+        let mut ranges_1 = RowRanges::new_empty();
+        ranges_1.add(Range { from: 1, to: 3 });
+        ranges_1.add(Range { from: 4, to: 5 });
+        ranges_1.add(Range { from: 6, to: 7 });
+        assert_eq!(ranges_1.count(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Must add range in ascending!")]
+    fn test_add_func_not_ascending() {
+        let mut ranges_1 = RowRanges::new_empty();
+        ranges_1.add(Range { from: 6, to: 7 });
+        ranges_1.add(Range { from: 1, to: 3 });
+        ranges_1.add(Range { from: 4, to: 5 });
+        assert_eq!(ranges_1.count(), 1);
+    }
+
+    #[test]
+    fn test_union_func() {
+        let mut ranges_1 = RowRanges::new_empty();
+        ranges_1.add(Range { from: 1, to: 2 });
+        ranges_1.add(Range { from: 3, to: 4 });
+        ranges_1.add(Range { from: 5, to: 6 });
+
+        let mut ranges_2 = RowRanges::new_empty();
+        ranges_2.add(Range { from: 2, to: 3 });
+        ranges_2.add(Range { from: 4, to: 5 });
+        ranges_2.add(Range { from: 6, to: 7 });
+
+        let ranges = RowRanges::union(ranges_1, ranges_2);
+        assert_eq!(ranges.count(), 1);
+        let range = ranges.ranges.get(0).unwrap();
+        assert_eq!(range.from, 1);
+        assert_eq!(range.to, 7);
+
+        let mut ranges_a = RowRanges::new_empty();
+        ranges_a.add(Range { from: 1, to: 3 });
+        ranges_a.add(Range { from: 5, to: 8 });
+        ranges_a.add(Range { from: 11, to: 12 });
+
+        let mut ranges_b = RowRanges::new_empty();
+        ranges_b.add(Range { from: 0, to: 2 });
+        ranges_b.add(Range { from: 6, to: 7 });
+        ranges_b.add(Range { from: 10, to: 11 });
+
+        let ranges = RowRanges::union(ranges_a, ranges_b);
+        assert_eq!(ranges.count(), 3);
+
+        let range_1 = ranges.ranges.get(0).unwrap();
+        assert_eq!(range_1.from, 0);
+        assert_eq!(range_1.to, 3);
+        let range_2 = ranges.ranges.get(1).unwrap();
+        assert_eq!(range_2.from, 5);
+        assert_eq!(range_2.to, 8);
+        let range_3 = ranges.ranges.get(2).unwrap();
+        assert_eq!(range_3.from, 10);
+        assert_eq!(range_3.to, 12);
+    }
+
+    #[test]
+    fn test_intersection_func() {
+        let mut ranges_1 = RowRanges::new_empty();
+        ranges_1.add(Range { from: 1, to: 2 });
+        ranges_1.add(Range { from: 3, to: 4 });
+        ranges_1.add(Range { from: 5, to: 6 });
+
+        let mut ranges_2 = RowRanges::new_empty();
+        ranges_2.add(Range { from: 2, to: 3 });
+        ranges_2.add(Range { from: 4, to: 5 });
+        ranges_2.add(Range { from: 6, to: 7 });
+
+        let ranges = RowRanges::intersection(ranges_1, ranges_2);
+        assert_eq!(ranges.count(), 1);
+        let range = ranges.ranges.get(0).unwrap();
+        assert_eq!(range.from, 2);
+        assert_eq!(range.to, 6);
+
+        let mut ranges_a = RowRanges::new_empty();
+        ranges_a.add(Range { from: 1, to: 3 });
+        ranges_a.add(Range { from: 5, to: 8 });
+        ranges_a.add(Range { from: 11, to: 12 });
+
+        let mut ranges_b = RowRanges::new_empty();
+        ranges_b.add(Range { from: 0, to: 2 });
+        ranges_b.add(Range { from: 6, to: 7 });
+        ranges_b.add(Range { from: 10, to: 11 });
+
+        let ranges = RowRanges::intersection(ranges_a, ranges_b);
+        assert_eq!(ranges.count(), 3);
+
+        let range_1 = ranges.ranges.get(0).unwrap();
+        assert_eq!(range_1.from, 1);
+        assert_eq!(range_1.to, 2);
+        let range_2 = ranges.ranges.get(1).unwrap();
+        assert_eq!(range_2.from, 6);
+        assert_eq!(range_2.to, 7);
+        let range_3 = ranges.ranges.get(2).unwrap();
+        assert_eq!(range_3.from, 11);
+        assert_eq!(range_3.to, 11);
+    }
 }
