@@ -24,7 +24,7 @@ use crate::error::{ArrowError, Result};
 use num::{One, ToPrimitive, Zero};
 use std::ops::Add;
 
-/// Combines the null bitmaps of two arrays using a bitwise `and` operation.
+/// Combines the null bitmaps of multiple arrays using a bitwise `and` operation.
 ///
 /// This function is useful when implementing operations on higher level arrays.
 #[allow(clippy::unnecessary_wraps)]
@@ -38,33 +38,30 @@ pub(super) fn combine_option_bitmap(
         ));
     }
 
-    let mut buffers = arrays
+    let buffers_and_offsets = arrays
         .iter()
-        .map(|array| (array.null_buffer(), array.offset()));
+        .map(|array| (array.null_buffer().cloned(), array.offset()));
 
-    let init = buffers.next().unwrap();
-    Ok(buffers
-        .fold((init.0.cloned(), init.1), |acc, buffer| {
-            match (acc, buffer) {
-                ((None, _), (None, _)) => (None, 0),
-                ((Some(buffer), offset), (None, _)) => (Some(buffer), offset),
-                ((None, _), (Some(buffer), offset)) => (Some(buffer.clone()), offset),
-                (
-                    (Some(buffer_left), offset_left),
-                    (Some(buffer_right), offset_right),
-                ) => (
-                    Some(buffer_bin_and(
-                        &buffer_left,
-                        offset_left,
-                        buffer_right,
-                        offset_right,
-                        len_in_bits,
-                    )),
-                    0,
-                ),
+    let (output_buffer, output_offset) = buffers_and_offsets
+        .reduce(|acc, buffer_and_offset| match (acc, buffer_and_offset) {
+            ((None, _), (None, _)) => (None, 0),
+            ((Some(buffer), offset), (None, _)) | ((None, _), (Some(buffer), offset)) => {
+                (Some(buffer), offset)
             }
+            ((Some(buffer_left), offset_left), (Some(buffer_right), offset_right)) => (
+                Some(buffer_bin_and(
+                    &buffer_left,
+                    offset_left,
+                    &buffer_right,
+                    offset_right,
+                    len_in_bits,
+                )),
+                0,
+            ),
         })
-        .0)
+        .unwrap();
+
+    Ok(output_buffer.map(|buffer| buffer.slice(output_offset)))
 }
 
 /// Takes/filters a list array's inner data using the offsets of the list array.
@@ -217,7 +214,6 @@ pub(super) mod tests {
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b10110101])));
         let some_other_bitmap =
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b11010111])));
-
         assert!(combine_option_bitmap(&[], 8).is_err());
         assert_eq!(
             Some(Buffer::from([0b01001010])),
