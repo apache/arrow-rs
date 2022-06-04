@@ -60,6 +60,7 @@ fn create_array(
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     mut node_index: usize,
     mut buffer_index: usize,
+    metadata: &ipc::MetadataVersion,
 ) -> Result<(ArrayRef, usize, usize)> {
     use DataType::*;
     let data_type = field.data_type();
@@ -106,6 +107,7 @@ fn create_array(
                 dictionaries_by_id,
                 node_index,
                 buffer_index,
+                metadata,
             )?;
             node_index = triple.1;
             buffer_index = triple.2;
@@ -128,6 +130,7 @@ fn create_array(
                 dictionaries_by_id,
                 node_index,
                 buffer_index,
+                metadata,
             )?;
             node_index = triple.1;
             buffer_index = triple.2;
@@ -153,6 +156,7 @@ fn create_array(
                     dictionaries_by_id,
                     node_index,
                     buffer_index,
+                    metadata,
                 )?;
                 node_index = triple.1;
                 buffer_index = triple.2;
@@ -201,6 +205,13 @@ fn create_array(
 
             let len = union_node.length() as usize;
 
+            // In V4, union types has validity bitmap
+            // In V5 and later, union types have no validity bitmap
+            if metadata < &ipc::MetadataVersion::V5 {
+                read_buffer(&buffers[buffer_index], data);
+                buffer_index += 1;
+            }
+
             let type_ids: Buffer =
                 read_buffer(&buffers[buffer_index], data)[..len].into();
 
@@ -226,6 +237,7 @@ fn create_array(
                     dictionaries_by_id,
                     node_index,
                     buffer_index,
+                    metadata,
                 )?;
 
                 node_index = triple.1;
@@ -582,6 +594,7 @@ pub fn read_record_batch(
     schema: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
+    metadata: &ipc::MetadataVersion,
 ) -> Result<RecordBatch> {
     let buffers = batch.buffers().ok_or_else(|| {
         ArrowError::IoError("Unable to get buffers from IPC RecordBatch".to_string())
@@ -607,6 +620,7 @@ pub fn read_record_batch(
                     dictionaries_by_id,
                     node_index,
                     buffer_index,
+                    metadata,
                 )?;
                 node_index = triple.1;
                 buffer_index = triple.2;
@@ -640,6 +654,7 @@ pub fn read_record_batch(
                 dictionaries_by_id,
                 node_index,
                 buffer_index,
+                metadata,
             )?;
             node_index = triple.1;
             buffer_index = triple.2;
@@ -656,6 +671,7 @@ pub fn read_dictionary(
     batch: ipc::DictionaryBatch,
     schema: &Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    metadata: &ipc::MetadataVersion,
 ) -> Result<()> {
     if batch.isDelta() {
         return Err(ArrowError::IoError(
@@ -686,6 +702,7 @@ pub fn read_dictionary(
                 Arc::new(schema),
                 dictionaries_by_id,
                 None,
+                metadata,
             )?;
             Some(record_batch.column(0).clone())
         }
@@ -816,7 +833,13 @@ impl<R: Read + Seek> FileReader<R> {
                         ))?;
                         reader.read_exact(&mut buf)?;
 
-                        read_dictionary(&buf, batch, &schema, &mut dictionaries_by_id)?;
+                        read_dictionary(
+                            &buf,
+                            batch,
+                            &schema,
+                            &mut dictionaries_by_id,
+                            &message.version(),
+                        )?;
                     }
                     t => {
                         return Err(ArrowError::IoError(format!(
@@ -925,6 +948,7 @@ impl<R: Read + Seek> FileReader<R> {
                     self.schema(),
                     &self.dictionaries_by_id,
                     self.projection.as_ref().map(|x| x.0.as_ref()),
+                    &message.version()
 
                 ).map(Some)
             }
@@ -1099,7 +1123,7 @@ impl<R: Read> StreamReader<R> {
                 let mut buf = vec![0; message.bodyLength() as usize];
                 self.reader.read_exact(&mut buf)?;
 
-                read_record_batch(&buf, batch, self.schema(), &self.dictionaries_by_id, self.projection.as_ref().map(|x| x.0.as_ref())).map(Some)
+                read_record_batch(&buf, batch, self.schema(), &self.dictionaries_by_id, self.projection.as_ref().map(|x| x.0.as_ref()), &message.version()).map(Some)
             }
             ipc::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().ok_or_else(|| {
@@ -1112,7 +1136,7 @@ impl<R: Read> StreamReader<R> {
                 self.reader.read_exact(&mut buf)?;
 
                 read_dictionary(
-                    &buf, batch, &self.schema, &mut self.dictionaries_by_id
+                    &buf, batch, &self.schema, &mut self.dictionaries_by_id, &message.version()
                 )?;
 
                 // read the next message until we encounter a RecordBatch
