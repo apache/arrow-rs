@@ -56,6 +56,7 @@ use std::sync::Arc;
 /// - The function errors when the passed array is not a \[Large\]String array, \[Large\]Binary
 ///   array, or DictionaryArray with \[Large\]String or \[Large\]Binary as its value type.
 /// - The function errors if the offset of a substring in the input array is at invalid char boundary (only for \[Large\]String array).
+/// - It is recommended to use [substring_by_char] if the input array contains non-ASCII chars.
 ///
 /// ## Example of trying to get an invalid utf-8 format substring
 /// ```
@@ -150,6 +151,31 @@ pub fn substring(array: &dyn Array, start: i64, length: Option<u64>) -> Result<A
     }
 }
 
+/// # Arguments
+/// * `array` - The input string array
+///
+/// * `start` - The start index of all substrings.
+/// If `start >= 0`, then count from the start of the string,
+/// otherwise count from the end of the string.
+///
+/// * `length`(option) - The length of all substrings.
+/// If `length` is `None`, then the substring is from `start` to the end of the string.
+///
+/// Attention: Both `start` and `length` are counted by char.
+///
+/// # Performance
+/// This function is slower than [substring].
+/// Theoretically, the time complexity is `O(n)` where `n` is the length of the value buffer.
+/// It is recommended to use [substring] if the input array only contains ASCII chars.
+///
+/// # Basic usage
+/// ```
+/// # use arrow::array::StringArray;
+/// # use arrow::compute::kernels::substring::substring_by_char;
+/// let array = StringArray::from(vec![Some("arrow"), None, Some("Γ ⊢x:T")]);
+/// let result = substring_by_char(&array, 1, Some(4)).unwrap();
+/// assert_eq!(result, StringArray::from(vec![Some("rrow"), None, Some(" ⊢x:")]));
+/// ```
 pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
     array: &GenericStringArray<OffsetSize>,
     start: i64,
