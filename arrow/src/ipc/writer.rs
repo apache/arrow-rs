@@ -855,12 +855,9 @@ fn write_continuation<W: Write>(
 /// In V5 and later, null and union types have no validity bitmap
 fn has_validity_bitmap(data_type: &DataType, write_options: &IpcWriteOptions) -> bool {
     if write_options.metadata_version < ipc::MetadataVersion::V5 {
-        !matches!(array_data.data_type(), DataType::Null)
+        !matches!(data_type, DataType::Null)
     } else {
-        !matches!(
-            array_data.data_type(),
-            DataType::Null | DataType::Union(_, _, _)
-        )
+        !matches!(data_type, DataType::Null | DataType::Union(_, _, _))
     }
 }
 
@@ -1443,6 +1440,70 @@ mod tests {
             |(batch1, batch2)| {
                 assert_eq!(batch1.unwrap(), batch2.unwrap());
             },
+        );
+    }
+
+    fn write_union_file(options: IpcWriteOptions) {
+        let schema = Schema::new(vec![Field::new(
+            "union",
+            DataType::Union(
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("c", DataType::Float64, false),
+                ],
+                vec![0, 1],
+                UnionMode::Sparse,
+            ),
+            true,
+        )]);
+        let mut builder = UnionBuilder::new_sparse(5);
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append_null::<Int32Type>("a").unwrap();
+        builder.append::<Float64Type>("c", 3.0).unwrap();
+        builder.append_null::<Float64Type>("c").unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        let union = builder.build().unwrap();
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(union) as ArrayRef],
+        )
+        .unwrap();
+        let file_name = format!("/tmp/union.arrow_file");
+        {
+            let file = File::create(&file_name).unwrap();
+            let mut writer =
+                FileWriter::try_new_with_options(file, &schema, options).unwrap();
+
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+
+        {
+            let file = File::open(&file_name).unwrap();
+            let reader = FileReader::try_new(file, None).unwrap();
+            reader.for_each(|maybe_batch| {
+                maybe_batch
+                    .unwrap()
+                    .columns()
+                    .iter()
+                    .zip(batch.columns())
+                    .for_each(|(a, b)| {
+                        assert_eq!(a.data_type(), b.data_type());
+                        assert_eq!(a.len(), b.len());
+                        assert_eq!(a.null_count(), b.null_count());
+                    });
+            });
+        }
+    }
+
+    #[test]
+    fn test_write_union_file_v4_v5() {
+        write_union_file(
+            IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap(),
+        );
+        write_union_file(
+            IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap(),
         );
     }
 }
