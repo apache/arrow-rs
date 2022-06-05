@@ -336,6 +336,7 @@ impl IpcDataGenerator {
                 offset,
                 array.len(),
                 array.null_count(),
+                write_options,
             );
         }
 
@@ -389,6 +390,7 @@ impl IpcDataGenerator {
             0,
             array_data.len(),
             array_data.null_count(),
+            write_options,
         );
 
         // write data
@@ -849,6 +851,19 @@ fn write_continuation<W: Write>(
     Ok(written)
 }
 
+/// In V4, null types have no validity bitmap
+/// In V5 and later, null and union types have no validity bitmap
+fn has_validity_bitmap(data_type: &DataType, write_options: &IpcWriteOptions) -> bool {
+    if write_options.metadata_version < ipc::MetadataVersion::V5 {
+        !matches!(array_data.data_type(), DataType::Null)
+    } else {
+        !matches!(
+            array_data.data_type(),
+            DataType::Null | DataType::Union(_, _, _)
+        )
+    }
+}
+
 /// Write array data to a vector of bytes
 fn write_array_data(
     array_data: &ArrayData,
@@ -858,6 +873,7 @@ fn write_array_data(
     offset: i64,
     num_rows: usize,
     null_count: usize,
+    write_options: &IpcWriteOptions,
 ) -> i64 {
     let mut offset = offset;
     if !matches!(array_data.data_type(), DataType::Null) {
@@ -867,12 +883,7 @@ fn write_array_data(
         // where null_count is always 0.
         nodes.push(ipc::FieldNode::new(num_rows as i64, num_rows as i64));
     }
-    // NullArray does not have any buffers, thus the null buffer is not generated
-    // UnionArray does not have a validity buffer
-    if !matches!(
-        array_data.data_type(),
-        DataType::Null | DataType::Union(_, _, _)
-    ) {
+    if has_validity_bitmap(array_data.data_type(), write_options) {
         // write null buffer if exists
         let null_buffer = match array_data.null_buffer() {
             None => {
@@ -904,6 +915,7 @@ fn write_array_data(
                 offset,
                 data_ref.len(),
                 data_ref.null_count(),
+                write_options,
             );
         });
     }
