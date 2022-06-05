@@ -233,7 +233,8 @@ impl RowRanges {
     }
 }
 
-/// Return the row ranges `Vec(start, len)` of all the selected pages
+/// Return the `RowRanges` of all the selected pages
+/// which represents a sequence of ranges of all the selected pages
 pub fn compute_row_ranges(
     mask: &[bool],
     locations: &[PageLocation],
