@@ -1942,4 +1942,17 @@ mod tests {
         let output_batch = roundtrip_ipc_stream(&input_batch);
         assert_eq!(input_batch, output_batch);
     }
+
+    #[test]
+    fn test_no_columns_batch() {
+        let schema = Arc::new(Schema::new(vec![]));
+        let options = RecordBatchOptions {
+            match_field_names: true,
+            row_count: Some(10),
+        };
+        let input_batch =
+            RecordBatch::try_new_with_options(schema, vec![], &options).unwrap();
+        let output_batch = roundtrip_ipc_stream(&input_batch);
+        assert_eq!(input_batch, output_batch);
+    }
 }
