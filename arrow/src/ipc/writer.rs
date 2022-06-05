@@ -1385,4 +1385,52 @@ mod tests {
         // Dictionary with id 2 should have been written to the dict tracker
         assert!(dict_tracker.written.contains_key(&2));
     }
+
+    #[test]
+    fn read_union_017() {
+        let testdata = crate::util::test_util::arrow_test_data();
+        let version = "0.17.1";
+        let data_file = File::open(format!(
+            "{}/arrow-ipc-stream/integration/0.17.1/generated_union.stream",
+            testdata,
+        ))
+        .unwrap();
+
+        let reader = StreamReader::try_new(data_file, None).unwrap();
+
+        // read and rewrite the stream to a temp location
+        {
+            let file = File::create(format!(
+                "target/debug/testdata/{}-generated_union.stream",
+                version
+            ))
+            .unwrap();
+            let mut writer = StreamWriter::try_new(file, &reader.schema()).unwrap();
+            reader.for_each(|batch| {
+                writer.write(&batch.unwrap()).unwrap();
+            });
+            writer.finish().unwrap();
+        }
+
+        // Compare original file and rewrote file
+        let file = File::open(format!(
+            "target/debug/testdata/{}-generated_union.stream",
+            version
+        ))
+        .unwrap();
+        let rewrite_reader = StreamReader::try_new(file, None).unwrap();
+
+        let data_file = File::open(format!(
+            "{}/arrow-ipc-stream/integration/0.17.1/generated_union.stream",
+            testdata,
+        ))
+        .unwrap();
+        let reader = StreamReader::try_new(data_file, None).unwrap();
+
+        reader.into_iter().zip(rewrite_reader.into_iter()).for_each(
+            |(batch1, batch2)| {
+                assert_eq!(batch1.unwrap(), batch2.unwrap());
+            },
+        );
+    }
 }
