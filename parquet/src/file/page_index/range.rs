@@ -14,11 +14,10 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
+use crate::errors::ParquetError;
+use parquet_format::PageLocation;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-use parquet_format::PageLocation;
-use crate::errors::ParquetError;
 
 /// A row range
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -81,8 +80,7 @@ impl Range {
             return Some(Range {
                 from: left.from,
                 to: std::cmp::min(left.to, right.to),
-            }
-            );
+            });
         }
         None
     }
@@ -109,17 +107,17 @@ impl RowRanges {
 
     pub fn filter_with_mask(&self, mask: &[bool]) -> Result<RowRanges, ParquetError> {
         if self.ranges.len() != mask.len() {
-            return Err(ParquetError::General(format!("Mask size{} is not equal to page size {}", mask.len(), self.count())));
+            return Err(ParquetError::General(format!(
+                "Mask size{} is not equal to page size {}",
+                mask.len(),
+                self.count()
+            )));
         }
-        let vec_range = mask.iter().zip(self.ranges.clone()).filter_map(
-            |(&f, r)| {
-                if f {
-                    Some(r)
-                } else {
-                    None
-                }
-            }
-        ).collect();
+        let vec_range = mask
+            .iter()
+            .zip(self.ranges.clone())
+            .filter_map(|(&f, r)| if f { Some(r) } else { None })
+            .collect();
         Ok(RowRanges { ranges: vec_range })
     }
 
@@ -221,15 +219,17 @@ impl RowRanges {
     }
 
     pub fn is_overlapping(&self, x: &Range) -> bool {
-        self.ranges.binary_search_by(|y| -> Ordering {
-            if y.is_before(x) {
-                Ordering::Less
-            } else if y.is_after(x) {
-                Ordering::Greater
-            } else {
-                Ordering::Equal
-            }
-        }).is_ok()
+        self.ranges
+            .binary_search_by(|y| -> Ordering {
+                if y.is_before(x) {
+                    Ordering::Less
+                } else if y.is_after(x) {
+                    Ordering::Greater
+                } else {
+                    Ordering::Equal
+                }
+            })
+            .is_ok()
     }
 }
 
@@ -251,13 +251,22 @@ fn page_locations_to_row_ranges(
         return Ok(RowRanges::new_empty());
     }
 
-    let mut vec_range: VecDeque<Range> = locations.windows(2).map(|x| {
-        let start = x[0].first_row_index as usize;
-        let end = (x[1].first_row_index - 1) as usize;
-        Range { from: start, to: end }
-    }).collect();
+    let mut vec_range: VecDeque<Range> = locations
+        .windows(2)
+        .map(|x| {
+            let start = x[0].first_row_index as usize;
+            let end = (x[1].first_row_index - 1) as usize;
+            Range {
+                from: start,
+                to: end,
+            };
+        })
+        .collect();
 
-    let last = Range { from: locations.last().unwrap().first_row_index as usize, to: total_rows };
+    let last = Range {
+        from: locations.last().unwrap().first_row_index as usize,
+        to: total_rows,
+    };
     vec_range.push_back(last);
 
     Ok(RowRanges { ranges: vec_range })
@@ -265,7 +274,10 @@ fn page_locations_to_row_ranges(
 
 #[cfg(test)]
 mod tests {
-    use crate::file::page_index::range::{Range, RowRanges};
+    use crate::basic::Type::INT32;
+    use crate::file::page_index::index::{NativeIndex, PageIndex};
+    use crate::file::page_index::range::{compute_row_ranges, Range, RowRanges};
+    use parquet_format::{BoundaryOrder, PageLocation};
 
     #[test]
     fn test_binary_search_overlap() {
@@ -394,5 +406,69 @@ mod tests {
         let range_3 = ranges.ranges.get(2).unwrap();
         assert_eq!(range_3.from, 11);
         assert_eq!(range_3.to, 11);
+    }
+
+    #[test]
+    fn test_compute_one() {
+        let locations = &[PageLocation {
+            offset: 50,
+            compressed_page_size: 10,
+            first_row_index: 0,
+        }];
+        let total_rows = 10;
+
+        let row_ranges = compute_row_ranges(&[true], locations, total_rows).unwrap();
+        assert_eq!(row_ranges.count(), 1);
+        assert_eq!(
+            row_ranges.ranges.get(0).unwrap(),
+            &Range { from: 0, to: 10 }
+        );
+    }
+
+    #[test]
+    fn test_compute_multi() {
+        let index: NativeIndex<i32> = NativeIndex {
+            physical_type: INT32,
+            indexes: vec![
+                PageIndex {
+                    min: Some(0),
+                    max: Some(10),
+                    null_count: Some(0),
+                },
+                PageIndex {
+                    min: Some(15),
+                    max: Some(20),
+                    null_count: Some(0),
+                },
+            ],
+            boundary_order: BoundaryOrder::Ascending,
+        };
+        let locations = &[
+            PageLocation {
+                offset: 100,
+                compressed_page_size: 10,
+                first_row_index: 0,
+            },
+            PageLocation {
+                offset: 200,
+                compressed_page_size: 20,
+                first_row_index: 11,
+            },
+        ];
+        let total_rows = 20;
+
+        //filter `x < 11`
+        let filter =
+            |page: &PageIndex<i32>| page.max.as_ref().map(|&x| x < 11).unwrap_or(false);
+
+        let mask = index.indexes.iter().map(filter).collect::<Vec<_>>();
+
+        let row_ranges = compute_row_ranges(&mask, locations, total_rows).unwrap();
+
+        assert_eq!(row_ranges.count(), 1);
+        assert_eq!(
+            row_ranges.ranges.get(0).unwrap(),
+            &Range { from: 0, to: 10 }
+        );
     }
 }
