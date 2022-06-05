@@ -265,7 +265,7 @@ fn page_locations_to_row_ranges(
 
     let last = Range {
         from: locations.last().unwrap().first_row_index as usize,
-        to: total_rows,
+        to: total_rows - 1,
     };
     vec_range.push_back(last);
 
@@ -419,10 +419,7 @@ mod tests {
 
         let row_ranges = compute_row_ranges(&[true], locations, total_rows).unwrap();
         assert_eq!(row_ranges.count(), 1);
-        assert_eq!(
-            row_ranges.ranges.get(0).unwrap(),
-            &Range { from: 0, to: 10 }
-        );
+        assert_eq!(row_ranges.ranges.get(0).unwrap(), &Range { from: 0, to: 9 });
     }
 
     #[test]
