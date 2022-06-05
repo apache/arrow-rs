@@ -223,7 +223,7 @@ pub struct RowGroupMetaData {
     num_rows: i64,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
-    // Todo and filter row range
+    // Todo add filter result -> row range
 }
 
 impl RowGroupMetaData {
