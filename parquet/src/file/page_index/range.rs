@@ -86,8 +86,8 @@ impl Range {
     }
 }
 
-///Struct representing row ranges in a row-group. These row ranges are calculated as a result of using
-///the column index on the filtering.
+/// Struct representing row ranges in a row-group. These row ranges are calculated as a result of using
+/// the column index on the filtering.
 #[derive(Debug, Clone)]
 pub struct RowRanges {
     pub ranges: VecDeque<Range>,
@@ -108,7 +108,7 @@ impl RowRanges {
     pub fn filter_with_mask(&self, mask: &[bool]) -> Result<RowRanges, ParquetError> {
         if self.ranges.len() != mask.len() {
             return Err(ParquetError::General(format!(
-                "Mask size{} is not equal to page size {}",
+                "Mask size {} is not equal to number of pages {}",
                 mask.len(),
                 self.count()
             )));
