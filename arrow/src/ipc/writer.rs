@@ -1470,7 +1470,7 @@ mod tests {
             vec![Arc::new(union) as ArrayRef],
         )
         .unwrap();
-        let file_name = format!("/tmp/union.arrow_file");
+        let file_name = "target/debug/testdata/union.arrow_file";
         {
             let file = File::create(&file_name).unwrap();
             let mut writer =
