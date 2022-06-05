@@ -30,7 +30,7 @@ use crate::compute::cast;
 use crate::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef, UnionMode};
 use crate::error::{ArrowError, Result};
 use crate::ipc;
-use crate::record_batch::{RecordBatch, RecordBatchReader};
+use crate::record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 
 use ipc::CONTINUATION_MARKER;
 use DataType::*;
@@ -608,6 +608,11 @@ pub fn read_record_batch(
     let mut node_index = 0;
     let mut arrays = vec![];
 
+    let options = RecordBatchOptions {
+        match_field_names: true,
+        row_count: Some(batch.length() as usize),
+    };
+
     if let Some(projection) = projection {
         // project fields
         for (idx, field) in schema.fields().iter().enumerate() {
@@ -643,7 +648,11 @@ pub fn read_record_batch(
             }
         }
 
-        RecordBatch::try_new(Arc::new(schema.project(projection)?), arrays)
+        RecordBatch::try_new_with_options(
+            Arc::new(schema.project(projection)?),
+            arrays,
+            &options,
+        )
     } else {
         // keep track of index as lists require more than one node
         for field in schema.fields() {
@@ -661,7 +670,7 @@ pub fn read_record_batch(
             buffer_index = triple.2;
             arrays.push(triple.0);
         }
-        RecordBatch::try_new(schema, arrays)
+        RecordBatch::try_new_with_options(schema, arrays, &options)
     }
 }
 
