@@ -259,7 +259,7 @@ fn page_locations_to_row_ranges(
             Range {
                 from: start,
                 to: end,
-            };
+            }
         })
         .collect();
 
