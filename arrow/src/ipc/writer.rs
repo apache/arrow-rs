@@ -862,6 +862,7 @@ fn has_validity_bitmap(data_type: &DataType, write_options: &IpcWriteOptions) ->
 }
 
 /// Write array data to a vector of bytes
+#[allow(clippy::too_many_arguments)]
 fn write_array_data(
     array_data: &ArrayData,
     buffers: &mut Vec<ipc::Buffer>,
