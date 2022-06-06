@@ -22,11 +22,19 @@ use criterion::Criterion;
 extern crate arrow;
 
 use arrow::array::*;
-use arrow::compute::kernels::substring::substring;
+use arrow::compute::kernels::substring::*;
 use arrow::util::bench_util::*;
 
 fn bench_substring(arr: &dyn Array, start: i64, length: Option<u64>) {
     substring(criterion::black_box(arr), start, length).unwrap();
+}
+
+fn bench_substring_by_char<O: OffsetSizeTrait>(
+    arr: &GenericStringArray<O>,
+    start: i64,
+    length: Option<u64>,
+) {
+    substring_by_char(criterion::black_box(arr), start, length).unwrap();
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -42,6 +50,10 @@ fn add_benchmark(c: &mut Criterion) {
 
     c.bench_function("substring utf8 (start = 1, length = str_len - 1)", |b| {
         b.iter(|| bench_substring(&arr_string, 1, Some((val_len - 1) as u64)))
+    });
+
+    c.bench_function("substring utf8 by char", |b| {
+        b.iter(|| bench_substring_by_char(&arr_string, 1, Some((val_len - 1) as u64)))
     });
 
     c.bench_function("substring fixed size binary array", |b| {
