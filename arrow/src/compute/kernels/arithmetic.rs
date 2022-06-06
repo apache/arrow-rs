@@ -64,7 +64,7 @@ where
     }
 
     let null_bit_buffer =
-        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
 
     let values = left
         .values()
@@ -117,7 +117,7 @@ where
     }
 
     let null_bit_buffer =
-        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
 
     let buffer = if let Some(b) = &null_bit_buffer {
         let values = left.values().iter().zip(right.values()).enumerate().map(
@@ -316,7 +316,7 @@ where
 
     // Create the combined `Bitmap`
     let null_bit_buffer =
-        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
 
     let lanes = T::lanes();
     let buffer_size = left.len() * std::mem::size_of::<T::Native>();
