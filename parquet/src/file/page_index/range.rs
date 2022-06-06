@@ -28,6 +28,10 @@ pub trait RangeOps {
     fn is_after(&self, other: &Self) -> bool;
 
     fn count(&self) -> usize;
+
+    fn union(left: &Range, right: &Range) -> Option<Range>;
+
+    fn intersection(left: &Range, right: &Range) -> Option<Range>;
 }
 
 impl RangeOps for Range {
@@ -42,44 +46,44 @@ impl RangeOps for Range {
     fn count(&self) -> usize {
         self.end() + 1 - self.start()
     }
-}
 
-/// Return the union of the two ranges,
-/// Return `None` if there are hole between them.
-pub fn union(left: &Range, right: &Range) -> Option<Range> {
-    if left.start() <= right.start() {
-        if left.end() + 1 >= *right.start() {
+    /// Return the union of the two ranges,
+    /// Return `None` if there are hole between them.
+    fn union(left: &Range, right: &Range) -> Option<Range> {
+        if left.start() <= right.start() {
+            if left.end() + 1 >= *right.start() {
+                return Some(Range::new(
+                    *left.start(),
+                    std::cmp::max(*left.end(), *right.end()),
+                ));
+            }
+        } else if right.end() + 1 >= *left.start() {
             return Some(Range::new(
-                *left.start(),
+                *right.start(),
                 std::cmp::max(*left.end(), *right.end()),
             ));
         }
-    } else if right.end() + 1 >= *left.start() {
-        return Some(Range::new(
-            *right.start(),
-            std::cmp::max(*left.end(), *right.end()),
-        ));
+        None
     }
-    None
-}
 
-/// Returns the intersection of the two ranges,
-/// return null if they are not overlapped.
-pub fn intersection(left: &Range, right: &Range) -> Option<Range> {
-    if left.start() <= right.start() {
-        if left.end() >= right.start() {
+    /// Returns the intersection of the two ranges,
+    /// return null if they are not overlapped.
+    fn intersection(left: &Range, right: &Range) -> Option<Range> {
+        if left.start() <= right.start() {
+            if left.end() >= right.start() {
+                return Some(Range::new(
+                    *right.start(),
+                    std::cmp::min(*left.end(), *right.end()),
+                ));
+            }
+        } else if right.end() >= left.start() {
             return Some(Range::new(
-                *right.start(),
+                *left.start(),
                 std::cmp::min(*left.end(), *right.end()),
             ));
         }
-    } else if right.end() >= left.start() {
-        return Some(Range::new(
-            *left.start(),
-            std::cmp::min(*left.end(), *right.end()),
-        ));
+        None
     }
-    None
 }
 
 /// Struct representing row ranges in a row-group. These row ranges are calculated as a result of using
@@ -129,7 +133,7 @@ impl RowRanges {
                 let last = self.ranges.get(index).unwrap();
                 assert!(!last.is_after(&range), "Must add range in ascending!");
                 // try to merge range
-                match union(last, &range) {
+                match Range::union(last, &range) {
                     None => {
                         break;
                     }
@@ -201,7 +205,7 @@ impl RowRanges {
                     right_index = i + 1;
                     continue;
                 }
-                if let Some(ra) = intersection(l, r) {
+                if let Some(ra) = Range::intersection(l, r) {
                     result.add(ra);
                 }
             }
@@ -235,8 +239,15 @@ pub fn compute_row_ranges(
     locations: &[PageLocation],
     total_rows: usize,
 ) -> Result<RowRanges, ParquetError> {
+    if page_mask.len() != locations.len() {
+        return Err(ParquetError::General(format!(
+            "Page_mask size {} is not equal to number of locations {}",
+            page_mask.len(),
+            locations.len(),
+        )));
+    }
     let row_ranges = page_locations_to_row_ranges(locations, total_rows)?;
-    row_ranges.filter_with_mask(mask)
+    row_ranges.filter_with_mask(page_mask)
 }
 
 fn page_locations_to_row_ranges(
@@ -247,6 +258,8 @@ fn page_locations_to_row_ranges(
         return Ok(RowRanges::new_empty());
     }
 
+    // If we read directly from parquet pageIndex to construct locations,
+    // the location index should be continuous
     let mut vec_range: VecDeque<Range> = locations
         .windows(2)
         .map(|x| {
