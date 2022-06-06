@@ -32,17 +32,9 @@ pub(super) fn combine_option_bitmap(
     arrays: &[&ArrayData],
     len_in_bits: usize,
 ) -> Result<Option<Buffer>> {
-    if arrays.is_empty() {
-        return Err(ArrowError::ComputeError(
-            "Arrays must not be empty".to_string(),
-        ));
-    }
-
-    let buffers_and_offsets = arrays
+    arrays
         .iter()
-        .map(|array| (array.null_buffer().cloned(), array.offset()));
-
-    let (output_buffer, output_offset) = buffers_and_offsets
+        .map(|array| (array.null_buffer().cloned(), array.offset()))
         .reduce(|acc, buffer_and_offset| match (acc, buffer_and_offset) {
             ((None, _), (None, _)) => (None, 0),
             ((Some(buffer), offset), (None, _)) | ((None, _), (Some(buffer), offset)) => {
@@ -59,9 +51,12 @@ pub(super) fn combine_option_bitmap(
                 0,
             ),
         })
-        .unwrap();
-
-    Ok(output_buffer.map(|buffer| buffer.slice(output_offset)))
+        .map_or(
+            Err(ArrowError::ComputeError(
+                "Arrays must not be empty".to_string(),
+            )),
+            |(buffer, offset)| Ok(buffer.map(|buffer| buffer.slice(offset))),
+        )
 }
 
 /// Takes/filters a list array's inner data using the offsets of the list array.
@@ -214,7 +209,10 @@ pub(super) mod tests {
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b10110101])));
         let some_other_bitmap =
             make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b11010111])));
-        assert!(combine_option_bitmap(&[], 8).is_err());
+        assert_eq!(
+            combine_option_bitmap(&[], 8).unwrap_err().to_string(),
+            "Compute error: Arrays must not be empty",
+        );
         assert_eq!(
             Some(Buffer::from([0b01001010])),
             combine_option_bitmap(&[&some_bitmap], 8).unwrap()
