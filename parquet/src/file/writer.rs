@@ -153,6 +153,11 @@ impl<W: Write> SerializedFileWriter<W> {
         Ok(row_group_writer)
     }
 
+    /// Returns metadata for any flushed row groups
+    pub fn flushed_row_groups(&self) -> &[RowGroupMetaDataPtr] {
+        &self.row_groups
+    }
+
     /// Closes and finalises file writer, returning the file metadata.
     ///
     /// All row groups must be appended before this method is called.
@@ -1000,7 +1005,7 @@ mod tests {
         );
         let mut rows: i64 = 0;
 
-        for subset in &data {
+        for (idx, subset) in data.iter().enumerate() {
             let mut row_group_writer = file_writer.next_row_group().unwrap();
             if let Some(mut writer) = row_group_writer.next_column().unwrap() {
                 rows += writer
@@ -1009,7 +1014,10 @@ mod tests {
                     .unwrap() as i64;
                 writer.close().unwrap();
             }
-            row_group_writer.close().unwrap();
+            let last_group = row_group_writer.close().unwrap();
+            let flushed = file_writer.flushed_row_groups();
+            assert_eq!(flushed.len(), idx + 1);
+            assert_eq!(flushed[idx].as_ref(), last_group.as_ref());
         }
         file_writer.close().unwrap();
 
