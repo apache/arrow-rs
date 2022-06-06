@@ -17,3 +17,4 @@
 
 pub mod index;
 pub mod index_reader;
+pub(crate) mod range;
