@@ -609,8 +609,8 @@ pub fn read_record_batch(
     let mut arrays = vec![];
 
     let options = RecordBatchOptions {
-        match_field_names: true,
         row_count: Some(batch.length() as usize),
+        ..Default::default()
     };
 
     if let Some(projection) = projection {
