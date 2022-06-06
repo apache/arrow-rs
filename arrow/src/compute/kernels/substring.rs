@@ -57,7 +57,7 @@ use std::sync::Arc;
 /// - The function errors when the passed array is not a [`GenericStringArray`], [`GenericBinaryArray`], [`FixedSizeBinaryArray`]
 ///   or [`DictionaryArray`] with supported array type as its value type.
 /// - The function errors if the offset of a substring in the input array is at invalid char boundary (only for \[Large\]String array).
-/// It is recommended to use [substring_by_char] if the input array contains non-ASCII chars.
+/// It is recommended to use [`substring_by_char`] if the input array may contain non-ASCII chars.
 ///
 /// ## Example of trying to get an invalid utf-8 format substring
 /// ```
