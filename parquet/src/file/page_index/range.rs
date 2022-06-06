@@ -23,9 +23,9 @@ use std::ops::RangeInclusive;
 type Range = RangeInclusive<usize>;
 
 pub trait RangeOps {
-    fn is_before(&self, other: &Range) -> bool;
+    fn is_before(&self, other: &Self) -> bool;
 
-    fn is_after(&self, other: &Range) -> bool;
+    fn is_after(&self, other: &Self) -> bool;
 
     fn count(&self) -> usize;
 }
@@ -40,7 +40,7 @@ impl RangeOps for Range {
     }
 
     fn count(&self) -> usize {
-        self.end() - self.start() + 1
+        self.end() + 1 - self.start()
     }
 }
 
@@ -228,10 +228,10 @@ impl RowRanges {
     }
 }
 
-/// Return the `RowRanges` of all the selected pages
-/// which represents a sequence of ranges of all the selected pages
+/// Takes an array of [`PageLocation`], and a total number of rows, and based on the provided `page_mask`
+/// returns the corresponding [`RowRanges`] to scan
 pub fn compute_row_ranges(
-    mask: &[bool],
+    page_mask: &[bool],
     locations: &[PageLocation],
     total_rows: usize,
 ) -> Result<RowRanges, ParquetError> {
@@ -243,7 +243,7 @@ fn page_locations_to_row_ranges(
     locations: &[PageLocation],
     total_rows: usize,
 ) -> Result<RowRanges, ParquetError> {
-    if locations.is_empty() {
+    if locations.is_empty() || total_rows == 0 {
         return Ok(RowRanges::new_empty());
     }
 
