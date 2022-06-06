@@ -30,7 +30,7 @@ use crate::{
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-/// Returns an [ArrayRef] with substrings of all the elements in `array`.
+/// Returns an [`ArrayRef`] with substrings of all the elements in `array`.
 ///
 /// # Arguments
 ///
