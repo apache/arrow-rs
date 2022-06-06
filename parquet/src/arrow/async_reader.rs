@@ -106,15 +106,20 @@ use crate::file::PARQUET_MAGIC;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
 
 /// A reader that can asynchronously read a range of bytes
-pub trait AsyncChunkReader: Send + Unpin + 'static {
+pub trait AsyncChunkReader {
     /// Retrieve the bytes in `range`
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
+}
 
+/// Provides asynchronous access to the metadata of a parquet file,
+/// allowing fine-grained control over how metadata is sourced, in particular allowing
+/// for caching, pre-fetching, catalog metadata, etc...
+pub trait AsyncFileReader {
     /// Retrieve the [`ParquetMetaData`] for this file
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
 }
 
-impl<T: AsyncRead + AsyncSeek + Unpin + Send + 'static> AsyncChunkReader for T {
+impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncChunkReader for T {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
         async move {
             self.seek(SeekFrom::Start(range.start as u64)).await?;
@@ -130,7 +135,9 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send + 'static> AsyncChunkReader for T {
         }
         .boxed()
     }
+}
 
+impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
         async move {
             self.seek(SeekFrom::End(-8)).await?;
@@ -181,7 +188,7 @@ pub struct ParquetRecordBatchStreamBuilder<T> {
     projection: ProjectionMask,
 }
 
-impl<T: AsyncChunkReader> ParquetRecordBatchStreamBuilder<T> {
+impl<T: AsyncFileReader> ParquetRecordBatchStreamBuilder<T> {
     /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
     pub async fn new(mut input: T) -> Result<Self> {
         let metadata = input.get_metadata().await?;
@@ -326,7 +333,10 @@ impl<T> ParquetRecordBatchStream<T> {
     }
 }
 
-impl<T: AsyncChunkReader> Stream for ParquetRecordBatchStream<T> {
+impl<T> Stream for ParquetRecordBatchStream<T>
+where
+    T: AsyncChunkReader + Unpin + Send + 'static,
+{
     type Item = Result<RecordBatch>;
 
     fn poll_next(
@@ -528,7 +538,9 @@ mod tests {
             self.requests.lock().unwrap().push(range.clone());
             futures::future::ready(Ok(self.data.slice(range))).boxed()
         }
+    }
 
+    impl AsyncFileReader for TestReader {
         fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
             futures::future::ready(Ok(self.metadata.clone())).boxed()
         }
