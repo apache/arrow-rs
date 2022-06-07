@@ -73,11 +73,19 @@ pub(super) fn list_equal<T: OffsetSizeTrait>(
     // however, one is more likely to slice into a list array and get a region that has 0
     // child values.
     // The test that triggered this behaviour had [4, 4] as a slice of 1 value slot.
-    let lhs_child_length = lhs_offsets[lhs_start + len].to_usize().unwrap()
-        - lhs_offsets[lhs_start].to_usize().unwrap();
+    let lhs_child_length = if len == 0 {
+        0
+    } else {
+        lhs_offsets[lhs_start + len].to_usize().unwrap()
+            - lhs_offsets[lhs_start].to_usize().unwrap()
+    };
 
-    let rhs_child_length = rhs_offsets[rhs_start + len].to_usize().unwrap()
-        - rhs_offsets[rhs_start].to_usize().unwrap();
+    let rhs_child_length = if len == 0 {
+        0
+    } else {
+        rhs_offsets[rhs_start + len].to_usize().unwrap()
+            - rhs_offsets[rhs_start].to_usize().unwrap()
+    };
 
     if lhs_child_length == 0 && lhs_child_length == rhs_child_length {
         return true;
