@@ -111,9 +111,10 @@ mod snappy_codec {
             output_buf: &mut Vec<u8>,
         ) -> Result<usize> {
             let len = decompress_len(input_buf)?;
-            output_buf.resize(len, 0);
+            let offset = output_buf.len();
+            output_buf.resize(offset + len, 0);
             self.decoder
-                .decompress(input_buf, output_buf)
+                .decompress(input_buf, &mut output_buf[offset..])
                 .map_err(|e| e.into())
         }
 
@@ -340,13 +341,13 @@ mod tests {
             .expect("Error when compressing");
 
         // Decompress with c2
-        let mut decompressed_size = c2
+        let decompressed_size = c2
             .decompress(compressed.as_slice(), &mut decompressed)
             .expect("Error when decompressing");
         assert_eq!(data.len(), decompressed_size);
-        decompressed.truncate(decompressed_size);
         assert_eq!(data, decompressed.as_slice());
 
+        decompressed.clear();
         compressed.clear();
 
         // Compress with c2
@@ -354,12 +355,32 @@ mod tests {
             .expect("Error when compressing");
 
         // Decompress with c1
-        decompressed_size = c1
+        let decompressed_size = c1
             .decompress(compressed.as_slice(), &mut decompressed)
             .expect("Error when decompressing");
         assert_eq!(data.len(), decompressed_size);
-        decompressed.truncate(decompressed_size);
         assert_eq!(data, decompressed.as_slice());
+
+        decompressed.clear();
+        compressed.clear();
+
+        // Test does not trample existing data in output buffers
+        let prefix = &[0xDE, 0xAD, 0xBE, 0xEF];
+        decompressed.extend_from_slice(prefix);
+        compressed.extend_from_slice(prefix);
+
+        c2.compress(data, &mut compressed)
+            .expect("Error when compressing");
+
+        assert_eq!(&compressed[..4], prefix);
+
+        let decompressed_size = c2
+            .decompress(&compressed[4..], &mut decompressed)
+            .expect("Error when decompressing");
+
+        assert_eq!(data.len(), decompressed_size);
+        assert_eq!(data, &decompressed[4..]);
+        assert_eq!(&decompressed[..4], prefix);
     }
 
     fn test_codec(c: CodecType) {
