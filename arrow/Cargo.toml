@@ -174,7 +174,7 @@ name = "buffer_create"
 harness = false
 
 [[bench]]
-name = "string_kernels"
+name = "substring_kernels"
 harness = false
 
 [[bench]]
