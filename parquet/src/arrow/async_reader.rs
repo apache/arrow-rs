@@ -77,13 +77,12 @@
 
 use std::collections::VecDeque;
 use std::fmt::Formatter;
-use std::io::{Cursor, SeekFrom};
+use std::io::SeekFrom;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use byteorder::{ByteOrder, LittleEndian};
 use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::Stream;
@@ -99,10 +98,10 @@ use crate::arrow::ProjectionMask;
 use crate::basic::Compression;
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
-use crate::file::footer::parse_metadata_buffer;
+use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::SerializedPageReader;
-use crate::file::PARQUET_MAGIC;
+use crate::file::FOOTER_SIZE;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
 
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
@@ -134,30 +133,21 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     }
 
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        const FOOTER_SIZE_I64: i64 = FOOTER_SIZE as i64;
         async move {
-            self.seek(SeekFrom::End(-8)).await?;
+            self.seek(SeekFrom::End(-FOOTER_SIZE_I64)).await?;
 
-            let mut buf = [0_u8; 8];
+            let mut buf = [0_u8; FOOTER_SIZE];
             self.read_exact(&mut buf).await?;
 
-            if buf[4..] != PARQUET_MAGIC {
-                return Err(general_err!("Invalid Parquet file. Corrupt footer"));
-            }
+            let metadata_len = decode_footer(&buf)?;
+            self.seek(SeekFrom::End(-FOOTER_SIZE_I64 - metadata_len as i64))
+                .await?;
 
-            let metadata_len = LittleEndian::read_i32(&buf[..4]) as i64;
-            if metadata_len < 0 {
-                return Err(general_err!(
-                    "Invalid Parquet file. Metadata length is less than zero ({})",
-                    metadata_len
-                ));
-            }
-
-            self.seek(SeekFrom::End(-8 - metadata_len)).await?;
-
-            let mut buf = Vec::with_capacity(metadata_len as usize + 8);
+            let mut buf = Vec::with_capacity(metadata_len);
             self.read_to_end(&mut buf).await?;
 
-            Ok(Arc::new(parse_metadata_buffer(&mut Cursor::new(buf))?))
+            Ok(Arc::new(decode_metadata(&buf)?))
         }
         .boxed()
     }
