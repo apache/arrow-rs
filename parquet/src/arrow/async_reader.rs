@@ -101,6 +101,7 @@ use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::SerializedPageReader;
+use crate::file::FOOTER_SIZE;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
 
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
@@ -132,14 +133,16 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     }
 
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        const FOOTER_SIZE_I64: i64 = FOOTER_SIZE as i64;
         async move {
-            self.seek(SeekFrom::End(-8)).await?;
+            self.seek(SeekFrom::End(-FOOTER_SIZE_I64)).await?;
 
-            let mut buf = [0_u8; 8];
+            let mut buf = [0_u8; FOOTER_SIZE];
             self.read_exact(&mut buf).await?;
 
             let metadata_len = decode_footer(&buf)?;
-            self.seek(SeekFrom::End(-8 - metadata_len as i64)).await?;
+            self.seek(SeekFrom::End(-FOOTER_SIZE_I64 - metadata_len as i64))
+                .await?;
 
             let mut buf = Vec::with_capacity(metadata_len);
             self.read_to_end(&mut buf).await?;
