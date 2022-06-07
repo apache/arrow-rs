@@ -747,7 +747,7 @@ impl ArrayData {
         self.typed_buffer(0, self.len + 1)
     }
 
-    /// Returns a reference to the data in `buffer` as a typed slice after validating
+    /// Returns a reference to the data in `buffers[idx]` as a typed slice after validating
     fn typed_buffer<T: ArrowNativeType + num::Num>(
         &self,
         idx: usize,
