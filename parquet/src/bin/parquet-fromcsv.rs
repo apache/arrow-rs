@@ -139,7 +139,7 @@ use parquet::{
 };
 
 #[derive(Debug, Parser)]
-#[clap(author, version, about("Binary file to convert csv to Parquet file"), long_about=None)]
+#[clap(author, version, about("Binary to convert csv to Parquet"), long_about=None)]
 struct Args {
     /// Parquet schema file path
     #[clap(short, long, help("message schema for output Parquet"))]
