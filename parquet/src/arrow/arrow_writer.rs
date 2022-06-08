@@ -36,6 +36,7 @@ use super::schema::{
 use crate::arrow::levels::calculate_array_levels;
 use crate::column::writer::ColumnWriter;
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::RowGroupMetaDataPtr;
 use crate::file::properties::WriterProperties;
 use crate::file::writer::{SerializedColumnWriter, SerializedRowGroupWriter};
 use crate::{data_type::*, file::writer::SerializedFileWriter};
@@ -93,6 +94,11 @@ impl<W: Write> ArrowWriter<W> {
             arrow_schema,
             max_row_group_size,
         })
+    }
+
+    /// Returns metadata for any flushed row groups
+    pub fn flushed_row_groups(&self) -> &[RowGroupMetaDataPtr] {
+        self.writer.flushed_row_groups()
     }
 
     /// Enqueues the provided `RecordBatch` to be written
@@ -689,6 +695,7 @@ fn get_fsb_array_slice(
 mod tests {
     use super::*;
 
+    use bytes::Bytes;
     use std::fs::File;
     use std::sync::Arc;
 
@@ -750,9 +757,8 @@ mod tests {
             writer.close().unwrap();
         }
 
-        let cursor = crate::file::serialized_reader::SliceableCursor::new(buffer);
-        let reader = SerializedFileReader::new(cursor).unwrap();
-        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
+        let cursor = Bytes::from(buffer);
+        let mut arrow_reader = ParquetFileArrowReader::try_new(cursor).unwrap();
         let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
 
         let actual_batch = record_batch_reader
@@ -1187,8 +1193,8 @@ mod tests {
         writer.write(&expected_batch).unwrap();
         writer.close().unwrap();
 
-        let reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
-        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
+        let mut arrow_reader =
+            ParquetFileArrowReader::try_new(file.try_clone().unwrap()).unwrap();
         let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
 
         let actual_batch = record_batch_reader
@@ -1917,10 +1923,9 @@ mod tests {
 
         writer.close().unwrap();
 
-        let reader = SerializedFileReader::new(file).unwrap();
-        assert_eq!(&row_group_sizes(reader.metadata()), &[200, 200, 50]);
+        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
+        assert_eq!(&row_group_sizes(arrow_reader.metadata()), &[200, 200, 50]);
 
-        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
         let batches = arrow_reader
             .get_record_reader(100)
             .unwrap()
@@ -2060,13 +2065,12 @@ mod tests {
         writer.close().unwrap();
 
         // Read Data
-        let reader = SerializedFileReader::new(file).unwrap();
-
         // Should have written entire first batch and first row of second to the first row group
         // leaving a single row in the second row group
-        assert_eq!(&row_group_sizes(reader.metadata()), &[6, 1]);
 
-        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
+        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
+        assert_eq!(&row_group_sizes(arrow_reader.metadata()), &[6, 1]);
+
         let batches = arrow_reader
             .get_record_reader(2)
             .unwrap()

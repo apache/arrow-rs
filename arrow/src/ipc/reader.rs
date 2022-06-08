@@ -30,7 +30,7 @@ use crate::compute::cast;
 use crate::datatypes::{DataType, Field, IntervalUnit, Schema, SchemaRef, UnionMode};
 use crate::error::{ArrowError, Result};
 use crate::ipc;
-use crate::record_batch::{RecordBatch, RecordBatchReader};
+use crate::record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 
 use ipc::CONTINUATION_MARKER;
 use DataType::*;
@@ -52,6 +52,7 @@ fn read_buffer(buf: &ipc::Buffer, a_data: &[u8]) -> Buffer {
 ///     - check if the bit width of non-64-bit numbers is 64, and
 ///     - read the buffer as 64-bit (signed integer or float), and
 ///     - cast the 64-bit array to the appropriate data type
+#[allow(clippy::too_many_arguments)]
 fn create_array(
     nodes: &[ipc::FieldNode],
     field: &Field,
@@ -60,6 +61,7 @@ fn create_array(
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     mut node_index: usize,
     mut buffer_index: usize,
+    metadata: &ipc::MetadataVersion,
 ) -> Result<(ArrayRef, usize, usize)> {
     use DataType::*;
     let data_type = field.data_type();
@@ -106,6 +108,7 @@ fn create_array(
                 dictionaries_by_id,
                 node_index,
                 buffer_index,
+                metadata,
             )?;
             node_index = triple.1;
             buffer_index = triple.2;
@@ -128,6 +131,7 @@ fn create_array(
                 dictionaries_by_id,
                 node_index,
                 buffer_index,
+                metadata,
             )?;
             node_index = triple.1;
             buffer_index = triple.2;
@@ -153,6 +157,7 @@ fn create_array(
                     dictionaries_by_id,
                     node_index,
                     buffer_index,
+                    metadata,
                 )?;
                 node_index = triple.1;
                 buffer_index = triple.2;
@@ -201,6 +206,13 @@ fn create_array(
 
             let len = union_node.length() as usize;
 
+            // In V4, union types has validity bitmap
+            // In V5 and later, union types have no validity bitmap
+            if metadata < &ipc::MetadataVersion::V5 {
+                read_buffer(&buffers[buffer_index], data);
+                buffer_index += 1;
+            }
+
             let type_ids: Buffer =
                 read_buffer(&buffers[buffer_index], data)[..len].into();
 
@@ -226,6 +238,7 @@ fn create_array(
                     dictionaries_by_id,
                     node_index,
                     buffer_index,
+                    metadata,
                 )?;
 
                 node_index = triple.1;
@@ -582,6 +595,7 @@ pub fn read_record_batch(
     schema: SchemaRef,
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     projection: Option<&[usize]>,
+    metadata: &ipc::MetadataVersion,
 ) -> Result<RecordBatch> {
     let buffers = batch.buffers().ok_or_else(|| {
         ArrowError::IoError("Unable to get buffers from IPC RecordBatch".to_string())
@@ -593,6 +607,11 @@ pub fn read_record_batch(
     let mut buffer_index = 0;
     let mut node_index = 0;
     let mut arrays = vec![];
+
+    let options = RecordBatchOptions {
+        row_count: Some(batch.length() as usize),
+        ..Default::default()
+    };
 
     if let Some(projection) = projection {
         // project fields
@@ -607,6 +626,7 @@ pub fn read_record_batch(
                     dictionaries_by_id,
                     node_index,
                     buffer_index,
+                    metadata,
                 )?;
                 node_index = triple.1;
                 buffer_index = triple.2;
@@ -628,7 +648,11 @@ pub fn read_record_batch(
             }
         }
 
-        RecordBatch::try_new(Arc::new(schema.project(projection)?), arrays)
+        RecordBatch::try_new_with_options(
+            Arc::new(schema.project(projection)?),
+            arrays,
+            &options,
+        )
     } else {
         // keep track of index as lists require more than one node
         for field in schema.fields() {
@@ -640,12 +664,13 @@ pub fn read_record_batch(
                 dictionaries_by_id,
                 node_index,
                 buffer_index,
+                metadata,
             )?;
             node_index = triple.1;
             buffer_index = triple.2;
             arrays.push(triple.0);
         }
-        RecordBatch::try_new(schema, arrays)
+        RecordBatch::try_new_with_options(schema, arrays, &options)
     }
 }
 
@@ -656,6 +681,7 @@ pub fn read_dictionary(
     batch: ipc::DictionaryBatch,
     schema: &Schema,
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
+    metadata: &ipc::MetadataVersion,
 ) -> Result<()> {
     if batch.isDelta() {
         return Err(ArrowError::IoError(
@@ -686,6 +712,7 @@ pub fn read_dictionary(
                 Arc::new(schema),
                 dictionaries_by_id,
                 None,
+                metadata,
             )?;
             Some(record_batch.column(0).clone())
         }
@@ -816,7 +843,13 @@ impl<R: Read + Seek> FileReader<R> {
                         ))?;
                         reader.read_exact(&mut buf)?;
 
-                        read_dictionary(&buf, batch, &schema, &mut dictionaries_by_id)?;
+                        read_dictionary(
+                            &buf,
+                            batch,
+                            &schema,
+                            &mut dictionaries_by_id,
+                            &message.version(),
+                        )?;
                     }
                     t => {
                         return Err(ArrowError::IoError(format!(
@@ -925,6 +958,7 @@ impl<R: Read + Seek> FileReader<R> {
                     self.schema(),
                     &self.dictionaries_by_id,
                     self.projection.as_ref().map(|x| x.0.as_ref()),
+                    &message.version()
 
                 ).map(Some)
             }
@@ -1099,7 +1133,7 @@ impl<R: Read> StreamReader<R> {
                 let mut buf = vec![0; message.bodyLength() as usize];
                 self.reader.read_exact(&mut buf)?;
 
-                read_record_batch(&buf, batch, self.schema(), &self.dictionaries_by_id, self.projection.as_ref().map(|x| x.0.as_ref())).map(Some)
+                read_record_batch(&buf, batch, self.schema(), &self.dictionaries_by_id, self.projection.as_ref().map(|x| x.0.as_ref()), &message.version()).map(Some)
             }
             ipc::MessageHeader::DictionaryBatch => {
                 let batch = message.header_as_dictionary_batch().ok_or_else(|| {
@@ -1112,7 +1146,7 @@ impl<R: Read> StreamReader<R> {
                 self.reader.read_exact(&mut buf)?;
 
                 read_dictionary(
-                    &buf, batch, &self.schema, &mut self.dictionaries_by_id
+                    &buf, batch, &self.schema, &mut self.dictionaries_by_id, &message.version()
                 )?;
 
                 // read the next message until we encounter a RecordBatch
@@ -1154,6 +1188,7 @@ mod tests {
     use crate::{datatypes, util::integration_util::*};
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn read_generated_files_014() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "0.14.1";
@@ -1274,6 +1309,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn read_generated_streams_014() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "0.14.1";
@@ -1903,6 +1939,19 @@ mod tests {
         )]));
         let input_batch =
             RecordBatch::try_new(schema, vec![Arc::new(dict_dict_array)]).unwrap();
+        let output_batch = roundtrip_ipc_stream(&input_batch);
+        assert_eq!(input_batch, output_batch);
+    }
+
+    #[test]
+    fn test_no_columns_batch() {
+        let schema = Arc::new(Schema::new(vec![]));
+        let options = RecordBatchOptions {
+            match_field_names: true,
+            row_count: Some(10),
+        };
+        let input_batch =
+            RecordBatch::try_new_with_options(schema, vec![], &options).unwrap();
         let output_batch = roundtrip_ipc_stream(&input_batch);
         assert_eq!(input_batch, output_batch);
     }

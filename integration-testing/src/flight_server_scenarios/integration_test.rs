@@ -296,6 +296,7 @@ async fn record_batch_from_message(
         schema_ref,
         dictionaries_by_id,
         None,
+        &message.version(),
     );
 
     arrow_batch_result.map_err(|e| {
@@ -313,8 +314,13 @@ async fn dictionary_from_message(
         Status::internal("Could not parse message header as dictionary batch")
     })?;
 
-    let dictionary_batch_result =
-        reader::read_dictionary(data_body, ipc_batch, &schema_ref, dictionaries_by_id);
+    let dictionary_batch_result = reader::read_dictionary(
+        data_body,
+        ipc_batch,
+        &schema_ref,
+        dictionaries_by_id,
+        &message.version(),
+    );
     dictionary_batch_result.map_err(|e| {
         Status::internal(format!("Could not convert to Dictionary: {:?}", e))
     })

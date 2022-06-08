@@ -71,6 +71,7 @@ pub fn flight_data_to_arrow_batch(
                 schema,
                 dictionaries_by_id,
                 None,
+                &message.version(),
             )
         })?
 }
