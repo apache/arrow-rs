@@ -141,7 +141,7 @@ use parquet::{
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Binary to convert csv to Parquet"), long_about=None)]
 struct Args {
-    /// Parquet schema file path
+    /// Path to a text file containing a parquet schema definition
     #[clap(short, long, help("message schema for output Parquet"))]
     schema: PathBuf,
     /// input CSV file path
