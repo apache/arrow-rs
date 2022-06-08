@@ -31,7 +31,7 @@
 //! parquet-fromcsv --schema message_schema_for_parquet.txt input.csv output.parquet
 //! ```
 //!
-//! The binary can also be build form the source code and run as follows:
+//! The binary can also be built from the source code and run as follows:
 //!
 //! ```text
 //! cargo run --features=cli --bin parquet-fromcsv --schema message_schema_for_parquet.txt \
