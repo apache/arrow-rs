@@ -41,67 +41,7 @@
 //! # Options
 //!
 //! ```text
-//! parquet 14.0.0
-//! Apache Arrow <dev@arrow.apache.org>
-//! Binary file to converts csv to Parquet file
-//!
-//! USAGE:
-//!     parquet-fromcsv [OPTIONS] --schema <SCHEMA> --input-file <INPUT_FILE> --output-file <OUTPUT_FILE>
-//!
-//! OPTIONS:
-//!     -b, --batch-size <BATCH_SIZE>
-//!             batch size
-//!             
-//!             [env: PARQUET_FROM_CSV_BATCHSIZE=]
-//!             [default: 1000]
-//!
-//!     -c, --parquet-compression <PARQUET_COMPRESSION>
-//!             compression mode
-//!             
-//!             [default: SNAPPY]
-//!
-//!     -d, --delimiter <DELIMITER>
-//!             field delimiter
-//!             
-//!             default value: when input_format==CSV: ',' when input_format==TSV: 'TAB'
-//!
-//!     -D, --double-quote <DOUBLE_QUOTE>
-//!             double quote
-//!
-//!     -e, --escape-char <ESCAPE_CHAR>
-//!             escape charactor
-//!
-//!     -f, --input-format <INPUT_FORMAT>
-//!             input file format
-//!             
-//!             [default: csv]
-//!             [possible values: csv, tsv]
-//!
-//!     -h, --has-header
-//!             has header
-//!
-//!         --help
-//!             Print help information
-//!
-//!     -i, --input-file <INPUT_FILE>
-//!             input CSV file
-//!
-//!     -o, --output-file <OUTPUT_FILE>
-//!             output Parquet file
-//!
-//!     -q, --quote-char <QUOTE_CHAR>
-//!             quate charactor
-//!
-//!     -r, --record-terminator <RECORD_TERMINATOR>
-//!             record terminator
-//!             
-//!             [possible values: lf, crlf, cr]
-//!
-//!     -s, --schema <SCHEMA>
-//!             message schema for output Parquet
-//!
-//!     -V, --version
-//!             Print version information
+#![doc = include_str!("./parquet-fromcsv-help.txt")] // Update for this file : Run test test_command_help
 //! ```
 //!
 //! ## Parquet file options
@@ -241,16 +181,6 @@ impl Args {
             self.quote_char.map(|c| c as u8)
         }
     }
-    fn get_quoting(&self) -> Option<bool> {
-        if let Some(_qch) = self.quote_char {
-            Some(true)
-        } else {
-            match self.input_format {
-                CsvDialect::CSV => None,
-                CsvDialect::TSV => Some(false),
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, ArgEnum, PartialEq)]
@@ -356,8 +286,20 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use arrow::datatypes::{DataType, Field};
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_command_help() {
+        let mut cmd = Args::command();
+        let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let mut path_buf = PathBuf::from(dir);
+        path_buf.push("src");
+        path_buf.push("bin");
+        path_buf.push("parquet-fromcsv-help.txt");
+        let mut help_file = File::create(path_buf).unwrap();
+        cmd.write_long_help(&mut help_file);
+    }
 
     fn parse_args(mut extra_args: Vec<&str>) -> Result<Args> {
         let mut args = vec![
@@ -403,14 +345,12 @@ mod tests {
         assert_eq!(args.get_delimiter(), b',');
         assert_eq!(args.get_terminator(), None); // CRLF
         assert_eq!(args.get_quote(), Some(b'\"'));
-        assert_eq!(args.get_quoting(), None); // quoting default: true
         assert_eq!(args.get_escape(), None);
         let args = parse_args(vec!["--input-format", "tsv"])?;
         assert_eq!(args.input_format, CsvDialect::TSV);
         assert_eq!(args.get_delimiter(), b'\t');
         assert_eq!(args.get_terminator(), Some(b'\x0a')); // LF
         assert_eq!(args.get_quote(), None); // quote none
-        assert_eq!(args.get_quoting(), Some(false));
         assert_eq!(args.get_escape(), None);
 
         let args = parse_args(vec!["--input-format", "csv", "--escape-char", "\\"])?;
@@ -418,7 +358,6 @@ mod tests {
         assert_eq!(args.get_delimiter(), b',');
         assert_eq!(args.get_terminator(), None); // CRLF
         assert_eq!(args.get_quote(), Some(b'\"'));
-        assert_eq!(args.get_quoting(), None); // quoting default: true
         assert_eq!(args.get_escape(), Some(b'\\'));
 
         let args = parse_args(vec!["--input-format", "tsv", "--delimiter", ":"])?;
@@ -426,7 +365,6 @@ mod tests {
         assert_eq!(args.get_delimiter(), b':');
         assert_eq!(args.get_terminator(), Some(b'\x0a')); // LF
         assert_eq!(args.get_quote(), None); // quote none
-        assert_eq!(args.get_quoting(), Some(false));
         assert_eq!(args.get_escape(), None);
 
         Ok(())
@@ -457,9 +395,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
     fn test_parse_arg_compression_format_fail() {
-        parse_args(vec!["--parquet-compression", "zip"]).unwrap();
+        match parse_args(vec!["--parquet-compression", "zip"]) {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => assert_eq!(
+                format!("{}", e),
+                "error: Invalid value \"zip\" for '--parquet-compression <PARQUET_COMPRESSION>': Unknown compression ZIP : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help\n"),
+        }
     }
 
     fn assert_debug_text(debug_text: &str, name: &str, value: &str) {
