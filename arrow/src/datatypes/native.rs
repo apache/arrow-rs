@@ -30,8 +30,25 @@ pub trait JsonSerializable: 'static {
 
 /// Trait expressing a Rust type that has the same in-memory representation
 /// as Arrow. This includes `i16`, `f32`, but excludes `bool` (which in arrow is represented in bits).
+///
 /// In little endian machines, types that implement [`ArrowNativeType`] can be memcopied to arrow buffers
 /// as is.
+///
+/// # Transmute Safety
+///
+/// A type T implementing this trait means that any arbitrary slice of bytes of length and
+/// alignment `size_of::<T>()` can be safely interpreted as a value of that type without
+/// being unsound, i.e. potentially resulting in undefined behaviour.
+///
+/// Note: in the case of floating point numbers this transmutation can result in a signalling
+/// NaN, which, whilst sound, can be unwieldy. In general, whilst it is perfectly sound to
+/// reinterpret bytes as different types using this trait, it is likely unwise
+///
+/// Note: `bool` is restricted to `0` or `1`, and so `bool: !ArrowNativeType`
+///
+/// # Sealed
+///
+/// Due to the above restrictions, this trait is sealed to prevent accidental misuse
 pub trait ArrowNativeType:
     std::fmt::Debug
     + Send
