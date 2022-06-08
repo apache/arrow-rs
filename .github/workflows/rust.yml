@@ -108,31 +108,42 @@ jobs:
 
           # run tests on all workspace members with default feature list
           cargo test
-
-          # Switch to arrow crate
-          cd arrow
-          # re-run tests on arrow crate to ensure
-          # all arrays are created correctly
-          cargo test --features=force_validate
-          cargo test --features=prettyprint
-          # run test on arrow crate with minimal set of features
-          cargo test --no-default-features
+          
+          # re-run tests on arrow crate with all supported features
+          cargo test -p arrow --features=force_validate,prettyprint
+          
+          # Test arrow examples
           cargo run --example builders
           cargo run --example dynamic_types
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
-          cargo check --no-default-features
+          
+          # Test compilation of arrow library crate with different feature combinations
+          cargo check -p arrow
+          cargo check -p arrow --no-default-features
+          
+          # Test compilation of arrow targets with different feature combinations
+          cargo check -p arrow --all-targets
+          cargo check -p arrow --no-default-features --all-targets
 
-          # Switch to parquet crate
-          cd ../parquet
-          # re-run tests on parquet crate with async feature enabled
-          cargo test --features=async
-          cargo check --no-default-features
+          # re-run tests on arrow-flight with all features
+          cargo test -p arrow-flight --all-features
 
-          # Switch to arrow-flight
-          cd ../arrow-flight
-          cargo test --features=flight-sql-experimental
-          cargo check --no-default-features
+          # re-run tests on parquet crate with all features
+          cargo test -p parquet --all-features
+          
+          # Test compilation of parquet library crate with different feature combinations
+          cargo check -p parquet
+          cargo check -p parquet --no-default-features
+          cargo check -p parquet --no-default-features --features arrow
+          
+          # Test compilation of parquet targets with different feature combinations
+          cargo check -p parquet --all-targets
+          cargo check -p parquet --no-default-features --all-targets
+          cargo check -p parquet --no-default-features --features arrow --all-targets
+          
+          # Test compilation of parquet_derive macro with different feature combinations
+          cargo check -p parquet_derive
 
   # test the --features "simd" of the arrow crate. This requires nightly.
   linux-test-simd:
@@ -173,12 +184,12 @@ jobs:
           export CARGO_TARGET_DIR="/github/home/target"
           cd arrow
           cargo test --features "simd"
-      - name: Check new project build with simd features
+      - name: Check compilation with simd features
         run: |
           export CARGO_HOME="/github/home/.cargo"
           export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow/test/dependency/simd
-          cargo check
+          cargo check -p arrow --features simd
+          cargo check -p arrow --features simd --all-targets
 
   windows-and-macos:
     name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
@@ -435,54 +446,3 @@ jobs:
           export CARGO_TARGET_DIR="/github/home/target"
           export RUSTDOCFLAGS="-Dwarnings"
           cargo doc --document-private-items --no-deps --workspace --all-features
-
-
-  # test builds with various feature flag combinations outside the main workspace
-  default-build:
-    name: Feature Flag Builds ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable debug symbol generation to speed up CI build and keep memory down
-        RUSTFLAGS: "-C debuginfo=0"
-    steps:
-      - uses: actions/checkout@v2
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Arrow Build with default features
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow/test/dependency/default-features
-          cargo check
-      - name: Arrow Build with default-features=false
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow/test/dependency/no-default-features
-          cargo check
-      - name: Parquet Derive build with default-features
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd parquet_derive/test/dependency/default-features
-          cargo check

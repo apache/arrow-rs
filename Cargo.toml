@@ -24,6 +24,7 @@ members = [
         "arrow-flight",
         "integration-testing",
 ]
+resolver = "2"
 
 # this package is excluded because it requires different compilation flags, thereby significantly changing
 # how it is compiled within the workspace, causing the whole workspace to be compiled from scratch
