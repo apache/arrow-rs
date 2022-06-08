@@ -52,7 +52,11 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
     }
 
     let output_bitmap = combine_option_bitmap(
-        arrays.iter().map(|a| a.data()).collect::<Vec<_>>().as_ref(),
+        arrays
+            .iter()
+            .map(|a| a.data())
+            .collect::<Vec<_>>()
+            .as_slice(),
         size,
     )?;
 
@@ -121,9 +125,6 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        println!("{:?}", output.data());
-        println!("{:?}", expected.data());
-
         assert_eq!(output, expected);
     }
 
@@ -158,13 +159,42 @@ mod tests {
     }
 
     #[test]
-    fn test_string_concat_error() {
+    fn test_string_concat_error_array_length() {
         let left = StringArray::from(vec!["foo", "bar"]);
         let right = StringArray::from(vec!["baz"]);
 
         let output = concat_elements_utf8(&[&left, &right]);
 
-        assert!(output.is_err());
+        assert_eq!(
+            output.unwrap_err().to_string(),
+            "Compute error: Arrays must have the same length of 2".to_string()
+        );
+    }
+
+    #[test]
+    fn test_string_concat_error_slice_length() {
+        let left = [Some("foo"), Some("bar"), None]
+            .into_iter()
+            .collect::<StringArray>();
+        assert_eq!(
+            concat_elements_utf8(&[&left]).unwrap_err().to_string(),
+            "Compute error: Arrays must have at least two elements length: 1".to_string()
+        );
+    }
+
+    #[test]
+    fn test_string_concat_multiple() {
+        let foo = &StringArray::from(vec![Some("f"), Some("o"), Some("o"), None]);
+        let bar = &StringArray::from(vec![None, Some("b"), Some("a"), Some("r")]);
+        let baz = &StringArray::from(vec![Some("b"), None, Some("a"), Some("z")]);
+
+        let output = concat_elements_utf8(&[&foo, &bar, &baz]).unwrap();
+
+        let expected = [None, None, Some("oaa"), None]
+            .into_iter()
+            .collect::<StringArray>();
+
+        assert_eq!(output, expected);
     }
 
     #[test]
