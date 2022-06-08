@@ -549,7 +549,7 @@ mod tests {
         {
             let csv = input_file.as_file_mut();
             for index in 1..2000 {
-                write!(csv, "{},\"name_{}\"\x0d\x0a", index, index).unwrap();
+                write!(csv, "{},\"name_{}\"\r\n", index, index).unwrap();
             }
             csv.flush().unwrap();
             csv.seek(SeekFrom::Start(0)).unwrap();
