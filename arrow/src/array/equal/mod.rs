@@ -660,6 +660,24 @@ mod tests {
         .unwrap();
 
         test_equal(&a, &b, true);
+
+        let c = ArrayDataBuilder::new(DataType::List(Box::new(Field::new(
+            "item",
+            DataType::Int32,
+            true,
+        ))))
+        .len(0)
+        .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
+        .add_child_data(
+            Int32Array::from(vec![1, 2, -1, -2, 3, 4, -3, -4])
+                .data()
+                .clone(),
+        )
+        .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
+        .build()
+        .unwrap();
+
+        test_equal(&a, &c, true);
     }
 
     // Test the case where null_count > 0
