@@ -23,6 +23,7 @@ pub use immutable::*;
 mod mutable;
 pub use mutable::*;
 mod ops;
+mod scalar;
 pub use ops::*;
 
 use crate::error::{ArrowError, Result};
