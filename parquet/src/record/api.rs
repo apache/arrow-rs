@@ -669,7 +669,7 @@ impl Field {
             Field::Double(n) => serde_json::Number::from_f64(*n)
                 .map(Value::Number)
                 .unwrap_or(Value::Null),
-            Field::Decimal(n) => Value::String(convert_decimal_to_string(&n)),
+            Field::Decimal(n) => Value::String(convert_decimal_to_string(n)),
             Field::Str(s) => Value::String(s.to_owned()),
             Field::Bytes(b) => Value::String(base64::encode(b.data())),
             Field::Date(d) => Value::String(convert_date_to_string(*d)),
@@ -1707,21 +1707,19 @@ mod tests {
         );
         assert_eq!(
             Field::Float(5.0).to_json_value(),
-            Value::Number(serde_json::Number::from_f64(f64::from(5.0 as f32)).unwrap())
+            Value::Number(serde_json::Number::from_f64(5.0).unwrap())
         );
         assert_eq!(
             Field::Float(5.1234).to_json_value(),
-            Value::Number(
-                serde_json::Number::from_f64(f64::from(5.1234 as f32)).unwrap()
-            )
+            Value::Number(serde_json::Number::from_f64(5.1234).unwrap())
         );
         assert_eq!(
             Field::Double(6.0).to_json_value(),
-            Value::Number(serde_json::Number::from_f64(6.0 as f64).unwrap())
+            Value::Number(serde_json::Number::from_f64(6.0).unwrap())
         );
         assert_eq!(
             Field::Double(6.1234).to_json_value(),
-            Value::Number(serde_json::Number::from_f64(6.1234 as f64).unwrap())
+            Value::Number(serde_json::Number::from_f64(6.1234).unwrap())
         );
         assert_eq!(
             Field::Str("abc".to_string()).to_json_value(),
