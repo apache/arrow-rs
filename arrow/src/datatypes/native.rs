@@ -19,6 +19,10 @@ use super::DataType;
 use half::f16;
 use serde_json::{Number, Value};
 
+mod private {
+    pub trait Sealed {}
+}
+
 /// Trait declaring any type that is serializable to JSON. This includes all primitive types (bool, i32, etc.).
 pub trait JsonSerializable: 'static {
     fn into_json_value(self) -> Option<Value>;
@@ -37,6 +41,7 @@ pub trait ArrowNativeType:
     + std::str::FromStr
     + Default
     + JsonSerializable
+    + private::Sealed
 {
     /// Convert native type from usize.
     #[inline]
@@ -109,6 +114,7 @@ impl JsonSerializable for i8 {
     }
 }
 
+impl private::Sealed for i8 {}
 impl ArrowNativeType for i8 {
     #[inline]
     fn from_usize(v: usize) -> Option<Self> {
@@ -132,6 +138,7 @@ impl JsonSerializable for i16 {
     }
 }
 
+impl private::Sealed for i16 {}
 impl ArrowNativeType for i16 {
     #[inline]
     fn from_usize(v: usize) -> Option<Self> {
@@ -155,6 +162,7 @@ impl JsonSerializable for i32 {
     }
 }
 
+impl private::Sealed for i32 {}
 impl ArrowNativeType for i32 {
     #[inline]
     fn from_usize(v: usize) -> Option<Self> {
@@ -184,6 +192,7 @@ impl JsonSerializable for i64 {
     }
 }
 
+impl private::Sealed for i64 {}
 impl ArrowNativeType for i64 {
     #[inline]
     fn from_usize(v: usize) -> Option<Self> {
@@ -217,6 +226,7 @@ impl JsonSerializable for i128 {
     }
 }
 
+impl private::Sealed for i128 {}
 impl ArrowNativeType for i128 {
     #[inline]
     fn from_usize(v: usize) -> Option<Self> {
@@ -246,6 +256,7 @@ impl JsonSerializable for u8 {
     }
 }
 
+impl private::Sealed for u8 {}
 impl ArrowNativeType for u8 {
     #[inline]
     fn from_usize(v: usize) -> Option<Self> {
@@ -269,6 +280,7 @@ impl JsonSerializable for u16 {
     }
 }
 
+impl private::Sealed for u16 {}
 impl ArrowNativeType for u16 {
     #[inline]
     fn from_usize(v: usize) -> Option<Self> {
@@ -292,6 +304,7 @@ impl JsonSerializable for u32 {
     }
 }
 
+impl private::Sealed for u32 {}
 impl ArrowNativeType for u32 {
     #[inline]
     fn from_usize(v: usize) -> Option<Self> {
@@ -315,6 +328,7 @@ impl JsonSerializable for u64 {
     }
 }
 
+impl private::Sealed for u64 {}
 impl ArrowNativeType for u64 {
     #[inline]
     fn from_usize(v: usize) -> Option<Self> {
@@ -351,8 +365,11 @@ impl JsonSerializable for f64 {
 }
 
 impl ArrowNativeType for f16 {}
+impl private::Sealed for f16 {}
 impl ArrowNativeType for f32 {}
+impl private::Sealed for f32 {}
 impl ArrowNativeType for f64 {}
+impl private::Sealed for f64 {}
 
 /// Allows conversion from supported Arrow types to a byte slice.
 pub trait ToByteSlice {
