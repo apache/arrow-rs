@@ -184,9 +184,9 @@ mod tests {
 
     #[test]
     fn test_string_concat_multiple() {
-        let foo = &StringArray::from(vec![Some("f"), Some("o"), Some("o"), None]);
-        let bar = &StringArray::from(vec![None, Some("b"), Some("a"), Some("r")]);
-        let baz = &StringArray::from(vec![Some("b"), None, Some("a"), Some("z")]);
+        let foo = StringArray::from(vec![Some("f"), Some("o"), Some("o"), None]);
+        let bar = StringArray::from(vec![None, Some("b"), Some("a"), Some("r")]);
+        let baz = StringArray::from(vec![Some("b"), None, Some("a"), Some("z")]);
 
         let output = concat_elements_utf8(&[&foo, &bar, &baz]).unwrap();
 
