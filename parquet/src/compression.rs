@@ -49,13 +49,14 @@ use crate::errors::{ParquetError, Result};
 
 /// Parquet compression codec interface.
 pub trait Codec: Send {
-    /// Compresses data stored in slice `input_buf` and writes the compressed result
+    /// Compresses data stored in slice `input_buf` and appends the compressed result
     /// to `output_buf`.
+    ///
     /// Note that you'll need to call `clear()` before reusing the same `output_buf`
     /// across different `compress` calls.
     fn compress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>) -> Result<()>;
 
-    /// Decompresses data stored in slice `input_buf` and writes output to `output_buf`.
+    /// Decompresses data stored in slice `input_buf` and appends output to `output_buf`.
     /// Returns the total number of bytes written.
     fn decompress(&mut self, input_buf: &[u8], output_buf: &mut Vec<u8>)
         -> Result<usize>;
