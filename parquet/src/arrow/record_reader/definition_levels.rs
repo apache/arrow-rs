@@ -21,7 +21,7 @@ use arrow::array::BooleanBufferBuilder;
 use arrow::bitmap::Bitmap;
 use arrow::buffer::Buffer;
 
-use crate::arrow::bit_util::count_set_bits;
+use crate::arrow::buffer::bit_util::count_set_bits;
 use crate::arrow::record_reader::buffer::BufferQueue;
 use crate::basic::Encoding;
 use crate::column::reader::decoder::{

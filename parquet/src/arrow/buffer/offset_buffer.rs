@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::bit_util::iter_set_bits_rev;
+use crate::arrow::buffer::bit_util::iter_set_bits_rev;
 use crate::arrow::record_reader::buffer::{
     BufferQueue, ScalarBuffer, ScalarValue, ValuesBuffer,
 };

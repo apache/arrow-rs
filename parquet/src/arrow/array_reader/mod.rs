@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Logic for reading into arrow arrays
+
 use std::any::Any;
 use std::cmp::max;
 use std::marker::PhantomData;
@@ -34,7 +36,7 @@ use arrow::datatypes::{
     UInt32Type as ArrowUInt32Type, UInt64Type as ArrowUInt64Type,
 };
 
-use crate::arrow::converter::Converter;
+use crate::arrow::buffer::converter::Converter;
 use crate::arrow::record_reader::buffer::{ScalarValue, ValuesBuffer};
 use crate::arrow::record_reader::{GenericRecordReader, RecordReader};
 use crate::arrow::schema::parquet_to_arrow_field;
@@ -50,11 +52,9 @@ use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 mod builder;
 mod byte_array;
 mod byte_array_dictionary;
-mod dictionary_buffer;
 mod empty_array;
 mod list_array;
 mod map_array;
-mod offset_buffer;
 
 #[cfg(test)]
 mod test_util;
@@ -811,7 +811,7 @@ mod tests {
         TimestampMillisecondType as ArrowTimestampMillisecondType,
     };
 
-    use crate::arrow::converter::{Utf8ArrayConverter, Utf8Converter};
+    use crate::arrow::buffer::converter::{Utf8ArrayConverter, Utf8Converter};
     use crate::basic::{Encoding, Type as PhysicalType};
     use crate::column::page::Page;
     use crate::data_type::{ByteArray, ByteArrayType, DataType, Int32Type, Int64Type};
@@ -1384,8 +1384,7 @@ mod tests {
         let mut all_values = Vec::with_capacity(num_pages * values_per_page);
 
         for i in 0..num_pages {
-            let mut dict_encoder =
-                DictEncoder::<ByteArrayType>::new(column_desc.clone());
+            let mut dict_encoder = DictEncoder::<ByteArrayType>::new(column_desc.clone());
             // add data page
             let mut values = Vec::with_capacity(values_per_page);
 

@@ -25,7 +25,7 @@ use crate::arrow::array_reader::{
     ComplexObjectArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
     PrimitiveArrayReader, RowGroupCollection, StructArrayReader,
 };
-use crate::arrow::converter::{
+use crate::arrow::buffer::converter::{
     DecimalArrayConverter, DecimalConverter, FixedLenBinaryConverter,
     FixedSizeArrayConverter, Int96ArrayConverter, Int96Converter,
     IntervalDayTimeArrayConverter, IntervalDayTimeConverter,
