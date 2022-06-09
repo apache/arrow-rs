@@ -457,7 +457,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "StringArray index out of bounds access: the len is 3 but the index is 4"
+        expected = "StringArray index out of bounds: the len is 3 but the index is 4"
     )]
     fn test_string_array_get_value_index_out_of_bound() {
         let values: [u8; 12] = [
