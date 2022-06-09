@@ -40,28 +40,12 @@ jobs:
         RUSTFLAGS: "-C debuginfo=1"
     steps:
       - uses: actions/checkout@v2
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          # these represent dependencies downloaded by cargo
-          # and thus do not depend on the OS, arch nor rust version.
-          path: /github/home/.cargo
-          key: cargo-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          # these represent compiled steps of both dependencies and arrow
-          # and thus are specific for a particular OS, arch and rust version.
-          path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}-
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
       - name: Build Workspace
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cargo build
 
   # test the crate
@@ -81,24 +65,10 @@ jobs:
         RUSTFLAGS: "-C debuginfo=1"
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
         PARQUET_TEST_DATA: /__w/arrow-rs/arrow-rs/parquet-testing/data
-        CARGO_HOME: /github/home/.cargo
-        CARGO_TARGET_DIR: /github/home/target
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -161,22 +131,10 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-        CARGO_HOME: /github/home/.cargo
-        CARGO_TARGET_DIR: /github/home/target
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          key: cargo-nightly-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -234,18 +192,6 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -255,8 +201,6 @@ jobs:
           rustup component add rustfmt clippy
       - name: Run clippy
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
 
   check_benches:
@@ -276,27 +220,13 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
       - name: Check benchmarks
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cargo check --benches --workspace --features test_common,prettyprint,async,experimental 
+          cargo check --benches --workspace --features test_common,prettyprint,async,experimental
 
   lint:
     name: Lint (cargo fmt)
@@ -396,8 +326,6 @@ jobs:
           rustup target add wasm32-wasi
       - name: Build arrow crate
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cd arrow
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
@@ -416,6 +344,7 @@ jobs:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
+        RUSTDOCFLAGS: "-Dwarnings"
     steps:
       - uses: actions/checkout@v2
         with:
@@ -424,23 +353,10 @@ jobs:
         run: |
           apt update
           apt install -y libpython3.9-dev
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          key: cargo-nightly-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
       - name: Run cargo doc
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          export RUSTDOCFLAGS="-Dwarnings"
           cargo doc --document-private-items --no-deps --workspace --all-features
