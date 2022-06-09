@@ -26,20 +26,15 @@ jobs:
   miri-checks:
     name: MIRI
     runs-on: ubuntu-latest
-    strategy:
-      # Consult https://rust-lang.github.io/rustup-components-history/ to see compatible versions
-      matrix:
-        arch: [ amd64 ]
-        rust: [ nightly-2022-06-08 ]
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: true
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
-          rustup component add rustfmt clippy miri
+          rustup toolchain install nightly --component miri
+          rustup override set nightly
+          cargo miri setup
       - name: Run Miri Checks
         env:
           RUST_BACKTRACE: full
