@@ -20,10 +20,10 @@ use std::fmt;
 use std::{any::Any, iter::FromIterator};
 
 use super::{
-    array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, GenericListArray,
-    GenericStringIter, OffsetSizeTrait,
+    array::print_long_array, Array, ArrayData, GenericListArray, GenericStringIter,
+    OffsetSizeTrait,
 };
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, ScalarBuffer};
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
@@ -33,8 +33,8 @@ use crate::{buffer::MutableBuffer, datatypes::DataType};
 /// specific string data.
 pub struct GenericStringArray<OffsetSize: OffsetSizeTrait> {
     data: ArrayData,
-    value_offsets: RawPtrBox<OffsetSize>,
-    value_data: RawPtrBox<u8>,
+    value_offsets: ScalarBuffer<OffsetSize>,
+    value_data: Buffer,
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
@@ -59,20 +59,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     /// Returns the offset values in the offsets buffer
     #[inline]
     pub fn value_offsets(&self) -> &[OffsetSize] {
-        // Soundness
-        //     pointer alignment & location is ensured by RawPtrBox
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.value_offsets.as_ptr().add(self.data.offset()),
-                self.len() + 1,
-            )
-        }
+        &self.value_offsets
     }
 
     /// Returns a clone of the value data buffer
     pub fn value_data(&self) -> Buffer {
-        self.data.buffers()[1].clone()
+        self.value_data.clone()
     }
 
     /// Returns the number of `Unicode Scalar Value` in the string at index `i`.
@@ -89,30 +81,28 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     /// caller is responsible for ensuring that index is within the array bounds
     #[inline]
     pub unsafe fn value_unchecked(&self, i: usize) -> &str {
-        let end = self.value_offsets().get_unchecked(i + 1);
-        let start = self.value_offsets().get_unchecked(i);
-
-        // Soundness
-        // pointer alignment & location is ensured by RawPtrBox
-        // buffer bounds/offset is ensured by the value_offset invariants
-        // ISSUE: utf-8 well formedness is not checked
-
         // Safety of `to_isize().unwrap()`
         // `start` and `end` are &OffsetSize, which is a generic type that implements the
         // OffsetSizeTrait. Currently, only i32 and i64 implement OffsetSizeTrait,
         // both of which should cleanly cast to isize on an architecture that supports
         // 32/64-bit offsets
-        let slice = std::slice::from_raw_parts(
-            self.value_data.as_ptr().offset(start.to_isize().unwrap()),
-            (*end - *start).to_usize().unwrap(),
-        );
+        let start = self.value_offsets.get_unchecked(i).to_isize().unwrap();
+        let end = self.value_offsets.get_unchecked(i + 1).to_isize().unwrap();
+
+        // buffer bounds/offset is ensured by the value_offset invariants
+        let slice = self.value_data.get_unchecked(start as usize..end as usize);
         std::str::from_utf8_unchecked(slice)
     }
 
     /// Returns the element at index `i` as &str
     #[inline]
     pub fn value(&self, i: usize) -> &str {
-        assert!(i < self.data.len(), "StringArray out of bounds access");
+        assert!(
+            i < self.data.len(),
+            "StringArray index out of bounds: the len is {} but the index is {}",
+            self.data.len(),
+            i
+        );
         // Safety:
         // `i < self.data.len()
         unsafe { self.value_unchecked(i) }
@@ -306,12 +296,14 @@ impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericStringArray<OffsetS
             2,
             "StringArray data should contain 2 buffers only (offsets and values)"
         );
-        let offsets = data.buffers()[0].as_ptr();
-        let values = data.buffers()[1].as_ptr();
+        let offsets = data.buffers()[0].clone();
+        let value_data = data.buffers()[1].clone();
+        let offsets_len = data.is_empty().then(|| 0).unwrap_or(data.len() + 1);
+        let value_offsets = ScalarBuffer::new(offsets, data.offset(), offsets_len);
         Self {
             data,
-            value_offsets: unsafe { RawPtrBox::new(offsets) },
-            value_data: unsafe { RawPtrBox::new(values) },
+            value_offsets,
+            value_data,
         }
     }
 }
@@ -368,8 +360,7 @@ impl<T: OffsetSizeTrait> From<GenericListArray<T>> for GenericStringArray<T> {
 
 #[cfg(test)]
 mod tests {
-
-    use crate::array::{ListBuilder, StringBuilder};
+    use crate::array::{ArrayDataBuilder, ListBuilder, StringBuilder};
 
     use super::*;
 
@@ -465,7 +456,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "StringArray out of bounds access")]
+    #[should_panic(
+        expected = "StringArray index out of bounds access: the len is 3 but the index is 4"
+    )]
     fn test_string_array_get_value_index_out_of_bound() {
         let values: [u8; 12] = [
             b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
@@ -571,6 +564,18 @@ mod tests {
             .data()
             .validate_full()
             .expect("All null array has valid array data");
+    }
+
+    #[test]
+    fn test_string_array_empty_offsets() {
+        let data = ArrayDataBuilder::new(DataType::Utf8)
+            .len(0)
+            .add_buffer(Buffer::from([]))
+            .add_buffer(Buffer::from([]))
+            .build()
+            .unwrap();
+        let array = GenericStringArray::<i32>::from(data);
+        assert_eq!(array.value_offsets().len(), 0);
     }
 
     #[cfg(feature = "test_utils")]

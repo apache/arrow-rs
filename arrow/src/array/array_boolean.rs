@@ -20,8 +20,8 @@ use std::convert::From;
 use std::iter::{FromIterator, IntoIterator};
 use std::{any::Any, fmt};
 
+use super::array::print_long_array;
 use super::*;
-use super::{array::print_long_array, raw_pointer::RawPtrBox};
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::util::bit_util;
 
@@ -66,9 +66,7 @@ use crate::util::bit_util;
 /// ```
 pub struct BooleanArray {
     data: ArrayData,
-    /// Pointer to the value array. The lifetime of this must be <= to the value buffer
-    /// stored in `data`, so it's safe to store.
-    raw_values: RawPtrBox<u8>,
+    raw_values: Buffer,
 }
 
 impl fmt::Debug for BooleanArray {
@@ -101,7 +99,7 @@ impl BooleanArray {
     ///
     /// Note this doesn't take the offset of this array into account.
     pub fn values(&self) -> &Buffer {
-        &self.data.buffers()[0]
+        &self.raw_values
     }
 
     /// Returns the boolean value at index `i`.
@@ -186,11 +184,9 @@ impl From<ArrayData> for BooleanArray {
             1,
             "BooleanArray data should contain a single buffer only (values buffer)"
         );
-        let ptr = data.buffers()[0].as_ptr();
-        Self {
-            data,
-            raw_values: unsafe { RawPtrBox::new(ptr) },
-        }
+        // TODO: Hydrate offset into BitMap
+        let raw_values = data.buffers()[0].clone();
+        Self { data, raw_values }
     }
 }
 

@@ -21,9 +21,10 @@ use std::fmt;
 use num::Integer;
 
 use super::{
-    array::print_long_array, make_array, raw_pointer::RawPtrBox, Array, ArrayData,
-    ArrayRef, BooleanBufferBuilder, GenericListArrayIter, PrimitiveArray,
+    array::print_long_array, make_array, Array, ArrayData, ArrayRef,
+    BooleanBufferBuilder, GenericListArrayIter, PrimitiveArray,
 };
+use crate::buffer::ScalarBuffer;
 use crate::{
     buffer::MutableBuffer,
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType, Field},
@@ -49,10 +50,10 @@ impl OffsetSizeTrait for i64 {
 /// <https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout>
 ///
 /// For non generic lists, you may wish to consider using [`ListArray`] or [`LargeListArray`]`
-pub struct GenericListArray<OffsetSize> {
+pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
     data: ArrayData,
     values: ArrayRef,
-    value_offsets: RawPtrBox<OffsetSize>,
+    value_offsets: ScalarBuffer<OffsetSize>,
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
@@ -70,32 +71,27 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
-        let end = *self.value_offsets().get_unchecked(i + 1);
-        let start = *self.value_offsets().get_unchecked(i);
+        let end = *self.value_offsets.get_unchecked(i + 1);
+        let start = *self.value_offsets.get_unchecked(i);
         self.values
             .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
     }
 
     /// Returns ith value of this list array.
     pub fn value(&self, i: usize) -> ArrayRef {
-        let end = self.value_offsets()[i + 1];
-        let start = self.value_offsets()[i];
-        self.values
-            .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
+        assert!(
+            i < self.data.len(),
+            "GenericListArray index out of bounds: the len is {} but the index is {}",
+            self.data.len(),
+            i
+        );
+        unsafe { self.value_unchecked(i) }
     }
 
     /// Returns the offset values in the offsets buffer
     #[inline]
     pub fn value_offsets(&self) -> &[OffsetSize] {
-        // Soundness
-        //     pointer alignment & location is ensured by RawPtrBox
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.value_offsets.as_ptr().add(self.data.offset()),
-                self.len() + 1,
-            )
-        }
+        &self.value_offsets
     }
 
     /// Returns the length for value at index `i`.
@@ -227,8 +223,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         }
 
         let values = make_array(values);
-        let value_offsets = data.buffers()[0].as_ptr();
-        let value_offsets = unsafe { RawPtrBox::<OffsetSize>::new(value_offsets) };
+        let offsets = data.buffers()[0].clone();
+        let offsets_len = data.is_empty().then(|| 0).unwrap_or(data.len() + 1);
+        let value_offsets = ScalarBuffer::new(offsets, data.offset(), offsets_len);
+
         Ok(Self {
             data,
             values,
@@ -940,7 +938,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "index out of bounds: the len is 10 but the index is 11")]
+    #[should_panic(expected = "index out of bounds: the len is 9 but the index is 10")]
     fn test_list_array_index_out_of_bound() {
         // Construct a value array
         let value_data = ArrayData::builder(DataType::Int32)
@@ -1142,12 +1140,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "memory is not aligned")]
+    #[should_panic(expected = "buffer is not aligned to 4 byte boundary")]
     fn test_primitive_array_alignment() {
         let ptr = alloc::allocate_aligned::<u8>(8);
-        let buf = unsafe { Buffer::from_raw_parts(ptr, 8, 8) };
+        let buf = unsafe { Buffer::from_raw_parts(ptr, 9, 9) };
         let buf2 = buf.slice(1);
         let array_data = ArrayData::builder(DataType::Int32)
+            .len(2)
             .add_buffer(buf2)
             .build()
             .unwrap();
@@ -1155,18 +1154,19 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "memory is not aligned")]
+    #[should_panic(expected = "buffer is not aligned to 4 byte boundary")]
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
     fn test_list_array_alignment() {
         let ptr = alloc::allocate_aligned::<u8>(8);
-        let buf = unsafe { Buffer::from_raw_parts(ptr, 8, 8) };
+        let buf = unsafe { Buffer::from_raw_parts(ptr, 9, 9) };
         let buf2 = buf.slice(1);
 
         let values: [i32; 8] = [0; 8];
         let value_data = unsafe {
             ArrayData::builder(DataType::Int32)
+                .len(1)
                 .add_buffer(Buffer::from_slice_ref(&values))
                 .build_unchecked()
         };
@@ -1175,6 +1175,7 @@ mod tests {
             DataType::List(Box::new(Field::new("item", DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
+                .len(1)
                 .add_buffer(buf2)
                 .add_child_data(value_data)
                 .build_unchecked()

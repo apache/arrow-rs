@@ -24,7 +24,6 @@ use std::mem;
 use chrono::{prelude::*, Duration};
 
 use super::array::print_long_array;
-use super::raw_pointer::RawPtrBox;
 use super::*;
 use crate::temporal_conversions;
 use crate::util::bit_util;
@@ -33,6 +32,7 @@ use crate::{
     util::trusted_len_unzip,
 };
 
+use crate::buffer::ScalarBuffer;
 use half::f16;
 
 /// Array whose elements are of primitive types.
@@ -59,7 +59,7 @@ pub struct PrimitiveArray<T: ArrowPrimitiveType> {
     /// # Safety
     /// raw_values must have a value equivalent to `data.buffers()[0].raw_data()`
     /// raw_values must have alignment for type T::NativeType
-    raw_values: RawPtrBox<T::Native>,
+    raw_values: ScalarBuffer<T::Native>,
 }
 
 impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
@@ -77,15 +77,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Returns a slice of the values of this array
     #[inline]
     pub fn values(&self) -> &[T::Native] {
-        // Soundness
-        //     raw_values alignment & location is ensured by fn from(ArrayDataRef)
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.raw_values.as_ptr().add(self.data.offset()),
-                self.len(),
-            )
-        }
+        &self.raw_values
     }
 
     // Returns a new primitive array builder
@@ -100,8 +92,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// caller must ensure that the passed in offset is less than the array len()
     #[inline]
     pub unsafe fn value_unchecked(&self, i: usize) -> T::Native {
-        let offset = i + self.offset();
-        *self.raw_values.as_ptr().add(offset)
+        *self.raw_values.get_unchecked(i)
     }
 
     /// Returns the primitive value at index `i`.
@@ -109,8 +100,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Panics of offset `i` is out of bounds
     #[inline]
     pub fn value(&self, i: usize) -> T::Native {
-        assert!(i < self.len());
-        unsafe { self.value_unchecked(i) }
+        self.raw_values[i]
     }
 
     /// Creates a PrimitiveArray based on an iterator of values without nulls
@@ -565,11 +555,9 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
             "PrimitiveArray data should contain a single buffer only (values buffer)"
         );
 
-        let ptr = data.buffers()[0].as_ptr();
-        Self {
-            data,
-            raw_values: unsafe { RawPtrBox::new(ptr) },
-        }
+        let buffer = data.buffers()[0].clone();
+        let raw_values = ScalarBuffer::new(buffer, data.offset(), data.len());
+        Self { data, raw_values }
     }
 }
 
