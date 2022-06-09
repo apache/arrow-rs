@@ -30,8 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [stable]
+        arch: [ amd64 ]
+        rust: [ stable ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -67,12 +67,12 @@ jobs:
   # test the crate
   linux-test:
     name: Test Workspace on AMD64 Rust ${{ matrix.rust }}
-    needs: [linux-build-lib]
+    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [stable]
+        arch: [ amd64 ]
+        rust: [ stable ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -81,6 +81,8 @@ jobs:
         RUSTFLAGS: "-C debuginfo=1"
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
         PARQUET_TEST_DATA: /__w/arrow-rs/arrow-rs/parquet-testing/data
+        CARGO_HOME: /github/home/.cargo
+        CARGO_TARGET_DIR: /github/home/target
     steps:
       - uses: actions/checkout@v2
         with:
@@ -103,47 +105,45 @@ jobs:
           rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-
           # run tests on all workspace members with default feature list
           cargo test
-          
-          # re-run tests on arrow crate with all supported features
+      - name: Re-run tests with all supported features
+        run: |
           cargo test -p arrow --features=force_validate,prettyprint
-          
+      - name: Run examples
+        run: |
           # Test arrow examples
           cargo run --example builders
           cargo run --example dynamic_types
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
-          
-          # Test compilation of arrow library crate with different feature combinations
+      - name: Test compilation of arrow library crate with different feature combinations
+        run: |
           cargo check -p arrow
           cargo check -p arrow --no-default-features
-          
-          # Test compilation of arrow targets with different feature combinations
+      - name: Test compilation of arrow targets with different feature combinations
+        run: |
           cargo check -p arrow --all-targets
           cargo check -p arrow --no-default-features --all-targets
           cargo check -p arrow --no-default-features --all-targets --features test_utils
-
-          # re-run tests on arrow-flight with all features
+      - name: Re-run tests on arrow-flight with all features
+        run: |
           cargo test -p arrow-flight --all-features
-
-          # re-run tests on parquet crate with all features
+      - name: Re-run tests on parquet crate with all features
+        run: |
           cargo test -p parquet --all-features
-          
-          # Test compilation of parquet library crate with different feature combinations
+      - name: Test compilation of parquet library crate with different feature combinations
+        run: |
           cargo check -p parquet
           cargo check -p parquet --no-default-features
           cargo check -p parquet --no-default-features --features arrow
-          
-          # Test compilation of parquet targets with different feature combinations
+      - name: Test compilation of parquet targets with different feature combinations
+        run: |
           cargo check -p parquet --all-targets
           cargo check -p parquet --no-default-features --all-targets
           cargo check -p parquet --no-default-features --features arrow --all-targets
-          
-          # Test compilation of parquet_derive macro with different feature combinations
+      - name: Test compilation of parquet_derive macro with different feature combinations
+        run: |
           cargo check -p parquet_derive
 
   # test the --features "simd" of the arrow crate. This requires nightly.
@@ -152,8 +152,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [nightly]
+        arch: [ amd64 ]
+        rust: [ nightly ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -161,6 +161,8 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
+        CARGO_HOME: /github/home/.cargo
+        CARGO_TARGET_DIR: /github/home/target
     steps:
       - uses: actions/checkout@v2
         with:
@@ -181,14 +183,9 @@ jobs:
           rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow
-          cargo test --features "simd"
+          cargo test -p arrow --features "simd"
       - name: Check compilation with simd features
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cargo check -p arrow --features simd
           cargo check -p arrow --features simd --all-targets
 
@@ -197,8 +194,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [windows-latest, macos-latest]
-        rust: [stable]
+        os: [ windows-latest, macos-latest ]
+        rust: [ stable ]
     steps:
       - uses: actions/checkout@v2
         with:
@@ -221,12 +218,12 @@ jobs:
 
   clippy:
     name: Clippy
-    needs: [linux-build-lib]
+    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [stable]
+        arch: [ amd64 ]
+        rust: [ stable ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -267,8 +264,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [stable]
+        arch: [ amd64 ]
+        rust: [ stable ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -321,8 +318,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [stable]
+        arch: [ amd64 ]
+        rust: [ stable ]
     steps:
       - uses: actions/checkout@v2
         with:
@@ -366,8 +363,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [nightly]
+        arch: [ amd64 ]
+        rust: [ nightly ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -411,8 +408,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [nightly]
+        arch: [ amd64 ]
+        rust: [ nightly ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
