@@ -36,11 +36,10 @@ use crate::error::{ArrowError, Result};
 pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
     arrays: &[&GenericStringArray<Offset>],
 ) -> Result<GenericStringArray<Offset>> {
-    if arrays.len() < 2 {
-        return Err(ArrowError::ComputeError(format!(
-            "Arrays must have at least two elements length: {}",
-            arrays.len(),
-        )));
+    if arrays.is_empty() {
+        return Err(ArrowError::ComputeError(
+            "concat requires input of at least one array".to_string(),
+        ));
     }
 
     let size = arrays[0].len();
@@ -172,14 +171,22 @@ mod tests {
     }
 
     #[test]
-    fn test_string_concat_error_slice_length() {
-        let left = [Some("foo"), Some("bar"), None]
+    fn test_string_concat_error_empty() {
+        assert_eq!(
+            concat_elements_utf8::<i32>(&[]).unwrap_err().to_string(),
+            "Compute error: concat requires input of at least one array".to_string()
+        );
+    }
+
+    #[test]
+    fn test_string_concat_one() {
+        let expected = [None, Some("baryyy"), None]
             .into_iter()
             .collect::<StringArray>();
-        assert_eq!(
-            concat_elements_utf8(&[&left]).unwrap_err().to_string(),
-            "Compute error: Arrays must have at least two elements length: 1".to_string()
-        );
+
+        let output = concat_elements_utf8(&[&expected]).unwrap();
+
+        assert_eq!(output, expected);
     }
 
     #[test]
