@@ -49,7 +49,6 @@ serde_json = { version = "1.0", features = ["preserve_order"], optional = true }
 rand = "0.8"
 futures = { version = "0.3", optional = true }
 tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "fs", "rt", "io-util"] }
-anyhow = { version = "1.0.57", optional = true }
 
 [dev-dependencies]
 criterion = "0.3"
@@ -67,7 +66,7 @@ all-features = true
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
-cli = ["serde_json", "base64", "clap", "anyhow", "arrow/csv"]
+cli = ["serde_json", "base64", "clap", "arrow/csv"]
 test_common = []
 # Experimental, unstable functionality primarily used for testing
 experimental = []

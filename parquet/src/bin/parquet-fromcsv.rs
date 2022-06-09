@@ -63,20 +63,81 @@
 //!
 
 use std::{
+    fmt::Display,
     fs::{read_to_string, File},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use anyhow::{bail, Context, Error, Result};
-use arrow::{csv::ReaderBuilder, datatypes::Schema};
+use arrow::{csv::ReaderBuilder, datatypes::Schema, error::ArrowError};
 use clap::{ArgEnum, Parser};
 use parquet::{
     arrow::{parquet_to_arrow_schema, ArrowWriter},
     basic::Compression,
+    errors::ParquetError,
     file::properties::WriterProperties,
     schema::{parser::parse_message_type, types::SchemaDescriptor},
 };
+
+#[derive(Debug)]
+enum ParquetFromCsvError {
+    CommandLineParseError(clap::Error),
+    IoError(std::io::Error),
+    ArrowError(ArrowError),
+    ParquetError(ParquetError),
+    WithContext(String, Box<Self>),
+}
+
+impl From<std::io::Error> for ParquetFromCsvError {
+    fn from(e: std::io::Error) -> Self {
+        Self::IoError(e)
+    }
+}
+
+impl From<ArrowError> for ParquetFromCsvError {
+    fn from(e: ArrowError) -> Self {
+        Self::ArrowError(e)
+    }
+}
+
+impl From<ParquetError> for ParquetFromCsvError {
+    fn from(e: ParquetError) -> Self {
+        Self::ParquetError(e)
+    }
+}
+
+impl From<clap::Error> for ParquetFromCsvError {
+    fn from(e: clap::Error) -> Self {
+        Self::CommandLineParseError(e)
+    }
+}
+
+impl ParquetFromCsvError {
+    pub fn with_context<E: Into<ParquetFromCsvError>>(
+        inner_error: E,
+        context: &str,
+    ) -> ParquetFromCsvError {
+        let inner = inner_error.into();
+        ParquetFromCsvError::WithContext(context.to_string(), Box::new(inner))
+    }
+}
+
+impl Display for ParquetFromCsvError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParquetFromCsvError::CommandLineParseError(e) => 
+                 write!(f, "{}", e),
+            ParquetFromCsvError::IoError(e) => 
+                write!(f, "{}", e),
+            ParquetFromCsvError::ArrowError(e) => write!(f, "{}", e),
+            ParquetFromCsvError::ParquetError(e) => write!(f, "{}", e),
+            ParquetFromCsvError::WithContext(c, e) => {
+                write!(f, "{}\n", e)?;
+                write!(f,"context: {}", c)
+            }
+        }
+    }
+}
 
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Binary to convert csv to Parquet"), long_about=None)]
@@ -131,7 +192,7 @@ struct Args {
     parquet_compression: Compression,
 }
 
-fn compression_from_str(cmp: &str) -> Result<Compression, Error> {
+fn compression_from_str(cmp: &str) -> Result<Compression, String> {
     match cmp.to_uppercase().as_str() {
         "UNCOMPRESSED" => Ok(Compression::UNCOMPRESSED),
         "SNAPPY" => Ok(Compression::SNAPPY),
@@ -140,7 +201,9 @@ fn compression_from_str(cmp: &str) -> Result<Compression, Error> {
         "BROTLI" => Ok(Compression::BROTLI),
         "LZ4" => Ok(Compression::LZ4),
         "ZSTD" => Ok(Compression::ZSTD),
-        v => bail!("Unknown compression {0} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD ", v),
+        v => Err( 
+            format!("Unknown compression {0} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD ",v)
+        )
     }
 }
 
@@ -231,47 +294,62 @@ fn configure_reader_builder(args: &Args, arrow_schema: Arc<Schema>) -> ReaderBui
     builder
 }
 
-fn arrow_schema_from_string(schema: &str) -> Result<Arc<Schema>> {
+fn arrow_schema_from_string(schema: &str) -> Result<Arc<Schema>, ParquetFromCsvError> {
     let schema = Arc::new(parse_message_type(&schema)?);
     let desc = SchemaDescriptor::new(schema);
     let arrow_schema = Arc::new(parquet_to_arrow_schema(&desc, None)?);
     Ok(arrow_schema)
 }
 
-fn convert_csv_to_parquet(args: &Args) -> Result<()> {
-    let schema = read_to_string(args.schema_path()).with_context(|| {
-        format!("Failed to open schema file {:#?}", args.schema_path())
+fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
+    let schema = read_to_string(args.schema_path()).map_err(|e| {
+        ParquetFromCsvError::with_context(
+            e,
+            &format!("Failed to open schema file {:#?}", args.schema_path()),
+        )
     })?;
     let arrow_schema = arrow_schema_from_string(&schema)?;
 
     // create output parquet writer
-    let parquet_file = File::create(&args.output_file).context(format!(
-        "Failed to create output file {:#?}",
-        &args.output_file
-    ))?;
+    let parquet_file = File::create(&args.output_file).map_err(|e| {
+        ParquetFromCsvError::with_context(
+            e,
+            &format!("Failed to create output file {:#?}", &args.output_file),
+        )
+    })?;
 
     let writer_properties = Some(configure_writer_properties(args.parquet_compression));
     let mut arrow_writer =
         ArrowWriter::try_new(parquet_file, arrow_schema.clone(), writer_properties)
-            .context("Failed to create ArrowWriter")?;
+            .map_err(|e| {
+                ParquetFromCsvError::with_context(e, "Failed to create ArrowWriter")
+            })?;
 
     // open input file
-    let input_file = File::open(&args.input_file)
-        .with_context(|| format!("Failed to open input file {:#?}", &args.input_file))?;
+    let input_file = File::open(&args.input_file).map_err(|e| {
+        ParquetFromCsvError::with_context(
+            e,
+            &format!("Failed to open input file {:#?}", &args.input_file),
+        )
+    })?;
     // create input csv reader
     let builder = configure_reader_builder(&args, arrow_schema);
     let reader = builder.build(input_file)?;
     for batch_result in reader {
-        let batch = batch_result.context("Failed to read RecordBatch from CSV")?;
-        arrow_writer
-            .write(&batch)
-            .context("Failed to write RecordBatch to parquet")?;
+        let batch = batch_result.map_err(|e| {
+            ParquetFromCsvError::with_context(e, "Failed to read RecordBatch from CSV")
+        })?;
+        arrow_writer.write(&batch).map_err(|e| {
+            ParquetFromCsvError::with_context(e, "Failed to write RecordBatch to parquet")
+        })?;
     }
-    arrow_writer.close().context("Failed to close parquet")?;
+    arrow_writer
+        .close()
+        .map_err(|e| ParquetFromCsvError::with_context(e, "Failed to close parquet"))?;
     Ok(())
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<(), ParquetFromCsvError> {
     let args = Args::parse();
     convert_csv_to_parquet(&args)
 }
@@ -284,7 +362,6 @@ mod tests {
     };
 
     use super::*;
-    use anyhow::Result;
     use arrow::datatypes::{DataType, Field};
     use clap::{CommandFactory, Parser};
     use tempfile::NamedTempFile;
@@ -298,10 +375,10 @@ mod tests {
         path_buf.push("bin");
         path_buf.push("parquet-fromcsv-help.txt");
         let mut help_file = File::create(path_buf).unwrap();
-        cmd.write_long_help(&mut help_file);
+        cmd.write_long_help(&mut help_file).unwrap();
     }
 
-    fn parse_args(mut extra_args: Vec<&str>) -> Result<Args> {
+    fn parse_args(mut extra_args: Vec<&str>) -> Result<Args, ParquetFromCsvError> {
         let mut args = vec![
             "test",
             "--schema",
@@ -317,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_arg_minimum() -> Result<()> {
+    fn test_parse_arg_minimum() -> Result<(), ParquetFromCsvError> {
         let args = parse_args(vec![])?;
 
         assert_eq!(args.schema, PathBuf::from(Path::new("test.schema")));
@@ -339,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_arg_format_variants() -> Result<()> {
+    fn test_parse_arg_format_variants() -> Result<(), ParquetFromCsvError> {
         let args = parse_args(vec!["--input-format", "csv"])?;
         assert_eq!(args.input_format, CsvDialect::CSV);
         assert_eq!(args.get_delimiter(), b',');
