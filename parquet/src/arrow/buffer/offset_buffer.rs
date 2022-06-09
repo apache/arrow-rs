@@ -58,7 +58,7 @@ impl<I: OffsetSizeTrait + ScalarValue> OffsetBuffer<I> {
     /// the start of a UTF-8 codepoint
     ///
     /// Note: This does not verify that the entirety of `data` is valid
-    /// UTF-8. This should be done by calling [`Self::values_as_str`] after
+    /// UTF-8. This should be done by calling [`Self::check_valid_utf8`] after
     /// all data has been written
     pub fn try_push(&mut self, data: &[u8], validate_utf8: bool) -> Result<()> {
         if validate_utf8 {
