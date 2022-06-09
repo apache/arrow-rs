@@ -25,33 +25,26 @@
 
 **Breaking changes:**
 
-- Seal ArrowNativeType and OffsetSizeTrait \(\#1028\) [\#1819](https://github.com/apache/arrow-rs/pull/1819) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- csv::infer\_file\_schema remove redundant ref [\#1776](https://github.com/apache/arrow-rs/pull/1776) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Seal `ArrowNativeType` and `OffsetSizeTrait` for safety \(\#1028\) [\#1819](https://github.com/apache/arrow-rs/pull/1819) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Improve API for `csv::infer_file_schema` by removing redundant ref  [\#1776](https://github.com/apache/arrow-rs/pull/1776) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 
 **Implemented enhancements:**
 
-- IPC writer should write validity buffer for UnionArray in V4 IPC message [\#1793](https://github.com/apache/arrow-rs/issues/1793)
-- Add function for row alignment with page mask [\#1790](https://github.com/apache/arrow-rs/issues/1790)
+- IPC writer should write validity buffer for `UnionArray` in V4 IPC message [\#1793](https://github.com/apache/arrow-rs/issues/1793) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add function for row alignment with page mask [\#1790](https://github.com/apache/arrow-rs/issues/1790) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Rust IPC Read should be able to read V4 UnionType Array [\#1788](https://github.com/apache/arrow-rs/issues/1788)
-- Rename `arrow/benches/string_kernels.rs` to `arrow/benches/substring_kernels.rs` [\#1786](https://github.com/apache/arrow-rs/issues/1786)
-- `combine_option_bitmap` should accept arbitrary number of input arrays. [\#1780](https://github.com/apache/arrow-rs/issues/1780)
-- Further simplify the offset validation [\#1770](https://github.com/apache/arrow-rs/issues/1770)
-- Support Substring by char [\#1768](https://github.com/apache/arrow-rs/issues/1768)
-- Remove `validate_decimal_precision` check in `DecimalBuilder.append_value` [\#1766](https://github.com/apache/arrow-rs/issues/1766)
-- Prepare and construct index from col metadata for skipping pages at reading [\#1761](https://github.com/apache/arrow-rs/issues/1761)
-- Changelog is getting large [\#1758](https://github.com/apache/arrow-rs/issues/1758)
-- Allow casting from `DataType::Utf8` to `DataType::Boolean` [\#1740](https://github.com/apache/arrow-rs/issues/1740)
-- Release Arrow  15.0.0 \(next release after 14.0.0\) [\#1727](https://github.com/apache/arrow-rs/issues/1727)
-- Make current position available in `FileWriter`. [\#1691](https://github.com/apache/arrow-rs/issues/1691)
-- Support writing parquet to stdout [\#1687](https://github.com/apache/arrow-rs/issues/1687)
+- `combine_option_bitmap` should accept arbitrary number of input arrays. [\#1780](https://github.com/apache/arrow-rs/issues/1780) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add `substring_by_char` kernels for slicing on character boundaries [\#1768](https://github.com/apache/arrow-rs/issues/1768) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Support reading `PageIndex` from column metadata [\#1761](https://github.com/apache/arrow-rs/issues/1761) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Support casting from `DataType::Utf8` to `DataType::Boolean` [\#1740](https://github.com/apache/arrow-rs/issues/1740) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Make current position available in `FileWriter`. [\#1691](https://github.com/apache/arrow-rs/issues/1691) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Support writing parquet to `stdout` [\#1687](https://github.com/apache/arrow-rs/issues/1687) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Fixed bugs:**
 
-- Incorrect Offset Validation for Sliced List Array Children [\#1814](https://github.com/apache/arrow-rs/issues/1814)
-- Unsound DecimalArray Validation in Unreleased arrow-rs [\#1813](https://github.com/apache/arrow-rs/issues/1813)
-- Parquet Snappy Codec Tramples Existing Data in Decompressed Buffer [\#1806](https://github.com/apache/arrow-rs/issues/1806)
-- `flight_data_to_arrow_batch` does not support `RecordBatch`es with no columns [\#1783](https://github.com/apache/arrow-rs/issues/1783)
-- DataType::Decimal Non-Compliant [\#1779](https://github.com/apache/arrow-rs/issues/1779)
+- Incorrect Offset Validation for Sliced List Array Children [\#1814](https://github.com/apache/arrow-rs/issues/1814) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Parquet Snappy Codec overwrites Existing Data in Decompression Buffer [\#1806](https://github.com/apache/arrow-rs/issues/1806) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- `flight_data_to_arrow_batch` does not support `RecordBatch`es with no columns [\#1783](https://github.com/apache/arrow-rs/issues/1783) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 
 **Documentation updates:**
 
@@ -60,6 +53,8 @@
 
 **Closed issues:**
 
+- `DataType::Decimal` Non-Compliant [\#1779](https://github.com/apache/arrow-rs/issues/1779)
+- Further simplify the offset validation [\#1770](https://github.com/apache/arrow-rs/issues/1770) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Best way to convert arrow to Rust native type [\#1760](https://github.com/apache/arrow-rs/issues/1760)
 - Why `Parquet` is a part of `Arrow`? [\#1715](https://github.com/apache/arrow-rs/issues/1715)
 
