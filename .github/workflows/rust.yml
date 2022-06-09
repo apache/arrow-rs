@@ -164,7 +164,6 @@ jobs:
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
       - name: Run tests
         shell: bash
         run: |
@@ -198,7 +197,7 @@ jobs:
           rust-version: ${{ matrix.rust }}
       - name: Setup Clippy
         run: |
-          rustup component add rustfmt clippy
+          rustup component add clippy
       - name: Run clippy
         run: |
           cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
@@ -258,7 +257,6 @@ jobs:
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
-          rustup component add rustfmt clippy
       - name: Cache Cargo
         uses: actions/cache@v3
         with:
@@ -321,7 +319,6 @@ jobs:
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup override set ${{ matrix.rust }}
-          rustup component add rustfmt
           rustup target add wasm32-unknown-unknown
           rustup target add wasm32-wasi
       - name: Build arrow crate
