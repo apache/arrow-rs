@@ -26,7 +26,10 @@ use std::fs::File;
 fn main() {
     #[cfg(feature = "csv")]
     {
-        let path = format!("{}/test/data/uk_cities_with_headers.csv", env!("CARGO_MANIFEST_DIR"));
+        let path = format!(
+            "{}/test/data/uk_cities_with_headers.csv",
+            env!("CARGO_MANIFEST_DIR")
+        );
         let file = File::open(path).unwrap();
         let builder = csv::ReaderBuilder::new()
             .has_header(true)
