@@ -47,7 +47,7 @@ impl OffsetSizeTrait for i64 {
 }
 
 mod private {
-    /// Prevent users from implementing the [`OffsetSizeTrait`].
+    /// Prevent users from implementing the [`super::OffsetSizeTrait`].
     pub trait Sealed {}
     impl Sealed for i32 {}
     impl Sealed for i64 {}
