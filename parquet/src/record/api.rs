@@ -1711,7 +1711,7 @@ mod tests {
         );
         assert_eq!(
             Field::Float(5.1234).to_json_value(),
-            Value::Number(serde_json::Number::from_f64(5.1234).unwrap())
+            Value::Number(serde_json::Number::from_f64(5.1234_f32 as f64).unwrap())
         );
         assert_eq!(
             Field::Double(6.0).to_json_value(),
