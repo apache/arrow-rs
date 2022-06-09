@@ -125,6 +125,7 @@ jobs:
           # Test compilation of arrow targets with different feature combinations
           cargo check -p arrow --all-targets
           cargo check -p arrow --no-default-features --all-targets
+          cargo check -p arrow --no-default-features --all-targets --features test_utils
 
           # re-run tests on arrow-flight with all features
           cargo test -p arrow-flight --all-features
