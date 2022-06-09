@@ -30,8 +30,11 @@ use crate::{
     error::ArrowError,
 };
 
-/// trait declaring an offset size, relevant for i32 vs i64 array types.
-pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
+/// [`OffsetSizeTrait`] describes types that can be used as offsets.
+/// This trait is sealed and cannot be implemented for types except [`i32`] and [`i64`].
+pub trait OffsetSizeTrait:
+    ArrowNativeType + std::ops::AddAssign + Integer + private::Sealed
+{
     const IS_LARGE: bool;
 }
 
@@ -41,6 +44,13 @@ impl OffsetSizeTrait for i32 {
 
 impl OffsetSizeTrait for i64 {
     const IS_LARGE: bool = true;
+}
+
+mod private {
+    /// Prevent users from implementing the [`OffsetSizeTrait`].
+    pub trait Sealed {}
+    impl Sealed for i32 {}
+    impl Sealed for i64 {}
 }
 
 /// Generic struct for a variable-size list array.
