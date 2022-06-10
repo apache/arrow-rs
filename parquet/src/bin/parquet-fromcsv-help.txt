@@ -1,4 +1,3 @@
-parquet 15.0.0
 Apache Arrow <dev@arrow.apache.org>
 Binary to convert csv to Parquet
 

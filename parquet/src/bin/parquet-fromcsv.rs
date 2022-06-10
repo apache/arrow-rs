@@ -403,7 +403,9 @@ mod tests {
         let mut buffer_vec = Vec::new();
         let mut buffer = std::io::Cursor::new(&mut buffer_vec);
         cmd.write_long_help(&mut buffer).unwrap();
-        let actual = String::from_utf8(buffer_vec).unwrap();
+        let mut actual = String::from_utf8(buffer_vec).unwrap();
+        let pos = actual.find('\n').unwrap() + 1;
+        actual = actual[pos..].to_string();
         assert_eq!(
             expected, actual,
             "help text not match. please update to \n---\n{}\n---\n",
