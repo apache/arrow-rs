@@ -88,6 +88,7 @@ tempfile = "3"
 [[bench]]
 name = "aggregate_kernels"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "array_from_vec"
@@ -96,6 +97,7 @@ harness = false
 [[bench]]
 name = "builder"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "buffer_bit_ops"
@@ -104,6 +106,7 @@ harness = false
 [[bench]]
 name = "boolean_kernels"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "boolean_append_packed"
@@ -112,22 +115,27 @@ harness = false
 [[bench]]
 name = "arithmetic_kernels"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "cast_kernels"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "comparison_kernels"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "filter_kernels"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "take_kernels"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "length_kernel"
@@ -140,10 +148,12 @@ harness = false
 [[bench]]
 name = "sort_kernel"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "partition_kernels"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "csv_writer"
@@ -156,6 +166,7 @@ harness = false
 [[bench]]
 name = "equal"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "array_slice"
@@ -164,18 +175,22 @@ harness = false
 [[bench]]
 name = "concatenate_kernel"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "mutable_array"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "buffer_create"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
-name = "string_kernels"
+name = "substring_kernels"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "array_data_validate"

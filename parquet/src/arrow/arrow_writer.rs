@@ -36,6 +36,7 @@ use super::schema::{
 use crate::arrow::levels::calculate_array_levels;
 use crate::column::writer::ColumnWriter;
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::RowGroupMetaDataPtr;
 use crate::file::properties::WriterProperties;
 use crate::file::writer::{SerializedColumnWriter, SerializedRowGroupWriter};
 use crate::{data_type::*, file::writer::SerializedFileWriter};
@@ -93,6 +94,11 @@ impl<W: Write> ArrowWriter<W> {
             arrow_schema,
             max_row_group_size,
         })
+    }
+
+    /// Returns metadata for any flushed row groups
+    pub fn flushed_row_groups(&self) -> &[RowGroupMetaDataPtr] {
+        self.writer.flushed_row_groups()
     }
 
     /// Enqueues the provided `RecordBatch` to be written

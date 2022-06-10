@@ -342,6 +342,7 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
     fn get_column_page_reader(&self, i: usize) -> Result<Box<dyn PageReader>> {
         let col = self.metadata.column(i);
         let (col_start, col_length) = col.byte_range();
+        //Todo filter with multi row range
         let file_chunk = self.chunk_reader.get_read(col_start, col_length as usize)?;
         let page_reader = SerializedPageReader::new(
             file_chunk,

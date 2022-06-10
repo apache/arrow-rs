@@ -217,12 +217,13 @@ impl FileMetaData {
 pub type RowGroupMetaDataPtr = Arc<RowGroupMetaData>;
 
 /// Metadata for a row group.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RowGroupMetaData {
     columns: Vec<ColumnChunkMetaData>,
     num_rows: i64,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
+    // Todo add filter result -> row range
 }
 
 impl RowGroupMetaData {
