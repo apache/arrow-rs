@@ -1,0 +1,67 @@
+parquet 15.0.0
+Apache Arrow <dev@arrow.apache.org>
+Binary to convert csv to Parquet
+
+USAGE:
+    parquet [OPTIONS] --schema <SCHEMA> --input-file <INPUT_FILE> --output-file <OUTPUT_FILE>
+
+OPTIONS:
+    -b, --batch-size <BATCH_SIZE>
+            batch size
+            
+            [env: PARQUET_FROM_CSV_BATCHSIZE=]
+            [default: 1000]
+
+    -c, --parquet-compression <PARQUET_COMPRESSION>
+            compression mode
+            
+            [default: SNAPPY]
+
+    -d, --delimiter <DELIMITER>
+            field delimiter
+            
+            default value: when input_format==CSV: ',' when input_format==TSV: 'TAB'
+
+    -D, --double-quote <DOUBLE_QUOTE>
+            double quote
+
+    -e, --escape-char <ESCAPE_CHAR>
+            escape charactor
+
+    -f, --input-format <INPUT_FORMAT>
+            input file format
+            
+            [default: csv]
+            [possible values: csv, tsv]
+
+    -h, --has-header
+            has header
+
+        --help
+            Print help information
+
+    -i, --input-file <INPUT_FILE>
+            input CSV file
+
+    -m, --max-row-group-size <MAX_ROW_GROUP_SIZE>
+            max row group size
+
+    -o, --output-file <OUTPUT_FILE>
+            output Parquet file
+
+    -q, --quote-char <QUOTE_CHAR>
+            quate charactor
+
+    -r, --record-terminator <RECORD_TERMINATOR>
+            record terminator
+            
+            [possible values: lf, crlf, cr]
+
+    -s, --schema <SCHEMA>
+            message schema for output Parquet
+
+    -V, --version
+            Print version information
+
+    -w, --writer-version <WRITER_VERSION>
+            writer version
