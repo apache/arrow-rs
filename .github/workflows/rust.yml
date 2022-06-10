@@ -30,8 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [stable]
+        arch: [ amd64 ]
+        rust: [ stable ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -40,39 +40,23 @@ jobs:
         RUSTFLAGS: "-C debuginfo=1"
     steps:
       - uses: actions/checkout@v2
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          # these represent dependencies downloaded by cargo
-          # and thus do not depend on the OS, arch nor rust version.
-          path: /github/home/.cargo
-          key: cargo-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          # these represent compiled steps of both dependencies and arrow
-          # and thus are specific for a particular OS, arch and rust version.
-          path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}-
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
       - name: Build Workspace
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cargo build
 
   # test the crate
   linux-test:
     name: Test Workspace on AMD64 Rust ${{ matrix.rust }}
-    needs: [linux-build-lib]
+    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [stable]
+        arch: [ amd64 ]
+        rust: [ stable ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -85,54 +69,52 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-
           # run tests on all workspace members with default feature list
           cargo test
-
-          # Switch to arrow crate
-          cd arrow
-          # re-run tests on arrow crate to ensure
-          # all arrays are created correctly
-          cargo test --features=force_validate
-          cargo test --features=prettyprint
-          # run test on arrow crate with minimal set of features
-          cargo test --no-default-features
+      - name: Re-run tests with all supported features
+        run: |
+          cargo test -p arrow --features=force_validate,prettyprint
+      - name: Run examples
+        run: |
+          # Test arrow examples
           cargo run --example builders
           cargo run --example dynamic_types
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
-          cargo check --no-default-features
-
-          # Switch to parquet crate
-          cd ../parquet
-          # re-run tests on parquet crate with async feature enabled
-          cargo test --features=async
-          cargo check --no-default-features
-
-          # Switch to arrow-flight
-          cd ../arrow-flight
-          cargo test --features=flight-sql-experimental
-          cargo check --no-default-features
+      - name: Test compilation of arrow library crate with different feature combinations
+        run: |
+          cargo check -p arrow
+          cargo check -p arrow --no-default-features
+      - name: Test compilation of arrow targets with different feature combinations
+        run: |
+          cargo check -p arrow --all-targets
+          cargo check -p arrow --no-default-features --all-targets
+          cargo check -p arrow --no-default-features --all-targets --features test_utils
+      - name: Re-run tests on arrow-flight with all features
+        run: |
+          cargo test -p arrow-flight --all-features
+      - name: Re-run tests on parquet crate with all features
+        run: |
+          cargo test -p parquet --all-features
+      - name: Test compilation of parquet library crate with different feature combinations
+        run: |
+          cargo check -p parquet
+          cargo check -p parquet --no-default-features
+          cargo check -p parquet --no-default-features --features arrow
+      - name: Test compilation of parquet targets with different feature combinations
+        run: |
+          cargo check -p parquet --all-targets
+          cargo check -p parquet --no-default-features --all-targets
+          cargo check -p parquet --no-default-features --features arrow --all-targets
+      - name: Test compilation of parquet_derive macro with different feature combinations
+        run: |
+          cargo check -p parquet_derive
 
   # test the --features "simd" of the arrow crate. This requires nightly.
   linux-test-simd:
@@ -140,8 +122,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [nightly]
+        arch: [ amd64 ]
+        rust: [ nightly ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -153,40 +135,25 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          key: cargo-nightly-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
       - name: Run tests
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow
-          cargo test --features "simd"
-      - name: Check new project build with simd features
+          cargo test -p arrow --features "simd"
+      - name: Check compilation with simd features
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow/test/dependency/simd
-          cargo check
+          cargo check -p arrow --features simd
+          cargo check -p arrow --features simd --all-targets
 
   windows-and-macos:
     name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [windows-latest, macos-latest]
-        rust: [stable]
+        os: [ windows-latest, macos-latest ]
+        rust: [ stable ]
     steps:
       - uses: actions/checkout@v2
         with:
@@ -197,7 +164,6 @@ jobs:
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
-          rustup component add rustfmt
       - name: Run tests
         shell: bash
         run: |
@@ -209,12 +175,12 @@ jobs:
 
   clippy:
     name: Clippy
-    needs: [linux-build-lib]
+    needs: [ linux-build-lib ]
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [stable]
+        arch: [ amd64 ]
+        rust: [ stable ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -225,29 +191,15 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
       - name: Setup Clippy
         run: |
-          rustup component add rustfmt clippy
+          rustup component add clippy
       - name: Run clippy
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
 
   check_benches:
@@ -255,8 +207,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [stable]
+        arch: [ amd64 ]
+        rust: [ stable ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -267,27 +219,13 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
       - name: Check benchmarks
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cargo check --benches --workspace --features test_common,prettyprint,async,experimental 
+          cargo check --benches --workspace --features test_common,prettyprint,async,experimental
 
   lint:
     name: Lint (cargo fmt)
@@ -309,8 +247,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [stable]
+        arch: [ amd64 ]
+        rust: [ stable ]
     steps:
       - uses: actions/checkout@v2
         with:
@@ -319,7 +257,6 @@ jobs:
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
-          rustup component add rustfmt clippy
       - name: Cache Cargo
         uses: actions/cache@v3
         with:
@@ -354,8 +291,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [nightly]
+        arch: [ amd64 ]
+        rust: [ nightly ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
@@ -382,13 +319,10 @@ jobs:
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup override set ${{ matrix.rust }}
-          rustup component add rustfmt
           rustup target add wasm32-unknown-unknown
           rustup target add wasm32-wasi
       - name: Build arrow crate
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
           cd arrow
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
@@ -399,14 +333,15 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64]
-        rust: [nightly]
+        arch: [ amd64 ]
+        rust: [ nightly ]
     container:
       image: ${{ matrix.arch }}/rust
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
+        RUSTDOCFLAGS: "-Dwarnings"
     steps:
       - uses: actions/checkout@v2
         with:
@@ -415,74 +350,10 @@ jobs:
         run: |
           apt update
           apt install -y libpython3.9-dev
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          key: cargo-nightly-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-nightly-cache3-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
       - name: Run cargo doc
         run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          export RUSTDOCFLAGS="-Dwarnings"
           cargo doc --document-private-items --no-deps --workspace --all-features
-
-
-  # test builds with various feature flag combinations outside the main workspace
-  default-build:
-    name: Feature Flag Builds ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [amd64]
-        rust: [stable]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable debug symbol generation to speed up CI build and keep memory down
-        RUSTFLAGS: "-C debuginfo=0"
-    steps:
-      - uses: actions/checkout@v2
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: cargo-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache3-${{ matrix.rust }}
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Arrow Build with default features
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow/test/dependency/default-features
-          cargo check
-      - name: Arrow Build with default-features=false
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd arrow/test/dependency/no-default-features
-          cargo check
-      - name: Parquet Derive build with default-features
-        run: |
-          export CARGO_HOME="/github/home/.cargo"
-          export CARGO_TARGET_DIR="/github/home/target"
-          cd parquet_derive/test/dependency/default-features
-          cargo check

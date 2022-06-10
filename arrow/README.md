@@ -49,13 +49,31 @@ The arrow crate provides the following features which may be enabled:
 
 ## Safety
 
-TLDR: You should avoid using the `alloc` and `buffer` and `bitmap` modules if at all possible. These modules contain `unsafe` code, are easy to misuse, and are not needed for most users.
+Arrow seeks to uphold the Rust Soundness Pledge as articulated eloquently [here](https://raphlinus.github.io/rust/2020/01/18/soundness-pledge.html). Specifically:
 
-As with all open source code, you should carefully evaluate the suitability of `arrow` for your project, taking into consideration your needs and risk tolerance prior to doing so.
+> The intent of this crate is to be free of soundness bugs. The developers will do their best to avoid them, and welcome help in analyzing and fixing them
 
-_Background_: There are various parts of the `arrow` crate which use `unsafe` and `transmute` code internally. We are actively working as a community to minimize undefined behavior and remove `unsafe` usage to align more with Rust's core principles of safety.
+Where soundness in turn is defined as:
 
-As `arrow` exists today, it is fairly easy to misuse the code in modules named above, leading to undefined behavior.
+> Code is unable to trigger undefined behaviour using safe APIs
+
+One way to ensure this would be to not use `unsafe`, however, as described in the opening chapter of the [Rustonomicon](https://doc.rust-lang.org/nomicon/meet-safe-and-unsafe.html) this is not a requirement, and flexibility in this regard is actually one of Rust's great strengths.
+
+In particular there are a number of scenarios where `unsafe` is largely unavoidable:
+
+* Invariants that cannot be statically verified by the compiler and unlock non-trivial performance wins, e.g. values in a StringArray are UTF-8, [TrustedLen](https://doc.rust-lang.org/std/iter/trait.TrustedLen.html) iterators, etc...
+* FFI 
+* SIMD
+
+Additionally, this crate exposes a number of `unsafe` APIs, allowing downstream crates to explicitly opt-out of potentially expensive invariant checking where appropriate. 
+
+We have a number of strategies to help reduce this risk:
+
+* Provide strongly-typed `Array` and `ArrayBuilder` APIs to safely and efficiently interact with arrays
+* Extensive validation logic to safely construct `ArrayData` from untrusted sources
+* All commits are verified using [MIRI](https://github.com/rust-lang/miri) to detect undefined behaviour
+* We provide a `force_validate` feature that enables additional validation checks for use in test/debug builds
+* There is ongoing work to reduce and better document the use of unsafe, and we welcome contributions in this space
 
 ## Building for WASM
 

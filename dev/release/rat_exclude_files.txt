@@ -20,3 +20,4 @@ conbench/.isort.cfg
 arrow-flight/src/arrow.flight.protocol.rs
 arrow-flight/src/sql/arrow.flight.protocol.sql.rs
 .github/*
+parquet/src/bin/parquet-fromcsv-help.txt

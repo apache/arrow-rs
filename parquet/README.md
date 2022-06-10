@@ -27,7 +27,7 @@ See [crate documentation](https://docs.rs/parquet/latest/parquet/) for examples 
 
 ## Rust Version Compatbility
 
-This crate is tested with the latest stable version of Rust. We do not currrently test against other, older versions of the Rust compiler.
+This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
 
 ## Features
 
