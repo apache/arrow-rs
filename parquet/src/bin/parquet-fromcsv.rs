@@ -50,9 +50,9 @@
 //! - `-c`, `--parquet-compression` : Compression option for Parquet, default is SNAPPY
 //! - `-s`, `--schema` : Path to message schema for generated Parquet file
 //! - `-o`, `--output-file` : Path to output Parquet file
-//! - `-w`, `--writer-version` : Writer version 
+//! - `-w`, `--writer-version` : Writer version
 //! - `-m`, `--max-row-group-size` : Max row group size
-//! 
+//!
 //! ## Input file options
 //!
 //! - `-i`, `--input-file` : Path to input CSV file
@@ -127,15 +127,13 @@ impl ParquetFromCsvError {
 impl Display for ParquetFromCsvError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParquetFromCsvError::CommandLineParseError(e) => 
-                 write!(f, "{}", e),
-            ParquetFromCsvError::IoError(e) => 
-                write!(f, "{}", e),
+            ParquetFromCsvError::CommandLineParseError(e) => write!(f, "{}", e),
+            ParquetFromCsvError::IoError(e) => write!(f, "{}", e),
             ParquetFromCsvError::ArrowError(e) => write!(f, "{}", e),
             ParquetFromCsvError::ParquetError(e) => write!(f, "{}", e),
             ParquetFromCsvError::WithContext(c, e) => {
                 writeln!(f, "{}", e)?;
-                write!(f,"context: {}", c)
+                write!(f, "context: {}", c)
             }
         }
     }
@@ -193,11 +191,11 @@ struct Args {
     #[clap(parse(try_from_str =compression_from_str))]
     parquet_compression: Compression,
 
-    #[clap(short,long, help("writer version"))]
+    #[clap(short, long, help("writer version"))]
     #[clap(parse(try_from_str =writer_version_from_str))]
     writer_version: Option<WriterVersion>,
-    #[clap(short,long, help("max row group size"))]
-    max_row_group_size: Option<usize>
+    #[clap(short, long, help("max row group size"))]
+    max_row_group_size: Option<usize>,
 }
 
 fn compression_from_str(cmp: &str) -> Result<Compression, String> {
@@ -209,7 +207,7 @@ fn compression_from_str(cmp: &str) -> Result<Compression, String> {
         "BROTLI" => Ok(Compression::BROTLI),
         "LZ4" => Ok(Compression::LZ4),
         "ZSTD" => Ok(Compression::ZSTD),
-        v => Err( 
+        v => Err(
             format!("Unknown compression {0} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD ",v)
         )
     }
@@ -219,10 +217,12 @@ fn writer_version_from_str(cmp: &str) -> Result<WriterVersion, String> {
     match cmp.to_uppercase().as_str() {
         "1" => Ok(WriterVersion::PARQUET_1_0),
         "2" => Ok(WriterVersion::PARQUET_2_0),
-        v => Err(format!("Unknown writer version {0} : possible values 1, 2",v)) 
+        v => Err(format!(
+            "Unknown writer version {0} : possible values 1, 2",
+            v
+        )),
     }
 }
-
 
 impl Args {
     fn schema_path(&self) -> &Path {
@@ -277,12 +277,14 @@ enum RecordTerminator {
 }
 
 fn configure_writer_properties(args: &Args) -> WriterProperties {
-    let mut properties_builder = WriterProperties::builder().set_compression(args.parquet_compression);
+    let mut properties_builder =
+        WriterProperties::builder().set_compression(args.parquet_compression);
     if let Some(writer_version) = args.writer_version {
-        properties_builder = properties_builder.set_writer_version( writer_version );
+        properties_builder = properties_builder.set_writer_version(writer_version);
     }
     if let Some(max_row_group_size) = args.max_row_group_size {
-        properties_builder = properties_builder.set_max_row_group_size(max_row_group_size);
+        properties_builder =
+            properties_builder.set_max_row_group_size(max_row_group_size);
     }
     properties_builder.build()
 }
@@ -402,7 +404,11 @@ mod tests {
         let mut buffer = std::io::Cursor::new(&mut buffer_vec);
         cmd.write_long_help(&mut buffer).unwrap();
         let actual = String::from_utf8(buffer_vec).unwrap();
-        assert_eq!( expected, actual, "help text not match. please update to \n---\n{}\n---\n", actual)
+        assert_eq!(
+            expected, actual,
+            "help text not match. please update to \n---\n{}\n---\n",
+            actual
+        )
     }
 
     fn parse_args(mut extra_args: Vec<&str>) -> Result<Args, ParquetFromCsvError> {
@@ -534,7 +540,7 @@ mod tests {
             double_quote: None,
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
-            max_row_group_size: None
+            max_row_group_size: None,
         };
         let arrow_schema = Arc::new(Schema::new(vec![
             Field::new("field1", DataType::Utf8, false),
@@ -567,7 +573,7 @@ mod tests {
             double_quote: None,
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
-            max_row_group_size: None
+            max_row_group_size: None,
         };
         let arrow_schema = Arc::new(Schema::new(vec![
             Field::new("field1", DataType::Utf8, false),
@@ -620,7 +626,7 @@ mod tests {
             double_quote: None,
             parquet_compression: Compression::SNAPPY,
             writer_version: None,
-            max_row_group_size: None
+            max_row_group_size: None,
         };
         convert_csv_to_parquet(&args).unwrap();
     }
