@@ -374,8 +374,12 @@ mod tests {
         path_buf.push("src");
         path_buf.push("bin");
         path_buf.push("parquet-fromcsv-help.txt");
-        let mut help_file = File::create(path_buf).unwrap();
-        cmd.write_long_help(&mut help_file).unwrap();
+        let expected = std::fs::read_to_string(path_buf).unwrap();
+        let mut buffer_vec = Vec::new();
+        let mut buffer = std::io::Cursor::new(&mut buffer_vec);
+        cmd.write_long_help(&mut buffer).unwrap();
+        let actual = String::from_utf8(buffer_vec).unwrap();
+        assert_eq!( expected, actual, "help text not match. please update to \n---\n{}\n---\n", actual)
     }
 
     fn parse_args(mut extra_args: Vec<&str>) -> Result<Args, ParquetFromCsvError> {
