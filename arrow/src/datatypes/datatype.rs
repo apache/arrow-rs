@@ -675,19 +675,19 @@ impl DataType {
             (DataType::List(a), DataType::List(b))
             | (DataType::LargeList(a), DataType::LargeList(b)) => {
                 a.is_nullable() == b.is_nullable()
-                    && a.data_type().equals_datatype(b.data_type())
+                    && a.data_type().compatible_datatype(b.data_type())
             }
             (DataType::FixedSizeList(a, a_size), DataType::FixedSizeList(b, b_size)) => {
                 a_size == b_size
                     && a.is_nullable() == b.is_nullable()
-                    && a.data_type().equals_datatype(b.data_type())
+                    && a.data_type().compatible_datatype(b.data_type())
             }
             (DataType::Struct(a), DataType::Struct(b)) => {
                 a.iter()
                     .all(|a| match b.iter().find(|f| f.name().eq(a.name())) {
                         Some(b) => {
                             a.is_nullable() == b.is_nullable()
-                                && a.data_type().equals_datatype(b.data_type())
+                                && a.data_type().compatible_datatype(b.data_type())
                         }
                         None => a.is_nullable(),
                     })
@@ -695,7 +695,7 @@ impl DataType {
                         .all(|b| match a.iter().find(|f| f.name().eq(b.name())) {
                             Some(a) => {
                                 a.is_nullable() == b.is_nullable()
-                                    && a.data_type().equals_datatype(b.data_type())
+                                    && a.data_type().compatible_datatype(b.data_type())
                             }
                             None => b.is_nullable(),
                         })
