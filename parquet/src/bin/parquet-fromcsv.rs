@@ -48,18 +48,20 @@
 //!
 //! - `-b`, `--batch-size` : Batch size for Parquet
 //! - `-c`, `--parquet-compression` : Compression option for Parquet, default is SNAPPY
-//! - `-s`, `--schema` : path to message schema for generated Parquet file
-//! - `-o`, `--output-file` : path to output parquet file
-//!  
+//! - `-s`, `--schema` : Path to message schema for generated Parquet file
+//! - `-o`, `--output-file` : Path to output Parquet file
+//! - `-w`, `--writer-version` : Writer version 
+//! - `-m`, `--max-row-group-size` : Max row group size
+//! 
 //! ## Input file options
 //!
-//! - `-i`, `--input-file` : path to input CSV file
-//! - `-f`, `--input-format` : dialect for input file, `csv` or `tsv`.
+//! - `-i`, `--input-file` : Path to input CSV file
+//! - `-f`, `--input-format` : Dialect for input file, `csv` or `tsv`.
 //! - `-d`, `--delimiter : Field delimitor for CSV file, default depends `--input-format`
 //! - `-e`, `--escape` : Escape charactor for input file
-//! - `-h`, `--has-header` : input has header
-//! - `-r`, `--record-terminator` : record terminator charactor for input. default is CRLF
-//! - `-q`, `--quote-char` : input quoting charactor
+//! - `-h`, `--has-header` : Input has header
+//! - `-r`, `--record-terminator` : Record terminator charactor for input. default is CRLF
+//! - `-q`, `--quote-char` : Input quoting charactor
 //!
 
 use std::{
@@ -75,7 +77,7 @@ use parquet::{
     arrow::{parquet_to_arrow_schema, ArrowWriter},
     basic::Compression,
     errors::ParquetError,
-    file::properties::WriterProperties,
+    file::properties::{WriterProperties, WriterVersion},
     schema::{parser::parse_message_type, types::SchemaDescriptor},
 };
 
@@ -190,6 +192,12 @@ struct Args {
     #[clap(short('c'), long, help("compression mode"), default_value_t=Compression::SNAPPY)]
     #[clap(parse(try_from_str =compression_from_str))]
     parquet_compression: Compression,
+
+    #[clap(short,long, help("writer version"))]
+    #[clap(parse(try_from_str =writer_version_from_str))]
+    writer_version: Option<WriterVersion>,
+    #[clap(short,long, help("max row group size"))]
+    max_row_group_size: Option<usize>
 }
 
 fn compression_from_str(cmp: &str) -> Result<Compression, String> {
@@ -206,6 +214,15 @@ fn compression_from_str(cmp: &str) -> Result<Compression, String> {
         )
     }
 }
+
+fn writer_version_from_str(cmp: &str) -> Result<WriterVersion, String> {
+    match cmp.to_uppercase().as_str() {
+        "1" => Ok(WriterVersion::PARQUET_1_0),
+        "2" => Ok(WriterVersion::PARQUET_2_0),
+        v => Err(format!("Unknown writer version {0} : possible values 1, 2",v)) 
+    }
+}
+
 
 impl Args {
     fn schema_path(&self) -> &Path {
@@ -259,8 +276,14 @@ enum RecordTerminator {
     CR,
 }
 
-fn configure_writer_properties(compression: Compression) -> WriterProperties {
-    let properties_builder = WriterProperties::builder().set_compression(compression);
+fn configure_writer_properties(args: &Args) -> WriterProperties {
+    let mut properties_builder = WriterProperties::builder().set_compression(args.parquet_compression);
+    if let Some(writer_version) = args.writer_version {
+        properties_builder = properties_builder.set_writer_version( writer_version );
+    }
+    if let Some(max_row_group_size) = args.max_row_group_size {
+        properties_builder = properties_builder.set_max_row_group_size(max_row_group_size);
+    }
     properties_builder.build()
 }
 
@@ -318,7 +341,7 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
         )
     })?;
 
-    let writer_properties = Some(configure_writer_properties(args.parquet_compression));
+    let writer_properties = Some(configure_writer_properties(args));
     let mut arrow_writer =
         ArrowWriter::try_new(parquet_file, arrow_schema.clone(), writer_properties)
             .map_err(|e| {
@@ -510,6 +533,8 @@ mod tests {
             quote_char: None,
             double_quote: None,
             parquet_compression: Compression::SNAPPY,
+            writer_version: None,
+            max_row_group_size: None
         };
         let arrow_schema = Arc::new(Schema::new(vec![
             Field::new("field1", DataType::Utf8, false),
@@ -541,6 +566,8 @@ mod tests {
             quote_char: None,
             double_quote: None,
             parquet_compression: Compression::SNAPPY,
+            writer_version: None,
+            max_row_group_size: None
         };
         let arrow_schema = Arc::new(Schema::new(vec![
             Field::new("field1", DataType::Utf8, false),
@@ -592,6 +619,8 @@ mod tests {
             quote_char: None,
             double_quote: None,
             parquet_compression: Compression::SNAPPY,
+            writer_version: None,
+            max_row_group_size: None
         };
         convert_csv_to_parquet(&args).unwrap();
     }

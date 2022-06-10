@@ -43,6 +43,9 @@ OPTIONS:
     -i, --input-file <INPUT_FILE>
             input CSV file
 
+    -m, --max-row-group-size <MAX_ROW_GROUP_SIZE>
+            max row group size
+
     -o, --output-file <OUTPUT_FILE>
             output Parquet file
 
@@ -59,3 +62,6 @@ OPTIONS:
 
     -V, --version
             Print version information
+
+    -w, --writer-version <WRITER_VERSION>
+            writer version
