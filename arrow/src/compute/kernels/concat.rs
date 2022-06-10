@@ -62,7 +62,7 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef> {
 
     if arrays
         .iter()
-        .any(|array| array.data_type() != arrays[0].data_type())
+        .any(|array| !array.data_type().equals_datatype(arrays[0].data_type()))
     {
         return Err(ArrowError::InvalidArgumentError(
             "It is not possible to concatenate arrays of different data types."
