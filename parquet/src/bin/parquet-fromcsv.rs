@@ -132,7 +132,7 @@ impl Display for ParquetFromCsvError {
             ParquetFromCsvError::ArrowError(e) => write!(f, "{}", e),
             ParquetFromCsvError::ParquetError(e) => write!(f, "{}", e),
             ParquetFromCsvError::WithContext(c, e) => {
-                write!(f, "{}\n", e)?;
+                writeln!(f, "{}", e)?;
                 write!(f,"context: {}", c)
             }
         }
@@ -157,7 +157,7 @@ struct Args {
         short('f'),
         long,
         help("input file format"),
-        default_value_t=CsvDialect::CSV
+        default_value_t=CsvDialect::Csv
     )]
     input_format: CsvDialect,
     /// batch size
@@ -215,8 +215,8 @@ impl Args {
         match self.delimiter {
             Some(ch) => ch as u8,
             None => match self.input_format {
-                CsvDialect::CSV => b',',
-                CsvDialect::TSV => b'\t',
+                CsvDialect::Csv => b',',
+                CsvDialect::Tsv => b'\t',
             },
         }
     }
@@ -224,10 +224,10 @@ impl Args {
         match self.record_terminator {
             Some(RecordTerminator::LF) => Some(0x0a),
             Some(RecordTerminator::CR) => Some(0x0d),
-            Some(RecordTerminator::CRLF) => None,
+            Some(RecordTerminator::Crlf) => None,
             None => match self.input_format {
-                CsvDialect::CSV => None,
-                CsvDialect::TSV => Some(0x0a),
+                CsvDialect::Csv => None,
+                CsvDialect::Tsv => Some(0x0a),
             },
         }
     }
@@ -237,8 +237,8 @@ impl Args {
     fn get_quote(&self) -> Option<u8> {
         if self.quote_char.is_none() {
             match self.input_format {
-                CsvDialect::CSV => Some(b'\"'),
-                CsvDialect::TSV => None,
+                CsvDialect::Csv => Some(b'\"'),
+                CsvDialect::Tsv => None,
             }
         } else {
             self.quote_char.map(|c| c as u8)
@@ -248,14 +248,14 @@ impl Args {
 
 #[derive(Debug, Clone, Copy, ArgEnum, PartialEq)]
 enum CsvDialect {
-    CSV,
-    TSV,
+    Csv,
+    Tsv,
 }
 
 #[derive(Debug, Clone, Copy, ArgEnum, PartialEq)]
 enum RecordTerminator {
     LF,
-    CRLF,
+    Crlf,
     CR,
 }
 
@@ -295,7 +295,7 @@ fn configure_reader_builder(args: &Args, arrow_schema: Arc<Schema>) -> ReaderBui
 }
 
 fn arrow_schema_from_string(schema: &str) -> Result<Arc<Schema>, ParquetFromCsvError> {
-    let schema = Arc::new(parse_message_type(&schema)?);
+    let schema = Arc::new(parse_message_type(schema)?);
     let desc = SchemaDescriptor::new(schema);
     let arrow_schema = Arc::new(parquet_to_arrow_schema(&desc, None)?);
     Ok(arrow_schema)
@@ -333,7 +333,7 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
         )
     })?;
     // create input csv reader
-    let builder = configure_reader_builder(&args, arrow_schema);
+    let builder = configure_reader_builder(args, arrow_schema);
     let reader = builder.build(input_file)?;
     for batch_result in reader {
         let batch = batch_result.map_err(|e| {
@@ -405,7 +405,7 @@ mod tests {
         assert_eq!(args.input_file, PathBuf::from(Path::new("infile.csv")));
         assert_eq!(args.output_file, PathBuf::from(Path::new("out.parquet")));
         // test default values
-        assert_eq!(args.input_format, CsvDialect::CSV);
+        assert_eq!(args.input_format, CsvDialect::Csv);
         assert_eq!(args.batch_size, 1000);
         assert_eq!(args.has_header, false);
         assert_eq!(args.delimiter, None);
@@ -422,27 +422,27 @@ mod tests {
     #[test]
     fn test_parse_arg_format_variants() -> Result<(), ParquetFromCsvError> {
         let args = parse_args(vec!["--input-format", "csv"])?;
-        assert_eq!(args.input_format, CsvDialect::CSV);
+        assert_eq!(args.input_format, CsvDialect::Csv);
         assert_eq!(args.get_delimiter(), b',');
         assert_eq!(args.get_terminator(), None); // CRLF
         assert_eq!(args.get_quote(), Some(b'\"'));
         assert_eq!(args.get_escape(), None);
         let args = parse_args(vec!["--input-format", "tsv"])?;
-        assert_eq!(args.input_format, CsvDialect::TSV);
+        assert_eq!(args.input_format, CsvDialect::Tsv);
         assert_eq!(args.get_delimiter(), b'\t');
         assert_eq!(args.get_terminator(), Some(b'\x0a')); // LF
         assert_eq!(args.get_quote(), None); // quote none
         assert_eq!(args.get_escape(), None);
 
         let args = parse_args(vec!["--input-format", "csv", "--escape-char", "\\"])?;
-        assert_eq!(args.input_format, CsvDialect::CSV);
+        assert_eq!(args.input_format, CsvDialect::Csv);
         assert_eq!(args.get_delimiter(), b',');
         assert_eq!(args.get_terminator(), None); // CRLF
         assert_eq!(args.get_quote(), Some(b'\"'));
         assert_eq!(args.get_escape(), Some(b'\\'));
 
         let args = parse_args(vec!["--input-format", "tsv", "--delimiter", ":"])?;
-        assert_eq!(args.input_format, CsvDialect::TSV);
+        assert_eq!(args.input_format, CsvDialect::Tsv);
         assert_eq!(args.get_delimiter(), b':');
         assert_eq!(args.get_terminator(), Some(b'\x0a')); // LF
         assert_eq!(args.get_quote(), None); // quote none
@@ -502,7 +502,7 @@ mod tests {
             input_file: PathBuf::from(Path::new("test.csv")),
             output_file: PathBuf::from(Path::new("out.parquet")),
             batch_size: 1000,
-            input_format: CsvDialect::CSV,
+            input_format: CsvDialect::Csv,
             has_header: false,
             delimiter: None,
             record_terminator: None,
@@ -533,7 +533,7 @@ mod tests {
             input_file: PathBuf::from(Path::new("test.csv")),
             output_file: PathBuf::from(Path::new("out.parquet")),
             batch_size: 2000,
-            input_format: CsvDialect::TSV,
+            input_format: CsvDialect::Tsv,
             has_header: true,
             delimiter: None,
             record_terminator: None,
@@ -584,7 +584,7 @@ mod tests {
             input_file: PathBuf::from(input_file.path()),
             output_file: PathBuf::from(output_parquet.path()),
             batch_size: 1000,
-            input_format: CsvDialect::CSV,
+            input_format: CsvDialect::Csv,
             has_header: false,
             delimiter: None,
             record_terminator: None,
