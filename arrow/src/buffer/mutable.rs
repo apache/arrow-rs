@@ -273,7 +273,7 @@ impl MutableBuffer {
         Buffer::from_bytes(bytes)
     }
 
-    /// View this buffer asa slice of a specific type.
+    /// View this buffer as a slice of a specific type.
     ///
     /// # Safety
     ///

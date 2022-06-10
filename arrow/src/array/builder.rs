@@ -34,29 +34,6 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 
-///  Converts a `MutableBuffer` to a `BufferBuilder<T>`.
-///
-/// `slots` is the number of array slots currently represented in the `MutableBuffer`.
-pub(crate) fn mutable_buffer_to_builder<T: ArrowNativeType>(
-    mutable_buffer: MutableBuffer,
-    slots: usize,
-) -> BufferBuilder<T> {
-    BufferBuilder::<T> {
-        buffer: mutable_buffer,
-        len: slots,
-        _marker: PhantomData,
-    }
-}
-
-///  Converts a `BufferBuilder<T>` into its underlying `MutableBuffer`.
-///
-/// `From` is not implemented because associated type bounds are unstable.
-pub(crate) fn builder_to_mutable_buffer<T: ArrowNativeType>(
-    builder: BufferBuilder<T>,
-) -> MutableBuffer {
-    builder.buffer
-}
-
 /// Builder for creating a [`Buffer`](crate::buffer::Buffer) object.
 ///
 /// A [`Buffer`](crate::buffer::Buffer) is the underlying data
@@ -1909,101 +1886,65 @@ struct FieldData {
     /// The Arrow data type represented in the `values_buffer`, which is untyped
     data_type: DataType,
     /// A buffer containing the values for this field in raw bytes
-    values_buffer: Option<MutableBuffer>,
+    values_buffer: Box<dyn FieldDataValues>,
     ///  The number of array slots represented by the buffer
     slots: usize,
     /// A builder for the null bitmap
     bitmap_builder: BooleanBufferBuilder,
 }
 
+/// A type-erased [`BufferBuilder`] used by [`FieldData`]
+trait FieldDataValues: std::fmt::Debug {
+    fn as_mut_any(&mut self) -> &mut dyn Any;
+
+    fn append_null(&mut self);
+
+    fn finish(&mut self) -> Buffer;
+}
+
+impl<T: ArrowNativeType> FieldDataValues for BufferBuilder<T> {
+    fn as_mut_any(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn append_null(&mut self) {
+        self.advance(1)
+    }
+
+    fn finish(&mut self) -> Buffer {
+        self.finish()
+    }
+}
+
 impl FieldData {
     /// Creates a new `FieldData`.
-    fn new(type_id: i8, data_type: DataType) -> Self {
+    fn new<T: ArrowPrimitiveType>(type_id: i8, data_type: DataType) -> Self {
         Self {
             type_id,
             data_type,
-            values_buffer: Some(MutableBuffer::new(1)),
             slots: 0,
+            values_buffer: Box::new(BufferBuilder::<T::Native>::new(1)),
             bitmap_builder: BooleanBufferBuilder::new(1),
         }
     }
 
     /// Appends a single value to this `FieldData`'s `values_buffer`.
-    #[allow(clippy::unnecessary_wraps)]
-    fn append_to_values_buffer<T: ArrowPrimitiveType>(
-        &mut self,
-        v: T::Native,
-    ) -> Result<()> {
-        let values_buffer = self
-            .values_buffer
-            .take()
-            .expect("Values buffer was never created");
-        let mut builder: BufferBuilder<T::Native> =
-            mutable_buffer_to_builder(values_buffer, self.slots);
-        builder.append(v);
-        let mutable_buffer = builder_to_mutable_buffer(builder);
-        self.values_buffer = Some(mutable_buffer);
+    fn append_value<T: ArrowPrimitiveType>(&mut self, v: T::Native) {
+        self.values_buffer
+            .as_mut_any()
+            .downcast_mut::<BufferBuilder<T::Native>>()
+            .unwrap()
+            .append(v);
 
-        self.slots += 1;
         self.bitmap_builder.append(true);
-        Ok(())
+        self.slots += 1;
     }
 
     /// Appends a null to this `FieldData`.
-    #[allow(clippy::unnecessary_wraps)]
-    fn append_null<T: ArrowPrimitiveType>(&mut self) -> Result<()> {
-        let values_buffer = self
-            .values_buffer
-            .take()
-            .expect("Values buffer was never created");
-
-        let mut builder: BufferBuilder<T::Native> =
-            mutable_buffer_to_builder(values_buffer, self.slots);
-
-        builder.advance(1);
-        let mutable_buffer = builder_to_mutable_buffer(builder);
-        self.values_buffer = Some(mutable_buffer);
-        self.slots += 1;
+    fn append_null(&mut self) {
+        self.values_buffer.append_null();
         self.bitmap_builder.append(false);
-        Ok(())
-    }
-
-    /// Appends a null to this `FieldData` when the type is not known at compile time.
-    ///
-    /// As the main `append` method of `UnionBuilder` is generic, we need a way to append null
-    /// slots to the fields that are not being appended to in the case of sparse unions.  This
-    /// method solves this problem by appending dynamically based on `DataType`.
-    ///
-    /// Note, this method does **not** update the length of the `UnionArray` (this is done by the
-    /// main append operation) and assumes that it is called from a method that is generic over `T`
-    /// where `T` satisfies the bound `ArrowPrimitiveType`.
-    fn append_null_dynamic(&mut self) -> Result<()> {
-        match self.data_type {
-            DataType::Null => unimplemented!(),
-            DataType::Int8 => self.append_null::<Int8Type>()?,
-            DataType::Int16 => self.append_null::<Int16Type>()?,
-            DataType::Int32
-            | DataType::Date32
-            | DataType::Time32(_)
-            | DataType::Interval(IntervalUnit::YearMonth) => {
-                self.append_null::<Int32Type>()?
-            }
-            DataType::Int64
-            | DataType::Timestamp(_, _)
-            | DataType::Date64
-            | DataType::Time64(_)
-            | DataType::Interval(IntervalUnit::DayTime)
-            | DataType::Duration(_) => self.append_null::<Int64Type>()?,
-            DataType::Interval(IntervalUnit::MonthDayNano) => self.append_null::<IntervalMonthDayNanoType>()?,
-            DataType::UInt8 => self.append_null::<UInt8Type>()?,
-            DataType::UInt16 => self.append_null::<UInt16Type>()?,
-            DataType::UInt32 => self.append_null::<UInt32Type>()?,
-            DataType::UInt64 => self.append_null::<UInt64Type>()?,
-            DataType::Float32 => self.append_null::<Float32Type>()?,
-            DataType::Float64 => self.append_null::<Float64Type>()?,
-            _ => unreachable!("All cases of types that satisfy the trait bounds over T are covered above."),
-        };
-        Ok(())
+        self.slots += 1;
     }
 }
 
@@ -2119,11 +2060,12 @@ impl UnionBuilder {
                 data
             }
             None => match self.value_offset_builder {
-                Some(_) => FieldData::new(self.fields.len() as i8, T::DATA_TYPE),
+                Some(_) => FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE),
                 None => {
-                    let mut fd = FieldData::new(self.fields.len() as i8, T::DATA_TYPE);
+                    let mut fd =
+                        FieldData::new::<T>(self.fields.len() as i8, T::DATA_TYPE);
                     for _ in 0..self.len {
-                        fd.append_null::<T>()?;
+                        fd.append_null();
                     }
                     fd
                 }
@@ -2140,14 +2082,14 @@ impl UnionBuilder {
             None => {
                 for (_, fd) in self.fields.iter_mut() {
                     // Append to all bar the FieldData currently being appended to
-                    fd.append_null_dynamic()?;
+                    fd.append_null();
                 }
             }
         }
 
         match v {
-            Some(v) => field_data.append_to_values_buffer::<T>(v)?,
-            None => field_data.append_null::<T>()?,
+            Some(v) => field_data.append_value::<T>(v),
+            None => field_data.append_null(),
         }
 
         self.fields.insert(type_name, field_data);
@@ -2165,15 +2107,13 @@ impl UnionBuilder {
             FieldData {
                 type_id,
                 data_type,
-                values_buffer,
+                mut values_buffer,
                 slots,
                 mut bitmap_builder,
             },
         ) in self.fields.into_iter()
         {
-            let buffer = values_buffer
-                .expect("The `values_buffer` should only ever be None inside the `append` method.")
-                .into();
+            let buffer = values_buffer.finish();
             let arr_data_builder = ArrayDataBuilder::new(data_type.clone())
                 .add_buffer(buffer)
                 .len(slots)
