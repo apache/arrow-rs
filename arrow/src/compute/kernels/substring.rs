@@ -182,9 +182,12 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
     start: i64,
     length: Option<u64>,
 ) -> Result<GenericStringArray<OffsetSize>> {
-    let mut vals = BufferBuilder::<u8>::new(array.value_data().len());
-    let mut offsets = BufferBuilder::<OffsetSize>::new(array.len() + 1);
-    offsets.append(OffsetSize::zero());
+    let mut vals = BufferBuilder::<u8>::new({
+        let offsets = array.value_offsets();
+        (offsets[array.len()] - offsets[0]).to_usize().unwrap()
+    });
+    let mut new_offsets = BufferBuilder::<OffsetSize>::new(array.len() + 1);
+    new_offsets.append(OffsetSize::zero());
     let length = length.map(|len| len.to_usize().unwrap());
 
     array.iter().for_each(|val| {
@@ -198,7 +201,7 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
             let (start_offset, end_offset) = get_start_end_offset(val, start, length);
             vals.append_slice(&val.as_bytes()[start_offset..end_offset]);
         }
-        offsets.append(OffsetSize::from_usize(vals.len()).unwrap());
+        new_offsets.append(OffsetSize::from_usize(vals.len()).unwrap());
     });
     let data = unsafe {
         ArrayData::new_unchecked(
@@ -210,7 +213,7 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
                 .null_buffer()
                 .map(|b| b.bit_slice(array.offset(), array.len())),
             0,
-            vec![offsets.finish(), vals.finish()],
+            vec![new_offsets.finish(), vals.finish()],
             vec![],
         )
     };
