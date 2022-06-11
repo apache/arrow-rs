@@ -403,6 +403,7 @@ mod tests {
         let mut buffer_vec = Vec::new();
         let mut buffer = std::io::Cursor::new(&mut buffer_vec);
         cmd.write_long_help(&mut buffer).unwrap();
+        // Remove Parquet version string from the help text
         let mut actual = String::from_utf8(buffer_vec).unwrap();
         let pos = actual.find('\n').unwrap() + 1;
         actual = actual[pos..].to_string();
