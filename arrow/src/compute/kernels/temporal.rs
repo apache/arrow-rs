@@ -17,7 +17,7 @@
 
 //! Defines temporal kernels for time and date related functions.
 
-use chrono::{Datelike, Timelike};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 
 use crate::array::*;
 use crate::datatypes::*;
@@ -112,6 +112,34 @@ macro_rules! return_compute_error_with {
     };
 }
 
+trait ChronoDateQuarter {
+    /// Returns a value in range `1..=4` indicating the quarter this date falls into
+    fn quarter(&self) -> u32;
+
+    /// Returns a value in range `0..=3` indicating the quarter (zero-based) this date falls into
+    fn quarter0(&self) -> u32;
+}
+
+impl ChronoDateQuarter for NaiveDateTime {
+    fn quarter(&self) -> u32 {
+        self.quarter0() + 1
+    }
+
+    fn quarter0(&self) -> u32 {
+        self.month0() / 3
+    }
+}
+
+impl ChronoDateQuarter for NaiveDate {
+    fn quarter(&self) -> u32 {
+        self.quarter0() + 1
+    }
+
+    fn quarter0(&self) -> u32 {
+        self.month0() / 3
+    }
+}
+
 #[cfg(not(feature = "chrono-tz"))]
 pub fn using_chrono_tz_and_utc_naive_date_time(
     _tz: &str,
@@ -178,6 +206,34 @@ where
             extract_component_from_array!(array, b, year, value_as_datetime)
         }
         dt => return_compute_error_with!("year does not support", dt),
+    }
+
+    Ok(b.finish())
+}
+
+/// Extracts the quarter of a given temporal array as an array of integers
+pub fn quarter<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::new(array.len());
+    match array.data_type() {
+        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
+            extract_component_from_array!(array, b, quarter, value_as_datetime)
+        }
+        &DataType::Timestamp(_, Some(ref tz)) => {
+            let mut scratch = Parsed::new();
+            extract_component_from_array!(
+                array,
+                b,
+                quarter,
+                value_as_datetime_with_tz,
+                tz,
+                scratch
+            )
+        }
+        dt => return_compute_error_with!("quarter does not support", dt),
     }
 
     Ok(b.finish())
@@ -390,6 +446,48 @@ mod tests {
     }
 
     #[test]
+    fn test_temporal_array_date64_quarter() {
+        //1514764800000 -> 2018-01-01
+        //1566275025000 -> 2019-08-20
+        let a: PrimitiveArray<Date64Type> =
+            vec![Some(1514764800000), None, Some(1566275025000)].into();
+
+        let b = quarter(&a).unwrap();
+        assert_eq!(1, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(3, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date32_quarter() {
+        let a: PrimitiveArray<Date32Type> = vec![Some(1), None, Some(300)].into();
+
+        let b = quarter(&a).unwrap();
+        assert_eq!(1, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(4, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_timestamp_quarter_with_timezone() {
+        use std::sync::Arc;
+
+        // 24 * 60 * 60 = 86400
+        let a = Arc::new(TimestampSecondArray::from_vec(
+            vec![86400 * 90],
+            Some("+00:00".to_string()),
+        ));
+        let b = quarter(&a).unwrap();
+        assert_eq!(2, b.value(0));
+        let a = Arc::new(TimestampSecondArray::from_vec(
+            vec![86400 * 90],
+            Some("-10:00".to_string()),
+        ));
+        let b = quarter(&a).unwrap();
+        assert_eq!(1, b.value(0));
+    }
+
+    #[test]
     fn test_temporal_array_date64_month() {
         //1514764800000 -> 2018-01-01
         //1550636625000 -> 2019-02-20
@@ -416,7 +514,7 @@ mod tests {
     fn test_temporal_array_timestamp_month_with_timezone() {
         use std::sync::Arc;
 
-        // 24 * 60 * 60 = 8640
+        // 24 * 60 * 60 = 86400
         let a = Arc::new(TimestampSecondArray::from_vec(
             vec![86400 * 31],
             Some("+00:00".to_string()),
@@ -435,7 +533,7 @@ mod tests {
     fn test_temporal_array_timestamp_day_with_timezone() {
         use std::sync::Arc;
 
-        // 24 * 60 * 60 = 8640
+        // 24 * 60 * 60 = 86400
         let a = Arc::new(TimestampSecondArray::from_vec(
             vec![86400],
             Some("+00:00".to_string()),
