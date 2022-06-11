@@ -27,19 +27,20 @@ use arrow::datatypes::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::Array;
 
-use super::levels::LevelInfo;
 use super::schema::{
     add_encoded_arrow_schema_to_metadata, arrow_to_parquet_schema,
     decimal_length_from_precision,
 };
 
-use crate::arrow::levels::calculate_array_levels;
 use crate::column::writer::ColumnWriter;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::RowGroupMetaDataPtr;
 use crate::file::properties::WriterProperties;
 use crate::file::writer::{SerializedColumnWriter, SerializedRowGroupWriter};
 use crate::{data_type::*, file::writer::SerializedFileWriter};
+use levels::{calculate_array_levels, LevelInfo};
+
+mod levels;
 
 /// Arrow writer
 ///
