@@ -124,6 +124,11 @@ fn bench_ilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
         .unwrap();
 }
 
+fn bench_nilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
+    nilike_utf8_scalar(criterion::black_box(arr_a), criterion::black_box(value_b))
+        .unwrap();
+}
+
 fn bench_regexp_is_match_utf8_scalar(arr_a: &StringArray, value_b: &str) {
     regexp_is_match_utf8_scalar(
         criterion::black_box(arr_a),
@@ -252,6 +257,26 @@ fn add_benchmark(c: &mut Criterion) {
 
     c.bench_function("ilike_utf8 scalar complex", |b| {
         b.iter(|| bench_ilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
+    });
+
+    c.bench_function("nilike_utf8 scalar equals", |b| {
+        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "xxXX"))
+    });
+
+    c.bench_function("nilike_utf8 scalar contains", |b| {
+        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xxXX%"))
+    });
+
+    c.bench_function("nilike_utf8 scalar ends with", |b| {
+        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "xXXx%"))
+    });
+
+    c.bench_function("nilike_utf8 scalar starts with", |b| {
+        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%XXXx"))
+    });
+
+    c.bench_function("nilike_utf8 scalar complex", |b| {
+        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
     });
 
     c.bench_function("egexp_matches_utf8 scalar starts with", |b| {
