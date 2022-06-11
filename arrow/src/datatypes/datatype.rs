@@ -671,7 +671,7 @@ impl DataType {
 
     /// Compares the datatype with another, ignoring nested field names
     /// and metadata.
-    pub(crate) fn equals_datatype(&self, other: &DataType) -> bool {
+    pub fn equals_datatype(&self, other: &DataType) -> bool {
         match (&self, other) {
             (DataType::List(a), DataType::List(b))
             | (DataType::LargeList(a), DataType::LargeList(b)) => {

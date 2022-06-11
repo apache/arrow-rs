@@ -35,7 +35,8 @@ fn main() {
             Field::new("lng", DataType::Float64, false),
         ]);
 
-        let file = File::open("test/data/uk_cities.csv").unwrap();
+        let path = format!("{}/test/data/uk_cities.csv", env!("CARGO_MANIFEST_DIR"));
+        let file = File::open(path).unwrap();
 
         let mut csv =
             csv::Reader::new(file, Arc::new(schema), false, None, 1024, None, None, None);

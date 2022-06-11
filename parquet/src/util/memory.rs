@@ -31,7 +31,6 @@ use std::{
 /// when all slices are dropped.
 ///
 /// TODO: Remove and replace with [`bytes::Bytes`]
-#[allow(clippy::rc_buffer)]
 #[derive(Clone, Debug)]
 pub struct ByteBufferPtr {
     data: Bytes,
@@ -106,6 +105,12 @@ impl AsRef<[u8]> for ByteBufferPtr {
 impl From<Vec<u8>> for ByteBufferPtr {
     fn from(data: Vec<u8>) -> Self {
         Self { data: data.into() }
+    }
+}
+
+impl From<Bytes> for ByteBufferPtr {
+    fn from(data: Bytes) -> Self {
+        Self { data }
     }
 }
 
