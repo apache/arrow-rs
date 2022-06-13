@@ -77,7 +77,7 @@
 
 use std::collections::VecDeque;
 use std::fmt::Formatter;
-use std::io::SeekFrom;
+use std::io::{Cursor, SeekFrom};
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -86,6 +86,7 @@ use std::task::{Context, Poll};
 use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::Stream;
+use parquet_format::PageType;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use arrow::datatypes::SchemaRef;
@@ -96,11 +97,13 @@ use crate::arrow::arrow_reader::ParquetRecordBatchReader;
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::ProjectionMask;
 use crate::basic::Compression;
-use crate::column::page::{PageIterator, PageReader};
+use crate::column::page::{Page, PageIterator, PageReader};
+use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::SerializedPageReader;
+use crate::file::serialized_reader::{decode_page, read_page_header};
 use crate::file::FOOTER_SIZE;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
 
@@ -433,6 +436,7 @@ where
     }
 }
 
+/// An in-memory collection of column chunks
 struct InMemoryRowGroup {
     schema: SchemaDescPtr,
     column_chunks: Vec<Option<InMemoryColumnChunk>>,
@@ -459,6 +463,7 @@ impl RowGroupCollection for InMemoryRowGroup {
     }
 }
 
+/// Data for a single column chunk
 #[derive(Clone)]
 struct InMemoryColumnChunk {
     num_values: i64,
@@ -480,6 +485,82 @@ impl InMemoryColumnChunk {
     }
 }
 
+// A serialized implementation for Parquet [`PageReader`].
+struct InMemoryColumnChunkReader {
+    chunk: InMemoryColumnChunk,
+    decompressor: Option<Box<dyn Codec>>,
+    offset: usize,
+    seen_num_values: i64,
+}
+
+impl InMemoryColumnChunkReader {
+    /// Creates a new serialized page reader from file source.
+    pub fn new(chunk: InMemoryColumnChunk) -> Result<Self> {
+        let decompressor = create_codec(chunk.compression)?;
+        let result = Self {
+            chunk,
+            decompressor,
+            offset: 0,
+            seen_num_values: 0,
+        };
+        Ok(result)
+    }
+}
+
+impl Iterator for InMemoryColumnChunkReader {
+    type Item = Result<Page>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.get_next_page().transpose()
+    }
+}
+
+impl PageReader for InMemoryColumnChunkReader {
+    fn get_next_page(&mut self) -> Result<Option<Page>> {
+        while self.seen_num_values < self.chunk.num_values {
+            let mut cursor = Cursor::new(&self.chunk.data.as_ref()[self.offset..]);
+            let page_header = read_page_header(&mut cursor)?;
+            let compressed_size = page_header.compressed_page_size as usize;
+
+            self.offset += cursor.position() as usize;
+            let start_offset = self.offset;
+            let end_offset = self.offset + compressed_size;
+            self.offset = end_offset;
+
+            let buffer = self.chunk.data.slice(start_offset..end_offset);
+
+            let result = match page_header.type_ {
+                PageType::DataPage | PageType::DataPageV2 => {
+                    let decoded = decode_page(
+                        page_header,
+                        buffer.into(),
+                        self.chunk.physical_type,
+                        self.decompressor.as_mut(),
+                    )?;
+                    self.seen_num_values += decoded.num_values() as i64;
+                    decoded
+                }
+                PageType::DictionaryPage => decode_page(
+                    page_header,
+                    buffer.into(),
+                    self.chunk.physical_type,
+                    self.decompressor.as_mut(),
+                )?,
+                _ => {
+                    // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                    continue;
+                }
+            };
+
+            return Ok(Some(result));
+        }
+
+        // We are at the end of this column chunk and no more page left. Return None.
+        Ok(None)
+    }
+}
+
+/// Implements [`PageIterator`] for a single column chunk, yielding a single [`PageReader`]
 struct ColumnChunkIterator {
     schema: SchemaDescPtr,
     column_schema: ColumnDescPtr,
