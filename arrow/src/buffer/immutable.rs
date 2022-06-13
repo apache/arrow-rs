@@ -187,7 +187,8 @@ impl Buffer {
     /// correctly for type `T`.
     pub fn typed_data<T: ArrowNativeType>(&self) -> &[T] {
         // SAFETY
-        // ArrowNativeType are trivially transmutable, and this method checks alignment
+        // ArrowNativeType is trivially transmutable, is sealed to prevent potentially incorrect
+        // implementation outside this crate, and this method checks alignment
         let (prefix, offsets, suffix) = unsafe { self.as_slice().align_to::<T>() };
         assert!(prefix.is_empty() && suffix.is_empty());
         offsets
