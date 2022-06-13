@@ -15,27 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// TODO: (vcq): Protobuf codegen is not generating Debug impls.
-#![allow(missing_debug_implementations)]
-
-pub mod convert;
-pub mod reader;
-pub mod writer;
-
-mod compression;
-#[allow(clippy::redundant_closure)]
-#[allow(clippy::needless_lifetimes)]
-#[allow(clippy::extra_unused_lifetimes)]
-#[allow(clippy::redundant_static_lifetimes)]
-#[allow(clippy::redundant_field_names)]
-#[allow(non_camel_case_types)]
-pub mod gen;
-
-pub use self::gen::File::*;
-pub use self::gen::Message::*;
-pub use self::gen::Schema::*;
-pub use self::gen::SparseTensor::*;
-pub use self::gen::Tensor::*;
-
-const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
-const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
+pub(crate) mod compression;
+pub(crate) const LENGTH_EMPTY_COMPRESSED_DATA: i64 = 0;
+pub(crate) const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
+pub(crate) const LENGTH_OF_PREFIX_DATA: i64 = 8;
