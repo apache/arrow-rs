@@ -573,7 +573,7 @@ mod tests {
 
         // Verify result record data
         let actual = record_reader.consume_record_data().unwrap();
-        let actual_values = unsafe { actual.typed_data::<i32>() };
+        let actual_values = actual.typed_data::<i32>();
 
         let expected = &[0, 7, 0, 6, 3, 0, 8];
         assert_eq!(actual_values.len(), expected.len());
@@ -687,7 +687,7 @@ mod tests {
 
         // Verify result record data
         let actual = record_reader.consume_record_data().unwrap();
-        let actual_values = unsafe { actual.typed_data::<i32>() };
+        let actual_values = actual.typed_data::<i32>();
         let expected = &[4, 0, 0, 7, 6, 3, 2, 8, 9];
         assert_eq!(actual_values.len(), expected.len());
 

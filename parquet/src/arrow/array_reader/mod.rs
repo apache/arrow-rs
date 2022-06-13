@@ -226,13 +226,13 @@ where
     fn get_def_levels(&self) -> Option<&[i16]> {
         self.def_levels_buffer
             .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+            .map(|buf| buf.typed_data())
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer
             .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+            .map(|buf| buf.typed_data())
     }
 }
 
@@ -447,13 +447,13 @@ where
     fn get_def_levels(&self) -> Option<&[i16]> {
         self.def_levels_buffer
             .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+            .map(|buf| buf.typed_data())
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer
             .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+            .map(|buf| buf.typed_data())
     }
 }
 

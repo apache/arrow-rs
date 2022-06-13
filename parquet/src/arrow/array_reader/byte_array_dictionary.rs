@@ -187,13 +187,13 @@ where
     fn get_def_levels(&self) -> Option<&[i16]> {
         self.def_levels_buffer
             .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+            .map(|buf| buf.typed_data())
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer
             .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+            .map(|buf| buf.typed_data())
     }
 }
 
@@ -356,7 +356,7 @@ where
                         assert_eq!(dict.data_type(), &self.value_type);
 
                         let dict_buffers = dict.data().buffers();
-                        let dict_offsets = unsafe { dict_buffers[0].typed_data::<V>() };
+                        let dict_offsets = dict_buffers[0].typed_data::<V>();
                         let dict_values = dict_buffers[1].as_slice();
 
                         values.extend_from_dictionary(

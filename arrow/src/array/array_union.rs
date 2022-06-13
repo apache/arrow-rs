@@ -185,7 +185,7 @@ impl UnionArray {
         }
 
         // Check the type_ids
-        let type_id_slice: &[i8] = unsafe { type_ids.typed_data() };
+        let type_id_slice: &[i8] = type_ids.typed_data();
         let invalid_type_ids = type_id_slice
             .iter()
             .filter(|i| *i < &0)
@@ -201,7 +201,7 @@ impl UnionArray {
         // Check the value offsets if provided
         if let Some(offset_buffer) = &value_offsets {
             let max_len = type_ids.len() as i32;
-            let offsets_slice: &[i32] = unsafe { offset_buffer.typed_data() };
+            let offsets_slice: &[i32] = offset_buffer.typed_data();
             let invalid_offsets = offsets_slice
                 .iter()
                 .filter(|i| *i < &0 || *i > &max_len)
@@ -255,9 +255,7 @@ impl UnionArray {
     pub fn value_offset(&self, index: usize) -> i32 {
         assert!(index - self.offset() < self.len());
         if self.is_dense() {
-            // safety: reinterpreting is safe since the offset buffer contains `i32` values and is
-            // properly aligned.
-            unsafe { self.data().buffers()[1].typed_data::<i32>()[index] }
+            self.data().buffers()[1].typed_data::<i32>()[index]
         } else {
             index as i32
         }

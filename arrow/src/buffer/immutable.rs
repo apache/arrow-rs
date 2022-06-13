@@ -181,19 +181,14 @@ impl Buffer {
 
     /// View buffer as typed slice.
     ///
-    /// # Safety
+    /// # Panics
     ///
-    /// `ArrowNativeType` is public so that it can be used as a trait bound for other public
-    /// components, such as the `ToByteSlice` trait.  However, this means that it can be
-    /// implemented by user defined types, which it is not intended for.
-    pub unsafe fn typed_data<T: ArrowNativeType + num::Num>(&self) -> &[T] {
-        // JUSTIFICATION
-        //  Benefit
-        //      Many of the buffers represent specific types, and consumers of `Buffer` often need to re-interpret them.
-        //  Soundness
-        //      * The pointer is non-null by construction
-        //      * alignment asserted below.
-        let (prefix, offsets, suffix) = self.as_slice().align_to::<T>();
+    /// This function panics if the underlying buffer is not aligned
+    /// correctly for type `T`.
+    pub fn typed_data<T: ArrowNativeType>(&self) -> &[T] {
+        // SAFETY
+        // ArrowNativeType are trivially transmutable, and this method checks alignment
+        let (prefix, offsets, suffix) = unsafe { self.as_slice().align_to::<T>() };
         assert!(prefix.is_empty() && suffix.is_empty());
         offsets
     }
@@ -451,7 +446,7 @@ mod tests {
     macro_rules! check_as_typed_data {
         ($input: expr, $native_t: ty) => {{
             let buffer = Buffer::from_slice_ref($input);
-            let slice: &[$native_t] = unsafe { buffer.typed_data::<$native_t>() };
+            let slice: &[$native_t] = buffer.typed_data::<$native_t>();
             assert_eq!($input, slice);
         }};
     }
@@ -573,12 +568,12 @@ mod tests {
             )
         };
 
-        let slice = unsafe { buffer.typed_data::<i32>() };
+        let slice = buffer.typed_data::<i32>();
         assert_eq!(slice, &[1, 2, 3, 4, 5]);
 
         let buffer = buffer.slice(std::mem::size_of::<i32>());
 
-        let slice = unsafe { buffer.typed_data::<i32>() };
+        let slice = buffer.typed_data::<i32>();
         assert_eq!(slice, &[2, 3, 4, 5]);
     }
 }

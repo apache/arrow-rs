@@ -106,7 +106,7 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
             Self::Dict { keys, values } => {
                 let mut spilled = OffsetBuffer::default();
                 let dict_buffers = values.data().buffers();
-                let dict_offsets = unsafe { dict_buffers[0].typed_data::<V>() };
+                let dict_offsets = dict_buffers[0].typed_data::<V>();
                 let dict_values = dict_buffers[1].as_slice();
 
                 if values.is_empty() {

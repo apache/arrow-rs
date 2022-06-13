@@ -2084,7 +2084,7 @@ where
     let list_data = array.data();
     let str_values_buf = str_array.value_data();
 
-    let offsets = unsafe { list_data.buffers()[0].typed_data::<OffsetSizeFrom>() };
+    let offsets = list_data.buffers()[0].typed_data::<OffsetSizeFrom>();
 
     let mut offset_builder = BufferBuilder::<OffsetSizeTo>::new(offsets.len());
     offsets.iter().try_for_each::<_, Result<_>>(|offset| {

@@ -76,7 +76,7 @@ pub(crate) fn builder_to_mutable_buffer<T: ArrowNativeType>(
 /// builder.append(45);
 /// let buffer = builder.finish();
 ///
-/// assert_eq!(unsafe { buffer.typed_data::<u8>() }, &[42, 43, 44, 45]);
+/// assert_eq!(buffer.typed_data::<u8>(), &[42, 43, 44, 45]);
 /// # Ok(())
 /// # }
 /// ```
@@ -291,7 +291,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     ///
     /// let buffer = builder.finish();
     ///
-    /// assert_eq!(unsafe { buffer.typed_data::<u8>() }, &[42, 44, 46]);
+    /// assert_eq!(buffer.typed_data::<u8>(), &[42, 44, 46]);
     /// ```
     #[inline]
     pub fn finish(&mut self) -> Buffer {
