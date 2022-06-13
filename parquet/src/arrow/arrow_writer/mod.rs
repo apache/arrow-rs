@@ -576,7 +576,7 @@ macro_rules! def_get_binary_array_fn {
         fn $name(array: &$ty) -> Vec<ByteArray> {
             let mut byte_array = ByteArray::new();
             let ptr = crate::util::memory::ByteBufferPtr::new(
-                unsafe { array.value_data().typed_data::<u8>() }.to_vec(),
+                array.value_data().as_slice().to_vec(),
             );
             byte_array.set_data(ptr);
             array
