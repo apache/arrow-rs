@@ -700,6 +700,19 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
     }
 }
 
+impl From<Vec<Option<&[u8]>>> for FixedSizeBinaryArray
+{
+    fn from(v: Vec<Option<&[u8]>>) -> Self {
+        Self::try_from_sparse_iter(v.into_iter()).unwrap()
+    }
+}
+
+impl From<Vec<&[u8]>> for FixedSizeBinaryArray {
+    fn from(v: Vec<&[u8]>) -> Self {
+        Self::try_from_iter(v.into_iter()).unwrap()
+    }
+}
+
 impl fmt::Debug for FixedSizeBinaryArray {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "FixedSizeBinaryArray<{}>\n[\n", self.value_length())?;
