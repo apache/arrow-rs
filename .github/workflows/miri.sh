@@ -19,8 +19,6 @@ run_miri() {
 # If MIRI fails, automatically retry
 # Seems like miri is occasionally killed by the github runner
 # https://github.com/apache/arrow-rs/issues/879
-for i in `seq 1 5`; do
-    echo "Starting Arrow MIRI run..."
-    run_miri && break
-    echo "foo" > /tmp/data.txt
-done
+echo "Starting Arrow MIRI run..."
+run_miri
+echo "Miri finished with exit code $?"
