@@ -282,7 +282,8 @@ impl MutableBuffer {
     pub fn typed_data_mut<T: ArrowNativeType>(&mut self) -> &mut [T] {
         // SAFETY
         // ArrowNativeType are trivially transmutable, and this method checks alignment
-        let (prefix, offsets, suffix) = unsafe { self.as_slice_mut().align_to_mut::<T>() };
+        let (prefix, offsets, suffix) =
+            unsafe { self.as_slice_mut().align_to_mut::<T>() };
         assert!(prefix.is_empty() && suffix.is_empty());
         offsets
     }
