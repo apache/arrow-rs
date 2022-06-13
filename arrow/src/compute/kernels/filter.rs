@@ -29,7 +29,7 @@ use crate::buffer::{buffer_bin_and, Buffer, MutableBuffer};
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::RecordBatch;
-use crate::util::bit_chunk_iterator::{UnalignedBitChunk, UnalignedBitChunkIterator};
+use crate::util::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use crate::util::bit_util;
 
 /// If the filter selects more than this fraction of rows, use
@@ -72,47 +72,15 @@ macro_rules! downcast_dict_filter {
 ///
 /// 2. Only performant for filters that copy across long contiguous runs
 #[derive(Debug)]
-pub struct SlicesIterator<'a> {
-    iter: UnalignedBitChunkIterator<'a>,
-    len: usize,
-    current_offset: i64,
-    current_chunk: u64,
-}
+pub struct SlicesIterator<'a>(BitSliceIterator<'a>);
 
 impl<'a> SlicesIterator<'a> {
     pub fn new(filter: &'a BooleanArray) -> Self {
         let values = &filter.data_ref().buffers()[0];
         let len = filter.len();
-        let chunk = UnalignedBitChunk::new(values.as_slice(), filter.offset(), len);
-        let mut iter = chunk.iter();
+        let offset = filter.offset();
 
-        let current_offset = -(chunk.lead_padding() as i64);
-        let current_chunk = iter.next().unwrap_or(0);
-
-        Self {
-            iter,
-            len,
-            current_offset,
-            current_chunk,
-        }
-    }
-
-    /// Returns `Some((chunk_offset, bit_offset))` for the next chunk that has at
-    /// least one bit set, or None if there is no such chunk.
-    ///
-    /// Where `chunk_offset` is the bit offset to the current `u64` chunk
-    /// and `bit_offset` is the offset of the first `1` bit in that chunk
-    fn advance_to_set_bit(&mut self) -> Option<(i64, u32)> {
-        loop {
-            if self.current_chunk != 0 {
-                // Find the index of the first 1
-                let bit_pos = self.current_chunk.trailing_zeros();
-                return Some((self.current_offset, bit_pos));
-            }
-
-            self.current_chunk = self.iter.next()?;
-            self.current_offset += 64;
-        }
+        Self(BitSliceIterator::new(values, offset, len))
     }
 }
 
@@ -120,43 +88,7 @@ impl<'a> Iterator for SlicesIterator<'a> {
     type Item = (usize, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Used as termination condition
-        if self.len == 0 {
-            return None;
-        }
-
-        let (start_chunk, start_bit) = self.advance_to_set_bit()?;
-
-        // Set bits up to start
-        self.current_chunk |= (1 << start_bit) - 1;
-
-        loop {
-            if self.current_chunk != u64::MAX {
-                // Find the index of the first 0
-                let end_bit = self.current_chunk.trailing_ones();
-
-                // Zero out up to end_bit
-                self.current_chunk &= !((1 << end_bit) - 1);
-
-                return Some((
-                    (start_chunk + start_bit as i64) as usize,
-                    (self.current_offset + end_bit as i64) as usize,
-                ));
-            }
-
-            match self.iter.next() {
-                Some(next) => {
-                    self.current_chunk = next;
-                    self.current_offset += 64;
-                }
-                None => {
-                    return Some((
-                        (start_chunk + start_bit as i64) as usize,
-                        std::mem::replace(&mut self.len, 0),
-                    ));
-                }
-            }
-        }
+        self.0.next()
     }
 }
 
@@ -165,29 +97,16 @@ impl<'a> Iterator for SlicesIterator<'a> {
 /// This provides the best performance on most predicates, apart from those which keep
 /// large runs and therefore favour [`SlicesIterator`]
 struct IndexIterator<'a> {
-    current_chunk: u64,
-    chunk_offset: i64,
     remaining: usize,
-    iter: UnalignedBitChunkIterator<'a>,
+    iter: BitIndexIterator<'a>,
 }
 
 impl<'a> IndexIterator<'a> {
-    fn new(filter: &'a BooleanArray, len: usize) -> Self {
+    fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
         assert_eq!(filter.null_count(), 0);
         let data = filter.data();
-        let chunks =
-            UnalignedBitChunk::new(&data.buffers()[0], data.offset(), data.len());
-        let mut iter = chunks.iter();
-
-        let current_chunk = iter.next().unwrap_or(0);
-        let chunk_offset = -(chunks.lead_padding() as i64);
-
-        Self {
-            current_chunk,
-            chunk_offset,
-            remaining: len,
-            iter,
-        }
+        let iter = BitIndexIterator::new(&data.buffers()[0], data.offset(), data.len());
+        Self { remaining, iter }
     }
 }
 
@@ -195,17 +114,11 @@ impl<'a> Iterator for IndexIterator<'a> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while self.remaining != 0 {
-            if self.current_chunk != 0 {
-                let bit_pos = self.current_chunk.trailing_zeros();
-                self.current_chunk ^= 1 << bit_pos;
-                self.remaining -= 1;
-                return Some((self.chunk_offset + bit_pos as i64) as usize);
-            }
-
+        if self.remaining != 0 {
+            let next = self.iter.next().expect("IndexIterator exhausted early");
+            self.remaining -= 1;
             // Must panic if exhausted early as trusted length iterator
-            self.current_chunk = self.iter.next().expect("IndexIterator exhausted early");
-            self.chunk_offset += 64;
+            return Some(next);
         }
         None
     }
