@@ -700,6 +700,18 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
     }
 }
 
+impl From<Vec<Option<&[u8]>>> for FixedSizeBinaryArray {
+    fn from(v: Vec<Option<&[u8]>>) -> Self {
+        Self::try_from_sparse_iter(v.into_iter()).unwrap()
+    }
+}
+
+impl From<Vec<&[u8]>> for FixedSizeBinaryArray {
+    fn from(v: Vec<&[u8]>) -> Self {
+        Self::try_from_iter(v.into_iter()).unwrap()
+    }
+}
+
 impl fmt::Debug for FixedSizeBinaryArray {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "FixedSizeBinaryArray<{}>\n[\n", self.value_length())?;
@@ -1711,6 +1723,64 @@ mod tests {
             FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len())
+    }
+
+    #[test]
+    fn test_fixed_size_binary_array_from_vec() {
+        let values = vec!["one".as_bytes(), b"two", b"six", b"ten"];
+        let array = FixedSizeBinaryArray::from(values);
+        assert_eq!(array.len(), 4);
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(array.value(0), b"one");
+        assert_eq!(array.value(1), b"two");
+        assert_eq!(array.value(2), b"six");
+        assert_eq!(array.value(3), b"ten");
+        assert!(!array.is_null(0));
+        assert!(!array.is_null(1));
+        assert!(!array.is_null(2));
+        assert!(!array.is_null(3));
+    }
+
+    #[test]
+    #[should_panic(expected = "Nested array size mismatch: one is 3, and the other is 5")]
+    fn test_fixed_size_binary_array_from_vec_incorrect_length() {
+        let values = vec!["one".as_bytes(), b"two", b"three", b"four"];
+        let _ = FixedSizeBinaryArray::from(values);
+    }
+
+    #[test]
+    fn test_fixed_size_binary_array_from_opt_vec() {
+        let values = vec![
+            Some("one".as_bytes()),
+            Some(b"two"),
+            None,
+            Some(b"six"),
+            Some(b"ten"),
+        ];
+        let array = FixedSizeBinaryArray::from(values);
+        assert_eq!(array.len(), 5);
+        assert_eq!(array.value(0), b"one");
+        assert_eq!(array.value(1), b"two");
+        assert_eq!(array.value(3), b"six");
+        assert_eq!(array.value(4), b"ten");
+        assert!(!array.is_null(0));
+        assert!(!array.is_null(1));
+        assert!(array.is_null(2));
+        assert!(!array.is_null(3));
+        assert!(!array.is_null(4));
+    }
+
+    #[test]
+    #[should_panic(expected = "Nested array size mismatch: one is 3, and the other is 5")]
+    fn test_fixed_size_binary_array_from_opt_vec_incorrect_length() {
+        let values = vec![
+            Some("one".as_bytes()),
+            Some(b"two"),
+            None,
+            Some(b"three"),
+            Some(b"four"),
+        ];
+        let _ = FixedSizeBinaryArray::from(values);
     }
 
     #[test]
