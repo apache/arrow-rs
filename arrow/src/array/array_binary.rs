@@ -1726,6 +1726,64 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_binary_array_from_vec() {
+        let values = vec!["one".as_bytes(), b"two", b"six", b"ten"];
+        let array = FixedSizeBinaryArray::from(values);
+        assert_eq!(array.len(), 4);
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(array.value(0), b"one");
+        assert_eq!(array.value(1), b"two");
+        assert_eq!(array.value(2), b"six");
+        assert_eq!(array.value(3), b"ten");
+        assert!(!array.is_null(0));
+        assert!(!array.is_null(1));
+        assert!(!array.is_null(2));
+        assert!(!array.is_null(3));
+    }
+
+    #[test]
+    #[should_panic(expected = "Nested array size mismatch: one is 3, and the other is 5")]
+    fn test_fixed_size_binary_array_from_vec_incorrect_length() {
+        let values = vec!["one".as_bytes(), b"two", b"three", b"four"];
+        let _ = FixedSizeBinaryArray::from(values);
+    }
+
+    #[test]
+    fn test_fixed_size_binary_array_from_opt_vec() {
+        let values = vec![
+            Some("one".as_bytes()),
+            Some(b"two"),
+            None,
+            Some(b"six"),
+            Some(b"ten"),
+        ];
+        let array = FixedSizeBinaryArray::from(values);
+        assert_eq!(array.len(), 5);
+        assert_eq!(array.value(0), b"one");
+        assert_eq!(array.value(1), b"two");
+        assert_eq!(array.value(3), b"six");
+        assert_eq!(array.value(4), b"ten");
+        assert!(!array.is_null(0));
+        assert!(!array.is_null(1));
+        assert!(array.is_null(2));
+        assert!(!array.is_null(3));
+        assert!(!array.is_null(4));
+    }
+
+    #[test]
+    #[should_panic(expected = "Nested array size mismatch: one is 3, and the other is 5")]
+    fn test_fixed_size_binary_array_from_opt_vec_incorrect_length() {
+        let values = vec![
+            Some("one".as_bytes()),
+            Some(b"two"),
+            None,
+            Some(b"three"),
+            Some(b"four"),
+        ];
+        let _ = FixedSizeBinaryArray::from(values);
+    }
+
+    #[test]
     fn test_binary_array_all_null() {
         let data = vec![None];
         let array = BinaryArray::from(data);
