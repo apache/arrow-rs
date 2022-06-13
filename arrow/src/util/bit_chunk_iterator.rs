@@ -611,6 +611,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn fuzz_unaligned_bit_chunk_iterator() {
         let mut rng = thread_rng();
 
