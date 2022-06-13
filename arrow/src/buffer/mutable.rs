@@ -30,7 +30,11 @@ use std::ptr::NonNull;
 /// along cache lines and in multiple of 64 bytes.
 /// Use [MutableBuffer::push] to insert an item, [MutableBuffer::extend_from_slice]
 /// to insert many items, and `into` to convert it to [`Buffer`].
+///
+/// For a safe, strongly typed API consider using [`crate::array::BufferBuilder`]
+///
 /// # Example
+///
 /// ```
 /// # use arrow::buffer::{Buffer, MutableBuffer};
 /// let mut buffer = MutableBuffer::new(0);
@@ -150,6 +154,17 @@ impl MutableBuffer {
             self.data = ptr;
             self.capacity = new_capacity;
         }
+    }
+
+    /// Truncates this buffer to `len` bytes
+    ///
+    /// If `len` is greater than the buffer's current length, this has no effect
+    #[inline(always)]
+    pub fn truncate(&mut self, len: usize) {
+        if len > self.len {
+            return;
+        }
+        self.len = len;
     }
 
     /// Resizes the buffer, either truncating its contents (with no change in capacity), or

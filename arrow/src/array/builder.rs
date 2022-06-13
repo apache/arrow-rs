@@ -180,8 +180,7 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     /// ```
     #[inline]
     pub fn advance(&mut self, i: usize) {
-        let new_buffer_len = (self.len + i) * mem::size_of::<T>();
-        self.buffer.resize(new_buffer_len, 0);
+        self.buffer.extend_zeros(i * mem::size_of::<T>());
         self.len += i;
     }
 
@@ -244,6 +243,24 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         self.len += n;
     }
 
+    /// Appends `n`, zero-initialized values
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// use arrow::array::UInt32BufferBuilder;
+    ///
+    /// let mut builder = UInt32BufferBuilder::new(10);
+    /// builder.append_n_zeroed(3);
+    ///
+    /// assert_eq!(builder.len(), 3);
+    /// assert_eq!(builder.as_slice(), &[0, 0, 0])
+    #[inline]
+    pub fn append_n_zeroed(&mut self, n: usize) {
+        self.buffer.extend_zeros(n * mem::size_of::<T>());
+        self.len += n;
+    }
+
     /// Appends a slice of type `T`, growing the internal buffer as needed.
     ///
     /// # Example:
@@ -260,6 +277,78 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
     pub fn append_slice(&mut self, slice: &[T]) {
         self.buffer.extend_from_slice(slice);
         self.len += slice.len();
+    }
+
+    /// View the contents of this buffer as a slice
+    ///
+    /// ```
+    /// use arrow::array::Float64BufferBuilder;
+    ///
+    /// let mut builder = Float64BufferBuilder::new(10);
+    /// builder.append(1.3);
+    /// builder.append_n(2, 2.3);
+    ///
+    /// assert_eq!(builder.as_slice(), &[1.3, 2.3, 2.3]);
+    /// ```
+    #[inline]
+    pub fn as_slice(&self) -> &[T] {
+        // SAFETY
+        //
+        // - MutableBuffer is aligned and initialized for len elements of T
+        // - MutableBuffer corresponds to a single allocation
+        // - MutableBuffer does not support modification whilst active immutable borrows
+        unsafe { std::slice::from_raw_parts(self.buffer.as_ptr() as _, self.len) }
+    }
+
+    /// View the contents of this buffer as a mutable slice
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// use arrow::array::Float32BufferBuilder;
+    ///
+    /// let mut builder = Float32BufferBuilder::new(10);
+    ///
+    /// builder.append_slice(&[1., 2., 3.4]);
+    /// assert_eq!(builder.as_slice(), &[1., 2., 3.4]);
+    ///
+    /// builder.as_slice_mut()[1] = 4.2;
+    /// assert_eq!(builder.as_slice(), &[1., 4.2, 3.4]);
+    /// ```
+    #[inline]
+    pub fn as_slice_mut(&mut self) -> &mut [T] {
+        // SAFETY
+        //
+        // - MutableBuffer is aligned and initialized for len elements of T
+        // - MutableBuffer corresponds to a single allocation
+        // - MutableBuffer does not support modification whilst active immutable borrows
+        unsafe { std::slice::from_raw_parts_mut(self.buffer.as_mut_ptr() as _, self.len) }
+    }
+
+    /// Shorten this BufferBuilder to `len` items
+    ///
+    /// If `len` is greater than the builder's current length, this has no effect
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// use arrow::array::UInt16BufferBuilder;
+    ///
+    /// let mut builder = UInt16BufferBuilder::new(10);
+    ///
+    /// builder.append_slice(&[42, 44, 46]);
+    /// assert_eq!(builder.as_slice(), &[42, 44, 46]);
+    ///
+    /// builder.truncate(2);
+    /// assert_eq!(builder.as_slice(), &[42, 44]);
+    ///
+    /// builder.append(12);
+    /// assert_eq!(builder.as_slice(), &[42, 44, 12]);
+    /// ```
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        self.buffer.truncate(len * mem::size_of::<T>());
+        self.len = len;
     }
 
     /// # Safety
