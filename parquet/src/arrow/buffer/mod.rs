@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-///
-/// Arch module contains architecture specific code.
-/// Be aware that not all machines have these specific operations available.
-#[cfg(all(target_arch = "x86_64", feature = "avx512"))]
-pub(crate) mod avx512;
+//! Logic for reading data into arrow buffers
+
+pub mod bit_util;
+pub mod converter;
+pub mod dictionary_buffer;
+pub mod offset_buffer;

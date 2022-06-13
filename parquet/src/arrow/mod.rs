@@ -122,14 +122,12 @@
 experimental_mod!(array_reader);
 pub mod arrow_reader;
 pub mod arrow_writer;
-mod bit_util;
+mod buffer;
 
 #[cfg(feature = "async")]
 pub mod async_reader;
 
-experimental_mod!(converter);
-pub(in crate::arrow) mod levels;
-pub(in crate::arrow) mod record_reader;
+mod record_reader;
 experimental_mod!(schema);
 
 pub use self::arrow_reader::ArrowReader;

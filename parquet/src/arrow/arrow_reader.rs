@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains reader which reads parquet data into arrow array.
+//! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
 use std::sync::Arc;
 
@@ -294,7 +294,7 @@ mod tests {
     use crate::arrow::arrow_reader::{
         ArrowReader, ArrowReaderOptions, ParquetFileArrowReader,
     };
-    use crate::arrow::converter::{
+    use crate::arrow::buffer::converter::{
         BinaryArrayConverter, Converter, FixedSizeArrayConverter, FromConverter,
         IntervalDayTimeArrayConverter, LargeUtf8ArrayConverter, Utf8ArrayConverter,
     };

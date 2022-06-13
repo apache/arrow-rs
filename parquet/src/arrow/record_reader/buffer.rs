@@ -17,7 +17,7 @@
 
 use std::marker::PhantomData;
 
-use crate::arrow::bit_util::iter_set_bits_rev;
+use crate::arrow::buffer::bit_util::iter_set_bits_rev;
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::ToByteSlice;
 

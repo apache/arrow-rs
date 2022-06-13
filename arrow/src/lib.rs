@@ -225,14 +225,10 @@
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
 //!
 
-#![cfg_attr(feature = "avx512", feature(stdsimd))]
-#![cfg_attr(feature = "avx512", feature(repr_simd))]
-#![cfg_attr(feature = "avx512", feature(avx512_target_feature))]
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
 
 pub mod alloc;
-mod arch;
 pub mod array;
 pub mod bitmap;
 pub mod buffer;
