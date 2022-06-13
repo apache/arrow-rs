@@ -27,6 +27,7 @@ use arrow::array::{ArrayData, ArrayRef, Int64Array};
 use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
+use arrow::ffi_stream::ArrowArrayStreamReader;
 use arrow::pyarrow::PyArrowConvert;
 use arrow::record_batch::RecordBatch;
 
@@ -111,6 +112,13 @@ fn round_trip_record_batch(obj: RecordBatch) -> PyResult<RecordBatch> {
     Ok(obj)
 }
 
+#[pyfunction]
+fn round_trip_record_batch_reader(
+    obj: ArrowArrayStreamReader,
+) -> PyResult<ArrowArrayStreamReader> {
+    Ok(obj)
+}
+
 #[pymodule]
 fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(double))?;
@@ -122,5 +130,6 @@ fn arrow_pyarrow_integration_testing(_py: Python, m: &PyModule) -> PyResult<()> 
     m.add_wrapped(wrap_pyfunction!(round_trip_schema))?;
     m.add_wrapped(wrap_pyfunction!(round_trip_array))?;
     m.add_wrapped(wrap_pyfunction!(round_trip_record_batch))?;
+    m.add_wrapped(wrap_pyfunction!(round_trip_record_batch_reader))?;
     Ok(())
 }
