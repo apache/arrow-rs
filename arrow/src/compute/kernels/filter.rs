@@ -1332,6 +1332,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn fuzz_test_slices_iterator() {
         let mut rng = thread_rng();
 
@@ -1401,6 +1402,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn fuzz_filter() {
         let mut rng = thread_rng();
 
