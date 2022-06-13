@@ -700,8 +700,7 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
     }
 }
 
-impl From<Vec<Option<&[u8]>>> for FixedSizeBinaryArray
-{
+impl From<Vec<Option<&[u8]>>> for FixedSizeBinaryArray {
     fn from(v: Vec<Option<&[u8]>>) -> Self {
         Self::try_from_sparse_iter(v.into_iter()).unwrap()
     }
