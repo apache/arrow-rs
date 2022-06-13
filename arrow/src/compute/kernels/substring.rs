@@ -461,7 +461,6 @@ mod tests {
                 |(array, start, length, expected)| {
                     let array = <$array_ty>::from(array);
                     let result = $substring_fn(&array, start, length)?;
-                    assert_eq!(array.len(), result.len());
                     let result = result.as_any().downcast_ref::<$array_ty>().unwrap();
                     let expected = <$array_ty>::from(expected);
                     assert_eq!(&expected, result);
@@ -637,25 +636,11 @@ mod tests {
             (-3, Some(4), input.clone())
         );
 
-        [&base_case[..], &cases[..]]
-            .concat()
-            .into_iter()
-            .try_for_each::<_, Result<()>>(|(array, start, length, expected)| {
-                let array = FixedSizeBinaryArray::try_from_sparse_iter(array.into_iter())
-                    .unwrap();
-                let result = substring(&array, start, length)?;
-                assert_eq!(array.len(), result.len());
-                let result = result
-                    .as_any()
-                    .downcast_ref::<FixedSizeBinaryArray>()
-                    .unwrap();
-                let expected =
-                    FixedSizeBinaryArray::try_from_sparse_iter(expected.into_iter())
-                        .unwrap();
-                assert_eq!(&expected, result,);
-                Ok(())
-            })?;
-
+        do_test!(
+            [&base_case[..], &cases[..]].concat(),
+            FixedSizeBinaryArray,
+            substring
+        )?;
         Ok(())
     }
 
@@ -691,24 +676,11 @@ mod tests {
             (-3, Some(4), input.clone())
         );
 
-        [&base_case[..], &cases[..]]
-            .concat()
-            .into_iter()
-            .try_for_each::<_, Result<()>>(|(array, start, length, expected)| {
-                let array =
-                    FixedSizeBinaryArray::try_from_iter(array.into_iter()).unwrap();
-                let result = substring(&array, start, length)?;
-                assert_eq!(array.len(), result.len());
-                let result = result
-                    .as_any()
-                    .downcast_ref::<FixedSizeBinaryArray>()
-                    .unwrap();
-                let expected =
-                    FixedSizeBinaryArray::try_from_iter(expected.into_iter()).unwrap();
-                assert_eq!(&expected, result,);
-                Ok(())
-            })?;
-
+        do_test!(
+            [&base_case[..], &cases[..]].concat(),
+            FixedSizeBinaryArray,
+            substring
+        )?;
         Ok(())
     }
 
