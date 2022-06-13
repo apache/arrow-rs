@@ -434,6 +434,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn test_dense_i32_large() {
         let mut builder = UnionBuilder::new_dense(1024);
 

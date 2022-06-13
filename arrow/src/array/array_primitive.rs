@@ -397,29 +397,35 @@ impl<'a, T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr>
         let iter = iter.into_iter();
         let (lower, _) = iter.size_hint();
 
-        let mut null_buf = BooleanBufferBuilder::new(lower);
+        let mut null_builder = BooleanBufferBuilder::new(lower);
 
         let buffer: Buffer = iter
             .map(|item| {
                 if let Some(a) = item.into().native {
-                    null_buf.append(true);
+                    null_builder.append(true);
                     a
                 } else {
-                    null_buf.append(false);
+                    null_builder.append(false);
                     // this ensures that null items on the buffer are not arbitrary.
-                    // This is important because falible operations can use null values (e.g. a vectorized "add")
+                    // This is important because fallible operations can use null values (e.g. a vectorized "add")
                     // which may panic (e.g. overflow if the number on the slots happen to be very large).
                     T::Native::default()
                 }
             })
             .collect();
 
+        let len = null_builder.len();
+        let null_buf: Buffer = null_builder.into();
+        let valid_count = null_buf.count_set_bits();
+        let null_count = len - valid_count;
+        let opt_null_buf = (null_count != 0).then(|| null_buf);
+
         let data = unsafe {
             ArrayData::new_unchecked(
                 T::DATA_TYPE,
-                null_buf.len(),
-                None,
-                Some(null_buf.into()),
+                len,
+                Some(null_count),
+                opt_null_buf,
                 0,
                 vec![buffer],
                 vec![],
@@ -1023,6 +1029,16 @@ mod tests {
         let primitive_array: PrimitiveArray<Int32Type> = value_iter.collect();
         // but the actual number of items in the array should be 10
         assert_eq!(primitive_array.len(), 10);
+    }
+
+    #[test]
+    fn test_primitive_array_from_non_null_iter() {
+        let iter = (0..10_i32).map(Some);
+        let primitive_array = PrimitiveArray::<Int32Type>::from_iter(iter);
+        assert_eq!(primitive_array.len(), 10);
+        assert_eq!(primitive_array.null_count(), 0);
+        assert_eq!(primitive_array.data().null_buffer(), None);
+        assert_eq!(primitive_array.values(), &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
     }
 
     #[test]
