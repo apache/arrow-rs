@@ -418,11 +418,7 @@ impl<'a, T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr>
         let null_buf: Buffer = null_builder.into();
         let valid_count = null_buf.count_set_bits();
         let null_count = len - valid_count;
-        let opt_null_buf = if null_count == 0 {
-            None
-        } else {
-            Some(null_buf)
-        };
+        let opt_null_buf = (null_count != 0).then(|| null_buf);
 
         let data = unsafe {
             ArrayData::new_unchecked(
