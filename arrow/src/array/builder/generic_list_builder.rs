@@ -107,6 +107,11 @@ where
         &mut self.values_builder
     }
 
+    /// Returns the child array builder as an immutable reference
+    pub fn values_ref(&self) -> &T {
+        &self.values_builder
+    }
+
     /// Finish the current variable-length list array slot
     #[inline]
     pub fn append(&mut self, is_valid: bool) -> Result<()> {
@@ -151,6 +156,11 @@ where
         let array_data = unsafe { array_data.build_unchecked() };
 
         GenericListArray::<OffsetSize>::from(array_data)
+    }
+
+    /// Returns the current offsets buffer as a slice
+    pub fn offsets_slice(&self) -> &[OffsetSize] {
+        self.offsets_builder.as_slice()
     }
 }
 
