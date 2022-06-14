@@ -33,6 +33,7 @@ use crate::datatypes::{
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
+use crate::util::decimal::Decimal128;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
 /// See [`BinaryArray`] and [`LargeBinaryArray`] for storing
@@ -756,7 +757,7 @@ impl Array for FixedSizeBinaryArray {
 ///     .unwrap();
 ///
 ///    assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
-///    assert_eq!(8_887_000_000, decimal_array.value(0));
+///    assert_eq!(8_887_000_000_i128, decimal_array.value(0).as_i128());
 ///    assert_eq!("8887.000000", decimal_array.value_as_string(0));
 ///    assert_eq!(3, decimal_array.len());
 ///    assert_eq!(1, decimal_array.null_count());
@@ -775,8 +776,8 @@ pub struct DecimalArray {
 }
 
 impl DecimalArray {
-    /// Returns the element at index `i` as i128.
-    pub fn value(&self, i: usize) -> i128 {
+    /// Returns the element at index `i`.
+    pub fn value(&self, i: usize) -> Decimal128 {
         assert!(i < self.data.len(), "DecimalArray out of bounds access");
         let offset = i.checked_add(self.data.offset()).unwrap();
         let raw_val = unsafe {
@@ -787,10 +788,11 @@ impl DecimalArray {
             )
         };
         let as_array = raw_val.try_into();
-        match as_array {
+        let integer = match as_array {
             Ok(v) if raw_val.len() == 16 => i128::from_le_bytes(v),
             _ => panic!("DecimalArray elements are not 128bit integers."),
-        }
+        };
+        Decimal128::new_from_i128(self.precision, self.scale, integer)
     }
 
     /// Returns the offset for the element at index `i`.
@@ -821,23 +823,7 @@ impl DecimalArray {
 
     #[inline]
     pub fn value_as_string(&self, row: usize) -> String {
-        let value = self.value(row);
-        let value_str = value.to_string();
-
-        if self.scale == 0 {
-            value_str
-        } else {
-            let (sign, rest) = value_str.split_at(if value >= 0 { 0 } else { 1 });
-
-            if rest.len() > self.scale {
-                // Decimal separator is in the middle of the string
-                let (whole, decimal) = value_str.split_at(value_str.len() - self.scale);
-                format!("{}.{}", whole, decimal)
-            } else {
-                // String has to be padded
-                format!("{}0.{:0>width$}", sign, rest, width = self.scale)
-            }
-        }
+        self.value(row).as_string()
     }
 
     pub fn from_fixed_size_list_array(
@@ -1498,8 +1484,8 @@ mod tests {
             .build()
             .unwrap();
         let decimal_array = DecimalArray::from(array_data);
-        assert_eq!(8_887_000_000, decimal_array.value(0));
-        assert_eq!(-8_887_000_000, decimal_array.value(1));
+        assert_eq!(8_887_000_000_i128, decimal_array.value(0).into());
+        assert_eq!(-8_887_000_000_i128, decimal_array.value(1).into());
         assert_eq!(16, decimal_array.value_length());
     }
 
@@ -1550,11 +1536,11 @@ mod tests {
         let array = DecimalArray::from_iter_values(vec![-100, 0, 101].into_iter());
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
-        assert_eq!(-100, array.value(0));
+        assert_eq!(-100_i128, array.value(0).into());
         assert!(!array.is_null(0));
-        assert_eq!(0, array.value(1));
+        assert_eq!(0_i128, array.value(1).into());
         assert!(!array.is_null(1));
-        assert_eq!(101, array.value(2));
+        assert_eq!(101_i128, array.value(2).into());
         assert!(!array.is_null(2));
     }
 
@@ -1563,10 +1549,10 @@ mod tests {
         let array: DecimalArray = vec![Some(-100), None, Some(101)].into_iter().collect();
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
-        assert_eq!(-100, array.value(0));
+        assert_eq!(-100_i128, array.value(0).into());
         assert!(!array.is_null(0));
         assert!(array.is_null(1));
-        assert_eq!(101, array.value(2));
+        assert_eq!(101_i128, array.value(2).into());
         assert!(!array.is_null(2));
     }
 

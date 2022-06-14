@@ -425,7 +425,7 @@ impl<'a> std::iter::Iterator for DecimalIter<'a> {
             if self.array.is_null(old) {
                 Some(None)
             } else {
-                Some(Some(self.array.value(old)))
+                Some(Some(self.array.value(old).as_i128()))
             }
         }
     }

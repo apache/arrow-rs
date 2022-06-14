@@ -673,7 +673,7 @@ fn get_decimal_array_slice(
     let mut values = Vec::with_capacity(indices.len());
     let size = decimal_length_from_precision(array.precision());
     for i in indices {
-        let as_be_bytes = array.value(*i).to_be_bytes();
+        let as_be_bytes = array.value(*i).as_i128().to_be_bytes();
         let resized_value = as_be_bytes[(16 - size)..].to_vec();
         values.push(FixedLenByteArray::from(ByteArray::from(resized_value)));
     }
