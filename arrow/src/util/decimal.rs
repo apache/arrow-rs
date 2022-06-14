@@ -19,8 +19,9 @@
 
 use std::cmp::Ordering;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Decimal128 {
+    #[allow(dead_code)]
     precision: usize,
     scale: usize,
     value: i128,
@@ -108,10 +109,9 @@ impl Decimal128 {
     }
 }
 
-/// Converts `Decimal128` to i128 to keep API
-impl Into<i128> for Decimal128 {
-    fn into(self) -> i128 {
-        self.value
+impl From<Decimal128> for i128 {
+    fn from(decimal: Decimal128) -> Self {
+        decimal.as_i128()
     }
 }
 
