@@ -74,6 +74,11 @@ mod tests {
         let result = &ArrayData::try_from(d1)?;
 
         assert_eq!(result, expected);
+
+        unsafe {
+            Arc::from_raw(array);
+            Arc::from_raw(schema);
+        }
         Ok(())
     }
 
