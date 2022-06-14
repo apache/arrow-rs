@@ -77,7 +77,7 @@ pyarrow = ["pyo3"]
 force_validate = []
 
 [dev-dependencies]
-rand = { version = "0.8", default-features = false }
+rand = { version = "0.8", default-features = false, features =  ["std", "std_rng"] }
 criterion = { version = "0.3", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 tempfile = { version = "3", default-features = false }
