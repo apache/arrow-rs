@@ -500,6 +500,8 @@ mod tests {
         }
 
         assert_eq!(produced_batches, vec![batch.clone(), batch]);
+
+        unsafe { Arc::from_raw(stream_ptr) };
         Ok(())
     }
 
@@ -529,6 +531,8 @@ mod tests {
         }
 
         assert_eq!(produced_batches, vec![batch.clone(), batch]);
+
+        unsafe { Arc::from_raw(stream_ptr) };
         Ok(())
     }
 

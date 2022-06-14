@@ -79,6 +79,8 @@
 //! unsafe {
 //!     Box::from_raw(out_array_ptr);
 //!     Box::from_raw(out_schema_ptr);
+//!     Arc::from_raw(array_ptr);
+//!     Arc::from_raw(schema_ptr);
 //! }
 //!
 //! Ok(())
