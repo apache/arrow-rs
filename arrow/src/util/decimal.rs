@@ -19,6 +19,8 @@
 
 use std::cmp::Ordering;
 
+/// Represents a decimal value with precision and scale.
+/// The decimal value is represented by a signed 128-bit integer.
 #[derive(Debug)]
 pub struct Decimal128 {
     #[allow(dead_code)]
