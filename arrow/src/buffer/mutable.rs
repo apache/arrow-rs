@@ -290,17 +290,16 @@ impl MutableBuffer {
 
     /// View this buffer asa slice of a specific type.
     ///
-    /// # Safety
-    ///
-    /// This function must only be used with buffers which are treated
-    /// as type `T` (e.g.  extended with items of type `T`).
-    ///
     /// # Panics
     ///
     /// This function panics if the underlying buffer is not aligned
     /// correctly for type `T`.
-    pub unsafe fn typed_data_mut<T: ArrowNativeType>(&mut self) -> &mut [T] {
-        let (prefix, offsets, suffix) = self.as_slice_mut().align_to_mut::<T>();
+    pub fn typed_data_mut<T: ArrowNativeType>(&mut self) -> &mut [T] {
+        // SAFETY
+        // ArrowNativeType is trivially transmutable, is sealed to prevent potentially incorrect
+        // implementation outside this crate, and this method checks alignment
+        let (prefix, offsets, suffix) =
+            unsafe { self.as_slice_mut().align_to_mut::<T>() };
         assert!(prefix.is_empty() && suffix.is_empty());
         offsets
     }
@@ -314,7 +313,7 @@ impl MutableBuffer {
     /// assert_eq!(buffer.len(), 8) // u32 has 4 bytes
     /// ```
     #[inline]
-    pub fn extend_from_slice<T: ToByteSlice>(&mut self, items: &[T]) {
+    pub fn extend_from_slice<T: ArrowNativeType>(&mut self, items: &[T]) {
         let len = items.len();
         let additional = len * std::mem::size_of::<T>();
         self.reserve(additional);

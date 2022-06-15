@@ -19,7 +19,7 @@ use std::marker::PhantomData;
 
 use crate::arrow::buffer::bit_util::iter_set_bits_rev;
 use arrow::buffer::{Buffer, MutableBuffer};
-use arrow::datatypes::ToByteSlice;
+use arrow::datatypes::ArrowNativeType;
 
 /// A buffer that supports writing new data to the end, and removing data from the front
 ///
@@ -172,7 +172,7 @@ impl<T: ScalarValue> ScalarBuffer<T> {
     }
 }
 
-impl<T: ScalarValue + ToByteSlice> ScalarBuffer<T> {
+impl<T: ScalarValue + ArrowNativeType> ScalarBuffer<T> {
     pub fn push(&mut self, v: T) {
         self.buffer.push(v);
         self.len += 1;

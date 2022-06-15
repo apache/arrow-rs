@@ -68,9 +68,7 @@ where
 
     let left_chunks = left.bit_chunks(offset_in_bits, len_in_bits);
 
-    // Safety: buffer is always treated as type `u64` in the code
-    // below.
-    let result_chunks = unsafe { result.typed_data_mut::<u64>().iter_mut() };
+    let result_chunks = result.typed_data_mut::<u64>().iter_mut();
 
     result_chunks
         .zip(left_chunks.iter())

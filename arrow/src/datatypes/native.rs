@@ -42,7 +42,8 @@ pub trait JsonSerializable: 'static {
 ///
 /// Note: in the case of floating point numbers this transmutation can result in a signalling
 /// NaN, which, whilst sound, can be unwieldy. In general, whilst it is perfectly sound to
-/// reinterpret bytes as different types using this trait, it is likely unwise
+/// reinterpret bytes as different types using this trait, it is likely unwise. For more information
+/// see [f32::from_bits] and [f64::from_bits].
 ///
 /// Note: `bool` is restricted to `0` or `1`, and so `bool: !ArrowNativeType`
 ///
