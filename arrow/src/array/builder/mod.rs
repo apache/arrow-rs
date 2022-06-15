@@ -20,25 +20,26 @@
 //! as an internal buffer in an [`ArrayData`](crate::array::ArrayData)
 //! object.
 
-pub mod boolean_buffer_builder;
-pub mod boolean_builder;
-#[allow(clippy::module_inception)]
-pub mod buffer_builder;
-pub mod decimal_builder;
-pub mod fixed_size_list_builder;
-pub mod generic_list_builder;
-pub mod map_builder;
-pub mod primitive_builder;
-pub mod primitive_dictionary_builder;
-pub mod string_dictionary_builder;
-pub mod struct_builder;
-pub mod union_builder;
+mod boolean_buffer_builder;
+mod boolean_builder;
+mod buffer_builder;
+mod decimal_builder;
+mod fixed_size_list_builder;
+mod generic_list_builder;
+mod map_builder;
+mod primitive_builder;
+mod primitive_dictionary_builder;
+mod string_dictionary_builder;
+mod struct_builder;
+mod union_builder;
 
 use std::any::Any;
 use std::marker::PhantomData;
 use std::ops::Range;
 
-use crate::array::*;
+use super::ArrayRef;
+use super::OffsetSizeTrait;
+use super::UInt8Builder;
 
 pub use boolean_buffer_builder::BooleanBufferBuilder;
 pub use boolean_builder::BooleanBuilder;
@@ -52,6 +53,8 @@ pub use primitive_dictionary_builder::PrimitiveDictionaryBuilder;
 pub use string_dictionary_builder::StringDictionaryBuilder;
 pub use struct_builder::StructBuilder;
 pub use union_builder::UnionBuilder;
+
+pub use struct_builder::make_builder;
 
 /// Trait for dealing with different array builders at runtime
 ///

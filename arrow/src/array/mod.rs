@@ -461,9 +461,29 @@ pub use self::array_string::GenericStringArray;
 
 // --------------------- Array Builder ---------------------
 
-pub use self::builder::boolean_buffer_builder::BooleanBufferBuilder;
-pub use self::builder::buffer_builder::BufferBuilder;
-pub use self::builder::struct_builder::make_builder;
+pub use self::builder::ArrayBuilder;
+pub use self::builder::BinaryBuilder;
+pub use self::builder::BooleanBufferBuilder;
+pub use self::builder::BooleanBuilder;
+pub use self::builder::BufferBuilder;
+pub use self::builder::DecimalBuilder;
+pub use self::builder::FixedSizeBinaryBuilder;
+pub use self::builder::FixedSizeListBuilder;
+pub use self::builder::GenericListBuilder;
+pub use self::builder::GenericStringBuilder;
+pub use self::builder::LargeBinaryBuilder;
+pub use self::builder::LargeListBuilder;
+pub use self::builder::LargeStringBuilder;
+pub use self::builder::ListBuilder;
+pub use self::builder::MapBuilder;
+pub use self::builder::PrimitiveBuilder;
+pub use self::builder::PrimitiveDictionaryBuilder;
+pub use self::builder::StringBuilder;
+pub use self::builder::StringDictionaryBuilder;
+pub use self::builder::StructBuilder;
+pub use self::builder::UnionBuilder;
+
+pub use self::builder::make_builder;
 
 pub type Int8BufferBuilder = BufferBuilder<i8>;
 pub type Int16BufferBuilder = BufferBuilder<i16>;
@@ -508,26 +528,6 @@ pub type DurationMicrosecondBufferBuilder =
     BufferBuilder<<DurationMicrosecondType as ArrowPrimitiveType>::Native>;
 pub type DurationNanosecondBufferBuilder =
     BufferBuilder<<DurationNanosecondType as ArrowPrimitiveType>::Native>;
-
-pub use self::builder::boolean_builder::BooleanBuilder;
-pub use self::builder::fixed_size_list_builder::FixedSizeListBuilder;
-pub use self::builder::generic_list_builder::GenericListBuilder;
-pub use self::builder::primitive_builder::PrimitiveBuilder;
-pub use self::builder::ArrayBuilder;
-pub use self::builder::BinaryBuilder;
-pub use self::builder::DecimalBuilder;
-pub use self::builder::FixedSizeBinaryBuilder;
-pub use self::builder::GenericStringBuilder;
-pub use self::builder::LargeBinaryBuilder;
-pub use self::builder::LargeListBuilder;
-pub use self::builder::LargeStringBuilder;
-pub use self::builder::ListBuilder;
-pub use self::builder::MapBuilder;
-pub use self::builder::PrimitiveDictionaryBuilder;
-pub use self::builder::StringBuilder;
-pub use self::builder::StringDictionaryBuilder;
-pub use self::builder::StructBuilder;
-pub use self::builder::UnionBuilder;
 
 pub type Int8Builder = PrimitiveBuilder<Int8Type>;
 pub type Int16Builder = PrimitiveBuilder<Int16Type>;

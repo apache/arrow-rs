@@ -1,20 +1,43 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::collections::HashMap;
 
+use crate::array::ArrayDataBuilder;
+use crate::array::Int32BufferBuilder;
+use crate::array::Int8BufferBuilder;
+use crate::array::UnionArray;
 use crate::buffer::MutableBuffer;
 
-pub use crate::array::ArrayDataBuilder;
-pub use crate::array::BooleanBufferBuilder;
-pub use crate::array::BufferBuilder;
-pub use crate::array::Int32BufferBuilder;
-pub use crate::array::Int8BufferBuilder;
-pub use crate::array::UnionArray;
-pub use crate::datatypes::*;
-pub use crate::error::{ArrowError, Result};
+use crate::datatypes::ArrowPrimitiveType;
+use crate::datatypes::DataType;
+use crate::datatypes::Field;
+use crate::datatypes::IntervalMonthDayNanoType;
+use crate::datatypes::IntervalUnit;
+use crate::datatypes::{Float32Type, Float64Type};
+use crate::datatypes::{Int16Type, Int32Type, Int64Type, Int8Type};
+use crate::datatypes::{UInt16Type, UInt32Type, UInt64Type, UInt8Type};
+use crate::error::{ArrowError, Result};
 
-pub use crate::array::make_array;
+use super::{BooleanBufferBuilder, BufferBuilder};
 
-use crate::array::builder::buffer_builder::builder_to_mutable_buffer;
-use crate::array::builder::buffer_builder::mutable_buffer_to_builder;
+use super::buffer_builder::builder_to_mutable_buffer;
+use super::buffer_builder::mutable_buffer_to_builder;
+use crate::array::make_array;
 
 /// `FieldData` is a helper struct to track the state of the fields in the `UnionBuilder`.
 #[derive(Debug)]

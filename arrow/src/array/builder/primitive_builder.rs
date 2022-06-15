@@ -1,18 +1,32 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::datatypes::*;
-
-use crate::array::ArrayBuilder;
 use crate::array::ArrayData;
 use crate::array::ArrayRef;
 use crate::array::DictionaryArray;
 use crate::array::PrimitiveArray;
-
-use crate::array::builder::BooleanBufferBuilder;
-use crate::array::builder::BufferBuilder;
-
+use crate::datatypes::ArrowPrimitiveType;
+use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
+
+use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
 
 ///  Array builder for fixed-width primitive types
 #[derive(Debug)]
@@ -228,9 +242,7 @@ mod tests {
     use crate::array::Int32Array;
     use crate::array::Int32Builder;
     use crate::array::TimestampSecondArray;
-    use crate::bitmap::Bitmap;
     use crate::buffer::Buffer;
-    use crate::error::Result;
 
     #[test]
     fn test_primitive_array_builder_i32() {

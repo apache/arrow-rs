@@ -1,11 +1,37 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::array::*;
-use crate::datatypes::*;
+use crate::array::ArrayBuilder;
+use crate::array::ArrayRef;
+use crate::array::DecimalArray;
+use crate::array::FixedSizeBinaryArray;
+use crate::array::OffsetSizeTrait;
+use crate::array::UInt8Builder;
+use crate::array::{GenericBinaryArray, GenericStringArray};
+
 use crate::error::{ArrowError, Result};
 
-pub use crate::array::builder::GenericBinaryBuilder;
+use super::{FixedSizeBinaryBuilder, FixedSizeListBuilder};
+use super::{GenericBinaryBuilder, GenericListBuilder, GenericStringBuilder};
+
+use crate::datatypes::validate_decimal_precision;
 
 /// Array Builder for [`DecimalArray`]
 ///
@@ -329,11 +355,11 @@ impl DecimalBuilder {
     /// Automatically calls the `append` method to delimit the slice appended in as a
     /// distinct array element.
     #[inline]
-    pub fn append_value(&mut self, value: i128) -> Result<()> {
+    pub fn append_value(&mut self, value: impl Into<i128>) -> Result<()> {
         let value = if self.value_validation {
-            validate_decimal_precision(value, self.precision)?
+            validate_decimal_precision(value.into(), self.precision)?
         } else {
-            value
+            value.into()
         };
 
         let value_as_bytes = Self::from_i128_to_fixed_size_bytes(
@@ -385,17 +411,36 @@ mod tests {
     use super::*;
 
     use crate::array::Array;
-    use crate::bitmap::Bitmap;
-    use crate::buffer::Buffer;
-    use crate::error::Result;
+    use crate::datatypes::DataType;
+    use crate::util::decimal::Decimal128;
 
     #[test]
     fn test_decimal_builder() {
         let mut builder = DecimalBuilder::new(30, 38, 6);
 
-        builder.append_value(8_887_000_000).unwrap();
+        builder.append_value(8_887_000_000_i128).unwrap();
         builder.append_null().unwrap();
-        builder.append_value(-8_887_000_000).unwrap();
+        builder.append_value(-8_887_000_000_i128).unwrap();
+        let decimal_array: DecimalArray = builder.finish();
+
+        assert_eq!(&DataType::Decimal(38, 6), decimal_array.data_type());
+        assert_eq!(3, decimal_array.len());
+        assert_eq!(1, decimal_array.null_count());
+        assert_eq!(32, decimal_array.value_offset(2));
+        assert_eq!(16, decimal_array.value_length());
+    }
+
+    #[test]
+    fn test_decimal_builder_with_decimal128() {
+        let mut builder = DecimalBuilder::new(30, 38, 6);
+
+        builder
+            .append_value(Decimal128::new_from_i128(30, 38, 8_887_000_000_i128))
+            .unwrap();
+        builder.append_null().unwrap();
+        builder
+            .append_value(Decimal128::new_from_i128(30, 38, -8_887_000_000_i128))
+            .unwrap();
         let decimal_array: DecimalArray = builder.finish();
 
         assert_eq!(&DataType::Decimal(38, 6), decimal_array.data_type());
