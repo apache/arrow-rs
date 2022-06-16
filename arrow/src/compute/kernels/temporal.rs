@@ -486,7 +486,7 @@ mod tests {
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
         let b = weekday(&a).unwrap();
-        assert_eq!(1, b.value(1));
+        assert_eq!(1, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(3, b.value(2));
     }
