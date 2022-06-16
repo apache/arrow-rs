@@ -1933,7 +1933,7 @@ impl FieldData {
         self.values_buffer
             .as_mut_any()
             .downcast_mut::<BufferBuilder<T::Native>>()
-            .unwrap()
+            .expect("Tried to append unexpected type")
             .append(v);
 
         self.bitmap_builder.append(true);
