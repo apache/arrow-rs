@@ -115,6 +115,8 @@ impl<'a> Iterator for IndexIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.remaining != 0 {
+            // Fascinatingly swapping these two lines around results in a 50% 
+            // performance regression for some benchmarks
             let next = self.iter.next().expect("IndexIterator exhausted early");
             self.remaining -= 1;
             // Must panic if exhausted early as trusted length iterator
