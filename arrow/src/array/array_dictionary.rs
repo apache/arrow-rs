@@ -114,11 +114,11 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         }
 
         // Safety: `validate` ensures key type is correct, and
-        //  `validate_dictionary_offset` ensures all offsets are within range
+        //  `validate_values` ensures all offsets are within range
         let array = unsafe { data.build_unchecked() };
 
         array.validate()?;
-        array.validate_dictionary_offset()?;
+        array.validate_values()?;
 
         Ok(array.into())
     }
