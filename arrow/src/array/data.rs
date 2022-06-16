@@ -985,7 +985,7 @@ impl ArrayData {
             )));
         }
 
-        self.validate_dictionary_offset()?;
+        self.validate_values()?;
 
         // validate all children recursively
         self.child_data
@@ -1003,7 +1003,7 @@ impl ArrayData {
         Ok(())
     }
 
-    pub fn validate_dictionary_offset(&self) -> Result<()> {
+    pub fn validate_values(&self) -> Result<()> {
         match &self.data_type {
             DataType::Decimal(p, _) => {
                 let values_buffer: &[i128] = self.typed_buffer(0, self.len)?;
@@ -2770,7 +2770,7 @@ mod tests {
             )
         };
 
-        let err = data.validate_dictionary_offset().unwrap_err();
+        let err = data.validate_values().unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
     }
 }
