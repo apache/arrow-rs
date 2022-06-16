@@ -33,7 +33,7 @@
 //! let schema = Schema::new(vec![
 //!     Field::new("a", DataType::Float64, false),
 //!     Field::new("b", DataType::Float64, false),
-//!     Field::new("c", DataType::Float64, false),
+//!     Field::new("c", DataType::Float64, true),
 //! ]);
 //!
 //! let file = File::open("test/data/basic.json").unwrap();

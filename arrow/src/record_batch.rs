@@ -140,10 +140,15 @@ impl RecordBatch {
 
         for (c, f) in columns.iter().zip(&schema.fields) {
             if !f.is_nullable() && c.null_count() > 0 {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Column '{}' is declared as non-nullable but contains null values",
-                    f.name()
-                )));
+                if f.name().len() == 0 {
+                    // hacky workaround for known issue with dictionary IPC encoding
+                    // https://github.com/apache/arrow-rs/issues/1892
+                } else {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Column '{}' is declared as non-nullable but contains null values",
+                        f.name()
+                    )));
+                }
             }
         }
 
