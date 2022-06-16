@@ -15,4 +15,3 @@ cargo clean
 
 echo "Starting Arrow MIRI run..."
 cargo miri test -p arrow -- --skip csv --skip ipc --skip json
-echo "Miri finished with exit code $?"
