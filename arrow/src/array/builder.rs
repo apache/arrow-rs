@@ -21,6 +21,7 @@
 //! object.
 
 use std::any::Any;
+use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt;
 use std::marker::PhantomData;
@@ -443,6 +444,18 @@ impl BooleanBufferBuilder {
         self.len = new_len;
     }
 
+    #[inline]
+    /// Advance wih every bit set to true, except for the last byte
+    pub fn advance_true(&mut self, additional: usize) {
+        let new_len = self.len + additional;
+        let new_len_bytes = bit_util::ceil(new_len, 8);
+        if new_len_bytes > self.buffer.len() {
+            self.buffer.resize(new_len_bytes, u8::MAX);
+            self.buffer.as_slice_mut()[new_len_bytes - 1] = 0;
+        }
+        self.len = new_len;
+    }
+
     /// Reserve space to at least `additional` new bits.
     /// Capacity will be `>= self.len() + additional`.
     /// New bytes are uninitialized and reading them is undefined behavior.
@@ -475,12 +488,25 @@ impl BooleanBufferBuilder {
 
     #[inline]
     pub fn append_n(&mut self, additional: usize, v: bool) {
-        self.advance(additional);
+        let len = self.len();
+
+        if v {
+            self.advance_true(additional);
+        } else {
+            self.advance(additional);
+        }
+
         if additional > 0 && v {
+            let start_bits = min(additional, 8 - len % 8);
+
             let offset = self.len() - additional;
-            (0..additional).for_each(|i| unsafe {
-                bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i)
-            })
+            let remaining = (additional - start_bits) % 8;
+
+            (0..start_bits)
+                .chain(additional - remaining..additional)
+                .for_each(|i| unsafe {
+                    bit_util::set_bit_raw(self.buffer.as_mut_ptr(), offset + i)
+                });
         }
     }
 
@@ -1517,7 +1543,8 @@ impl FixedSizeBinaryBuilder {
     pub fn append_value(&mut self, value: impl AsRef<[u8]>) -> Result<()> {
         if self.builder.value_length() != value.as_ref().len() as i32 {
             return Err(ArrowError::InvalidArgumentError(
-                "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths".to_string()
+                "Byte slice does not have the same length as FixedSizeBinaryBuilder value lengths"
+                    .to_string(),
             ));
         }
         self.builder.values().append_slice(value.as_ref())?;
@@ -1580,7 +1607,8 @@ impl DecimalBuilder {
         )?;
         if self.builder.value_length() != value_as_bytes.len() as i32 {
             return Err(ArrowError::InvalidArgumentError(
-                "Byte slice does not have the same length as DecimalBuilder value lengths".to_string()
+                "Byte slice does not have the same length as DecimalBuilder value lengths"
+                    .to_string(),
             ));
         }
         self.builder
@@ -2074,23 +2102,25 @@ impl FieldData {
             DataType::Int32
             | DataType::Date32
             | DataType::Time32(_)
-            | DataType::Interval(IntervalUnit::YearMonth) => {
-                self.append_null::<Int32Type>()?
-            }
+            | DataType::Interval(IntervalUnit::YearMonth) => self.append_null::<Int32Type>()?,
             DataType::Int64
             | DataType::Timestamp(_, _)
             | DataType::Date64
             | DataType::Time64(_)
             | DataType::Interval(IntervalUnit::DayTime)
             | DataType::Duration(_) => self.append_null::<Int64Type>()?,
-            DataType::Interval(IntervalUnit::MonthDayNano) => self.append_null::<IntervalMonthDayNanoType>()?,
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                self.append_null::<IntervalMonthDayNanoType>()?
+            }
             DataType::UInt8 => self.append_null::<UInt8Type>()?,
             DataType::UInt16 => self.append_null::<UInt16Type>()?,
             DataType::UInt32 => self.append_null::<UInt32Type>()?,
             DataType::UInt64 => self.append_null::<UInt64Type>()?,
             DataType::Float32 => self.append_null::<Float32Type>()?,
             DataType::Float64 => self.append_null::<Float64Type>()?,
-            _ => unreachable!("All cases of types that satisfy the trait bounds over T are covered above."),
+            _ => unreachable!(
+                "All cases of types that satisfy the trait bounds over T are covered above."
+            ),
         };
         Ok(())
     }
