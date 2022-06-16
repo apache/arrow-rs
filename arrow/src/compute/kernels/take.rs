@@ -524,7 +524,7 @@ where
                 if decimal_values.is_null(index) {
                     Ok(None)
                 } else {
-                    Ok(Some(decimal_values.value(index)))
+                    Ok(Some(decimal_values.value(index).as_i128()))
                 }
             });
             let t: Result<Option<Option<_>>> = t.transpose();

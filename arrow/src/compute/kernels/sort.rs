@@ -503,7 +503,7 @@ where
         .expect("Unable to downcast to decimal array");
     let valids = value_indices
         .into_iter()
-        .map(|index| (index, decimal_array.value(index as usize)))
+        .map(|index| (index, decimal_array.value(index as usize).as_i128()))
         .collect::<Vec<(u32, i128)>>();
     sort_primitive_inner(decimal_values, null_indices, cmp, options, limit, valids)
 }
