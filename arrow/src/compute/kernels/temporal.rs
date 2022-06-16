@@ -239,7 +239,6 @@ where
     Ok(b.finish())
 }
 
-
 /// Extracts the day of a given temporal array as an array of integers
 pub fn day<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
