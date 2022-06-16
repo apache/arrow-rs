@@ -33,7 +33,11 @@ use crate::{
     GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
 };
 use async_trait::async_trait;
-use azure_core::{prelude::*, HttpClient};
+use azure_core::{
+    error::{Error as AzureError, ErrorKind as AzureErrorKind},
+    prelude::*,
+    HttpClient,
+};
 use azure_storage::core::prelude::{AsStorageClient, StorageAccountClient};
 use azure_storage_blobs::blob::responses::ListBlobsResponse;
 use azure_storage_blobs::blob::Blob;
@@ -66,7 +70,7 @@ enum Error {
         source,
     ))]
     UnableToDeleteData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         path: String,
     },
@@ -79,7 +83,7 @@ enum Error {
         source,
     ))]
     UnableToGetData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         path: String,
     },
@@ -92,7 +96,7 @@ enum Error {
         source,
     ))]
     UnableToHeadData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         path: String,
     },
@@ -105,7 +109,7 @@ enum Error {
         source,
     ))]
     UnableToGetPieceOfData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         path: String,
     },
@@ -118,7 +122,7 @@ enum Error {
         source,
     ))]
     UnableToPutData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         path: String,
     },
@@ -130,7 +134,7 @@ enum Error {
         source,
     ))]
     UnableToListData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
     },
 
@@ -142,7 +146,7 @@ enum Error {
         source
     ))]
     UnableToCopyFile {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         from: String,
         to: String,
@@ -160,12 +164,12 @@ enum Error {
 
     NotFound {
         path: String,
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: AzureError,
     },
 
     AlreadyExists {
         path: String,
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: AzureError,
     },
 
     #[cfg(not(feature = "azure_test"))]
@@ -190,8 +194,14 @@ enum Error {
 impl From<Error> for super::Error {
     fn from(source: Error) -> Self {
         match source {
-            Error::NotFound { path, source } => Self::NotFound { path, source },
-            Error::AlreadyExists { path, source } => Self::AlreadyExists { path, source },
+            Error::NotFound { path, source } => Self::NotFound {
+                path,
+                source: Box::new(source),
+            },
+            Error::AlreadyExists { path, source } => Self::AlreadyExists {
+                path,
+                source: Box::new(source),
+            },
             _ => Self::Generic {
                 store: "Azure Blob Storage",
                 source: Box::new(source),
@@ -219,11 +229,11 @@ impl std::fmt::Display for MicrosoftAzure {
 }
 
 #[allow(clippy::borrowed_box)]
-fn check_err_not_found(err: &Box<dyn std::error::Error + Send + Sync>) -> bool {
-    if let Some(azure_core::HttpError::StatusCode { status, .. }) =
-        err.downcast_ref::<azure_core::HttpError>()
-    {
-        return status.as_u16() == 404;
+fn check_err_not_found(err: &AzureError) -> bool {
+    if let Some(cast_err) = err.downcast_ref::<AzureError>() {
+        if let AzureErrorKind::HttpResponse { status, .. } = cast_err.kind() {
+            return *status == 404;
+        }
     };
     false
 }
@@ -438,10 +448,8 @@ impl ObjectStore for MicrosoftAzure {
             .execute()
             .await
             .map_err(|err| {
-                if let Some(azure_core::HttpError::StatusCode { status, .. }) =
-                    err.downcast_ref::<azure_core::HttpError>()
-                {
-                    if status.as_u16() == 409 {
+                if let AzureErrorKind::HttpResponse { status, .. } = err.kind() {
+                    if *status == 409 {
                         return Error::AlreadyExists {
                             source: err,
                             path: to.to_string(),
