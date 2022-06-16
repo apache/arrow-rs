@@ -81,7 +81,6 @@ const EINVAL: i32 = 22;
 const ENOSYS: i32 = 78;
 
 /// ABI-compatible struct for `ArrayStream` from C Stream Interface
-/// This interface is experimental
 /// See <https://arrow.apache.org/docs/format/CStreamInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
