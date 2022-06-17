@@ -480,15 +480,15 @@ mod tests {
 
     #[test]
     fn test_temporal_array_date64_weekday() {
-        //1514764800000 -> 2018-01-01
-        //1550636625000 -> 2019-02-20
+        //1514764800000 -> 2018-01-01 (Monday)
+        //1550636625000 -> 2019-02-20 (Wednesday)
         let a: PrimitiveArray<Date64Type> =
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
         let b = weekday(&a).unwrap();
-        assert_eq!(1, b.value(0));
+        assert_eq!(0, b.value(0));
         assert!(!b.is_valid(1));
-        assert_eq!(3, b.value(2));
+        assert_eq!(2, b.value(2));
     }
 
     #[test]
