@@ -457,20 +457,19 @@ mod tests {
 
     macro_rules! do_test {
         ($cases:expr, $array_ty:ty, $substring_fn:ident) => {
-            $cases.into_iter().try_for_each::<_, Result<()>>(
-                |(array, start, length, expected)| {
+            $cases
+                .into_iter()
+                .for_each(|(array, start, length, expected)| {
                     let array = <$array_ty>::from(array);
-                    let result = $substring_fn(&array, start, length)?;
+                    let result = $substring_fn(&array, start, length).unwrap();
                     let result = result.as_any().downcast_ref::<$array_ty>().unwrap();
                     let expected = <$array_ty>::from(expected);
                     assert_eq!(&expected, result);
-                    Ok(())
-                },
-            )
+                })
         };
     }
 
-    fn with_nulls_generic_binary<O: OffsetSizeTrait>() -> Result<()> {
+    fn with_nulls_generic_binary<O: OffsetSizeTrait>() {
         let input = vec![
             Some("hello".as_bytes()),
             None,
@@ -499,21 +498,20 @@ mod tests {
             [&base_case[..], &cases[..]].concat(),
             GenericBinaryArray<O>,
             substring
-        )?;
-        Ok(())
+        );
     }
 
     #[test]
-    fn with_nulls_binary() -> Result<()> {
+    fn with_nulls_binary() {
         with_nulls_generic_binary::<i32>()
     }
 
     #[test]
-    fn with_nulls_large_binary() -> Result<()> {
+    fn with_nulls_large_binary() {
         with_nulls_generic_binary::<i64>()
     }
 
-    fn without_nulls_generic_binary<O: OffsetSizeTrait>() -> Result<()> {
+    fn without_nulls_generic_binary<O: OffsetSizeTrait>() {
         let input = vec!["hello".as_bytes(), b"", &[0xf8, 0xf9, 0xff, 0xfa]];
         // empty array is always identical
         let base_case = gen_test_cases!(
@@ -549,21 +547,20 @@ mod tests {
             [&base_case[..], &cases[..]].concat(),
             GenericBinaryArray<O>,
             substring
-        )?;
-        Ok(())
+        );
     }
 
     #[test]
-    fn without_nulls_binary() -> Result<()> {
+    fn without_nulls_binary() {
         without_nulls_generic_binary::<i32>()
     }
 
     #[test]
-    fn without_nulls_large_binary() -> Result<()> {
+    fn without_nulls_large_binary() {
         without_nulls_generic_binary::<i64>()
     }
 
-    fn generic_binary_with_non_zero_offset<O: OffsetSizeTrait>() -> Result<()> {
+    fn generic_binary_with_non_zero_offset<O: OffsetSizeTrait>() {
         let values = 0_u8..15;
         let offsets = &[
             O::zero(),
@@ -580,11 +577,12 @@ mod tests {
             .add_buffer(Buffer::from_iter(values))
             .null_bit_buffer(Some(Buffer::from(bitmap)))
             .offset(1)
-            .build()?;
+            .build()
+            .unwrap();
         // array is `[null, [10, 11, 12, 13, 14]]`
         let array = GenericBinaryArray::<O>::from(data);
         // result is `[null, [11, 12, 13, 14]]`
-        let result = substring(&array, 1, None)?;
+        let result = substring(&array, 1, None).unwrap();
         let result = result
             .as_any()
             .downcast_ref::<GenericBinaryArray<O>>()
@@ -592,22 +590,20 @@ mod tests {
         let expected =
             GenericBinaryArray::<O>::from_opt_vec(vec![None, Some(&[11_u8, 12, 13, 14])]);
         assert_eq!(result, &expected);
-
-        Ok(())
     }
 
     #[test]
-    fn binary_with_non_zero_offset() -> Result<()> {
+    fn binary_with_non_zero_offset() {
         generic_binary_with_non_zero_offset::<i32>()
     }
 
     #[test]
-    fn large_binary_with_non_zero_offset() -> Result<()> {
+    fn large_binary_with_non_zero_offset() {
         generic_binary_with_non_zero_offset::<i64>()
     }
 
     #[test]
-    fn with_nulls_fixed_size_binary() -> Result<()> {
+    fn with_nulls_fixed_size_binary() {
         let input = vec![Some("cat".as_bytes()), None, Some(&[0xf8, 0xf9, 0xff])];
         // all-nulls array is always identical
         let base_case =
@@ -640,12 +636,11 @@ mod tests {
             [&base_case[..], &cases[..]].concat(),
             FixedSizeBinaryArray,
             substring
-        )?;
-        Ok(())
+        );
     }
 
     #[test]
-    fn without_nulls_fixed_size_binary() -> Result<()> {
+    fn without_nulls_fixed_size_binary() {
         let input = vec!["cat".as_bytes(), b"dog", &[0xf8, 0xf9, 0xff]];
         // empty array is always identical
         let base_case = gen_test_cases!(
@@ -680,12 +675,11 @@ mod tests {
             [&base_case[..], &cases[..]].concat(),
             FixedSizeBinaryArray,
             substring
-        )?;
-        Ok(())
+        );
     }
 
     #[test]
-    fn fixed_size_binary_with_non_zero_offset() -> Result<()> {
+    fn fixed_size_binary_with_non_zero_offset() {
         let values: [u8; 15] = *b"hellotherearrow";
         // set the first and third element to be valid
         let bits_v = [0b101_u8];
@@ -700,7 +694,7 @@ mod tests {
         // array is `[null, "arrow"]`
         let array = FixedSizeBinaryArray::from(data);
         // result is `[null, "rrow"]`
-        let result = substring(&array, 1, None)?;
+        let result = substring(&array, 1, None).unwrap();
         let result = result
             .as_any()
             .downcast_ref::<FixedSizeBinaryArray>()
@@ -710,11 +704,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, &expected);
-
-        Ok(())
     }
 
-    fn with_nulls_generic_string<O: OffsetSizeTrait>() -> Result<()> {
+    fn with_nulls_generic_string<O: OffsetSizeTrait>() {
         let input = vec![Some("hello"), None, Some("word")];
         // all-nulls array is always identical
         let base_case =
@@ -737,21 +729,20 @@ mod tests {
             [&base_case[..], &cases[..]].concat(),
             GenericStringArray<O>,
             substring
-        )?;
-        Ok(())
+        );
     }
 
     #[test]
-    fn with_nulls_string() -> Result<()> {
+    fn with_nulls_string() {
         with_nulls_generic_string::<i32>()
     }
 
     #[test]
-    fn with_nulls_large_string() -> Result<()> {
+    fn with_nulls_large_string() {
         with_nulls_generic_string::<i64>()
     }
 
-    fn without_nulls_generic_string<O: OffsetSizeTrait>() -> Result<()> {
+    fn without_nulls_generic_string<O: OffsetSizeTrait>() {
         let input = vec!["hello", "", "word"];
         // empty array is always identical
         let base_case = gen_test_cases!(vec!["", "", ""], (0, None, vec!["", "", ""]));
@@ -783,21 +774,20 @@ mod tests {
             [&base_case[..], &cases[..]].concat(),
             GenericStringArray<O>,
             substring
-        )?;
-        Ok(())
+        );
     }
 
     #[test]
-    fn without_nulls_string() -> Result<()> {
+    fn without_nulls_string() {
         without_nulls_generic_string::<i32>()
     }
 
     #[test]
-    fn without_nulls_large_string() -> Result<()> {
+    fn without_nulls_large_string() {
         without_nulls_generic_string::<i64>()
     }
 
-    fn generic_string_with_non_zero_offset<O: OffsetSizeTrait>() -> Result<()> {
+    fn generic_string_with_non_zero_offset<O: OffsetSizeTrait>() {
         let values = "hellotherearrow";
         let offsets = &[
             O::zero(),
@@ -814,32 +804,31 @@ mod tests {
             .add_buffer(Buffer::from(values))
             .null_bit_buffer(Some(Buffer::from(bitmap)))
             .offset(1)
-            .build()?;
+            .build()
+            .unwrap();
         // array is `[null, "arrow"]`
         let array = GenericStringArray::<O>::from(data);
         // result is `[null, "rrow"]`
-        let result = substring(&array, 1, None)?;
+        let result = substring(&array, 1, None).unwrap();
         let result = result
             .as_any()
             .downcast_ref::<GenericStringArray<O>>()
             .unwrap();
         let expected = GenericStringArray::<O>::from(vec![None, Some("rrow")]);
         assert_eq!(result, &expected);
-
-        Ok(())
     }
 
     #[test]
-    fn string_with_non_zero_offset() -> Result<()> {
+    fn string_with_non_zero_offset() {
         generic_string_with_non_zero_offset::<i32>()
     }
 
     #[test]
-    fn large_string_with_non_zero_offset() -> Result<()> {
+    fn large_string_with_non_zero_offset() {
         generic_string_with_non_zero_offset::<i64>()
     }
 
-    fn with_nulls_generic_string_by_char<O: OffsetSizeTrait>() -> Result<()> {
+    fn with_nulls_generic_string_by_char<O: OffsetSizeTrait>() {
         let input = vec![Some("hello"), None, Some("Γ ⊢x:T")];
         // all-nulls array is always identical
         let base_case =
@@ -862,21 +851,20 @@ mod tests {
             [&base_case[..], &cases[..]].concat(),
             GenericStringArray<O>,
             substring_by_char
-        )?;
-        Ok(())
+        );
     }
 
     #[test]
-    fn with_nulls_string_by_char() -> Result<()> {
+    fn with_nulls_string_by_char() {
         with_nulls_generic_string_by_char::<i32>()
     }
 
     #[test]
-    fn with_nulls_large_string_by_char() -> Result<()> {
+    fn with_nulls_large_string_by_char() {
         with_nulls_generic_string_by_char::<i64>()
     }
 
-    fn without_nulls_generic_string_by_char<O: OffsetSizeTrait>() -> Result<()> {
+    fn without_nulls_generic_string_by_char<O: OffsetSizeTrait>() {
         let input = vec!["hello", "", "Γ ⊢x:T"];
         // empty array is always identical
         let base_case = gen_test_cases!(vec!["", "", ""], (0, None, vec!["", "", ""]));
@@ -909,21 +897,20 @@ mod tests {
             [&base_case[..], &cases[..]].concat(),
             GenericStringArray<O>,
             substring_by_char
-        )?;
-        Ok(())
+        );
     }
 
     #[test]
-    fn without_nulls_string_by_char() -> Result<()> {
+    fn without_nulls_string_by_char() {
         without_nulls_generic_string_by_char::<i32>()
     }
 
     #[test]
-    fn without_nulls_large_string_by_char() -> Result<()> {
+    fn without_nulls_large_string_by_char() {
         without_nulls_generic_string_by_char::<i64>()
     }
 
-    fn generic_string_by_char_with_non_zero_offset<O: OffsetSizeTrait>() -> Result<()> {
+    fn generic_string_by_char_with_non_zero_offset<O: OffsetSizeTrait>() {
         let values = "S→T = Πx:S.T";
         let offsets = &[
             O::zero(),
@@ -942,41 +929,39 @@ mod tests {
             .add_buffer(Buffer::from(values))
             .null_bit_buffer(Some(Buffer::from(bitmap)))
             .offset(1)
-            .build()?;
+            .build()
+            .unwrap();
         // array is `[null, "Πx:S.T"]`
         let array = GenericStringArray::<O>::from(data);
         // result is `[null, "x:S.T"]`
-        let result = substring_by_char(&array, 1, None)?;
+        let result = substring_by_char(&array, 1, None).unwrap();
         let expected = GenericStringArray::<O>::from(vec![None, Some("x:S.T")]);
         assert_eq!(result, expected);
-
-        Ok(())
     }
 
     #[test]
-    fn string_with_non_zero_offset_by_char() -> Result<()> {
+    fn string_with_non_zero_offset_by_char() {
         generic_string_by_char_with_non_zero_offset::<i32>()
     }
 
     #[test]
-    fn large_string_with_non_zero_offset_by_char() -> Result<()> {
+    fn large_string_with_non_zero_offset_by_char() {
         generic_string_by_char_with_non_zero_offset::<i64>()
     }
 
     #[test]
-    fn dictionary() -> Result<()> {
-        _dictionary::<Int8Type>()?;
-        _dictionary::<Int16Type>()?;
-        _dictionary::<Int32Type>()?;
-        _dictionary::<Int64Type>()?;
-        _dictionary::<UInt8Type>()?;
-        _dictionary::<UInt16Type>()?;
-        _dictionary::<UInt32Type>()?;
-        _dictionary::<UInt64Type>()?;
-        Ok(())
+    fn dictionary() {
+        _dictionary::<Int8Type>();
+        _dictionary::<Int16Type>();
+        _dictionary::<Int32Type>();
+        _dictionary::<Int64Type>();
+        _dictionary::<UInt8Type>();
+        _dictionary::<UInt16Type>();
+        _dictionary::<UInt32Type>();
+        _dictionary::<UInt64Type>();
     }
 
-    fn _dictionary<K: ArrowDictionaryKeyType>() -> Result<()> {
+    fn _dictionary<K: ArrowDictionaryKeyType>() {
         const TOTAL: i32 = 100;
 
         let v = ["aaa", "bbb", "ccc", "ddd", "eee"];
@@ -996,7 +981,7 @@ mod tests {
         let expected: Vec<Option<&str>> =
             data.iter().map(|opt| opt.map(|s| &s[1..3])).collect();
 
-        let res = substring(&dict_array, 1, Some(2))?;
+        let res = substring(&dict_array, 1, Some(2)).unwrap();
         let actual = res.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
         let actual: Vec<Option<&str>> = actual
             .values()
@@ -1009,8 +994,6 @@ mod tests {
         for i in 0..TOTAL as usize {
             assert_eq!(expected[i], actual[i],);
         }
-
-        Ok(())
     }
 
     #[test]
