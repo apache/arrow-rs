@@ -1800,10 +1800,6 @@ mod tests {
     }
 
     #[test]
-    // Test for https://github.com/apache/arrow-rs/issues/1390
-    #[should_panic(
-        expected = "column types must match schema types, expected FixedSizeBinary(2) but found FixedSizeBinary(0) at column index 0"
-    )]
     fn fixed_size_binary_array_all_null_in_batch_with_schema() {
         let schema =
             Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), false)]);

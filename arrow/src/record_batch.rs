@@ -160,20 +160,27 @@ impl RecordBatch {
             }
         };
 
-        // check that all columns match the schema
-        let not_match = columns
-            .iter()
-            .zip(schema.fields().iter())
-            .map(|(col, field)| (col.data_type(), field.data_type()))
-            .enumerate()
-            .find(type_not_match);
+        let is_all_nones = columns.iter().all(|x| {
+            let data = x.as_ref().data();
+            data.null_count() == data.len()
+        });
 
-        if let Some((i, (col_type, field_type))) = not_match {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "column types must match schema types, expected {:?} but found {:?} at column index {}",
-                field_type,
-                col_type,
-                i)));
+        if !is_all_nones {
+            // check that all columns match the schema
+            let not_match = columns
+                .iter()
+                .zip(schema.fields().iter())
+                .map(|(col, field)| (col.data_type(), field.data_type()))
+                .enumerate()
+                .find(type_not_match);
+
+            if let Some((i, (col_type, field_type))) = not_match {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "column types must match schema types, expected {:?} but found {:?} at column index {}",
+                    field_type,
+                    col_type,
+                    i)));
+            }
         }
 
         Ok(RecordBatch {
