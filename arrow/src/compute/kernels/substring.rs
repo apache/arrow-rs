@@ -445,6 +445,16 @@ mod tests {
     use super::*;
     use crate::datatypes::*;
 
+    /// A helper macro to generate test cases.
+    /// # Arguments
+    /// * `input` - A vector which array can be built from.
+    /// * `start` - The start index of the substring.
+    /// * `len` - The length of the substring.
+    /// * `result` - The expected result of substring, which is a vector that array can be built from.
+    /// # Return
+    /// A vector of `(input, start, len, result)`.
+    ///
+    /// Users can provide any number of `(start, len, result)` to generate test cases for one `input`.
     macro_rules! gen_test_cases {
         ($input:expr, $(($start:expr, $len:expr, $result:expr)), *) => {
             [
@@ -455,6 +465,12 @@ mod tests {
         };
     }
 
+    /// A helper macro to test the substring functions.
+    /// # Arguments
+    /// * `cases` - The test cases which is a vector of `(input, start, len, result)`.
+    /// Please look at [`gen_test_cases`] to find how to generate it.
+    /// * `array_ty` - The array type.
+    /// * `substring_fn` - Either [`substring`] or [`substring_by_char`].
     macro_rules! do_test {
         ($cases:expr, $array_ty:ty, $substring_fn:ident) => {
             $cases
