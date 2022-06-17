@@ -267,7 +267,10 @@ where
     Ok(b.finish())
 }
 
-/// Extracts the day of week of a given temporal array as an array of integers
+/// Extracts the day of week of a given temporal array as an array of
+/// integers.
+///
+/// Monday is encoded as `0`, Tuesday as `1`, etc.
 pub fn weekday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
