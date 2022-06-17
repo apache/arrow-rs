@@ -105,7 +105,8 @@ fn process(batch: &RecordBatch) {
             id.clone(), // NOTE: this is cloning the Arc not the array data
             Arc::new(Float64Array::from(nested_c.data().clone())),
         ],
-    ).unwrap();
+    )
+    .unwrap();
 
     #[cfg(feature = "prettyprint")]
     {
