@@ -962,7 +962,7 @@ mod tests {
 
     #[test]
     fn test_write_file() {
-        let schema = Schema::new(vec![Field::new("field1", DataType::UInt32, false)]);
+        let schema = Schema::new(vec![Field::new("field1", DataType::UInt32, true)]);
         let values: Vec<Option<u32>> = vec![
             Some(999),
             None,
@@ -1011,7 +1011,7 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new("nulls", DataType::Null, true),
             Field::new("int32s", DataType::Int32, false),
-            Field::new("nulls2", DataType::Null, false),
+            Field::new("nulls2", DataType::Null, true),
             Field::new("f64s", DataType::Float64, false),
         ]);
         let array1 = NullArray::new(32);

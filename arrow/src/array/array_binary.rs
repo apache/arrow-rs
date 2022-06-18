@@ -1806,7 +1806,7 @@ mod tests {
     )]
     fn fixed_size_binary_array_all_null_in_batch_with_schema() {
         let schema =
-            Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), false)]);
+            Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), true)]);
 
         let none_option: Option<[u8; 2]> = None;
         let item = FixedSizeBinaryArray::try_from_sparse_iter(

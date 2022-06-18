@@ -33,7 +33,7 @@
 //! let schema = Schema::new(vec![
 //!     Field::new("a", DataType::Float64, false),
 //!     Field::new("b", DataType::Float64, false),
-//!     Field::new("c", DataType::Float64, false),
+//!     Field::new("c", DataType::Float64, true),
 //! ]);
 //!
 //! let file = File::open("test/data/basic.json").unwrap();
@@ -1869,7 +1869,7 @@ mod tests {
     #[test]
     fn test_json_basic_schema() {
         let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
+            Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Float32, false),
             Field::new("c", DataType::Boolean, false),
             Field::new("d", DataType::Utf8, false),
@@ -1917,8 +1917,7 @@ mod tests {
 
     #[test]
     fn test_json_format_strings_for_date() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("e", DataType::Date32, false)]));
+        let schema = Arc::new(Schema::new(vec![Field::new("e", DataType::Date32, true)]));
         let e = schema.column_with_name("e").unwrap();
         assert_eq!(&DataType::Date32, e.1.data_type());
         let mut fmts = HashMap::new();
@@ -1952,7 +1951,7 @@ mod tests {
         // Implicit: omitting fields from a schema
         // Explicit: supplying a vec of fields to take
         let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
+            Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Float32, false),
             Field::new("c", DataType::Boolean, false),
         ]);
@@ -1964,7 +1963,7 @@ mod tests {
         );
         let reader_schema = reader.schema();
         let expected_schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
+            Field::new("a", DataType::Int32, true),
             Field::new("c", DataType::Boolean, false),
         ]));
         assert_eq!(reader_schema, expected_schema);
