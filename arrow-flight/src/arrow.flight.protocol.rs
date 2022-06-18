@@ -279,9 +279,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::HandshakeRequest>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::HandshakeResponse>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::HandshakeResponse>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -308,9 +308,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Criteria>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::FlightInfo>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::FlightInfo>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -389,9 +389,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Ticket>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::FlightData>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::FlightData>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -418,9 +418,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::FlightData>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::PutResult>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::PutResult>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -446,9 +446,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::FlightData>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::FlightData>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::FlightData>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -475,9 +475,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Action>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::Result>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::Result>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -501,9 +501,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Empty>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::ActionType>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::ActionType>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
