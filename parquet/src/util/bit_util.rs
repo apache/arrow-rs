@@ -136,7 +136,7 @@ where
 /// Returns the ceil of value/divisor.
 ///
 /// This function should be removed after
-/// https://github.com/rust-lang/rust/issues/88581 is closed.
+/// [`int_roundings`](https://github.com/rust-lang/rust/issues/88581) is stable.
 #[inline]
 pub fn ceil(value: i64, divisor: i64) -> i64 {
     num::Integer::div_ceil(&value, &divisor)
