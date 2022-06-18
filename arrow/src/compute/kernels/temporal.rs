@@ -267,6 +267,37 @@ where
     Ok(b.finish())
 }
 
+/// Extracts the day of week of a given temporal array as an array of
+/// integers.
+///
+/// Monday is encoded as `0`, Tuesday as `1`, etc.
+pub fn weekday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::new(array.len());
+    match array.data_type() {
+        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
+            extract_component_from_array!(array, b, weekday, value_as_datetime)
+        }
+        &DataType::Timestamp(_, Some(ref tz)) => {
+            let mut scratch = Parsed::new();
+            extract_component_from_array!(
+                array,
+                b,
+                weekday,
+                value_as_datetime_with_tz,
+                tz,
+                scratch
+            )
+        }
+        dt => return_compute_error_with!("weekday does not support", dt),
+    }
+
+    Ok(b.finish())
+}
+
 /// Extracts the day of a given temporal array as an array of integers
 pub fn day<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
@@ -546,6 +577,19 @@ mod tests {
         ));
         let b = day(&a).unwrap();
         assert_eq!(1, b.value(0));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_weekday() {
+        //1514764800000 -> 2018-01-01 (Monday)
+        //1550636625000 -> 2019-02-20 (Wednesday)
+        let a: PrimitiveArray<Date64Type> =
+            vec![Some(1514764800000), None, Some(1550636625000)].into();
+
+        let b = weekday(&a).unwrap();
+        assert_eq!(0, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(2, b.value(2));
     }
 
     #[test]

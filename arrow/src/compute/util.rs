@@ -55,7 +55,9 @@ pub(super) fn combine_option_bitmap(
             Err(ArrowError::ComputeError(
                 "Arrays must not be empty".to_string(),
             )),
-            |(buffer, offset)| Ok(buffer.map(|buffer| buffer.slice(offset))),
+            |(buffer, offset)| {
+                Ok(buffer.map(|buffer| buffer.bit_slice(offset, len_in_bits)))
+            },
         )
 }
 
@@ -185,7 +187,7 @@ pub(super) mod tests {
         offset: usize,
         null_bit_buffer: Option<Buffer>,
     ) -> Arc<ArrayData> {
-        let buffer = Buffer::from(&vec![11; len]);
+        let buffer = Buffer::from(&vec![11; len + offset]);
 
         Arc::new(
             ArrayData::try_new(
@@ -253,6 +255,41 @@ pub(super) mod tests {
                 5,
             )
             .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_combine_option_bitmap_with_offsets() {
+        let none_bitmap = make_data_with_null_bit_buffer(8, 0, None);
+        let bitmap0 =
+            make_data_with_null_bit_buffer(8, 0, Some(Buffer::from([0b10101010])));
+        let bitmap1 =
+            make_data_with_null_bit_buffer(8, 1, Some(Buffer::from([0b01010100, 0b1])));
+        let bitmap2 =
+            make_data_with_null_bit_buffer(8, 2, Some(Buffer::from([0b10101000, 0b10])));
+        assert_eq!(
+            Some(Buffer::from([0b10101010])),
+            combine_option_bitmap(&[&bitmap1], 8).unwrap()
+        );
+        assert_eq!(
+            Some(Buffer::from([0b10101010])),
+            combine_option_bitmap(&[&bitmap2], 8).unwrap()
+        );
+        assert_eq!(
+            Some(Buffer::from([0b10101010])),
+            combine_option_bitmap(&[&bitmap1, &none_bitmap], 8).unwrap()
+        );
+        assert_eq!(
+            Some(Buffer::from([0b10101010])),
+            combine_option_bitmap(&[&none_bitmap, &bitmap2], 8).unwrap()
+        );
+        assert_eq!(
+            Some(Buffer::from([0b10101010])),
+            combine_option_bitmap(&[&bitmap0, &bitmap1], 8).unwrap()
+        );
+        assert_eq!(
+            Some(Buffer::from([0b10101010])),
+            combine_option_bitmap(&[&bitmap1, &bitmap2], 8).unwrap()
         );
     }
 
