@@ -133,23 +133,23 @@ where
     memcpy(&source.as_bytes()[..num_bytes], target)
 }
 
-/// Returns the ceil of value/divisor
+/// Returns the ceil of value/divisor.
+///
+/// This function should be removed after
+/// https://github.com/rust-lang/rust/issues/88581 is closed.
 #[inline]
 pub fn ceil(value: i64, divisor: i64) -> i64 {
-    value / divisor + ((value % divisor != 0) as i64)
+    num::Integer::div_ceil(&value, &divisor)
 }
 
 /// Returns the `num_bits` least-significant bits of `v`
 #[inline]
 pub fn trailing_bits(v: u64, num_bits: usize) -> u64 {
-    if num_bits == 0 {
-        return 0;
-    }
     if num_bits >= 64 {
-        return v;
+        v
+    } else {
+        v & ((1<<num_bits) - 1)
     }
-    let n = 64 - num_bits;
-    (v << n) >> n
 }
 
 #[inline]
