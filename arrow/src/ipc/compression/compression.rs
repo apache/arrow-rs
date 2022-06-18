@@ -59,7 +59,6 @@ impl CompressionCodecType {
                 let mut encoder = zstd::Encoder::new(output, 0).unwrap();
                 encoder.write_all(input).unwrap();
                 encoder.finish().unwrap();
-                // Err(ArrowError::NotYetImplemented("Compression don't support the ZSTD".to_string()))
                 Ok(())
             }
             _ => Ok(()),
@@ -77,7 +76,6 @@ impl CompressionCodecType {
                 let mut decoder = zstd::Decoder::new(input)?;
                 let size = decoder.read_to_end(output).unwrap();
                 Ok(size)
-                // Err(ArrowError::NotYetImplemented("Compression don't support the ZSTD".to_string()))
             }
             _ => Ok(input.len()),
         };

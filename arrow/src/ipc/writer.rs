@@ -1074,7 +1074,7 @@ fn write_buffer(
     } else {
         buffers.push(ipc::Buffer::new(offset, len + LENGTH_OF_PREFIX_DATA));
         // write the prefix of the uncompressed length
-        let mut uncompression_len_buf = [0;8];
+        let mut uncompression_len_buf = [0; 8];
         LittleEndian::write_i64(&mut uncompression_len_buf, uncompression_buffer_len);
         arrow_data.extend_from_slice(&uncompression_len_buf);
         len + LENGTH_OF_PREFIX_DATA
