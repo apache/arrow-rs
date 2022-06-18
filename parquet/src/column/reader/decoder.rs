@@ -26,8 +26,10 @@ use crate::encodings::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::num_required_bits;
-use crate::util::{bit_util::BitReader, memory::ByteBufferPtr};
+use crate::util::{
+    bit_util::{num_required_bits, BitReader},
+    memory::ByteBufferPtr,
+};
 
 /// A slice of levels buffer data that is written to by a [`ColumnLevelDecoder`]
 pub trait LevelsBufferSlice {
@@ -239,7 +241,7 @@ impl ColumnLevelDecoder for ColumnLevelDecoderImpl {
     type Slice = [i16];
 
     fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self {
-        let bit_width = num_required_bits(max_level as u64) as u8;
+        let bit_width = num_required_bits(max_level as u64);
         match encoding {
             Encoding::RLE => {
                 let mut decoder = RleDecoder::new(bit_width);

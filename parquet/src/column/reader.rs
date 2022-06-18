@@ -468,7 +468,7 @@ fn parse_v1_level(
             Ok((i32_size + data_size, buf.range(i32_size, data_size)))
         }
         Encoding::BIT_PACKED => {
-            let bit_width = num_required_bits(max_level as u64) as u8;
+            let bit_width = num_required_bits(max_level as u64);
             let num_bytes = ceil(
                 (num_buffered_values as usize * bit_width as usize) as i64,
                 8,

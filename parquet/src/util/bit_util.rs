@@ -164,8 +164,8 @@ pub fn unset_array_bit(bits: &mut [u8], i: usize) {
 
 /// Returns the minimum number of bits needed to represent the value 'x'
 #[inline]
-pub fn num_required_bits(x: u64) -> usize {
-    64 - x.leading_zeros() as usize
+pub fn num_required_bits(x: u64) -> u8 {
+    64 - x.leading_zeros() as u8
 }
 
 static BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
@@ -829,6 +829,7 @@ mod tests {
         assert_eq!(num_required_bits(10), 4);
         assert_eq!(num_required_bits(12), 4);
         assert_eq!(num_required_bits(16), 5);
+        assert_eq!(num_required_bits(u64::MAX), 64);
     }
 
     #[test]
