@@ -139,12 +139,6 @@ pub fn ceil(value: i64, divisor: i64) -> i64 {
     value / divisor + ((value % divisor != 0) as i64)
 }
 
-/// Returns ceil(log2(x))
-#[inline]
-pub fn log2(x: u64) -> i32 {
-    num_required_bits(x - 1) as i32
-}
-
 /// Returns the `num_bits` least-significant bits of `v`
 #[inline]
 pub fn trailing_bits(v: u64, num_bits: usize) -> u64 {
@@ -862,20 +856,6 @@ mod tests {
         assert!(!get_bit(&[0b01001001, 0b01010010], 13));
         assert!(get_bit(&[0b01001001, 0b01010010], 14));
         assert!(!get_bit(&[0b01001001, 0b01010010], 15));
-    }
-
-    #[test]
-    fn test_log2() {
-        assert_eq!(log2(1), 0);
-        assert_eq!(log2(2), 1);
-        assert_eq!(log2(3), 2);
-        assert_eq!(log2(4), 2);
-        assert_eq!(log2(5), 3);
-        assert_eq!(log2(5), 3);
-        assert_eq!(log2(6), 3);
-        assert_eq!(log2(7), 3);
-        assert_eq!(log2(8), 3);
-        assert_eq!(log2(9), 4);
     }
 
     #[test]

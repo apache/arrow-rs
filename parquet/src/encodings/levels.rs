@@ -22,8 +22,9 @@ use super::rle::{RleDecoder, RleEncoder};
 use crate::basic::Encoding;
 use crate::data_type::AsBytes;
 use crate::errors::{ParquetError, Result};
+use crate::util::bit_util::num_required_bits;
 use crate::util::{
-    bit_util::{ceil, log2, BitReader, BitWriter},
+    bit_util::{ceil, BitReader, BitWriter},
     memory::ByteBufferPtr,
 };
 
@@ -36,7 +37,7 @@ pub fn max_buffer_size(
     max_level: i16,
     num_buffered_values: usize,
 ) -> usize {
-    let bit_width = log2(max_level as u64 + 1) as u8;
+    let bit_width = num_required_bits(max_level as u64) as u8;
     match encoding {
         Encoding::RLE => {
             RleEncoder::max_buffer_size(bit_width, num_buffered_values)
@@ -66,7 +67,7 @@ impl LevelEncoder {
     ///
     /// Panics, if encoding is not supported.
     pub fn v1(encoding: Encoding, max_level: i16, byte_buffer: Vec<u8>) -> Self {
-        let bit_width = log2(max_level as u64 + 1) as u8;
+        let bit_width = num_required_bits(max_level as u64) as u8;
         match encoding {
             Encoding::RLE => LevelEncoder::Rle(RleEncoder::new_from_buf(
                 bit_width,
@@ -89,7 +90,7 @@ impl LevelEncoder {
     /// Creates new level encoder based on RLE encoding. Used to encode Data Page v2
     /// repetition and definition levels.
     pub fn v2(max_level: i16, byte_buffer: Vec<u8>) -> Self {
-        let bit_width = log2(max_level as u64 + 1) as u8;
+        let bit_width = num_required_bits(max_level as u64) as u8;
         LevelEncoder::RleV2(RleEncoder::new_from_buf(bit_width, byte_buffer, 0))
     }
 
@@ -163,7 +164,7 @@ impl LevelDecoder {
     ///
     /// Panics if encoding is not supported
     pub fn v1(encoding: Encoding, max_level: i16) -> Self {
-        let bit_width = log2(max_level as u64 + 1) as u8;
+        let bit_width = num_required_bits(max_level as u64) as u8;
         match encoding {
             Encoding::RLE => LevelDecoder::Rle(None, RleDecoder::new(bit_width)),
             Encoding::BIT_PACKED => {
@@ -178,7 +179,7 @@ impl LevelDecoder {
     ///
     /// To set data for this decoder, use `set_data_range` method.
     pub fn v2(max_level: i16) -> Self {
-        let bit_width = log2(max_level as u64 + 1) as u8;
+        let bit_width = num_required_bits(max_level as u64) as u8;
         LevelDecoder::RleV2(None, RleDecoder::new(bit_width))
     }
 

@@ -26,7 +26,7 @@ use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::{
-    bit_util::{self, log2, num_required_bits, BitWriter},
+    bit_util::{self, num_required_bits, BitWriter},
     hash_util,
     memory::ByteBufferPtr,
 };
@@ -312,7 +312,7 @@ impl<T: DataType> DictEncoder<T> {
         } else if num_entries == 1 {
             1
         } else {
-            log2(num_entries as u64) as u8
+            num_required_bits(num_entries as u64 - 1) as u8
         }
     }
 
