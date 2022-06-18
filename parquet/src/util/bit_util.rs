@@ -141,17 +141,8 @@ pub fn ceil(value: i64, divisor: i64) -> i64 {
 
 /// Returns ceil(log2(x))
 #[inline]
-pub fn log2(mut x: u64) -> i32 {
-    if x == 1 {
-        return 0;
-    }
-    x -= 1;
-    let mut result = 0;
-    while x > 0 {
-        x >>= 1;
-        result += 1;
-    }
-    result
+pub fn log2(x: u64) -> i32 {
+    num_required_bits(x - 1) as i32
 }
 
 /// Returns the `num_bits` least-significant bits of `v`
@@ -180,12 +171,7 @@ pub fn unset_array_bit(bits: &mut [u8], i: usize) {
 /// Returns the minimum number of bits needed to represent the value 'x'
 #[inline]
 pub fn num_required_bits(x: u64) -> usize {
-    for i in (0..64).rev() {
-        if x & (1u64 << i) != 0 {
-            return i + 1;
-        }
-    }
-    0
+    64 - x.leading_zeros() as usize
 }
 
 static BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
