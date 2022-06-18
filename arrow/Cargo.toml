@@ -63,7 +63,7 @@ multiversion = { version = "0.6.1", default-features = false }
 bitflags = { version = "1.2.1", default-features = false }
 
 [features]
-default = ["csv", "ipc", "test_utils"]
+default = ["csv", "ipc", "test_utils", "lz4", "zstd"]
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
 simd = ["packed_simd"]

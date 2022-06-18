@@ -20,7 +20,7 @@
 //! The `FileWriter` and `StreamWriter` have similar interfaces,
 //! however the `FileWriter` expects a reader that supports `Seek`ing
 
-use byteorder::{LittleEndian, WriteBytesExt};
+use byteorder::{ByteOrder, LittleEndian};
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 
@@ -1074,9 +1074,9 @@ fn write_buffer(
     } else {
         buffers.push(ipc::Buffer::new(offset, len + LENGTH_OF_PREFIX_DATA));
         // write the prefix of the uncompressed length
-        arrow_data
-            .write_i64::<LittleEndian>(uncompression_buffer_len)
-            .unwrap();
+        let mut uncompression_len_buf = [0;8];
+        LittleEndian::write_i64(&mut uncompression_len_buf, uncompression_buffer_len);
+        arrow_data.extend_from_slice(&uncompression_len_buf);
         len + LENGTH_OF_PREFIX_DATA
     };
     arrow_data.extend_from_slice(data);

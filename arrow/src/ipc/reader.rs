@@ -273,7 +273,7 @@ fn create_array(
             // In V4, union types has validity bitmap
             // In V5 and later, union types have no validity bitmap
             if metadata < &ipc::MetadataVersion::V5 {
-                read_buffer(&buffers[buffer_index], data);
+                read_buffer(&buffers[buffer_index], data, compression_codec);
                 buffer_index += 1;
             }
 
