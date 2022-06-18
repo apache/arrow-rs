@@ -96,12 +96,9 @@
 //! # writer.close().unwrap();
 //!
 //! let file = File::open("data.parquet").unwrap();
-//! let file_reader = SerializedFileReader::new(file).unwrap();
 //!
-//! let file_metadata = file_reader.metadata().file_metadata();
-//! let mask = ProjectionMask::leaves(file_metadata.schema_descr(), [0]);
-//!
-//! let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
+//! let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
+//! let mask = ProjectionMask::leaves(arrow_reader.parquet_schema(), [0]);
 //!
 //! println!("Converted arrow schema is: {}", arrow_reader.get_schema().unwrap());
 //! println!("Arrow schema after projection is: {}",
@@ -125,14 +122,12 @@
 experimental_mod!(array_reader);
 pub mod arrow_reader;
 pub mod arrow_writer;
-mod bit_util;
+mod buffer;
 
 #[cfg(feature = "async")]
 pub mod async_reader;
 
-experimental_mod!(converter);
-pub(in crate::arrow) mod levels;
-pub(in crate::arrow) mod record_reader;
+mod record_reader;
 experimental_mod!(schema);
 
 pub use self::arrow_reader::ArrowReader;

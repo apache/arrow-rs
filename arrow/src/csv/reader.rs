@@ -120,7 +120,7 @@ pub struct ReaderOptions {
 /// Return inferred schema and number of records used for inference. This function does not change
 /// reader cursor offset.
 pub fn infer_file_schema<R: Read + Seek>(
-    reader: &mut R,
+    reader: R,
     delimiter: u8,
     max_read_records: Option<usize>,
     has_header: bool,
@@ -136,12 +136,13 @@ pub fn infer_file_schema<R: Read + Seek>(
 }
 
 fn infer_file_schema_with_csv_options<R: Read + Seek>(
-    reader: &mut R,
-    roptoins: ReaderOptions,
+    mut reader: R,
+    roptions: ReaderOptions,
 ) -> Result<(Schema, usize)> {
     let saved_offset = reader.seek(SeekFrom::Current(0))?;
 
-    let (schema, records_count) = infer_reader_schema_with_csv_options(reader, roptoins)?;
+    let (schema, records_count) =
+        infer_reader_schema_with_csv_options(&mut reader, roptions)?;
     // return the reader seek back to the start
     reader.seek(SeekFrom::Start(saved_offset))?;
 
@@ -155,7 +156,7 @@ fn infer_file_schema_with_csv_options<R: Read + Seek>(
 ///
 /// Return infered schema and number of records used for inference.
 pub fn infer_reader_schema<R: Read>(
-    reader: &mut R,
+    reader: R,
     delimiter: u8,
     max_read_records: Option<usize>,
     has_header: bool,
@@ -170,7 +171,7 @@ pub fn infer_reader_schema<R: Read>(
 }
 
 fn infer_reader_schema_with_csv_options<R: Read>(
-    reader: &mut R,
+    reader: R,
     roptions: ReaderOptions,
 ) -> Result<(Schema, usize)> {
     let mut csv_reader = Reader::build_csv_reader(
@@ -1203,8 +1204,8 @@ mod tests {
     fn test_csv_reader_with_decimal() {
         let schema = Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
-            Field::new("lat", DataType::Decimal(26, 6), false),
-            Field::new("lng", DataType::Decimal(26, 6), false),
+            Field::new("lat", DataType::Decimal(38, 6), false),
+            Field::new("lng", DataType::Decimal(38, 6), false),
         ]);
 
         let file = File::open("test/data/decimal_test.csv").unwrap();

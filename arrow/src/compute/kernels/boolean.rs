@@ -193,7 +193,7 @@ where
 
     let left_data = left.data_ref();
     let right_data = right.data_ref();
-    let null_bit_buffer = combine_option_bitmap(left_data, right_data, len)?;
+    let null_bit_buffer = combine_option_bitmap(&[left_data, right_data], len)?;
 
     let left_buffer = &left_data.buffers()[0];
     let right_buffer = &right_data.buffers()[0];

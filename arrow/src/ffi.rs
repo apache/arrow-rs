@@ -79,6 +79,8 @@
 //! unsafe {
 //!     Box::from_raw(out_array_ptr);
 //!     Box::from_raw(out_schema_ptr);
+//!     Arc::from_raw(array_ptr);
+//!     Arc::from_raw(schema_ptr);
 //! }
 //!
 //! Ok(())
@@ -907,6 +909,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal_round_trip() -> Result<()> {
         // create an array natively
         let original_array = [Some(12345_i128), Some(-12345_i128), None]

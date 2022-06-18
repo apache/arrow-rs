@@ -353,7 +353,7 @@ macro_rules! cast_decimal_to_integer {
             if array.is_null(i) {
                 value_builder.append_null()?;
             } else {
-                let v = array.value(i) / div;
+                let v = array.value(i).as_i128() / div;
                 // check the overflow
                 // For example: Decimal(128,10,0) as i8
                 // 128 is out of range i8
@@ -383,7 +383,7 @@ macro_rules! cast_decimal_to_float {
             } else {
                 // The range of f32 or f64 is larger than i128, we don't need to check overflow.
                 // cast the i128 to f64 will lose precision, for example the `112345678901234568` will be as `112345678901234560`.
-                let v = (array.value(i) as f64 / div) as $NATIVE_TYPE;
+                let v = (array.value(i).as_i128() as f64 / div) as $NATIVE_TYPE;
                 value_builder.append_value(v)?;
             }
         }
@@ -2084,7 +2084,7 @@ where
     let list_data = array.data();
     let str_values_buf = str_array.value_data();
 
-    let offsets = unsafe { list_data.buffers()[0].typed_data::<OffsetSizeFrom>() };
+    let offsets = list_data.buffers()[0].typed_data::<OffsetSizeFrom>();
 
     let mut offset_builder = BufferBuilder::<OffsetSizeTo>::new(offsets.len());
     offsets.iter().try_for_each::<_, Result<_>>(|offset| {
@@ -2196,6 +2196,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::decimal::Decimal128;
     use crate::{buffer::Buffer, util::display::array_value_to_string};
 
     macro_rules! generate_cast_test_case {
@@ -2247,9 +2248,9 @@ mod tests {
             DecimalArray,
             &output_type,
             vec![
-                Some(11234560_i128),
-                Some(21234560_i128),
-                Some(31234560_i128),
+                Some(Decimal128::new_from_i128(20, 4, 11234560_i128)),
+                Some(Decimal128::new_from_i128(20, 4, 21234560_i128)),
+                Some(Decimal128::new_from_i128(20, 4, 31234560_i128)),
                 None
             ]
         );
@@ -2426,11 +2427,11 @@ mod tests {
                 DecimalArray,
                 &decimal_type,
                 vec![
-                    Some(1000000_i128),
-                    Some(2000000_i128),
-                    Some(3000000_i128),
+                    Some(Decimal128::new_from_i128(38, 6, 1000000_i128)),
+                    Some(Decimal128::new_from_i128(38, 6, 2000000_i128)),
+                    Some(Decimal128::new_from_i128(38, 6, 3000000_i128)),
                     None,
-                    Some(5000000_i128)
+                    Some(Decimal128::new_from_i128(38, 6, 5000000_i128))
                 ]
             );
         }
@@ -2458,12 +2459,12 @@ mod tests {
             DecimalArray,
             &decimal_type,
             vec![
-                Some(1100000_i128),
-                Some(2200000_i128),
-                Some(4400000_i128),
+                Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 2200000_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 4400000_i128)),
                 None,
-                Some(1123456_i128),
-                Some(1123456_i128),
+                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
             ]
         );
 
@@ -2483,13 +2484,13 @@ mod tests {
             DecimalArray,
             &decimal_type,
             vec![
-                Some(1100000_i128),
-                Some(2200000_i128),
-                Some(4400000_i128),
+                Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 2200000_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 4400000_i128)),
                 None,
-                Some(1123456_i128),
-                Some(1123456_i128),
-                Some(1123456_i128),
+                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
             ]
         );
     }

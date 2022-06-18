@@ -355,27 +355,6 @@ fn create_string_byte_array_dictionary_reader(
     .unwrap()
 }
 
-fn create_complex_object_byte_array_dictionary_reader(
-    page_iterator: impl PageIterator + 'static,
-    column_desc: ColumnDescPtr,
-) -> Box<dyn ArrayReader> {
-    use parquet::arrow::array_reader::ComplexObjectArrayReader;
-    use parquet::arrow::converter::{Utf8ArrayConverter, Utf8Converter};
-    let arrow_type =
-        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
-
-    let converter = Utf8Converter::new(Utf8ArrayConverter {});
-    Box::new(
-        ComplexObjectArrayReader::<ByteArrayType, Utf8Converter>::new(
-            Box::new(page_iterator),
-            column_desc,
-            converter,
-            Some(arrow_type),
-        )
-        .unwrap(),
-    )
-}
-
 fn bench_primitive<T>(
     group: &mut BenchmarkGroup<WallTime>,
     schema: &SchemaDescPtr,
@@ -678,18 +657,7 @@ fn add_benches(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("arrow_array_reader/StringDictionary");
 
-    group.bench_function("dictionary encoded, mandatory, no NULLs - old", |b| {
-        b.iter(|| {
-            let array_reader = create_complex_object_byte_array_dictionary_reader(
-                dictionary_string_no_null_data.clone(),
-                mandatory_string_column_desc.clone(),
-            );
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
-
-    group.bench_function("dictionary encoded, mandatory, no NULLs - new", |b| {
+    group.bench_function("dictionary encoded, mandatory, no NULLs", |b| {
         b.iter(|| {
             let array_reader = create_string_byte_array_dictionary_reader(
                 dictionary_string_no_null_data.clone(),
@@ -700,18 +668,7 @@ fn add_benches(c: &mut Criterion) {
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
 
-    group.bench_function("dictionary encoded, optional, no NULLs - old", |b| {
-        b.iter(|| {
-            let array_reader = create_complex_object_byte_array_dictionary_reader(
-                dictionary_string_no_null_data.clone(),
-                optional_string_column_desc.clone(),
-            );
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
-
-    group.bench_function("dictionary encoded, optional, no NULLs - new", |b| {
+    group.bench_function("dictionary encoded, optional, no NULLs", |b| {
         b.iter(|| {
             let array_reader = create_string_byte_array_dictionary_reader(
                 dictionary_string_no_null_data.clone(),
@@ -722,18 +679,7 @@ fn add_benches(c: &mut Criterion) {
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });
 
-    group.bench_function("dictionary encoded, optional, half NULLs - old", |b| {
-        b.iter(|| {
-            let array_reader = create_complex_object_byte_array_dictionary_reader(
-                dictionary_string_half_null_data.clone(),
-                optional_string_column_desc.clone(),
-            );
-            count = bench_array_reader(array_reader);
-        });
-        assert_eq!(count, EXPECTED_VALUE_COUNT);
-    });
-
-    group.bench_function("dictionary encoded, optional, half NULLs - new", |b| {
+    group.bench_function("dictionary encoded, optional, half NULLs", |b| {
         b.iter(|| {
             let array_reader = create_string_byte_array_dictionary_reader(
                 dictionary_string_half_null_data.clone(),

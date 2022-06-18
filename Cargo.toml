@@ -24,6 +24,15 @@ members = [
         "arrow-flight",
         "integration-testing",
 ]
+# Enable the version 2 feature resolver, which avoids unifying features for targets that are not being built
+#
+# Critically this prevents dev-dependencies from enabling features even when not building a target that
+# uses dev-dependencies, e.g. the library crate. This in turn ensures that we can catch invalid feature
+# flag combinations that would otherwise only surface in dependent crates
+#
+# Reference - https://doc.rust-lang.org/nightly/cargo/reference/features.html#feature-resolver-version-2
+#
+resolver = "2"
 
 # this package is excluded because it requires different compilation flags, thereby significantly changing
 # how it is compiled within the workspace, causing the whole workspace to be compiled from scratch

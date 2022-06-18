@@ -33,6 +33,7 @@ use crate::datatypes::{
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
+use crate::util::decimal::Decimal128;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
 /// See [`BinaryArray`] and [`LargeBinaryArray`] for storing
@@ -700,6 +701,18 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
     }
 }
 
+impl From<Vec<Option<&[u8]>>> for FixedSizeBinaryArray {
+    fn from(v: Vec<Option<&[u8]>>) -> Self {
+        Self::try_from_sparse_iter(v.into_iter()).unwrap()
+    }
+}
+
+impl From<Vec<&[u8]>> for FixedSizeBinaryArray {
+    fn from(v: Vec<&[u8]>) -> Self {
+        Self::try_from_iter(v.into_iter()).unwrap()
+    }
+}
+
 impl fmt::Debug for FixedSizeBinaryArray {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "FixedSizeBinaryArray<{}>\n[\n", self.value_length())?;
@@ -744,7 +757,7 @@ impl Array for FixedSizeBinaryArray {
 ///     .unwrap();
 ///
 ///    assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
-///    assert_eq!(8_887_000_000, decimal_array.value(0));
+///    assert_eq!(8_887_000_000_i128, decimal_array.value(0).as_i128());
 ///    assert_eq!("8887.000000", decimal_array.value_as_string(0));
 ///    assert_eq!(3, decimal_array.len());
 ///    assert_eq!(1, decimal_array.null_count());
@@ -763,8 +776,8 @@ pub struct DecimalArray {
 }
 
 impl DecimalArray {
-    /// Returns the element at index `i` as i128.
-    pub fn value(&self, i: usize) -> i128 {
+    /// Returns the element at index `i`.
+    pub fn value(&self, i: usize) -> Decimal128 {
         assert!(i < self.data.len(), "DecimalArray out of bounds access");
         let offset = i.checked_add(self.data.offset()).unwrap();
         let raw_val = unsafe {
@@ -775,10 +788,11 @@ impl DecimalArray {
             )
         };
         let as_array = raw_val.try_into();
-        match as_array {
+        let integer = match as_array {
             Ok(v) if raw_val.len() == 16 => i128::from_le_bytes(v),
             _ => panic!("DecimalArray elements are not 128bit integers."),
-        }
+        };
+        Decimal128::new_from_i128(self.precision, self.scale, integer)
     }
 
     /// Returns the offset for the element at index `i`.
@@ -809,23 +823,7 @@ impl DecimalArray {
 
     #[inline]
     pub fn value_as_string(&self, row: usize) -> String {
-        let value = self.value(row);
-        let value_str = value.to_string();
-
-        if self.scale == 0 {
-            value_str
-        } else {
-            let (sign, rest) = value_str.split_at(if value >= 0 { 0 } else { 1 });
-
-            if rest.len() > self.scale {
-                // Decimal separator is in the middle of the string
-                let (whole, decimal) = value_str.split_at(value_str.len() - self.scale);
-                format!("{}.{}", whole, decimal)
-            } else {
-                // String has to be padded
-                format!("{}0.{:0>width$}", sign, rest, width = self.scale)
-            }
-        }
+        self.value(row).as_string()
     }
 
     pub fn from_fixed_size_list_array(
@@ -1480,18 +1478,19 @@ mod tests {
             192, 219, 180, 17, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 36, 75, 238, 253,
             255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
         ];
-        let array_data = ArrayData::builder(DataType::Decimal(23, 6))
+        let array_data = ArrayData::builder(DataType::Decimal(38, 6))
             .len(2)
             .add_buffer(Buffer::from(&values[..]))
             .build()
             .unwrap();
         let decimal_array = DecimalArray::from(array_data);
-        assert_eq!(8_887_000_000, decimal_array.value(0));
-        assert_eq!(-8_887_000_000, decimal_array.value(1));
+        assert_eq!(8_887_000_000_i128, decimal_array.value(0).into());
+        assert_eq!(-8_887_000_000_i128, decimal_array.value(1).into());
         assert_eq!(16, decimal_array.value_length());
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal_append_error_value() {
         let mut decimal_builder = DecimalBuilder::new(10, 5, 3);
         let mut result = decimal_builder.append_value(123456);
@@ -1500,9 +1499,15 @@ mod tests {
             "Invalid argument error: 123456 is too large to store in a Decimal of precision 5. Max is 99999",
             error.to_string()
         );
+
+        unsafe {
+            decimal_builder.disable_value_validation();
+        }
+        result = decimal_builder.append_value(123456);
+        assert!(result.is_ok());
         decimal_builder.append_value(12345).unwrap();
         let arr = decimal_builder.finish();
-        assert_eq!("12.345", arr.value_as_string(0));
+        assert_eq!("12.345", arr.value_as_string(1));
 
         decimal_builder = DecimalBuilder::new(10, 2, 1);
         result = decimal_builder.append_value(100);
@@ -1511,28 +1516,31 @@ mod tests {
             "Invalid argument error: 100 is too large to store in a Decimal of precision 2. Max is 99",
             error.to_string()
         );
+
+        unsafe {
+            decimal_builder.disable_value_validation();
+        }
+        result = decimal_builder.append_value(100);
+        assert!(result.is_ok());
         decimal_builder.append_value(99).unwrap();
         result = decimal_builder.append_value(-100);
-        error = result.unwrap_err();
-        assert_eq!(
-            "Invalid argument error: -100 is too small to store in a Decimal of precision 2. Min is -99",
-            error.to_string()
-        );
+        assert!(result.is_ok());
         decimal_builder.append_value(-99).unwrap();
         let arr = decimal_builder.finish();
-        assert_eq!("9.9", arr.value_as_string(0));
-        assert_eq!("-9.9", arr.value_as_string(1));
+        assert_eq!("9.9", arr.value_as_string(1));
+        assert_eq!("-9.9", arr.value_as_string(3));
     }
+
     #[test]
     fn test_decimal_from_iter_values() {
         let array = DecimalArray::from_iter_values(vec![-100, 0, 101].into_iter());
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
-        assert_eq!(-100, array.value(0));
+        assert_eq!(-100_i128, array.value(0).into());
         assert!(!array.is_null(0));
-        assert_eq!(0, array.value(1));
+        assert_eq!(0_i128, array.value(1).into());
         assert!(!array.is_null(1));
-        assert_eq!(101, array.value(2));
+        assert_eq!(101_i128, array.value(2).into());
         assert!(!array.is_null(2));
     }
 
@@ -1541,10 +1549,10 @@ mod tests {
         let array: DecimalArray = vec![Some(-100), None, Some(101)].into_iter().collect();
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
-        assert_eq!(-100, array.value(0));
+        assert_eq!(-100_i128, array.value(0).into());
         assert!(!array.is_null(0));
         assert!(array.is_null(1));
-        assert_eq!(101, array.value(2));
+        assert_eq!(101_i128, array.value(2).into());
         assert!(!array.is_null(2));
     }
 
@@ -1701,6 +1709,64 @@ mod tests {
             FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len())
+    }
+
+    #[test]
+    fn test_fixed_size_binary_array_from_vec() {
+        let values = vec!["one".as_bytes(), b"two", b"six", b"ten"];
+        let array = FixedSizeBinaryArray::from(values);
+        assert_eq!(array.len(), 4);
+        assert_eq!(array.null_count(), 0);
+        assert_eq!(array.value(0), b"one");
+        assert_eq!(array.value(1), b"two");
+        assert_eq!(array.value(2), b"six");
+        assert_eq!(array.value(3), b"ten");
+        assert!(!array.is_null(0));
+        assert!(!array.is_null(1));
+        assert!(!array.is_null(2));
+        assert!(!array.is_null(3));
+    }
+
+    #[test]
+    #[should_panic(expected = "Nested array size mismatch: one is 3, and the other is 5")]
+    fn test_fixed_size_binary_array_from_vec_incorrect_length() {
+        let values = vec!["one".as_bytes(), b"two", b"three", b"four"];
+        let _ = FixedSizeBinaryArray::from(values);
+    }
+
+    #[test]
+    fn test_fixed_size_binary_array_from_opt_vec() {
+        let values = vec![
+            Some("one".as_bytes()),
+            Some(b"two"),
+            None,
+            Some(b"six"),
+            Some(b"ten"),
+        ];
+        let array = FixedSizeBinaryArray::from(values);
+        assert_eq!(array.len(), 5);
+        assert_eq!(array.value(0), b"one");
+        assert_eq!(array.value(1), b"two");
+        assert_eq!(array.value(3), b"six");
+        assert_eq!(array.value(4), b"ten");
+        assert!(!array.is_null(0));
+        assert!(!array.is_null(1));
+        assert!(array.is_null(2));
+        assert!(!array.is_null(3));
+        assert!(!array.is_null(4));
+    }
+
+    #[test]
+    #[should_panic(expected = "Nested array size mismatch: one is 3, and the other is 5")]
+    fn test_fixed_size_binary_array_from_opt_vec_incorrect_length() {
+        let values = vec![
+            Some("one".as_bytes()),
+            Some(b"two"),
+            None,
+            Some(b"three"),
+            Some(b"four"),
+        ];
+        let _ = FixedSizeBinaryArray::from(values);
     }
 
     #[test]

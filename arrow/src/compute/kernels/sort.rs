@@ -452,8 +452,7 @@ fn sort_boolean(
     let mut result = MutableBuffer::new(result_capacity);
     // sets len to capacity so we can access the whole buffer as a typed slice
     result.resize(result_capacity, 0);
-    // Safety: the buffer is always treated as `u32` in the code below
-    let result_slice: &mut [u32] = unsafe { result.typed_data_mut() };
+    let result_slice: &mut [u32] = result.typed_data_mut();
 
     if options.nulls_first {
         let size = nulls_len.min(len);
@@ -504,7 +503,7 @@ where
         .expect("Unable to downcast to decimal array");
     let valids = value_indices
         .into_iter()
-        .map(|index| (index, decimal_array.value(index as usize)))
+        .map(|index| (index, decimal_array.value(index as usize).as_i128()))
         .collect::<Vec<(u32, i128)>>();
     sort_primitive_inner(decimal_values, null_indices, cmp, options, limit, valids)
 }
@@ -565,8 +564,7 @@ where
     let mut result = MutableBuffer::new(result_capacity);
     // sets len to capacity so we can access the whole buffer as a typed slice
     result.resize(result_capacity, 0);
-    // Safety: the buffer is always treated as `u32` in the code below
-    let result_slice: &mut [u32] = unsafe { result.typed_data_mut() };
+    let result_slice: &mut [u32] = result.typed_data_mut();
 
     if options.nulls_first {
         let size = nulls_len.min(len);

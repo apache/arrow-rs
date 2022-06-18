@@ -370,7 +370,7 @@ impl JsonEqual for DecimalArray {
                 self.is_valid(i)
                     && (s
                         .parse::<i128>()
-                        .map_or_else(|_| false, |v| v == self.value(i)))
+                        .map_or_else(|_| false, |v| v == self.value(i).as_i128()))
             }
             JNull => self.is_null(i),
             _ => false,

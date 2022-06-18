@@ -15,11 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{
-    cmp::min,
-    io::{Cursor, Read, Seek, SeekFrom},
-    sync::Arc,
-};
+use std::{io::Read, sync::Arc};
 
 use byteorder::{ByteOrder, LittleEndian};
 use parquet_format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
@@ -28,10 +24,7 @@ use thrift::protocol::TCompactInputProtocol;
 use crate::basic::ColumnOrder;
 
 use crate::errors::{ParquetError, Result};
-use crate::file::{
-    metadata::*, reader::ChunkReader, DEFAULT_FOOTER_READ_SIZE, FOOTER_SIZE,
-    PARQUET_MAGIC,
-};
+use crate::file::{metadata::*, reader::ChunkReader, FOOTER_SIZE, PARQUET_MAGIC};
 
 use crate::schema::types::{self, SchemaDescriptor};
 
@@ -52,55 +45,42 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
         ));
     }
 
-    // read and cache up to DEFAULT_FOOTER_READ_SIZE bytes from the end and process the footer
-    let default_end_len = min(DEFAULT_FOOTER_READ_SIZE, chunk_reader.len() as usize);
-    let mut default_end_reader = chunk_reader
-        .get_read(chunk_reader.len() - default_end_len as u64, default_end_len)?;
-    let mut default_len_end_buf = vec![0; default_end_len];
-    default_end_reader.read_exact(&mut default_len_end_buf)?;
+    let mut footer = [0_u8; 8];
+    chunk_reader
+        .get_read(file_size - 8, 8)?
+        .read_exact(&mut footer)?;
 
-    // check this is indeed a parquet file
-    if default_len_end_buf[default_end_len - 4..] != PARQUET_MAGIC {
-        return Err(general_err!("Invalid Parquet file. Corrupt footer"));
-    }
+    let metadata_len = decode_footer(&footer)?;
+    let footer_metadata_len = FOOTER_SIZE + metadata_len;
 
-    // get the metadata length from the footer
-    let metadata_len = LittleEndian::read_i32(
-        &default_len_end_buf[default_end_len - 8..default_end_len - 4],
-    ) as i64;
-    if metadata_len < 0 {
-        return Err(general_err!(
-            "Invalid Parquet file. Metadata length is less than zero ({})",
-            metadata_len
-        ));
-    }
-    let footer_metadata_len = FOOTER_SIZE + metadata_len as usize;
-
-    // build up the reader covering the entire metadata
-    let mut default_end_cursor = Cursor::new(default_len_end_buf);
     if footer_metadata_len > file_size as usize {
         return Err(general_err!(
-            "Invalid Parquet file. Metadata start is less than zero ({})",
-            file_size as i64 - footer_metadata_len as i64
+            "Invalid Parquet file. Reported metadata length of {} + {} byte footer, but file is only {} bytes",
+            metadata_len,
+            FOOTER_SIZE,
+            file_size
         ));
-    } else if footer_metadata_len < DEFAULT_FOOTER_READ_SIZE {
-        // the whole metadata is in the bytes we already read
-        default_end_cursor.seek(SeekFrom::End(-(footer_metadata_len as i64)))?;
-        parse_metadata_buffer(&mut default_end_cursor)
-    } else {
-        // the end of file read by default is not long enough, read missing bytes
-        let complementary_end_read = chunk_reader.get_read(
-            file_size - footer_metadata_len as u64,
-            FOOTER_SIZE + metadata_len as usize - default_end_len,
-        )?;
-        parse_metadata_buffer(&mut complementary_end_read.chain(default_end_cursor))
     }
+
+    let mut metadata = Vec::with_capacity(metadata_len);
+
+    let read = chunk_reader
+        .get_read(file_size - footer_metadata_len as u64, metadata_len)?
+        .read_to_end(&mut metadata)?;
+
+    if read != metadata_len {
+        return Err(eof_err!(
+            "Expected to read {} bytes of metadata, got {}",
+            metadata_len,
+            read
+        ));
+    }
+
+    decode_metadata(&metadata)
 }
 
-/// Reads [`ParquetMetaData`] from the provided [`Read`] starting at the readers current position
-pub(crate) fn parse_metadata_buffer<T: Read + ?Sized>(
-    metadata_read: &mut T,
-) -> Result<ParquetMetaData> {
+/// Decodes [`ParquetMetaData`] from the provided bytes
+pub fn decode_metadata(metadata_read: &[u8]) -> Result<ParquetMetaData> {
     // TODO: row group filtering
     let mut prot = TCompactInputProtocol::new(metadata_read);
     let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
@@ -122,6 +102,23 @@ pub(crate) fn parse_metadata_buffer<T: Read + ?Sized>(
         column_orders,
     );
     Ok(ParquetMetaData::new(file_metadata, row_groups))
+}
+
+/// Decodes the footer returning the metadata length in bytes
+pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
+    // check this is indeed a parquet file
+    if slice[4..] != PARQUET_MAGIC {
+        return Err(general_err!("Invalid Parquet file. Corrupt footer"));
+    }
+
+    // get the metadata length from the footer
+    let metadata_len = LittleEndian::read_i32(&slice[..4]);
+    metadata_len.try_into().map_err(|_| {
+        general_err!(
+            "Invalid Parquet file. Metadata length is less than zero ({})",
+            metadata_len
+        )
+    })
 }
 
 /// Parses column orders from Thrift definition.
@@ -160,11 +157,11 @@ fn parse_column_orders(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
 
     use crate::basic::SortOrder;
     use crate::basic::Type;
     use crate::schema::types::Type as SchemaType;
-    use crate::util::cursor::SliceableCursor;
     use parquet_format::TypeDefinedOrder;
 
     #[test]
@@ -180,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_parse_metadata_corrupt_footer() {
-        let data = SliceableCursor::new(Arc::new(vec![1, 2, 3, 4, 5, 6, 7, 8]));
+        let data = Bytes::from(vec![1, 2, 3, 4, 5, 6, 7, 8]);
         let reader_result = parse_metadata(&data);
         assert!(reader_result.is_err());
         assert_eq!(
@@ -191,8 +188,7 @@ mod tests {
 
     #[test]
     fn test_parse_metadata_invalid_length() {
-        let test_file =
-            SliceableCursor::new(Arc::new(vec![0, 0, 0, 255, b'P', b'A', b'R', b'1']));
+        let test_file = Bytes::from(vec![0, 0, 0, 255, b'P', b'A', b'R', b'1']);
         let reader_result = parse_metadata(&test_file);
         assert!(reader_result.is_err());
         assert_eq!(
@@ -205,13 +201,14 @@ mod tests {
 
     #[test]
     fn test_parse_metadata_invalid_start() {
-        let test_file =
-            SliceableCursor::new(Arc::new(vec![255, 0, 0, 0, b'P', b'A', b'R', b'1']));
+        let test_file = Bytes::from(vec![255, 0, 0, 0, b'P', b'A', b'R', b'1']);
         let reader_result = parse_metadata(&test_file);
         assert!(reader_result.is_err());
         assert_eq!(
             reader_result.err().unwrap(),
-            general_err!("Invalid Parquet file. Metadata start is less than zero (-255)")
+            general_err!(
+                "Invalid Parquet file. Reported metadata length of 255 + 8 byte footer, but file is only 8 bytes"
+            )
         );
     }
 

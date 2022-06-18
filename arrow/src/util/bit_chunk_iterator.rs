@@ -1,5 +1,3 @@
-use std::fmt::Debug;
-
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -16,7 +14,11 @@ use std::fmt::Debug;
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+//! Types for iterating over bitmasks in 64-bit chunks
+
 use crate::util::bit_util::ceil;
+use std::fmt::Debug;
 
 /// Iterates over an arbitrarily aligned byte buffer
 ///
@@ -611,6 +613,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)]
     fn fuzz_unaligned_bit_chunk_iterator() {
         let mut rng = thread_rng();
 

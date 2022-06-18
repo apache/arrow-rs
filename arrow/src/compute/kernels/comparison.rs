@@ -52,7 +52,7 @@ macro_rules! compare_op {
         }
 
         let null_bit_buffer =
-            combine_option_bitmap($left.data_ref(), $right.data_ref(), $left.len())?;
+            combine_option_bitmap(&[$left.data_ref(), $right.data_ref()], $left.len())?;
 
         // Safety:
         // `i < $left.len()` and $left.len() == $right.len()
@@ -86,7 +86,7 @@ macro_rules! compare_op_primitive {
         }
 
         let null_bit_buffer =
-            combine_option_bitmap($left.data_ref(), $right.data_ref(), $left.len())?;
+            combine_option_bitmap(&[$left.data_ref(), $right.data_ref()], $left.len())?;
 
         let mut values = MutableBuffer::from_len_zeroed(($left.len() + 7) / 8);
         let lhs_chunks_iter = $left.values().chunks_exact(8);
@@ -258,7 +258,7 @@ where
     }
 
     let null_bit_buffer =
-        combine_option_bitmap(left.data_ref(), right.data_ref(), left.len())?;
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
 
     let mut result = BooleanBufferBuilder::new(left.len());
     for i in 0..left.len() {
@@ -548,6 +548,89 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     Ok(BooleanArray::from(data))
 }
 
+/// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`].
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nilike_utf8<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &GenericStringArray<OffsetSize>,
+) -> Result<BooleanArray> {
+    regex_like(left, right, true, |re_pattern| {
+        Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+            ArrowError::ComputeError(format!(
+                "Unable to build regex from ILIKE pattern: {}",
+                e
+            ))
+        })
+    })
+}
+
+/// Perform SQL `left NOT ILIKE right` operation on [`StringArray`] /
+/// [`LargeStringArray`] and a scalar.
+///
+/// See the documentation on [`like_utf8`] for more details.
+pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
+    left: &GenericStringArray<OffsetSize>,
+    right: &str,
+) -> Result<BooleanArray> {
+    let null_bit_buffer = left.data().null_buffer().cloned();
+    let mut result = BooleanBufferBuilder::new(left.len());
+
+    if !right.contains(is_like_pattern) {
+        // fast path, can use equals
+        for i in 0..left.len() {
+            result.append(left.value(i) != right);
+        }
+    } else if right.ends_with('%') && !right[..right.len() - 1].contains(is_like_pattern)
+    {
+        // fast path, can use ends_with
+        for i in 0..left.len() {
+            result.append(
+                !left
+                    .value(i)
+                    .to_uppercase()
+                    .starts_with(&right[..right.len() - 1].to_uppercase()),
+            );
+        }
+    } else if right.starts_with('%') && !right[1..].contains(is_like_pattern) {
+        // fast path, can use starts_with
+        for i in 0..left.len() {
+            result.append(
+                !left
+                    .value(i)
+                    .to_uppercase()
+                    .ends_with(&right[1..].to_uppercase()),
+            );
+        }
+    } else {
+        let re_pattern = escape(right).replace('%', ".*").replace('_', ".");
+        let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
+            ArrowError::ComputeError(format!(
+                "Unable to build regex from ILIKE pattern: {}",
+                e
+            ))
+        })?;
+        for i in 0..left.len() {
+            let haystack = left.value(i);
+            result.append(!re.is_match(haystack));
+        }
+    }
+
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![result.finish()],
+            vec![],
+        )
+    };
+    Ok(BooleanArray::from(data))
+}
+
 /// Perform SQL `array ~ regex_array` operation on [`StringArray`] / [`LargeStringArray`].
 /// If `regex_array` element has an empty value, the corresponding result value is always true.
 ///
@@ -567,7 +650,7 @@ pub fn regexp_is_match_utf8<OffsetSize: OffsetSizeTrait>(
         ));
     }
     let null_bit_buffer =
-        combine_option_bitmap(array.data_ref(), regex_array.data_ref(), array.len())?;
+        combine_option_bitmap(&[array.data_ref(), regex_array.data_ref()], array.len())?;
 
     let mut patterns: HashMap<String, Regex> = HashMap::new();
     let mut result = BooleanBufferBuilder::new(array.len());
@@ -1676,7 +1759,8 @@ where
         ));
     }
 
-    let null_bit_buffer = combine_option_bitmap(left.data_ref(), right.data_ref(), len)?;
+    let null_bit_buffer =
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], len)?;
 
     // we process the data in chunks so that each iteration results in one u64 of comparison result bits
     const CHUNK_SIZE: usize = 64;
@@ -2617,7 +2701,7 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let not_both_null_bit_buffer =
-        match combine_option_bitmap(left.data_ref(), right.data_ref(), left_len)? {
+        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len)? {
             Some(buff) => buff,
             None => new_all_set_buffer(num_bytes),
         };
@@ -2674,7 +2758,7 @@ where
     let num_bytes = bit_util::ceil(left_len, 8);
 
     let not_both_null_bit_buffer =
-        match combine_option_bitmap(left.data_ref(), right.data_ref(), left_len)? {
+        match combine_option_bitmap(&[left.data_ref(), right.data_ref()], left_len)? {
             Some(buff) => buff,
             None => new_all_set_buffer(num_bytes),
         };
@@ -3981,6 +4065,60 @@ mod tests {
         "arrow_",
         ilike_utf8_scalar,
         vec![false, true, false, false]
+    );
+
+    test_utf8!(
+        test_utf8_array_nilike,
+        vec!["arrow", "arrow", "ARROW", "arrow", "ARROW", "ARROWS", "arROw"],
+        vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
+        nilike_utf8,
+        vec![false, false, false, true, true, false, true]
+    );
+    test_utf8_scalar!(
+        nilike_utf8_scalar_escape_testing,
+        vec!["varchar(255)", "int(255)", "varchar", "int"],
+        "%(%)%",
+        nilike_utf8_scalar,
+        vec![false, false, true, true]
+    );
+    test_utf8_scalar!(
+        test_utf8_array_nilike_scalar,
+        vec!["arrow", "parquet", "datafusion", "flight"],
+        "%AR%",
+        nilike_utf8_scalar,
+        vec![false, false, true, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_nilike_scalar_start,
+        vec!["arrow", "parrow", "arrows", "ARR"],
+        "aRRow%",
+        nilike_utf8_scalar,
+        vec![false, true, false, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_nilike_scalar_end,
+        vec!["ArroW", "parrow", "ARRowS", "arr"],
+        "%arrow",
+        nilike_utf8_scalar,
+        vec![false, false, true, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_nilike_scalar_equals,
+        vec!["arrow", "parrow", "arrows", "arr"],
+        "arrow",
+        nilike_utf8_scalar,
+        vec![false, true, true, true]
+    );
+
+    test_utf8_scalar!(
+        test_utf8_array_nilike_scalar_one,
+        vec!["arrow", "arrows", "parrow", "arr"],
+        "arrow_",
+        nilike_utf8_scalar,
+        vec![true, false, true, true]
     );
 
     test_utf8!(

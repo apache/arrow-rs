@@ -18,6 +18,7 @@
 //! Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
+use bytes::{Buf, Bytes};
 use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
 
 use parquet_format::{PageHeader, PageType};
@@ -27,6 +28,7 @@ use crate::basic::{Compression, Encoding, Type};
 use crate::column::page::{Page, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
+use crate::file::page_index::index_reader;
 use crate::file::{footer, metadata::*, reader::*, statistics};
 use crate::record::reader::RowIter;
 use crate::record::Row;
@@ -35,6 +37,7 @@ use crate::util::{io::TryClone, memory::ByteBufferPtr};
 
 // export `SliceableCursor` and `FileSource` publically so clients can
 // re-use the logic in their own ParquetFileWriter wrappers
+#[allow(deprecated)]
 pub use crate::util::{cursor::SliceableCursor, io::FileSource};
 
 // ----------------------------------------------------------------------
@@ -60,12 +63,35 @@ impl ChunkReader for File {
     }
 }
 
+impl Length for Bytes {
+    fn len(&self) -> u64 {
+        self.len() as u64
+    }
+}
+
+impl TryClone for Bytes {
+    fn try_clone(&self) -> std::io::Result<Self> {
+        Ok(self.clone())
+    }
+}
+
+impl ChunkReader for Bytes {
+    type T = bytes::buf::Reader<Bytes>;
+
+    fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
+        let start = start as usize;
+        Ok(self.slice(start..start + length).reader())
+    }
+}
+
+#[allow(deprecated)]
 impl Length for SliceableCursor {
     fn len(&self) -> u64 {
         SliceableCursor::len(self)
     }
 }
 
+#[allow(deprecated)]
 impl ChunkReader for SliceableCursor {
     type T = SliceableCursor;
 
@@ -132,12 +158,16 @@ pub struct SerializedFileReader<R: ChunkReader> {
 /// they will be chained using 'AND' to filter the row groups.
 pub struct ReadOptionsBuilder {
     predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
+    enable_page_index: bool,
 }
 
 impl ReadOptionsBuilder {
     /// New builder
     pub fn new() -> Self {
-        ReadOptionsBuilder { predicates: vec![] }
+        ReadOptionsBuilder {
+            predicates: vec![],
+            enable_page_index: false,
+        }
     }
 
     /// Add a predicate on row group metadata to the reading option,
@@ -162,10 +192,17 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Enable page index in the reading option,
+    pub fn with_page_index(mut self) -> Self {
+        self.enable_page_index = true;
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         ReadOptions {
             predicates: self.predicates,
+            enable_page_index: self.enable_page_index,
         }
     }
 }
@@ -176,6 +213,7 @@ impl ReadOptionsBuilder {
 /// All predicates will be chained using 'AND' to filter the row groups.
 pub struct ReadOptions {
     predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
+    enable_page_index: bool,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -209,13 +247,33 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
             }
         }
 
-        Ok(Self {
-            chunk_reader: Arc::new(chunk_reader),
-            metadata: ParquetMetaData::new(
-                metadata.file_metadata().clone(),
-                filtered_row_groups,
-            ),
-        })
+        if options.enable_page_index {
+            //Todo for now test data `data_index_bloom_encoding_stats.parquet` only have one rowgroup
+            //support multi after create multi-RG test data.
+            let cols = metadata.row_group(0);
+            let columns_indexes =
+                index_reader::read_columns_indexes(&chunk_reader, cols.columns())?;
+            let pages_locations =
+                index_reader::read_pages_locations(&chunk_reader, cols.columns())?;
+
+            Ok(Self {
+                chunk_reader: Arc::new(chunk_reader),
+                metadata: ParquetMetaData::new_with_page_index(
+                    metadata.file_metadata().clone(),
+                    filtered_row_groups,
+                    Some(columns_indexes),
+                    Some(pages_locations),
+                ),
+            })
+        } else {
+            Ok(Self {
+                chunk_reader: Arc::new(chunk_reader),
+                metadata: ParquetMetaData::new(
+                    metadata.file_metadata().clone(),
+                    filtered_row_groups,
+                ),
+            })
+        }
     }
 }
 
@@ -284,6 +342,7 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
     fn get_column_page_reader(&self, i: usize) -> Result<Box<dyn PageReader>> {
         let col = self.metadata.column(i);
         let (col_start, col_length) = col.byte_range();
+        //Todo filter with multi row range
         let file_chunk = self.chunk_reader.get_read(col_start, col_length as usize)?;
         let page_reader = SerializedPageReader::new(
             file_chunk,
@@ -297,6 +356,108 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
     fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter> {
         RowIter::from_row_group(projection, self)
     }
+}
+
+/// Reads a [`PageHeader`] from the provided [`Read`]
+pub(crate) fn read_page_header<T: Read>(input: &mut T) -> Result<PageHeader> {
+    let mut prot = TCompactInputProtocol::new(input);
+    let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
+    Ok(page_header)
+}
+
+/// Decodes a [`Page`] from the provided `buffer`
+pub(crate) fn decode_page(
+    page_header: PageHeader,
+    buffer: ByteBufferPtr,
+    physical_type: Type,
+    decompressor: Option<&mut Box<dyn Codec>>,
+) -> Result<Page> {
+    // When processing data page v2, depending on enabled compression for the
+    // page, we should account for uncompressed data ('offset') of
+    // repetition and definition levels.
+    //
+    // We always use 0 offset for other pages other than v2, `true` flag means
+    // that compression will be applied if decompressor is defined
+    let mut offset: usize = 0;
+    let mut can_decompress = true;
+
+    if let Some(ref header_v2) = page_header.data_page_header_v2 {
+        offset = (header_v2.definition_levels_byte_length
+            + header_v2.repetition_levels_byte_length) as usize;
+        // When is_compressed flag is missing the page is considered compressed
+        can_decompress = header_v2.is_compressed.unwrap_or(true);
+    }
+
+    // TODO: page header could be huge because of statistics. We should set a
+    // maximum page header size and abort if that is exceeded.
+    let buffer = match decompressor {
+        Some(decompressor) if can_decompress => {
+            let uncompressed_size = page_header.uncompressed_page_size as usize;
+            let mut decompressed = Vec::with_capacity(uncompressed_size);
+            let compressed = &buffer.as_ref()[offset..];
+            decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
+            decompressor.decompress(compressed, &mut decompressed)?;
+
+            if decompressed.len() != uncompressed_size {
+                return Err(general_err!(
+                    "Actual decompressed size doesn't match the expected one ({} vs {})",
+                    decompressed.len(),
+                    uncompressed_size
+                ));
+            }
+
+            ByteBufferPtr::new(decompressed)
+        }
+        _ => buffer,
+    };
+
+    let result = match page_header.type_ {
+        PageType::DictionaryPage => {
+            assert!(page_header.dictionary_page_header.is_some());
+            let dict_header = page_header.dictionary_page_header.as_ref().unwrap();
+            let is_sorted = dict_header.is_sorted.unwrap_or(false);
+            Page::DictionaryPage {
+                buf: buffer,
+                num_values: dict_header.num_values as u32,
+                encoding: Encoding::from(dict_header.encoding),
+                is_sorted,
+            }
+        }
+        PageType::DataPage => {
+            assert!(page_header.data_page_header.is_some());
+            let header = page_header.data_page_header.unwrap();
+            Page::DataPage {
+                buf: buffer,
+                num_values: header.num_values as u32,
+                encoding: Encoding::from(header.encoding),
+                def_level_encoding: Encoding::from(header.definition_level_encoding),
+                rep_level_encoding: Encoding::from(header.repetition_level_encoding),
+                statistics: statistics::from_thrift(physical_type, header.statistics),
+            }
+        }
+        PageType::DataPageV2 => {
+            assert!(page_header.data_page_header_v2.is_some());
+            let header = page_header.data_page_header_v2.unwrap();
+            let is_compressed = header.is_compressed.unwrap_or(true);
+            Page::DataPageV2 {
+                buf: buffer,
+                num_values: header.num_values as u32,
+                encoding: Encoding::from(header.encoding),
+                num_nulls: header.num_nulls as u32,
+                num_rows: header.num_rows as u32,
+                def_levels_byte_len: header.definition_levels_byte_length as u32,
+                rep_levels_byte_len: header.repetition_levels_byte_length as u32,
+                is_compressed,
+                statistics: statistics::from_thrift(physical_type, header.statistics),
+            }
+        }
+        _ => {
+            // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+            unimplemented!("Page type {:?} is not supported", page_header.type_)
+        }
+    };
+
+    Ok(result)
 }
 
 /// A serialized implementation for Parquet [`PageReader`].
@@ -336,13 +497,6 @@ impl<T: Read> SerializedPageReader<T> {
         };
         Ok(result)
     }
-
-    /// Reads Page header from Thrift.
-    fn read_page_header(&mut self) -> Result<PageHeader> {
-        let mut prot = TCompactInputProtocol::new(&mut self.buf);
-        let page_header = PageHeader::read_from_in_protocol(&mut prot)?;
-        Ok(page_header)
-    }
 }
 
 impl<T: Read + Send> Iterator for SerializedPageReader<T> {
@@ -356,108 +510,40 @@ impl<T: Read + Send> Iterator for SerializedPageReader<T> {
 impl<T: Read + Send> PageReader for SerializedPageReader<T> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         while self.seen_num_values < self.total_num_values {
-            let page_header = self.read_page_header()?;
+            let page_header = read_page_header(&mut self.buf)?;
 
-            // When processing data page v2, depending on enabled compression for the
-            // page, we should account for uncompressed data ('offset') of
-            // repetition and definition levels.
-            //
-            // We always use 0 offset for other pages other than v2, `true` flag means
-            // that compression will be applied if decompressor is defined
-            let mut offset: usize = 0;
-            let mut can_decompress = true;
+            let to_read = page_header.compressed_page_size as usize;
+            let mut buffer = Vec::with_capacity(to_read);
+            let read = (&mut self.buf)
+                .take(to_read as u64)
+                .read_to_end(&mut buffer)?;
 
-            if let Some(ref header_v2) = page_header.data_page_header_v2 {
-                offset = (header_v2.definition_levels_byte_length
-                    + header_v2.repetition_levels_byte_length)
-                    as usize;
-                // When is_compressed flag is missing the page is considered compressed
-                can_decompress = header_v2.is_compressed.unwrap_or(true);
+            if read != to_read {
+                return Err(eof_err!(
+                    "Expected to read {} bytes of page, read only {}",
+                    to_read,
+                    read
+                ));
             }
 
-            let compressed_len = page_header.compressed_page_size as usize - offset;
-            let uncompressed_len = page_header.uncompressed_page_size as usize - offset;
-            // We still need to read all bytes from buffered stream
-            let mut buffer = vec![0; offset + compressed_len];
-            self.buf.read_exact(&mut buffer)?;
-
-            // TODO: page header could be huge because of statistics. We should set a
-            // maximum page header size and abort if that is exceeded.
-            if let Some(decompressor) = self.decompressor.as_mut() {
-                if can_decompress {
-                    let mut decompressed_buffer = Vec::with_capacity(uncompressed_len);
-                    let decompressed_size = decompressor
-                        .decompress(&buffer[offset..], &mut decompressed_buffer)?;
-                    if decompressed_size != uncompressed_len {
-                        return Err(general_err!(
-              "Actual decompressed size doesn't match the expected one ({} vs {})",
-              decompressed_size,
-              uncompressed_len
-            ));
-                    }
-                    if offset == 0 {
-                        buffer = decompressed_buffer;
-                    } else {
-                        // Prepend saved offsets to the buffer
-                        buffer.truncate(offset);
-                        buffer.append(&mut decompressed_buffer);
-                    }
-                }
-            }
-
+            let buffer = ByteBufferPtr::new(buffer);
             let result = match page_header.type_ {
-                PageType::DictionaryPage => {
-                    assert!(page_header.dictionary_page_header.is_some());
-                    let dict_header =
-                        page_header.dictionary_page_header.as_ref().unwrap();
-                    let is_sorted = dict_header.is_sorted.unwrap_or(false);
-                    Page::DictionaryPage {
-                        buf: ByteBufferPtr::new(buffer),
-                        num_values: dict_header.num_values as u32,
-                        encoding: Encoding::from(dict_header.encoding),
-                        is_sorted,
-                    }
+                PageType::DataPage | PageType::DataPageV2 => {
+                    let decoded = decode_page(
+                        page_header,
+                        buffer,
+                        self.physical_type,
+                        self.decompressor.as_mut(),
+                    )?;
+                    self.seen_num_values += decoded.num_values() as i64;
+                    decoded
                 }
-                PageType::DataPage => {
-                    assert!(page_header.data_page_header.is_some());
-                    let header = page_header.data_page_header.unwrap();
-                    self.seen_num_values += header.num_values as i64;
-                    Page::DataPage {
-                        buf: ByteBufferPtr::new(buffer),
-                        num_values: header.num_values as u32,
-                        encoding: Encoding::from(header.encoding),
-                        def_level_encoding: Encoding::from(
-                            header.definition_level_encoding,
-                        ),
-                        rep_level_encoding: Encoding::from(
-                            header.repetition_level_encoding,
-                        ),
-                        statistics: statistics::from_thrift(
-                            self.physical_type,
-                            header.statistics,
-                        ),
-                    }
-                }
-                PageType::DataPageV2 => {
-                    assert!(page_header.data_page_header_v2.is_some());
-                    let header = page_header.data_page_header_v2.unwrap();
-                    let is_compressed = header.is_compressed.unwrap_or(true);
-                    self.seen_num_values += header.num_values as i64;
-                    Page::DataPageV2 {
-                        buf: ByteBufferPtr::new(buffer),
-                        num_values: header.num_values as u32,
-                        encoding: Encoding::from(header.encoding),
-                        num_nulls: header.num_nulls as u32,
-                        num_rows: header.num_rows as u32,
-                        def_levels_byte_len: header.definition_levels_byte_length as u32,
-                        rep_levels_byte_len: header.repetition_levels_byte_length as u32,
-                        is_compressed,
-                        statistics: statistics::from_thrift(
-                            self.physical_type,
-                            header.statistics,
-                        ),
-                    }
-                }
+                PageType::DictionaryPage => decode_page(
+                    page_header,
+                    buffer,
+                    self.physical_type,
+                    self.decompressor.as_mut(),
+                )?,
                 _ => {
                     // For unknown page type (e.g., INDEX_PAGE), skip and read next.
                     continue;
@@ -475,9 +561,11 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
 mod tests {
     use super::*;
     use crate::basic::{self, ColumnOrder};
+    use crate::file::page_index::index::Index;
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::{get_test_file, get_test_path};
+    use parquet_format::BoundaryOrder;
     use std::sync::Arc;
 
     #[test]
@@ -486,7 +574,7 @@ mod tests {
         get_test_file("alltypes_plain.parquet")
             .read_to_end(&mut buf)
             .unwrap();
-        let cursor = SliceableCursor::new(buf);
+        let cursor = Bytes::from(buf);
         let read_from_cursor = SerializedFileReader::new(cursor).unwrap();
 
         let test_file = get_test_file("alltypes_plain.parquet");
@@ -605,9 +693,9 @@ mod tests {
         let file_metadata = metadata.file_metadata();
         assert!(file_metadata.created_by().is_some());
         assert_eq!(
-      file_metadata.created_by().unwrap(),
-      "impala version 1.3.0-INTERNAL (build 8a48ddb1eff84592b3fc06bc6f51ec120e1fffc9)"
-    );
+            file_metadata.created_by().unwrap(),
+            "impala version 1.3.0-INTERNAL (build 8a48ddb1eff84592b3fc06bc6f51ec120e1fffc9)"
+        );
         assert!(file_metadata.key_value_metadata().is_none());
         assert_eq!(file_metadata.num_rows(), 8);
         assert_eq!(file_metadata.version(), 1);
@@ -954,5 +1042,67 @@ mod tests {
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 0);
         Ok(())
+    }
+
+    #[test]
+    // Use java parquet-tools get below pageIndex info
+    // !```
+    // parquet-tools column-index ./data_index_bloom_encoding_stats.parquet
+    // row group 0:
+    // column index for column String:
+    // Boudary order: ASCENDING
+    // page-0  :
+    // null count                 min                                  max
+    // 0                          Hello                                today
+    //
+    // offset index for column String:
+    // page-0   :
+    // offset   compressed size       first row index
+    // 4               152                     0
+    ///```
+    //
+    fn test_page_index_reader() {
+        let test_file = get_test_file("data_index_bloom_encoding_stats.parquet");
+        let builder = ReadOptionsBuilder::new();
+        //enable read page index
+        let options = builder.with_page_index().build();
+        let reader_result = SerializedFileReader::new_with_options(test_file, options);
+        let reader = reader_result.unwrap();
+
+        // Test contents in Parquet metadata
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        let page_indexes = metadata.page_indexes().unwrap();
+
+        // only one row group
+        assert_eq!(page_indexes.len(), 1);
+        let index = if let Index::BYTE_ARRAY(index) = page_indexes.get(0).unwrap() {
+            index
+        } else {
+            unreachable!()
+        };
+
+        assert_eq!(index.boundary_order, BoundaryOrder::Ascending);
+        let index_in_pages = &index.indexes;
+
+        //only one page group
+        assert_eq!(index_in_pages.len(), 1);
+
+        let page0 = index_in_pages.get(0).unwrap();
+        let min = page0.min.as_ref().unwrap();
+        let max = page0.max.as_ref().unwrap();
+        assert_eq!("Hello", std::str::from_utf8(min.as_slice()).unwrap());
+        assert_eq!("today", std::str::from_utf8(max.as_slice()).unwrap());
+
+        let offset_indexes = metadata.offset_indexes().unwrap();
+        // only one row group
+        assert_eq!(offset_indexes.len(), 1);
+        let offset_index = offset_indexes.get(0).unwrap();
+        let page_offset = offset_index.get(0).unwrap();
+
+        assert_eq!(4, page_offset.offset);
+        assert_eq!(152, page_offset.compressed_page_size);
+        assert_eq!(0, page_offset.first_row_index);
     }
 }

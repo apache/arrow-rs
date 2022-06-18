@@ -78,18 +78,13 @@ impl<'a> _MutableArrayData<'a> {
             }
         };
 
-        let mut array_data_builder = ArrayDataBuilder::new(self.data_type)
+        ArrayDataBuilder::new(self.data_type)
             .offset(0)
             .len(self.len)
             .null_count(self.null_count)
             .buffers(buffers)
-            .child_data(child_data);
-        if self.null_count > 0 {
-            array_data_builder =
-                array_data_builder.null_bit_buffer(Some(self.null_buffer.into()));
-        }
-
-        array_data_builder
+            .child_data(child_data)
+            .null_bit_buffer((self.null_count > 0).then(|| self.null_buffer.into()))
     }
 }
 
@@ -184,48 +179,23 @@ fn build_extend_dictionary(
     max: usize,
 ) -> Option<Extend> {
     use crate::datatypes::*;
+    macro_rules! validate_and_build {
+        ($dt: ty) => {{
+            let _: $dt = max.try_into().ok()?;
+            let offset: $dt = offset.try_into().ok()?;
+            Some(primitive::build_extend_with_offset(array, offset))
+        }};
+    }
     match array.data_type() {
         DataType::Dictionary(child_data_type, _) => match child_data_type.as_ref() {
-            DataType::UInt8 => {
-                let _: u8 = max.try_into().ok()?;
-                let offset: u8 = offset.try_into().ok()?;
-                Some(primitive::build_extend_with_offset(array, offset))
-            }
-            DataType::UInt16 => {
-                let _: u16 = max.try_into().ok()?;
-                let offset: u16 = offset.try_into().ok()?;
-                Some(primitive::build_extend_with_offset(array, offset))
-            }
-            DataType::UInt32 => {
-                let _: u32 = max.try_into().ok()?;
-                let offset: u32 = offset.try_into().ok()?;
-                Some(primitive::build_extend_with_offset(array, offset))
-            }
-            DataType::UInt64 => {
-                let _: u64 = max.try_into().ok()?;
-                let offset: u64 = offset.try_into().ok()?;
-                Some(primitive::build_extend_with_offset(array, offset))
-            }
-            DataType::Int8 => {
-                let _: i8 = max.try_into().ok()?;
-                let offset: i8 = offset.try_into().ok()?;
-                Some(primitive::build_extend_with_offset(array, offset))
-            }
-            DataType::Int16 => {
-                let _: i16 = max.try_into().ok()?;
-                let offset: i16 = offset.try_into().ok()?;
-                Some(primitive::build_extend_with_offset(array, offset))
-            }
-            DataType::Int32 => {
-                let _: i32 = max.try_into().ok()?;
-                let offset: i32 = offset.try_into().ok()?;
-                Some(primitive::build_extend_with_offset(array, offset))
-            }
-            DataType::Int64 => {
-                let _: i64 = max.try_into().ok()?;
-                let offset: i64 = offset.try_into().ok()?;
-                Some(primitive::build_extend_with_offset(array, offset))
-            }
+            DataType::UInt8 => validate_and_build!(u8),
+            DataType::UInt16 => validate_and_build!(u16),
+            DataType::UInt32 => validate_and_build!(u32),
+            DataType::UInt64 => validate_and_build!(u64),
+            DataType::Int8 => validate_and_build!(i8),
+            DataType::Int16 => validate_and_build!(i16),
+            DataType::Int32 => validate_and_build!(i32),
+            DataType::Int64 => validate_and_build!(i64),
             _ => unreachable!(),
         },
         _ => None,
@@ -394,7 +364,7 @@ impl<'a> MutableArrayData<'a> {
     /// a [Capacities] variant is not yet supported.
     pub fn with_capacities(
         arrays: Vec<&'a ArrayData>,
-        mut use_nulls: bool,
+        use_nulls: bool,
         capacities: Capacities,
     ) -> Self {
         let data_type = arrays[0].data_type();
@@ -402,24 +372,33 @@ impl<'a> MutableArrayData<'a> {
 
         // if any of the arrays has nulls, insertions from any array requires setting bits
         // as there is at least one array with nulls.
-        if arrays.iter().any(|array| array.null_count() > 0) {
-            use_nulls = true;
-        };
+        let use_nulls = use_nulls | arrays.iter().any(|array| array.null_count() > 0);
 
         let mut array_capacity;
 
         let [buffer1, buffer2] = match (data_type, &capacities) {
-            (DataType::LargeUtf8, Capacities::Binary(capacity, Some(value_cap)))
-            | (DataType::LargeBinary, Capacities::Binary(capacity, Some(value_cap))) => {
+            (
+                DataType::LargeUtf8 | DataType::LargeBinary,
+                Capacities::Binary(capacity, Some(value_cap)),
+            ) => {
                 array_capacity = *capacity;
                 preallocate_offset_and_binary_buffer::<i64>(*capacity, *value_cap)
             }
-            (DataType::Utf8, Capacities::Binary(capacity, Some(value_cap)))
-            | (DataType::Binary, Capacities::Binary(capacity, Some(value_cap))) => {
+            (
+                DataType::Utf8 | DataType::Binary,
+                Capacities::Binary(capacity, Some(value_cap)),
+            ) => {
                 array_capacity = *capacity;
                 preallocate_offset_and_binary_buffer::<i32>(*capacity, *value_cap)
             }
             (_, Capacities::Array(capacity)) => {
+                array_capacity = *capacity;
+                new_buffers(data_type, *capacity)
+            }
+            (
+                DataType::List(_) | DataType::LargeList(_),
+                Capacities::List(capacity, _),
+            ) => {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
@@ -462,11 +441,10 @@ impl<'a> MutableArrayData<'a> {
                 let capacities = if let Capacities::List(capacity, ref child_capacities) =
                     capacities
                 {
-                    array_capacity = capacity;
                     child_capacities
                         .clone()
                         .map(|c| *c)
-                        .unwrap_or(Capacities::Array(array_capacity))
+                        .unwrap_or(Capacities::Array(capacity))
                 } else {
                     Capacities::Array(array_capacity)
                 };
@@ -721,6 +699,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal() {
         let decimal_array =
             create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
@@ -734,6 +713,7 @@ mod tests {
         assert_eq!(array, expected);
     }
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal_offset() {
         let decimal_array =
             create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
@@ -748,6 +728,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "force_validate"))]
     fn test_decimal_null_offset_nulls() {
         let decimal_array =
             create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
@@ -1339,6 +1320,40 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, expected_list_data);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_append_with_capacities() -> Result<()> {
+        let mut builder = ListBuilder::<Int64Builder>::new(Int64Builder::new(24));
+        builder.values().append_slice(&[1, 2, 3])?;
+        builder.append(true)?;
+        builder.values().append_slice(&[4, 5])?;
+        builder.append(true)?;
+        builder.values().append_slice(&[6, 7, 8])?;
+        builder.values().append_slice(&[9, 10, 11])?;
+        builder.append(true)?;
+        let a = builder.finish();
+
+        let a_builder = Int64Builder::new(24);
+        let mut a_builder = ListBuilder::<Int64Builder>::new(a_builder);
+        a_builder.values().append_slice(&[12, 13])?;
+        a_builder.append(true)?;
+        a_builder.append(true)?;
+        a_builder.values().append_slice(&[14, 15, 16, 17])?;
+        a_builder.append(true)?;
+        let b = a_builder.finish();
+
+        let mutable = MutableArrayData::with_capacities(
+            vec![a.data(), b.data()],
+            false,
+            Capacities::List(6, Some(Box::new(Capacities::Array(17)))),
+        );
+
+        // capacities are rounded up to multiples of 64 by MutableBuffer
+        assert_eq!(mutable.data.buffer1.capacity(), 64);
+        assert_eq!(mutable.data.child_data[0].data.buffer1.capacity(), 192);
 
         Ok(())
     }

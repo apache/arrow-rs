@@ -66,5 +66,5 @@ There is more information in the [contributing] guide.
 [parquet-readme]: parquet/README.md
 [flight-readme]: arrow-flight/README.md
 [datafusion-readme]: https://github.com/apache/arrow-datafusion/blob/master/README.md
-[ballista-readme]: https://github.com/apache/arrow-datafusion/blob/master/ballista/README.md
+[ballista-readme]: https://github.com/apache/arrow-ballista/blob/master/README.md
 [issues]: https://github.com/apache/arrow-rs/issues

@@ -478,11 +478,11 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
 mod tests {
     use super::*;
 
-    use std::{collections::HashMap, convert::TryFrom, sync::Arc};
+    use std::{collections::HashMap, sync::Arc};
 
     use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 
-    use crate::file::{metadata::KeyValue, reader::SerializedFileReader};
+    use crate::file::metadata::KeyValue;
     use crate::{
         arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader},
         schema::{parser::parse_message_type, types::SchemaDescriptor},
@@ -571,9 +571,12 @@ mod tests {
         ];
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
 
-        let converted_arrow_schema =
-            parquet_to_arrow_schema_by_columns(&parquet_schema, ProjectionMask::all(), None)
-                .unwrap();
+        let converted_arrow_schema = parquet_to_arrow_schema_by_columns(
+            &parquet_schema,
+            ProjectionMask::all(),
+            None,
+        )
+        .unwrap();
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
     }
 
@@ -1599,13 +1602,13 @@ mod tests {
         writer.close()?;
 
         // read file back
-        let parquet_reader = SerializedFileReader::try_from(file)?;
-        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(parquet_reader));
+        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
         let read_schema = arrow_reader.get_schema()?;
         assert_eq!(schema, read_schema);
 
         // read all fields by columns
-        let partial_read_schema = arrow_reader.get_schema_by_columns(ProjectionMask::all())?;
+        let partial_read_schema =
+            arrow_reader.get_schema_by_columns(ProjectionMask::all())?;
         assert_eq!(schema, partial_read_schema);
 
         Ok(())
@@ -1668,13 +1671,13 @@ mod tests {
         writer.close()?;
 
         // read file back
-        let parquet_reader = SerializedFileReader::try_from(file)?;
-        let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(parquet_reader));
+        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
         let read_schema = arrow_reader.get_schema()?;
         assert_eq!(schema, read_schema);
 
         // read all fields by columns
-        let partial_read_schema = arrow_reader.get_schema_by_columns(ProjectionMask::all())?;
+        let partial_read_schema =
+            arrow_reader.get_schema_by_columns(ProjectionMask::all())?;
         assert_eq!(schema, partial_read_schema);
 
         Ok(())

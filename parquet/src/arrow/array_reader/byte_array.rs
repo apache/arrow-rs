@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::offset_buffer::OffsetBuffer;
 use crate::arrow::array_reader::{read_records, ArrayReader};
+use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::record_reader::buffer::ScalarValue;
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
@@ -125,13 +125,13 @@ impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
     fn get_def_levels(&self) -> Option<&[i16]> {
         self.def_levels_buffer
             .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+            .map(|buf| buf.typed_data())
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer
             .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+            .map(|buf| buf.typed_data())
     }
 }
 

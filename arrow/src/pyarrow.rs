@@ -24,13 +24,16 @@ use std::sync::Arc;
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::import_exception;
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyList, PyTuple};
 
 use crate::array::{Array, ArrayData, ArrayRef};
 use crate::datatypes::{DataType, Field, Schema};
 use crate::error::ArrowError;
 use crate::ffi;
 use crate::ffi::FFI_ArrowSchema;
+use crate::ffi_stream::{
+    export_reader_into_raw, ArrowArrayStreamReader, FFI_ArrowArrayStream,
+};
 use crate::record_batch::RecordBatch;
 
 import_exception!(pyarrow, ArrowException);
@@ -198,6 +201,42 @@ impl PyArrowConvert for RecordBatch {
     }
 }
 
+impl PyArrowConvert for ArrowArrayStreamReader {
+    fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
+        // prepare a pointer to receive the stream struct
+        let stream = Box::new(FFI_ArrowArrayStream::empty());
+        let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
+
+        // make the conversion through PyArrow's private API
+        // this changes the pointer's memory and is thus unsafe.
+        // In particular, `_export_to_c` can go out of bounds
+        let args = PyTuple::new(value.py(), &[stream_ptr as Py_uintptr_t]);
+        value.call_method1("_export_to_c", args)?;
+
+        let stream_reader =
+            unsafe { ArrowArrayStreamReader::from_raw(stream_ptr).unwrap() };
+
+        unsafe {
+            Box::from_raw(stream_ptr);
+        }
+
+        Ok(stream_reader)
+    }
+
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+        let stream = Box::new(FFI_ArrowArrayStream::empty());
+        let stream_ptr = Box::into_raw(stream) as *mut FFI_ArrowArrayStream;
+
+        unsafe { export_reader_into_raw(Box::new(self.clone()), stream_ptr) };
+
+        let module = py.import("pyarrow")?;
+        let class = module.getattr("RecordBatchReader")?;
+        let args = PyTuple::new(py, &[stream_ptr as Py_uintptr_t]);
+        let reader = class.call_method1("_import_from_c", args)?;
+        Ok(PyObject::from(reader))
+    }
+}
+
 macro_rules! add_conversion {
     ($typ:ty) => {
         impl<'source> FromPyObject<'source> for $typ {
@@ -219,3 +258,4 @@ add_conversion!(Field);
 add_conversion!(Schema);
 add_conversion!(ArrayData);
 add_conversion!(RecordBatch);
+add_conversion!(ArrowArrayStreamReader);

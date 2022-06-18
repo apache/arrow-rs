@@ -25,6 +25,31 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Cache Cargo
+      uses: actions/cache@v3
+      with:
+        # these represent dependencies downloaded by cargo
+        # and thus do not depend on the OS, arch nor rust version.
+        #
+        # source https://github.com/actions/cache/blob/main/examples.md#rust---cargo
+        path: |
+          /usr/local/cargo/bin/
+          /usr/local/cargo/registry/index/
+          /usr/local/cargo/registry/cache/
+          /usr/local/cargo/git/db/
+        key: cargo-cache3-${{ hashFiles('**/Cargo.toml') }}
+        restore-keys: cargo-cache3-
+    - name: Generate lockfile
+      shell: bash
+      run: cargo fetch
+    - name: Cache Rust dependencies
+      uses: actions/cache@v3
+      with:
+        # these represent compiled steps of both dependencies and arrow
+        # and thus are specific for a particular OS, arch and rust version.
+        path: /github/home/target
+        key: ${{ runner.os }}-${{ runner.arch }}-target-cache3-${{ inputs.rust-version }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: ${{ runner.os }}-${{ runner.arch }}-target-cache3-${{ inputs.rust-version }}-
     - name: Install Build Dependencies
       shell: bash
       run: |
@@ -36,4 +61,4 @@ runs:
         echo "Installing ${{ inputs.rust-version }}"
         rustup toolchain install ${{ inputs.rust-version }}
         rustup default ${{ inputs.rust-version }}
-        rustup component add rustfmt
+        echo "CARGO_TARGET_DIR=/github/home/target" >> $GITHUB_ENV

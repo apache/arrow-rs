@@ -303,3 +303,19 @@ def test_dictionary_python():
     assert a == b
     del a
     del b
+
+def test_record_batch_reader():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema),
+        pa.record_batch([[None, [], [5, 6]]], schema),
+    ]
+    a = pa.RecordBatchReader.from_batches(schema, batches)
+    b = rust.round_trip_record_batch_reader(a)
+
+    assert b.schema == schema
+    got_batches = list(b)
+    assert got_batches == batches
