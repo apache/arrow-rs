@@ -702,7 +702,7 @@ pub fn read_dictionary(
         DataType::Dictionary(_, ref value_type) => {
             // Make a fake schema for the dictionary batch.
             let schema = Schema {
-                fields: vec![Field::new("", value_type.as_ref().clone(), false)],
+                fields: vec![Field::new("", value_type.as_ref().clone(), true)],
                 metadata: HashMap::new(),
             };
             // Read a single column
