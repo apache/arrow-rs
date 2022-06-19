@@ -42,7 +42,7 @@ use ipc::CONTINUATION_MARKER;
 use DataType::*;
 
 /// Read a buffer based on offset and length
-/// From https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58
+/// From <https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58>
 /// Each constituent buffer is first compressed with the indicated
 /// compressor, and then written with the uncompressed length in the first 8
 /// bytes as a 64-bit little-endian signed integer followed by the compressed
