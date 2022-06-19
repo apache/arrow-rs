@@ -37,7 +37,7 @@ use crate::ipc;
 use crate::record_batch::RecordBatch;
 use crate::util::bit_util;
 
-use crate::ipc::compression::compression::CompressionCodecType;
+use crate::ipc::compression::ipc_compression::CompressionCodecType;
 use crate::ipc::compression::{
     LENGTH_EMPTY_COMPRESSED_DATA, LENGTH_NO_COMPRESSED_DATA, LENGTH_OF_PREFIX_DATA,
 };
@@ -379,12 +379,12 @@ impl IpcDataGenerator {
 
         // get the type of compression
         let compression_codec = write_options.batch_compression_type;
-        let compression_type: CompressionType = compression_codec.into();
+        let compression_type: Option<CompressionType> = compression_codec.into();
         let compression = {
-            if compression_codec != CompressionCodecType::NoCompression {
+            if let Some(codec) = compression_type {
                 let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
                 c.add_method(ipc::BodyCompressionMethod::BUFFER);
-                c.add_codec(compression_type);
+                c.add_codec(codec);
                 Some(c.finish())
             } else {
                 None
@@ -455,12 +455,12 @@ impl IpcDataGenerator {
 
         // get the type of compression
         let compression_codec = write_options.batch_compression_type;
-        let compression_type: CompressionType = compression_codec.into();
+        let compression_type: Option<CompressionType> = compression_codec.into();
         let compression = {
-            if compression_codec != CompressionCodecType::NoCompression {
+            if let Some(codec) = compression_type {
                 let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
                 c.add_method(ipc::BodyCompressionMethod::BUFFER);
-                c.add_codec(compression_type);
+                c.add_codec(codec);
                 Some(c.finish())
             } else {
                 None
@@ -1011,7 +1011,7 @@ fn write_array_data(
                 offset,
                 data_ref.len(),
                 data_ref.null_count(),
-                &compression_codec,
+                compression_codec,
                 write_options,
             );
         });
@@ -1044,7 +1044,7 @@ fn write_buffer(
             // If we don't use the compression, just write the data in the array
             (buffer.as_slice(), origin_buffer_len as i64)
         }
-        CompressionCodecType::Lz4Frame | CompressionCodecType::ZSTD => {
+        CompressionCodecType::Lz4Frame | CompressionCodecType::Zstd => {
             if (origin_buffer_len as i64) == LENGTH_EMPTY_COMPRESSED_DATA {
                 (buffer.as_slice(), 0)
             } else {
@@ -1227,7 +1227,7 @@ mod tests {
                 8,
                 false,
                 ipc::MetadataVersion::V5,
-                CompressionCodecType::ZSTD,
+                CompressionCodecType::Zstd,
             )
             .unwrap();
             let mut writer =

@@ -23,25 +23,25 @@ use std::io::{Read, Write};
 pub enum CompressionCodecType {
     NoCompression,
     Lz4Frame,
-    ZSTD,
+    Zstd,
 }
 
 impl From<CompressionType> for CompressionCodecType {
     fn from(compression_type: CompressionType) -> Self {
         match compression_type {
-            CompressionType::ZSTD => CompressionCodecType::ZSTD,
+            CompressionType::ZSTD => CompressionCodecType::Zstd,
             CompressionType::LZ4_FRAME => CompressionCodecType::Lz4Frame,
             _ => CompressionCodecType::NoCompression,
         }
     }
 }
 
-impl Into<CompressionType> for CompressionCodecType {
-    fn into(self) -> CompressionType {
-        match self {
-            CompressionCodecType::NoCompression => CompressionType(-1),
-            CompressionCodecType::Lz4Frame => CompressionType::LZ4_FRAME,
-            CompressionCodecType::ZSTD => CompressionType::ZSTD,
+impl From<CompressionCodecType> for Option<CompressionType> {
+    fn from(codec: CompressionCodecType) -> Self {
+        match codec {
+            CompressionCodecType::NoCompression => None,
+            CompressionCodecType::Lz4Frame => Some(CompressionType::LZ4_FRAME),
+            CompressionCodecType::Zstd => Some(CompressionType::ZSTD),
         }
     }
 }
@@ -55,7 +55,7 @@ impl CompressionCodecType {
                 encoder.finish().1.unwrap();
                 Ok(())
             }
-            CompressionCodecType::ZSTD => {
+            CompressionCodecType::Zstd => {
                 let mut encoder = zstd::Encoder::new(output, 0).unwrap();
                 encoder.write_all(input).unwrap();
                 encoder.finish().unwrap();
@@ -72,7 +72,7 @@ impl CompressionCodecType {
                 let size = decoder.read_to_end(output).unwrap();
                 Ok(size)
             }
-            CompressionCodecType::ZSTD => {
+            CompressionCodecType::Zstd => {
                 let mut decoder = zstd::Decoder::new(input)?;
                 let size = decoder.read_to_end(output).unwrap();
                 Ok(size)
@@ -85,7 +85,7 @@ impl CompressionCodecType {
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::compression::compression::CompressionCodecType;
+    use crate::ipc::compression::ipc_compression::CompressionCodecType;
 
     #[test]
     fn test_lz4_compression() {
@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn test_zstd_compression() {
         let input_bytes = "hello zstd".as_bytes();
-        let codec: CompressionCodecType = CompressionCodecType::ZSTD;
+        let codec: CompressionCodecType = CompressionCodecType::Zstd;
         let mut output_bytes: Vec<u8> = Vec::new();
         codec.compress(input_bytes, &mut output_bytes).unwrap();
         let mut result_output_bytes: Vec<u8> = Vec::new();

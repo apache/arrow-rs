@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub(crate) mod compression;
+pub(crate) mod ipc_compression;
 pub(crate) const LENGTH_EMPTY_COMPRESSED_DATA: i64 = 0;
 pub(crate) const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 pub(crate) const LENGTH_OF_PREFIX_DATA: i64 = 8;

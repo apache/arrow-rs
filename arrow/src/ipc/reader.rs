@@ -33,7 +33,7 @@ use crate::error::{ArrowError, Result};
 use crate::ipc;
 use crate::record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 
-use crate::ipc::compression::compression::CompressionCodecType;
+use crate::ipc::compression::ipc_compression::CompressionCodecType;
 use crate::ipc::compression::{
     LENGTH_EMPTY_COMPRESSED_DATA, LENGTH_NO_COMPRESSED_DATA, LENGTH_OF_PREFIX_DATA,
 };
@@ -64,7 +64,7 @@ fn read_buffer(
     }
     match compression_codec {
         CompressionCodecType::NoCompression => Buffer::from(buf_data),
-        CompressionCodecType::Lz4Frame | CompressionCodecType::ZSTD => {
+        CompressionCodecType::Lz4Frame | CompressionCodecType::Zstd => {
             // 8byte + data
             // read the first 8 bytes
             // if the data is compressed, decompress the data, otherwise return as is
@@ -675,7 +675,7 @@ pub fn read_record_batch(
     let compression_codec = match option_compression {
         None => CompressionCodecType::NoCompression,
         Some(compression) => match compression.codec() {
-            CompressionType::ZSTD => CompressionCodecType::ZSTD,
+            CompressionType::ZSTD => CompressionCodecType::Zstd,
             CompressionType::LZ4_FRAME => CompressionCodecType::Lz4Frame,
             _ => CompressionCodecType::NoCompression,
         },
