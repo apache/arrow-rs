@@ -670,7 +670,6 @@ pub fn read_record_batch(
     let field_nodes = batch.nodes().ok_or_else(|| {
         ArrowError::IoError("Unable to get field nodes from IPC RecordBatch".to_string())
     })?;
-    // TODO check the compression body logical
     let option_compression = batch.compression();
     let compression_codec = match option_compression {
         None => CompressionCodecType::NoCompression,
