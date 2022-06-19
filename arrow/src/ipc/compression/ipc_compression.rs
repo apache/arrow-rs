@@ -49,12 +49,14 @@ impl From<CompressionCodecType> for Option<CompressionType> {
 impl CompressionCodecType {
     pub fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<()> {
         match self {
+            #[cfg(any(feature = "lz4", test))]
             CompressionCodecType::Lz4Frame => {
                 let mut encoder = lz4::EncoderBuilder::new().build(output).unwrap();
                 encoder.write_all(input).unwrap();
                 encoder.finish().1.unwrap();
                 Ok(())
             }
+            #[cfg(any(feature = "zstd", test))]
             CompressionCodecType::Zstd => {
                 let mut encoder = zstd::Encoder::new(output, 0).unwrap();
                 encoder.write_all(input).unwrap();
@@ -67,15 +69,21 @@ impl CompressionCodecType {
 
     pub fn decompress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<usize> {
         let result: Result<usize> = match self {
+            #[cfg(any(feature = "lz4", test))]
             CompressionCodecType::Lz4Frame => {
                 let mut decoder = lz4::Decoder::new(input)?;
-                let size = decoder.read_to_end(output).unwrap();
-                Ok(size)
+                match decoder.read_to_end(output) {
+                    Ok(size) => Ok(size),
+                    Err(e) => Err(e.into()),
+                }
             }
+            #[cfg(any(feature = "zstd", test))]
             CompressionCodecType::Zstd => {
                 let mut decoder = zstd::Decoder::new(input)?;
-                let size = decoder.read_to_end(output).unwrap();
-                Ok(size)
+                match decoder.read_to_end(output) {
+                    Ok(size) => Ok(size),
+                    Err(e) => Err(e.into()),
+                }
             }
             _ => Ok(input.len()),
         };

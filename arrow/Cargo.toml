@@ -39,8 +39,8 @@ bench = false
 
 [dependencies]
 byteorder = { version = "1", default-features = false }
-lz4 = { version = "1.23", default-features = true}
-zstd = { version = "0.11.1", default-features = true }
+lz4 = { version = "1.23", default-features = false, optional = true }
+zstd = { version = "0.11.1", optional = true, default-features = false }
 serde = { version = "1.0", default-features = false }
 serde_derive = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["preserve_order"] }
@@ -63,7 +63,7 @@ multiversion = { version = "0.6.1", default-features = false }
 bitflags = { version = "1.2.1", default-features = false }
 
 [features]
-default = ["csv", "ipc", "test_utils"]
+default = ["csv", "ipc", "test_utils", "zstd", "lz4"]
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
 simd = ["packed_simd"]
