@@ -1064,25 +1064,22 @@ fn write_buffer(
         }
     };
     let len = data.len() as i64;
-    // TODO: don't need to pad each buffer, and just need to pad the tail of the message body
-    // let pad_len = pad_to_8(len as u32);
-    // let total_len: i64 = (len + pad_len) as i64;
-    // assert_eq!(len % 8, 0, "Buffer width not a multiple of 8 bytes");
     let total_len = if compression_codec == &CompressionCodecType::NoCompression {
         buffers.push(ipc::Buffer::new(offset, len));
         len
     } else {
-        buffers.push(ipc::Buffer::new(offset, len + LENGTH_OF_PREFIX_DATA));
+        buffers.push(ipc::Buffer::new(offset, LENGTH_OF_PREFIX_DATA + len));
         // write the prefix of the uncompressed length
         let mut uncompression_len_buf = [0; 8];
         LittleEndian::write_i64(&mut uncompression_len_buf, uncompression_buffer_len);
         arrow_data.extend_from_slice(&uncompression_len_buf);
-        len + LENGTH_OF_PREFIX_DATA
+        LENGTH_OF_PREFIX_DATA + len
     };
     arrow_data.extend_from_slice(data);
-
-    // arrow_data.extend_from_slice(&vec![0u8; pad_len][..]);
-    offset + total_len
+    // padding and make offset 8 bytes aligned
+    let pad_len = pad_to_8(len as u32) as i64;
+    arrow_data.extend_from_slice(&vec![0u8; pad_len as usize][..]);
+    offset + total_len + pad_len
 }
 
 /// Calculate an 8-byte boundary and return the number of bytes needed to pad to 8 bytes
@@ -1601,6 +1598,107 @@ mod tests {
                 .unwrap();
                 let options =
                     IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5).unwrap();
+                let mut writer =
+                    StreamWriter::try_new_with_options(file, &reader.schema(), options)
+                        .unwrap();
+                reader.for_each(|batch| {
+                    writer.write(&batch.unwrap()).unwrap();
+                });
+                writer.finish().unwrap();
+            }
+
+            let file =
+                File::open(format!("target/debug/testdata/{}-{}.stream", version, path))
+                    .unwrap();
+            let mut reader = StreamReader::try_new(file, None).unwrap();
+
+            // read expected JSON output
+            let arrow_json = read_gzip_json(version, path);
+            assert!(arrow_json.equals_reader(&mut reader));
+        });
+    }
+
+    #[test]
+    fn read_and_rewrite_compression_files_200() {
+        let testdata = crate::util::test_util::arrow_test_data();
+        let version = "2.0.0-compression";
+        // the test is repetitive, thus we can read all supported files at once
+        let paths = vec!["generated_lz4", "generated_zstd"];
+        paths.iter().for_each(|path| {
+            let file = File::open(format!(
+                "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
+                testdata, version, path
+            ))
+            .unwrap();
+
+            let mut reader = FileReader::try_new(file, None).unwrap();
+
+            // read and rewrite the file to a temp location
+            {
+                let file = File::create(format!(
+                    "target/debug/testdata/{}-{}.arrow_file",
+                    version, path
+                ))
+                .unwrap();
+                // write IPC version 5
+                let options = IpcWriteOptions::try_new_with_compression(
+                    8,
+                    false,
+                    ipc::MetadataVersion::V5,
+                    CompressionCodecType::Lz4Frame,
+                )
+                .unwrap();
+                let mut writer =
+                    FileWriter::try_new_with_options(file, &reader.schema(), options)
+                        .unwrap();
+                while let Some(Ok(batch)) = reader.next() {
+                    writer.write(&batch).unwrap();
+                }
+                writer.finish().unwrap();
+            }
+
+            let file = File::open(format!(
+                "target/debug/testdata/{}-{}.arrow_file",
+                version, path
+            ))
+            .unwrap();
+            let mut reader = FileReader::try_new(file, None).unwrap();
+
+            // read expected JSON output
+            let arrow_json = read_gzip_json(version, path);
+            assert!(arrow_json.equals_reader(&mut reader));
+        });
+    }
+
+    #[test]
+    fn read_and_rewrite_compression_stream_200() {
+        let testdata = crate::util::test_util::arrow_test_data();
+        let version = "2.0.0-compression";
+        // the test is repetitive, thus we can read all supported files at once
+        let paths = vec!["generated_lz4", "generated_zstd"];
+        paths.iter().for_each(|path| {
+            let file = File::open(format!(
+                "{}/arrow-ipc-stream/integration/{}/{}.stream",
+                testdata, version, path
+            ))
+            .unwrap();
+
+            let reader = StreamReader::try_new(file, None).unwrap();
+
+            // read and rewrite the stream to a temp location
+            {
+                let file = File::create(format!(
+                    "target/debug/testdata/{}-{}.stream",
+                    version, path
+                ))
+                .unwrap();
+                let options = IpcWriteOptions::try_new_with_compression(
+                    8,
+                    false,
+                    ipc::MetadataVersion::V5,
+                    CompressionCodecType::Zstd,
+                )
+                .unwrap();
                 let mut writer =
                     StreamWriter::try_new_with_options(file, &reader.schema(), options)
                         .unwrap();
