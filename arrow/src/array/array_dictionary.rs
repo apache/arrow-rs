@@ -128,7 +128,11 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         &self.keys
     }
 
-    /// Returns the lookup key by doing reverse dictionary lookup
+    /// If `value` is present in `values` (aka the dictionary),
+    /// returns the coresponding key (index into the `values`
+    /// array). Otherwise returns `None`.
+    ///
+    /// Panics if `values` is not a [`StringArray`].
     pub fn lookup_key(&self, value: &str) -> Option<K::Native> {
         let rd_buf: &StringArray =
             self.values.as_any().downcast_ref::<StringArray>().unwrap();
