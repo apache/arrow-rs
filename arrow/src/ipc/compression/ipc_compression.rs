@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::Result;
 use crate::ipc::CompressionType;
-use std::io::{Read, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CompressionCodecType {
@@ -46,48 +44,51 @@ impl From<CompressionCodecType> for Option<CompressionType> {
     }
 }
 
-impl CompressionCodecType {
-    pub fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<()> {
-        match self {
-            #[cfg(any(feature = "lz4", test))]
-            CompressionCodecType::Lz4Frame => {
-                let mut encoder = lz4::EncoderBuilder::new().build(output).unwrap();
-                encoder.write_all(input).unwrap();
-                encoder.finish().1.unwrap();
-                Ok(())
-            }
-            #[cfg(any(feature = "zstd", test))]
-            CompressionCodecType::Zstd => {
-                let mut encoder = zstd::Encoder::new(output, 0).unwrap();
-                encoder.write_all(input).unwrap();
-                encoder.finish().unwrap();
-                Ok(())
-            }
-            _ => Ok(()),
-        }
-    }
+#[cfg(any(feature = "zstd,lz4", test))]
+mod compression_function {
+    use crate::error::Result;
+    use crate::ipc::compression::ipc_compression::CompressionCodecType;
+    use std::io::{Read, Write};
 
-    pub fn decompress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<usize> {
-        let result: Result<usize> = match self {
-            #[cfg(any(feature = "lz4", test))]
-            CompressionCodecType::Lz4Frame => {
-                let mut decoder = lz4::Decoder::new(input)?;
-                match decoder.read_to_end(output) {
-                    Ok(size) => Ok(size),
-                    Err(e) => Err(e.into()),
+    impl CompressionCodecType {
+        pub fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<()> {
+            match self {
+                CompressionCodecType::Lz4Frame => {
+                    let mut encoder = lz4::EncoderBuilder::new().build(output).unwrap();
+                    encoder.write_all(input).unwrap();
+                    encoder.finish().1.unwrap();
+                    Ok(())
                 }
-            }
-            #[cfg(any(feature = "zstd", test))]
-            CompressionCodecType::Zstd => {
-                let mut decoder = zstd::Decoder::new(input)?;
-                match decoder.read_to_end(output) {
-                    Ok(size) => Ok(size),
-                    Err(e) => Err(e.into()),
+                CompressionCodecType::Zstd => {
+                    let mut encoder = zstd::Encoder::new(output, 0).unwrap();
+                    encoder.write_all(input).unwrap();
+                    encoder.finish().unwrap();
+                    Ok(())
                 }
+                _ => Ok(()),
             }
-            _ => Ok(input.len()),
-        };
-        result
+        }
+
+        pub fn decompress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<usize> {
+            let result: Result<usize> = match self {
+                CompressionCodecType::Lz4Frame => {
+                    let mut decoder = lz4::Decoder::new(input)?;
+                    match decoder.read_to_end(output) {
+                        Ok(size) => Ok(size),
+                        Err(e) => Err(e.into()),
+                    }
+                }
+                CompressionCodecType::Zstd => {
+                    let mut decoder = zstd::Decoder::new(input)?;
+                    match decoder.read_to_end(output) {
+                        Ok(size) => Ok(size),
+                        Err(e) => Err(e.into()),
+                    }
+                }
+                _ => Ok(input.len()),
+            };
+            result
+        }
     }
 }
 

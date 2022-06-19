@@ -1037,7 +1037,7 @@ fn write_buffer(
     compression_codec: &CompressionCodecType,
 ) -> i64 {
     let origin_buffer_len = buffer.len();
-    let mut compression_buffer = Vec::<u8>::new();
+    let mut _compression_buffer = Vec::<u8>::new();
     let (data, uncompression_buffer_len) = match compression_codec {
         CompressionCodecType::NoCompression => {
             // this buffer_len will not used in the following logic
@@ -1048,17 +1048,19 @@ fn write_buffer(
             if (origin_buffer_len as i64) == LENGTH_EMPTY_COMPRESSED_DATA {
                 (buffer.as_slice(), 0)
             } else {
+                #[cfg(any(feature = "zstd,lz4", test))]
                 compression_codec
-                    .compress(buffer.as_slice(), &mut compression_buffer)
+                    .compress(buffer.as_slice(), &mut _compression_buffer)
                     .unwrap();
-                if compression_buffer.len() > origin_buffer_len {
+                let compression_len = _compression_buffer.len();
+                if compression_len > origin_buffer_len {
                     // the length of compressed data is larger than uncompressed data
                     // use the uncompressed data with -1
                     // -1 indicate that we don't compress the data
                     (buffer.as_slice(), LENGTH_NO_COMPRESSED_DATA)
                 } else {
                     // use the compressed data with uncompressed length
-                    (compression_buffer.as_slice(), origin_buffer_len as i64)
+                    (_compression_buffer.as_slice(), origin_buffer_len as i64)
                 }
             }
         }

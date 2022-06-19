@@ -79,13 +79,14 @@ fn read_buffer(
                 Buffer::from(data)
             } else {
                 // decompress data using the codec
-                let mut uncompressed_buffer = Vec::new();
-                let input_data = &buf_data[(LENGTH_OF_PREFIX_DATA as usize)..];
+                let mut _uncompressed_buffer = Vec::new();
+                let _input_data = &buf_data[(LENGTH_OF_PREFIX_DATA as usize)..];
                 // TODO consider the error result
+                #[cfg(any(feature = "zstd,lz4", test))]
                 compression_codec
-                    .decompress(input_data, &mut uncompressed_buffer)
+                    .decompress(_input_data, &mut _uncompressed_buffer)
                     .unwrap();
-                Buffer::from(uncompressed_buffer)
+                Buffer::from(_uncompressed_buffer)
             }
         }
     }
