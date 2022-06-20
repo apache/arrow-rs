@@ -33,7 +33,7 @@ use crate::datatypes::{
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
-use crate::util::decimal::Decimal128;
+use crate::util::decimal::{BasicDecimal, Decimal128};
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
 /// See [`BinaryArray`] and [`LargeBinaryArray`] for storing

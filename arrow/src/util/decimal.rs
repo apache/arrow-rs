@@ -17,97 +17,123 @@
 
 //! Decimal related utils
 
+use crate::error::{ArrowError, Result};
+use num::bigint::BigInt;
 use std::cmp::Ordering;
 
+pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
+    /// The bit-width of the internal representation.
+    const BIT_WIDTH: usize;
+
+    /// Tries to create a decimal value from precision, scale and bytes.
+    /// If the length of bytes isn't same as the bit width of this decimal,
+    /// returning an error. The bytes should be stored in little-endian order.
+    ///
+    /// Safety:
+    /// This method doesn't validate if the decimal value represented by the bytes
+    /// can be fitted into the specified precision.
+    fn try_new_from_bytes(precision: usize, scale: usize, bytes: &[u8]) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        if bytes.len() == Self::BIT_WIDTH / 8 {
+            Ok(Self::new(precision, scale, bytes))
+        } else {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "Input to Decimal{} must be {} bytes",
+                Self::BIT_WIDTH,
+                Self::BIT_WIDTH / 8
+            )))
+        }
+    }
+
+    /// Creates a decimal value from precision, scale, and bytes.
+    ///
+    /// Safety:
+    /// This method doesn't check if the length of bytes is compatible with this decimal.
+    /// Use `try_new_from_bytes` for safe constructor.
+    fn new(precision: usize, scale: usize, bytes: &[u8]) -> Self;
+
+    /// Returns the raw bytes of the integer representation of the decimal.
+    fn raw_value(&self) -> &[u8];
+
+    /// Returns the precision of the decimal.
+    fn precision(&self) -> usize;
+
+    /// Returns the scale of the decimal.
+    fn scale(&self) -> usize;
+
+    /// Returns the string representation of the decimal.
+    fn as_string(&self) -> String {
+        let raw_bytes = self.raw_value();
+        let integer = BigInt::from_signed_bytes_le(raw_bytes);
+        let value_str = integer.to_string();
+
+        if self.scale() == 0 {
+            value_str
+        } else {
+            let (sign, rest) =
+                value_str.split_at(if integer >= BigInt::from(0) { 0 } else { 1 });
+
+            if rest.len() > self.scale() {
+                // Decimal separator is in the middle of the string
+                let (whole, decimal) = value_str.split_at(value_str.len() - self.scale());
+                format!("{}.{}", whole, decimal)
+            } else {
+                // String has to be padded
+                format!("{}0.{:0>width$}", sign, rest, width = self.scale())
+            }
+        }
+    }
+}
+
 /// Represents a decimal value with precision and scale.
-/// The decimal value is represented by a signed 128-bit integer.
+/// The decimal value could represented by a signed 128-bit integer.
 #[derive(Debug)]
 pub struct Decimal128 {
     #[allow(dead_code)]
     precision: usize,
     scale: usize,
-    value: i128,
+    value: [u8; 16],
 }
 
-impl PartialOrd for Decimal128 {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        assert_eq!(
-            self.scale, other.scale,
-            "Cannot compare two Decimal128 with different scale: {}, {}",
-            self.scale, other.scale
-        );
-        self.value.partial_cmp(&other.value)
-    }
-}
+impl BasicDecimal for Decimal128 {
+    const BIT_WIDTH: usize = 128;
 
-impl Ord for Decimal128 {
-    fn cmp(&self, other: &Self) -> Ordering {
-        assert_eq!(
-            self.scale, other.scale,
-            "Cannot compare two Decimal128 with different scale: {}, {}",
-            self.scale, other.scale
-        );
-        self.value.cmp(&other.value)
-    }
-}
-
-impl PartialEq<Self> for Decimal128 {
-    fn eq(&self, other: &Self) -> bool {
-        assert_eq!(
-            self.scale, other.scale,
-            "Cannot compare two Decimal128 with different scale: {}, {}",
-            self.scale, other.scale
-        );
-        self.value.eq(&other.value)
-    }
-}
-
-impl Eq for Decimal128 {}
-
-impl Decimal128 {
-    pub fn new_from_bytes(precision: usize, scale: usize, bytes: &[u8]) -> Self {
-        let as_array = bytes.try_into();
-        let value = match as_array {
-            Ok(v) if bytes.len() == 16 => i128::from_le_bytes(v),
-            _ => panic!("Input to Decimal128 is not 128bit integer."),
-        };
-
+    fn new(precision: usize, scale: usize, bytes: &[u8]) -> Self {
         Decimal128 {
             precision,
             scale,
-            value,
+            value: bytes.try_into().unwrap(),
         }
     }
 
+    fn raw_value(&self) -> &[u8] {
+        &self.value
+    }
+
+    fn precision(&self) -> usize {
+        self.precision
+    }
+
+    fn scale(&self) -> usize {
+        self.scale
+    }
+}
+
+impl Decimal128 {
+    /// Creates `Decimal128` from an `i128` value.
     pub fn new_from_i128(precision: usize, scale: usize, value: i128) -> Self {
         Decimal128 {
             precision,
             scale,
-            value,
+            value: value.to_le_bytes(),
         }
     }
 
+    /// Returns `i128` representation of the decimal.
     pub fn as_i128(&self) -> i128 {
-        self.value
-    }
-
-    pub fn as_string(&self) -> String {
-        let value_str = self.value.to_string();
-
-        if self.scale == 0 {
-            value_str
-        } else {
-            let (sign, rest) = value_str.split_at(if self.value >= 0 { 0 } else { 1 });
-
-            if rest.len() > self.scale {
-                // Decimal separator is in the middle of the string
-                let (whole, decimal) = value_str.split_at(value_str.len() - self.scale);
-                format!("{}.{}", whole, decimal)
-            } else {
-                // String has to be padded
-                format!("{}0.{:0>width$}", sign, rest, width = self.scale)
-            }
-        }
+        i128::from_le_bytes(self.value)
     }
 }
 
@@ -117,9 +143,85 @@ impl From<Decimal128> for i128 {
     }
 }
 
+/// Represents a decimal value with precision and scale.
+/// The decimal value could be represented by a signed 256-bit integer.
+#[derive(Debug)]
+pub struct Decimal256 {
+    #[allow(dead_code)]
+    precision: usize,
+    scale: usize,
+    value: [u8; 32],
+}
+
+impl BasicDecimal for Decimal256 {
+    const BIT_WIDTH: usize = 256;
+
+    fn new(precision: usize, scale: usize, bytes: &[u8]) -> Self {
+        Decimal256 {
+            precision,
+            scale,
+            value: bytes.try_into().unwrap(),
+        }
+    }
+
+    fn raw_value(&self) -> &[u8] {
+        &self.value
+    }
+
+    fn precision(&self) -> usize {
+        self.precision
+    }
+
+    fn scale(&self) -> usize {
+        self.scale
+    }
+}
+
+macro_rules! def_eq_ord_for_decimal {
+    ($ty:ident) => {
+        impl PartialOrd for $ty {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                assert_eq!(
+                    self.scale, other.scale,
+                    "Cannot compare two Decimals with different scale: {}, {}",
+                    self.scale, other.scale
+                );
+                self.value.partial_cmp(&other.value)
+            }
+        }
+
+        impl Ord for $ty {
+            fn cmp(&self, other: &Self) -> Ordering {
+                assert_eq!(
+                    self.scale, other.scale,
+                    "Cannot compare two Decimals with different scale: {}, {}",
+                    self.scale, other.scale
+                );
+                self.value.cmp(&other.value)
+            }
+        }
+
+        impl PartialEq<Self> for $ty {
+            fn eq(&self, other: &Self) -> bool {
+                assert_eq!(
+                    self.scale, other.scale,
+                    "Cannot compare two Decimals with different scale: {}, {}",
+                    self.scale, other.scale
+                );
+                self.value.eq(&other.value)
+            }
+        }
+
+        impl Eq for $ty {}
+    };
+}
+
+def_eq_ord_for_decimal!(Decimal128);
+def_eq_ord_for_decimal!(Decimal256);
+
 #[cfg(test)]
 mod tests {
-    use crate::util::decimal::Decimal128;
+    use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
 
     #[test]
     fn decimal_128_to_string() {
@@ -132,9 +234,46 @@ mod tests {
 
     #[test]
     fn decimal_128_from_bytes() {
-        let bytes = 100_i128.to_le_bytes();
-        let value = Decimal128::new_from_bytes(5, 2, &bytes);
+        let mut bytes = 100_i128.to_le_bytes();
+        let value = Decimal128::try_new_from_bytes(5, 2, &bytes).unwrap();
         assert_eq!(value.as_string(), "1.00");
+
+        bytes = (-1_i128).to_le_bytes();
+        let value = Decimal128::try_new_from_bytes(5, 2, &bytes).unwrap();
+        assert_eq!(value.as_string(), "-0.01");
+
+        bytes = i128::MAX.to_le_bytes();
+        let value = Decimal128::try_new_from_bytes(5, 2, &bytes).unwrap();
+        assert_eq!(
+            value.as_string(),
+            "1701411834604692317316873037158841057.27"
+        );
+
+        bytes = i128::MIN.to_le_bytes();
+        let value = Decimal128::try_new_from_bytes(5, 2, &bytes).unwrap();
+        assert_eq!(
+            value.as_string(),
+            "-1701411834604692317316873037158841057.28"
+        );
+    }
+
+    #[test]
+    fn decimal_256_from_bytes() {
+        let mut bytes = vec![0; 32];
+        bytes[0..16].clone_from_slice(&100_i128.to_le_bytes());
+        let value = Decimal256::try_new_from_bytes(5, 2, bytes.as_slice()).unwrap();
+        assert_eq!(value.as_string(), "1.00");
+
+        bytes[0..16].clone_from_slice(&i128::MAX.to_le_bytes());
+        let value = Decimal256::try_new_from_bytes(5, 4, &bytes).unwrap();
+        assert_eq!(
+            value.as_string(),
+            "17014118346046923173168730371588410.5727"
+        );
+
+        bytes = vec![255; 32];
+        let value = Decimal256::try_new_from_bytes(5, 2, &bytes).unwrap();
+        assert_eq!(value.as_string(), "-0.01");
     }
 
     fn i128_func(value: impl Into<i128>) -> i128 {
