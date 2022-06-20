@@ -169,6 +169,17 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
             .iter()
             .map(|key| key.map(|k| k.to_usize().expect("Dictionary index not usize")))
     }
+
+    /// Return the value of `keys` (the dictionary key) at index `i`,
+    /// cast to `usize`, `None` if the value at `i` is `NULL`.
+    pub fn key(&self, i: usize) -> Option<usize> {
+        self.keys.is_valid(i).then(|| {
+            self.keys
+                .value(i)
+                .to_usize()
+                .expect("Dictionary index not usize")
+        })
+    }
 }
 
 /// Constructs a `DictionaryArray` from an array data reference.
@@ -532,6 +543,17 @@ mod tests {
         assert!(iter.next().unwrap().is_none());
         assert_eq!("a", iter.next().unwrap().unwrap());
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_dictionary_key() {
+        let keys = Int8Array::from(vec![Some(2), None, Some(1)]);
+        let values = StringArray::from(vec!["foo", "bar", "baz", "blarg"]);
+
+        let array = DictionaryArray::try_new(&keys, &values).unwrap();
+        assert_eq!(array.key(0), Some(2));
+        assert_eq!(array.key(1), None);
+        assert_eq!(array.key(2), Some(1));
     }
 
     #[test]
