@@ -97,30 +97,6 @@ pub struct Decimal128 {
     value: [u8; 16],
 }
 
-impl BasicDecimal for Decimal128 {
-    const BIT_WIDTH: usize = 128;
-
-    fn new(precision: usize, scale: usize, bytes: &[u8]) -> Self {
-        Decimal128 {
-            precision,
-            scale,
-            value: bytes.try_into().unwrap(),
-        }
-    }
-
-    fn raw_value(&self) -> &[u8] {
-        &self.value
-    }
-
-    fn precision(&self) -> usize {
-        self.precision
-    }
-
-    fn scale(&self) -> usize {
-        self.scale
-    }
-}
-
 impl Decimal128 {
     /// Creates `Decimal128` from an `i128` value.
     pub fn new_from_i128(precision: usize, scale: usize, value: i128) -> Self {
@@ -153,32 +129,32 @@ pub struct Decimal256 {
     value: [u8; 32],
 }
 
-impl BasicDecimal for Decimal256 {
-    const BIT_WIDTH: usize = 256;
+macro_rules! def_decimal {
+    ($ty:ident, $bit:expr) => {
+        impl BasicDecimal for $ty {
+            const BIT_WIDTH: usize = $bit;
 
-    fn new(precision: usize, scale: usize, bytes: &[u8]) -> Self {
-        Decimal256 {
-            precision,
-            scale,
-            value: bytes.try_into().unwrap(),
+            fn new(precision: usize, scale: usize, bytes: &[u8]) -> Self {
+                $ty {
+                    precision,
+                    scale,
+                    value: bytes.try_into().unwrap(),
+                }
+            }
+
+            fn raw_value(&self) -> &[u8] {
+                &self.value
+            }
+
+            fn precision(&self) -> usize {
+                self.precision
+            }
+
+            fn scale(&self) -> usize {
+                self.scale
+            }
         }
-    }
 
-    fn raw_value(&self) -> &[u8] {
-        &self.value
-    }
-
-    fn precision(&self) -> usize {
-        self.precision
-    }
-
-    fn scale(&self) -> usize {
-        self.scale
-    }
-}
-
-macro_rules! def_eq_ord_for_decimal {
-    ($ty:ident) => {
         impl PartialOrd for $ty {
             fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
                 assert_eq!(
@@ -216,8 +192,8 @@ macro_rules! def_eq_ord_for_decimal {
     };
 }
 
-def_eq_ord_for_decimal!(Decimal128);
-def_eq_ord_for_decimal!(Decimal256);
+def_decimal!(Decimal128, 128);
+def_decimal!(Decimal256, 256);
 
 #[cfg(test)]
 mod tests {
