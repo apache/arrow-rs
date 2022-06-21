@@ -34,8 +34,8 @@ use crate::error::Result;
 /// for example when doing NLP analysis or representing chromosomes by name.
 ///
 /// [`DictionaryArray`] are represented using a `keys` array and a
-/// `values` array, which may be diferent lengths. The `keys` array
-/// stores indexes in the `values` array which holding holds
+/// `values` array, which may be different lengths. The `keys` array
+/// stores indexes in the `values` array which holds
 /// the corresponding logical value, as shown here:
 ///
 /// ```text
