@@ -129,7 +129,7 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
     }
 
     /// If `value` is present in `values` (aka the dictionary),
-    /// returns the coresponding key (index into the `values`
+    /// returns the corresponding key (index into the `values`
     /// array). Otherwise returns `None`.
     ///
     /// Panics if `values` is not a [`StringArray`].
