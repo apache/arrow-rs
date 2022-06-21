@@ -33,6 +33,34 @@ use crate::error::Result;
 /// This is mostly used to represent strings or a limited set of primitive types as integers,
 /// for example when doing NLP analysis or representing chromosomes by name.
 ///
+/// [`DictionaryArray`] are represented using a `keys` array and a
+/// `values` array, which may be different lengths. The `keys` array
+/// stores indexes in the `values` array which holds
+/// the corresponding logical value, as shown here:
+///
+/// ```text
+/// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///   ┌─────────────────┐  ┌─────────┐ │     ┌─────────────────┐
+/// │ │        A        │  │    0    │       │        A        │     values[keys[0]]
+///   ├─────────────────┤  ├─────────┤ │     ├─────────────────┤
+/// │ │        D        │  │    2    │       │        B        │     values[keys[1]]
+///   ├─────────────────┤  ├─────────┤ │     ├─────────────────┤
+/// │ │        B        │  │    2    │       │        B        │     values[keys[2]]
+///   └─────────────────┘  ├─────────┤ │     ├─────────────────┤
+/// │                      │    1    │       │        D        │     values[keys[3]]
+///                        ├─────────┤ │     ├─────────────────┤
+/// │                      │    1    │       │        D        │     values[keys[4]]
+///                        ├─────────┤ │     ├─────────────────┤
+/// │                      │    0    │       │        A        │     values[keys[5]]
+///                        └─────────┘ │     └─────────────────┘
+/// │       values            keys
+///  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+///                                             Logical array
+///                                                Contents
+///           DictionaryArray
+///              length = 6
+/// ```
+///
 /// Example **with nullable** data:
 ///
 /// ```
