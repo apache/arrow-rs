@@ -90,7 +90,7 @@ pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
                 if sign.len() == 1 {
                     bound += 1;
                 }
-                let value_str = value_str[0..bound].to_string();
+                let value_str = &value_str[0..bound];
                 let (whole, decimal) = value_str.split_at(value_str.len() - self.scale());
                 format!("{}.{}", whole, decimal)
             } else {
