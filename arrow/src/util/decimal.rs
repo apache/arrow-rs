@@ -84,17 +84,15 @@ pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
             let bound = min(self.precision(), rest.len()) + sign.len();
             let value_str = &value_str[0..bound];
             value_str.to_string()
+        } else if rest.len() > self.scale() {
+            // Decimal separator is in the middle of the string
+            let bound = min(self.precision(), rest.len()) + sign.len();
+            let value_str = &value_str[0..bound];
+            let (whole, decimal) = value_str.split_at(value_str.len() - self.scale());
+            format!("{}.{}", whole, decimal)
         } else {
-            if rest.len() > self.scale() {
-                // Decimal separator is in the middle of the string
-                let bound = min(self.precision(), rest.len()) + sign.len();
-                let value_str = &value_str[0..bound];
-                let (whole, decimal) = value_str.split_at(value_str.len() - self.scale());
-                format!("{}.{}", whole, decimal)
-            } else {
-                // String has to be padded
-                format!("{}0.{:0>width$}", sign, rest, width = self.scale())
-            }
+            // String has to be padded
+            format!("{}0.{:0>width$}", sign, rest, width = self.scale())
         }
     }
 }
