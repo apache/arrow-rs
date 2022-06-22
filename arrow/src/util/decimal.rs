@@ -77,19 +77,17 @@ pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
         let raw_bytes = self.raw_value();
         let integer = BigInt::from_signed_bytes_le(raw_bytes);
         let value_str = integer.to_string();
+        let (sign, rest) =
+            value_str.split_at(if integer >= BigInt::from(0) { 0 } else { 1 });
 
         if self.scale() == 0 {
-            value_str
+            let bound = min(self.precision(), rest.len()) + sign.len();
+            let value_str = &value_str[0..bound];
+            value_str.to_string()
         } else {
-            let (sign, rest) =
-                value_str.split_at(if integer >= BigInt::from(0) { 0 } else { 1 });
-
             if rest.len() > self.scale() {
                 // Decimal separator is in the middle of the string
                 let bound = min(self.precision(), rest.len()) + sign.len();
-                if sign.len() == 1 {
-                    bound += 1;
-                }
                 let value_str = &value_str[0..bound];
                 let (whole, decimal) = value_str.split_at(value_str.len() - self.scale());
                 format!("{}.{}", whole, decimal)
@@ -216,10 +214,10 @@ mod tests {
     #[test]
     fn decimal_128_to_string() {
         let mut value = Decimal128::new_from_i128(5, 2, 100);
-        assert_eq!(value.as_string(), "1.00");
+        assert_eq!(value.to_string(), "1.00");
 
         value = Decimal128::new_from_i128(5, 3, 100);
-        assert_eq!(value.as_string(), "0.100");
+        assert_eq!(value.to_string(), "0.100");
     }
 
     #[test]
@@ -233,31 +231,31 @@ mod tests {
     fn decimal_128_from_bytes() {
         let mut bytes = 100_i128.to_le_bytes();
         let value = Decimal128::try_new_from_bytes(5, 2, &bytes).unwrap();
-        assert_eq!(value.as_string(), "1.00");
+        assert_eq!(value.to_string(), "1.00");
 
         bytes = (-1_i128).to_le_bytes();
         let value = Decimal128::try_new_from_bytes(5, 2, &bytes).unwrap();
-        assert_eq!(value.as_string(), "-0.01");
+        assert_eq!(value.to_string(), "-0.01");
 
         bytes = i128::MAX.to_le_bytes();
         let value = Decimal128::try_new_from_bytes(38, 2, &bytes).unwrap();
-        assert_eq!(value.as_string(), "170141183460469231731687303715884105.72");
+        assert_eq!(value.to_string(), "170141183460469231731687303715884105.72");
 
         bytes = i128::MIN.to_le_bytes();
         let value = Decimal128::try_new_from_bytes(38, 2, &bytes).unwrap();
         assert_eq!(
-            value.as_string(),
+            value.to_string(),
             "-170141183460469231731687303715884105.72"
         );
 
         // Truncated
         bytes = 12345_i128.to_le_bytes();
         let value = Decimal128::try_new_from_bytes(3, 2, &bytes).unwrap();
-        assert_eq!(value.as_string(), "1.23");
+        assert_eq!(value.to_string(), "1.23");
 
         bytes = (-12345_i128).to_le_bytes();
         let value = Decimal128::try_new_from_bytes(3, 2, &bytes).unwrap();
-        assert_eq!(value.as_string(), "-1.23");
+        assert_eq!(value.to_string(), "-1.23");
     }
 
     #[test]
@@ -265,18 +263,36 @@ mod tests {
         let mut bytes = vec![0; 32];
         bytes[0..16].clone_from_slice(&100_i128.to_le_bytes());
         let value = Decimal256::try_new_from_bytes(5, 2, bytes.as_slice()).unwrap();
-        assert_eq!(value.as_string(), "1.00");
+        assert_eq!(value.to_string(), "1.00");
 
         bytes[0..16].clone_from_slice(&i128::MAX.to_le_bytes());
         let value = Decimal256::try_new_from_bytes(40, 4, &bytes).unwrap();
         assert_eq!(
-            value.as_string(),
+            value.to_string(),
             "17014118346046923173168730371588410.5727"
+        );
+
+        // i128 maximum + 1
+        bytes[0..16].clone_from_slice(&0_i128.to_le_bytes());
+        bytes[15] = 128;
+        let value = Decimal256::try_new_from_bytes(40, 4, &bytes).unwrap();
+        assert_eq!(
+            value.to_string(),
+            "17014118346046923173168730371588410.5728"
+        );
+
+        // smaller than i128 minimum
+        bytes = vec![255; 32];
+        bytes[31] = 128;
+        let value = Decimal256::try_new_from_bytes(79, 4, &bytes).unwrap();
+        assert_eq!(
+            value.to_string(),
+            "-5744373177007483132341216834415376678658315645522012356644966081642565415.7313"
         );
 
         bytes = vec![255; 32];
         let value = Decimal256::try_new_from_bytes(5, 2, &bytes).unwrap();
-        assert_eq!(value.as_string(), "-0.01");
+        assert_eq!(value.to_string(), "-0.01");
     }
 
     fn i128_func(value: impl Into<i128>) -> i128 {

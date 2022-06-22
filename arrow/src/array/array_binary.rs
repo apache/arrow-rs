@@ -823,7 +823,7 @@ impl DecimalArray {
 
     #[inline]
     pub fn value_as_string(&self, row: usize) -> String {
-        self.value(row).as_string()
+        self.value(row).to_string()
     }
 
     pub fn from_fixed_size_list_array(
