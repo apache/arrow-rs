@@ -73,7 +73,7 @@ pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
     /// Returns the string representation of the decimal.
     /// If the string representation cannot be fitted with the precision of the decimal,
     /// the string will be truncated.
-    fn as_string(&self) -> String {
+    fn to_string(&self) -> String {
         let raw_bytes = self.raw_value();
         let integer = BigInt::from_signed_bytes_le(raw_bytes);
         let value_str = integer.to_string();
