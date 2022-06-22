@@ -70,7 +70,7 @@ fn read_buffer(
             // if the data is compressed, decompress the data, otherwise return as is
             let decompressed_length = read_uncompressed_size(buf_data);
             if decompressed_length == LENGTH_EMPTY_COMPRESSED_DATA {
-                // emtpy
+                // empty
                 let empty = Vec::<u8>::new();
                 Buffer::from(empty)
             } else if decompressed_length == LENGTH_NO_COMPRESSED_DATA {
