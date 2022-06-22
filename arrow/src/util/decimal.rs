@@ -86,7 +86,7 @@ pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
 
             if rest.len() > self.scale() {
                 // Decimal separator is in the middle of the string
-                let mut bound = min(self.precision(), rest.len());
+                let bound = min(self.precision(), rest.len()) + sign.len();
                 if sign.len() == 1 {
                     bound += 1;
                 }
