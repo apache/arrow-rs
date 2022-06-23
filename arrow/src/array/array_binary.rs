@@ -33,7 +33,7 @@ use crate::datatypes::{
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
-use crate::util::decimal::Decimal128;
+use crate::util::decimal::{BasicDecimal, Decimal128};
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
 /// See [`BinaryArray`] and [`LargeBinaryArray`] for storing
@@ -823,7 +823,7 @@ impl DecimalArray {
 
     #[inline]
     pub fn value_as_string(&self, row: usize) -> String {
-        self.value(row).as_string()
+        self.value(row).to_string()
     }
 
     pub fn from_fixed_size_list_array(
