@@ -79,14 +79,13 @@ pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
         let value_str = integer.to_string();
         let (sign, rest) =
             value_str.split_at(if integer >= BigInt::from(0) { 0 } else { 1 });
+        let bound = min(self.precision(), rest.len()) + sign.len();
 
         if self.scale() == 0 {
-            let bound = min(self.precision(), rest.len()) + sign.len();
             let value_str = &value_str[0..bound];
             value_str.to_string()
         } else if rest.len() > self.scale() {
             // Decimal separator is in the middle of the string
-            let bound = min(self.precision(), rest.len()) + sign.len();
             let value_str = &value_str[0..bound];
             let (whole, decimal) = value_str.split_at(value_str.len() - self.scale());
             format!("{}.{}", whole, decimal)
