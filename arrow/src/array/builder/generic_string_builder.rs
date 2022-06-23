@@ -15,10 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::{
+    ArrayBuilder, ArrayRef, GenericListBuilder, GenericStringArray, OffsetSizeTrait,
+    UInt8Builder,
+};
+use crate::error::Result;
 use std::any::Any;
 use std::sync::Arc;
-use crate::array::{ArrayBuilder, ArrayRef, GenericListBuilder, GenericStringArray, OffsetSizeTrait, UInt8Builder};
-use crate::error::{Result};
 
 #[derive(Debug)]
 pub struct GenericStringBuilder<OffsetSize: OffsetSizeTrait> {
