@@ -40,8 +40,7 @@ pub(crate) fn count_nulls(
     len: usize,
 ) -> usize {
     if let Some(buf) = null_bit_buffer {
-        len.checked_sub(buf.count_set_bits_offset(offset, len))
-            .unwrap()
+        len - buf.count_set_bits_offset(offset, len)
     } else {
         0
     }
