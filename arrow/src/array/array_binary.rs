@@ -459,7 +459,7 @@ impl FixedSizeBinaryArray {
             i < self.data.len(),
             "FixedSizeBinaryArray out of bounds access"
         );
-        let offset = i.checked_add(self.data.offset()).unwrap();
+        let offset = i + self.data.offset();
         unsafe {
             let pos = self.value_offset_at(offset);
             std::slice::from_raw_parts(
@@ -473,7 +473,7 @@ impl FixedSizeBinaryArray {
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
     pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
-        let offset = i.checked_add(self.data.offset()).unwrap();
+        let offset = i + self.data.offset();
         let pos = self.value_offset_at(offset);
         std::slice::from_raw_parts(
             self.value_data.as_ptr().offset(pos as isize),
@@ -779,7 +779,7 @@ impl DecimalArray {
     /// Returns the element at index `i`.
     pub fn value(&self, i: usize) -> Decimal128 {
         assert!(i < self.data.len(), "DecimalArray out of bounds access");
-        let offset = i.checked_add(self.data.offset()).unwrap();
+        let offset = i + self.data.offset();
         let raw_val = unsafe {
             let pos = self.value_offset_at(offset);
             std::slice::from_raw_parts(
