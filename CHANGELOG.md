@@ -19,81 +19,99 @@
 
 # Changelog
 
-## [16.0.0](https://github.com/apache/arrow-rs/tree/16.0.0) (2022-06-10)
+## [17.0.0](https://github.com/apache/arrow-rs/tree/17.0.0) (2022-06-23)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/15.0.0...16.0.0)
+[Full Changelog](https://github.com/apache/arrow-rs/compare/16.0.0...17.0.0)
 
 **Breaking changes:**
 
-- Seal `ArrowNativeType` and `OffsetSizeTrait` for safety \(\#1028\) [\#1819](https://github.com/apache/arrow-rs/pull/1819) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Improve API for `csv::infer_file_schema` by removing redundant ref  [\#1776](https://github.com/apache/arrow-rs/pull/1776) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Add Decimal128 API and use it in DecimalArray and DecimalBuilder [\#1870](https://github.com/apache/arrow-rs/issues/1870)
+- Rename `ArrayData::validate_dict_offsets` to `ArrayData::validate_values` [\#1889](https://github.com/apache/arrow-rs/pull/1889) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([frolovdev](https://github.com/frolovdev))
+-  Add Decimal128 API and use it in DecimalArray and DecimalBuilder [\#1871](https://github.com/apache/arrow-rs/pull/1871) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Mark typed buffer APIs safe \(\#996\) \(\#1027\) [\#1866](https://github.com/apache/arrow-rs/pull/1866) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 
 **Implemented enhancements:**
 
-- List equality method should work on empty offset `ListArray` [\#1817](https://github.com/apache/arrow-rs/issues/1817) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Command line tool for convert CSV to Parquet [\#1797](https://github.com/apache/arrow-rs/issues/1797) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- IPC writer should write validity buffer for `UnionArray` in V4 IPC message [\#1793](https://github.com/apache/arrow-rs/issues/1793) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Add function for row alignment with page mask [\#1790](https://github.com/apache/arrow-rs/issues/1790) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Rust IPC Read should be able to read V4 UnionType Array [\#1788](https://github.com/apache/arrow-rs/issues/1788) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- `combine_option_bitmap` should accept arbitrary number of input arrays. [\#1780](https://github.com/apache/arrow-rs/issues/1780) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Add `substring_by_char` kernels for slicing on character boundaries [\#1768](https://github.com/apache/arrow-rs/issues/1768) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Support reading `PageIndex` from column metadata [\#1761](https://github.com/apache/arrow-rs/issues/1761) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Support casting from `DataType::Utf8` to `DataType::Boolean` [\#1740](https://github.com/apache/arrow-rs/issues/1740) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Make current position available in `FileWriter`. [\#1691](https://github.com/apache/arrow-rs/issues/1691) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Support writing parquet to `stdout` [\#1687](https://github.com/apache/arrow-rs/issues/1687) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Add `DictionaryArray::key` function [\#1911](https://github.com/apache/arrow-rs/issues/1911)
+- Explicitly declare the features used for each dependency [\#1876](https://github.com/apache/arrow-rs/issues/1876)
+- Exclude some long-running tests from miri [\#1862](https://github.com/apache/arrow-rs/issues/1862)
+- PrimitiveArray::from\_iter should omit validity buffer if all values are valid [\#1856](https://github.com/apache/arrow-rs/issues/1856)
+- Add `from(v: Vec<Option<&[u8]>>)` and `from(v: Vec<&[u8]>)` for `FixedSizedBInaryArray` [\#1852](https://github.com/apache/arrow-rs/issues/1852)
+- Add Vec-inspired APIs to BufferBuilder [\#1850](https://github.com/apache/arrow-rs/issues/1850)
+- PyArrow intergation test for C Stream Interface [\#1847](https://github.com/apache/arrow-rs/issues/1847)
+- Add `nilike` support in `comparison` [\#1845](https://github.com/apache/arrow-rs/issues/1845)
+- Split up arrow::array::builder module [\#1843](https://github.com/apache/arrow-rs/issues/1843)
+- Add `quarter` support in `temporal` [\#1835](https://github.com/apache/arrow-rs/issues/1835)
+- AVX512 + simd binary and/or kernels slower than autovectorized version [\#1829](https://github.com/apache/arrow-rs/issues/1829)
+- Rename ArrayData::validate\_dictionary\_offset [\#1812](https://github.com/apache/arrow-rs/issues/1812)
+- Blog post about arrow 10.0.0 - 16.0.0 [\#1808](https://github.com/apache/arrow-rs/issues/1808)
+- Clean up the testing code in `substring` kernel [\#1801](https://github.com/apache/arrow-rs/issues/1801)
 
 **Fixed bugs:**
 
-- Incorrect Offset Validation for Sliced List Array Children [\#1814](https://github.com/apache/arrow-rs/issues/1814) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Parquet Snappy Codec overwrites Existing Data in Decompression Buffer [\#1806](https://github.com/apache/arrow-rs/issues/1806) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- `flight_data_to_arrow_batch` does not support `RecordBatch`es with no columns [\#1783](https://github.com/apache/arrow-rs/issues/1783) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
-- parquet does not compile with `features=["zstd"]` [\#1630](https://github.com/apache/arrow-rs/issues/1630) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Incorrect max and min decimals [\#1916](https://github.com/apache/arrow-rs/issues/1916)
+- `dynamic_types` example does not print the projection [\#1902](https://github.com/apache/arrow-rs/issues/1902)
+- `log2(0)` panicked at `'attempt to subtract with overflow', parquet/src/util/bit_util.rs:148:5` [\#1901](https://github.com/apache/arrow-rs/issues/1901) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Final slicing in combine\_option\_bitmap needs to use bit slices [\#1899](https://github.com/apache/arrow-rs/issues/1899)
+- Dictionary IPC writer appears to write incorrect schema [\#1892](https://github.com/apache/arrow-rs/issues/1892)
+- Creating a `RecordBatch` with null values in non-nullable fields does not cause an error [\#1888](https://github.com/apache/arrow-rs/issues/1888)
+- Specifying capacities for ListArrays is not supported in MutableArrayData [\#1884](https://github.com/apache/arrow-rs/issues/1884)
+- Upgrade `regex` dependency to latest  [\#1874](https://github.com/apache/arrow-rs/issues/1874)
+- Miri reports leaks in ffi tests [\#1872](https://github.com/apache/arrow-rs/issues/1872)
 
 **Documentation updates:**
 
-- Update arrow module docs [\#1840](https://github.com/apache/arrow-rs/pull/1840) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Update safety disclaimer [\#1837](https://github.com/apache/arrow-rs/pull/1837) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Update ballista readme link [\#1765](https://github.com/apache/arrow-rs/pull/1765) ([tustvold](https://github.com/tustvold))
-- Move changelog archive to `CHANGELOG-old.md` [\#1759](https://github.com/apache/arrow-rs/pull/1759) ([alamb](https://github.com/alamb))
+- minor: clarify docstring on `DictionaryArray::lookup_key` [\#1910](https://github.com/apache/arrow-rs/pull/1910) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- minor: add a diagram to docstring for DictionaryArray [\#1909](https://github.com/apache/arrow-rs/pull/1909) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Closes \#1902: Print the original and projected RecordBatch in dynamic\_types example [\#1903](https://github.com/apache/arrow-rs/pull/1903) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([martin-g](https://github.com/martin-g))
 
 **Closed issues:**
 
-- `DataType::Decimal` Non-Compliant? [\#1779](https://github.com/apache/arrow-rs/issues/1779) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Further simplify the offset validation [\#1770](https://github.com/apache/arrow-rs/issues/1770) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Best way to convert arrow to Rust native type [\#1760](https://github.com/apache/arrow-rs/issues/1760) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Why `Parquet` is a part of `Arrow`? [\#1715](https://github.com/apache/arrow-rs/issues/1715) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- how read/write REPEATED [\#1886](https://github.com/apache/arrow-rs/issues/1886)
+- Speed up `substring_by_char` [\#1800](https://github.com/apache/arrow-rs/issues/1800)
 
 **Merged pull requests:**
 
-- Make equals\_datatype method public, enabling other modules [\#1838](https://github.com/apache/arrow-rs/pull/1838) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([nl5887](https://github.com/nl5887))
-- \[Minor\] Clarify `PageIterator` Documentation [\#1831](https://github.com/apache/arrow-rs/pull/1831) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Ted-Jiang](https://github.com/Ted-Jiang))
-- Update MIRI pin [\#1828](https://github.com/apache/arrow-rs/pull/1828) ([tustvold](https://github.com/tustvold))
-- Change to use `resolver v2`, test more feature flag combinations in CI, fix errors \(\#1630\) [\#1822](https://github.com/apache/arrow-rs/pull/1822) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Add ScalarBuffer abstraction \(\#1811\) [\#1820](https://github.com/apache/arrow-rs/pull/1820) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Fix list equal for empty offset list array [\#1818](https://github.com/apache/arrow-rs/pull/1818) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
-- Fix Decimal and List ArrayData Validation \(\#1813\) \(\#1814\) [\#1816](https://github.com/apache/arrow-rs/pull/1816) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Don't overwrite existing data on snappy decompress \(\#1806\) [\#1807](https://github.com/apache/arrow-rs/pull/1807) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- Rename `arrow/benches/string_kernels.rs` to `arrow/benches/substring_kernels.rs` [\#1805](https://github.com/apache/arrow-rs/pull/1805) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
-- Add public API for decoding parquet footer [\#1804](https://github.com/apache/arrow-rs/pull/1804) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- Add AsyncFileReader trait [\#1803](https://github.com/apache/arrow-rs/pull/1803) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- add parquet-fromcsv \(\#1\) [\#1798](https://github.com/apache/arrow-rs/pull/1798) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([kazuk](https://github.com/kazuk))
-- Use IPC row count info in IPC reader [\#1796](https://github.com/apache/arrow-rs/pull/1796) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
-- Fix typos in the Memory and Buffers section of the docs home [\#1795](https://github.com/apache/arrow-rs/pull/1795) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([datapythonista](https://github.com/datapythonista))
-- Write validity buffer for UnionArray in V4 IPC message [\#1794](https://github.com/apache/arrow-rs/pull/1794) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
-- feat:Add function for row alignment with page mask [\#1791](https://github.com/apache/arrow-rs/pull/1791) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Ted-Jiang](https://github.com/Ted-Jiang))
-- Read and skip validity buffer of UnionType Array for V4 ipc message [\#1789](https://github.com/apache/arrow-rs/pull/1789) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([viirya](https://github.com/viirya))
-- Add `Substring_by_char` [\#1784](https://github.com/apache/arrow-rs/pull/1784) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
-- Add `ParquetFileArrowReader::try_new` [\#1782](https://github.com/apache/arrow-rs/pull/1782) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- Arbitrary size combine option bitmap [\#1781](https://github.com/apache/arrow-rs/pull/1781) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Ismail-Maj](https://github.com/Ismail-Maj))
-- Implement `ChunkReader` for `Bytes`, deprecate `SliceableCursor` [\#1775](https://github.com/apache/arrow-rs/pull/1775) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- Access metadata of flushed row groups on write \(\#1691\) [\#1774](https://github.com/apache/arrow-rs/pull/1774) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- Simplify ParquetFileArrowReader Metadata API [\#1773](https://github.com/apache/arrow-rs/pull/1773) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
-- MINOR: Unpin nightly version as packed\_simd releases new version [\#1771](https://github.com/apache/arrow-rs/pull/1771) ([viirya](https://github.com/viirya))
-- Update comfy-table requirement from 5.0 to 6.0 [\#1769](https://github.com/apache/arrow-rs/pull/1769) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([dependabot[bot]](https://github.com/apps/dependabot))
-- Optionally disable `validate_decimal_precision` check in `DecimalBuilder.append_value` for interop test [\#1767](https://github.com/apache/arrow-rs/pull/1767) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
-- Minor: Clean up the code of MutableArrayData [\#1763](https://github.com/apache/arrow-rs/pull/1763) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
-- Support reading PageIndex from parquet metadata, prepare for skipping pages at reading [\#1762](https://github.com/apache/arrow-rs/pull/1762) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([Ted-Jiang](https://github.com/Ted-Jiang))
-- Support casting `Utf8` to `Boolean` [\#1738](https://github.com/apache/arrow-rs/pull/1738) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([MazterQyou](https://github.com/MazterQyou))
+- MINOR: Replace `checked_add/sub().unwrap()` with `+/-` [\#1924](https://github.com/apache/arrow-rs/pull/1924) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Update half requirement from 1.8 to 2.0 [\#1919](https://github.com/apache/arrow-rs/pull/1919) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([dependabot[bot]](https://github.com/apps/dependabot))
+- Fix max and min decimal for max precision [\#1917](https://github.com/apache/arrow-rs/pull/1917) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Add `DictionaryArray::key` function [\#1912](https://github.com/apache/arrow-rs/pull/1912) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Fix misaligned reference and logic error in crc32 [\#1906](https://github.com/apache/arrow-rs/pull/1906) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([saethlin](https://github.com/saethlin))
+- Refine the `bit_util` of Parquet. [\#1905](https://github.com/apache/arrow-rs/pull/1905) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([HaoYang670](https://github.com/HaoYang670))
+- Use bit\_slice in combine\_option\_bitmap [\#1900](https://github.com/apache/arrow-rs/pull/1900) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jhorstmann](https://github.com/jhorstmann))
+- Issue \#1876: Explicitly declare the used features for each dependency in integration\_testing [\#1898](https://github.com/apache/arrow-rs/pull/1898) ([martin-g](https://github.com/martin-g))
+- Issue \#1876: Explicitly declare the used features for each dependency in parquet\_derive\_test [\#1897](https://github.com/apache/arrow-rs/pull/1897) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([martin-g](https://github.com/martin-g))
+- Issue \#1876: Explicitly declare the used features for each dependency in parquet\_derive [\#1896](https://github.com/apache/arrow-rs/pull/1896) ([martin-g](https://github.com/martin-g))
+- Issue \#1876: Explicitly declare the used features for each dependency in parquet [\#1895](https://github.com/apache/arrow-rs/pull/1895) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([martin-g](https://github.com/martin-g))
+- Minor: Add examples to docstring for `weekday` [\#1894](https://github.com/apache/arrow-rs/pull/1894) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- Correct nullable in read\_dictionary [\#1893](https://github.com/apache/arrow-rs/pull/1893) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Feature add weekday temporal kernel [\#1891](https://github.com/apache/arrow-rs/pull/1891) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([nl5887](https://github.com/nl5887))
+- Add validation to `RecordBatch` for non-nullable fields containing null values [\#1890](https://github.com/apache/arrow-rs/pull/1890) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([andygrove](https://github.com/andygrove))
+- Support specifying list capacities for `MutableArrayData` [\#1885](https://github.com/apache/arrow-rs/pull/1885) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jhorstmann](https://github.com/jhorstmann))
+- Issue \#1876: Explicitly declare the used features for each dependency in parquet [\#1881](https://github.com/apache/arrow-rs/pull/1881) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([martin-g](https://github.com/martin-g))
+- Issue \#1876: Explicitly declare the used features for each dependency in arrow-flight [\#1880](https://github.com/apache/arrow-rs/pull/1880) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([martin-g](https://github.com/martin-g))
+- Split up arrow::array::builder module \(\#1843\) [\#1879](https://github.com/apache/arrow-rs/pull/1879) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([DaltonModlin](https://github.com/DaltonModlin))
+- Fix memory leak in ffi test [\#1878](https://github.com/apache/arrow-rs/pull/1878) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Issue \#1876 - Explicitly declare the used features for each dependency [\#1877](https://github.com/apache/arrow-rs/pull/1877) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([martin-g](https://github.com/martin-g))
+- Fixes \#1874 - Upgrade `regex` dependency to 1.5.6 [\#1875](https://github.com/apache/arrow-rs/pull/1875) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([martin-g](https://github.com/martin-g))
+- Do not print exit code from miri, instead it should be the return value of the script [\#1873](https://github.com/apache/arrow-rs/pull/1873) ([jhorstmann](https://github.com/jhorstmann))
+- Update vendored gRPC [\#1869](https://github.com/apache/arrow-rs/pull/1869) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([tustvold](https://github.com/tustvold))
+- Expose `BitSliceIterator` and `BitIndexIterator` \(\#1864\) [\#1865](https://github.com/apache/arrow-rs/pull/1865) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Exclude some long-running tests when running under miri [\#1863](https://github.com/apache/arrow-rs/pull/1863) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jhorstmann](https://github.com/jhorstmann))
+- Add vec-inspired APIs to BufferBuilder \(\#1850\) [\#1860](https://github.com/apache/arrow-rs/pull/1860) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Omit validity buffer in PrimitiveArray::from\_iter when all values are valid [\#1859](https://github.com/apache/arrow-rs/pull/1859) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jhorstmann](https://github.com/jhorstmann))
+- Add two `from` methods for `FixedSizeBinaryArray` [\#1854](https://github.com/apache/arrow-rs/pull/1854) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Clean up the test code of `substring` kernel. [\#1853](https://github.com/apache/arrow-rs/pull/1853) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Add PyArrow integration test for C Stream Interface [\#1848](https://github.com/apache/arrow-rs/pull/1848) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Add `nilike` support in `comparison` [\#1846](https://github.com/apache/arrow-rs/pull/1846) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([MazterQyou](https://github.com/MazterQyou))
+- MINOR: Remove version check from `test_command_help` [\#1844](https://github.com/apache/arrow-rs/pull/1844) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([viirya](https://github.com/viirya))
+- Implement UnionArray FieldData using Type Erasure [\#1842](https://github.com/apache/arrow-rs/pull/1842) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Add `quarter` support in `temporal` [\#1836](https://github.com/apache/arrow-rs/pull/1836) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([MazterQyou](https://github.com/MazterQyou))
+- speed up `substring_by_char` by about 2.5x [\#1832](https://github.com/apache/arrow-rs/pull/1832) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([HaoYang670](https://github.com/HaoYang670))
+- Remove simd and avx512 bitwise kernels in favor of autovectorization [\#1830](https://github.com/apache/arrow-rs/pull/1830) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jhorstmann](https://github.com/jhorstmann))
+- Refactor parquet::arrow module [\#1827](https://github.com/apache/arrow-rs/pull/1827) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
+- docs: remove experimental marker on C Stream Interface [\#1821](https://github.com/apache/arrow-rs/pull/1821) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([wjones127](https://github.com/wjones127))
+- Separate Page IO from Page Decode [\#1810](https://github.com/apache/arrow-rs/pull/1810) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([tustvold](https://github.com/tustvold))
 
 
 
