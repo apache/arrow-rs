@@ -22,29 +22,6 @@ use crate::datatypes::ArrowNativeType;
 
 use super::PhantomData;
 
-///  Converts a `MutableBuffer` to a `BufferBuilder<T>`.
-///
-/// `slots` is the number of array slots currently represented in the `MutableBuffer`.
-pub(crate) fn mutable_buffer_to_builder<T: ArrowNativeType>(
-    mutable_buffer: MutableBuffer,
-    slots: usize,
-) -> BufferBuilder<T> {
-    BufferBuilder::<T> {
-        buffer: mutable_buffer,
-        len: slots,
-        _marker: PhantomData,
-    }
-}
-
-///  Converts a `BufferBuilder<T>` into its underlying `MutableBuffer`.
-///
-/// `From` is not implemented because associated type bounds are unstable.
-pub(crate) fn builder_to_mutable_buffer<T: ArrowNativeType>(
-    builder: BufferBuilder<T>,
-) -> MutableBuffer {
-    builder.buffer
-}
-
 /// Builder for creating a [`Buffer`](crate::buffer::Buffer) object.
 ///
 /// A [`Buffer`](crate::buffer::Buffer) is the underlying data
