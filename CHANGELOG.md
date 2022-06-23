@@ -25,39 +25,39 @@
 
 **Breaking changes:**
 
-- Add Decimal128 API and use it in DecimalArray and DecimalBuilder [\#1870](https://github.com/apache/arrow-rs/issues/1870)
 - Rename `ArrayData::validate_dict_offsets` to `ArrayData::validate_values` [\#1889](https://github.com/apache/arrow-rs/pull/1889) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([frolovdev](https://github.com/frolovdev))
--  Add Decimal128 API and use it in DecimalArray and DecimalBuilder [\#1871](https://github.com/apache/arrow-rs/pull/1871) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+-  Add `Decimal128` API and use it in DecimalArray and DecimalBuilder [\#1871](https://github.com/apache/arrow-rs/pull/1871) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
 - Mark typed buffer APIs safe \(\#996\) \(\#1027\) [\#1866](https://github.com/apache/arrow-rs/pull/1866) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 
 **Implemented enhancements:**
 
-- Add `DictionaryArray::key` function [\#1911](https://github.com/apache/arrow-rs/issues/1911)
-- Explicitly declare the features used for each dependency [\#1876](https://github.com/apache/arrow-rs/issues/1876)
-- Exclude some long-running tests from miri [\#1862](https://github.com/apache/arrow-rs/issues/1862)
-- PrimitiveArray::from\_iter should omit validity buffer if all values are valid [\#1856](https://github.com/apache/arrow-rs/issues/1856)
-- Add `from(v: Vec<Option<&[u8]>>)` and `from(v: Vec<&[u8]>)` for `FixedSizedBInaryArray` [\#1852](https://github.com/apache/arrow-rs/issues/1852)
-- Add Vec-inspired APIs to BufferBuilder [\#1850](https://github.com/apache/arrow-rs/issues/1850)
-- PyArrow intergation test for C Stream Interface [\#1847](https://github.com/apache/arrow-rs/issues/1847)
-- Add `nilike` support in `comparison` [\#1845](https://github.com/apache/arrow-rs/issues/1845)
-- Split up arrow::array::builder module [\#1843](https://github.com/apache/arrow-rs/issues/1843)
-- Add `quarter` support in `temporal` [\#1835](https://github.com/apache/arrow-rs/issues/1835)
-- AVX512 + simd binary and/or kernels slower than autovectorized version [\#1829](https://github.com/apache/arrow-rs/issues/1829)
-- Rename ArrayData::validate\_dictionary\_offset [\#1812](https://github.com/apache/arrow-rs/issues/1812)
+- Add `DictionaryArray::key` function [\#1911](https://github.com/apache/arrow-rs/issues/1911) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Support specifying capacities for `ListArrays` in `MutableArrayData` [\#1884](https://github.com/apache/arrow-rs/issues/1884) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Explicitly declare the features used for each dependency [\#1876](https://github.com/apache/arrow-rs/issues/1876) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Add Decimal128 API and use it in DecimalArray and DecimalBuilder [\#1870](https://github.com/apache/arrow-rs/issues/1870) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- `PrimitiveArray::from_iter` should omit validity buffer if all values are valid [\#1856](https://github.com/apache/arrow-rs/issues/1856) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add `from(v: Vec<Option<&[u8]>>)` and `from(v: Vec<&[u8]>)` for `FixedSizedBInaryArray` [\#1852](https://github.com/apache/arrow-rs/issues/1852) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add `Vec`-inspired APIs to `BufferBuilder` [\#1850](https://github.com/apache/arrow-rs/issues/1850) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- PyArrow intergation test for C Stream Interface [\#1847](https://github.com/apache/arrow-rs/issues/1847) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add `nilike` support in `comparison` [\#1845](https://github.com/apache/arrow-rs/issues/1845) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Split up `arrow::array::builder` module [\#1843](https://github.com/apache/arrow-rs/issues/1843) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add `quarter` support in `temporal` kernels [\#1835](https://github.com/apache/arrow-rs/issues/1835) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Rename `ArrayData::validate_dictionary_offset` to `ArrayData::validate_values` [\#1812](https://github.com/apache/arrow-rs/issues/1812) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Blog post about arrow 10.0.0 - 16.0.0 [\#1808](https://github.com/apache/arrow-rs/issues/1808)
-- Clean up the testing code in `substring` kernel [\#1801](https://github.com/apache/arrow-rs/issues/1801)
+- Clean up the testing code for `substring` kernel [\#1801](https://github.com/apache/arrow-rs/issues/1801) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Speed up `substring_by_char` kernel [\#1800](https://github.com/apache/arrow-rs/issues/1800) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
-- Incorrect max and min decimals [\#1916](https://github.com/apache/arrow-rs/issues/1916)
-- `dynamic_types` example does not print the projection [\#1902](https://github.com/apache/arrow-rs/issues/1902)
+- Incorrect max and min decimals [\#1916](https://github.com/apache/arrow-rs/issues/1916) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- `dynamic_types` example does not print the projection [\#1902](https://github.com/apache/arrow-rs/issues/1902) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - `log2(0)` panicked at `'attempt to subtract with overflow', parquet/src/util/bit_util.rs:148:5` [\#1901](https://github.com/apache/arrow-rs/issues/1901) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Final slicing in combine\_option\_bitmap needs to use bit slices [\#1899](https://github.com/apache/arrow-rs/issues/1899)
-- Dictionary IPC writer appears to write incorrect schema [\#1892](https://github.com/apache/arrow-rs/issues/1892)
-- Creating a `RecordBatch` with null values in non-nullable fields does not cause an error [\#1888](https://github.com/apache/arrow-rs/issues/1888)
-- Specifying capacities for ListArrays is not supported in MutableArrayData [\#1884](https://github.com/apache/arrow-rs/issues/1884)
-- Upgrade `regex` dependency to latest  [\#1874](https://github.com/apache/arrow-rs/issues/1874)
-- Miri reports leaks in ffi tests [\#1872](https://github.com/apache/arrow-rs/issues/1872)
+- Final slicing in `combine_option_bitmap` needs to use bit slices [\#1899](https://github.com/apache/arrow-rs/issues/1899) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Dictionary IPC writer  writes incorrect schema [\#1892](https://github.com/apache/arrow-rs/issues/1892) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Creating a `RecordBatch` with null values in non-nullable fields does not cause an error [\#1888](https://github.com/apache/arrow-rs/issues/1888) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Upgrade `regex` dependency [\#1874](https://github.com/apache/arrow-rs/issues/1874) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Miri reports leaks in ffi tests [\#1872](https://github.com/apache/arrow-rs/issues/1872) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- AVX512 + simd binary and/or kernels slower than autovectorized version [\#1829](https://github.com/apache/arrow-rs/issues/1829) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Documentation updates:**
 
@@ -67,8 +67,7 @@
 
 **Closed issues:**
 
-- how read/write REPEATED [\#1886](https://github.com/apache/arrow-rs/issues/1886)
-- Speed up `substring_by_char` [\#1800](https://github.com/apache/arrow-rs/issues/1800)
+- how read/write REPEATED [\#1886](https://github.com/apache/arrow-rs/issues/1886) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Merged pull requests:**
 
