@@ -72,9 +72,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // cast one decimal type to another decimal type
         (Decimal(_, _), Decimal(_, _)) => true,
         // signed numeric to decimal
-        (Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal(_, _)) |
+        (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal(_, _)) |
         // decimal to signed numeric
-        (Decimal(_, _), Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
+        (Decimal(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
         | (
             Null,
             Boolean
@@ -251,21 +251,21 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Int64, Duration(_)) => true,
         (Duration(_), Int64) => true,
         (Interval(from_type), Int64) => {
-            match from_type{
+            match from_type {
                 IntervalUnit::YearMonth => true,
                 IntervalUnit::DayTime => true,
                 IntervalUnit::MonthDayNano => false, // Native type is i128
             }
-        },
+        }
         (Int32, Interval(to_type)) => {
-            match to_type{
+            match to_type {
                 IntervalUnit::YearMonth => true,
                 IntervalUnit::DayTime => false,
                 IntervalUnit::MonthDayNano => false,
             }
-        },
+        }
         (Int64, Interval(to_type)) => {
-            match to_type{
+            match to_type {
                 IntervalUnit::YearMonth => false,
                 IntervalUnit::DayTime => true,
                 IntervalUnit::MonthDayNano => false,
@@ -447,6 +447,7 @@ pub fn cast_with_options(
                 Float64 => {
                     cast_decimal_to_float!(array, scale, Float64Builder, f64)
                 }
+                Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {:?} to {:?} not supported",
                     from_type, to_type
@@ -475,6 +476,7 @@ pub fn cast_with_options(
                 Float64 => {
                     cast_floating_point_to_decimal!(array, Float64Array, precision, scale)
                 }
+                Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {:?} to {:?} not supported",
                     from_type, to_type
@@ -4310,6 +4312,26 @@ mod tests {
         let cast_array = cast(&array, &cast_type).expect("cast failed");
         assert_eq!(cast_array.data_type(), &cast_type);
         assert_eq!(array_to_strings(&cast_array), expected);
+    }
+
+    #[test]
+    fn test_cast_null_array_to_from_decimal_array() {
+        let data_type = DataType::Decimal(12, 4);
+        let array = new_null_array(&DataType::Null, 4);
+        assert_eq!(array.data_type(), &DataType::Null);
+        let cast_array = cast(&array, &data_type).expect("cast failed");
+        assert_eq!(cast_array.data_type(), &data_type);
+        for i in 0..4 {
+            assert!(cast_array.is_null(i));
+        }
+
+        let array = new_null_array(&data_type, 4);
+        assert_eq!(array.data_type(), &data_type);
+        let cast_array = cast(&array, &DataType::Null).expect("cast failed");
+        assert_eq!(cast_array.data_type(), &DataType::Null);
+        for i in 0..4 {
+            assert!(cast_array.is_null(i));
+        }
     }
 
     #[test]

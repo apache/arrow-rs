@@ -24,8 +24,11 @@ mod boolean_buffer_builder;
 mod boolean_builder;
 mod buffer_builder;
 mod decimal_builder;
+mod fixed_size_binary_builder;
 mod fixed_size_list_builder;
+mod generic_binary_builder;
 mod generic_list_builder;
+mod generic_string_builder;
 mod map_builder;
 mod primitive_builder;
 mod primitive_dictionary_builder;
@@ -38,23 +41,22 @@ use std::marker::PhantomData;
 use std::ops::Range;
 
 use super::ArrayRef;
-use super::OffsetSizeTrait;
-use super::UInt8Builder;
 
 pub use boolean_buffer_builder::BooleanBufferBuilder;
 pub use boolean_builder::BooleanBuilder;
 pub use buffer_builder::BufferBuilder;
 pub use decimal_builder::DecimalBuilder;
+pub use fixed_size_binary_builder::FixedSizeBinaryBuilder;
 pub use fixed_size_list_builder::FixedSizeListBuilder;
+pub use generic_binary_builder::GenericBinaryBuilder;
 pub use generic_list_builder::GenericListBuilder;
+pub use generic_string_builder::GenericStringBuilder;
 pub use map_builder::MapBuilder;
 pub use primitive_builder::PrimitiveBuilder;
 pub use primitive_dictionary_builder::PrimitiveDictionaryBuilder;
 pub use string_dictionary_builder::StringDictionaryBuilder;
-pub use struct_builder::StructBuilder;
+pub use struct_builder::{make_builder, StructBuilder};
 pub use union_builder::UnionBuilder;
-
-pub use struct_builder::make_builder;
 
 /// Trait for dealing with different array builders at runtime
 ///
@@ -139,27 +141,8 @@ pub trait ArrayBuilder: Any + Send {
 pub type ListBuilder<T> = GenericListBuilder<i32, T>;
 pub type LargeListBuilder<T> = GenericListBuilder<i64, T>;
 
-///  Array builder for `BinaryArray`
-#[derive(Debug)]
-pub struct GenericBinaryBuilder<OffsetSize: OffsetSizeTrait> {
-    builder: GenericListBuilder<OffsetSize, UInt8Builder>,
-}
-
 pub type BinaryBuilder = GenericBinaryBuilder<i32>;
 pub type LargeBinaryBuilder = GenericBinaryBuilder<i64>;
 
-#[derive(Debug)]
-pub struct GenericStringBuilder<OffsetSize: OffsetSizeTrait> {
-    builder: GenericListBuilder<OffsetSize, UInt8Builder>,
-}
-
 pub type StringBuilder = GenericStringBuilder<i32>;
 pub type LargeStringBuilder = GenericStringBuilder<i64>;
-
-#[derive(Debug)]
-pub struct FixedSizeBinaryBuilder {
-    builder: FixedSizeListBuilder<UInt8Builder>,
-}
-
-#[cfg(test)]
-mod tests {}

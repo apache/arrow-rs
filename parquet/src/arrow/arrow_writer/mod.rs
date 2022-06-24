@@ -48,6 +48,27 @@ mod levels;
 /// to produce row groups with `max_row_group_size` rows. Any remaining rows will be
 /// flushed on close, leading the final row group in the output file to potentially
 /// contain fewer than `max_row_group_size` rows
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use bytes::Bytes;
+/// # use arrow::array::{ArrayRef, Int64Array};
+/// # use arrow::record_batch::RecordBatch;
+/// # use parquet::arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader};
+/// let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
+/// let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
+///
+/// let mut buffer = Vec::new();
+/// let mut writer = ArrowWriter::try_new(&mut buffer, to_write.schema(), None).unwrap();
+/// writer.write(&to_write).unwrap();
+/// writer.close().unwrap();
+///
+/// let mut reader = ParquetFileArrowReader::try_new(Bytes::from(buffer)).unwrap();
+/// let mut reader = reader.get_record_reader(1024).unwrap();
+/// let read = reader.next().unwrap().unwrap();
+///
+/// assert_eq!(to_write, read);
+/// ```
 pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
     writer: SerializedFileWriter<W>,

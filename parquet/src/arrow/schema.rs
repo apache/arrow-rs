@@ -300,10 +300,15 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_repetition(repetition)
                 .build()
         }
-        DataType::Timestamp(time_unit, _) => {
+        DataType::Timestamp(time_unit, tz) => {
+            let is_utc = tz
+                .as_ref()
+                .map(|tz| tz == "UTC" || tz == "+00:00" || tz == "-00:00")
+                .unwrap_or(false);
+
             Type::primitive_type_builder(name, PhysicalType::INT64)
                 .with_logical_type(Some(LogicalType::Timestamp {
-                    is_adjusted_to_u_t_c: false,
+                    is_adjusted_to_u_t_c: is_utc,
                     unit: match time_unit {
                         TimeUnit::Second => unreachable!(),
                         TimeUnit::Millisecond => {
@@ -1281,6 +1286,11 @@ mod tests {
             OPTIONAL INT64   time_micro (TIME_MICROS);
             OPTIONAL INT64   ts_milli (TIMESTAMP_MILLIS);
             REQUIRED INT64   ts_micro (TIMESTAMP(MICROS,false));
+            REQUIRED INT64   ts_seconds;
+            REQUIRED INT64   ts_micro_utc (TIMESTAMP(MICROS, true));
+            REQUIRED INT64   ts_millis_zero_offset (TIMESTAMP(MILLIS, true));
+            REQUIRED INT64   ts_millis_zero_negative_offset (TIMESTAMP(MILLIS, true));
+            REQUIRED INT64   ts_micro_non_utc (TIMESTAMP(MICROS, false));
             REQUIRED GROUP struct {
                 REQUIRED BOOLEAN bools;
                 REQUIRED INT32 uint32 (INTEGER(32,false));
@@ -1327,6 +1337,31 @@ mod tests {
             Field::new(
                 "ts_micro",
                 DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            ),
+            Field::new(
+                "ts_seconds",
+                DataType::Timestamp(TimeUnit::Second, Some("UTC".to_string())),
+                false,
+            ),
+            Field::new(
+                "ts_micro_utc",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string())),
+                false,
+            ),
+            Field::new(
+                "ts_millis_zero_offset",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".to_string())),
+                false,
+            ),
+            Field::new(
+                "ts_millis_zero_negative_offset",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("-00:00".to_string())),
+                false,
+            ),
+            Field::new(
+                "ts_micro_non_utc",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("+01:00".to_string())),
                 false,
             ),
             Field::new(

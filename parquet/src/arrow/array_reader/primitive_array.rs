@@ -1,0 +1,613 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::arrow::array_reader::{read_records, ArrayReader};
+use crate::arrow::record_reader::buffer::ScalarValue;
+use crate::arrow::record_reader::RecordReader;
+use crate::arrow::schema::parquet_to_arrow_field;
+use crate::basic::Type as PhysicalType;
+use crate::column::page::PageIterator;
+use crate::data_type::DataType;
+use crate::errors::{ParquetError, Result};
+use crate::schema::types::ColumnDescPtr;
+use arrow::array::{
+    ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder, DecimalArray,
+    Float32Array, Float64Array, Int32Array, Int64Array,
+};
+use arrow::buffer::Buffer;
+use arrow::datatypes::DataType as ArrowType;
+use std::any::Any;
+use std::sync::Arc;
+
+/// Primitive array readers are leaves of array reader tree. They accept page iterator
+/// and read them into primitive arrays.
+pub struct PrimitiveArrayReader<T>
+where
+    T: DataType,
+    T::T: ScalarValue,
+{
+    data_type: ArrowType,
+    pages: Box<dyn PageIterator>,
+    def_levels_buffer: Option<Buffer>,
+    rep_levels_buffer: Option<Buffer>,
+    column_desc: ColumnDescPtr,
+    record_reader: RecordReader<T>,
+}
+
+impl<T> PrimitiveArrayReader<T>
+where
+    T: DataType,
+    T::T: ScalarValue,
+{
+    /// Construct primitive array reader.
+    pub fn new(
+        pages: Box<dyn PageIterator>,
+        column_desc: ColumnDescPtr,
+        arrow_type: Option<ArrowType>,
+    ) -> Result<Self> {
+        Self::new_with_options(pages, column_desc, arrow_type, false)
+    }
+
+    /// Construct primitive array reader with ability to only compute null mask and not
+    /// buffer level data
+    pub fn new_with_options(
+        pages: Box<dyn PageIterator>,
+        column_desc: ColumnDescPtr,
+        arrow_type: Option<ArrowType>,
+        null_mask_only: bool,
+    ) -> Result<Self> {
+        // Check if Arrow type is specified, else create it from Parquet type
+        let data_type = match arrow_type {
+            Some(t) => t,
+            None => parquet_to_arrow_field(column_desc.as_ref())?
+                .data_type()
+                .clone(),
+        };
+
+        let record_reader =
+            RecordReader::<T>::new_with_options(column_desc.clone(), null_mask_only);
+
+        Ok(Self {
+            data_type,
+            pages,
+            def_levels_buffer: None,
+            rep_levels_buffer: None,
+            column_desc,
+            record_reader,
+        })
+    }
+}
+
+/// Implementation of primitive array reader.
+impl<T> ArrayReader for PrimitiveArrayReader<T>
+where
+    T: DataType,
+    T::T: ScalarValue,
+{
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Returns data type of primitive array.
+    fn get_data_type(&self) -> &ArrowType {
+        &self.data_type
+    }
+
+    /// Reads at most `batch_size` records into array.
+    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
+
+        let target_type = self.get_data_type().clone();
+        let arrow_data_type = match T::get_physical_type() {
+            PhysicalType::BOOLEAN => ArrowType::Boolean,
+            PhysicalType::INT32 => {
+                match target_type {
+                    ArrowType::UInt32 => {
+                        // follow C++ implementation and use overflow/reinterpret cast from  i32 to u32 which will map
+                        // `i32::MIN..0` to `(i32::MAX as u32)..u32::MAX`
+                        ArrowType::UInt32
+                    }
+                    _ => ArrowType::Int32,
+                }
+            }
+            PhysicalType::INT64 => {
+                match target_type {
+                    ArrowType::UInt64 => {
+                        // follow C++ implementation and use overflow/reinterpret cast from  i64 to u64 which will map
+                        // `i64::MIN..0` to `(i64::MAX as u64)..u64::MAX`
+                        ArrowType::UInt64
+                    }
+                    _ => ArrowType::Int64,
+                }
+            }
+            PhysicalType::FLOAT => ArrowType::Float32,
+            PhysicalType::DOUBLE => ArrowType::Float64,
+            PhysicalType::INT96
+            | PhysicalType::BYTE_ARRAY
+            | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+                unreachable!(
+                    "PrimitiveArrayReaders don't support complex physical types"
+                );
+            }
+        };
+
+        // Convert to arrays by using the Parquet physical type.
+        // The physical types are then cast to Arrow types if necessary
+
+        let mut record_data = self.record_reader.consume_record_data()?;
+
+        if T::get_physical_type() == PhysicalType::BOOLEAN {
+            let mut boolean_buffer = BooleanBufferBuilder::new(record_data.len());
+
+            for e in record_data.as_slice() {
+                boolean_buffer.append(*e > 0);
+            }
+            record_data = boolean_buffer.finish();
+        }
+
+        let array_data = ArrayDataBuilder::new(arrow_data_type)
+            .len(self.record_reader.num_values())
+            .add_buffer(record_data)
+            .null_bit_buffer(self.record_reader.consume_bitmap_buffer()?);
+
+        let array_data = unsafe { array_data.build_unchecked() };
+        let array = match T::get_physical_type() {
+            PhysicalType::BOOLEAN => Arc::new(BooleanArray::from(array_data)) as ArrayRef,
+            PhysicalType::INT32 => Arc::new(Int32Array::from(array_data)) as ArrayRef,
+            PhysicalType::INT64 => Arc::new(Int64Array::from(array_data)) as ArrayRef,
+            PhysicalType::FLOAT => Arc::new(Float32Array::from(array_data)) as ArrayRef,
+            PhysicalType::DOUBLE => Arc::new(Float64Array::from(array_data)) as ArrayRef,
+            PhysicalType::INT96
+            | PhysicalType::BYTE_ARRAY
+            | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+                unreachable!(
+                    "PrimitiveArrayReaders don't support complex physical types"
+                );
+            }
+        };
+
+        // cast to Arrow type
+        // We make a strong assumption here that the casts should be infallible.
+        // If the cast fails because of incompatible datatypes, then there might
+        // be a bigger problem with how Arrow schemas are converted to Parquet.
+        //
+        // As there is not always a 1:1 mapping between Arrow and Parquet, there
+        // are datatypes which we must convert explicitly.
+        // These are:
+        // - date64: we should cast int32 to date32, then date32 to date64.
+        let array = match target_type {
+            ArrowType::Date64 => {
+                // this is cheap as it internally reinterprets the data
+                let a = arrow::compute::cast(&array, &ArrowType::Date32)?;
+                arrow::compute::cast(&a, &target_type)?
+            }
+            ArrowType::Decimal(p, s) => {
+                let array = match array.data_type() {
+                    ArrowType::Int32 => array
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.map(|v| v.into()))
+                        .collect::<DecimalArray>(),
+
+                    ArrowType::Int64 => array
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.map(|v| v.into()))
+                        .collect::<DecimalArray>(),
+                    _ => {
+                        return Err(arrow_err!(
+                            "Cannot convert {:?} to decimal",
+                            array.data_type()
+                        ))
+                    }
+                }
+                .with_precision_and_scale(p, s)?;
+
+                Arc::new(array) as ArrayRef
+            }
+            _ => arrow::compute::cast(&array, &target_type)?,
+        };
+
+        // save definition and repetition buffers
+        self.def_levels_buffer = self.record_reader.consume_def_levels()?;
+        self.rep_levels_buffer = self.record_reader.consume_rep_levels()?;
+        self.record_reader.reset();
+        Ok(array)
+    }
+
+    fn get_def_levels(&self) -> Option<&[i16]> {
+        self.def_levels_buffer.as_ref().map(|buf| buf.typed_data())
+    }
+
+    fn get_rep_levels(&self) -> Option<&[i16]> {
+        self.rep_levels_buffer.as_ref().map(|buf| buf.typed_data())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arrow::array_reader::test_util::EmptyPageIterator;
+    use crate::basic::Encoding;
+    use crate::column::page::Page;
+    use crate::data_type::Int32Type;
+    use crate::schema::parser::parse_message_type;
+    use crate::schema::types::SchemaDescriptor;
+    use crate::util::test_common::make_pages;
+    use crate::util::InMemoryPageIterator;
+    use arrow::array::PrimitiveArray;
+    use arrow::datatypes::ArrowPrimitiveType;
+
+    use rand::distributions::uniform::SampleUniform;
+    use std::collections::VecDeque;
+
+    fn make_column_chunks<T: DataType>(
+        column_desc: ColumnDescPtr,
+        encoding: Encoding,
+        num_levels: usize,
+        min_value: T::T,
+        max_value: T::T,
+        def_levels: &mut Vec<i16>,
+        rep_levels: &mut Vec<i16>,
+        values: &mut Vec<T::T>,
+        page_lists: &mut Vec<Vec<Page>>,
+        use_v2: bool,
+        num_chunks: usize,
+    ) where
+        T::T: PartialOrd + SampleUniform + Copy,
+    {
+        for _i in 0..num_chunks {
+            let mut pages = VecDeque::new();
+            let mut data = Vec::new();
+            let mut page_def_levels = Vec::new();
+            let mut page_rep_levels = Vec::new();
+
+            make_pages::<T>(
+                column_desc.clone(),
+                encoding,
+                1,
+                num_levels,
+                min_value,
+                max_value,
+                &mut page_def_levels,
+                &mut page_rep_levels,
+                &mut data,
+                &mut pages,
+                use_v2,
+            );
+
+            def_levels.append(&mut page_def_levels);
+            rep_levels.append(&mut page_rep_levels);
+            values.append(&mut data);
+            page_lists.push(Vec::from(pages));
+        }
+    }
+
+    #[test]
+    fn test_primitive_array_reader_empty_pages() {
+        // Construct column schema
+        let message_type = "
+        message test_schema {
+          REQUIRED INT32 leaf;
+        }
+        ";
+
+        let schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+
+        let column_desc = schema.column(0);
+        let page_iterator = EmptyPageIterator::new(schema);
+
+        let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+            Box::new(page_iterator),
+            column_desc,
+            None,
+        )
+        .unwrap();
+
+        // expect no values to be read
+        let array = array_reader.next_batch(50).unwrap();
+        assert!(array.is_empty());
+    }
+
+    #[test]
+    fn test_primitive_array_reader_data() {
+        // Construct column schema
+        let message_type = "
+        message test_schema {
+          REQUIRED INT32 leaf;
+        }
+        ";
+
+        let schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+
+        let column_desc = schema.column(0);
+
+        // Construct page iterator
+        {
+            let mut data = Vec::new();
+            let mut page_lists = Vec::new();
+            make_column_chunks::<Int32Type>(
+                column_desc.clone(),
+                Encoding::PLAIN,
+                100,
+                1,
+                200,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut data,
+                &mut page_lists,
+                true,
+                2,
+            );
+            let page_iterator =
+                InMemoryPageIterator::new(schema, column_desc.clone(), page_lists);
+
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+            )
+            .unwrap();
+
+            // Read first 50 values, which are all from the first column chunk
+            let array = array_reader.next_batch(50).unwrap();
+            let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+
+            assert_eq!(&Int32Array::from(data[0..50].to_vec()), array);
+
+            // Read next 100 values, the first 50 ones are from the first column chunk,
+            // and the last 50 ones are from the second column chunk
+            let array = array_reader.next_batch(100).unwrap();
+            let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+
+            assert_eq!(&Int32Array::from(data[50..150].to_vec()), array);
+
+            // Try to read 100 values, however there are only 50 values
+            let array = array_reader.next_batch(100).unwrap();
+            let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+
+            assert_eq!(&Int32Array::from(data[150..200].to_vec()), array);
+        }
+    }
+
+    macro_rules! test_primitive_array_reader_one_type {
+        ($arrow_parquet_type:ty, $physical_type:expr, $converted_type_str:expr, $result_arrow_type:ty, $result_arrow_cast_type:ty, $result_primitive_type:ty) => {{
+            let message_type = format!(
+                "
+            message test_schema {{
+              REQUIRED {:?} leaf ({});
+          }}
+            ",
+                $physical_type, $converted_type_str
+            );
+            let schema = parse_message_type(&message_type)
+                .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+                .unwrap();
+
+            let column_desc = schema.column(0);
+
+            // Construct page iterator
+            {
+                let mut data = Vec::new();
+                let mut page_lists = Vec::new();
+                make_column_chunks::<$arrow_parquet_type>(
+                    column_desc.clone(),
+                    Encoding::PLAIN,
+                    100,
+                    1,
+                    200,
+                    &mut Vec::new(),
+                    &mut Vec::new(),
+                    &mut data,
+                    &mut page_lists,
+                    true,
+                    2,
+                );
+                let page_iterator = InMemoryPageIterator::new(
+                    schema.clone(),
+                    column_desc.clone(),
+                    page_lists,
+                );
+                let mut array_reader = PrimitiveArrayReader::<$arrow_parquet_type>::new(
+                    Box::new(page_iterator),
+                    column_desc.clone(),
+                    None,
+                )
+                .expect("Unable to get array reader");
+
+                let array = array_reader
+                    .next_batch(50)
+                    .expect("Unable to get batch from reader");
+
+                let result_data_type = <$result_arrow_type>::DATA_TYPE;
+                let array = array
+                    .as_any()
+                    .downcast_ref::<PrimitiveArray<$result_arrow_type>>()
+                    .expect(
+                        format!(
+                            "Unable to downcast {:?} to {:?}",
+                            array.data_type(),
+                            result_data_type
+                        )
+                        .as_str(),
+                    );
+
+                // create expected array as primitive, and cast to result type
+                let expected = PrimitiveArray::<$result_arrow_cast_type>::from(
+                    data[0..50]
+                        .iter()
+                        .map(|x| *x as $result_primitive_type)
+                        .collect::<Vec<$result_primitive_type>>(),
+                );
+                let expected = Arc::new(expected) as ArrayRef;
+                let expected = arrow::compute::cast(&expected, &result_data_type)
+                    .expect("Unable to cast expected array");
+                assert_eq!(expected.data_type(), &result_data_type);
+                let expected = expected
+                    .as_any()
+                    .downcast_ref::<PrimitiveArray<$result_arrow_type>>()
+                    .expect(
+                        format!(
+                            "Unable to downcast expected {:?} to {:?}",
+                            expected.data_type(),
+                            result_data_type
+                        )
+                        .as_str(),
+                    );
+                assert_eq!(expected, array);
+            }
+        }};
+    }
+
+    #[test]
+    fn test_primitive_array_reader_temporal_types() {
+        test_primitive_array_reader_one_type!(
+            crate::data_type::Int32Type,
+            PhysicalType::INT32,
+            "DATE",
+            arrow::datatypes::Date32Type,
+            arrow::datatypes::Int32Type,
+            i32
+        );
+        test_primitive_array_reader_one_type!(
+            crate::data_type::Int32Type,
+            PhysicalType::INT32,
+            "TIME_MILLIS",
+            arrow::datatypes::Time32MillisecondType,
+            arrow::datatypes::Int32Type,
+            i32
+        );
+        test_primitive_array_reader_one_type!(
+            crate::data_type::Int64Type,
+            PhysicalType::INT64,
+            "TIME_MICROS",
+            arrow::datatypes::Time64MicrosecondType,
+            arrow::datatypes::Int64Type,
+            i64
+        );
+        test_primitive_array_reader_one_type!(
+            crate::data_type::Int64Type,
+            PhysicalType::INT64,
+            "TIMESTAMP_MILLIS",
+            arrow::datatypes::TimestampMillisecondType,
+            arrow::datatypes::Int64Type,
+            i64
+        );
+        test_primitive_array_reader_one_type!(
+            crate::data_type::Int64Type,
+            PhysicalType::INT64,
+            "TIMESTAMP_MICROS",
+            arrow::datatypes::TimestampMicrosecondType,
+            arrow::datatypes::Int64Type,
+            i64
+        );
+    }
+
+    #[test]
+    fn test_primitive_array_reader_def_and_rep_levels() {
+        // Construct column schema
+        let message_type = "
+        message test_schema {
+            REPEATED Group test_mid {
+                OPTIONAL INT32 leaf;
+            }
+        }
+        ";
+
+        let schema = parse_message_type(message_type)
+            .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+            .unwrap();
+
+        let column_desc = schema.column(0);
+
+        // Construct page iterator
+        {
+            let mut def_levels = Vec::new();
+            let mut rep_levels = Vec::new();
+            let mut page_lists = Vec::new();
+            make_column_chunks::<Int32Type>(
+                column_desc.clone(),
+                Encoding::PLAIN,
+                100,
+                1,
+                200,
+                &mut def_levels,
+                &mut rep_levels,
+                &mut Vec::new(),
+                &mut page_lists,
+                true,
+                2,
+            );
+
+            let page_iterator =
+                InMemoryPageIterator::new(schema, column_desc.clone(), page_lists);
+
+            let mut array_reader = PrimitiveArrayReader::<Int32Type>::new(
+                Box::new(page_iterator),
+                column_desc,
+                None,
+            )
+            .unwrap();
+
+            let mut accu_len: usize = 0;
+
+            // Read first 50 values, which are all from the first column chunk
+            let array = array_reader.next_batch(50).unwrap();
+            assert_eq!(
+                Some(&def_levels[accu_len..(accu_len + array.len())]),
+                array_reader.get_def_levels()
+            );
+            assert_eq!(
+                Some(&rep_levels[accu_len..(accu_len + array.len())]),
+                array_reader.get_rep_levels()
+            );
+            accu_len += array.len();
+
+            // Read next 100 values, the first 50 ones are from the first column chunk,
+            // and the last 50 ones are from the second column chunk
+            let array = array_reader.next_batch(100).unwrap();
+            assert_eq!(
+                Some(&def_levels[accu_len..(accu_len + array.len())]),
+                array_reader.get_def_levels()
+            );
+            assert_eq!(
+                Some(&rep_levels[accu_len..(accu_len + array.len())]),
+                array_reader.get_rep_levels()
+            );
+            accu_len += array.len();
+
+            // Try to read 100 values, however there are only 50 values
+            let array = array_reader.next_batch(100).unwrap();
+            assert_eq!(
+                Some(&def_levels[accu_len..(accu_len + array.len())]),
+                array_reader.get_def_levels()
+            );
+            assert_eq!(
+                Some(&rep_levels[accu_len..(accu_len + array.len())]),
+                array_reader.get_rep_levels()
+            );
+        }
+    }
+}
