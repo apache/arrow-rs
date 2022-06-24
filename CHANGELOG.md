@@ -28,12 +28,12 @@
 - Add validation to `RecordBatch` for non-nullable fields containing null values [\#1890](https://github.com/apache/arrow-rs/pull/1890) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([andygrove](https://github.com/andygrove))
 - Rename `ArrayData::validate_dict_offsets` to `ArrayData::validate_values` [\#1889](https://github.com/apache/arrow-rs/pull/1889) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([frolovdev](https://github.com/frolovdev))
 -  Add `Decimal128` API and use it in DecimalArray and DecimalBuilder [\#1871](https://github.com/apache/arrow-rs/pull/1871) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
-- Mark typed buffer APIs safe \(\#996\) \(\#1027\) [\#1866](https://github.com/apache/arrow-rs/pull/1866) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Mark typed buffer APIs `safe` \(\#996\) \(\#1027\) [\#1866](https://github.com/apache/arrow-rs/pull/1866) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 
 **Implemented enhancements:**
 
-- add a small doc example showing `ArrowWriter` being used with a cursor [\#1927](https://github.com/apache/arrow-rs/issues/1927)
-- CAST NULL Data type to any decimal data type [\#1921](https://github.com/apache/arrow-rs/issues/1921)
+- add a small doc example showing `ArrowWriter` being used with a cursor [\#1927](https://github.com/apache/arrow-rs/issues/1927) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Support `cast` to/from `NULL` and `DataType::Decimal` [\#1921](https://github.com/apache/arrow-rs/issues/1921) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Add `Decimal256` API [\#1913](https://github.com/apache/arrow-rs/issues/1913) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Add `DictionaryArray::key` function [\#1911](https://github.com/apache/arrow-rs/issues/1911) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Support specifying capacities for `ListArrays` in `MutableArrayData` [\#1884](https://github.com/apache/arrow-rs/issues/1884) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
@@ -74,7 +74,7 @@
 **Closed issues:**
 
 - how read/write REPEATED [\#1886](https://github.com/apache/arrow-rs/issues/1886) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Handling Unsupported Arrow Types in Parquet [\#1666](https://github.com/apache/arrow-rs/issues/1666)
+- Handling Unsupported Arrow Types in Parquet [\#1666](https://github.com/apache/arrow-rs/issues/1666) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Merged pull requests:**
 
