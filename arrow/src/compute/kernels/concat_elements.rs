@@ -277,7 +277,9 @@ mod tests {
     #[test]
     fn test_string_concat_error_empty() {
         assert_eq!(
-            concat_elements_utf8_many::<i32>(&[]).unwrap_err().to_string(),
+            concat_elements_utf8_many::<i32>(&[])
+                .unwrap_err()
+                .to_string(),
             "Compute error: concat requires input of at least one array".to_string()
         );
     }
