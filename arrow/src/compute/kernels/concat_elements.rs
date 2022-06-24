@@ -29,11 +29,70 @@ use crate::error::{ArrowError, Result};
 ///
 ///   ["Hello"] + ["World"] = ["HelloWorld"]
 ///
+///   ["a", "b"] + [None, "c"] = [None, "bc"]
+/// ```
+///
+/// An error will be returned if `left` and `right` have different lengths
+pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
+    left: &GenericStringArray<Offset>,
+    right: &GenericStringArray<Offset>,
+) -> Result<GenericStringArray<Offset>> {
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(format!(
+            "Arrays must have the same length: {} != {}",
+            left.len(),
+            right.len()
+        )));
+    }
+
+    let output_bitmap = combine_option_bitmap(&[left.data(), right.data()], left.len())?;
+
+    let left_offsets = left.value_offsets();
+    let right_offsets = right.value_offsets();
+
+    let left_buffer = left.value_data();
+    let right_buffer = right.value_data();
+    let left_values = left_buffer.as_slice();
+    let right_values = right_buffer.as_slice();
+
+    let mut output_values = BufferBuilder::<u8>::new(
+        left_values.len() + right_values.len()
+            - left_offsets[0].to_usize().unwrap()
+            - right_offsets[0].to_usize().unwrap(),
+    );
+
+    let mut output_offsets = BufferBuilder::<Offset>::new(left_offsets.len());
+    output_offsets.append(Offset::zero());
+    for (left_idx, right_idx) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
+        output_values.append_slice(
+            &left_values
+                [left_idx[0].to_usize().unwrap()..left_idx[1].to_usize().unwrap()],
+        );
+        output_values.append_slice(
+            &right_values
+                [right_idx[0].to_usize().unwrap()..right_idx[1].to_usize().unwrap()],
+        );
+        output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
+    }
+
+    let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::get_data_type())
+        .len(left.len())
+        .add_buffer(output_offsets.finish())
+        .add_buffer(output_values.finish())
+        .null_bit_buffer(output_bitmap);
+
+    // SAFETY - offsets valid by construction
+    Ok(unsafe { builder.build_unchecked() }.into())
+}
+
+/// Returns the elementwise concatenation of [`StringArray`].
+/// ```text
+/// e.g:
 ///   ["a", "b"] + [None, "c"] + [None, "d"] = [None, "bcd"]
 /// ```
 ///
-/// An error will be returned if the [`StringArray`] are of different lengths.
-pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
+/// An error will be returned if the [`StringArray`] are of different lengths
+pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
     arrays: &[&GenericStringArray<Offset>],
 ) -> Result<GenericStringArray<Offset>> {
     if arrays.is_empty() {
@@ -118,7 +177,7 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        let output = concat_elements_utf8(&[&left, &right]).unwrap();
+        let output = concat_elements_utf8(&left, &right).unwrap();
 
         let expected = [None, Some("baryyy"), None]
             .into_iter()
@@ -136,7 +195,7 @@ mod tests {
             .into_iter()
             .collect::<StringArray>();
 
-        let output = concat_elements_utf8(&[&left, &right]).unwrap();
+        let output = concat_elements_utf8(&left, &right).unwrap();
 
         let expected = [Some("foobaz"), Some(""), Some("bar")]
             .into_iter()
@@ -150,7 +209,7 @@ mod tests {
         let left = StringArray::from(vec!["foo", "bar"]);
         let right = StringArray::from(vec!["bar", "baz"]);
 
-        let output = concat_elements_utf8(&[&left, &right]).unwrap();
+        let output = concat_elements_utf8(&left, &right).unwrap();
 
         let expected = StringArray::from(vec!["foobar", "barbaz"]);
 
@@ -158,50 +217,16 @@ mod tests {
     }
 
     #[test]
-    fn test_string_concat_error_array_length() {
+    fn test_string_concat_error() {
         let left = StringArray::from(vec!["foo", "bar"]);
         let right = StringArray::from(vec!["baz"]);
 
-        let output = concat_elements_utf8(&[&left, &right]);
+        let output = concat_elements_utf8(&left, &right);
 
         assert_eq!(
             output.unwrap_err().to_string(),
-            "Compute error: Arrays must have the same length of 2".to_string()
+            "Compute error: Arrays must have the same length: 2 != 1".to_string()
         );
-    }
-
-    #[test]
-    fn test_string_concat_error_empty() {
-        assert_eq!(
-            concat_elements_utf8::<i32>(&[]).unwrap_err().to_string(),
-            "Compute error: concat requires input of at least one array".to_string()
-        );
-    }
-
-    #[test]
-    fn test_string_concat_one() {
-        let expected = [None, Some("baryyy"), None]
-            .into_iter()
-            .collect::<StringArray>();
-
-        let output = concat_elements_utf8(&[&expected]).unwrap();
-
-        assert_eq!(output, expected);
-    }
-
-    #[test]
-    fn test_string_concat_multiple() {
-        let foo = StringArray::from(vec![Some("f"), Some("o"), Some("o"), None]);
-        let bar = StringArray::from(vec![None, Some("b"), Some("a"), Some("r")]);
-        let baz = StringArray::from(vec![Some("b"), None, Some("a"), Some("z")]);
-
-        let output = concat_elements_utf8(&[&foo, &bar, &baz]).unwrap();
-
-        let expected = [None, None, Some("oaa"), None]
-            .into_iter()
-            .collect::<StringArray>();
-
-        assert_eq!(output, expected);
     }
 
     #[test]
@@ -211,7 +236,7 @@ mod tests {
 
         let left_slice = left.slice(0, 3);
         let right_slice = right.slice(1, 3);
-        let output = concat_elements_utf8(&[
+        let output = concat_elements_utf8(
             left_slice
                 .as_any()
                 .downcast_ref::<GenericStringArray<i32>>()
@@ -220,7 +245,7 @@ mod tests {
                 .as_any()
                 .downcast_ref::<GenericStringArray<i32>>()
                 .unwrap(),
-        ])
+        )
         .unwrap();
 
         let expected = [None, Some("foofar"), Some("barfaz")]
@@ -232,7 +257,7 @@ mod tests {
         let left_slice = left.slice(2, 2);
         let right_slice = right.slice(1, 2);
 
-        let output = concat_elements_utf8(&[
+        let output = concat_elements_utf8(
             left_slice
                 .as_any()
                 .downcast_ref::<GenericStringArray<i32>>()
@@ -241,10 +266,44 @@ mod tests {
                 .as_any()
                 .downcast_ref::<GenericStringArray<i32>>()
                 .unwrap(),
-        ])
+        )
         .unwrap();
 
         let expected = [None, Some("bazfar")].into_iter().collect::<StringArray>();
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_string_concat_error_empty() {
+        assert_eq!(
+            concat_elements_utf8_many::<i32>(&[]).unwrap_err().to_string(),
+            "Compute error: concat requires input of at least one array".to_string()
+        );
+    }
+
+    #[test]
+    fn test_string_concat_one() {
+        let expected = [None, Some("baryyy"), None]
+            .into_iter()
+            .collect::<StringArray>();
+
+        let output = concat_elements_utf8_many(&[&expected]).unwrap();
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_string_concat_many() {
+        let foo = StringArray::from(vec![Some("f"), Some("o"), Some("o"), None]);
+        let bar = StringArray::from(vec![None, Some("b"), Some("a"), Some("r")]);
+        let baz = StringArray::from(vec![Some("b"), None, Some("a"), Some("z")]);
+
+        let output = concat_elements_utf8_many(&[&foo, &bar, &baz]).unwrap();
+
+        let expected = [None, None, Some("oaa"), None]
+            .into_iter()
+            .collect::<StringArray>();
 
         assert_eq!(output, expected);
     }
