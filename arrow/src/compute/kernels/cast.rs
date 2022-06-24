@@ -74,7 +74,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // signed numeric to decimal
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal(_, _)) |
         // decimal to signed numeric
-        (Decimal(_, _), Null| Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
+        (Decimal(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
         | (
             Null,
             Boolean
