@@ -409,6 +409,9 @@ impl Drop for FFI_ArrowArray {
     }
 }
 
+unsafe impl Send for FFI_ArrowArray {}
+unsafe impl Sync for FFI_ArrowArray {}
+
 // callback used to drop [FFI_ArrowArray] when it is exported
 unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
     if array.is_null() {
