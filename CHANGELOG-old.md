@@ -18,9 +18,7 @@
 -->
 
 
-# Changelog
-
-# Changelog
+# Historical Changelog
 
 ## [16.0.0](https://github.com/apache/arrow-rs/tree/16.0.0) (2022-06-10)
 
