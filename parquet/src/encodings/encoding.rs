@@ -26,7 +26,7 @@ use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::{
-    bit_util::{self, log2, num_required_bits, BitWriter},
+    bit_util::{self, num_required_bits, BitWriter},
     hash_util,
     memory::ByteBufferPtr,
 };
@@ -307,12 +307,10 @@ impl<T: DataType> DictEncoder<T> {
     #[inline]
     fn bit_width(&self) -> u8 {
         let num_entries = self.uniques.len();
-        if num_entries == 0 {
-            0
-        } else if num_entries == 1 {
-            1
+        if num_entries <= 1 {
+            num_entries as u8
         } else {
-            log2(num_entries as u64) as u8
+            num_required_bits(num_entries as u64 - 1)
         }
     }
 
@@ -589,7 +587,7 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             }
 
             // Compute bit width to store (max_delta - min_delta)
-            let bit_width = num_required_bits(self.subtract_u64(max_delta, min_delta));
+            let bit_width = num_required_bits(self.subtract_u64(max_delta, min_delta)) as usize;
             self.bit_writer.write_at(offset + i, bit_width as u8);
 
             // Encode values in current mini block using min_delta and bit_width

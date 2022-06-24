@@ -17,7 +17,7 @@
 
 [package]
 name = "parquet"
-version = "15.0.0"
+version = "16.0.0"
 license = "Apache-2.0"
 description = "Apache Parquet implementation in Rust"
 homepage = "https://github.com/apache/arrow-rs"
@@ -30,47 +30,52 @@ edition = "2021"
 rust-version = "1.57"
 
 [dependencies]
-parquet-format = "4.0.0"
-bytes = "1.1"
-byteorder = "1"
-thrift = "0.13"
-snap = { version = "1.0", optional = true }
-brotli = { version = "3.3", optional = true }
-flate2 = { version = "1.0", optional = true }
-lz4 = { version = "1.23", optional = true }
+parquet-format = { version = "4.0.0", default-features = false }
+bytes = { version = "1.1", default-features = false, features = ["std"] }
+byteorder = { version = "1", default-features = false }
+thrift = { version = "0.13", default-features = false }
+snap = { version = "1.0", default-features = false, optional = true }
+brotli = { version = "3.3", default-features = false, features = ["std"], optional = true }
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"], optional = true }
+lz4 = { version = "1.23", default-features = false, optional = true }
 zstd = { version = "0.11.1", optional = true, default-features = false }
-chrono = { version = "0.4", default-features = false }
-num = "0.4"
-num-bigint = "0.4"
-arrow = { path = "../arrow", version = "15.0.0", optional = true, default-features = false, features = ["ipc"] }
-base64 = { version = "0.13", optional = true }
-clap = { version = "3", optional = true, features = ["derive", "env"] }
-serde_json = { version = "1.0", features = ["preserve_order"], optional = true }
-rand = "0.8"
-futures = { version = "0.3", optional = true }
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+num = { version = "0.4", default-features = false }
+num-bigint = { version = "0.4", default-features = false }
+arrow = { path = "../arrow", version = "16.0.0", optional = true, default-features = false, features = ["ipc"] }
+base64 = { version = "0.13", default-features = false, features = ["std"], optional = true }
+clap = { version = "~3.1", default-features = false, features = ["std", "derive", "env"], optional = true }
+serde_json = { version = "1.0", default-features = false, optional = true }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+futures = { version = "0.3", default-features = false, features = ["std" ], optional = true }
 tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "fs", "rt", "io-util"] }
 
 [dev-dependencies]
-criterion = "0.3"
-rand = "0.8"
-snap = "1.0"
-tempfile = "3.0"
-brotli = "3.3"
-flate2 = "1.0"
-lz4 = "1.23"
-serde_json = { version = "1.0", features = ["preserve_order"] }
-arrow = { path = "../arrow", version = "15.0.0", default-features = false, features = ["test_utils", "prettyprint"] }
+base64 = { version = "0.13", default-features = false, features = ["std"] }
+criterion = { version = "0.3", default-features = false }
+snap = { version = "1.0", default-features = false }
+tempfile = { version = "3.0", default-features = false }
+brotli = { version = "3.3", default-features = false, features = [ "std" ] }
+flate2 = { version = "1.0", default-features = false, features = [ "rust_backend" ] }
+lz4 = { version = "1.23", default-features = false }
+zstd = { version = "0.11", default-features = false }
+serde_json = { version = "1.0", default-features = false, features = ["preserve_order"] }
+arrow = { path = "../arrow", version = "16.0.0", default-features = false, features = ["ipc", "test_utils", "prettyprint"] }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
 default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
-cli = ["serde_json", "base64", "clap"]
+# Enable arrow reader/writer APIs
+arrow = ["dep:arrow", "base64"]
+# Enable CLI tools
+cli = ["serde_json", "base64", "clap","arrow/csv"]
+# Enable internal testing APIs
 test_common = []
 # Experimental, unstable functionality primarily used for testing
 experimental = []
-# Enable async API
+# Enable async APIs
 async = ["futures", "tokio"]
 
 [[bin]]
@@ -85,13 +90,18 @@ required-features = ["cli"]
 name = "parquet-rowcount"
 required-features = ["cli"]
 
+[[bin]]
+name = "parquet-fromcsv"
+required-features = ["cli"]
+
 [[bench]]
 name = "arrow_writer"
+required-features = ["arrow"]
 harness = false
 
 [[bench]]
 name = "arrow_reader"
-required-features = ["test_common", "experimental"]
+required-features = ["arrow", "test_common", "experimental"]
 harness = false
 
 [lib]

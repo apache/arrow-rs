@@ -24,12 +24,11 @@ use arrow::array::{Array, ArrayRef, OffsetSizeTrait};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
 
-use crate::arrow::array_reader::dictionary_buffer::DictionaryBuffer;
-use crate::arrow::array_reader::{
-    byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain},
-    offset_buffer::OffsetBuffer,
-};
+use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
 use crate::arrow::array_reader::{read_records, ArrayReader};
+use crate::arrow::buffer::{
+    dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer,
+};
 use crate::arrow::record_reader::buffer::{BufferQueue, ScalarValue};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
@@ -188,13 +187,13 @@ where
     fn get_def_levels(&self) -> Option<&[i16]> {
         self.def_levels_buffer
             .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+            .map(|buf| buf.typed_data())
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
         self.rep_levels_buffer
             .as_ref()
-            .map(|buf| unsafe { buf.typed_data() })
+            .map(|buf| buf.typed_data())
     }
 }
 
@@ -236,13 +235,13 @@ where
     fn new(col: &ColumnDescPtr) -> Self {
         let validate_utf8 = col.converted_type() == ConvertedType::UTF8;
 
-        let value_type =
-            match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8) {
-                (true, true) => ArrowType::LargeUtf8,
-                (true, false) => ArrowType::LargeBinary,
-                (false, true) => ArrowType::Utf8,
-                (false, false) => ArrowType::Binary,
-            };
+        let value_type = match (V::IS_LARGE, col.converted_type() == ConvertedType::UTF8)
+        {
+            (true, true) => ArrowType::LargeUtf8,
+            (true, false) => ArrowType::LargeBinary,
+            (false, true) => ArrowType::Utf8,
+            (false, false) => ArrowType::Binary,
+        };
 
         Self {
             dict: None,
@@ -357,7 +356,7 @@ where
                         assert_eq!(dict.data_type(), &self.value_type);
 
                         let dict_buffers = dict.data().buffers();
-                        let dict_offsets = unsafe { dict_buffers[0].typed_data::<V>() };
+                        let dict_offsets = dict_buffers[0].typed_data::<V>();
                         let dict_values = dict_buffers[1].as_slice();
 
                         values.extend_from_dictionary(

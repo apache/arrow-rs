@@ -27,7 +27,7 @@ use crate::column::reader::decoder::{
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::ceil;
+use crate::util::bit_util::{ceil, num_required_bits};
 use crate::util::memory::ByteBufferPtr;
 
 pub(crate) mod decoder;
@@ -468,7 +468,7 @@ fn parse_v1_level(
             Ok((i32_size + data_size, buf.range(i32_size, data_size)))
         }
         Encoding::BIT_PACKED => {
-            let bit_width = crate::util::bit_util::log2(max_level as u64 + 1) as u8;
+            let bit_width = num_required_bits(max_level as u64);
             let num_bytes = ceil(
                 (num_buffered_values as usize * bit_width as usize) as i64,
                 8,

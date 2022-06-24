@@ -72,9 +72,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // cast one decimal type to another decimal type
         (Decimal(_, _), Decimal(_, _)) => true,
         // signed numeric to decimal
-        (Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal(_, _)) |
+        (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal(_, _)) |
         // decimal to signed numeric
-        (Decimal(_, _), Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
+        (Decimal(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
         | (
             Null,
             Boolean
@@ -251,21 +251,21 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Int64, Duration(_)) => true,
         (Duration(_), Int64) => true,
         (Interval(from_type), Int64) => {
-            match from_type{
+            match from_type {
                 IntervalUnit::YearMonth => true,
                 IntervalUnit::DayTime => true,
                 IntervalUnit::MonthDayNano => false, // Native type is i128
             }
-        },
+        }
         (Int32, Interval(to_type)) => {
-            match to_type{
+            match to_type {
                 IntervalUnit::YearMonth => true,
                 IntervalUnit::DayTime => false,
                 IntervalUnit::MonthDayNano => false,
             }
-        },
+        }
         (Int64, Interval(to_type)) => {
-            match to_type{
+            match to_type {
                 IntervalUnit::YearMonth => false,
                 IntervalUnit::DayTime => true,
                 IntervalUnit::MonthDayNano => false,
@@ -353,7 +353,7 @@ macro_rules! cast_decimal_to_integer {
             if array.is_null(i) {
                 value_builder.append_null()?;
             } else {
-                let v = array.value(i) / div;
+                let v = array.value(i).as_i128() / div;
                 // check the overflow
                 // For example: Decimal(128,10,0) as i8
                 // 128 is out of range i8
@@ -383,7 +383,7 @@ macro_rules! cast_decimal_to_float {
             } else {
                 // The range of f32 or f64 is larger than i128, we don't need to check overflow.
                 // cast the i128 to f64 will lose precision, for example the `112345678901234568` will be as `112345678901234560`.
-                let v = (array.value(i) as f64 / div) as $NATIVE_TYPE;
+                let v = (array.value(i).as_i128() as f64 / div) as $NATIVE_TYPE;
                 value_builder.append_value(v)?;
             }
         }
@@ -447,6 +447,7 @@ pub fn cast_with_options(
                 Float64 => {
                     cast_decimal_to_float!(array, scale, Float64Builder, f64)
                 }
+                Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {:?} to {:?} not supported",
                     from_type, to_type
@@ -475,6 +476,7 @@ pub fn cast_with_options(
                 Float64 => {
                     cast_floating_point_to_decimal!(array, Float64Array, precision, scale)
                 }
+                Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {:?} to {:?} not supported",
                     from_type, to_type
@@ -2084,7 +2086,7 @@ where
     let list_data = array.data();
     let str_values_buf = str_array.value_data();
 
-    let offsets = unsafe { list_data.buffers()[0].typed_data::<OffsetSizeFrom>() };
+    let offsets = list_data.buffers()[0].typed_data::<OffsetSizeFrom>();
 
     let mut offset_builder = BufferBuilder::<OffsetSizeTo>::new(offsets.len());
     offsets.iter().try_for_each::<_, Result<_>>(|offset| {
@@ -2196,6 +2198,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::decimal::Decimal128;
     use crate::{buffer::Buffer, util::display::array_value_to_string};
 
     macro_rules! generate_cast_test_case {
@@ -2247,9 +2250,9 @@ mod tests {
             DecimalArray,
             &output_type,
             vec![
-                Some(11234560_i128),
-                Some(21234560_i128),
-                Some(31234560_i128),
+                Some(Decimal128::new_from_i128(20, 4, 11234560_i128)),
+                Some(Decimal128::new_from_i128(20, 4, 21234560_i128)),
+                Some(Decimal128::new_from_i128(20, 4, 31234560_i128)),
                 None
             ]
         );
@@ -2426,11 +2429,11 @@ mod tests {
                 DecimalArray,
                 &decimal_type,
                 vec![
-                    Some(1000000_i128),
-                    Some(2000000_i128),
-                    Some(3000000_i128),
+                    Some(Decimal128::new_from_i128(38, 6, 1000000_i128)),
+                    Some(Decimal128::new_from_i128(38, 6, 2000000_i128)),
+                    Some(Decimal128::new_from_i128(38, 6, 3000000_i128)),
                     None,
-                    Some(5000000_i128)
+                    Some(Decimal128::new_from_i128(38, 6, 5000000_i128))
                 ]
             );
         }
@@ -2458,12 +2461,12 @@ mod tests {
             DecimalArray,
             &decimal_type,
             vec![
-                Some(1100000_i128),
-                Some(2200000_i128),
-                Some(4400000_i128),
+                Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 2200000_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 4400000_i128)),
                 None,
-                Some(1123456_i128),
-                Some(1123456_i128),
+                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
             ]
         );
 
@@ -2483,13 +2486,13 @@ mod tests {
             DecimalArray,
             &decimal_type,
             vec![
-                Some(1100000_i128),
-                Some(2200000_i128),
-                Some(4400000_i128),
+                Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 2200000_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 4400000_i128)),
                 None,
-                Some(1123456_i128),
-                Some(1123456_i128),
-                Some(1123456_i128),
+                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
+                Some(Decimal128::new_from_i128(38, 6, 1123456_i128)),
             ]
         );
     }
@@ -4309,6 +4312,26 @@ mod tests {
         let cast_array = cast(&array, &cast_type).expect("cast failed");
         assert_eq!(cast_array.data_type(), &cast_type);
         assert_eq!(array_to_strings(&cast_array), expected);
+    }
+
+    #[test]
+    fn test_cast_null_array_to_from_decimal_array() {
+        let data_type = DataType::Decimal(12, 4);
+        let array = new_null_array(&DataType::Null, 4);
+        assert_eq!(array.data_type(), &DataType::Null);
+        let cast_array = cast(&array, &data_type).expect("cast failed");
+        assert_eq!(cast_array.data_type(), &data_type);
+        for i in 0..4 {
+            assert!(cast_array.is_null(i));
+        }
+
+        let array = new_null_array(&data_type, 4);
+        assert_eq!(array.data_type(), &data_type);
+        let cast_array = cast(&array, &DataType::Null).expect("cast failed");
+        assert_eq!(cast_array.data_type(), &DataType::Null);
+        for i in 0..4 {
+            assert!(cast_array.is_null(i));
+        }
     }
 
     #[test]

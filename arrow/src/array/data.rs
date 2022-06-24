@@ -40,8 +40,7 @@ pub(crate) fn count_nulls(
     len: usize,
 ) -> usize {
     if let Some(buf) = null_bit_buffer {
-        len.checked_sub(buf.count_set_bits_offset(offset, len))
-            .unwrap()
+        len - buf.count_set_bits_offset(offset, len)
     } else {
         0
     }
@@ -767,8 +766,7 @@ impl ArrayData {
             )));
         }
 
-        // SAFETY: Bounds checked above
-        Ok(unsafe { &(buffer.typed_data::<T>()[self.offset..self.offset + len]) })
+        Ok(&buffer.typed_data::<T>()[self.offset..self.offset + len])
     }
 
     /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
@@ -986,7 +984,7 @@ impl ArrayData {
             )));
         }
 
-        self.validate_dictionary_offset()?;
+        self.validate_values()?;
 
         // validate all children recursively
         self.child_data
@@ -1004,7 +1002,7 @@ impl ArrayData {
         Ok(())
     }
 
-    pub fn validate_dictionary_offset(&self) -> Result<()> {
+    pub fn validate_values(&self) -> Result<()> {
         match &self.data_type {
             DataType::Decimal(p, _) => {
                 let values_buffer: &[i128] = self.typed_buffer(0, self.len)?;
@@ -1161,7 +1159,7 @@ impl ArrayData {
 
         // Justification: buffer size was validated above
         let indexes: &[T] =
-            unsafe { &(buffer.typed_data::<T>()[self.offset..self.offset + self.len]) };
+            &buffer.typed_data::<T>()[self.offset..self.offset + self.len];
 
         indexes.iter().enumerate().try_for_each(|(i, &dict_index)| {
             // Do not check the value is null (value can be arbitrary)
@@ -2771,7 +2769,7 @@ mod tests {
             )
         };
 
-        let err = data.validate_dictionary_offset().unwrap_err();
+        let err = data.validate_values().unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
     }
 }

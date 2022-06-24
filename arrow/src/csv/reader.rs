@@ -1439,7 +1439,7 @@ mod tests {
     fn test_nulls() {
         let schema = Schema::new(vec![
             Field::new("c_int", DataType::UInt64, false),
-            Field::new("c_float", DataType::Float32, false),
+            Field::new("c_float", DataType::Float32, true),
             Field::new("c_string", DataType::Utf8, false),
         ]);
 

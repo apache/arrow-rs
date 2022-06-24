@@ -17,7 +17,7 @@
 
 //! Common Parquet errors and macros.
 
-use std::{cell, convert, io, result, str};
+use std::{cell, io, result, str};
 
 #[cfg(any(feature = "arrow", test))]
 use arrow::error::ArrowError;
@@ -108,7 +108,7 @@ pub type Result<T> = result::Result<T, ParquetError>;
 // ----------------------------------------------------------------------
 // Conversion from `ParquetError` to other types of `Error`s
 
-impl convert::From<ParquetError> for io::Error {
+impl From<ParquetError> for io::Error {
     fn from(e: ParquetError) -> Self {
         io::Error::new(io::ErrorKind::Other, e)
     }
@@ -135,6 +135,7 @@ macro_rules! eof_err {
     ($fmt:expr, $($args:expr),*) => (ParquetError::EOF(format!($fmt, $($args),*)));
 }
 
+#[cfg(any(feature = "arrow", test))]
 macro_rules! arrow_err {
     ($fmt:expr) => (ParquetError::ArrowError($fmt.to_owned()));
     ($fmt:expr, $($args:expr),*) => (ParquetError::ArrowError(format!($fmt, $($args),*)));

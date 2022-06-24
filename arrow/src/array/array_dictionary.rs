@@ -33,6 +33,34 @@ use crate::error::Result;
 /// This is mostly used to represent strings or a limited set of primitive types as integers,
 /// for example when doing NLP analysis or representing chromosomes by name.
 ///
+/// [`DictionaryArray`] are represented using a `keys` array and a
+/// `values` array, which may be different lengths. The `keys` array
+/// stores indexes in the `values` array which holds
+/// the corresponding logical value, as shown here:
+///
+/// ```text
+/// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///   ┌─────────────────┐  ┌─────────┐ │     ┌─────────────────┐
+/// │ │        A        │  │    0    │       │        A        │     values[keys[0]]
+///   ├─────────────────┤  ├─────────┤ │     ├─────────────────┤
+/// │ │        D        │  │    2    │       │        B        │     values[keys[1]]
+///   ├─────────────────┤  ├─────────┤ │     ├─────────────────┤
+/// │ │        B        │  │    2    │       │        B        │     values[keys[2]]
+///   └─────────────────┘  ├─────────┤ │     ├─────────────────┤
+/// │                      │    1    │       │        D        │     values[keys[3]]
+///                        ├─────────┤ │     ├─────────────────┤
+/// │                      │    1    │       │        D        │     values[keys[4]]
+///                        ├─────────┤ │     ├─────────────────┤
+/// │                      │    0    │       │        A        │     values[keys[5]]
+///                        └─────────┘ │     └─────────────────┘
+/// │       values            keys
+///  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+///                                             Logical array
+///                                                Contents
+///           DictionaryArray
+///              length = 6
+/// ```
+///
 /// Example **with nullable** data:
 ///
 /// ```
@@ -114,11 +142,11 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         }
 
         // Safety: `validate` ensures key type is correct, and
-        //  `validate_dictionary_offset` ensures all offsets are within range
+        //  `validate_values` ensures all offsets are within range
         let array = unsafe { data.build_unchecked() };
 
         array.validate()?;
-        array.validate_dictionary_offset()?;
+        array.validate_values()?;
 
         Ok(array.into())
     }
@@ -128,7 +156,11 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         &self.keys
     }
 
-    /// Returns the lookup key by doing reverse dictionary lookup
+    /// If `value` is present in `values` (aka the dictionary),
+    /// returns the corresponding key (index into the `values`
+    /// array). Otherwise returns `None`.
+    ///
+    /// Panics if `values` is not a [`StringArray`].
     pub fn lookup_key(&self, value: &str) -> Option<K::Native> {
         let rd_buf: &StringArray =
             self.values.as_any().downcast_ref::<StringArray>().unwrap();
@@ -168,6 +200,17 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         self.keys
             .iter()
             .map(|key| key.map(|k| k.to_usize().expect("Dictionary index not usize")))
+    }
+
+    /// Return the value of `keys` (the dictionary key) at index `i`,
+    /// cast to `usize`, `None` if the value at `i` is `NULL`.
+    pub fn key(&self, i: usize) -> Option<usize> {
+        self.keys.is_valid(i).then(|| {
+            self.keys
+                .value(i)
+                .to_usize()
+                .expect("Dictionary index not usize")
+        })
     }
 }
 
@@ -532,6 +575,17 @@ mod tests {
         assert!(iter.next().unwrap().is_none());
         assert_eq!("a", iter.next().unwrap().unwrap());
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_dictionary_key() {
+        let keys = Int8Array::from(vec![Some(2), None, Some(1)]);
+        let values = StringArray::from(vec!["foo", "bar", "baz", "blarg"]);
+
+        let array = DictionaryArray::try_new(&keys, &values).unwrap();
+        assert_eq!(array.key(0), Some(2));
+        assert_eq!(array.key(1), None);
+        assert_eq!(array.key(2), Some(1));
     }
 
     #[test]

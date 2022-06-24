@@ -81,7 +81,6 @@ const EINVAL: i32 = 22;
 const ENOSYS: i32 = 78;
 
 /// ABI-compatible struct for `ArrayStream` from C Stream Interface
-/// This interface is experimental
 /// See <https://arrow.apache.org/docs/format/CStreamInterface.html#structure-definitions>
 /// This was created by bindgen
 #[repr(C)]
@@ -198,13 +197,6 @@ impl ExportedArrayStream {
     }
 
     pub fn get_schema(&mut self, out: *mut FFI_ArrowSchema) -> i32 {
-        unsafe {
-            match (*out).release {
-                None => (),
-                Some(release) => release(out),
-            };
-        };
-
         let mut private_data = self.get_private_data();
         let reader = &private_data.batch_reader;
 
@@ -224,18 +216,17 @@ impl ExportedArrayStream {
     }
 
     pub fn get_next(&mut self, out: *mut FFI_ArrowArray) -> i32 {
-        unsafe {
-            match (*out).release {
-                None => (),
-                Some(release) => release(out),
-            };
-        };
-
         let mut private_data = self.get_private_data();
         let reader = &mut private_data.batch_reader;
 
         let ret_code = match reader.next() {
-            None => 0,
+            None => {
+                // Marks ArrowArray released to indicate reaching the end of stream.
+                unsafe {
+                    (*out).release = None;
+                }
+                0
+            }
             Some(next_batch) => {
                 if let Ok(batch) = next_batch {
                     let struct_array = StructArray::from(batch);
@@ -275,7 +266,7 @@ fn get_error_code(err: &ArrowError) -> i32 {
 /// Struct used to fetch `RecordBatch` from the C Stream Interface.
 /// Its main responsibility is to expose `RecordBatchReader` functionality
 /// that requires [FFI_ArrowArrayStream].
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ArrowArrayStreamReader {
     stream: Arc<FFI_ArrowArrayStream>,
     schema: SchemaRef,
@@ -508,6 +499,8 @@ mod tests {
         }
 
         assert_eq!(produced_batches, vec![batch.clone(), batch]);
+
+        unsafe { Arc::from_raw(stream_ptr) };
         Ok(())
     }
 
@@ -537,6 +530,8 @@ mod tests {
         }
 
         assert_eq!(produced_batches, vec![batch.clone(), batch]);
+
+        unsafe { Arc::from_raw(stream_ptr) };
         Ok(())
     }
 

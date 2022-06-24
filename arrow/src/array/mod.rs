@@ -15,40 +15,66 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The central type in Apache Arrow are arrays, represented
-//! by the [`Array` trait](crate::array::Array).
-//! An array represents a known-length sequence of values all
-//! having the same type.
+//! The central type in Apache Arrow are arrays, which are a known-length sequence of values
+//! all having the same type. This module provides concrete implementations of each type, as
+//! well as an [`Array`] trait that can be used for type-erasure.
 //!
-//! Internally, those values are represented by one or several
-//! [buffers](crate::buffer::Buffer), the number and meaning
-//! of which depend on the array’s data type, as documented in
-//! [the Arrow data layout specification](https://arrow.apache.org/docs/format/Columnar.html).
-//! For example, the type `Int16Array` represents an Apache
-//! Arrow array of 16-bit integers.
+//! # Downcasting an Array
 //!
-//! Those buffers consist of the value data itself and an
-//! optional [bitmap buffer](crate::bitmap::Bitmap) that
-//! indicates which array entries are null values.
-//! The bitmap buffer can be entirely omitted if the array is
-//! known to have zero null values.
+//! Arrays are often passed around as a dynamically typed [`&dyn Array`] or [`ArrayRef`].
+//! For example, [`RecordBatch`](`crate::record_batch::RecordBatch`) stores columns as [`ArrayRef`].
 //!
-//! There are concrete implementations of this trait for each
-//! data type, that help you access individual values of the
-//! array.
+//! Whilst these arrays can be passed directly to the [`compute`](crate::compute),
+//! [`csv`](crate::csv), [`json`](crate::json), etc... APIs, it is often the case that you wish
+//! to interact with the data directly. This requires downcasting to the concrete type of the array:
+//!
+//! ```
+//! # use arrow::array::{Array, Float32Array, Int32Array};
+//! #
+//! fn sum_int32(array: &dyn Array) -> i32 {
+//!     let integers: &Int32Array = array.as_any().downcast_ref().unwrap();
+//!     integers.iter().map(|val| val.unwrap_or_default()).sum()
+//! }
+//!
+//! // Note: the values for positions corresponding to nulls will be arbitrary
+//! fn as_f32_slice(array: &dyn Array) -> &[f32] {
+//!     array.as_any().downcast_ref::<Float32Array>().unwrap().values()
+//! }
+//! ```
 //!
 //! # Building an Array
 //!
-//! Arrow's `Arrays` are immutable, but there is the trait
-//! [`ArrayBuilder`](crate::array::ArrayBuilder)
-//! that helps you with constructing new `Arrays`. As with the
-//! `Array` trait, there are builder implementations for all
-//! concrete array types.
+//! Most [`Array`] implementations can be constructed directly from iterators or [`Vec`]
 //!
-//! # Example
 //! ```
-//! use arrow::array::Int16Array;
+//! # use arrow::array::Int32Array;
+//! # use arrow::array::StringArray;
+//! # use arrow::array::ListArray;
+//! # use arrow::datatypes::Int32Type;
+//! #
+//! Int32Array::from(vec![1, 2]);
+//! Int32Array::from(vec![Some(1), None]);
+//! Int32Array::from_iter([1, 2, 3, 4]);
+//! Int32Array::from_iter([Some(1), Some(2), None, Some(4)]);
 //!
+//! StringArray::from(vec!["foo", "bar"]);
+//! StringArray::from(vec![Some("foo"), None]);
+//! StringArray::from_iter([Some("foo"), None]);
+//! StringArray::from_iter_values(["foo", "bar"]);
+//!
+//! ListArray::from_iter_primitive::<Int32Type, _, _>([
+//!     Some(vec![Some(1), None, Some(3)]),
+//!     None,
+//!     Some(vec![])
+//! ]);
+//! ```
+//!
+//! Additionally [`ArrayBuilder`](crate::array::ArrayBuilder) implementations can be
+//! used to construct arrays with a push-based interface
+//!
+//! ```
+//! # use arrow::array::Int16Array;
+//! #
 //! // Create a new builder with a capacity of 100
 //! let mut builder = Int16Array::builder(100);
 //!
@@ -78,6 +104,43 @@
 //!     "Get slice of len 2 starting at idx 3"
 //! )
 //! ```
+//!
+//! # Zero-Copy Slicing
+//!
+//! Given an [`Array`] of arbitrary length, it is possible to create an owned slice of this
+//! data. Internally this just increments some ref-counts, and so is incredibly cheap
+//!
+//! ```rust
+//! # use std::sync::Arc;
+//! # use arrow::array::{Array, Int32Array, ArrayRef};
+//! let array = Arc::new(Int32Array::from_iter([1, 2, 3])) as ArrayRef;
+//!
+//! // Slice with offset 1 and length 2
+//! let sliced = array.slice(1, 2);
+//! let ints = sliced.as_any().downcast_ref::<Int32Array>().unwrap();
+//! assert_eq!(ints.values(), &[2, 3]);
+//! ```
+//!
+//! # Internal Representation
+//!
+//! Internally, arrays are represented by one or several [`Buffer`], the number and meaning of
+//! which depend on the array’s data type, as documented in the [Arrow specification].
+//!
+//! For example, the type `Int16Array` represents an array of 16-bit integers and consists of:
+//!
+//! * An optional [`Bitmap`] identifying any null values
+//! * A contiguous [`Buffer`] of 16-bit integers
+//!
+//! Similarly, the type `StringArray` represents an array of UTF-8 strings and consists of:
+//!
+//! * An optional [`Bitmap`] identifying any null values
+//! * An offsets [`Buffer`] of 32-bit integers identifying valid UTF-8 sequences within the values buffer
+//! * A values [`Buffer`] of UTF-8 encoded string data
+//!
+//! [Arrow specification]: https://arrow.apache.org/docs/format/Columnar.html
+//! [`&dyn Array`]: Array
+//! [`Bitmap`]: crate::bitmap::Bitmap
+//! [`Buffer`]: crate::buffer::Buffer
 
 #[allow(clippy::module_inception)]
 mod array;
@@ -398,9 +461,29 @@ pub use self::array_string::GenericStringArray;
 
 // --------------------- Array Builder ---------------------
 
-pub use self::builder::make_builder;
+pub use self::builder::ArrayBuilder;
+pub use self::builder::BinaryBuilder;
 pub use self::builder::BooleanBufferBuilder;
+pub use self::builder::BooleanBuilder;
 pub use self::builder::BufferBuilder;
+pub use self::builder::DecimalBuilder;
+pub use self::builder::FixedSizeBinaryBuilder;
+pub use self::builder::FixedSizeListBuilder;
+pub use self::builder::GenericListBuilder;
+pub use self::builder::GenericStringBuilder;
+pub use self::builder::LargeBinaryBuilder;
+pub use self::builder::LargeListBuilder;
+pub use self::builder::LargeStringBuilder;
+pub use self::builder::ListBuilder;
+pub use self::builder::MapBuilder;
+pub use self::builder::PrimitiveBuilder;
+pub use self::builder::PrimitiveDictionaryBuilder;
+pub use self::builder::StringBuilder;
+pub use self::builder::StringDictionaryBuilder;
+pub use self::builder::StructBuilder;
+pub use self::builder::UnionBuilder;
+
+pub use self::builder::make_builder;
 
 pub type Int8BufferBuilder = BufferBuilder<i8>;
 pub type Int16BufferBuilder = BufferBuilder<i16>;
@@ -445,26 +528,6 @@ pub type DurationMicrosecondBufferBuilder =
     BufferBuilder<<DurationMicrosecondType as ArrowPrimitiveType>::Native>;
 pub type DurationNanosecondBufferBuilder =
     BufferBuilder<<DurationNanosecondType as ArrowPrimitiveType>::Native>;
-
-pub use self::builder::ArrayBuilder;
-pub use self::builder::BinaryBuilder;
-pub use self::builder::BooleanBuilder;
-pub use self::builder::DecimalBuilder;
-pub use self::builder::FixedSizeBinaryBuilder;
-pub use self::builder::FixedSizeListBuilder;
-pub use self::builder::GenericListBuilder;
-pub use self::builder::GenericStringBuilder;
-pub use self::builder::LargeBinaryBuilder;
-pub use self::builder::LargeListBuilder;
-pub use self::builder::LargeStringBuilder;
-pub use self::builder::ListBuilder;
-pub use self::builder::MapBuilder;
-pub use self::builder::PrimitiveBuilder;
-pub use self::builder::PrimitiveDictionaryBuilder;
-pub use self::builder::StringBuilder;
-pub use self::builder::StringDictionaryBuilder;
-pub use self::builder::StructBuilder;
-pub use self::builder::UnionBuilder;
 
 pub type Int8Builder = PrimitiveBuilder<Int8Type>;
 pub type Int16Builder = PrimitiveBuilder<Int16Type>;

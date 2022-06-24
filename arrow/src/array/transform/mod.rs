@@ -395,6 +395,13 @@ impl<'a> MutableArrayData<'a> {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
+            (
+                DataType::List(_) | DataType::LargeList(_),
+                Capacities::List(capacity, _),
+            ) => {
+                array_capacity = *capacity;
+                new_buffers(data_type, *capacity)
+            }
             _ => panic!("Capacities: {:?} not yet supported", capacities),
         };
 
@@ -434,11 +441,10 @@ impl<'a> MutableArrayData<'a> {
                 let capacities = if let Capacities::List(capacity, ref child_capacities) =
                     capacities
                 {
-                    array_capacity = capacity;
                     child_capacities
                         .clone()
                         .map(|c| *c)
-                        .unwrap_or(Capacities::Array(array_capacity))
+                        .unwrap_or(Capacities::Array(capacity))
                 } else {
                     Capacities::Array(array_capacity)
                 };
@@ -1314,6 +1320,40 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, expected_list_data);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_append_with_capacities() -> Result<()> {
+        let mut builder = ListBuilder::<Int64Builder>::new(Int64Builder::new(24));
+        builder.values().append_slice(&[1, 2, 3])?;
+        builder.append(true)?;
+        builder.values().append_slice(&[4, 5])?;
+        builder.append(true)?;
+        builder.values().append_slice(&[6, 7, 8])?;
+        builder.values().append_slice(&[9, 10, 11])?;
+        builder.append(true)?;
+        let a = builder.finish();
+
+        let a_builder = Int64Builder::new(24);
+        let mut a_builder = ListBuilder::<Int64Builder>::new(a_builder);
+        a_builder.values().append_slice(&[12, 13])?;
+        a_builder.append(true)?;
+        a_builder.append(true)?;
+        a_builder.values().append_slice(&[14, 15, 16, 17])?;
+        a_builder.append(true)?;
+        let b = a_builder.finish();
+
+        let mutable = MutableArrayData::with_capacities(
+            vec![a.data(), b.data()],
+            false,
+            Capacities::List(6, Some(Box::new(Capacities::Array(17)))),
+        );
+
+        // capacities are rounded up to multiples of 64 by MutableBuffer
+        assert_eq!(mutable.data.buffer1.capacity(), 64);
+        assert_eq!(mutable.data.child_data[0].data.buffer1.capacity(), 192);
 
         Ok(())
     }

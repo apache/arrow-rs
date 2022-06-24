@@ -107,27 +107,18 @@ unsafe fn crc32_hash(bytes: &[u8], seed: u32) -> u32 {
     #[cfg(target_arch = "x86_64")]
     use std::arch::x86_64::*;
 
-    let u32_num_bytes = std::mem::size_of::<u32>();
-    let mut num_bytes = bytes.len();
-    let num_words = num_bytes / u32_num_bytes;
-    num_bytes %= u32_num_bytes;
-
-    let bytes_u32: &[u32] = std::slice::from_raw_parts(
-        &bytes[0..num_words * u32_num_bytes] as *const [u8] as *const u32,
-        num_words,
-    );
-
-    let mut offset = 0;
     let mut hash = seed;
-    while offset < num_words {
-        hash = _mm_crc32_u32(hash, bytes_u32[offset]);
-        offset += 1;
+    for chunk in bytes
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap()))
+    {
+        hash = _mm_crc32_u32(hash, chunk);
     }
 
-    offset = num_words * u32_num_bytes;
-    while offset < num_bytes {
-        hash = _mm_crc32_u8(hash, bytes[offset]);
-        offset += 1;
+    let remainder = bytes.len() % 4;
+
+    for byte in &bytes[bytes.len() - remainder..] {
+        hash = _mm_crc32_u8(hash, *byte);
     }
 
     // The lower half of the CRC hash has poor uniformity, so swap the halves
@@ -158,13 +149,13 @@ mod tests {
         if is_x86_feature_detected!("sse4.2") {
             unsafe {
                 let result = crc32_hash(b"hello", 123);
-                assert_eq!(result, 2927487359);
+                assert_eq!(result, 3359043980);
 
                 let result = crc32_hash(b"helloworld", 123);
-                assert_eq!(result, 314229527);
+                assert_eq!(result, 3971745255);
 
                 let result = crc32_hash(b"helloworldparquet", 123);
-                assert_eq!(result, 667078870);
+                assert_eq!(result, 1124504676);
             }
         }
     }

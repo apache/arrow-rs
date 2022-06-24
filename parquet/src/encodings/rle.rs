@@ -870,7 +870,7 @@ mod tests {
             }
             let bit_width = bit_util::num_required_bits(values.len() as u64);
             assert!(bit_width < 64);
-            test_round_trip(&values[..], bit_width as u8);
+            test_round_trip(&values[..], bit_width);
         }
     }
 }

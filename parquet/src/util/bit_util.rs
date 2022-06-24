@@ -133,38 +133,23 @@ where
     memcpy(&source.as_bytes()[..num_bytes], target)
 }
 
-/// Returns the ceil of value/divisor
+/// Returns the ceil of value/divisor.
+///
+/// This function should be removed after
+/// [`int_roundings`](https://github.com/rust-lang/rust/issues/88581) is stable.
 #[inline]
 pub fn ceil(value: i64, divisor: i64) -> i64 {
-    value / divisor + ((value % divisor != 0) as i64)
-}
-
-/// Returns ceil(log2(x))
-#[inline]
-pub fn log2(mut x: u64) -> i32 {
-    if x == 1 {
-        return 0;
-    }
-    x -= 1;
-    let mut result = 0;
-    while x > 0 {
-        x >>= 1;
-        result += 1;
-    }
-    result
+    num::Integer::div_ceil(&value, &divisor)
 }
 
 /// Returns the `num_bits` least-significant bits of `v`
 #[inline]
 pub fn trailing_bits(v: u64, num_bits: usize) -> u64 {
-    if num_bits == 0 {
-        return 0;
-    }
     if num_bits >= 64 {
-        return v;
+        v
+    } else {
+        v & ((1<<num_bits) - 1)
     }
-    let n = 64 - num_bits;
-    (v << n) >> n
 }
 
 #[inline]
@@ -179,13 +164,8 @@ pub fn unset_array_bit(bits: &mut [u8], i: usize) {
 
 /// Returns the minimum number of bits needed to represent the value 'x'
 #[inline]
-pub fn num_required_bits(x: u64) -> usize {
-    for i in (0..64).rev() {
-        if x & (1u64 << i) != 0 {
-            return i + 1;
-        }
-    }
-    0
+pub fn num_required_bits(x: u64) -> u8 {
+    64 - x.leading_zeros() as u8
 }
 
 static BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
@@ -849,6 +829,7 @@ mod tests {
         assert_eq!(num_required_bits(10), 4);
         assert_eq!(num_required_bits(12), 4);
         assert_eq!(num_required_bits(16), 5);
+        assert_eq!(num_required_bits(u64::MAX), 64);
     }
 
     #[test]
@@ -876,20 +857,6 @@ mod tests {
         assert!(!get_bit(&[0b01001001, 0b01010010], 13));
         assert!(get_bit(&[0b01001001, 0b01010010], 14));
         assert!(!get_bit(&[0b01001001, 0b01010010], 15));
-    }
-
-    #[test]
-    fn test_log2() {
-        assert_eq!(log2(1), 0);
-        assert_eq!(log2(2), 1);
-        assert_eq!(log2(3), 2);
-        assert_eq!(log2(4), 2);
-        assert_eq!(log2(5), 3);
-        assert_eq!(log2(5), 3);
-        assert_eq!(log2(6), 3);
-        assert_eq!(log2(7), 3);
-        assert_eq!(log2(8), 3);
-        assert_eq!(log2(9), 4);
     }
 
     #[test]
