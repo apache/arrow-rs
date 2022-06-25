@@ -579,7 +579,24 @@ impl ColumnChunkMetaData {
 
     /// Method to convert to Thrift.
     pub fn to_thrift(&self) -> ColumnChunk {
-        let column_metadata = ColumnMetaData {
+        let column_metadata = self.to_column_metadata_thrift();
+
+        ColumnChunk {
+            file_path: self.file_path().map(|s| s.to_owned()),
+            file_offset: self.file_offset,
+            meta_data: Some(column_metadata),
+            offset_index_offset: self.offset_index_offset,
+            offset_index_length: self.offset_index_length,
+            column_index_offset: self.column_index_offset,
+            column_index_length: self.column_index_length,
+            crypto_metadata: None,
+            encrypted_column_metadata: None,
+        }
+    }
+
+    /// Method to convert to Thrift `ColumnMetaData`
+    pub fn to_column_metadata_thrift(&self) -> ColumnMetaData {
+        ColumnMetaData {
             type_: self.column_type.into(),
             encodings: self.encodings().iter().map(|&v| v.into()).collect(),
             path_in_schema: Vec::from(self.column_path.as_ref()),
@@ -597,18 +614,6 @@ impl ColumnChunkMetaData {
                 .as_ref()
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
-        };
-
-        ColumnChunk {
-            file_path: self.file_path().map(|s| s.to_owned()),
-            file_offset: self.file_offset,
-            meta_data: Some(column_metadata),
-            offset_index_offset: self.offset_index_offset,
-            offset_index_length: self.offset_index_length,
-            column_index_offset: self.column_index_offset,
-            column_index_length: self.column_index_length,
-            crypto_metadata: None,
-            encrypted_column_metadata: None,
         }
     }
 }
