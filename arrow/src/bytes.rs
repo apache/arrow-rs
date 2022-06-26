@@ -101,6 +101,11 @@ impl Bytes {
     }
 }
 
+// Deallocation is Send + Sync, repeating the bound here makes that refactoring safe
+// The only field that is not automatically Send+Sync then is the NonNull ptr
+unsafe impl Send for Bytes where Deallocation: Send {}
+unsafe impl Sync for Bytes where Deallocation: Sync {}
+
 impl Drop for Bytes {
     #[inline]
     fn drop(&mut self) {
