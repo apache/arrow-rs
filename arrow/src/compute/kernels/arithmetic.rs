@@ -612,9 +612,11 @@ macro_rules! typed_math_op {
 macro_rules! math_dict_op {
     ($left: expr, $right:expr, $op:expr, $value_ty:ty) => {{
         if $left.len() != $right.len() {
-            return Err(ArrowError::ComputeError(
-                "Cannot perform operation on arrays of different length".to_string(),
-            ));
+            return Err(ArrowError::ComputeError(format!(
+                "Cannot perform operation on arrays of different length ({}, {})",
+                $left.len(),
+                $right.len()
+            )));
         }
 
         // Safety justification: Since the inputs are valid Arrow arrays, all values are
