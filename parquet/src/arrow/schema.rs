@@ -301,14 +301,10 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .build()
         }
         DataType::Timestamp(time_unit, tz) => {
-            let is_utc = tz
-                .as_ref()
-                .map(|tz| tz == "UTC" || tz == "+00:00" || tz == "-00:00")
-                .unwrap_or(false);
-
             Type::primitive_type_builder(name, PhysicalType::INT64)
                 .with_logical_type(Some(LogicalType::Timestamp {
-                    is_adjusted_to_u_t_c: is_utc,
+                    // If timezone set, values are normalized to UTC timezone
+                    is_adjusted_to_u_t_c: matches!(tz, Some(z) if !z.as_str().is_empty()),
                     unit: match time_unit {
                         TimeUnit::Second => unreachable!(),
                         TimeUnit::Millisecond => {
@@ -1290,7 +1286,7 @@ mod tests {
             REQUIRED INT64   ts_micro_utc (TIMESTAMP(MICROS, true));
             REQUIRED INT64   ts_millis_zero_offset (TIMESTAMP(MILLIS, true));
             REQUIRED INT64   ts_millis_zero_negative_offset (TIMESTAMP(MILLIS, true));
-            REQUIRED INT64   ts_micro_non_utc (TIMESTAMP(MICROS, false));
+            REQUIRED INT64   ts_micro_non_utc (TIMESTAMP(MICROS, true));
             REQUIRED GROUP struct {
                 REQUIRED BOOLEAN bools;
                 REQUIRED INT32 uint32 (INTEGER(32,false));
