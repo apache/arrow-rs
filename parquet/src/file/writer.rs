@@ -434,16 +434,6 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
         }
         Ok(self.sink.bytes_written() - start_pos)
     }
-
-    /// Serializes column chunk into Thrift.
-    /// Returns Ok() if there are not errors serializing and writing data into the sink.
-    #[inline]
-    fn serialize_column_chunk(&mut self, chunk: parquet::ColumnChunk) -> Result<()> {
-        let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-        chunk.write_to_out_protocol(&mut protocol)?;
-        protocol.flush()?;
-        Ok(())
-    }
 }
 
 impl<'a, W: Write> PageWriter for SerializedPageWriter<'a, W> {
@@ -533,7 +523,12 @@ impl<'a, W: Write> PageWriter for SerializedPageWriter<'a, W> {
     }
 
     fn write_metadata(&mut self, metadata: &ColumnChunkMetaData) -> Result<()> {
-        self.serialize_column_chunk(metadata.to_thrift())
+        let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
+        metadata
+            .to_column_metadata_thrift()
+            .write_to_out_protocol(&mut protocol)?;
+        protocol.flush()?;
+        Ok(())
     }
 
     fn close(&mut self) -> Result<()> {
