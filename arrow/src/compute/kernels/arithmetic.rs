@@ -894,14 +894,14 @@ mod tests {
 
     #[test]
     fn test_primitive_array_add_dyn() {
-        let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
-        let b = Int32Array::from(vec![6, 7, 8, 9, 8]);
+        let a = Int32Array::from(vec![Some(5), Some(6), Some(7), Some(8), Some(9)]);
+        let b = Int32Array::from(vec![Some(6), Some(7), Some(8), None, Some(8)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(11, c.value(0));
         assert_eq!(13, c.value(1));
         assert_eq!(15, c.value(2));
-        assert_eq!(17, c.value(3));
+        assert!(c.is_null(3));
         assert_eq!(17, c.value(4));
     }
 
@@ -923,7 +923,7 @@ mod tests {
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
-        builder.append(9).unwrap();
+        builder.append_null().unwrap();
         builder.append(10).unwrap();
         let b = builder.finish();
 
@@ -932,7 +932,7 @@ mod tests {
         assert_eq!(11, c.value(0));
         assert_eq!(13, c.value(1));
         assert_eq!(15, c.value(2));
-        assert_eq!(17, c.value(3));
+        assert!(c.is_null(3));
         assert_eq!(19, c.value(4));
     }
 
