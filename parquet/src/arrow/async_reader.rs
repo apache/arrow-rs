@@ -83,7 +83,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::Stream;
 use parquet_format::PageType;
@@ -102,7 +102,6 @@ use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::ParquetMetaData;
-use crate::file::reader::SerializedPageReader;
 use crate::file::serialized_reader::{decode_page, read_page_header};
 use crate::file::FOOTER_SIZE;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
@@ -474,13 +473,7 @@ struct InMemoryColumnChunk {
 
 impl InMemoryColumnChunk {
     fn pages(&self) -> Result<Box<dyn PageReader>> {
-        let page_reader = SerializedPageReader::new(
-            self.data.clone().reader(),
-            self.num_values,
-            self.compression,
-            self.physical_type,
-        )?;
-
+        let page_reader = InMemoryColumnChunkReader::new(self.clone())?;
         Ok(Box::new(page_reader))
     }
 }
@@ -495,7 +488,7 @@ struct InMemoryColumnChunkReader {
 
 impl InMemoryColumnChunkReader {
     /// Creates a new serialized page reader from file source.
-    pub fn new(chunk: InMemoryColumnChunk) -> Result<Self> {
+    fn new(chunk: InMemoryColumnChunk) -> Result<Self> {
         let decompressor = create_codec(chunk.compression)?;
         let result = Self {
             chunk,
