@@ -120,7 +120,7 @@ use std::{
 
 use bitflags::bitflags;
 
-use crate::array::ArrayData;
+use crate::array::{layout, ArrayData};
 use crate::buffer::Buffer;
 use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
@@ -450,7 +450,17 @@ impl FFI_ArrowArray {
         let buffers = iter::once(data.null_buffer().cloned())
             .chain(data.buffers().iter().map(|b| Some(b.clone())))
             .collect::<Vec<_>>();
-        let n_buffers = buffers.len() as i64;
+        let data_layout = layout(data.data_type());
+        // `n_buffers` is the number of buffers by the spec.
+        let n_buffers = {
+            data_layout.buffers.len() + {
+                if data_layout.can_contain_null_mask {
+                    1
+                } else {
+                    0
+                }
+            }
+        } as i64;
 
         let buffers_ptr = buffers
             .iter()
