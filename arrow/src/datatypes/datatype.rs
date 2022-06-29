@@ -78,6 +78,63 @@ pub enum DataType {
     /// * As used in the Olson time zone database (the "tz database" or
     ///   "tzdata"), such as "America/New_York"
     /// * An absolute time zone offset of the form +XX:XX or -XX:XX, such as +07:30
+    ///
+    /// Timestamps with a non-empty timezone
+    /// ------------------------------------
+    ///
+    /// If a Timestamp column has a non-empty timezone value, its epoch is
+    /// 1970-01-01 00:00:00 (January 1st 1970, midnight) in the *UTC* timezone
+    /// (the Unix epoch), regardless of the Timestamp's own timezone.
+    ///
+    /// Therefore, timestamp values with a non-empty timezone correspond to
+    /// physical points in time together with some additional information about
+    /// how the data was obtained and/or how to display it (the timezone).
+    ///
+    ///   For example, the timestamp value 0 with the timezone string "Europe/Paris"
+    ///   corresponds to "January 1st 1970, 00h00" in the UTC timezone, but the
+    ///   application may prefer to display it as "January 1st 1970, 01h00" in
+    ///   the Europe/Paris timezone (which is the same physical point in time).
+    ///
+    /// One consequence is that timestamp values with a non-empty timezone
+    /// can be compared and ordered directly, since they all share the same
+    /// well-known point of reference (the Unix epoch).
+    ///
+    /// Timestamps with an unset / empty timezone
+    /// -----------------------------------------
+    ///
+    /// If a Timestamp column has no timezone value, its epoch is
+    /// 1970-01-01 00:00:00 (January 1st 1970, midnight) in an *unknown* timezone.
+    ///
+    /// Therefore, timestamp values without a timezone cannot be meaningfully
+    /// interpreted as physical points in time, but only as calendar / clock
+    /// indications ("wall clock time") in an unspecified timezone.
+    ///
+    ///   For example, the timestamp value 0 with an empty timezone string
+    ///   corresponds to "January 1st 1970, 00h00" in an unknown timezone: there
+    ///   is not enough information to interpret it as a well-defined physical
+    ///   point in time.
+    ///
+    /// One consequence is that timestamp values without a timezone cannot
+    /// be reliably compared or ordered, since they may have different points of
+    /// reference.  In particular, it is *not* possible to interpret an unset
+    /// or empty timezone as the same as "UTC".
+    ///
+    /// Conversion between timezones
+    /// ----------------------------
+    ///
+    /// If a Timestamp column has a non-empty timezone, changing the timezone
+    /// to a different non-empty value is a metadata-only operation:
+    /// the timestamp values need not change as their point of reference remains
+    /// the same (the Unix epoch).
+    ///
+    /// However, if a Timestamp column has no timezone value, changing it to a
+    /// non-empty value requires to think about the desired semantics.
+    /// One possibility is to assume that the original timestamp values are
+    /// relative to the epoch of the timezone being set; timestamp values should
+    /// then adjusted to the Unix epoch (for example, changing the timezone from
+    /// empty to "Europe/Paris" would require converting the timestamp values
+    /// from "Europe/Paris" to "UTC", which seems counter-intuitive but is
+    /// nevertheless correct).
     Timestamp(TimeUnit, Option<String>),
     /// A 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days (32 bits).
