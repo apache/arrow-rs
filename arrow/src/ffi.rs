@@ -891,7 +891,7 @@ mod tests {
     use crate::array::{
         export_array_into_raw, make_array, Array, ArrayData, BooleanArray, DecimalArray,
         DictionaryArray, DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray,
-        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array,
+        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array, NullArray,
         OffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray,
     };
     use crate::compute::kernels;
@@ -1410,6 +1410,17 @@ mod tests {
         );
 
         // (drop/release)
+        Ok(())
+    }
+
+    #[test]
+    fn null_array_n_buffers() -> Result<()> {
+        let array = NullArray::new(10);
+        let data = array.data();
+
+        let ffi_array = FFI_ArrowArray::new(data);
+        assert_eq!(0, ffi_array.n_buffers);
+
         Ok(())
     }
 }
