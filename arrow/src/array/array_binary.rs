@@ -848,7 +848,7 @@ impl DecimalArray {
         let child_offset = child_data.offset();
         let builder = ArrayData::builder(DataType::Decimal(precision, scale))
             .len(v.len())
-            .add_buffer(v.data_ref().child_data()[0].buffers()[0].slice(child_offset))
+            .add_buffer(child_data.buffers()[0].slice(child_offset))
             .null_bit_buffer(v.data_ref().null_buffer().cloned())
             .offset(list_offset);
 
