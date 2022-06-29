@@ -831,22 +831,26 @@ impl DecimalArray {
         precision: usize,
         scale: usize,
     ) -> Self {
+        let child_data = &v.data_ref().child_data()[0];
         assert_eq!(
-            v.data_ref().child_data()[0].child_data().len(),
+            child_data.child_data().len(),
             0,
             "DecimalArray can only be created from list array of u8 values \
              (i.e. FixedSizeList<PrimitiveArray<u8>>)."
         );
         assert_eq!(
-            v.data_ref().child_data()[0].data_type(),
+            child_data.data_type(),
             &DataType::UInt8,
             "DecimalArray can only be created from FixedSizeList<u8> arrays, mismatched data types."
         );
 
+        let list_offset = v.offset();
+        let child_offset = child_data.offset();
         let builder = ArrayData::builder(DataType::Decimal(precision, scale))
             .len(v.len())
-            .add_buffer(v.data_ref().child_data()[0].buffers()[0].clone())
-            .null_bit_buffer(v.data_ref().null_buffer().cloned());
+            .add_buffer(v.data_ref().child_data()[0].buffers()[0].slice(child_offset))
+            .null_bit_buffer(v.data_ref().null_buffer().cloned())
+            .offset(list_offset);
 
         let array_data = unsafe { builder.build_unchecked() };
         Self::from(array_data)
@@ -1675,6 +1679,37 @@ mod tests {
             "DecimalArray<23, 6>\n[\n  8887.000000,\n  -8887.000000,\n  null,\n]",
             format!("{:?}", arr)
         );
+    }
+
+    #[test]
+    fn test_decimal_array_from_fixed_size_list() {
+        let value_data = ArrayData::builder(DataType::UInt8)
+            .offset(16)
+            .len(48)
+            .add_buffer(Buffer::from_slice_ref(&[99999_i128, 12, 34, 56]))
+            .build()
+            .unwrap();
+
+        let null_buffer = Buffer::from_slice_ref(&[0b101]);
+
+        // Construct a list array from the above two
+        let list_data_type = DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::UInt8, false)),
+            16,
+        );
+        let list_data = ArrayData::builder(list_data_type)
+            .len(2)
+            .null_bit_buffer(Some(null_buffer))
+            .offset(1)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+        let list_array = FixedSizeListArray::from(list_data);
+        let decimal = DecimalArray::from_fixed_size_list_array(list_array, 38, 0);
+
+        assert_eq!(decimal.len(), 2);
+        assert!(decimal.is_null(0));
+        assert_eq!(decimal.value_as_string(1), "56".to_string());
     }
 
     #[test]
