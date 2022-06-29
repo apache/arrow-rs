@@ -47,11 +47,10 @@
 //! let batch = json.next().unwrap().unwrap();
 //! ```
 
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
-use indexmap::map::IndexMap as HashMap;
-use indexmap::set::IndexSet as HashSet;
 use serde_json::json;
 use serde_json::{map::Map as JsonMap, Value};
 
@@ -65,9 +64,9 @@ use crate::{array::*, buffer::Buffer};
 
 #[derive(Debug, Clone)]
 enum InferredType {
-    Scalar(HashSet<DataType>),
+    Scalar(BTreeSet<DataType>),
     Array(Box<InferredType>),
-    Object(HashMap<String, InferredType>),
+    Object(BTreeMap<String, InferredType>),
     Any,
 }
 
@@ -160,14 +159,14 @@ fn generate_datatype(t: &InferredType) -> Result<DataType> {
     })
 }
 
-fn generate_fields(spec: &HashMap<String, InferredType>) -> Result<Vec<Field>> {
+fn generate_fields(spec: &BTreeMap<String, InferredType>) -> Result<Vec<Field>> {
     spec.iter()
         .map(|(k, types)| Ok(Field::new(k, generate_datatype(types)?, true)))
         .collect()
 }
 
 /// Generate schema from JSON field names and inferred data types
-fn generate_schema(spec: HashMap<String, InferredType>) -> Result<Schema> {
+fn generate_schema(spec: BTreeMap<String, InferredType>) -> Result<Schema> {
     Ok(Schema::new(generate_fields(&spec)?))
 }
 
@@ -312,12 +311,12 @@ pub fn infer_json_schema<R: Read>(
 }
 
 fn set_object_scalar_field_type(
-    field_types: &mut HashMap<String, InferredType>,
+    field_types: &mut BTreeMap<String, InferredType>,
     key: &str,
     ftype: DataType,
 ) -> Result<()> {
     if !field_types.contains_key(key) {
-        field_types.insert(key.to_string(), InferredType::Scalar(HashSet::new()));
+        field_types.insert(key.to_string(), InferredType::Scalar(BTreeSet::new()));
     }
 
     match field_types.get_mut(key).unwrap() {
@@ -328,7 +327,7 @@ fn set_object_scalar_field_type(
         // in case of column contains both scalar type and scalar array type, we convert type of
         // this column to scalar array.
         scalar_array @ InferredType::Array(_) => {
-            let mut hs = HashSet::new();
+            let mut hs = BTreeSet::new();
             hs.insert(ftype);
             scalar_array.merge(InferredType::Scalar(hs))?;
             Ok(())
@@ -341,7 +340,7 @@ fn set_object_scalar_field_type(
 }
 
 fn infer_scalar_array_type(array: &[Value]) -> Result<InferredType> {
-    let mut hs = HashSet::new();
+    let mut hs = BTreeSet::new();
 
     for v in array {
         match v {
@@ -392,7 +391,7 @@ fn infer_nested_array_type(array: &[Value]) -> Result<InferredType> {
 }
 
 fn infer_struct_array_type(array: &[Value]) -> Result<InferredType> {
-    let mut field_types = HashMap::new();
+    let mut field_types = BTreeMap::new();
 
     for v in array {
         match v {
@@ -423,7 +422,7 @@ fn infer_array_element_type(array: &[Value]) -> Result<InferredType> {
 }
 
 fn collect_field_types_from_object(
-    field_types: &mut HashMap<String, InferredType>,
+    field_types: &mut BTreeMap<String, InferredType>,
     map: &JsonMap<String, Value>,
 ) -> Result<()> {
     for (k, v) in map {
@@ -437,7 +436,7 @@ fn collect_field_types_from_object(
                             field_types.insert(
                                 k.to_string(),
                                 InferredType::Array(Box::new(InferredType::Scalar(
-                                    HashSet::new(),
+                                    BTreeSet::new(),
                                 ))),
                             );
                         }
@@ -445,7 +444,7 @@ fn collect_field_types_from_object(
                             field_types.insert(
                                 k.to_string(),
                                 InferredType::Array(Box::new(InferredType::Object(
-                                    HashMap::new(),
+                                    BTreeMap::new(),
                                 ))),
                             );
                         }
@@ -499,7 +498,7 @@ fn collect_field_types_from_object(
             Value::Object(inner_map) => {
                 if !field_types.contains_key(k) {
                     field_types
-                        .insert(k.to_string(), InferredType::Object(HashMap::new()));
+                        .insert(k.to_string(), InferredType::Object(BTreeMap::new()));
                 }
                 match field_types.get_mut(k).unwrap() {
                     InferredType::Object(inner_field_types) => {
@@ -536,7 +535,7 @@ pub fn infer_json_schema_from_iterator<I>(value_iter: I) -> Result<Schema>
 where
     I: Iterator<Item = Result<Value>>,
 {
-    let mut field_types: HashMap<String, InferredType> = HashMap::new();
+    let mut field_types: BTreeMap<String, InferredType> = BTreeMap::new();
 
     for record in value_iter {
         match record? {
@@ -590,7 +589,7 @@ pub struct Decoder {
     options: DecoderOptions,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Options for JSON decoding
 pub struct DecoderOptions {
     /// Batch size (number of records to load each time), defaults to 1024 records
@@ -1752,9 +1751,15 @@ mod tests {
     #[test]
     fn test_json_basic() {
         let builder = ReaderBuilder::new().infer_schema(None).with_batch_size(64);
-        let mut reader: Reader<File> = builder
-            .build::<File>(File::open("test/data/basic.json").unwrap())
-            .unwrap();
+        // Read the JSON into a vec, so we can alter column names later
+        let json_data = {
+            let mut file = File::open("test/data/basic.json").unwrap();
+            let mut bytes = String::new();
+            file.read_to_string(&mut bytes).unwrap();
+            bytes
+        };
+        let mut reader: Reader<_> =
+            builder.build::<_>(Cursor::new(json_data.clone())).unwrap();
         let batch = reader.next().unwrap().unwrap();
 
         assert_eq!(5, batch.num_columns());
@@ -1764,17 +1769,15 @@ mod tests {
         let batch_schema = batch.schema();
         assert_eq!(schema, batch_schema);
 
+        // Check that the columns exist. They are sorted alphabetically,
+        // but we need not assert that. See https://github.com/apache/arrow-rs/issues/1882#issuecomment-1169528840
         let a = schema.column_with_name("a").unwrap();
-        assert_eq!(0, a.0);
         assert_eq!(&DataType::Int64, a.1.data_type());
         let b = schema.column_with_name("b").unwrap();
-        assert_eq!(1, b.0);
         assert_eq!(&DataType::Float64, b.1.data_type());
         let c = schema.column_with_name("c").unwrap();
-        assert_eq!(2, c.0);
         assert_eq!(&DataType::Boolean, c.1.data_type());
         let d = schema.column_with_name("d").unwrap();
-        assert_eq!(3, d.0);
         assert_eq!(&DataType::Utf8, d.1.data_type());
 
         let aa = batch
@@ -1805,6 +1808,25 @@ mod tests {
             .unwrap();
         assert_eq!("4", dd.value(0));
         assert_eq!("text", dd.value(8));
+
+        // Rename fields and check that they still exist
+        let json_data = json_data.replace("\"a\"", "\"f\"");
+
+        let builder = ReaderBuilder::new().infer_schema(None).with_batch_size(64);
+        let reader: Reader<_> = builder.build::<_>(Cursor::new(json_data)).unwrap();
+        let schema = reader.schema();
+
+        // Field "a" should not exist
+        assert!(schema.column_with_name("a").is_none());
+        assert_eq!(&DataType::Int64, a.1.data_type());
+        let b = schema.column_with_name("b").unwrap();
+        assert_eq!(&DataType::Float64, b.1.data_type());
+        let c = schema.column_with_name("c").unwrap();
+        assert_eq!(&DataType::Boolean, c.1.data_type());
+        let d = schema.column_with_name("d").unwrap();
+        assert_eq!(&DataType::Utf8, d.1.data_type());
+        let f = schema.column_with_name("f").unwrap();
+        assert_eq!(&DataType::Int64, f.1.data_type());
     }
 
     #[test]
