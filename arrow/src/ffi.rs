@@ -120,7 +120,7 @@ use std::{
 
 use bitflags::bitflags;
 
-use crate::array::ArrayData;
+use crate::array::{layout, ArrayData};
 use crate::buffer::Buffer;
 use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
@@ -450,14 +450,30 @@ impl FFI_ArrowArray {
         let buffers = iter::once(data.null_buffer().cloned())
             .chain(data.buffers().iter().map(|b| Some(b.clone())))
             .collect::<Vec<_>>();
-        let n_buffers = buffers.len() as i64;
+        let data_layout = layout(data.data_type());
+        // `n_buffers` is the number of buffers by the spec.
+        let n_buffers = {
+            data_layout.buffers.len() + {
+                // If the layout has a null buffer by Arrow spec.
+                // Note that even the array doesn't have a null buffer because it has
+                // no null value, we still need to count 1 here to follow the spec.
+                if data_layout.can_contain_null_mask {
+                    1
+                } else {
+                    0
+                }
+            }
+        } as i64;
 
         let buffers_ptr = buffers
             .iter()
-            .map(|maybe_buffer| match maybe_buffer {
+            .flat_map(|maybe_buffer| match maybe_buffer {
                 // note that `raw_data` takes into account the buffer's offset
-                Some(b) => b.as_ptr() as *const c_void,
-                None => std::ptr::null(),
+                Some(b) => Some(b.as_ptr() as *const c_void),
+                // This is for null buffer. We only put a null pointer for
+                // null buffer if by spec it can contain null mask.
+                None if data_layout.can_contain_null_mask => Some(std::ptr::null()),
+                None => None,
             })
             .collect::<Box<[_]>>();
 
@@ -881,7 +897,7 @@ mod tests {
     use crate::array::{
         export_array_into_raw, make_array, Array, ArrayData, BooleanArray, DecimalArray,
         DictionaryArray, DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray,
-        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array,
+        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array, NullArray,
         OffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray,
     };
     use crate::compute::kernels;
@@ -1400,6 +1416,24 @@ mod tests {
         );
 
         // (drop/release)
+        Ok(())
+    }
+
+    #[test]
+    fn null_array_n_buffers() -> Result<()> {
+        let array = NullArray::new(10);
+        let data = array.data();
+
+        let ffi_array = FFI_ArrowArray::new(data);
+        assert_eq!(0, ffi_array.n_buffers);
+
+        let private_data =
+            unsafe { Box::from_raw(ffi_array.private_data as *mut ArrayPrivateData) };
+
+        assert_eq!(0, private_data.buffers_ptr.len());
+
+        Box::into_raw(private_data);
+
         Ok(())
     }
 }

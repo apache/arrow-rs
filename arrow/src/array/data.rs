@@ -1221,7 +1221,7 @@ impl ArrayData {
 
 /// Return the expected [`DataTypeLayout`] Arrays of this data
 /// type are expected to have
-fn layout(data_type: &DataType) -> DataTypeLayout {
+pub(crate) fn layout(data_type: &DataType) -> DataTypeLayout {
     // based on C/C++ implementation in
     // https://github.com/apache/arrow/blob/661c7d749150905a63dd3b52e0a04dac39030d95/cpp/src/arrow/type.h (and .cc)
     use std::mem::size_of;
@@ -1312,7 +1312,7 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
 /// Layout specification for a data type
 #[derive(Debug, PartialEq)]
 // Note: Follows structure from C++: https://github.com/apache/arrow/blob/master/cpp/src/arrow/type.h#L91
-struct DataTypeLayout {
+pub(crate) struct DataTypeLayout {
     /// A vector of buffer layout specifications, one for each expected buffer
     pub buffers: Vec<BufferSpec>,
 
@@ -1359,7 +1359,7 @@ impl DataTypeLayout {
 
 /// Layout specification for a single data type buffer
 #[derive(Debug, PartialEq)]
-enum BufferSpec {
+pub(crate) enum BufferSpec {
     /// each element has a fixed width
     FixedWidth { byte_width: usize },
     /// Variable width, such as string data for utf8 data
