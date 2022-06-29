@@ -230,6 +230,11 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         b.append_n(self.values_builder.len(), true);
         self.bitmap_builder = Some(b);
     }
+
+    /// Returns the current values buffer as a slice
+    pub fn values_slice(&self) -> &[T::Native] {
+        self.values_builder.as_slice()
+    }
 }
 
 #[cfg(test)]

@@ -87,6 +87,16 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
     pub fn finish(&mut self) -> GenericStringArray<OffsetSize> {
         GenericStringArray::<OffsetSize>::from(self.builder.finish())
     }
+
+    /// Returns the current values buffer as a slice
+    pub fn values_slice(&self) -> &[u8] {
+        self.builder.values_ref().values_slice()
+    }
+
+    /// Returns the current offsets buffer as a slice
+    pub fn offsets_slice(&self) -> &[OffsetSize] {
+        self.builder.offsets_slice()
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericStringBuilder<OffsetSize> {
