@@ -343,6 +343,35 @@ impl<T: ArrowPrimitiveType> Array for DictionaryArray<T> {
     fn data(&self) -> &ArrayData {
         &self.data
     }
+
+    fn is_null(&self, index: usize) -> bool {
+        if let Some(value_index) = self.key(index) {
+            self.values.is_null(value_index)
+        } else {
+            true
+        }
+    }
+
+    fn is_valid(&self, index: usize) -> bool {
+        !self.is_null(index)
+    }
+
+    fn null_count(&self) -> usize {
+        let keys = self.keys_iter();
+        let values = self.values();
+        keys.map(|k| {
+            if let Some(key) = k {
+                if values.is_null(key) {
+                    1
+                } else {
+                    0
+                }
+            } else {
+                1
+            }
+        })
+        .sum()
+    }
 }
 
 impl<T: ArrowPrimitiveType> fmt::Debug for DictionaryArray<T> {
@@ -643,5 +672,18 @@ mod tests {
         let values: StringArray = [Some("foo"), Some("bar")].into_iter().collect();
         let keys: Float32Array = [Some(0_f32), None, Some(3_f32)].into_iter().collect();
         DictionaryArray::<Float32Type>::try_new(&keys, &values).unwrap();
+    }
+
+    #[test]
+    fn test_dictionary_nulls() {
+        let keys = Int8Array::from(vec![Some(2), Some(1), Some(1)]);
+        let values =
+            StringArray::from(vec![Some("foo"), None, Some("baz"), Some("blarg")]);
+
+        let array = DictionaryArray::try_new(&keys, &values).unwrap();
+        assert_eq!(2, array.null_count());
+        assert!(!array.is_null(0));
+        assert!(array.is_null(1));
+        assert!(array.is_null(2));
     }
 }
