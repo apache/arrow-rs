@@ -381,9 +381,9 @@ impl FixedSizeListArray {
         self.value_offset_at(self.data.offset() + i)
     }
 
-    /// Returns the length for value at index `i`.
+    /// Returns the length for an element.
     ///
-    /// Note this doesn't do any bound checking, for performance reason.
+    /// All elements have the same length as the array is a fixed size.
     #[inline]
     pub const fn value_length(&self) -> i32 {
         self.length
