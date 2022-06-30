@@ -35,7 +35,10 @@
 
 use std::sync::Arc;
 
-use parquet_format::{ColumnChunk, ColumnMetaData, PageLocation, RowGroup};
+use parquet_format::{
+    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation,
+    RowGroup,
+};
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 use crate::errors::{ParquetError, Result};
@@ -791,6 +794,107 @@ impl ColumnChunkMetaDataBuilder {
             column_index_offset: self.column_index_offset,
             column_index_length: self.column_index_length,
         })
+    }
+}
+
+/// Builder for column index
+pub struct ColumnIndexBuilder {
+    null_pages: Vec<bool>,
+    min_values: Vec<Vec<u8>>,
+    max_values: Vec<Vec<u8>>,
+    // TODO: calc the order for all pages in this column
+    boundary_order: BoundaryOrder,
+    null_counts: Vec<i64>,
+    // If one page can't get build index, need to ignore all index in this column
+    valid: bool,
+}
+
+impl ColumnIndexBuilder {
+    pub fn new() -> Self {
+        ColumnIndexBuilder {
+            null_pages: Vec::new(),
+            min_values: Vec::new(),
+            max_values: Vec::new(),
+            boundary_order: BoundaryOrder::Unordered,
+            null_counts: Vec::new(),
+            valid: true,
+        }
+    }
+
+    pub fn append(
+        &mut self,
+        null_page: bool,
+        min_value: &[u8],
+        max_value: &[u8],
+        null_count: i64,
+    ) {
+        self.null_pages.push(null_page);
+        self.min_values.push(min_value.to_vec());
+        self.max_values.push(max_value.to_vec());
+        self.null_counts.push(null_count);
+    }
+
+    pub fn to_invalid(&mut self) {
+        self.valid = false;
+    }
+
+    pub fn valid(&self) -> bool {
+        self.valid
+    }
+
+    /// Build and get the thrift metadata of column index
+    pub fn build_to_thrift(self) -> ColumnIndex {
+        ColumnIndex::new(
+            self.null_pages,
+            self.min_values,
+            self.max_values,
+            self.boundary_order,
+            self.null_counts,
+        )
+    }
+}
+
+/// Builder for offset index
+pub struct OffsetIndexBuilder {
+    offset_array: Vec<i64>,
+    compressed_page_size_array: Vec<i32>,
+    first_row_index_array: Vec<i64>,
+    current_first_row_index: i64,
+}
+
+impl OffsetIndexBuilder {
+    pub fn new() -> Self {
+        OffsetIndexBuilder {
+            offset_array: Vec::new(),
+            compressed_page_size_array: Vec::new(),
+            first_row_index_array: Vec::new(),
+            current_first_row_index: 0,
+        }
+    }
+
+    pub fn append_row_count(&mut self, row_count: i64) {
+        let current_page_row_index = self.current_first_row_index;
+        self.first_row_index_array.push(current_page_row_index);
+        self.current_first_row_index += row_count;
+    }
+
+    pub fn append_offset_and_size(&mut self, offset: i64, compressed_page_size: i32) {
+        self.offset_array.push(offset);
+        self.compressed_page_size_array.push(compressed_page_size);
+    }
+
+    /// Build and get the thrift metadata of offset index
+    pub fn build_to_thrift(self) -> OffsetIndex {
+        let locations = self
+            .offset_array
+            .iter()
+            .zip(self.compressed_page_size_array.iter())
+            .zip(self.first_row_index_array.iter())
+            .map(|((offset, size), row_index)| {
+                PageLocation::new(*offset, *size, *row_index)
+            })
+            .collect::<Vec<_>>();
+        OffsetIndex::new(locations)
     }
 }
 

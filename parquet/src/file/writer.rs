@@ -22,6 +22,7 @@ use std::{io::Write, sync::Arc};
 
 use byteorder::{ByteOrder, LittleEndian};
 use parquet_format as parquet;
+use parquet_format::{ColumnIndex, OffsetIndex, RowGroup};
 use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
 
 use crate::basic::PageType;
@@ -78,14 +79,33 @@ impl<W: Write> Write for TrackedWrite<W> {
 /// - the number of bytes written
 /// - the number of rows written
 /// - the column chunk metadata
+/// - the column index
+/// - the offset index
 ///
-pub type OnCloseColumnChunk<'a> =
-    Box<dyn FnOnce(u64, u64, ColumnChunkMetaData) -> Result<()> + 'a>;
+pub type OnCloseColumnChunk<'a> = Box<
+    dyn FnOnce(
+            u64,
+            u64,
+            ColumnChunkMetaData,
+            Option<ColumnIndex>,
+            Option<OffsetIndex>,
+        ) -> Result<()>
+        + 'a,
+>;
 
 /// Callback invoked on closing a row group, arguments are:
 ///
 /// - the row group metadata
-pub type OnCloseRowGroup<'a> = Box<dyn FnOnce(RowGroupMetaDataPtr) -> Result<()> + 'a>;
+/// - the column index for each column chunk
+/// - the offset index for each column chunk
+pub type OnCloseRowGroup<'a> = Box<
+    dyn FnOnce(
+            RowGroupMetaDataPtr,
+            Vec<Option<ColumnIndex>>,
+            Vec<Option<OffsetIndex>>,
+        ) -> Result<()>
+        + 'a,
+>;
 
 #[deprecated = "use std::io::Write"]
 pub trait ParquetWriter: Write + std::io::Seek + TryClone {}
@@ -110,6 +130,8 @@ pub struct SerializedFileWriter<W: Write> {
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
     row_groups: Vec<RowGroupMetaDataPtr>,
+    column_indexes: Vec<Vec<Option<ColumnIndex>>>,
+    offset_indexes: Vec<Vec<Option<OffsetIndex>>>,
     row_group_index: usize,
 }
 
@@ -124,6 +146,8 @@ impl<W: Write> SerializedFileWriter<W> {
             descr: Arc::new(SchemaDescriptor::new(schema)),
             props: properties,
             row_groups: vec![],
+            column_indexes: Vec::new(),
+            offset_indexes: Vec::new(),
             row_group_index: 0,
         })
     }
@@ -139,8 +163,12 @@ impl<W: Write> SerializedFileWriter<W> {
         self.row_group_index += 1;
 
         let row_groups = &mut self.row_groups;
-        let on_close = |metadata| {
+        let row_column_indexes = &mut self.column_indexes;
+        let row_offset_indexes = &mut self.offset_indexes;
+        let on_close = |metadata, row_group_column_index, row_group_offset_index| {
             row_groups.push(metadata);
+            row_column_indexes.push(row_group_column_index);
+            row_offset_indexes.push(row_group_offset_index);
             Ok(())
         };
 
@@ -177,16 +205,74 @@ impl<W: Write> SerializedFileWriter<W> {
         Ok(())
     }
 
+    /// Serialize all the offset index to the file
+    fn write_offset_indexes(&mut self, row_groups: &mut [RowGroup]) -> Result<()> {
+        // iter row group
+        // iter each column
+        // write offset index to the file
+        for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
+            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate()
+            {
+                match &self.offset_indexes[row_group_idx][column_idx] {
+                    Some(offset_index) => {
+                        let start_offset = self.buf.bytes_written();
+                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                        offset_index.write_to_out_protocol(&mut protocol)?;
+                        protocol.flush()?;
+                        let end_offset = self.buf.bytes_written();
+                        // set offset and index for offset index
+                        column_metadata.offset_index_offset = Some(start_offset as i64);
+                        column_metadata.offset_index_length =
+                            Some((end_offset - start_offset) as i32);
+                    }
+                    None => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Serialize all the column index to the file
+    fn write_column_indexes(&mut self, row_groups: &mut [RowGroup]) -> Result<()> {
+        // iter row group
+        // iter each column
+        // write column index to the file
+        for (row_group_idx, row_group) in row_groups.iter_mut().enumerate() {
+            for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate()
+            {
+                match &self.column_indexes[row_group_idx][column_idx] {
+                    Some(column_index) => {
+                        let start_offset = self.buf.bytes_written();
+                        let mut protocol = TCompactOutputProtocol::new(&mut self.buf);
+                        column_index.write_to_out_protocol(&mut protocol)?;
+                        protocol.flush()?;
+                        let end_offset = self.buf.bytes_written();
+                        // set offset and index for offset index
+                        column_metadata.column_index_offset = Some(start_offset as i64);
+                        column_metadata.column_index_length =
+                            Some((end_offset - start_offset) as i32);
+                    }
+                    None => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Assembles and writes metadata at the end of the file.
     fn write_metadata(&mut self) -> Result<parquet::FileMetaData> {
         let num_rows = self.row_groups.iter().map(|x| x.num_rows()).sum();
 
-        let row_groups = self
+        let mut row_groups = self
             .row_groups
             .as_slice()
             .iter()
             .map(|v| v.to_thrift())
-            .collect();
+            .collect::<Vec<_>>();
+
+        // Write column indexes and offset indexes
+        self.write_column_indexes(&mut row_groups)?;
+        self.write_offset_indexes(&mut row_groups)?;
 
         let file_metadata = parquet::FileMetaData {
             num_rows,
@@ -247,6 +333,8 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     column_index: usize,
     row_group_metadata: Option<RowGroupMetaDataPtr>,
     column_chunks: Vec<ColumnChunkMetaData>,
+    column_indexes: Vec<Option<ColumnIndex>>,
+    offset_indexes: Vec<Option<OffsetIndex>>,
     on_close: Option<OnCloseRowGroup<'a>>,
 }
 
@@ -273,6 +361,8 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
             column_index: 0,
             row_group_metadata: None,
             column_chunks: Vec::with_capacity(num_columns),
+            column_indexes: Vec::with_capacity(num_columns),
+            offset_indexes: Vec::with_capacity(num_columns),
             total_bytes_written: 0,
         }
     }
@@ -297,25 +387,31 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         let total_bytes_written = &mut self.total_bytes_written;
         let total_rows_written = &mut self.total_rows_written;
         let column_chunks = &mut self.column_chunks;
+        let column_indexes = &mut self.column_indexes;
+        let offset_indexes = &mut self.offset_indexes;
 
-        let on_close = |bytes_written, rows_written, metadata| {
-            // Update row group writer metrics
-            *total_bytes_written += bytes_written;
-            column_chunks.push(metadata);
-            if let Some(rows) = *total_rows_written {
-                if rows != rows_written {
-                    return Err(general_err!(
-                        "Incorrect number of rows, expected {} != {} rows",
-                        rows,
-                        rows_written
-                    ));
+        let on_close =
+            |bytes_written, rows_written, metadata, column_index, offset_index| {
+                // Update row group writer metrics
+                *total_bytes_written += bytes_written;
+                column_chunks.push(metadata);
+                column_indexes.push(column_index);
+                offset_indexes.push(offset_index);
+
+                if let Some(rows) = *total_rows_written {
+                    if rows != rows_written {
+                        return Err(general_err!(
+                            "Incorrect number of rows, expected {} != {} rows",
+                            rows,
+                            rows_written
+                        ));
+                    }
+                } else {
+                    *total_rows_written = Some(rows_written);
                 }
-            } else {
-                *total_rows_written = Some(rows_written);
-            }
 
-            Ok(())
-        };
+                Ok(())
+            };
 
         Ok(Some(SerializedColumnWriter::new(
             column_writer,
@@ -343,7 +439,11 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
             self.row_group_metadata = Some(metadata.clone());
 
             if let Some(on_close) = self.on_close.take() {
-                on_close(metadata)?
+                on_close(
+                    metadata,
+                    self.column_indexes.clone(),
+                    self.offset_indexes.clone(),
+                )?
             }
         }
 
@@ -389,19 +489,26 @@ impl<'a> SerializedColumnWriter<'a> {
 
     /// Close this [`SerializedColumnWriter]
     pub fn close(mut self) -> Result<()> {
-        let (bytes_written, rows_written, metadata) = match self.inner {
-            ColumnWriter::BoolColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int32ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int64ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::Int96ColumnWriter(typed) => typed.close()?,
-            ColumnWriter::FloatColumnWriter(typed) => typed.close()?,
-            ColumnWriter::DoubleColumnWriter(typed) => typed.close()?,
-            ColumnWriter::ByteArrayColumnWriter(typed) => typed.close()?,
-            ColumnWriter::FixedLenByteArrayColumnWriter(typed) => typed.close()?,
-        };
+        let (bytes_written, rows_written, metadata, column_index, offset_index) =
+            match self.inner {
+                ColumnWriter::BoolColumnWriter(typed) => typed.close()?,
+                ColumnWriter::Int32ColumnWriter(typed) => typed.close()?,
+                ColumnWriter::Int64ColumnWriter(typed) => typed.close()?,
+                ColumnWriter::Int96ColumnWriter(typed) => typed.close()?,
+                ColumnWriter::FloatColumnWriter(typed) => typed.close()?,
+                ColumnWriter::DoubleColumnWriter(typed) => typed.close()?,
+                ColumnWriter::ByteArrayColumnWriter(typed) => typed.close()?,
+                ColumnWriter::FixedLenByteArrayColumnWriter(typed) => typed.close()?,
+            };
 
         if let Some(on_close) = self.on_close.take() {
-            on_close(bytes_written, rows_written, metadata)?
+            on_close(
+                bytes_written,
+                rows_written,
+                metadata,
+                column_index,
+                offset_index,
+            )?
         }
 
         Ok(())
@@ -521,7 +628,6 @@ impl<'a, W: Write> PageWriter for SerializedPageWriter<'a, W> {
 
         Ok(spec)
     }
-
     fn write_metadata(&mut self, metadata: &ColumnChunkMetaData) -> Result<()> {
         let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
         metadata
@@ -982,7 +1088,10 @@ mod tests {
 
     /// File write-read roundtrip.
     /// `data` consists of arrays of values for each row group.
-    fn test_file_roundtrip(file: File, data: Vec<Vec<i32>>) {
+    fn test_file_roundtrip(
+        file: File,
+        data: Vec<Vec<i32>>,
+    ) -> parquet_format::FileMetaData {
         let schema = Arc::new(
             types::Type::group_type_builder("schema")
                 .with_fields(&mut vec![Arc::new(
@@ -1014,7 +1123,7 @@ mod tests {
             assert_eq!(flushed.len(), idx + 1);
             assert_eq!(flushed[idx].as_ref(), last_group.as_ref());
         }
-        file_writer.close().unwrap();
+        let file_metadata = file_writer.close().unwrap();
 
         let reader = assert_send(SerializedFileReader::new(file).unwrap());
         assert_eq!(reader.num_row_groups(), data.len());
@@ -1031,6 +1140,7 @@ mod tests {
                 .collect::<Vec<i32>>();
             assert_eq!(res, *item);
         }
+        file_metadata
     }
 
     fn assert_send<T: Send>(t: T) -> T {
@@ -1110,5 +1220,20 @@ mod tests {
                 .collect::<Vec<i32>>();
             assert_eq!(res, *item);
         }
+    }
+
+    #[test]
+    fn test_column_offset_index_file() {
+        let file = tempfile::tempfile().unwrap();
+        let file_metadata = test_file_roundtrip(file, vec![vec![1, 2, 3, 4, 5]]);
+        file_metadata.row_groups.iter().for_each(|row_group| {
+            row_group.columns.iter().for_each(|column_chunk| {
+                assert_ne!(None, column_chunk.column_index_offset);
+                assert_ne!(None, column_chunk.column_index_length);
+
+                assert_ne!(None, column_chunk.offset_index_offset);
+                assert_ne!(None, column_chunk.offset_index_length);
+            })
+        });
     }
 }
