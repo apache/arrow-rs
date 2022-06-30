@@ -82,6 +82,22 @@ impl<T: ArrowNativeType> AsRef<[T]> for ScalarBuffer<T> {
     }
 }
 
+/// [`ScalarBuffer`] is `Send` if `Buffer: Send` and `T: Sync`
+unsafe impl<T: ArrowNativeType> Send for ScalarBuffer<T>
+where
+    T: Sync,
+    Buffer: Send,
+{
+}
+
+/// [`ScalarBuffer`] is `Sync` if `Buffer` and `T` are both Sync
+unsafe impl<T: ArrowNativeType> Sync for ScalarBuffer<T>
+where
+    T: Sync,
+    Buffer: Sync,
+{
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

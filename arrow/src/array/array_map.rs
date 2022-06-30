@@ -16,17 +16,15 @@
 // under the License.
 
 use crate::array::{StringArray, StructArray};
-use crate::buffer::Buffer;
+use crate::buffer::{Buffer, ScalarBuffer};
 use std::any::Any;
 use std::fmt;
 use std::mem;
 use std::sync::Arc;
 
 use super::make_array;
-use super::{
-    array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, ArrayRef,
-};
-use crate::datatypes::{ArrowNativeType, DataType, Field, ToByteSlice};
+use super::{array::print_long_array, Array, ArrayData, ArrayRef};
+use crate::datatypes::{DataType, Field, ToByteSlice};
 use crate::error::ArrowError;
 
 /// A nested array type where each record is a key-value map.
@@ -37,7 +35,7 @@ use crate::error::ArrowError;
 pub struct MapArray {
     data: ArrayData,
     values: ArrayRef,
-    value_offsets: RawPtrBox<i32>,
+    value_offsets: ScalarBuffer<i32>,
 }
 
 impl MapArray {
@@ -65,31 +63,26 @@ impl MapArray {
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
-        let end = *self.value_offsets().get_unchecked(i + 1);
         let start = *self.value_offsets().get_unchecked(i);
-        self.values
-            .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
+        let end = *self.value_offsets().get_unchecked(i + 1);
+        self.values.slice(start as usize, (end - start) as usize)
     }
 
     /// Returns ith value of this map array.
     pub fn value(&self, i: usize) -> ArrayRef {
-        let end = self.value_offsets()[i + 1] as usize;
-        let start = self.value_offsets()[i] as usize;
-        self.values.slice(start, end - start)
+        assert!(
+            i < self.data.len(),
+            "MapArray index out of bounds: the len is {} but the index is {}",
+            self.data.len(),
+            i
+        );
+        unsafe { self.value_unchecked(i) }
     }
 
     /// Returns the offset values in the offsets buffer
     #[inline]
     pub fn value_offsets(&self) -> &[i32] {
-        // Soundness
-        //     pointer alignment & location is ensured by RawPtrBox
-        //     buffer bounds/offset is ensured by the ArrayData instance.
-        unsafe {
-            std::slice::from_raw_parts(
-                self.value_offsets.as_ptr().add(self.data.offset()),
-                self.len() + 1,
-            )
-        }
+        &self.value_offsets
     }
 
     /// Returns the length for value at index `i`.
@@ -139,16 +132,10 @@ impl MapArray {
         }
 
         let values = make_array(entries);
-        let value_offsets = data.buffers()[0].as_ptr();
+        let offsets = data.buffers()[0].clone();
+        let offsets_len = data.is_empty().then(|| 0).unwrap_or(data.len() + 1);
+        let value_offsets = ScalarBuffer::new(offsets, data.offset(), offsets_len);
 
-        let value_offsets = unsafe { RawPtrBox::<i32>::new(value_offsets) };
-        unsafe {
-            if (*value_offsets.as_ptr().offset(0)) != 0 {
-                return Err(ArrowError::InvalidArgumentError(String::from(
-                    "offsets do not start at zero",
-                )));
-            }
-        }
         Ok(Self {
             data,
             values,

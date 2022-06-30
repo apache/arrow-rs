@@ -162,7 +162,6 @@ mod ffi;
 mod iterator;
 mod null;
 mod ord;
-mod raw_pointer;
 mod transform;
 
 use crate::datatypes::*;
