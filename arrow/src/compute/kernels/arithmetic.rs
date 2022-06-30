@@ -720,6 +720,17 @@ where
     math_op(left, right, |a, b| a - b)
 }
 
+/// Perform `left - right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_math_op!(left, right, |a, b| a - b)
+        }
+        _ => typed_math_op!(left, right, |a, b| a - b),
+    }
+}
+
 /// Subtract every value in an array by a scalar. If any value in the array is null then the
 /// result is also null.
 pub fn subtract_scalar<T>(
@@ -934,6 +945,50 @@ mod tests {
         assert_eq!(15, c.value(2));
         assert!(c.is_null(3));
         assert_eq!(19, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_subtract_dyn() {
+        let a = Int32Array::from(vec![Some(51), Some(6), Some(15), Some(8), Some(9)]);
+        let b = Int32Array::from(vec![Some(6), Some(7), Some(8), None, Some(8)]);
+        let c = subtract_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(45, c.value(0));
+        assert_eq!(-1, c.value(1));
+        assert_eq!(7, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(1, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_subtract_dyn_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(15).unwrap();
+        builder.append(8).unwrap();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append(20).unwrap();
+        let a = builder.finish();
+
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(6).unwrap();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append_null().unwrap();
+        builder.append(10).unwrap();
+        let b = builder.finish();
+
+        let c = subtract_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(9, c.value(0));
+        assert_eq!(1, c.value(1));
+        assert_eq!(-1, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(10, c.value(4));
     }
 
     #[test]
