@@ -390,7 +390,7 @@ impl<T: ArrowPrimitiveType> From<&Option<<T as ArrowPrimitiveType>::Native>>
     }
 }
 
-impl<'a, T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr>
+impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr>
     for PrimitiveArray<T>
 {
     fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {

@@ -114,7 +114,7 @@ pub struct DictionaryArray<K: ArrowPrimitiveType> {
     is_ordered: bool,
 }
 
-impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
+impl<K: ArrowPrimitiveType> DictionaryArray<K> {
     /// Attempt to create a new DictionaryArray with a specified keys
     /// (indexes into the dictionary) and values (dictionary)
     /// array. Returns an error if there are any keys that are outside

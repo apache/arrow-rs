@@ -19,6 +19,7 @@
 //! purposes. See the `pretty` crate for additional functions for
 //! record batch pretty printing.
 
+use std::fmt::Write;
 use std::sync::Arc;
 
 use crate::array::Array;
@@ -208,7 +209,7 @@ macro_rules! make_string_hex {
             let mut tmp = "".to_string();
 
             for character in array.value($row) {
-                tmp += &format!("{:02x}", character);
+                let _ = write!(tmp, "{:02x}", character);
             }
 
             tmp

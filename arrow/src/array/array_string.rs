@@ -211,7 +211,7 @@ where
     }
 }
 
-impl<'a, Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
+impl<Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
     for GenericStringArray<OffsetSize>
 where
     Ptr: AsRef<str>,
