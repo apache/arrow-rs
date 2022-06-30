@@ -785,15 +785,15 @@ impl DecimalArray {
             let pos = self.value_offset_at(offset);
             std::slice::from_raw_parts(
                 self.value_data.as_ptr().offset(pos as isize),
-                (self.value_offset_at(offset + 1) - pos) as usize,
+                Self::VALUE_LENGTH as usize,
             )
         };
-        let as_array = raw_val.try_into();
-        let integer = match as_array {
-            Ok(v) if raw_val.len() == 16 => i128::from_le_bytes(v),
-            _ => panic!("DecimalArray elements are not 128bit integers."),
-        };
-        Decimal128::new_from_i128(self.precision, self.scale, integer)
+        let as_array = raw_val.try_into().unwrap();
+        Decimal128::new_from_i128(
+            self.precision,
+            self.scale,
+            i128::from_le_bytes(as_array),
+        )
     }
 
     /// Returns the offset for the element at index `i`.
