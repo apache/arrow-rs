@@ -772,10 +772,11 @@ pub struct DecimalArray {
     value_data: RawPtrBox<u8>,
     precision: usize,
     scale: usize,
-    length: i32,
 }
 
 impl DecimalArray {
+    const VALUE_LENGTH: i32 = 16;
+
     /// Returns the element at index `i`.
     pub fn value(&self, i: usize) -> Decimal128 {
         assert!(i < self.data.len(), "DecimalArray out of bounds access");
@@ -807,8 +808,8 @@ impl DecimalArray {
     ///
     /// All elements have the same length as the array is a fixed size.
     #[inline]
-    pub fn value_length(&self) -> i32 {
-        self.length
+    pub const fn value_length(&self) -> i32 {
+        Self::VALUE_LENGTH
     }
 
     /// Returns a clone of the value data buffer
@@ -818,7 +819,7 @@ impl DecimalArray {
 
     #[inline]
     fn value_offset_at(&self, i: usize) -> i32 {
-        self.length * i as i32
+        Self::VALUE_LENGTH * i as i32
     }
 
     #[inline]
@@ -956,13 +957,11 @@ impl From<ArrayData> for DecimalArray {
             DataType::Decimal(precision, scale) => (*precision, *scale),
             _ => panic!("Expected data type to be Decimal"),
         };
-        let length = 16;
         Self {
             data,
             value_data: unsafe { RawPtrBox::new(values) },
             precision,
             scale,
-            length,
         }
     }
 }
