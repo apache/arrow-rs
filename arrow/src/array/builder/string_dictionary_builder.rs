@@ -19,7 +19,7 @@ use super::PrimitiveBuilder;
 use crate::array::{
     Array, ArrayBuilder, ArrayRef, DictionaryArray, StringArray, StringBuilder,
 };
-use crate::datatypes::{ArrowDictionaryKeyType, ArrowNativeType};
+use crate::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType};
 use crate::error::{ArrowError, Result};
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
@@ -250,8 +250,19 @@ where
     /// Builds the `DictionaryArray` and reset this builder.
     pub fn finish(&mut self) -> DictionaryArray<K> {
         self.dedup.clear();
-        let value_ref: ArrayRef = Arc::new(self.values_builder.finish());
-        self.keys_builder.finish_dict(value_ref)
+        let values = self.values_builder.finish();
+        let keys = self.keys_builder.finish();
+
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(DataType::Utf8));
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 }
 

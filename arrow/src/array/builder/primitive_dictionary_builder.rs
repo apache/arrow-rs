@@ -19,11 +19,8 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::array::ArrayRef;
-use crate::array::ArrowPrimitiveType;
-use crate::array::DictionaryArray;
-use crate::datatypes::ArrowNativeType;
-use crate::datatypes::ToByteSlice;
+use crate::array::{ArrayRef, ArrowPrimitiveType, DictionaryArray};
+use crate::datatypes::{ArrowNativeType, DataType, ToByteSlice};
 use crate::error::{ArrowError, Result};
 
 use super::ArrayBuilder;
@@ -164,8 +161,19 @@ where
     /// Builds the `DictionaryArray` and reset this builder.
     pub fn finish(&mut self) -> DictionaryArray<K> {
         self.map.clear();
-        let value_ref: ArrayRef = Arc::new(self.values_builder.finish());
-        self.keys_builder.finish_dict(value_ref)
+        let values = self.values_builder.finish();
+        let keys = self.keys_builder.finish();
+
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 }
 

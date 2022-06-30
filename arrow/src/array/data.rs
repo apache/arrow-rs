@@ -1217,6 +1217,11 @@ impl ArrayData {
             .zip(other.child_data.iter())
             .all(|(a, b)| a.ptr_eq(b))
     }
+
+    /// Converts this [`ArrayData`] into an [`ArrayDataBuilder`]
+    pub fn into_builder(self) -> ArrayDataBuilder {
+        self.into()
+    }
 }
 
 /// Return the expected [`DataTypeLayout`] Arrays of this data
@@ -1408,6 +1413,10 @@ impl ArrayDataBuilder {
         }
     }
 
+    pub fn data_type(self, data_type: DataType) -> Self {
+        Self { data_type, ..self }
+    }
+
     #[inline]
     #[allow(clippy::len_without_is_empty)]
     pub const fn len(mut self, n: usize) -> Self {
@@ -1479,6 +1488,22 @@ impl ArrayDataBuilder {
             self.buffers,
             self.child_data,
         )
+    }
+}
+
+impl From<ArrayData> for ArrayDataBuilder {
+    fn from(d: ArrayData) -> Self {
+        // TODO: Store Bitmap on ArrayData (#1799)
+        let null_bit_buffer = d.null_buffer().cloned();
+        Self {
+            null_bit_buffer,
+            data_type: d.data_type,
+            len: d.len,
+            null_count: Some(d.null_count),
+            offset: d.offset,
+            buffers: d.buffers,
+            child_data: d.child_data,
+        }
     }
 }
 
