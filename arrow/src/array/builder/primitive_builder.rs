@@ -20,10 +20,8 @@ use std::sync::Arc;
 
 use crate::array::ArrayData;
 use crate::array::ArrayRef;
-use crate::array::DictionaryArray;
 use crate::array::PrimitiveArray;
 use crate::datatypes::ArrowPrimitiveType;
-use crate::datatypes::DataType;
 use crate::error::{ArrowError, Result};
 
 use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
@@ -195,30 +193,6 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
-    }
-
-    /// Builds the `DictionaryArray` and reset this builder.
-    pub fn finish_dict(&mut self, values: ArrayRef) -> DictionaryArray<T> {
-        let len = self.len();
-        let null_bit_buffer = self.bitmap_builder.as_mut().map(|b| b.finish());
-        let null_count = len
-            - null_bit_buffer
-                .as_ref()
-                .map(|b| b.count_set_bits())
-                .unwrap_or(len);
-        let data_type = DataType::Dictionary(
-            Box::new(T::DATA_TYPE),
-            Box::new(values.data_type().clone()),
-        );
-        let mut builder = ArrayData::builder(data_type)
-            .len(len)
-            .add_buffer(self.values_builder.finish());
-        if null_count > 0 {
-            builder = builder.null_bit_buffer(null_bit_buffer);
-        }
-        builder = builder.add_child_data(values.data().clone());
-        let array_data = unsafe { builder.build_unchecked() };
-        DictionaryArray::<T>::from(array_data)
     }
 
     fn materialize_bitmap_builder(&mut self) {
