@@ -170,6 +170,11 @@ impl ArrayReader for InMemoryArrayReader {
         Ok(self.array.slice(self.last_idx, read))
     }
 
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        let array = self.next_batch(num_records)?;
+        Ok(array.len())
+    }
+
     fn get_def_levels(&self) -> Option<&[i16]> {
         self.def_levels
             .as_ref()

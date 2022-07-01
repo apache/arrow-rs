@@ -149,6 +149,19 @@ impl ArrayReader for MapArrayReader {
         Ok(Arc::new(MapArray::from(array_data)))
     }
 
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        let key_skipped = self.key_reader.skip_records(num_records)?;
+        let value_skipped = self.value_reader.skip_records(num_records)?;
+        if key_skipped != value_skipped {
+            return Err(general_err!(
+                "MapArrayReader out of sync, skipped {} keys and {} values",
+                key_skipped,
+                value_skipped
+            ));
+        }
+        Ok(key_skipped)
+    }
+
     fn get_def_levels(&self) -> Option<&[i16]> {
         // Children definition levels should describe the same parent structure,
         // so return key_reader only

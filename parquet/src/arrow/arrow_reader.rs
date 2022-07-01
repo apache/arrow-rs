@@ -17,6 +17,7 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::array::Array;
@@ -29,7 +30,7 @@ use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::schema::parquet_to_arrow_schema_by_columns;
 use crate::arrow::ProjectionMask;
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::reader::{ChunkReader, FileReader, SerializedFileReader};
 use crate::schema::types::SchemaDescriptor;
@@ -70,9 +71,39 @@ pub trait ArrowReader {
     ) -> Result<Self::RecordReader>;
 }
 
+/// [`RowSelection`] allows selecting or skipping a provided number of rows
+/// when scanning the parquet file
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RowSelection {
+    /// The number of rows
+    pub row_count: usize,
+
+    /// If true, skip `row_count` rows
+    pub skip: bool,
+}
+
+impl RowSelection {
+    /// Select `row_count` rows
+    pub fn select(row_count: usize) -> Self {
+        Self {
+            row_count,
+            skip: false,
+        }
+    }
+
+    /// Skip `row_count` rows
+    pub fn skip(row_count: usize) -> Self {
+        Self {
+            row_count,
+            skip: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ArrowReaderOptions {
     skip_arrow_metadata: bool,
+    selection: Option<Vec<RowSelection>>,
 }
 
 impl ArrowReaderOptions {
@@ -90,6 +121,20 @@ impl ArrowReaderOptions {
     pub fn with_skip_arrow_metadata(self, skip_arrow_metadata: bool) -> Self {
         Self {
             skip_arrow_metadata,
+            ..self
+        }
+    }
+
+    /// Scan rows from the parquet file according to the provided `selection`
+    ///
+    /// TODO: Make public once row selection fully implemented
+    pub(crate) fn with_row_selection(
+        self,
+        selection: impl Into<Vec<RowSelection>>,
+    ) -> Self {
+        Self {
+            selection: Some(selection.into()),
+            ..self
         }
     }
 }
@@ -139,7 +184,12 @@ impl ArrowReader for ParquetFileArrowReader {
             Box::new(self.file_reader.clone()),
         )?;
 
-        ParquetRecordBatchReader::try_new(batch_size, array_reader)
+        let selection = self.options.selection.clone().map(Into::into);
+        Ok(ParquetRecordBatchReader::new(
+            batch_size,
+            array_reader,
+            selection,
+        ))
     }
 }
 
@@ -221,13 +271,47 @@ pub struct ParquetRecordBatchReader {
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
+    selection: Option<VecDeque<RowSelection>>,
 }
 
 impl Iterator for ParquetRecordBatchReader {
     type Item = ArrowResult<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.array_reader.next_batch(self.batch_size) {
+        let to_read = match self.selection.as_mut() {
+            Some(selection) => loop {
+                let front = selection.pop_front()?;
+                if front.skip {
+                    let skipped = match self.array_reader.skip_records(front.row_count) {
+                        Ok(skipped) => skipped,
+                        Err(e) => return Some(Err(e.into())),
+                    };
+
+                    if skipped != front.row_count {
+                        return Some(Err(general_err!(
+                            "failed to skip rows, expected {}, got {}",
+                            front.row_count,
+                            skipped
+                        )
+                        .into()));
+                    }
+                    continue;
+                }
+
+                let to_read = match front.row_count.checked_sub(self.batch_size) {
+                    Some(remaining) => {
+                        selection.push_front(RowSelection::skip(remaining));
+                        self.batch_size
+                    }
+                    None => front.row_count,
+                };
+
+                break to_read;
+            },
+            None => self.batch_size,
+        };
+
+        match self.array_reader.next_batch(to_read) {
             Err(error) => Some(Err(error.into())),
             Ok(array) => {
                 let struct_array =
@@ -257,16 +341,30 @@ impl ParquetRecordBatchReader {
         batch_size: usize,
         array_reader: Box<dyn ArrayReader>,
     ) -> Result<Self> {
+        Ok(Self::new(batch_size, array_reader, None))
+    }
+
+    /// Create a new [`ParquetRecordBatchReader`] that will read at most `batch_size` rows at
+    /// a time from [`ArrayReader`] based on the configured `selection`. If `selection` is `None`
+    /// all rows will be returned
+    ///
+    /// TODO: Make public once row selection fully implemented
+    pub(crate) fn new(
+        batch_size: usize,
+        array_reader: Box<dyn ArrayReader>,
+        selection: Option<VecDeque<RowSelection>>,
+    ) -> Self {
         let schema = match array_reader.get_data_type() {
             ArrowType::Struct(ref fields) => Schema::new(fields.clone()),
             _ => unreachable!("Struct array reader's data type is not struct!"),
         };
 
-        Ok(Self {
+        Self {
             batch_size,
             array_reader,
             schema: Arc::new(schema),
-        })
+            selection,
+        }
     }
 }
 

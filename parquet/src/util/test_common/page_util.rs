@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::basic::Encoding;
-use crate::column::page::PageReader;
+use crate::column::page::{PageMetadata, PageReader};
 use crate::column::page::{Page, PageIterator};
 use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
@@ -171,6 +171,14 @@ impl<P: Iterator<Item = Page>> InMemoryPageReader<P> {
 impl<P: Iterator<Item = Page> + Send> PageReader for InMemoryPageReader<P> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         Ok(self.page_iter.next())
+    }
+
+    fn peek_next_page(&self) -> Result<Option<PageMetadata>> {
+        unimplemented!()
+    }
+
+    fn skip_next_page(&mut self) -> Result<()> {
+        unimplemented!()
     }
 }
 

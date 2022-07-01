@@ -184,6 +184,10 @@ where
         Ok(array)
     }
 
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        self.record_reader.skip_records(num_records)
+    }
+
     fn get_def_levels(&self) -> Option<&[i16]> {
         self.def_levels_buffer
             .as_ref()
@@ -370,6 +374,10 @@ where
                 }
             }
         }
+    }
+
+    fn skip_values(&mut self, _num_values: usize) -> Result<usize> {
+        todo!()
     }
 }
 

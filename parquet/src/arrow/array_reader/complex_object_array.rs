@@ -163,6 +163,13 @@ where
         Ok(array)
     }
 
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        match self.column_reader.as_mut() {
+            Some(reader) => reader.skip_records(num_records),
+            None => Ok(0),
+        }
+    }
+
     fn get_def_levels(&self) -> Option<&[i16]> {
         self.def_levels_buffer.as_deref()
     }
