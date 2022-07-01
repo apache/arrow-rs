@@ -1071,9 +1071,7 @@ mod tests {
     fn test_primitive_array_add_mismatched_length() {
         let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
         let b = Int32Array::from(vec![6, 7, 8]);
-        let e = add(&a, &b)
-            .err()
-            .expect("should have failed due to different lengths");
+        let e = add(&a, &b).expect_err("should have failed due to different lengths");
         assert_eq!(
             "ComputeError(\"Cannot perform math operation on arrays of different length\")",
             format!("{:?}", e)

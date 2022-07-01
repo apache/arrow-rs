@@ -433,7 +433,6 @@ pub struct DeltaBitPackDecoder<T: DataType> {
     initialized: bool,
 
     // Header info
-
     /// The number of values in each block
     block_size: usize,
     /// The number of values that remain to be read in the current page
@@ -444,7 +443,6 @@ pub struct DeltaBitPackDecoder<T: DataType> {
     values_per_mini_block: usize,
 
     // Per block info
-
     /// The minimum delta in the block
     min_delta: T::T,
     /// The byte offset of the end of the current block
@@ -839,7 +837,7 @@ impl<T: DataType> DeltaByteArrayDecoder<T> {
     }
 }
 
-impl<'m, T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
+impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
     fn set_data(&mut self, data: ByteBufferPtr, num_values: usize) -> Result<()> {
         match T::get_physical_type() {
             Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
