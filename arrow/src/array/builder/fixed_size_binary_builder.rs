@@ -97,3 +97,32 @@ impl ArrayBuilder for FixedSizeBinaryBuilder {
         Arc::new(self.finish())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::array::Array;
+    use crate::array::FixedSizeBinaryArray;
+    use crate::datatypes::DataType;
+
+    #[test]
+    fn test_fixed_size_binary_builder() {
+        let mut builder = FixedSizeBinaryBuilder::new(15, 5);
+
+        //  [b"hello", null, "arrow"]
+        builder.append_value(b"hello").unwrap();
+        builder.append_null().unwrap();
+        builder.append_value(b"arrow").unwrap();
+        let fixed_size_binary_array: FixedSizeBinaryArray = builder.finish();
+
+        assert_eq!(
+            &DataType::FixedSizeBinary(5),
+            fixed_size_binary_array.data_type()
+        );
+        assert_eq!(3, fixed_size_binary_array.len());
+        assert_eq!(1, fixed_size_binary_array.null_count());
+        assert_eq!(10, fixed_size_binary_array.value_offset(2));
+        assert_eq!(5, fixed_size_binary_array.value_length());
+    }
+}

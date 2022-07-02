@@ -21,7 +21,6 @@ use std::sync::Arc;
 use crate::array::ArrayData;
 use crate::array::ArrayRef;
 use crate::array::FixedSizeListArray;
-use crate::array::Int32BufferBuilder;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
 use crate::error::Result;
@@ -29,34 +28,30 @@ use crate::error::Result;
 use super::ArrayBuilder;
 use super::BooleanBufferBuilder;
 
-///  Array builder for `ListArray`
+///  Array builder for [`FixedSizeListArray`]
 #[derive(Debug)]
 pub struct FixedSizeListBuilder<T: ArrayBuilder> {
     bitmap_builder: BooleanBufferBuilder,
     values_builder: T,
-    len: usize,
     list_len: i32,
 }
 
 impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
-    /// Creates a new `FixedSizeListBuilder` from a given values array builder
-    /// `length` is the number of values within each array
-    pub fn new(values_builder: T, length: i32) -> Self {
+    /// Creates a new [`FixedSizeListBuilder`] from a given values array builder
+    /// `value_length` is the number of values within each array
+    pub fn new(values_builder: T, value_length: i32) -> Self {
         let capacity = values_builder.len();
-        Self::with_capacity(values_builder, length, capacity)
+        Self::with_capacity(values_builder, value_length, capacity)
     }
 
-    /// Creates a new `FixedSizeListBuilder` from a given values array builder
-    /// `length` is the number of values within each array
+    /// Creates a new [`FixedSizeListBuilder`] from a given values array builder
+    /// `value_length` is the number of values within each array
     /// `capacity` is the number of items to pre-allocate space for in this builder
-    pub fn with_capacity(values_builder: T, length: i32, capacity: usize) -> Self {
-        let mut offsets_builder = Int32BufferBuilder::new(capacity + 1);
-        offsets_builder.append(0);
+    pub fn with_capacity(values_builder: T, value_length: i32, capacity: usize) -> Self {
         Self {
             bitmap_builder: BooleanBufferBuilder::new(capacity),
             values_builder,
-            len: 0,
-            list_len: length,
+            list_len: value_length,
         }
     }
 }
@@ -82,12 +77,12 @@ where
 
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
-        self.len
+        self.bitmap_builder.len()
     }
 
     /// Returns whether the number of array slots is zero
     fn is_empty(&self) -> bool {
-        self.len == 0
+        self.bitmap_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -103,7 +98,7 @@ where
     /// Returns the child array builder as a mutable reference.
     ///
     /// This mutable reference can be used to append values into the child array builder,
-    /// but you must call `append` to delimit each distinct list value.
+    /// but you must call [`append`](#method.append) to delimit each distinct list value.
     pub fn values(&mut self) -> &mut T {
         &mut self.values_builder
     }
@@ -112,18 +107,16 @@ where
         self.list_len
     }
 
-    /// Finish the current variable-length list array slot
+    /// Finish the current fixed-length list array slot
     #[inline]
     pub fn append(&mut self, is_valid: bool) -> Result<()> {
         self.bitmap_builder.append(is_valid);
-        self.len += 1;
         Ok(())
     }
 
-    /// Builds the `FixedSizeListBuilder` and reset this builder.
+    /// Builds the [`FixedSizeListBuilder`] and reset this builder.
     pub fn finish(&mut self) -> FixedSizeListArray {
         let len = self.len();
-        self.len = 0;
         let values_arr = self
             .values_builder
             .as_any_mut()
@@ -132,15 +125,13 @@ where
             .finish();
         let values_data = values_arr.data();
 
-        // check that values_data length is multiple of len if we have data
-        if len != 0 {
-            assert!(
-                values_data.len() / len == self.list_len as usize,
-                "Values of FixedSizeList must have equal lengths, values have length {} and list has {}",
-                values_data.len() / len,
-                self.list_len
-            );
-        }
+        assert!(
+            values_data.len() == len * self.list_len as usize,
+            "Length of the child array ({}) must be the multiple of the value length ({}) and the array length ({}).",
+            values_data.len(),
+            self.list_len,
+            len,
+        );
 
         let null_bit_buffer = self.bitmap_builder.finish();
         let array_data = ArrayData::builder(DataType::FixedSizeList(
@@ -162,8 +153,6 @@ mod tests {
     use super::*;
 
     use crate::array::Array;
-    use crate::array::FixedSizeBinaryArray;
-    use crate::array::FixedSizeBinaryBuilder;
     use crate::array::Int32Array;
     use crate::array::Int32Builder;
 
@@ -230,22 +219,20 @@ mod tests {
     }
 
     #[test]
-    fn test_fixed_size_binary_builder() {
-        let mut builder = FixedSizeBinaryBuilder::new(15, 5);
+    #[should_panic(
+        expected = "Length of the child array (10) must be the multiple of the value length (3) and the array length (3)."
+    )]
+    fn test_fixed_size_list_array_builder_fail() {
+        let values_builder = Int32Array::builder(5);
+        let mut builder = FixedSizeListBuilder::new(values_builder, 3);
 
-        //  [b"hello", null, "arrow"]
-        builder.append_value(b"hello").unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(b"arrow").unwrap();
-        let fixed_size_binary_array: FixedSizeBinaryArray = builder.finish();
+        builder.values().append_slice(&[1, 2, 3]).unwrap();
+        builder.append(true).unwrap();
+        builder.values().append_slice(&[4, 5, 6]).unwrap();
+        builder.append(true).unwrap();
+        builder.values().append_slice(&[7, 8, 9, 10]).unwrap();
+        builder.append(true).unwrap();
 
-        assert_eq!(
-            &DataType::FixedSizeBinary(5),
-            fixed_size_binary_array.data_type()
-        );
-        assert_eq!(3, fixed_size_binary_array.len());
-        assert_eq!(1, fixed_size_binary_array.null_count());
-        assert_eq!(10, fixed_size_binary_array.value_offset(2));
-        assert_eq!(5, fixed_size_binary_array.value_length());
+        builder.finish();
     }
 }
