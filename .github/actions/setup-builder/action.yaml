@@ -54,7 +54,7 @@ runs:
       shell: bash
       run: |
         apt-get update
-        apt-get install -y protobuf-compiler
+        apt-get install -y protobuf-compiler git
     - name: Setup Rust toolchain
       shell: bash
       run: |
