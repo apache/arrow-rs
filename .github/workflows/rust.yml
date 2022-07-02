@@ -66,6 +66,10 @@ jobs:
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
         PARQUET_TEST_DATA: /__w/arrow-rs/arrow-rs/parquet-testing/data
     steps:
+      - name: Install git
+        run: |
+          apt update
+          apt install -y git
       - uses: actions/checkout@v2
         with:
           submodules: true
@@ -132,6 +136,10 @@ jobs:
         RUSTFLAGS: "-C debuginfo=1"
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
     steps:
+      - name: Install git
+        run: |
+          apt update
+          apt install -y git
       - uses: actions/checkout@v2
         with:
           submodules: true
@@ -155,6 +163,10 @@ jobs:
         os: [ windows-latest, macos-latest ]
         rust: [ stable ]
     steps:
+      - name: Install git
+        run: |
+          apt update
+          apt install -y git
       - uses: actions/checkout@v2
         with:
           submodules: true
@@ -188,6 +200,10 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
     steps:
+      - name: Install git
+        run: |
+          apt update
+          apt install -y git
       - uses: actions/checkout@v2
         with:
           submodules: true
@@ -216,6 +232,10 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
     steps:
+      - name: Install git
+        run: |
+          apt update
+          apt install -y git
       - uses: actions/checkout@v2
         with:
           submodules: true
@@ -250,6 +270,10 @@ jobs:
         arch: [ amd64 ]
         rust: [ stable ]
     steps:
+      - name: Install git
+        run: |
+          apt update
+          apt install -y git
       - uses: actions/checkout@v2
         with:
           submodules: true
@@ -302,6 +326,10 @@ jobs:
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
         PARQUET_TEST_DATA: /__w/arrow/arrow/parquet-testing/data
     steps:
+      - name: Install git
+        run: |
+          apt update
+          apt install -y git
       - uses: actions/checkout@v2
         with:
           submodules: true
@@ -343,6 +371,10 @@ jobs:
         RUSTFLAGS: "-C debuginfo=1"
         RUSTDOCFLAGS: "-Dwarnings"
     steps:
+      - name: Install git
+        run: |
+          apt update
+          apt install -y git
       - uses: actions/checkout@v2
         with:
           submodules: true
