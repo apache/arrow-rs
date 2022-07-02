@@ -362,6 +362,7 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
         RUSTDOCFLAGS: "-Dwarnings"
+        PYO3_PYTHON: "python3.9"
     steps:
       - name: Install git
         run: |
