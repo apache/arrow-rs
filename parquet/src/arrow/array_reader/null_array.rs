@@ -86,11 +86,11 @@ where
         let array = arrow::array::NullArray::new(self.record_reader.num_values());
 
         // save definition and repetition buffers
-        self.def_levels_buffer = self.record_reader.consume_def_levels()?;
-        self.rep_levels_buffer = self.record_reader.consume_rep_levels()?;
+        self.def_levels_buffer = self.record_reader.consume_def_levels();
+        self.rep_levels_buffer = self.record_reader.consume_rep_levels();
 
         // Must consume bitmap buffer
-        self.record_reader.consume_bitmap_buffer()?;
+        self.record_reader.consume_bitmap_buffer();
 
         self.record_reader.reset();
         Ok(Arc::new(array))
