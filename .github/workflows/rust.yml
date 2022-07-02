@@ -33,7 +33,7 @@ jobs:
         arch: [ amd64 ]
         rust: [ stable ]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: ${{ matrix.arch }}/rust:slim
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -58,7 +58,7 @@ jobs:
         arch: [ amd64 ]
         rust: [ stable ]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: ${{ matrix.arch }}/rust:slim
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -125,7 +125,7 @@ jobs:
         arch: [ amd64 ]
         rust: [ nightly ]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: ${{ matrix.arch }}/rust:slim
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -182,7 +182,7 @@ jobs:
         arch: [ amd64 ]
         rust: [ stable ]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: ${{ matrix.arch }}/rust:slim
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -210,7 +210,7 @@ jobs:
         arch: [ amd64 ]
         rust: [ stable ]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: ${{ matrix.arch }}/rust:slim
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -231,7 +231,7 @@ jobs:
     name: Lint (cargo fmt)
     runs-on: ubuntu-latest
     container:
-      image: amd64/rust
+      image: amd64/rust:slim
     steps:
       - uses: actions/checkout@v2
       - name: Setup toolchain
@@ -294,7 +294,7 @@ jobs:
         arch: [ amd64 ]
         rust: [ nightly ]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: ${{ matrix.arch }}/rust:slim
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -336,7 +336,7 @@ jobs:
         arch: [ amd64 ]
         rust: [ nightly ]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: ${{ matrix.arch }}/rust:slim
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
