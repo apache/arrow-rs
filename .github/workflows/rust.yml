@@ -163,10 +163,6 @@ jobs:
         os: [ windows-latest, macos-latest ]
         rust: [ stable ]
     steps:
-      - name: Install git
-        run: |
-          apt update
-          apt install -y git
       - uses: actions/checkout@v2
         with:
           submodules: true
@@ -270,10 +266,6 @@ jobs:
         arch: [ amd64 ]
         rust: [ stable ]
     steps:
-      - name: Install git
-        run: |
-          apt update
-          apt install -y git
       - uses: actions/checkout@v2
         with:
           submodules: true
@@ -381,7 +373,7 @@ jobs:
       - name: Install python dev
         run: |
           apt update
-          apt install -y libpython3.9-dev
+          apt install -y python3.9 libpython3.9-dev
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
