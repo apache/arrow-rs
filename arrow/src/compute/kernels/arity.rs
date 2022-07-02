@@ -96,15 +96,7 @@ macro_rules! unary_dict_op {
                 .take_iter_unchecked($array.keys_iter())
         };
 
-        let values = array_iter
-            .map(|v| {
-                if let Some(value) = v {
-                    Some($op(value))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let values = array_iter.map(|v| v.map(|value| $op(value))).collect();
 
         Ok(values)
     }};
