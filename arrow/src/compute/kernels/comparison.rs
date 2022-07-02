@@ -2563,7 +2563,7 @@ where
     T: ArrowNumericType,
     F: Fn(T::Native) -> bool,
 {
-    return compare_op_scalar!(left, |a| op(a));
+    return compare_op_scalar!(left, op);
 }
 
 /// Perform `left != right` operation on two [`PrimitiveArray`]s.
