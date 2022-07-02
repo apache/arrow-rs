@@ -19,7 +19,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::array::{ArrayRef, ArrowPrimitiveType, DictionaryArray};
+use crate::array::{Array, ArrayRef, ArrowPrimitiveType, DictionaryArray};
 use crate::datatypes::{ArrowNativeType, DataType, ToByteSlice};
 use crate::error::{ArrowError, Result};
 

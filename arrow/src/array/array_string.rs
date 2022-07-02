@@ -195,11 +195,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     ) -> impl Iterator<Item = Option<&str>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
-
-    /// Returns the backing [`ArrayData`] of this [`GenericStringArray`]
-    pub fn into_data(self) -> ArrayData {
-        self.into()
-    }
 }
 
 impl<'a, Ptr, OffsetSize: OffsetSizeTrait> FromIterator<&'a Option<Ptr>>

@@ -60,7 +60,7 @@ pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
     /// Returns a reference to the underlying data of this array.
     fn data(&self) -> &ArrayData;
 
-    /// Returns underlying data of this array.
+    /// Returns the underlying data of this array.
     fn into_data(self) -> ArrayData;
 
     /// Returns a reference-counted pointer to the underlying data of this array.
