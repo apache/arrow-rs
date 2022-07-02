@@ -66,13 +66,13 @@ jobs:
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
         PARQUET_TEST_DATA: /__w/arrow-rs/arrow-rs/parquet-testing/data
     steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
       - name: Run tests
         run: |
           # run tests on all workspace members with default feature list
@@ -132,13 +132,13 @@ jobs:
         RUSTFLAGS: "-C debuginfo=1"
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
     steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
       - name: Run tests
         run: |
           cargo test -p arrow --features "simd"
@@ -155,15 +155,15 @@ jobs:
         os: [ windows-latest, macos-latest ]
         rust: [ stable ]
     steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
       # TODO: this won't cache anything, which is expensive. Setup this action
       # with a OS-dependent path.
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
       - name: Run tests
         shell: bash
         run: |
@@ -188,13 +188,13 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
     steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
       - name: Setup Clippy
         run: |
           rustup component add clippy
@@ -216,13 +216,13 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
     steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ matrix.rust }}
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
       - name: Check benchmarks
         run: |
           cargo check --benches --workspace --features test_common,prettyprint,async,experimental
@@ -250,13 +250,13 @@ jobs:
         arch: [ amd64 ]
         rust: [ stable ]
     steps:
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
       - uses: actions/checkout@v2
         with:
           submodules: true
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install ${{ matrix.rust }}
+          rustup default ${{ matrix.rust }}
       - name: Cache Cargo
         uses: actions/cache@v3
         with:
@@ -302,10 +302,6 @@ jobs:
         ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
         PARQUET_TEST_DATA: /__w/arrow/arrow/parquet-testing/data
     steps:
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
       - uses: actions/checkout@v2
         with:
           submodules: true
@@ -347,10 +343,6 @@ jobs:
         RUSTFLAGS: "-C debuginfo=1"
         RUSTDOCFLAGS: "-Dwarnings"
     steps:
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
       - uses: actions/checkout@v2
         with:
           submodules: true
@@ -358,6 +350,10 @@ jobs:
         run: |
           apt update
           apt install -y libpython3.9-dev
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
       - name: Run cargo doc
         run: |
           cargo doc --document-private-items --no-deps --workspace --all-features
