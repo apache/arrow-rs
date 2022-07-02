@@ -297,6 +297,10 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericStringArray<OffsetSize> {
     fn data(&self) -> &ArrayData {
         &self.data
     }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericStringArray<OffsetSize> {
@@ -342,8 +346,8 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<Offse
 }
 
 impl<OffsetSize: OffsetSizeTrait> From<GenericStringArray<OffsetSize>> for ArrayData {
-    fn from(a: GenericStringArray<OffsetSize>) -> Self {
-        a.data
+    fn from(array: GenericStringArray<OffsetSize>) -> Self {
+        array.data
     }
 }
 
@@ -413,7 +417,7 @@ mod tests {
     #[should_panic(expected = "[Large]StringArray expects Datatype::[Large]Utf8")]
     fn test_string_array_from_int() {
         let array = LargeStringArray::from(vec!["a", "b"]);
-        drop(StringArray::from(array.data().clone()));
+        drop(StringArray::from(array.into_data()));
     }
 
     #[test]

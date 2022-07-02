@@ -495,7 +495,7 @@ fn array_from_json(
                 .len(json_col.count)
                 .offset(0)
                 .add_buffer(Buffer::from(&offsets.to_byte_slice()))
-                .add_child_data(child_array.data().clone())
+                .add_child_data(child_array.into_data())
                 .null_bit_buffer(Some(null_buf))
                 .build()
                 .unwrap();
@@ -523,7 +523,7 @@ fn array_from_json(
                 .len(json_col.count)
                 .offset(0)
                 .add_buffer(Buffer::from(&offsets.to_byte_slice()))
-                .add_child_data(child_array.data().clone())
+                .add_child_data(child_array.into_data())
                 .null_bit_buffer(Some(null_buf))
                 .build()
                 .unwrap();
@@ -539,7 +539,7 @@ fn array_from_json(
             let null_buf = create_null_buf(&json_col);
             let list_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
-                .add_child_data(child_array.data().clone())
+                .add_child_data(child_array.into_data())
                 .null_bit_buffer(Some(null_buf))
                 .build()
                 .unwrap();
@@ -554,7 +554,7 @@ fn array_from_json(
 
             for (field, col) in fields.iter().zip(json_col.children.unwrap()) {
                 let array = array_from_json(field, col, dictionaries)?;
-                array_data = array_data.add_child_data(array.data().clone());
+                array_data = array_data.add_child_data(array.into_data());
             }
 
             let array = StructArray::from(array_data.build().unwrap());
@@ -628,7 +628,7 @@ fn array_from_json(
             let array_data = ArrayData::builder(field.data_type().clone())
                 .len(json_col.count)
                 .add_buffer(Buffer::from(&offsets.to_byte_slice()))
-                .add_child_data(child_array.data().clone())
+                .add_child_data(child_array.into_data())
                 .null_bit_buffer(Some(null_buf))
                 .build()
                 .unwrap();
@@ -718,7 +718,7 @@ fn dictionary_array_from_json(
                 .len(keys.len())
                 .add_buffer(keys.data().buffers()[0].clone())
                 .null_bit_buffer(Some(null_buf))
-                .add_child_data(values.data().clone())
+                .add_child_data(values.into_data())
                 .build()
                 .unwrap();
 

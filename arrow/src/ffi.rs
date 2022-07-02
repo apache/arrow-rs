@@ -53,7 +53,7 @@
 //! assert_eq!(array, Int32Array::from(vec![Some(2), None, Some(6)]));
 //!
 //! // Simulate if raw pointers are provided by consumer
-//! let array = make_array(Int32Array::from(vec![Some(1), None, Some(3)]).data().clone());
+//! let array = make_array(Int32Array::from(vec![Some(1), None, Some(3)]).into_data());
 //!
 //! let out_array = Box::new(FFI_ArrowArray::empty());
 //! let out_schema = Box::new(FFI_ArrowSchema::empty());
@@ -910,7 +910,7 @@ mod tests {
         let array = Int32Array::from(vec![1, 2, 3]);
 
         // export it
-        let array = ArrowArray::try_from(array.data().clone())?;
+        let array = ArrowArray::try_from(array.into_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -961,7 +961,7 @@ mod tests {
             GenericStringArray::<Offset>::from(vec![Some("a"), None, Some("aaa")]);
 
         // export it
-        let array = ArrowArray::try_from(array.data().clone())?;
+        let array = ArrowArray::try_from(array.into_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1033,7 +1033,7 @@ mod tests {
         let array = GenericListArray::<Offset>::from(list_data.clone());
 
         // export it
-        let array = ArrowArray::try_from(array.data().clone())?;
+        let array = ArrowArray::try_from(array.into_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1073,7 +1073,7 @@ mod tests {
         let array = GenericBinaryArray::<Offset>::from(array);
 
         // export it
-        let array = ArrowArray::try_from(array.data().clone())?;
+        let array = ArrowArray::try_from(array.into_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1118,7 +1118,7 @@ mod tests {
         let array = BooleanArray::from(vec![None, Some(true), Some(false)]);
 
         // export it
-        let array = ArrowArray::try_from(array.data().clone())?;
+        let array = ArrowArray::try_from(array.into_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1144,7 +1144,7 @@ mod tests {
         let array = Time32MillisecondArray::from(vec![None, Some(1), Some(2)]);
 
         // export it
-        let array = ArrowArray::try_from(array.data().clone())?;
+        let array = ArrowArray::try_from(array.into_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1180,7 +1180,7 @@ mod tests {
         let array = TimestampMillisecondArray::from(vec![None, Some(1), Some(2)]);
 
         // export it
-        let array = ArrowArray::try_from(array.data().clone())?;
+        let array = ArrowArray::try_from(array.into_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1223,7 +1223,7 @@ mod tests {
         let array = FixedSizeBinaryArray::try_from_sparse_iter(values.into_iter())?;
 
         // export it
-        let array = ArrowArray::try_from(array.data().clone())?;
+        let array = ArrowArray::try_from(array.into_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1328,7 +1328,7 @@ mod tests {
         let dict_array: DictionaryArray<Int8Type> = values.into_iter().collect();
 
         // export it
-        let array = ArrowArray::try_from(dict_array.data().clone())?;
+        let array = ArrowArray::try_from(dict_array.into_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;
@@ -1352,7 +1352,7 @@ mod tests {
 
     #[test]
     fn test_export_array_into_raw() -> Result<()> {
-        let array = make_array(Int32Array::from(vec![1, 2, 3]).data().clone());
+        let array = make_array(Int32Array::from(vec![1, 2, 3]).into_data());
 
         // Assume two raw pointers provided by the consumer
         let out_array = Box::new(FFI_ArrowArray::empty());
@@ -1389,7 +1389,7 @@ mod tests {
         let array = DurationSecondArray::from(vec![None, Some(1), Some(2)]);
 
         // export it
-        let array = ArrowArray::try_from(array.data().clone())?;
+        let array = ArrowArray::try_from(array.into_data())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;

@@ -153,7 +153,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         let array_data = ArrayData::builder(DataType::Map(map_field, false)) // TODO: support sorted keys
             .len(len)
             .add_buffer(offset_buffer)
-            .add_child_data(struct_array.data().clone())
+            .add_child_data(struct_array.into_data())
             .null_bit_buffer(Some(null_bit_buffer));
 
         let array_data = unsafe { array_data.build_unchecked() };
