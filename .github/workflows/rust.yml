@@ -72,8 +72,6 @@ jobs:
           apt install -y git
       - name: free disk space
         run: |
-          sudo swapoff -a
-          sudo rm -f /swapfile
           apt clean
           docker rmi $(docker image ls -aq)
           df -h
