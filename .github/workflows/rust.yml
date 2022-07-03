@@ -70,6 +70,13 @@ jobs:
         run: |
           apt update
           apt install -y git
+      - name: free disk space
+        run: |
+          swapoff -a
+          rm -f /swapfile
+          apt clean
+          docker rmi $(docker image ls -aq)
+          df -h
       - uses: actions/checkout@v2
         with:
           submodules: true
