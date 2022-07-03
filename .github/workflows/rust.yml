@@ -84,12 +84,15 @@ jobs:
       - name: Run tests
         run: |
           # run tests on all workspace members with default feature list
+          cargo clean
           cargo test
       - name: Re-run tests with all supported features
         run: |
+          cargo clean
           cargo test -p arrow --features=force_validate,prettyprint
       - name: Run examples
         run: |
+          cargo clean 
           # Test arrow examples
           cargo run --example builders
           cargo run --example dynamic_types
@@ -97,31 +100,38 @@ jobs:
           cargo run --example read_csv_infer_schema
       - name: Test compilation of arrow library crate with different feature combinations
         run: |
+          cargo clean
           cargo check -p arrow
           cargo check -p arrow --no-default-features
       - name: Test compilation of arrow targets with different feature combinations
         run: |
+          cargo clean
           cargo check -p arrow --all-targets
           cargo check -p arrow --no-default-features --all-targets
           cargo check -p arrow --no-default-features --all-targets --features test_utils
       - name: Re-run tests on arrow-flight with all features
         run: |
+          cargo clean
           cargo test -p arrow-flight --all-features
       - name: Re-run tests on parquet crate with all features
         run: |
+          cargo clean
           cargo test -p parquet --all-features
       - name: Test compilation of parquet library crate with different feature combinations
         run: |
+          cargo clean
           cargo check -p parquet
           cargo check -p parquet --no-default-features
           cargo check -p parquet --no-default-features --features arrow
       - name: Test compilation of parquet targets with different feature combinations
         run: |
+          cargo clean
           cargo check -p parquet --all-targets
           cargo check -p parquet --no-default-features --all-targets
           cargo check -p parquet --no-default-features --features arrow --all-targets
       - name: Test compilation of parquet_derive macro with different feature combinations
         run: |
+          cargo clean
           cargo check -p parquet_derive
 
   # test the --features "simd" of the arrow crate. This requires nightly.
