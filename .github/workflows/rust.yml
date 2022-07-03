@@ -73,7 +73,6 @@ jobs:
       - name: free disk space
         run: |
           apt clean
-          docker rmi $(docker image ls -aq)
           df -h
       - uses: actions/checkout@v2
         with:
