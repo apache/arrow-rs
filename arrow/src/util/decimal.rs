@@ -107,6 +107,7 @@ pub struct Decimal128 {
 
 impl Decimal128 {
     /// Creates `Decimal128` from an `i128` value.
+    #[allow(dead_code)]
     pub(crate) fn new_from_i128(precision: usize, scale: usize, value: i128) -> Self {
         Decimal128 {
             precision,

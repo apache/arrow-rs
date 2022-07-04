@@ -38,6 +38,7 @@
 use std::str;
 use std::sync::Arc;
 
+use crate::array::BasicDecimalArray;
 use crate::buffer::MutableBuffer;
 use crate::compute::kernels::arithmetic::{divide, multiply};
 use crate::compute::kernels::arity::unary;
@@ -2134,6 +2135,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::array::BasicDecimalArray;
     use crate::util::decimal::Decimal128;
     use crate::{buffer::Buffer, util::display::array_value_to_string};
 
