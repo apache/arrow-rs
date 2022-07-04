@@ -45,6 +45,7 @@ use super::ArrayRef;
 pub use boolean_buffer_builder::BooleanBufferBuilder;
 pub use boolean_builder::BooleanBuilder;
 pub use buffer_builder::BufferBuilder;
+pub use decimal_builder::Decimal256Builder;
 pub use decimal_builder::DecimalBuilder;
 pub use fixed_size_binary_builder::FixedSizeBinaryBuilder;
 pub use fixed_size_list_builder::FixedSizeListBuilder;
