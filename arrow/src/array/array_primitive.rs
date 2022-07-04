@@ -166,16 +166,11 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     ) -> impl Iterator<Item = Option<T::Native>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
-
-    /// Returns the backing [`ArrayData`] of this [`PrimitiveArray`]
-    pub fn into_data(self) -> ArrayData {
-        self.into()
-    }
 }
 
 impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
-    fn from(a: PrimitiveArray<T>) -> Self {
-        a.data
+    fn from(array: PrimitiveArray<T>) -> Self {
+        array.data
     }
 }
 
@@ -186,6 +181,10 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 }
 

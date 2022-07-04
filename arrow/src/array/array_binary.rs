@@ -239,6 +239,10 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericBinaryArray<OffsetSize> {
     fn data(&self) -> &ArrayData {
         &self.data
     }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericBinaryArray<OffsetSize> {
@@ -260,6 +264,12 @@ impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericBinaryArray<OffsetS
             value_offsets: unsafe { RawPtrBox::new(offsets) },
             value_data: unsafe { RawPtrBox::new(values) },
         }
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>> for ArrayData {
+    fn from(array: GenericBinaryArray<OffsetSize>) -> Self {
+        array.data
     }
 }
 
@@ -669,6 +679,12 @@ impl From<ArrayData> for FixedSizeBinaryArray {
     }
 }
 
+impl From<FixedSizeBinaryArray> for ArrayData {
+    fn from(array: FixedSizeBinaryArray) -> Self {
+        array.data
+    }
+}
+
 /// Creates a `FixedSizeBinaryArray` from `FixedSizeList<u8>` array
 impl From<FixedSizeListArray> for FixedSizeBinaryArray {
     fn from(v: FixedSizeListArray) -> Self {
@@ -723,6 +739,10 @@ impl Array for FixedSizeBinaryArray {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 }
 

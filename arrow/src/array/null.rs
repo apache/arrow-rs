@@ -67,6 +67,10 @@ impl Array for NullArray {
         &self.data
     }
 
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
+
     /// Returns whether the element at `index` is null.
     /// All elements of a `NullArray` are always null.
     fn is_null(&self, _index: usize) -> bool {
@@ -103,6 +107,12 @@ impl From<ArrayData> for NullArray {
             "NullArray data should not contain a null buffer, as no buffers are required"
         );
         Self { data }
+    }
+}
+
+impl From<NullArray> for ArrayData {
+    fn from(array: NullArray) -> Self {
+        array.data
     }
 }
 

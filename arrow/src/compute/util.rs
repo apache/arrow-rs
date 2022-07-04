@@ -370,7 +370,7 @@ pub(super) mod tests {
             offset.push(values.len() as i64);
         }
 
-        let value_data = PrimitiveArray::<T>::from(values).data().clone();
+        let value_data = PrimitiveArray::<T>::from(values).into_data();
         let (list_data_type, value_offsets) = if TypeId::of::<S>() == TypeId::of::<i32>()
         {
             (
@@ -439,7 +439,7 @@ pub(super) mod tests {
             length,
         );
 
-        let child_data = PrimitiveArray::<T>::from(values).data().clone();
+        let child_data = PrimitiveArray::<T>::from(values).into_data();
 
         let list_data = ArrayData::builder(list_data_type)
             .len(list_len)

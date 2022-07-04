@@ -18,7 +18,7 @@
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::ParquetError::ArrowError;
 use crate::errors::{ParquetError, Result};
-use arrow::array::{ArrayDataBuilder, ArrayRef, MapArray};
+use arrow::array::{Array, ArrayDataBuilder, ArrayRef, MapArray};
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::DataType as ArrowType;
 use arrow::datatypes::ToByteSlice;
@@ -97,8 +97,8 @@ impl ArrayReader for MapArrayReader {
 
         let entry_data = ArrayDataBuilder::new(entry_data_type)
             .len(key_length)
-            .add_child_data(key_array.data().clone())
-            .add_child_data(value_array.data().clone());
+            .add_child_data(key_array.into_data())
+            .add_child_data(value_array.into_data());
         let entry_data = unsafe { entry_data.build_unchecked() };
 
         let entry_len = rep_levels.iter().filter(|level| **level == 0).count();

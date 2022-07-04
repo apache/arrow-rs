@@ -257,6 +257,12 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for DictionaryArray<T> {
     }
 }
 
+impl<T: ArrowPrimitiveType> From<DictionaryArray<T>> for ArrayData {
+    fn from(array: DictionaryArray<T>) -> Self {
+        array.data
+    }
+}
+
 /// Constructs a `DictionaryArray` from an iterator of optional strings.
 ///
 /// # Example:
@@ -342,6 +348,10 @@ impl<T: ArrowPrimitiveType> Array for DictionaryArray<T> {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 }
 

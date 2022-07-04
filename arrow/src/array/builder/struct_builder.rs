@@ -218,7 +218,7 @@ impl StructBuilder {
         let mut child_data = Vec::with_capacity(self.field_builders.len());
         for f in &mut self.field_builders {
             let arr = f.finish();
-            child_data.push(arr.data().clone());
+            child_data.push(arr.into_data());
         }
 
         let null_bit_buffer = self.bitmap_builder.finish();

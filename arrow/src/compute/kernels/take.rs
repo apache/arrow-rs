@@ -832,7 +832,7 @@ where
         .len(indices.len())
         .null_bit_buffer(Some(null_buf.into()))
         .offset(0)
-        .add_child_data(taken.data().clone())
+        .add_child_data(taken.into_data())
         .add_buffer(value_offsets);
 
     let list_data = unsafe { list_data.build_unchecked() };
@@ -875,7 +875,7 @@ where
         .len(indices.len())
         .null_bit_buffer(Some(null_buf.into()))
         .offset(0)
-        .add_child_data(taken.data().clone());
+        .add_child_data(taken.into_data());
 
     let list_data = unsafe { list_data.build_unchecked() };
 

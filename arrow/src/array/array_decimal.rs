@@ -345,6 +345,10 @@ impl Array for DecimalArray {
     fn data(&self) -> &ArrayData {
         &self.data
     }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
 }
 
 #[cfg(test)]

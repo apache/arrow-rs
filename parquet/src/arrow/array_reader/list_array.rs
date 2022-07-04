@@ -326,7 +326,7 @@ mod tests {
         let l3 = ArrayDataBuilder::new(l3_type.clone())
             .len(10)
             .add_buffer(offsets)
-            .add_child_data(leaf.data().clone())
+            .add_child_data(leaf.into_data())
             .null_bit_buffer(Some(Buffer::from([0b11111101, 0b00000010])))
             .build()
             .unwrap();

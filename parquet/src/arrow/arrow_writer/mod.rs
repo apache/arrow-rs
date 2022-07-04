@@ -838,7 +838,7 @@ mod tests {
         ))))
         .len(5)
         .add_buffer(a_value_offsets)
-        .add_child_data(a_values.data().clone())
+        .add_child_data(a_values.into_data())
         .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
         .build()
         .unwrap();
@@ -879,7 +879,7 @@ mod tests {
         ))))
         .len(5)
         .add_buffer(a_value_offsets)
-        .add_child_data(a_values.data().clone())
+        .add_child_data(a_values.into_data())
         .build()
         .unwrap();
         let a = ListArray::from(a_list_data);
@@ -1110,14 +1110,14 @@ mod tests {
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
             .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
-            .add_child_data(c.data().clone())
+            .add_child_data(c.into_data())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
             .null_bit_buffer(Some(Buffer::from(vec![0b00101111])))
-            .add_child_data(b.data().clone())
+            .add_child_data(b.into_data())
             .build()
             .unwrap();
         let a = StructArray::from(a_data);
@@ -1143,13 +1143,13 @@ mod tests {
         let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
-            .add_child_data(c.data().clone())
+            .add_child_data(c.into_data())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
-            .add_child_data(b.data().clone())
+            .add_child_data(b.into_data())
             .build()
             .unwrap();
         let a = StructArray::from(a_data);
@@ -1176,14 +1176,14 @@ mod tests {
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
             .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
-            .add_child_data(c.data().clone())
+            .add_child_data(c.into_data())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
         // a intentionally has no null buffer, to test that this is handled correctly
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
-            .add_child_data(b.data().clone())
+            .add_child_data(b.into_data())
             .build()
             .unwrap();
         let a = StructArray::from(a_data);
@@ -1559,7 +1559,7 @@ mod tests {
         .len(3)
         .add_buffer(a_value_offsets)
         .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
-        .add_child_data(a_values.data().clone())
+        .add_child_data(a_values.into_data())
         .build()
         .unwrap();
 
@@ -1590,7 +1590,7 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
-        .add_child_data(a_values.data().clone())
+        .add_child_data(a_values.into_data())
         .build()
         .unwrap();
 
@@ -1614,7 +1614,7 @@ mod tests {
         ))))
         .len(5)
         .add_buffer(a_value_offsets)
-        .add_child_data(a_values.data().clone())
+        .add_child_data(a_values.into_data())
         .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
         .build()
         .unwrap();
@@ -2014,7 +2014,7 @@ mod tests {
             .null_bit_buffer(Some(Buffer::from_iter(vec![
                 true, false, true, false, true,
             ])))
-            .child_data(vec![struct_a_array.data().clone()])
+            .child_data(vec![struct_a_array.into_data()])
             .build()
             .unwrap();
 
@@ -2038,7 +2038,7 @@ mod tests {
         let list_data = ArrayDataBuilder::new(list_a.data_type().clone())
             .len(2)
             .add_buffer(Buffer::from_iter(vec![0_i32, 4_i32, 5_i32]))
-            .child_data(vec![struct_a_array.data().clone()])
+            .child_data(vec![struct_a_array.into_data()])
             .build()
             .unwrap();
 
