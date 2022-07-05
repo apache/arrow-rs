@@ -17,7 +17,7 @@
 
 //! Contains column reader API.
 
-use std::cmp::{max, min};
+use std::cmp::min;
 
 use super::page::{Page, PageReader};
 use crate::basic::*;
@@ -163,26 +163,18 @@ where
         }
     }
 
-    /// Reads a batch of values of at most `batch_size`.
+    /// Reads a batch of values of at most `batch_size`, returning a tuple containing the
+    /// actual number of non-null values read, followed by the corresponding number of levels,
+    /// i.e, the total number of values including nulls, empty lists, etc...
     ///
-    /// This will try to read from the row group, and fills up at most `batch_size` values
-    /// for `def_levels`, `rep_levels` and `values`. It will stop either when the row
-    /// group is depleted or `batch_size` values has been read, or there is no space
-    /// in the input slices (values/definition levels/repetition levels).
+    /// If the max definition level is 0, `def_levels` will be ignored, otherwise it will be
+    /// populated with the number of levels read, with an error returned if it is `None`.
     ///
-    /// Note that in case the field being read is not required, `values` could contain
-    /// less values than `def_levels`. Also note that this will skip reading def / rep
-    /// levels if the field is required / not repeated, respectively.
+    /// If the max repetition level is 0, `rep_levels` will be ignored, otherwise it will be
+    /// populated with the number of levels read, with an error returned if it is `None`.
     ///
-    /// If `def_levels` or `rep_levels` is `None`, this will also skip reading the
-    /// respective levels. This is useful when the caller of this function knows in
-    /// advance that the field is required and non-repeated, therefore can avoid
-    /// allocating memory for the levels data. Note that if field has definition
-    /// levels, but caller provides None, there might be inconsistency between
-    /// levels/values (see comments below).
-    ///
-    /// Returns a tuple where the first element is the actual number of values read,
-    /// and the second element is the actual number of levels read.
+    /// `values` will be contiguously populated with the non-null values. Note that if the column
+    /// is not required, this may be less than either `batch_size` or the number of levels read
     #[inline]
     pub fn read_batch(
         &mut self,
@@ -205,84 +197,65 @@ where
 
         // Read exhaustively all pages until we read all batch_size values/levels
         // or there are no more values/levels to read.
-        while max(values_read, levels_read) < batch_size {
+        while levels_read < batch_size {
             if !self.has_next()? {
                 break;
             }
 
             // Batch size for the current iteration
-            let iter_batch_size = {
-                // Compute approximate value based on values decoded so far
-                let mut adjusted_size = min(
-                    batch_size,
-                    (self.num_buffered_values - self.num_decoded_values) as usize,
-                );
-
-                // Adjust batch size by taking into account how much data there
-                // to read. As batch_size is also smaller than value and level
-                // slices (if available), this ensures that available space is not
-                // exceeded.
-                adjusted_size = min(adjusted_size, batch_size - values_read);
-                adjusted_size = min(adjusted_size, batch_size - levels_read);
-
-                adjusted_size
-            };
+            let iter_batch_size = (batch_size - levels_read)
+                .min((self.num_buffered_values - self.num_decoded_values) as usize);
 
             // If the field is required and non-repeated, there are no definition levels
-            let (num_def_levels, null_count) = match def_levels.as_mut() {
-                Some(levels) if self.descr.max_def_level() > 0 => {
+            let null_count = match self.descr.max_def_level() > 0 {
+                true => {
+                    let levels = def_levels
+                        .as_mut()
+                        .ok_or_else(|| general_err!("must specify definition levels"))?;
+
                     let num_def_levels = self
                         .def_level_decoder
                         .as_mut()
                         .expect("def_level_decoder be set")
-                        .read(*levels, levels_read..levels_read + iter_batch_size)?;
+                        .read(levels, levels_read..levels_read + iter_batch_size)?;
 
-                    let null_count = levels.count_nulls(
+                    if num_def_levels != iter_batch_size {
+                        return Err(general_err!("insufficient definition levels read from column - expected {}, got {}", iter_batch_size, num_def_levels));
+                    }
+
+                    levels.count_nulls(
                         levels_read..levels_read + num_def_levels,
                         self.descr.max_def_level(),
-                    );
-                    (num_def_levels, null_count)
+                    )
                 }
-                _ => (0, 0),
+                false => 0,
             };
 
-            let num_rep_levels = match rep_levels.as_mut() {
-                Some(levels) if self.descr.max_rep_level() > 0 => self
+            if self.descr.max_rep_level() > 0 {
+                let levels = rep_levels
+                    .as_mut()
+                    .ok_or_else(|| general_err!("must specify repetition levels"))?;
+
+                let rep_levels = self
                     .rep_level_decoder
                     .as_mut()
                     .expect("rep_level_decoder be set")
-                    .read(levels, levels_read..levels_read + iter_batch_size)?,
-                _ => 0,
-            };
+                    .read(levels, levels_read..levels_read + iter_batch_size)?;
 
-            // At this point we have read values, definition and repetition levels.
-            // If both definition and repetition levels are defined, their counts
-            // should be equal. Values count is always less or equal to definition levels.
-            if num_def_levels != 0
-                && num_rep_levels != 0
-                && num_rep_levels != num_def_levels
-            {
-                return Err(general_err!(
-                    "inconsistent number of levels read - def: {}, rep: {}",
-                    num_def_levels,
-                    num_rep_levels
-                ));
+                if rep_levels != iter_batch_size {
+                    return Err(general_err!("insufficient repetition levels read from column - expected {}, got {}", iter_batch_size, rep_levels));
+                }
             }
-
-            // Note that if field is not required, but no definition levels are provided,
-            // we would read values of batch size and (if provided, of course) repetition
-            // levels of batch size - [!] they will not be synced, because only definition
-            // levels enforce number of non-null values to read.
 
             let values_to_read = iter_batch_size - null_count;
             let curr_values_read = self
                 .values_decoder
                 .read(values, values_read..values_read + values_to_read)?;
 
-            if num_def_levels != 0 && curr_values_read != num_def_levels - null_count {
+            if curr_values_read != values_to_read {
                 return Err(general_err!(
                     "insufficient values read from column - expected: {}, got: {}",
-                    num_def_levels - null_count,
+                    values_to_read,
                     curr_values_read
                 ));
             }
@@ -290,9 +263,8 @@ where
             // Update all "return" counters and internal state.
 
             // This is to account for when def or rep levels are not provided
-            let curr_levels_read = max(num_def_levels, num_rep_levels);
-            self.num_decoded_values += max(curr_levels_read, curr_values_read) as u32;
-            levels_read += curr_levels_read;
+            self.num_decoded_values += iter_batch_size as u32;
+            levels_read += iter_batch_size;
             values_read += curr_values_read;
         }
 
@@ -302,8 +274,7 @@ where
     /// Reads a new page and set up the decoders for levels, values or dictionary.
     /// Returns false if there's no page left.
     fn read_new_page(&mut self) -> Result<bool> {
-        #[allow(while_true)]
-        while true {
+        loop {
             match self.page_reader.get_next_page()? {
                 // No more page to read
                 None => return Ok(false),
@@ -433,8 +404,6 @@ where
                 }
             }
         }
-
-        Ok(true)
     }
 
     #[inline]
@@ -484,12 +453,12 @@ mod tests {
     use super::*;
 
     use rand::distributions::uniform::SampleUniform;
-    use std::{collections::VecDeque, sync::Arc, vec::IntoIter};
+    use std::{collections::VecDeque, sync::Arc};
 
     use crate::basic::Type as PhysicalType;
-    use crate::column::page::Page;
     use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
     use crate::util::test_common::make_pages;
+    use crate::util::test_common::page_util::InMemoryPageReader;
 
     const NUM_LEVELS: usize = 128;
     const NUM_PAGES: usize = 2;
@@ -1036,7 +1005,7 @@ mod tests {
         } else {
             0
         };
-        let max_rep_level = if def_levels.is_some() {
+        let max_rep_level = if rep_levels.is_some() {
             MAX_REP_LEVEL
         } else {
             0
@@ -1055,8 +1024,8 @@ mod tests {
             NUM_PAGES,
             NUM_LEVELS,
             batch_size,
-            std::i32::MIN,
-            std::i32::MAX,
+            i32::MIN,
+            i32::MAX,
             values,
             def_levels,
             rep_levels,
@@ -1235,7 +1204,8 @@ mod tests {
                 use_v2,
             );
             let max_def_level = desc.max_def_level();
-            let page_reader = TestPageReader::new(Vec::from(pages));
+            let max_rep_level = desc.max_rep_level();
+            let page_reader = InMemoryPageReader::new(pages);
             let column_reader: ColumnReader =
                 get_column_reader(desc, Box::new(page_reader));
             let mut typed_column_reader = get_typed_column_reader::<T>(column_reader);
@@ -1276,7 +1246,8 @@ mod tests {
                 "values content doesn't match"
             );
 
-            if let Some(ref levels) = def_levels {
+            if max_def_level > 0 {
+                let levels = def_levels.as_ref().unwrap();
                 assert!(
                     levels.len() >= curr_levels_read,
                     "def_levels.len() >= levels_read"
@@ -1288,7 +1259,8 @@ mod tests {
                 );
             }
 
-            if let Some(ref levels) = rep_levels {
+            if max_rep_level > 0 {
+                let levels = rep_levels.as_ref().unwrap();
                 assert!(
                     levels.len() >= curr_levels_read,
                     "rep_levels.len() >= levels_read"
@@ -1300,44 +1272,10 @@ mod tests {
                 );
             }
 
-            if def_levels.is_none() && rep_levels.is_none() {
-                assert!(
-                    curr_levels_read == 0,
-                    "expected to read 0 levels, found {}",
-                    curr_levels_read
-                );
-            } else if def_levels.is_some() && max_def_level > 0 {
-                assert!(
-                    curr_levels_read >= curr_values_read,
-                    "expected levels read to be greater than values read"
-                );
-            }
-        }
-    }
-
-    struct TestPageReader {
-        pages: IntoIter<Page>,
-    }
-
-    impl TestPageReader {
-        pub fn new(pages: Vec<Page>) -> Self {
-            Self {
-                pages: pages.into_iter(),
-            }
-        }
-    }
-
-    impl PageReader for TestPageReader {
-        fn get_next_page(&mut self) -> Result<Option<Page>> {
-            Ok(self.pages.next())
-        }
-    }
-
-    impl Iterator for TestPageReader {
-        type Item = Result<Page>;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            self.get_next_page().transpose()
+            assert!(
+                curr_levels_read >= curr_values_read,
+                "expected levels read to be greater than values read"
+            );
         }
     }
 }
