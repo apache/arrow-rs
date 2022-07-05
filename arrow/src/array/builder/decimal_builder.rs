@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::array::array_decimal::{BasicDecimalArray, Decimal256Array};
+use crate::array::array_decimal::Decimal256Array;
 use crate::array::ArrayRef;
 use crate::array::DecimalArray;
 use crate::array::UInt8Builder;
@@ -218,7 +218,6 @@ impl Decimal256Builder {
 mod tests {
     use super::*;
 
-    use crate::array::array_decimal::BasicDecimalArray;
     use crate::array::Array;
     use crate::datatypes::DataType;
     use crate::util::decimal::Decimal128;

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::BasicDecimalArray;
 use crate::datatypes::ArrowPrimitiveType;
 
 use super::{

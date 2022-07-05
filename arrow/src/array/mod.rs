@@ -181,7 +181,6 @@ pub use self::array_binary::BinaryArray;
 pub use self::array_binary::FixedSizeBinaryArray;
 pub use self::array_binary::LargeBinaryArray;
 pub use self::array_boolean::BooleanArray;
-pub use self::array_decimal::BasicDecimalArray;
 pub use self::array_decimal::Decimal256Array;
 pub use self::array_decimal::DecimalArray;
 pub use self::array_dictionary::DictionaryArray;

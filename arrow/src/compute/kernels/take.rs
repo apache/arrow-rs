@@ -19,8 +19,6 @@
 
 use std::{ops::AddAssign, sync::Arc};
 
-use crate::array::BasicDecimalArray;
-
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::compute::util::{
     take_value_indices_from_fixed_size_list, take_value_indices_from_list,

@@ -16,7 +16,6 @@
 // under the License.
 
 use super::*;
-use crate::array::BasicDecimalArray;
 use crate::datatypes::*;
 use crate::util::decimal::BasicDecimal;
 use array::Array;

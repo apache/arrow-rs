@@ -34,13 +34,20 @@ use crate::datatypes::{
 use crate::error::{ArrowError, Result};
 use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
 
+pub struct GenericDecimalArray<T: BasicDecimal, const VALUE_LENGTH: i32> {
+    data: ArrayData,
+    value_data: RawPtrBox<u8>,
+    precision: usize,
+    scale: usize,
+}
+
 /// `DecimalArray` stores fixed width decimal numbers,
 /// with a fixed precision and scale.
 ///
 /// # Examples
 ///
 /// ```
-///    use arrow::array::{Array, BasicDecimalArray, DecimalArray};
+///    use arrow::array::{Array, DecimalArray};
 ///    use arrow::datatypes::DataType;
 ///
 ///    // Create a DecimalArray with the default precision and scale
@@ -68,41 +75,40 @@ use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
 ///    assert_eq!(6, decimal_array.scale());
 /// ```
 ///
-pub struct DecimalArray {
-    data: ArrayData,
-    value_data: RawPtrBox<u8>,
-    precision: usize,
-    scale: usize,
-}
+pub type DecimalArray = GenericDecimalArray<Decimal128, 16>;
+pub type Decimal256Array = GenericDecimalArray<Decimal256, 32>;
 
-pub struct Decimal256Array {
-    data: ArrayData,
-    value_data: RawPtrBox<u8>,
-    precision: usize,
-    scale: usize,
-}
-
-mod private_decimal {
-    pub trait DecimalArrayPrivate {
-        fn raw_value_data_ptr(&self) -> *const u8;
+impl<T: BasicDecimal, const VALUE_LENGTH: i32> GenericDecimalArray<T, VALUE_LENGTH> {
+    fn new(
+        data: ArrayData,
+        value_data: RawPtrBox<u8>,
+        precision: usize,
+        scale: usize,
+    ) -> Self {
+        Self {
+            data,
+            value_data,
+            precision,
+            scale,
+        }
     }
-}
 
-pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
-    private_decimal::DecimalArrayPrivate
-{
-    const VALUE_LENGTH: i32;
-
-    fn data(&self) -> &ArrayData;
+    pub fn data(&self) -> &ArrayData {
+        &self.data
+    }
 
     /// Return the precision (total digits) that can be stored by this array
-    fn precision(&self) -> usize;
+    pub fn precision(&self) -> usize {
+        self.precision
+    }
 
     /// Return the scale (digits after the decimal) that can be stored by this array
-    fn scale(&self) -> usize;
+    pub fn scale(&self) -> usize {
+        self.scale
+    }
 
     /// Returns the element at index `i`.
-    fn value(&self, i: usize) -> T {
+    pub fn value(&self, i: usize) -> T {
         let data = self.data();
         assert!(i < data.len(), "Out of bounds access");
 
@@ -110,8 +116,8 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
         let raw_val = unsafe {
             let pos = self.value_offset_at(offset);
             std::slice::from_raw_parts(
-                self.raw_value_data_ptr().offset(pos as isize),
-                Self::VALUE_LENGTH as usize,
+                self.value_data.as_ptr().offset(pos as isize),
+                VALUE_LENGTH as usize,
             )
         };
         T::new(self.precision(), self.scale(), raw_val)
@@ -121,7 +127,7 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     ///
     /// Note this doesn't do any bound checking, for performance reason.
     #[inline]
-    fn value_offset(&self, i: usize) -> i32 {
+    pub fn value_offset(&self, i: usize) -> i32 {
         self.value_offset_at(self.data().offset() + i)
     }
 
@@ -129,25 +135,27 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     ///
     /// All elements have the same length as the array is a fixed size.
     #[inline]
-    fn value_length(&self) -> i32 {
-        Self::VALUE_LENGTH
+    pub fn value_length(&self) -> i32 {
+        VALUE_LENGTH
     }
 
     /// Returns a clone of the value data buffer
-    fn value_data(&self) -> Buffer {
+    pub fn value_data(&self) -> Buffer {
         self.data().buffers()[0].clone()
     }
 
     #[inline]
-    fn value_offset_at(&self, i: usize) -> i32 {
-        Self::VALUE_LENGTH * i as i32
+    pub fn value_offset_at(&self, i: usize) -> i32 {
+        VALUE_LENGTH * i as i32
     }
 
     #[inline]
-    fn value_as_string(&self, row: usize) -> String {
+    pub fn value_as_string(&self, row: usize) -> String {
         self.value(row).to_string()
     }
+}
 
+pub trait FromFixedSizeList<U: From<ArrayData>> {
     fn from_fixed_size_list_array(
         v: FixedSizeListArray,
         precision: usize,
@@ -179,49 +187,8 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     }
 }
 
-impl private_decimal::DecimalArrayPrivate for DecimalArray {
-    fn raw_value_data_ptr(&self) -> *const u8 {
-        self.value_data.as_ptr()
-    }
-}
-
-impl private_decimal::DecimalArrayPrivate for Decimal256Array {
-    fn raw_value_data_ptr(&self) -> *const u8 {
-        self.value_data.as_ptr()
-    }
-}
-
-impl BasicDecimalArray<Decimal128, DecimalArray> for DecimalArray {
-    const VALUE_LENGTH: i32 = 16;
-
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
-    fn precision(&self) -> usize {
-        self.precision
-    }
-
-    fn scale(&self) -> usize {
-        self.scale
-    }
-}
-
-impl BasicDecimalArray<Decimal256, Decimal256Array> for Decimal256Array {
-    const VALUE_LENGTH: i32 = 32;
-
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
-    fn precision(&self) -> usize {
-        self.precision
-    }
-
-    fn scale(&self) -> usize {
-        self.scale
-    }
-}
+impl FromFixedSizeList<DecimalArray> for DecimalArray {}
+impl FromFixedSizeList<Decimal256Array> for Decimal256Array {}
 
 impl DecimalArray {
     /// Creates a [DecimalArray] with default precision and scale,
@@ -302,7 +269,9 @@ impl DecimalArray {
     }
 }
 
-impl From<ArrayData> for DecimalArray {
+impl<T: BasicDecimal, const VALUE_LENGTH: i32> From<ArrayData>
+    for GenericDecimalArray<T, VALUE_LENGTH>
+{
     fn from(data: ArrayData) -> Self {
         assert_eq!(
             data.buffers().len(),
@@ -314,33 +283,13 @@ impl From<ArrayData> for DecimalArray {
             DataType::Decimal(precision, scale) => (*precision, *scale),
             _ => panic!("Expected data type to be Decimal"),
         };
-        Self {
-            data,
-            value_data: unsafe { RawPtrBox::new(values) },
-            precision,
-            scale,
-        }
-    }
-}
 
-impl From<ArrayData> for Decimal256Array {
-    fn from(data: ArrayData) -> Self {
-        assert_eq!(
-            data.buffers().len(),
-            1,
-            "DecimalArray data should contain 1 buffer only (values)"
-        );
-        let values = data.buffers()[0].as_ptr();
-        let (precision, scale) = match data.data_type() {
-            DataType::Decimal(precision, scale) => (*precision, *scale),
-            _ => panic!("Expected data type to be Decimal"),
-        };
-        Self {
+        GenericDecimalArray::new(
             data,
-            value_data: unsafe { RawPtrBox::new(values) },
+            unsafe { RawPtrBox::new(values) },
             precision,
             scale,
-        }
+        )
     }
 }
 
