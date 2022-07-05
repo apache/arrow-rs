@@ -285,8 +285,10 @@ impl<T: BasicDecimal, const VALUE_LENGTH: i32> From<ArrayData>
     }
 }
 
-impl From<DecimalArray> for ArrayData {
-    fn from(array: DecimalArray) -> Self {
+impl<T: BasicDecimal + 'static, const VALUE_LENGTH: i32>
+    From<GenericDecimalArray<T, VALUE_LENGTH>> for ArrayData
+{
+    fn from(array: GenericDecimalArray<T, VALUE_LENGTH>) -> Self {
         array.data
     }
 }
@@ -372,6 +374,10 @@ impl<T: BasicDecimal + 'static, const VALUE_LENGTH: i32> Array
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 }
 
