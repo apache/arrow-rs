@@ -21,7 +21,7 @@ use crate::error::{ArrowError, Result};
 use num::bigint::BigInt;
 use std::cmp::{min, Ordering};
 
-pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
+pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq + Sync + Send {
     /// The bit-width of the internal representation.
     const BIT_WIDTH: usize;
 

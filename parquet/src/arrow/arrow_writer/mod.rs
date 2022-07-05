@@ -23,7 +23,6 @@ use std::sync::Arc;
 
 use arrow::array as arrow_array;
 use arrow::array::ArrayRef;
-use arrow::array::BasicDecimalArray;
 use arrow::datatypes::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::Array;

@@ -33,12 +33,14 @@ use crate::datatypes::{
 };
 use crate::error::{ArrowError, Result};
 use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
+use std::marker::PhantomData;
 
 pub struct GenericDecimalArray<T: BasicDecimal, const VALUE_LENGTH: i32> {
     data: ArrayData,
     value_data: RawPtrBox<u8>,
     precision: usize,
     scale: usize,
+    phantom: PhantomData<T>,
 }
 
 /// `DecimalArray` stores fixed width decimal numbers,
@@ -90,11 +92,8 @@ impl<T: BasicDecimal, const VALUE_LENGTH: i32> GenericDecimalArray<T, VALUE_LENG
             value_data,
             precision,
             scale,
+            phantom: PhantomData,
         }
-    }
-
-    pub fn data(&self) -> &ArrayData {
-        &self.data
     }
 
     /// Return the precision (total digits) that can be stored by this array
@@ -109,10 +108,8 @@ impl<T: BasicDecimal, const VALUE_LENGTH: i32> GenericDecimalArray<T, VALUE_LENG
 
     /// Returns the element at index `i`.
     pub fn value(&self, i: usize) -> T {
-        let data = self.data();
-        assert!(i < data.len(), "Out of bounds access");
-
-        let offset = i + data.offset();
+        assert!(i < self.data.len(), "DecimalArray out of bounds access");
+        let offset = i + self.data.offset();
         let raw_val = unsafe {
             let pos = self.value_offset_at(offset);
             std::slice::from_raw_parts(
@@ -128,24 +125,24 @@ impl<T: BasicDecimal, const VALUE_LENGTH: i32> GenericDecimalArray<T, VALUE_LENG
     /// Note this doesn't do any bound checking, for performance reason.
     #[inline]
     pub fn value_offset(&self, i: usize) -> i32 {
-        self.value_offset_at(self.data().offset() + i)
+        self.value_offset_at(self.data.offset() + i)
     }
 
     /// Returns the length for an element.
     ///
     /// All elements have the same length as the array is a fixed size.
     #[inline]
-    pub fn value_length(&self) -> i32 {
+    pub const fn value_length(&self) -> i32 {
         VALUE_LENGTH
     }
 
     /// Returns a clone of the value data buffer
     pub fn value_data(&self) -> Buffer {
-        self.data().buffers()[0].clone()
+        self.data.buffers()[0].clone()
     }
 
     #[inline]
-    pub fn value_offset_at(&self, i: usize) -> i32 {
+    fn value_offset_at(&self, i: usize) -> i32 {
         VALUE_LENGTH * i as i32
     }
 
@@ -153,14 +150,12 @@ impl<T: BasicDecimal, const VALUE_LENGTH: i32> GenericDecimalArray<T, VALUE_LENG
     pub fn value_as_string(&self, row: usize) -> String {
         self.value(row).to_string()
     }
-}
 
-pub trait FromFixedSizeList<U: From<ArrayData>> {
-    fn from_fixed_size_list_array(
+    pub fn from_fixed_size_list_array(
         v: FixedSizeListArray,
         precision: usize,
         scale: usize,
-    ) -> U {
+    ) -> Self {
         let child_data = &v.data_ref().child_data()[0];
         assert_eq!(
             child_data.child_data().len(),
@@ -183,12 +178,9 @@ pub trait FromFixedSizeList<U: From<ArrayData>> {
             .offset(list_offset);
 
         let array_data = unsafe { builder.build_unchecked() };
-        U::from(array_data)
+        Self::from(array_data)
     }
 }
-
-impl FromFixedSizeList<DecimalArray> for DecimalArray {}
-impl FromFixedSizeList<Decimal256Array> for Decimal256Array {}
 
 impl DecimalArray {
     /// Creates a [DecimalArray] with default precision and scale,
@@ -351,24 +343,16 @@ impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalArray {
     }
 }
 
-impl fmt::Debug for DecimalArray {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DecimalArray<{}, {}>\n[\n", self.precision, self.scale)?;
-        print_long_array(self, f, |array, index, f| {
-            let formatted_decimal = array.value_as_string(index);
-
-            write!(f, "{}", formatted_decimal)
-        })?;
-        write!(f, "]")
-    }
-}
-
-impl fmt::Debug for Decimal256Array {
+impl<T: BasicDecimal + 'static, const VALUE_LENGTH: i32> fmt::Debug
+    for GenericDecimalArray<T, VALUE_LENGTH>
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "Decimal256Array<{}, {}>\n[\n",
-            self.precision, self.scale
+            "Decimal{}Array<{}, {}>\n[\n",
+            VALUE_LENGTH * 8,
+            self.precision,
+            self.scale
         )?;
         print_long_array(self, f, |array, index, f| {
             let formatted_decimal = array.value_as_string(index);
@@ -379,21 +363,9 @@ impl fmt::Debug for Decimal256Array {
     }
 }
 
-impl Array for DecimalArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
-    fn into_data(self) -> ArrayData {
-        self.into()
-    }
-}
-
-impl Array for Decimal256Array {
+impl<T: BasicDecimal + 'static, const VALUE_LENGTH: i32> Array
+    for GenericDecimalArray<T, VALUE_LENGTH>
+{
     fn as_any(&self) -> &dyn Any {
         self
     }
