@@ -220,7 +220,7 @@ where
         self.consume_bitmap();
         self.reset();
 
-        let remaining = buffered_records - num_records;
+        let remaining = num_records - buffered_records;
 
         if remaining == 0 {
             return Ok(buffered_records);
