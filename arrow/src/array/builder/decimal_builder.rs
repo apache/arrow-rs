@@ -258,4 +258,42 @@ mod tests {
         assert_eq!(32, decimal_array.value_offset(2));
         assert_eq!(16, decimal_array.value_length());
     }
+
+    #[test]
+    fn test_decimal256_builder() {
+        let mut builder = Decimal256Builder::new(30, 40, 6);
+
+        let mut bytes = vec![0; 32];
+        bytes[0..16].clone_from_slice(&8_887_000_000_i128.to_le_bytes());
+        let value = Decimal256::try_new_from_bytes(40, 6, bytes.as_slice()).unwrap();
+        builder.append_value(&value).unwrap();
+
+        builder.append_null().unwrap();
+
+        bytes = vec![255; 32];
+        let value = Decimal256::try_new_from_bytes(40, 6, bytes.as_slice()).unwrap();
+        builder.append_value(&value).unwrap();
+
+        bytes = vec![0; 32];
+        bytes[0..16].clone_from_slice(&0_i128.to_le_bytes());
+        bytes[15] = 128;
+        let value = Decimal256::try_new_from_bytes(40, 6, bytes.as_slice()).unwrap();
+        builder.append_value(&value).unwrap();
+
+        let decimal_array: Decimal256Array = builder.finish();
+
+        assert_eq!(&DataType::Decimal(40, 6), decimal_array.data_type());
+        assert_eq!(4, decimal_array.len());
+        assert_eq!(1, decimal_array.null_count());
+        assert_eq!(64, decimal_array.value_offset(2));
+        assert_eq!(32, decimal_array.value_length());
+
+        assert_eq!(decimal_array.value(0).to_string(), "8887.000000");
+        assert!(decimal_array.is_null(1));
+        assert_eq!(decimal_array.value(2).to_string(), "-0.000001");
+        assert_eq!(
+            decimal_array.value(3).to_string(),
+            "170141183460469231731687303715884.105728"
+        );
+    }
 }
