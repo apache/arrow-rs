@@ -350,6 +350,12 @@ impl From<DecimalArray> for ArrayData {
     }
 }
 
+impl From<Decimal256Array> for ArrayData {
+    fn from(array: Decimal256Array) -> Self {
+        array.data
+    }
+}
+
 impl<'a> IntoIterator for &'a DecimalArray {
     type Item = Option<i128>;
     type IntoIter = DecimalIter<'a>;
@@ -451,6 +457,10 @@ impl Array for Decimal256Array {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 }
 
