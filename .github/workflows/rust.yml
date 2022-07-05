@@ -87,35 +87,6 @@ jobs:
           cargo run --example dynamic_types
           cargo run --example read_csv
           cargo run --example read_csv_infer_schema
-      - name: Test compilation of arrow library crate with different feature combinations
-        run: |
-          cargo check -p arrow
-          cargo check -p arrow --no-default-features
-      - name: Test compilation of arrow targets with different feature combinations
-        run: |
-          cargo check -p arrow --all-targets
-          cargo check -p arrow --no-default-features --all-targets
-          cargo check -p arrow --no-default-features --all-targets --features test_utils
-      - name: Re-run tests on arrow-flight with all features
-        run: |
-          cargo test -p arrow-flight --all-features
-      - name: Re-run tests on parquet crate with all features
-        run: |
-          cargo test -p parquet --all-features
-      - name: Test compilation of parquet library crate with different feature combinations
-        run: |
-          cargo check -p parquet
-          cargo check -p parquet --no-default-features
-          cargo check -p parquet --no-default-features --features arrow
-          cargo check -p parquet --all-features
-      - name: Test compilation of parquet targets with different feature combinations
-        run: |
-          cargo check -p parquet --all-targets
-          cargo check -p parquet --no-default-features --all-targets
-          cargo check -p parquet --no-default-features --features arrow --all-targets
-      - name: Test compilation of parquet_derive macro with different feature combinations
-        run: |
-          cargo check -p parquet_derive
 
   # test the --features "simd" of the arrow crate. This requires nightly.
   linux-test-simd:
@@ -143,10 +114,32 @@ jobs:
       - name: Run tests
         run: |
           cargo test -p arrow --features "simd"
-      - name: Check compilation with simd features
-        run: |
-          cargo check -p arrow --features simd
-          cargo check -p arrow --features simd --all-targets
+
+  check-features:
+    name: Test feature combinations on AMD64 Rust ${{ matrix.rust }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [ amd64 ]
+        rust: [ nightly ]
+    container:
+      image: ${{ matrix.arch }}/rust
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
+      - name: Install cargo hack
+        run: cargo install cargo-hack
+      - name: Check feature powerset
+        run: cargo hack check --feature-powerset --workspace
 
   windows-and-macos:
     name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
