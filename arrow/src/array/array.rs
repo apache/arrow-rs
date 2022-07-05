@@ -60,6 +60,9 @@ pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
     /// Returns a reference to the underlying data of this array.
     fn data(&self) -> &ArrayData;
 
+    /// Returns the underlying data of this array.
+    fn into_data(self) -> ArrayData;
+
     /// Returns a reference-counted pointer to the underlying data of this array.
     fn data_ref(&self) -> &ArrayData {
         self.data()
@@ -237,6 +240,10 @@ impl Array for ArrayRef {
         self.as_ref().data()
     }
 
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
+
     fn data_ref(&self) -> &ArrayData {
         self.as_ref().data_ref()
     }
@@ -407,6 +414,12 @@ impl From<ArrayData> for ArrayRef {
     }
 }
 
+impl From<ArrayRef> for ArrayData {
+    fn from(array: ArrayRef) -> Self {
+        array.data().clone()
+    }
+}
+
 /// Creates a new empty array
 ///
 /// ```
@@ -550,7 +563,7 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                     keys.null_buffer().cloned(),
                     0,
                     keys.buffers().into(),
-                    vec![new_empty_array(value.as_ref()).data().clone()],
+                    vec![new_empty_array(value.as_ref()).into_data()],
                 )
             })
         }

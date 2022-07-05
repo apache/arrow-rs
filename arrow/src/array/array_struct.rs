@@ -118,6 +118,12 @@ impl From<ArrayData> for StructArray {
     }
 }
 
+impl From<StructArray> for ArrayData {
+    fn from(array: StructArray) -> Self {
+        array.data
+    }
+}
+
 impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
     type Error = ArrowError;
 
@@ -196,6 +202,10 @@ impl Array for StructArray {
         &self.data
     }
 
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
+
     /// Returns the length (i.e., number of elements) of this array
     fn len(&self) -> usize {
         self.data_ref().len()
@@ -222,7 +232,7 @@ impl From<Vec<(Field, ArrayRef)>> for StructArray {
         }
 
         let array_data = ArrayData::builder(DataType::Struct(field_types))
-            .child_data(field_values.into_iter().map(|a| a.data().clone()).collect())
+            .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
             .len(length);
         let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)
@@ -269,7 +279,7 @@ impl From<(Vec<(Field, ArrayRef)>, Buffer)> for StructArray {
 
         let array_data = ArrayData::builder(DataType::Struct(field_types))
             .null_bit_buffer(Some(pair.1))
-            .child_data(field_values.into_iter().map(|a| a.data().clone()).collect())
+            .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
             .len(length);
         let array_data = unsafe { array_data.build_unchecked() };
         Self::from(array_data)

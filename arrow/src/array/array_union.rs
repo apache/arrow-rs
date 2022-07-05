@@ -158,7 +158,7 @@ impl UnionArray {
             mode,
         ))
         .add_buffer(type_ids)
-        .child_data(field_values.into_iter().map(|a| a.data().clone()).collect())
+        .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
         .len(len);
 
         let data = match value_offsets {
@@ -303,6 +303,12 @@ impl From<ArrayData> for UnionArray {
     }
 }
 
+impl From<UnionArray> for ArrayData {
+    fn from(array: UnionArray) -> Self {
+        array.data
+    }
+}
+
 impl Array for UnionArray {
     fn as_any(&self) -> &dyn Any {
         self
@@ -310,6 +316,10 @@ impl Array for UnionArray {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 
     /// Union types always return non null as there is no validity buffer.

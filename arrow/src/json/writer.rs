@@ -1118,7 +1118,7 @@ mod tests {
         let a_list_data = ArrayData::builder(field_c1.data_type().clone())
             .len(5)
             .add_buffer(a_value_offsets)
-            .add_child_data(a_values.data().clone())
+            .add_child_data(a_values.into_data())
             .null_bit_buffer(Some(Buffer::from(vec![0b00011111])))
             .build()
             .unwrap();
@@ -1171,7 +1171,7 @@ mod tests {
             .len(3)
             .add_buffer(a_value_offsets)
             .null_bit_buffer(Some(Buffer::from(vec![0b00000111])))
-            .add_child_data(a_values.data().clone())
+            .add_child_data(a_values.into_data())
             .build()
             .unwrap();
 
@@ -1253,7 +1253,7 @@ mod tests {
         let c1_list_data = ArrayData::builder(field_c1.data_type().clone())
             .len(3)
             .add_buffer(c1_value_offsets)
-            .add_child_data(struct_values.data().clone())
+            .add_child_data(struct_values.into_data())
             .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
             .build()
             .unwrap();
@@ -1438,7 +1438,7 @@ mod tests {
             .len(6)
             .null_bit_buffer(Some(valid_buffer))
             .add_buffer(entry_offsets)
-            .add_child_data(entry_struct.data().clone())
+            .add_child_data(entry_struct.into_data())
             .build()
             .unwrap();
 

@@ -21,7 +21,7 @@ use crate::arrow::record_reader::buffer::{
 };
 use crate::column::reader::decoder::ValuesBufferSlice;
 use crate::errors::{ParquetError, Result};
-use arrow::array::{make_array, ArrayDataBuilder, ArrayRef, OffsetSizeTrait};
+use arrow::array::{make_array, Array, ArrayDataBuilder, ArrayRef, OffsetSizeTrait};
 use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
 use std::sync::Arc;
@@ -161,7 +161,7 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                 let builder = ArrayDataBuilder::new(data_type.clone())
                     .len(keys.len())
                     .add_buffer(keys.into())
-                    .add_child_data(values.data().clone())
+                    .add_child_data(values.into_data())
                     .null_bit_buffer(null_buffer);
 
                 let data = match cfg!(debug_assertions) {

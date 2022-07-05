@@ -151,6 +151,10 @@ impl Array for BooleanArray {
     fn data(&self) -> &ArrayData {
         &self.data
     }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
 }
 
 impl From<Vec<bool>> for BooleanArray {
@@ -191,6 +195,12 @@ impl From<ArrayData> for BooleanArray {
             data,
             raw_values: unsafe { RawPtrBox::new(ptr) },
         }
+    }
+}
+
+impl From<BooleanArray> for ArrayData {
+    fn from(array: BooleanArray) -> Self {
+        array.data
     }
 }
 

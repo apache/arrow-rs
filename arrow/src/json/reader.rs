@@ -1031,7 +1031,7 @@ impl Decoder {
         });
         let valid_len = cur_offset.to_usize().unwrap();
         let array_data = match list_field.data_type() {
-            DataType::Null => NullArray::new(valid_len).data().clone(),
+            DataType::Null => NullArray::new(valid_len).into_data(),
             DataType::Boolean => {
                 let num_bytes = bit_util::ceil(valid_len, 8);
                 let mut bool_values = MutableBuffer::from_len_zeroed(num_bytes);
@@ -1103,12 +1103,12 @@ impl Decoder {
             DataType::List(field) => {
                 let child = self
                     .build_nested_list_array::<i32>(&flatten_json_values(rows), field)?;
-                child.data().clone()
+                child.into_data()
             }
             DataType::LargeList(field) => {
                 let child = self
                     .build_nested_list_array::<i64>(&flatten_json_values(rows), field)?;
-                child.data().clone()
+                child.into_data()
             }
             DataType::Struct(fields) => {
                 // extract list values, with non-lists converted to Value::Null
@@ -1144,9 +1144,7 @@ impl Decoder {
                     ArrayDataBuilder::new(data_type)
                         .len(rows.len())
                         .null_bit_buffer(Some(buf))
-                        .child_data(
-                            arrays.into_iter().map(|a| a.data().clone()).collect(),
-                        )
+                        .child_data(arrays.into_iter().map(|a| a.into_data()).collect())
                         .build_unchecked()
                 }
             }
@@ -1353,7 +1351,7 @@ impl Decoder {
                             .len(len)
                             .null_bit_buffer(Some(null_buffer.into()))
                             .child_data(
-                                arrays.into_iter().map(|a| a.data().clone()).collect(),
+                                arrays.into_iter().map(|a| a.into_data()).collect(),
                             );
                         let data = unsafe { data.build_unchecked() };
                         Ok(make_array(data))
@@ -1463,7 +1461,7 @@ impl Decoder {
                     vec![],
                     struct_children
                         .into_iter()
-                        .map(|array| array.data().clone())
+                        .map(|array| array.into_data())
                         .collect(),
                 )],
             )))
@@ -1525,7 +1523,7 @@ impl Decoder {
             })
             .collect::<Vec<Option<T::Native>>>();
         let array = values.iter().collect::<PrimitiveArray<T>>();
-        array.data().clone()
+        array.into_data()
     }
 }
 
@@ -2233,14 +2231,14 @@ mod tests {
         let d = StringArray::from(vec![Some("text"), None, Some("text"), None]);
         let c = ArrayDataBuilder::new(c_field.data_type().clone())
             .len(4)
-            .add_child_data(d.data().clone())
+            .add_child_data(d.into_data())
             .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
             .build()
             .unwrap();
         let b = BooleanArray::from(vec![Some(true), Some(false), Some(true), None]);
         let a = ArrayDataBuilder::new(a_field.data_type().clone())
             .len(4)
-            .add_child_data(b.data().clone())
+            .add_child_data(b.into_data())
             .add_child_data(c)
             .null_bit_buffer(Some(Buffer::from(vec![0b00000111])))
             .build()

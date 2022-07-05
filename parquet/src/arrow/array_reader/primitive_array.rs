@@ -148,7 +148,7 @@ where
         // Convert to arrays by using the Parquet physical type.
         // The physical types are then cast to Arrow types if necessary
 
-        let mut record_data = self.record_reader.consume_record_data()?;
+        let mut record_data = self.record_reader.consume_record_data();
 
         if T::get_physical_type() == PhysicalType::BOOLEAN {
             let mut boolean_buffer = BooleanBufferBuilder::new(record_data.len());
@@ -162,7 +162,7 @@ where
         let array_data = ArrayDataBuilder::new(arrow_data_type)
             .len(self.record_reader.num_values())
             .add_buffer(record_data)
-            .null_bit_buffer(self.record_reader.consume_bitmap_buffer()?);
+            .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
 
         let array_data = unsafe { array_data.build_unchecked() };
         let array = match T::get_physical_type() {
@@ -227,8 +227,8 @@ where
         };
 
         // save definition and repetition buffers
-        self.def_levels_buffer = self.record_reader.consume_def_levels()?;
-        self.rep_levels_buffer = self.record_reader.consume_rep_levels()?;
+        self.def_levels_buffer = self.record_reader.consume_def_levels();
+        self.rep_levels_buffer = self.record_reader.consume_rep_levels();
         self.record_reader.reset();
         Ok(array)
     }

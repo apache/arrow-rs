@@ -977,7 +977,7 @@ mod tests {
                 builder.append_null().unwrap()
             }
         }
-        builder.finish().data().clone()
+        builder.finish().into_data()
     }
 
     #[test]
@@ -1235,7 +1235,7 @@ mod tests {
             None,
             0,
             vec![list_value_offsets],
-            vec![expected_int_array.data().clone()],
+            vec![expected_int_array.into_data()],
         )
         .unwrap();
         assert_eq!(finished, expected_list_data);
@@ -1316,7 +1316,7 @@ mod tests {
             Some(Buffer::from(&[0b11011011, 0b1110])),
             0,
             vec![list_value_offsets],
-            vec![expected_int_array.data().clone()],
+            vec![expected_int_array.into_data()],
         )
         .unwrap();
         assert_eq!(result, expected_list_data);
@@ -1500,7 +1500,7 @@ mod tests {
             Some(Buffer::from(&[0b11011011, 0b1110])),
             0,
             vec![map_offsets],
-            vec![expected_entry_array.data().clone()],
+            vec![expected_entry_array.into_data()],
         )
         .unwrap();
         assert_eq!(result, expected_list_data);
@@ -1571,7 +1571,7 @@ mod tests {
             None,
             0,
             vec![list_value_offsets],
-            vec![expected_string_array.data().clone()],
+            vec![expected_string_array.into_data()],
         )
         .unwrap();
         assert_eq!(result, expected_list_data);
