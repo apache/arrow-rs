@@ -179,18 +179,6 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     }
 }
 
-impl private_decimal::DecimalArrayPrivate for DecimalArray {
-    fn raw_value_data_ptr(&self) -> *const u8 {
-        self.value_data.as_ptr()
-    }
-}
-
-impl private_decimal::DecimalArrayPrivate for Decimal256Array {
-    fn raw_value_data_ptr(&self) -> *const u8 {
-        self.value_data.as_ptr()
-    }
-}
-
 impl BasicDecimalArray<Decimal128, DecimalArray> for DecimalArray {
     const VALUE_LENGTH: i32 = 16;
 
@@ -344,18 +332,6 @@ impl From<ArrayData> for Decimal256Array {
     }
 }
 
-impl From<DecimalArray> for ArrayData {
-    fn from(array: DecimalArray) -> Self {
-        array.data
-    }
-}
-
-impl From<Decimal256Array> for ArrayData {
-    fn from(array: Decimal256Array) -> Self {
-        array.data
-    }
-}
-
 impl<'a> IntoIterator for &'a DecimalArray {
     type Item = Option<i128>;
     type IntoIter = DecimalIter<'a>;
@@ -408,61 +384,54 @@ impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalArray {
     }
 }
 
-impl fmt::Debug for DecimalArray {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DecimalArray<{}, {}>\n[\n", self.precision, self.scale)?;
-        print_long_array(self, f, |array, index, f| {
-            let formatted_decimal = array.value_as_string(index);
+macro_rules! def_decimal_array {
+    ($ty:ident, $array_name:expr) => {
+        impl private_decimal::DecimalArrayPrivate for $ty {
+            fn raw_value_data_ptr(&self) -> *const u8 {
+                self.value_data.as_ptr()
+            }
+        }
 
-            write!(f, "{}", formatted_decimal)
-        })?;
-        write!(f, "]")
-    }
+        impl Array for $ty {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn data(&self) -> &ArrayData {
+                &self.data
+            }
+
+            fn into_data(self) -> ArrayData {
+                self.into()
+            }
+        }
+
+        impl From<$ty> for ArrayData {
+            fn from(array: $ty) -> Self {
+                array.data
+            }
+        }
+
+        impl fmt::Debug for $ty {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(
+                    f,
+                    "{}<{}, {}>\n[\n",
+                    $array_name, self.precision, self.scale
+                )?;
+                print_long_array(self, f, |array, index, f| {
+                    let formatted_decimal = array.value_as_string(index);
+
+                    write!(f, "{}", formatted_decimal)
+                })?;
+                write!(f, "]")
+            }
+        }
+    };
 }
 
-impl fmt::Debug for Decimal256Array {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Decimal256Array<{}, {}>\n[\n",
-            self.precision, self.scale
-        )?;
-        print_long_array(self, f, |array, index, f| {
-            let formatted_decimal = array.value_as_string(index);
-
-            write!(f, "{}", formatted_decimal)
-        })?;
-        write!(f, "]")
-    }
-}
-
-impl Array for DecimalArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
-    fn into_data(self) -> ArrayData {
-        self.into()
-    }
-}
-
-impl Array for Decimal256Array {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
-    fn into_data(self) -> ArrayData {
-        self.into()
-    }
-}
+def_decimal_array!(DecimalArray, "DecimalArray");
+def_decimal_array!(Decimal256Array, "Decimal256Array");
 
 #[cfg(test)]
 mod tests {
