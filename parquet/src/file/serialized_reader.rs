@@ -248,13 +248,17 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
         }
 
         if options.enable_page_index {
-            //Todo for now test data `data_index_bloom_encoding_stats.parquet` only have one rowgroup
-            //support multi after create multi-RG test data.
-            let cols = metadata.row_group(0);
-            let columns_indexes =
-                index_reader::read_columns_indexes(&chunk_reader, cols.columns())?;
-            let pages_locations =
-                index_reader::read_pages_locations(&chunk_reader, cols.columns())?;
+            let mut columns_indexes = vec![];
+            let mut offset_indexes = vec![];
+
+            for rg in &filtered_row_groups {
+                let column_index =
+                    index_reader::read_columns_indexes(&chunk_reader, rg.columns())?;
+                let offset_index =
+                    index_reader::read_pages_locations(&chunk_reader, rg.columns())?;
+                columns_indexes.push(column_index);
+                offset_indexes.push(offset_index);
+            }
 
             Ok(Self {
                 chunk_reader: Arc::new(chunk_reader),
@@ -262,7 +266,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
                     metadata.file_metadata().clone(),
                     filtered_row_groups,
                     Some(columns_indexes),
-                    Some(pages_locations),
+                    Some(offset_indexes),
                 ),
             })
         } else {
@@ -561,10 +565,13 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
 mod tests {
     use super::*;
     use crate::basic::{self, ColumnOrder};
-    use crate::file::page_index::index::Index;
+    use crate::data_type::private::ParquetValueType;
+    use crate::file::page_index::index::{ByteArrayIndex, Index, NativeIndex};
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
+    use crate::util::bit_util::from_le_slice;
     use crate::util::test_common::{get_test_file, get_test_path};
+    use arrow::datatypes::ToByteSlice;
     use parquet_format::BoundaryOrder;
     use std::sync::Arc;
 
@@ -1077,7 +1084,7 @@ mod tests {
 
         // only one row group
         assert_eq!(page_indexes.len(), 1);
-        let index = if let Index::BYTE_ARRAY(index) = page_indexes.get(0).unwrap() {
+        let index = if let Index::BYTE_ARRAY(index) = &page_indexes[0][0] {
             index
         } else {
             unreachable!()
@@ -1089,7 +1096,7 @@ mod tests {
         //only one page group
         assert_eq!(index_in_pages.len(), 1);
 
-        let page0 = index_in_pages.get(0).unwrap();
+        let page0 = &index_in_pages[0];
         let min = page0.min.as_ref().unwrap();
         let max = page0.max.as_ref().unwrap();
         assert_eq!("Hello", std::str::from_utf8(min.as_slice()).unwrap());
@@ -1098,11 +1105,292 @@ mod tests {
         let offset_indexes = metadata.offset_indexes().unwrap();
         // only one row group
         assert_eq!(offset_indexes.len(), 1);
-        let offset_index = offset_indexes.get(0).unwrap();
-        let page_offset = offset_index.get(0).unwrap();
+        let offset_index = &offset_indexes[0];
+        let page_offset = &offset_index[0][0];
 
         assert_eq!(4, page_offset.offset);
         assert_eq!(152, page_offset.compressed_page_size);
         assert_eq!(0, page_offset.first_row_index);
+    }
+
+    #[test]
+    fn test_page_index_reader_all_type() {
+        let test_file = get_test_file("alltypes_tiny_pages_plain.parquet");
+        let builder = ReadOptionsBuilder::new();
+        //enable read page index
+        let options = builder.with_page_index().build();
+        let reader_result = SerializedFileReader::new_with_options(test_file, options);
+        let reader = reader_result.unwrap();
+
+        // Test contents in Parquet metadata
+        let metadata = reader.metadata();
+        assert_eq!(metadata.num_row_groups(), 1);
+
+        let page_indexes = metadata.page_indexes().unwrap();
+        let row_group_offset_indexes = &metadata.offset_indexes().unwrap()[0];
+
+        // only one row group
+        assert_eq!(page_indexes.len(), 1);
+        let row_group_metadata = metadata.row_group(0);
+
+        //col0->id: INT32 UNCOMPRESSED DO:0 FPO:4 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 7299, num_nulls: 0]
+        if let Index::INT32(index) = &page_indexes[0][0] {
+            check_native_page_index(
+                index,
+                325,
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .min_bytes(),
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .max_bytes(),
+                BoundaryOrder::Unordered,
+            );
+            assert_eq!(row_group_offset_indexes[0].len(), 325);
+        } else {
+            unreachable!()
+        };
+        //col1->bool_col:BOOLEAN UNCOMPRESSED DO:0 FPO:37329 SZ:3022/3022/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: false, max: true, num_nulls: 0]
+        if let Index::BOOLEAN(index) = &page_indexes[0][1] {
+            assert_eq!(index.indexes.len(), 82);
+            assert_eq!(row_group_offset_indexes[1].len(), 82);
+        } else {
+            unreachable!()
+        };
+        //col2->tinyint_col: INT32 UNCOMPRESSED DO:0 FPO:40351 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        if let Index::INT32(index) = &page_indexes[0][2] {
+            check_native_page_index(
+                index,
+                325,
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .min_bytes(),
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .max_bytes(),
+                BoundaryOrder::Ascending,
+            );
+            assert_eq!(row_group_offset_indexes[2].len(), 325);
+        } else {
+            unreachable!()
+        };
+        //col4->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        if let Index::INT32(index) = &page_indexes[0][3] {
+            check_native_page_index(
+                index,
+                325,
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .min_bytes(),
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .max_bytes(),
+                BoundaryOrder::Ascending,
+            );
+            assert_eq!(row_group_offset_indexes[3].len(), 325);
+        } else {
+            unreachable!()
+        };
+        //col5->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        if let Index::INT32(index) = &page_indexes[0][4] {
+            check_native_page_index(
+                index,
+                325,
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .min_bytes(),
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .max_bytes(),
+                BoundaryOrder::Ascending,
+            );
+            assert_eq!(row_group_offset_indexes[4].len(), 325);
+        } else {
+            unreachable!()
+        };
+        //col6->bigint_col: INT64 UNCOMPRESSED DO:0 FPO:152326 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 90, num_nulls: 0]
+        if let Index::INT64(index) = &page_indexes[0][5] {
+            //Todo row_group_metadata.column(0).statistics().unwrap().min_bytes() only return 4 bytes
+            check_native_page_index(
+                index,
+                528,
+                0_i64.to_byte_slice(),
+                100_i64.to_byte_slice(),
+                BoundaryOrder::Unordered,
+            );
+            assert_eq!(row_group_offset_indexes[5].len(), 528);
+        } else {
+            unreachable!()
+        };
+        //col7->float_col: FLOAT UNCOMPRESSED DO:0 FPO:223924 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 9.9, num_nulls: 0]
+        if let Index::FLOAT(index) = &page_indexes[0][6] {
+            check_native_page_index(
+                index,
+                325,
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .min_bytes(),
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .max_bytes(),
+                BoundaryOrder::Ascending,
+            );
+            assert_eq!(row_group_offset_indexes[6].len(), 325);
+        } else {
+            unreachable!()
+        };
+        //col8->double_col: DOUBLE UNCOMPRESSED DO:0 FPO:261249 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 90.89999999999999, num_nulls: 0]
+        if let Index::DOUBLE(index) = &page_indexes[0][7] {
+            check_native_page_index(
+                index,
+                528,
+                0_i64.to_byte_slice(),
+                100_i64.to_byte_slice(),
+                BoundaryOrder::Unordered,
+            );
+            assert_eq!(row_group_offset_indexes[7].len(), 528);
+        } else {
+            unreachable!()
+        };
+        //col9->date_string_col: BINARY UNCOMPRESSED DO:0 FPO:332847 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 01/01/09, max: 12/31/10, num_nulls: 0]
+        if let Index::BYTE_ARRAY(index) = &page_indexes[0][8] {
+            check_bytes_page_index(
+                index,
+                974,
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .min_bytes(),
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .max_bytes(),
+                BoundaryOrder::Unordered,
+            );
+            assert_eq!(row_group_offset_indexes[8].len(), 974);
+        } else {
+            unreachable!()
+        };
+        //col10->string_col: BINARY UNCOMPRESSED DO:0 FPO:444795 SZ:45298/45298/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
+        if let Index::BYTE_ARRAY(index) = &page_indexes[0][9] {
+            check_bytes_page_index(
+                index,
+                352,
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .min_bytes(),
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .max_bytes(),
+                BoundaryOrder::Ascending,
+            );
+            assert_eq!(row_group_offset_indexes[9].len(), 352);
+        } else {
+            unreachable!()
+        };
+        //col11->timestamp_col: INT96 UNCOMPRESSED DO:0 FPO:490093 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[num_nulls: 0, min/max not defined]
+        if let Index::EMPTY_ARRAY() = &page_indexes[0][10] {
+            assert_eq!(row_group_offset_indexes[10].len(), 974);
+        } else {
+            unreachable!()
+        };
+        //col12->year: INT32 UNCOMPRESSED DO:0 FPO:602041 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 2009, max: 2010, num_nulls: 0]
+        if let Index::INT32(index) = &page_indexes[0][11] {
+            check_native_page_index(
+                index,
+                325,
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .min_bytes(),
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .max_bytes(),
+                BoundaryOrder::Ascending,
+            );
+            assert_eq!(row_group_offset_indexes[11].len(), 325);
+        } else {
+            unreachable!()
+        };
+        //col13->month: INT32 UNCOMPRESSED DO:0 FPO:639366 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 1, max: 12, num_nulls: 0]
+        if let Index::INT32(index) = &page_indexes[0][12] {
+            check_native_page_index(
+                index,
+                325,
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .min_bytes(),
+                row_group_metadata
+                    .column(0)
+                    .statistics()
+                    .unwrap()
+                    .max_bytes(),
+                BoundaryOrder::Unordered,
+            );
+            assert_eq!(row_group_offset_indexes[12].len(), 325);
+        } else {
+            unreachable!()
+        };
+    }
+
+    fn check_native_page_index<T: ParquetValueType>(
+        row_group_index: &NativeIndex<T>,
+        page_size: usize,
+        min_value: &[u8],
+        max_value: &[u8],
+        boundary_order: BoundaryOrder,
+    ) {
+        assert_eq!(row_group_index.indexes.len(), page_size);
+        assert_eq!(row_group_index.boundary_order, boundary_order);
+        row_group_index.indexes.iter().all(|x| {
+            x.min.as_ref().unwrap() >= &from_le_slice::<T>(min_value)
+                && x.max.as_ref().unwrap() <= &from_le_slice::<T>(max_value)
+        });
+    }
+
+    fn check_bytes_page_index(
+        row_group_index: &ByteArrayIndex,
+        page_size: usize,
+        min_value: &[u8],
+        max_value: &[u8],
+        boundary_order: BoundaryOrder,
+    ) {
+        assert_eq!(row_group_index.indexes.len(), page_size);
+        assert_eq!(row_group_index.boundary_order, boundary_order);
+        row_group_index.indexes.iter().all(|x| {
+            x.min.as_ref().unwrap().as_slice() >= min_value
+                && x.max.as_ref().unwrap().as_slice() <= max_value
+        });
     }
 }
