@@ -173,7 +173,6 @@ mod tests {
     )]
     fn test_fixed_size_binary_builder_with_inconsistent_value_length() {
         let mut builder = FixedSizeBinaryBuilder::new(15, 4);
-        //  [b"hello", null, "arrow"]
         builder.append_value(b"hello").unwrap();
     }
     #[test]
