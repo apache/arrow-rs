@@ -134,6 +134,23 @@ pub trait RowAccessor {
 }
 
 /// Trait for formating fields within a Row.
+///
+/// # Examples
+///
+/// ```
+/// use std::fs::File;
+/// use std::path::Path;
+/// use parquet::record::Row;
+/// use parquet::record::RowFormatter;
+/// use parquet::file::reader::{FileReader, SerializedFileReader};
+///
+/// if let Ok(file) = File::open(&Path::new("test.parquet")) {
+///     let reader = SerializedFileReader::new(file).unwrap();
+///     let row = reader.get_row_iter(None).unwrap().next().unwrap();
+///     println!("column 0: {}, column 1: {}", row.fmt(0), row.fmt(1));
+/// }
+/// ```
+///
 pub trait RowFormatter {
     fn fmt(&self, i: usize) -> &dyn fmt::Display;
 }
