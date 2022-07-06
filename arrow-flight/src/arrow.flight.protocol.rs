@@ -217,20 +217,20 @@ pub mod flight_service_client {
     impl FlightServiceClient<tonic::transport::Channel> {
         /// Attempt to create a new client by connecting to a given endpoint.
         pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
-        where
-            D: std::convert::TryInto<tonic::transport::Endpoint>,
-            D::Error: Into<StdError>,
+            where
+                D: std::convert::TryInto<tonic::transport::Endpoint>,
+                D::Error: Into<StdError>,
         {
             let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
             Ok(Self::new(conn))
         }
     }
     impl<T> FlightServiceClient<T>
-    where
-        T: tonic::client::GrpcService<tonic::body::BoxBody>,
-        T::Error: Into<StdError>,
-        T::ResponseBody: Default + Body<Data = Bytes> + Send + 'static,
-        <T::ResponseBody as Body>::Error: Into<StdError> + Send,
+        where
+            T: tonic::client::GrpcService<tonic::body::BoxBody>,
+            T::Error: Into<StdError>,
+            T::ResponseBody: Body<Data = Bytes> + Send + 'static,
+            <T::ResponseBody as Body>::Error: Into<StdError> + Send,
     {
         pub fn new(inner: T) -> Self {
             let inner = tonic::client::Grpc::new(inner);
@@ -240,17 +240,18 @@ pub mod flight_service_client {
             inner: T,
             interceptor: F,
         ) -> FlightServiceClient<InterceptedService<T, F>>
-        where
-            F: tonic::service::Interceptor,
-            T: tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-                Response = http::Response<
-                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+            where
+                F: tonic::service::Interceptor,
+                T::ResponseBody: Default,
+                T: tonic::codegen::Service<
+                    http::Request<tonic::body::BoxBody>,
+                    Response = http::Response<
+                        <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                    >,
                 >,
-            >,
-            <T as tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-            >>::Error: Into<StdError> + Send + Sync,
+                <T as tonic::codegen::Service<
+                    http::Request<tonic::body::BoxBody>,
+                >>::Error: Into<StdError> + Send + Sync,
         {
             FlightServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -278,9 +279,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::HandshakeRequest>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::HandshakeResponse>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::HandshakeResponse>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -307,9 +308,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Criteria>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::FlightInfo>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::FlightInfo>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -388,9 +389,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Ticket>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::FlightData>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::FlightData>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -417,9 +418,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::FlightData>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::PutResult>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::PutResult>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -445,9 +446,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::FlightData>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::FlightData>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::FlightData>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -474,9 +475,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Action>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::Result>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::Result>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -500,9 +501,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Empty>,
         ) -> Result<
-                tonic::Response<tonic::codec::Streaming<super::ActionType>>,
-                tonic::Status,
-            > {
+            tonic::Response<tonic::codec::Streaming<super::ActionType>>,
+            tonic::Status,
+        > {
             self.inner
                 .ready()
                 .await
@@ -529,10 +530,10 @@ pub mod flight_service_server {
     pub trait FlightService: Send + Sync + 'static {
         ///Server streaming response type for the Handshake method.
         type HandshakeStream: futures_core::Stream<
-                Item = Result<super::HandshakeResponse, tonic::Status>,
-            >
-            + Send
-            + 'static;
+            Item = Result<super::HandshakeResponse, tonic::Status>,
+        >
+        + Send
+        + 'static;
         ///
         /// Handshake between client and server. Depending on the server, the
         /// handshake may be required to determine the token that should be used for
@@ -544,10 +545,10 @@ pub mod flight_service_server {
         ) -> Result<tonic::Response<Self::HandshakeStream>, tonic::Status>;
         ///Server streaming response type for the ListFlights method.
         type ListFlightsStream: futures_core::Stream<
-                Item = Result<super::FlightInfo, tonic::Status>,
-            >
-            + Send
-            + 'static;
+            Item = Result<super::FlightInfo, tonic::Status>,
+        >
+        + Send
+        + 'static;
         ///
         /// Get a list of available streams given a particular criteria. Most flight
         /// services will expose one or more streams that are readily available for
@@ -585,10 +586,10 @@ pub mod flight_service_server {
         ) -> Result<tonic::Response<super::SchemaResult>, tonic::Status>;
         ///Server streaming response type for the DoGet method.
         type DoGetStream: futures_core::Stream<
-                Item = Result<super::FlightData, tonic::Status>,
-            >
-            + Send
-            + 'static;
+            Item = Result<super::FlightData, tonic::Status>,
+        >
+        + Send
+        + 'static;
         ///
         /// Retrieve a single stream associated with a particular descriptor
         /// associated with the referenced ticket. A Flight can be composed of one or
@@ -600,10 +601,10 @@ pub mod flight_service_server {
         ) -> Result<tonic::Response<Self::DoGetStream>, tonic::Status>;
         ///Server streaming response type for the DoPut method.
         type DoPutStream: futures_core::Stream<
-                Item = Result<super::PutResult, tonic::Status>,
-            >
-            + Send
-            + 'static;
+            Item = Result<super::PutResult, tonic::Status>,
+        >
+        + Send
+        + 'static;
         ///
         /// Push a stream to the flight service associated with a particular
         /// flight stream. This allows a client of a flight service to upload a stream
@@ -617,10 +618,10 @@ pub mod flight_service_server {
         ) -> Result<tonic::Response<Self::DoPutStream>, tonic::Status>;
         ///Server streaming response type for the DoExchange method.
         type DoExchangeStream: futures_core::Stream<
-                Item = Result<super::FlightData, tonic::Status>,
-            >
-            + Send
-            + 'static;
+            Item = Result<super::FlightData, tonic::Status>,
+        >
+        + Send
+        + 'static;
         ///
         /// Open a bidirectional data channel for a given descriptor. This
         /// allows clients to send and receive arbitrary Arrow data and
@@ -633,10 +634,10 @@ pub mod flight_service_server {
         ) -> Result<tonic::Response<Self::DoExchangeStream>, tonic::Status>;
         ///Server streaming response type for the DoAction method.
         type DoActionStream: futures_core::Stream<
-                Item = Result<super::Result, tonic::Status>,
-            >
-            + Send
-            + 'static;
+            Item = Result<super::Result, tonic::Status>,
+        >
+        + Send
+        + 'static;
         ///
         /// Flight services can support an arbitrary number of simple actions in
         /// addition to the possible ListFlights, GetFlightInfo, DoGet, DoPut
@@ -650,10 +651,10 @@ pub mod flight_service_server {
         ) -> Result<tonic::Response<Self::DoActionStream>, tonic::Status>;
         ///Server streaming response type for the ListActions method.
         type ListActionsStream: futures_core::Stream<
-                Item = Result<super::ActionType, tonic::Status>,
-            >
-            + Send
-            + 'static;
+            Item = Result<super::ActionType, tonic::Status>,
+        >
+        + Send
+        + 'static;
         ///
         /// A flight service exposes all of the available action types that it has
         /// along with descriptions. This allows different flight consumers to
@@ -691,17 +692,17 @@ pub mod flight_service_server {
             inner: T,
             interceptor: F,
         ) -> InterceptedService<Self, F>
-        where
-            F: tonic::service::Interceptor,
+            where
+                F: tonic::service::Interceptor,
         {
             InterceptedService::new(Self::new(inner), interceptor)
         }
     }
     impl<T, B> tonic::codegen::Service<http::Request<B>> for FlightServiceServer<T>
-    where
-        T: FlightService,
-        B: Body + Send + 'static,
-        B::Error: Into<StdError> + Send + 'static,
+        where
+            T: FlightService,
+            B: Body + Send + 'static,
+            B::Error: Into<StdError> + Send + 'static,
     {
         type Response = http::Response<tonic::body::BoxBody>;
         type Error = std::convert::Infallible;
