@@ -229,7 +229,7 @@ pub mod flight_service_client {
     where
         T: tonic::client::GrpcService<tonic::body::BoxBody>,
         T::Error: Into<StdError>,
-        T::ResponseBody: Body<Data = Bytes> + Send + 'static,
+        T::ResponseBody: Default + Body<Data = Bytes> + Send + 'static,
         <T::ResponseBody as Body>::Error: Into<StdError> + Send,
     {
         pub fn new(inner: T) -> Self {
@@ -242,7 +242,6 @@ pub mod flight_service_client {
         ) -> FlightServiceClient<InterceptedService<T, F>>
         where
             F: tonic::service::Interceptor,
-            T::ResponseBody: Default,
             T: tonic::codegen::Service<
                 http::Request<tonic::body::BoxBody>,
                 Response = http::Response<
@@ -279,9 +278,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::HandshakeRequest>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::HandshakeResponse>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::HandshakeResponse>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -308,9 +307,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Criteria>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::FlightInfo>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::FlightInfo>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -389,9 +388,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Ticket>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::FlightData>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::FlightData>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -418,9 +417,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::FlightData>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::PutResult>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::PutResult>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -446,9 +445,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::FlightData>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::FlightData>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::FlightData>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -475,9 +474,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Action>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::Result>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::Result>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await
@@ -501,9 +500,9 @@ pub mod flight_service_client {
             &mut self,
             request: impl tonic::IntoRequest<super::Empty>,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::ActionType>>,
-            tonic::Status,
-        > {
+                tonic::Response<tonic::codec::Streaming<super::ActionType>>,
+                tonic::Status,
+            > {
             self.inner
                 .ready()
                 .await

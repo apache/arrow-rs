@@ -55,8 +55,10 @@ use crate::schema::types::{
 pub struct ParquetMetaData {
     file_metadata: FileMetaData,
     row_groups: Vec<RowGroupMetaData>,
-    page_indexes: Option<Vec<Index>>,
-    offset_indexes: Option<Vec<Vec<PageLocation>>>,
+    /// Page index for all pages in each column chunk
+    page_indexes: Option<Vec<Vec<Index>>>,
+    /// Offset index for all pages in each column chunk
+    offset_indexes: Option<Vec<Vec<Vec<PageLocation>>>>,
 }
 
 impl ParquetMetaData {
@@ -74,8 +76,8 @@ impl ParquetMetaData {
     pub fn new_with_page_index(
         file_metadata: FileMetaData,
         row_groups: Vec<RowGroupMetaData>,
-        page_indexes: Option<Vec<Index>>,
-        offset_indexes: Option<Vec<Vec<PageLocation>>>,
+        page_indexes: Option<Vec<Vec<Index>>>,
+        offset_indexes: Option<Vec<Vec<Vec<PageLocation>>>>,
     ) -> Self {
         ParquetMetaData {
             file_metadata,
@@ -107,12 +109,12 @@ impl ParquetMetaData {
     }
 
     /// Returns page indexes in this file.
-    pub fn page_indexes(&self) -> Option<&Vec<Index>> {
+    pub fn page_indexes(&self) -> Option<&Vec<Vec<Index>>> {
         self.page_indexes.as_ref()
     }
 
     /// Returns offset indexes in this file.
-    pub fn offset_indexes(&self) -> Option<&Vec<Vec<PageLocation>>> {
+    pub fn offset_indexes(&self) -> Option<&Vec<Vec<Vec<PageLocation>>>> {
         self.offset_indexes.as_ref()
     }
 }
