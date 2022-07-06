@@ -568,6 +568,7 @@ pub(crate) mod private {
     use crate::util::bit_util::{round_upto_power_of_2, BitReader, BitWriter};
     use crate::util::memory::ByteBufferPtr;
 
+    use crate::basic::Type;
     use byteorder::ByteOrder;
     use std::convert::TryInto;
 
@@ -581,18 +582,21 @@ pub(crate) mod private {
     /// crate, and thus hint to the type system (and end user) traits are public for the contract
     /// and not for extension.
     pub trait ParquetValueType:
-        std::cmp::PartialEq
+        PartialEq
         + std::fmt::Debug
         + std::fmt::Display
-        + std::default::Default
-        + std::clone::Clone
+        + Default
+        + Clone
         + super::AsBytes
         + super::FromBytes
-        + super::SliceAsBytes
+        + SliceAsBytes
         + PartialOrd
         + Send
         + crate::encodings::decoding::private::GetDecoder
+        + crate::file::statistics::private::MakeStatistics
     {
+        const PHYSICAL_TYPE: Type;
+
         /// Encode the value directly from a higher level encoder
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -644,6 +648,8 @@ pub(crate) mod private {
     }
 
     impl ParquetValueType for bool {
+        const PHYSICAL_TYPE: Type = Type::BOOLEAN;
+
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -720,8 +726,10 @@ pub(crate) mod private {
     }
 
     macro_rules! impl_from_raw {
-        ($ty: ty, $self: ident => $as_i64: block) => {
+        ($ty: ty, $physical_ty: expr, $self: ident => $as_i64: block) => {
             impl ParquetValueType for $ty {
+                const PHYSICAL_TYPE: Type = $physical_ty;
+
                 #[inline]
                 fn encode<W: std::io::Write>(values: &[Self], writer: &mut W, _: &mut BitWriter) -> Result<()> {
                     let raw = unsafe {
@@ -782,12 +790,14 @@ pub(crate) mod private {
         }
     }
 
-    impl_from_raw!(i32, self => { Ok(*self as i64) });
-    impl_from_raw!(i64, self => { Ok(*self) });
-    impl_from_raw!(f32, self => { Err(general_err!("Type cannot be converted to i64")) });
-    impl_from_raw!(f64, self => { Err(general_err!("Type cannot be converted to i64")) });
+    impl_from_raw!(i32, Type::INT32, self => { Ok(*self as i64) });
+    impl_from_raw!(i64, Type::INT64, self => { Ok(*self) });
+    impl_from_raw!(f32, Type::FLOAT, self => { Err(general_err!("Type cannot be converted to i64")) });
+    impl_from_raw!(f64, Type::DOUBLE, self => { Err(general_err!("Type cannot be converted to i64")) });
 
     impl ParquetValueType for super::Int96 {
+        const PHYSICAL_TYPE: Type = Type::INT96;
+
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -880,6 +890,8 @@ pub(crate) mod private {
     }
 
     impl ParquetValueType for super::ByteArray {
+        const PHYSICAL_TYPE: Type = Type::BYTE_ARRAY;
+
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -953,6 +965,8 @@ pub(crate) mod private {
     }
 
     impl ParquetValueType for super::FixedLenByteArray {
+        const PHYSICAL_TYPE: Type = Type::FIXED_LEN_BYTE_ARRAY;
+
         #[inline]
         fn encode<W: std::io::Write>(
             values: &[Self],
@@ -1028,7 +1042,9 @@ pub trait DataType: 'static + Send {
     type T: private::ParquetValueType;
 
     /// Returns Parquet physical type.
-    fn get_physical_type() -> Type;
+    fn get_physical_type() -> Type {
+        <Self::T as private::ParquetValueType>::PHYSICAL_TYPE
+    }
 
     /// Returns size in bytes for Rust representation of the physical type.
     fn get_type_size() -> usize;
@@ -1071,16 +1087,12 @@ where
 }
 
 macro_rules! make_type {
-    ($name:ident, $physical_ty:path, $reader_ident: ident, $writer_ident: ident, $native_ty:ty, $size:expr) => {
+    ($name:ident, $reader_ident: ident, $writer_ident: ident, $native_ty:ty, $size:expr) => {
         #[derive(Clone)]
         pub struct $name {}
 
         impl DataType for $name {
             type T = $native_ty;
-
-            fn get_physical_type() -> Type {
-                $physical_ty
-            }
 
             fn get_type_size() -> usize {
                 $size
@@ -1129,7 +1141,6 @@ macro_rules! make_type {
 
 make_type!(
     BoolType,
-    Type::BOOLEAN,
     BoolColumnReader,
     BoolColumnWriter,
     bool,
@@ -1137,7 +1148,6 @@ make_type!(
 );
 make_type!(
     Int32Type,
-    Type::INT32,
     Int32ColumnReader,
     Int32ColumnWriter,
     i32,
@@ -1145,7 +1155,6 @@ make_type!(
 );
 make_type!(
     Int64Type,
-    Type::INT64,
     Int64ColumnReader,
     Int64ColumnWriter,
     i64,
@@ -1153,7 +1162,6 @@ make_type!(
 );
 make_type!(
     Int96Type,
-    Type::INT96,
     Int96ColumnReader,
     Int96ColumnWriter,
     Int96,
@@ -1161,7 +1169,6 @@ make_type!(
 );
 make_type!(
     FloatType,
-    Type::FLOAT,
     FloatColumnReader,
     FloatColumnWriter,
     f32,
@@ -1169,7 +1176,6 @@ make_type!(
 );
 make_type!(
     DoubleType,
-    Type::DOUBLE,
     DoubleColumnReader,
     DoubleColumnWriter,
     f64,
@@ -1177,7 +1183,6 @@ make_type!(
 );
 make_type!(
     ByteArrayType,
-    Type::BYTE_ARRAY,
     ByteArrayColumnReader,
     ByteArrayColumnWriter,
     ByteArray,
@@ -1185,7 +1190,6 @@ make_type!(
 );
 make_type!(
     FixedLenByteArrayType,
-    Type::FIXED_LEN_BYTE_ARRAY,
     FixedLenByteArrayColumnReader,
     FixedLenByteArrayColumnWriter,
     FixedLenByteArray,

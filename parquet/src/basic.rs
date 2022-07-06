@@ -212,7 +212,7 @@ pub enum Repetition {
 /// Encodings supported by Parquet.
 /// Not all encodings are valid for all types. These enums are also used to specify the
 /// encoding of definition and repetition levels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum Encoding {
     /// Default byte encoding.
     /// - BOOLEAN - 1 bit per value, 0 is false; 1 is true.

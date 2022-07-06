@@ -37,14 +37,44 @@
 //! }
 //! ```
 
-use std::{cmp, fmt};
+use std::fmt;
 
 use byteorder::{ByteOrder, LittleEndian};
 use parquet_format::Statistics as TStatistics;
 
 use crate::basic::Type;
+use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::util::bit_util::from_ne_slice;
+
+pub(crate) mod private {
+    use super::*;
+
+    pub trait MakeStatistics {
+        fn make_statistics(statistics: ValueStatistics<Self>) -> Statistics
+        where
+            Self: Sized;
+    }
+
+    macro_rules! gen_make_statistics {
+        ($value_ty:ty, $stat:ident) => {
+            impl MakeStatistics for $value_ty {
+                fn make_statistics(statistics: ValueStatistics<Self>) -> Statistics where Self: Sized {
+                    Statistics::$stat(statistics)
+                }
+            }
+        };
+    }
+
+    gen_make_statistics!(bool, Boolean);
+    gen_make_statistics!(i32, Int32);
+    gen_make_statistics!(i64, Int64);
+    gen_make_statistics!(Int96, Int96);
+    gen_make_statistics!(f32, Float);
+    gen_make_statistics!(f64, Double);
+    gen_make_statistics!(ByteArray, ByteArray);
+    gen_make_statistics!(FixedLenByteArray, FixedLenByteArray);
+}
 
 // Macro to generate methods create Statistics.
 macro_rules! statistics_new_func {
@@ -56,7 +86,7 @@ macro_rules! statistics_new_func {
             nulls: u64,
             is_deprecated: bool,
         ) -> Self {
-            Statistics::$stat(TypedStatistics::new(
+            Statistics::$stat(ValueStatistics::new(
                 min,
                 max,
                 distinct,
@@ -234,17 +264,39 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
 /// Statistics for a column chunk and data page.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statistics {
-    Boolean(TypedStatistics<BoolType>),
-    Int32(TypedStatistics<Int32Type>),
-    Int64(TypedStatistics<Int64Type>),
-    Int96(TypedStatistics<Int96Type>),
-    Float(TypedStatistics<FloatType>),
-    Double(TypedStatistics<DoubleType>),
-    ByteArray(TypedStatistics<ByteArrayType>),
-    FixedLenByteArray(TypedStatistics<FixedLenByteArrayType>),
+    Boolean(ValueStatistics<bool>),
+    Int32(ValueStatistics<i32>),
+    Int64(ValueStatistics<i64>),
+    Int96(ValueStatistics<Int96>),
+    Float(ValueStatistics<f32>),
+    Double(ValueStatistics<f64>),
+    ByteArray(ValueStatistics<ByteArray>),
+    FixedLenByteArray(ValueStatistics<FixedLenByteArray>),
+}
+
+impl<T: ParquetValueType> From<ValueStatistics<T>> for Statistics {
+    fn from(t: ValueStatistics<T>) -> Self {
+        T::make_statistics(t)
+    }
 }
 
 impl Statistics {
+    pub fn new<T: ParquetValueType>(
+        min: Option<T>,
+        max: Option<T>,
+        distinct_count: Option<u64>,
+        null_count: u64,
+        is_deprecated: bool,
+    ) -> Self {
+        Self::from(ValueStatistics::new(
+            min,
+            max,
+            distinct_count,
+            null_count,
+            is_deprecated,
+        ))
+    }
+
     statistics_new_func![boolean, Option<bool>, Boolean];
 
     statistics_new_func![int32, Option<i32>, Int32];
@@ -341,21 +393,24 @@ impl fmt::Display for Statistics {
 }
 
 /// Typed implementation for [`Statistics`].
-#[derive(Clone)]
-pub struct TypedStatistics<T: DataType> {
-    min: Option<T::T>,
-    max: Option<T::T>,
+pub type TypedStatistics<T> = ValueStatistics<<T as DataType>::T>;
+
+/// Statistics for a particular [`ParquetValueType`]
+#[derive(Clone, Eq, PartialEq)]
+pub struct ValueStatistics<T> {
+    min: Option<T>,
+    max: Option<T>,
     // Distinct count could be omitted in some cases
     distinct_count: Option<u64>,
     null_count: u64,
     is_min_max_deprecated: bool,
 }
 
-impl<T: DataType> TypedStatistics<T> {
+impl<T: ParquetValueType> ValueStatistics<T> {
     /// Creates new typed statistics.
     pub fn new(
-        min: Option<T::T>,
-        max: Option<T::T>,
+        min: Option<T>,
+        max: Option<T>,
         distinct_count: Option<u64>,
         null_count: u64,
         is_min_max_deprecated: bool,
@@ -373,7 +428,7 @@ impl<T: DataType> TypedStatistics<T> {
     ///
     /// Panics if min value is not set, e.g. all values are `null`.
     /// Use `has_min_max_set` method to check that.
-    pub fn min(&self) -> &T::T {
+    pub fn min(&self) -> &T {
         self.min.as_ref().unwrap()
     }
 
@@ -381,7 +436,7 @@ impl<T: DataType> TypedStatistics<T> {
     ///
     /// Panics if max value is not set, e.g. all values are `null`.
     /// Use `has_min_max_set` method to check that.
-    pub fn max(&self) -> &T::T {
+    pub fn max(&self) -> &T {
         self.max.as_ref().unwrap()
     }
 
@@ -423,7 +478,7 @@ impl<T: DataType> TypedStatistics<T> {
     }
 }
 
-impl<T: DataType> fmt::Display for TypedStatistics<T> {
+impl<T: ParquetValueType> fmt::Display for ValueStatistics<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{{")?;
         write!(f, "min: ")?;
@@ -447,7 +502,7 @@ impl<T: DataType> fmt::Display for TypedStatistics<T> {
     }
 }
 
-impl<T: DataType> fmt::Debug for TypedStatistics<T> {
+impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -459,16 +514,6 @@ impl<T: DataType> fmt::Debug for TypedStatistics<T> {
             self.null_count,
             self.is_min_max_deprecated
         )
-    }
-}
-
-impl<T: DataType> cmp::PartialEq for TypedStatistics<T> {
-    fn eq(&self, other: &TypedStatistics<T>) -> bool {
-        self.min == other.min
-            && self.max == other.max
-            && self.distinct_count == other.distinct_count
-            && self.null_count == other.null_count
-            && self.is_min_max_deprecated == other.is_min_max_deprecated
     }
 }
 
