@@ -33,8 +33,8 @@ pub struct FixedSizeBinaryBuilder {
 }
 
 impl FixedSizeBinaryBuilder {
-    /// Creates a new `BinaryBuilder`, `capacity` is the number of bytes in the values
-    /// array
+    /// Creates a new [`FixedSizeBinaryBuilder`], `capacity` is the number of bytes in the values
+    /// buffer
     pub fn new(capacity: usize, byte_width: i32) -> Self {
         assert!(
             byte_width >= 0,
@@ -54,8 +54,8 @@ impl FixedSizeBinaryBuilder {
 
     /// Appends a byte slice into the builder.
     ///
-    /// Automatically calls the `append` method to delimit the slice appended in as a
-    /// distinct array element.
+    /// Automatically update the null buffer to delimit the slice appended in as a
+    /// distinct value element.
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<[u8]>) -> Result<()> {
         if self.value_length != value.as_ref().len() as i32 {
@@ -78,7 +78,7 @@ impl FixedSizeBinaryBuilder {
         Ok(())
     }
 
-    /// Builds the `FixedSizeBinaryArray` and reset this builder.
+    /// Builds the [`FixedSizeBinaryArray`] and reset this builder.
     pub fn finish(&mut self) -> FixedSizeBinaryArray {
         let array_length = self.len();
         let array_data_builder =
