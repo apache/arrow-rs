@@ -103,8 +103,22 @@ where
         .collect::<PrimitiveArray<T>>();
 
     let keys = array.keys();
-    let new_dict = DictionaryArray::<K>::try_new(keys, &values).unwrap();
 
+    let mut data = ArrayData::builder(array.data_type().clone())
+        .len(keys.len())
+        .add_buffer(keys.data().buffers()[0].clone())
+        .add_child_data(values.data().clone());
+
+    match keys.data().null_buffer() {
+        Some(buffer) if keys.data().null_count() > 0 => {
+            data = data
+                .null_bit_buffer(Some(buffer.clone()))
+                .null_count(keys.data().null_count());
+        }
+        _ => data = data.null_count(0),
+    }
+
+    let new_dict: DictionaryArray<K> = unsafe { data.build_unchecked() }.into();
     Ok(Arc::new(new_dict))
 }
 
