@@ -187,6 +187,12 @@ impl Decimal256Builder {
     pub fn append_value(&mut self, value: &Decimal256) -> Result<()> {
         let value_as_bytes = value.raw_value();
 
+        if self.precision != value.precision() || self.scale != value.scale() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Decimal value does not have the same precision or scale as Decimal256Builder".to_string()
+            ));
+        }
+
         if self.builder.value_length() != value_as_bytes.len() as i32 {
             return Err(ArrowError::InvalidArgumentError(
                 "Byte slice does not have the same length as Decimal256Builder value lengths".to_string()
@@ -295,5 +301,18 @@ mod tests {
             decimal_array.value(3).to_string(),
             "170141183460469231731687303715884.105728"
         );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Decimal value does not have the same precision or scale as Decimal256Builder"
+    )]
+    fn test_decimal256_builder_unmatched_precision_scale() {
+        let mut builder = Decimal256Builder::new(30, 10, 6);
+
+        let mut bytes = vec![0; 32];
+        bytes[0..16].clone_from_slice(&8_887_000_000_i128.to_le_bytes());
+        let value = Decimal256::try_new_from_bytes(40, 6, bytes.as_slice()).unwrap();
+        builder.append_value(&value).unwrap();
     }
 }
