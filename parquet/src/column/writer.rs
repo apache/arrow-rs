@@ -342,6 +342,13 @@ impl<'a, T: DataType> ColumnWriterImpl<'a, T> {
                 }
                 (None, None) => {
                     for val in values {
+                        if let Type::FLOAT | Type::DOUBLE = T::get_physical_type() {
+                            // Skip NaN values
+                            if val != val {
+                                continue;
+                            }
+                        }
+
                         if self
                             .min_column_value
                             .as_ref()
@@ -703,8 +710,9 @@ impl<'a, T: DataType> ColumnWriterImpl<'a, T> {
 
         self.num_column_nulls += self.num_page_nulls;
 
+        let has_min_max = self.min_page_value.is_some() && self.max_page_value.is_some();
         let page_statistics = match self.statistics_enabled {
-            EnabledStatistics::Page => {
+            EnabledStatistics::Page if has_min_max => {
                 self.update_column_min_max();
                 Some(self.make_page_statistics())
             }
