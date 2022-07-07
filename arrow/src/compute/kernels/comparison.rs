@@ -2000,16 +2000,16 @@ macro_rules! typed_dict_cmp {
                 cmp_dict::<$KT, Float64Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Utf8, DataType::Utf8) => {
-                cmp_dict_utf8::<$KT, i32, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_utf8::<$KT, i32, _>($LEFT, $RIGHT, |l, r| $OP(l, r))
             }
             (DataType::LargeUtf8, DataType::LargeUtf8) => {
-                cmp_dict_utf8::<$KT, i64, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_utf8::<$KT, i64, _>($LEFT, $RIGHT, |l, r| $OP(l, r))
             }
             (DataType::Binary, DataType::Binary) => {
-               cmp_dict_binary::<$KT, i32, _>($LEFT, $RIGHT, $OP)
+               cmp_dict_binary::<$KT, i32, _>($LEFT, $RIGHT, |l, r| $OP(l, r))
             }
             (DataType::LargeBinary, DataType::LargeBinary) => {
-                cmp_dict_binary::<$KT, i64, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_binary::<$KT, i64, _>($LEFT, $RIGHT, |l, r| $OP(l, r))
             }
             (
                 DataType::Timestamp(TimeUnit::Nanosecond, _),
@@ -2256,7 +2256,14 @@ where
 pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a == b, |a, b| a == b)
+            #[inline]
+            fn op_eq<T>(l: T, r: T) -> bool
+            where
+                T: PartialOrd,
+            {
+                l != r
+            }
+            typed_dict_compares!(left, right, op_eq, op_eq)
         }
         _ => typed_compares!(left, right, |a, b| !(a ^ b), |a, b| a == b),
     }
@@ -2281,7 +2288,14 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a != b, |a, b| a != b)
+            #[inline]
+            fn op_neq<T>(l: T, r: T) -> bool
+            where
+                T: PartialOrd,
+            {
+                l != r
+            }
+            typed_dict_compares!(left, right, op_neq, op_neq)
         }
         _ => typed_compares!(left, right, |a, b| (a ^ b), |a, b| a != b),
     }
@@ -2306,7 +2320,14 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a < b, |a, b| a < b)
+            #[inline]
+            fn op_lt<T>(l: T, r: T) -> bool
+            where
+                T: PartialOrd,
+            {
+                l < r
+            }
+            typed_dict_compares!(left, right, op_lt, op_lt)
         }
         _ => typed_compares!(left, right, |a, b| ((!a) & b), |a, b| a < b),
     }
@@ -2330,7 +2351,14 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a <= b, |a, b| a <= b)
+            #[inline]
+            fn op_le<T>(l: T, r: T) -> bool
+            where
+                T: PartialOrd,
+            {
+                l > r
+            }
+            typed_dict_compares!(left, right, op_le, op_le)
         }
         _ => typed_compares!(left, right, |a, b| !(a & (!b)), |a, b| a <= b),
     }
@@ -2354,7 +2382,14 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a > b, |a, b| a > b)
+            #[inline]
+            fn op_gt<T>(l: T, r: T) -> bool
+            where
+                T: PartialOrd,
+            {
+                l > r
+            }
+            typed_dict_compares!(left, right, op_gt, op_gt)
         }
         _ => typed_compares!(left, right, |a, b| (a & (!b)), |a, b| a > b),
     }
@@ -2377,7 +2412,14 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
 pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
     match left.data_type() {
         DataType::Dictionary(_, _) => {
-            typed_dict_compares!(left, right, |a, b| a >= b, |a, b| a >= b)
+            #[inline]
+            fn op_ge<T>(l: T, r: T) -> bool
+            where
+                T: PartialOrd,
+            {
+                l >= r
+            }
+            typed_dict_compares!(left, right, op_ge, op_ge)
         }
         _ => typed_compares!(left, right, |a, b| !((!a) & b), |a, b| a >= b),
     }
