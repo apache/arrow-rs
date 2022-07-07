@@ -153,6 +153,13 @@ type ColumnCloseResult = (
     Option<OffsetIndex>,
 );
 
+// Metrics per page
+struct PageMetrics {
+    num_buffered_values: u32,
+    num_buffered_rows: u32,
+    num_page_nulls: u64,
+}
+
 /// Typed column writer for a primitive column.
 pub type ColumnWriterImpl<'a, T> = GenericColumnWriter<'a, ColumnValueEncoderImpl<T>>;
 
@@ -167,13 +174,7 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     compressor: Option<Box<dyn Codec>>,
     encoder: E,
 
-    // Metrics per page
-    /// The number of values including nulls in the in-progress data page
-    num_buffered_values: u32,
-    /// The number of rows in the in-progress data page
-    num_buffered_rows: u32,
-    /// The number of nulls in the in-progress data page
-    num_page_nulls: u64,
+    page_metrics: PageMetrics,
 
     // Metrics per column writer
     total_bytes_written: u64,
@@ -226,9 +227,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             codec,
             compressor,
             encoder,
-            num_buffered_values: 0,
-            num_buffered_rows: 0,
-            num_page_nulls: 0,
             total_bytes_written: 0,
             total_rows_written: 0,
             total_uncompressed_size: 0,
@@ -239,6 +237,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             def_levels_sink: vec![],
             rep_levels_sink: vec![],
             data_pages: VecDeque::new(),
+            page_metrics: PageMetrics {
+                num_buffered_values: 0,
+                num_buffered_rows: 0,
+                num_page_nulls: 0,
+            },
             min_column_value: None,
             max_column_value: None,
             num_column_nulls: 0,
@@ -397,7 +400,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Finalises writes and closes the column writer.
     /// Returns total bytes written, total rows written and column chunk metadata.
     pub fn close(mut self) -> Result<ColumnCloseResult> {
-        if self.num_buffered_values > 0 {
+        if self.page_metrics.num_buffered_values > 0 {
             self.add_data_page()?;
         }
         if self.encoder.has_dictionary() {
@@ -464,7 +467,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     values_to_write += 1;
                 } else {
                     // We must always compute this as it is used to populate v2 pages
-                    self.num_page_nulls += 1
+                    self.page_metrics.num_page_nulls += 1
                 }
             }
 
@@ -486,14 +489,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
             // Count the occasions where we start a new row
             for &level in levels {
-                self.num_buffered_rows += (level == 0) as u32
+                self.page_metrics.num_buffered_rows += (level == 0) as u32
             }
 
             self.rep_levels_sink.extend_from_slice(levels);
         } else {
             // Each value is exactly one row.
             // Equals to the number of values, we count nulls as well.
-            self.num_buffered_rows += num_levels as u32;
+            self.page_metrics.num_buffered_rows += num_levels as u32;
         }
 
         match value_indices {
@@ -504,7 +507,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             None => self.encoder.write(values, values_offset, values_to_write)?,
         }
 
-        self.num_buffered_values += num_levels as u32;
+        self.page_metrics.num_buffered_values += num_levels as u32;
 
         if self.should_add_data_page() {
             self.add_data_page()?;
@@ -547,7 +550,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Prepares and writes dictionary and all data pages into page writer.
     fn dict_fallback(&mut self) -> Result<()> {
         // At this point we know that we need to fall back.
-        if self.num_buffered_values > 0 {
+        if self.page_metrics.num_buffered_values > 0 {
             self.add_data_page()?;
         }
         self.write_dictionary_page()?;
@@ -558,7 +561,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Update the column index and offset index when adding the data page
     fn update_column_offset_index(&mut self, page_statistics: &Option<Statistics>) {
         // update the column index
-        let null_page = (self.num_buffered_rows as u64) == self.num_page_nulls;
+        let null_page = (self.page_metrics.num_buffered_rows as u64)
+            == self.page_metrics.num_page_nulls;
         // a page contains only null values,
         // and writers have to set the corresponding entries in min_values and max_values to byte[0]
         if null_page && self.column_index_builder.valid() {
@@ -566,7 +570,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 null_page,
                 &[0; 1],
                 &[0; 1],
-                self.num_page_nulls as i64,
+                self.page_metrics.num_page_nulls as i64,
             );
         } else if self.column_index_builder.valid() {
             // from page statistics
@@ -580,7 +584,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         null_page,
                         stat.min_bytes(),
                         stat.max_bytes(),
-                        self.num_page_nulls as i64,
+                        self.page_metrics.num_page_nulls as i64,
                     );
                 }
             }
@@ -588,7 +592,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         // update the offset index
         self.offset_index_builder
-            .append_row_count(self.num_buffered_rows as i64);
+            .append_row_count(self.page_metrics.num_buffered_rows as i64);
     }
 
     /// Adds data page.
@@ -600,7 +604,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let max_def_level = self.descr.max_def_level();
         let max_rep_level = self.descr.max_rep_level();
 
-        self.num_column_nulls += self.num_page_nulls;
+        self.num_column_nulls += self.page_metrics.num_page_nulls;
 
         let page_statistics = match (values_data.min_value, values_data.max_value) {
             (Some(min), Some(max)) => {
@@ -610,7 +614,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     Some(min),
                     Some(max),
                     None,
-                    self.num_page_nulls,
+                    self.page_metrics.num_page_nulls,
                     false,
                 ))
             }
@@ -655,7 +659,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
                 let data_page = Page::DataPage {
                     buf: ByteBufferPtr::new(buffer),
-                    num_values: self.num_buffered_values,
+                    num_values: self.page_metrics.num_buffered_values,
                     encoding: values_data.encoding,
                     def_level_encoding: Encoding::RLE,
                     rep_level_encoding: Encoding::RLE,
@@ -696,10 +700,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
                 let data_page = Page::DataPageV2 {
                     buf: ByteBufferPtr::new(buffer),
-                    num_values: self.num_buffered_values,
+                    num_values: self.page_metrics.num_buffered_values,
                     encoding: values_data.encoding,
-                    num_nulls: self.num_page_nulls as u32,
-                    num_rows: self.num_buffered_rows,
+                    num_nulls: self.page_metrics.num_page_nulls as u32,
+                    num_rows: self.page_metrics.num_buffered_rows,
                     def_levels_byte_len: def_levels_byte_len as u32,
                     rep_levels_byte_len: rep_levels_byte_len as u32,
                     is_compressed: self.compressor.is_some(),
@@ -718,14 +722,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         // Update total number of rows.
-        self.total_rows_written += self.num_buffered_rows as u64;
+        self.total_rows_written += self.page_metrics.num_buffered_rows as u64;
 
         // Reset state.
         self.rep_levels_sink.clear();
         self.def_levels_sink.clear();
-        self.num_buffered_values = 0;
-        self.num_buffered_rows = 0;
-        self.num_page_nulls = 0;
+        self.page_metrics.num_buffered_values = 0;
+        self.page_metrics.num_buffered_rows = 0;
+        self.page_metrics.num_page_nulls = 0;
 
         Ok(())
     }
@@ -735,7 +739,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     #[inline]
     fn flush_data_pages(&mut self) -> Result<()> {
         // Write all outstanding data to a new page.
-        if self.num_buffered_values > 0 {
+        if self.page_metrics.num_buffered_values > 0 {
             self.add_data_page()?;
         }
 
