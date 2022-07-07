@@ -127,7 +127,7 @@ impl ArrowReaderOptions {
 
     /// Scan rows from the parquet file according to the provided `selection`
     ///
-    /// TODO: Make public once row selection fully implemented
+    /// TODO: Make public once row selection fully implemented (#1792)
     pub(crate) fn with_row_selection(
         self,
         selection: impl Into<Vec<RowSelection>>,
@@ -348,7 +348,7 @@ impl ParquetRecordBatchReader {
     /// a time from [`ArrayReader`] based on the configured `selection`. If `selection` is `None`
     /// all rows will be returned
     ///
-    /// TODO: Make public once row selection fully implemented
+    /// TODO: Make public once row selection fully implemented (#1792)
     pub(crate) fn new(
         batch_size: usize,
         array_reader: Box<dyn ArrayReader>,
