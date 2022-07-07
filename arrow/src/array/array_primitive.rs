@@ -134,7 +134,9 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     /// Creates a PrimitiveArray based on a constant value with `count` elements
     pub fn from_value(value: T::Native, count: usize) -> Self {
         // # Safety: iterator (0..count) correctly reports its length
-        let val_buf = unsafe { Buffer::from_trusted_len_iter((0..count).map(|_| value)) };
+        let val_buf = unsafe {
+            Buffer::from_trusted_len_iter(std::iter::repeat(value).take(count))
+        };
         let data = unsafe {
             ArrayData::new_unchecked(
                 T::DATA_TYPE,
