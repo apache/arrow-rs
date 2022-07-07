@@ -680,52 +680,6 @@ macro_rules! math_dict_op {
     }};
 }
 
-/// Helper function to perform divide lambda function on values from two dictionary arrays, this
-/// version does not attempt to use SIMD explicitly (though the compiler may auto vectorize)
-macro_rules! math_dict_divide_checked_op {
-    ($left: expr, $right:expr, $op:expr, $value_ty:ty) => {{
-        if $left.len() != $right.len() {
-            return Err(ArrowError::ComputeError(format!(
-                "Cannot perform operation on arrays of different length ({}, {})",
-                $left.len(),
-                $right.len()
-            )));
-        }
-
-        let null_bit_buffer =
-            combine_option_bitmap(&[$left.data_ref(), $right.data_ref()], $left.len())?;
-
-        // Safety justification: Since the inputs are valid Arrow arrays, all values are
-        // valid indexes into the dictionary (which is verified during construction)
-
-        let left_iter = unsafe {
-            $left
-                .values()
-                .as_any()
-                .downcast_ref::<$value_ty>()
-                .unwrap()
-                .take_iter_unchecked($left.keys_iter())
-        };
-
-        let right_iter = unsafe {
-            $right
-                .values()
-                .as_any()
-                .downcast_ref::<$value_ty>()
-                .unwrap()
-                .take_iter_unchecked($right.keys_iter())
-        };
-
-        math_checked_divide_op_on_iters(
-            left_iter,
-            right_iter,
-            $op,
-            $left.len(),
-            null_bit_buffer,
-        )
-    }};
-}
-
 /// Perform given operation on two `DictionaryArray`s.
 /// Returns an error if the two arrays have different value type
 fn math_op_dict<K, T, F>(
@@ -760,7 +714,44 @@ where
     T::Native: One + Zero,
     F: Fn(T::Native, T::Native) -> T::Native,
 {
-    math_dict_divide_checked_op!(left, right, op, PrimitiveArray<T>)
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(format!(
+            "Cannot perform operation on arrays of different length ({}, {})",
+            left.len(),
+            right.len()
+        )));
+    }
+
+    let null_bit_buffer =
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
+
+    // Safety justification: Since the inputs are valid Arrow arrays, all values are
+    // valid indexes into the dictionary (which is verified during construction)
+
+    let left_iter = unsafe {
+        left.values()
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap()
+            .take_iter_unchecked(left.keys_iter())
+    };
+
+    let right_iter = unsafe {
+        right
+            .values()
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap()
+            .take_iter_unchecked(right.keys_iter())
+    };
+
+    math_checked_divide_op_on_iters(
+        left_iter,
+        right_iter,
+        op,
+        left.len(),
+        null_bit_buffer,
+    )
 }
 
 /// Perform `left + right` operation on two arrays. If either left or right value is null
