@@ -571,7 +571,6 @@ mod tests {
     use crate::schema::parser::parse_message_type;
     use crate::util::bit_util::from_le_slice;
     use crate::util::test_common::{get_test_file, get_test_path};
-    use arrow::datatypes::ToByteSlice;
     use parquet_format::BoundaryOrder;
     use std::sync::Arc;
 
@@ -1138,16 +1137,7 @@ mod tests {
             check_native_page_index(
                 index,
                 325,
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .min_bytes(),
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .max_bytes(),
+                get_row_group_min_max_bytes(row_group_metadata, 0),
                 BoundaryOrder::Unordered,
             );
             assert_eq!(row_group_offset_indexes[0].len(), 325);
@@ -1166,16 +1156,7 @@ mod tests {
             check_native_page_index(
                 index,
                 325,
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .min_bytes(),
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .max_bytes(),
+                get_row_group_min_max_bytes(row_group_metadata, 2),
                 BoundaryOrder::Ascending,
             );
             assert_eq!(row_group_offset_indexes[2].len(), 325);
@@ -1187,16 +1168,7 @@ mod tests {
             check_native_page_index(
                 index,
                 325,
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .min_bytes(),
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .max_bytes(),
+                get_row_group_min_max_bytes(row_group_metadata, 3),
                 BoundaryOrder::Ascending,
             );
             assert_eq!(row_group_offset_indexes[3].len(), 325);
@@ -1208,16 +1180,7 @@ mod tests {
             check_native_page_index(
                 index,
                 325,
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .min_bytes(),
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .max_bytes(),
+                get_row_group_min_max_bytes(row_group_metadata, 4),
                 BoundaryOrder::Ascending,
             );
             assert_eq!(row_group_offset_indexes[4].len(), 325);
@@ -1226,12 +1189,10 @@ mod tests {
         };
         //col6->bigint_col: INT64 UNCOMPRESSED DO:0 FPO:152326 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 90, num_nulls: 0]
         if let Index::INT64(index) = &page_indexes[0][5] {
-            //Todo row_group_metadata.column(0).statistics().unwrap().min_bytes() only return 4 bytes
             check_native_page_index(
                 index,
                 528,
-                0_i64.to_byte_slice(),
-                100_i64.to_byte_slice(),
+                get_row_group_min_max_bytes(row_group_metadata, 5),
                 BoundaryOrder::Unordered,
             );
             assert_eq!(row_group_offset_indexes[5].len(), 528);
@@ -1243,16 +1204,7 @@ mod tests {
             check_native_page_index(
                 index,
                 325,
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .min_bytes(),
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .max_bytes(),
+                get_row_group_min_max_bytes(row_group_metadata, 6),
                 BoundaryOrder::Ascending,
             );
             assert_eq!(row_group_offset_indexes[6].len(), 325);
@@ -1264,8 +1216,7 @@ mod tests {
             check_native_page_index(
                 index,
                 528,
-                0_i64.to_byte_slice(),
-                100_i64.to_byte_slice(),
+                get_row_group_min_max_bytes(row_group_metadata, 7),
                 BoundaryOrder::Unordered,
             );
             assert_eq!(row_group_offset_indexes[7].len(), 528);
@@ -1277,16 +1228,7 @@ mod tests {
             check_bytes_page_index(
                 index,
                 974,
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .min_bytes(),
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .max_bytes(),
+                get_row_group_min_max_bytes(row_group_metadata, 8),
                 BoundaryOrder::Unordered,
             );
             assert_eq!(row_group_offset_indexes[8].len(), 974);
@@ -1298,16 +1240,7 @@ mod tests {
             check_bytes_page_index(
                 index,
                 352,
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .min_bytes(),
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .max_bytes(),
+                get_row_group_min_max_bytes(row_group_metadata, 9),
                 BoundaryOrder::Ascending,
             );
             assert_eq!(row_group_offset_indexes[9].len(), 352);
@@ -1315,6 +1248,7 @@ mod tests {
             unreachable!()
         };
         //col11->timestamp_col: INT96 UNCOMPRESSED DO:0 FPO:490093 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[num_nulls: 0, min/max not defined]
+        //Notice: min_max values for each page for this col not exits.
         if let Index::EMPTY_ARRAY() = &page_indexes[0][10] {
             assert_eq!(row_group_offset_indexes[10].len(), 974);
         } else {
@@ -1325,16 +1259,7 @@ mod tests {
             check_native_page_index(
                 index,
                 325,
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .min_bytes(),
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .max_bytes(),
+                get_row_group_min_max_bytes(row_group_metadata, 11),
                 BoundaryOrder::Ascending,
             );
             assert_eq!(row_group_offset_indexes[11].len(), 325);
@@ -1346,16 +1271,7 @@ mod tests {
             check_native_page_index(
                 index,
                 325,
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .min_bytes(),
-                row_group_metadata
-                    .column(0)
-                    .statistics()
-                    .unwrap()
-                    .max_bytes(),
+                get_row_group_min_max_bytes(row_group_metadata, 12),
                 BoundaryOrder::Unordered,
             );
             assert_eq!(row_group_offset_indexes[12].len(), 325);
@@ -1367,30 +1283,36 @@ mod tests {
     fn check_native_page_index<T: ParquetValueType>(
         row_group_index: &NativeIndex<T>,
         page_size: usize,
-        min_value: &[u8],
-        max_value: &[u8],
+        min_max: (&[u8], &[u8]),
         boundary_order: BoundaryOrder,
     ) {
         assert_eq!(row_group_index.indexes.len(), page_size);
         assert_eq!(row_group_index.boundary_order, boundary_order);
         row_group_index.indexes.iter().all(|x| {
-            x.min.as_ref().unwrap() >= &from_le_slice::<T>(min_value)
-                && x.max.as_ref().unwrap() <= &from_le_slice::<T>(max_value)
+            x.min.as_ref().unwrap() >= &from_le_slice::<T>(min_max.0)
+                && x.max.as_ref().unwrap() <= &from_le_slice::<T>(min_max.1)
         });
     }
 
     fn check_bytes_page_index(
         row_group_index: &ByteArrayIndex,
         page_size: usize,
-        min_value: &[u8],
-        max_value: &[u8],
+        min_max: (&[u8], &[u8]),
         boundary_order: BoundaryOrder,
     ) {
         assert_eq!(row_group_index.indexes.len(), page_size);
         assert_eq!(row_group_index.boundary_order, boundary_order);
         row_group_index.indexes.iter().all(|x| {
-            x.min.as_ref().unwrap().as_slice() >= min_value
-                && x.max.as_ref().unwrap().as_slice() <= max_value
+            x.min.as_ref().unwrap().as_slice() >= min_max.0
+                && x.max.as_ref().unwrap().as_slice() <= min_max.1
         });
+    }
+
+    fn get_row_group_min_max_bytes(
+        r: &RowGroupMetaData,
+        col_num: usize,
+    ) -> (&[u8], &[u8]) {
+        let statistics = r.column(col_num).statistics().unwrap();
+        (statistics.min_bytes(), statistics.max_bytes())
     }
 }
