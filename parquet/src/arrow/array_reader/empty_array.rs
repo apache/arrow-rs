@@ -65,6 +65,12 @@ impl ArrayReader for EmptyArrayReader {
         Ok(Arc::new(StructArray::from(data)))
     }
 
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        let skipped = self.remaining_rows.min(num_records);
+        self.remaining_rows -= skipped;
+        Ok(skipped)
+    }
+
     fn get_def_levels(&self) -> Option<&[i16]> {
         None
     }

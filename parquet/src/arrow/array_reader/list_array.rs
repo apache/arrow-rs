@@ -231,6 +231,10 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         Ok(Arc::new(result_array))
     }
 
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        self.item_reader.skip_records(num_records)
+    }
+
     fn get_def_levels(&self) -> Option<&[i16]> {
         self.item_reader.get_def_levels()
     }

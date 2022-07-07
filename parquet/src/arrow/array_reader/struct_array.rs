@@ -157,6 +157,26 @@ impl ArrayReader for StructArrayReader {
         Ok(Arc::new(StructArray::from(array_data)))
     }
 
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        let mut skipped = None;
+        for child in self.children.iter_mut() {
+            let child_skipped = child.skip_records(num_records)?;
+            match skipped {
+                Some(expected) => {
+                    if expected != child_skipped {
+                        return Err(general_err!(
+                            "StructArrayReader out of sync, expected {} skipped, got {}",
+                            expected,
+                            child_skipped
+                        ));
+                    }
+                }
+                None => skipped = Some(child_skipped),
+            }
+        }
+        Ok(skipped.unwrap_or(0))
+    }
+
     fn get_def_levels(&self) -> Option<&[i16]> {
         // Children definition levels should describe the same
         // parent structure, so return first child's

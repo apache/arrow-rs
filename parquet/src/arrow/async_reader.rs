@@ -97,7 +97,7 @@ use crate::arrow::arrow_reader::ParquetRecordBatchReader;
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::ProjectionMask;
 use crate::basic::Compression;
-use crate::column::page::{Page, PageIterator, PageReader};
+use crate::column::page::{Page, PageIterator, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
@@ -550,6 +550,14 @@ impl PageReader for InMemoryColumnChunkReader {
 
         // We are at the end of this column chunk and no more page left. Return None.
         Ok(None)
+    }
+
+    fn peek_next_page(&self) -> Result<Option<PageMetadata>> {
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
+    }
+
+    fn skip_next_page(&mut self) -> Result<()> {
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }
 

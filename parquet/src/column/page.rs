@@ -187,12 +187,29 @@ impl PageWriteSpec {
     }
 }
 
+/// Contains metadata for a page
+pub struct PageMetadata {
+    /// The number of rows in this page
+    pub num_rows: usize,
+
+    /// Returns true if the page is a dictionary page
+    pub is_dict: bool,
+}
+
 /// API for reading pages from a column chunk.
 /// This offers a iterator like API to get the next page.
 pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// Gets the next page in the column chunk associated with this reader.
     /// Returns `None` if there are no pages left.
     fn get_next_page(&mut self) -> Result<Option<Page>>;
+
+    /// Gets metadata about the next page, returns an error if no
+    /// column index information
+    fn peek_next_page(&self) -> Result<Option<PageMetadata>>;
+
+    /// Skips reading the next page, returns an error if no
+    /// column index information
+    fn skip_next_page(&mut self) -> Result<()>;
 }
 
 /// API for writing pages in a column chunk.

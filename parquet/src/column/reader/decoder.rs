@@ -81,6 +81,25 @@ pub trait ColumnLevelDecoder {
     fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize>;
 }
 
+pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
+    /// Skips over repetition level corresponding to `num_records` records, where a record
+    /// is delimited by a repetition level of 0
+    ///
+    /// Returns the number of records skipped, and the number of levels skipped
+    fn skip_rep_levels(&mut self, num_records: usize) -> Result<(usize, usize)>;
+}
+
+pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
+    /// Skips over `num_levels` definition levels
+    ///
+    /// Returns the number of values skipped, and the number of levels skipped
+    fn skip_def_levels(
+        &mut self,
+        num_levels: usize,
+        max_def_level: i16,
+    ) -> Result<(usize, usize)>;
+}
+
 /// Decodes value data to a [`ValuesBufferSlice`]
 pub trait ColumnValueDecoder {
     type Slice: ValuesBufferSlice + ?Sized;
@@ -126,6 +145,11 @@ pub trait ColumnValueDecoder {
     /// Implementations may panic if `range` overlaps with already written data
     ///
     fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize>;
+
+    /// Skips over `num_values` values
+    ///
+    /// Returns the number of values skipped
+    fn skip_values(&mut self, num_values: usize) -> Result<usize>;
 }
 
 /// An implementation of [`ColumnValueDecoder`] for `[T::T]`
@@ -225,6 +249,10 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 
         current_decoder.get(&mut out[range])
     }
+
+    fn skip_values(&mut self, _num_values: usize) -> Result<usize> {
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
+    }
 }
 
 /// An implementation of [`ColumnLevelDecoder`] for `[i16]`
@@ -264,5 +292,21 @@ impl ColumnLevelDecoder for ColumnLevelDecoderImpl {
             }
             LevelDecoderInner::Rle(reader) => reader.get_batch(&mut out[range]),
         }
+    }
+}
+
+impl DefinitionLevelDecoder for ColumnLevelDecoderImpl {
+    fn skip_def_levels(
+        &mut self,
+        _num_levels: usize,
+        _max_def_level: i16,
+    ) -> Result<(usize, usize)> {
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
+    }
+}
+
+impl RepetitionLevelDecoder for ColumnLevelDecoderImpl {
+    fn skip_rep_levels(&mut self, _num_records: usize) -> Result<(usize, usize)> {
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }

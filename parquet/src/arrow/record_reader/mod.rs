@@ -22,7 +22,7 @@ use arrow::buffer::Buffer;
 
 use crate::arrow::record_reader::{
     buffer::{BufferQueue, ScalarBuffer, ValuesBuffer},
-    definition_levels::{DefinitionLevelBuffer, DefinitionLevelDecoder},
+    definition_levels::{DefinitionLevelBuffer, DefinitionLevelBufferDecoder},
 };
 use crate::column::{
     page::PageReader,
@@ -56,8 +56,9 @@ pub struct GenericRecordReader<V, CV> {
     records: V,
     def_levels: Option<DefinitionLevelBuffer>,
     rep_levels: Option<ScalarBuffer<i16>>,
-    column_reader:
-        Option<GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelDecoder, CV>>,
+    column_reader: Option<
+        GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelBufferDecoder, CV>,
+    >,
 
     /// Number of records accumulated in records
     num_records: usize,
@@ -200,6 +201,37 @@ where
         }
 
         Ok(records_read)
+    }
+
+    /// Try to skip the next `num_records` rows
+    ///
+    /// # Returns
+    ///
+    /// Number of records skipped
+    pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        // First need to clear the buffer
+        let (buffered_records, buffered_values) = self.count_records(num_records);
+        self.num_records += buffered_records;
+        self.num_values += buffered_values;
+
+        self.consume_def_levels();
+        self.consume_rep_levels();
+        self.consume_record_data();
+        self.consume_bitmap();
+        self.reset();
+
+        let remaining = num_records - buffered_records;
+
+        if remaining == 0 {
+            return Ok(buffered_records);
+        }
+
+        let skipped = match self.column_reader.as_mut() {
+            Some(column_reader) => column_reader.skip_records(remaining)?,
+            None => 0,
+        };
+
+        Ok(skipped + buffered_records)
     }
 
     /// Returns number of records stored in buffer.

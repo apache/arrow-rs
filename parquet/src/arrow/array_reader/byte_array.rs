@@ -122,6 +122,10 @@ impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
         Ok(buffer.into_array(null_buffer, self.data_type.clone()))
     }
 
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        self.record_reader.skip_records(num_records)
+    }
+
     fn get_def_levels(&self) -> Option<&[i16]> {
         self.def_levels_buffer
             .as_ref()
@@ -209,6 +213,10 @@ impl<I: OffsetSizeTrait + ScalarValue> ColumnValueDecoder
             .ok_or_else(|| general_err!("no decoder set"))?;
 
         decoder.read(out, range.end - range.start, self.dict.as_ref())
+    }
+
+    fn skip_values(&mut self, _num_values: usize) -> Result<usize> {
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }
 

@@ -64,6 +64,9 @@ pub trait ArrayReader: Send {
     /// Reads at most `batch_size` records into an arrow array and return it.
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef>;
 
+    /// Skips over `num_records` records, returning the number of rows skipped
+    fn skip_records(&mut self, num_records: usize) -> Result<usize>;
+
     /// If this array has a non-zero definition level, i.e. has a nullable parent
     /// array, returns the definition levels of data from the last call of `next_batch`
     ///

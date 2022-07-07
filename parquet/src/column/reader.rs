@@ -22,7 +22,8 @@ use std::cmp::min;
 use super::page::{Page, PageReader};
 use crate::basic::*;
 use crate::column::reader::decoder::{
-    ColumnLevelDecoder, ColumnValueDecoder, LevelsBufferSlice, ValuesBufferSlice,
+    ColumnValueDecoder, DefinitionLevelDecoder, LevelsBufferSlice,
+    RepetitionLevelDecoder, ValuesBufferSlice,
 };
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
@@ -137,8 +138,8 @@ pub struct GenericColumnReader<R, D, V> {
 
 impl<R, D, V> GenericColumnReader<R, D, V>
 where
-    R: ColumnLevelDecoder,
-    D: ColumnLevelDecoder,
+    R: RepetitionLevelDecoder,
+    D: DefinitionLevelDecoder,
     V: ColumnValueDecoder,
 {
     /// Creates new column reader based on column descriptor and page reader.
@@ -269,6 +270,72 @@ where
         }
 
         Ok((values_read, levels_read))
+    }
+
+    /// Skips over `num_records` records, where records are delimited by repetition levels of 0
+    ///
+    /// # Returns
+    ///
+    /// Returns the number of records skipped
+    pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        let mut remaining = num_records;
+        while remaining != 0 {
+            if self.num_buffered_values == self.num_decoded_values {
+                let metadata = match self.page_reader.peek_next_page()? {
+                    None => return Ok(num_records - remaining),
+                    Some(metadata) => metadata,
+                };
+
+                // If dictionary, we must read it
+                if metadata.is_dict {
+                    self.read_new_page()?;
+                    continue;
+                }
+
+                // If page has less rows than the remaining records to
+                // be skipped, skip entire page
+                if metadata.num_rows < remaining {
+                    self.page_reader.skip_next_page()?;
+                    remaining -= metadata.num_rows;
+                    continue;
+                }
+            }
+
+            let to_read = remaining
+                .min((self.num_buffered_values - self.num_decoded_values) as usize);
+
+            let (records_read, rep_levels_read) = match self.rep_level_decoder.as_mut() {
+                Some(decoder) => decoder.skip_rep_levels(to_read)?,
+                None => (to_read, to_read),
+            };
+
+            let (values_read, def_levels_read) = match self.def_level_decoder.as_mut() {
+                Some(decoder) => decoder
+                    .skip_def_levels(rep_levels_read, self.descr.max_def_level())?,
+                None => (rep_levels_read, rep_levels_read),
+            };
+
+            if rep_levels_read != def_levels_read {
+                return Err(general_err!(
+                    "levels mismatch, read {} repetition levels and {} definition levels",
+                    rep_levels_read,
+                    def_levels_read
+                ));
+            }
+
+            let values = self.values_decoder.skip_values(values_read)?;
+            if values != values_read {
+                return Err(general_err!(
+                    "skipped {} values, expected {}",
+                    values,
+                    values_read
+                ));
+            }
+
+            self.num_decoded_values += rep_levels_read as u32;
+            remaining -= records_read;
+        }
+        Ok(num_records - remaining)
     }
 
     /// Reads a new page and set up the decoders for levels, values or dictionary.

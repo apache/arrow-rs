@@ -25,7 +25,7 @@ use crate::arrow::buffer::bit_util::count_set_bits;
 use crate::arrow::record_reader::buffer::BufferQueue;
 use crate::basic::Encoding;
 use crate::column::reader::decoder::{
-    ColumnLevelDecoder, ColumnLevelDecoderImpl, LevelsBufferSlice,
+    ColumnLevelDecoder, ColumnLevelDecoderImpl, DefinitionLevelDecoder, LevelsBufferSlice,
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
@@ -146,7 +146,7 @@ impl LevelsBufferSlice for DefinitionLevelBuffer {
     }
 }
 
-pub struct DefinitionLevelDecoder {
+pub struct DefinitionLevelBufferDecoder {
     max_level: i16,
     encoding: Encoding,
     data: Option<ByteBufferPtr>,
@@ -154,7 +154,7 @@ pub struct DefinitionLevelDecoder {
     packed_decoder: Option<PackedDecoder>,
 }
 
-impl ColumnLevelDecoder for DefinitionLevelDecoder {
+impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
     type Slice = DefinitionLevelBuffer;
 
     fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self {
@@ -220,6 +220,16 @@ impl ColumnLevelDecoder for DefinitionLevelDecoder {
                 decoder.read(nulls, range.end - range.start)
             }
         }
+    }
+}
+
+impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
+    fn skip_def_levels(
+        &mut self,
+        _num_levels: usize,
+        _max_def_level: i16,
+    ) -> Result<(usize, usize)> {
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }
 

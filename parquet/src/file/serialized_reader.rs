@@ -25,7 +25,7 @@ use parquet_format::{PageHeader, PageType};
 use thrift::protocol::TCompactInputProtocol;
 
 use crate::basic::{Compression, Encoding, Type};
-use crate::column::page::{Page, PageReader};
+use crate::column::page::{Page, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::page_index::index_reader;
@@ -554,6 +554,14 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
 
         // We are at the end of this column chunk and no more page left. Return None.
         Ok(None)
+    }
+
+    fn peek_next_page(&self) -> Result<Option<PageMetadata>> {
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
+    }
+
+    fn skip_next_page(&mut self) -> Result<()> {
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }
 
