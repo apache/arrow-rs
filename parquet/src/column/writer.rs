@@ -1734,7 +1734,11 @@ mod tests {
     #[test]
     fn test_column_writer_precalculated_statistics() {
         let page_writer = get_test_page_writer();
-        let props = Arc::new(WriterProperties::builder().build());
+        let props = Arc::new(
+            WriterProperties::builder()
+                .set_statistics_enabled(EnabledStatistics::Chunk)
+                .build(),
+        );
         let mut writer = get_test_column_writer::<Int32Type>(page_writer, 0, 0, props);
         writer
             .write_batch_with_statistics(
