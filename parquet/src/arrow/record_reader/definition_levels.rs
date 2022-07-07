@@ -229,7 +229,7 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
         _num_levels: usize,
         _max_def_level: i16,
     ) -> Result<(usize, usize)> {
-        todo!()
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }
 

@@ -251,7 +251,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     }
 
     fn skip_values(&mut self, _num_values: usize) -> Result<usize> {
-        todo!()
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }
 
@@ -301,12 +301,12 @@ impl DefinitionLevelDecoder for ColumnLevelDecoderImpl {
         _num_levels: usize,
         _max_def_level: i16,
     ) -> Result<(usize, usize)> {
-        todo!()
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }
 
 impl RepetitionLevelDecoder for ColumnLevelDecoderImpl {
     fn skip_rep_levels(&mut self, _num_records: usize) -> Result<(usize, usize)> {
-        todo!()
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }

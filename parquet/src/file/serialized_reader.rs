@@ -557,11 +557,11 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
     }
 
     fn peek_next_page(&self) -> Result<Option<PageMetadata>> {
-        todo!()
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 
     fn skip_next_page(&mut self) -> Result<()> {
-        todo!()
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }
 

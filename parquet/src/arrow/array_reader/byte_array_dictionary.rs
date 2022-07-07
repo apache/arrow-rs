@@ -377,7 +377,7 @@ where
     }
 
     fn skip_values(&mut self, _num_values: usize) -> Result<usize> {
-        todo!()
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }
 
