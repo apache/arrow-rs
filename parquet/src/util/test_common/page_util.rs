@@ -100,11 +100,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
     }
 
     fn add_def_levels(&mut self, max_levels: i16, def_levels: &[i16]) {
-        assert!(
-            self.num_values == def_levels.len() as u32,
-            "Must call `add_rep_levels() first!`"
-        );
-
+        self.num_values = def_levels.len() as u32;
         self.def_levels_byte_len = self.add_levels(max_levels, def_levels);
     }
 

@@ -616,7 +616,7 @@ mod tests {
                 builder.append(false).unwrap()
             }
         }
-        builder.finish().data().clone()
+        builder.finish().into_data()
     }
 
     #[test]
@@ -712,7 +712,7 @@ mod tests {
         ))))
         .len(6)
         .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
-        .add_child_data(c_values.data().clone())
+        .add_child_data(c_values.into_data())
         .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
         .build()
         .unwrap();
@@ -734,7 +734,7 @@ mod tests {
         ))))
         .len(6)
         .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
-        .add_child_data(d_values.data().clone())
+        .add_child_data(d_values.into_data())
         .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
         .build()
         .unwrap();
@@ -774,7 +774,7 @@ mod tests {
                 builder.append_null().unwrap();
             }
         }
-        builder.finish().data().clone()
+        builder.finish().into_data()
     }
 
     #[test]
@@ -941,7 +941,7 @@ mod tests {
                 builder.append(false).unwrap()
             }
         }
-        builder.finish().data().clone()
+        builder.finish().into_data()
     }
 
     #[test]
@@ -1250,7 +1250,7 @@ mod tests {
                 builder.append_null().unwrap()
             }
         }
-        builder.finish().data().clone()
+        builder.finish().into_data()
     }
 
     #[test]

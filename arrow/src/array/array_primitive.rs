@@ -168,6 +168,12 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     }
 }
 
+impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
+    fn from(array: PrimitiveArray<T>) -> Self {
+        array.data
+    }
+}
+
 impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     fn as_any(&self) -> &dyn Any {
         self
@@ -175,6 +181,10 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 }
 

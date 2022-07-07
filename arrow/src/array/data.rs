@@ -1217,6 +1217,11 @@ impl ArrayData {
             .zip(other.child_data.iter())
             .all(|(a, b)| a.ptr_eq(b))
     }
+
+    /// Converts this [`ArrayData`] into an [`ArrayDataBuilder`]
+    pub fn into_builder(self) -> ArrayDataBuilder {
+        self.into()
+    }
 }
 
 /// Return the expected [`DataTypeLayout`] Arrays of this data
@@ -1408,6 +1413,10 @@ impl ArrayDataBuilder {
         }
     }
 
+    pub fn data_type(self, data_type: DataType) -> Self {
+        Self { data_type, ..self }
+    }
+
     #[inline]
     #[allow(clippy::len_without_is_empty)]
     pub const fn len(mut self, n: usize) -> Self {
@@ -1479,6 +1488,22 @@ impl ArrayDataBuilder {
             self.buffers,
             self.child_data,
         )
+    }
+}
+
+impl From<ArrayData> for ArrayDataBuilder {
+    fn from(d: ArrayData) -> Self {
+        // TODO: Store Bitmap on ArrayData (#1799)
+        let null_bit_buffer = d.null_buffer().cloned();
+        Self {
+            null_bit_buffer,
+            data_type: d.data_type,
+            len: d.len,
+            null_count: Some(d.null_count),
+            offset: d.offset,
+            buffers: d.buffers,
+            child_data: d.child_data,
+        }
     }
 }
 
@@ -1772,7 +1797,7 @@ mod tests {
             Box::new(DataType::Int32),
             Box::new(DataType::LargeUtf8),
         );
-        let child_data = string_array.data().clone();
+        let child_data = string_array.into_data();
         ArrayData::try_new(data_type, 1, None, 0, vec![i32_buffer], vec![child_data])
             .unwrap();
     }
@@ -2030,7 +2055,7 @@ mod tests {
             None,
             0,
             vec![],
-            vec![child_array.data().clone()],
+            vec![child_array.into_data()],
         )
         .unwrap();
     }
@@ -2049,7 +2074,7 @@ mod tests {
             None,
             0,
             vec![],
-            vec![field1.data().clone()],
+            vec![field1.into_data()],
         )
         .unwrap();
     }
@@ -2070,7 +2095,7 @@ mod tests {
             None,
             0,
             vec![],
-            vec![field1.data().clone()],
+            vec![field1.into_data()],
         )
         .unwrap();
     }
@@ -2235,7 +2260,7 @@ mod tests {
             None,
             0,
             vec![keys.data().buffers[0].clone()],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2261,7 +2286,7 @@ mod tests {
             None,
             0,
             vec![keys.data().buffers[0].clone()],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2286,7 +2311,7 @@ mod tests {
             None,
             0,
             vec![keys.data().buffers[0].clone()],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2312,7 +2337,7 @@ mod tests {
             None,
             0,
             vec![keys.data().buffers[0].clone()],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2335,7 +2360,7 @@ mod tests {
             None,
             0,
             vec![offsets_buffer],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2379,7 +2404,7 @@ mod tests {
             None,
             0,
             vec![offsets_buffer],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2409,7 +2434,7 @@ mod tests {
                 None,
                 0,
                 vec![keys.data().buffers[0].clone()],
-                vec![values.data().clone()],
+                vec![values.into_data()],
             )
         };
 
@@ -2452,7 +2477,7 @@ mod tests {
             None,
             0,
             vec![type_ids],
-            vec![field1.data().clone(), field2.data().clone()],
+            vec![field1.into_data(), field2.into_data()],
         )
         .unwrap();
     }
@@ -2483,7 +2508,7 @@ mod tests {
             None,
             0,
             vec![type_ids],
-            vec![field1.data().clone(), field2.data().clone()],
+            vec![field1.into_data(), field2.into_data()],
         )
         .unwrap();
     }
@@ -2510,7 +2535,7 @@ mod tests {
             None,
             0,
             vec![type_ids], // need offsets buffer here too
-            vec![field1.data().clone(), field2.data().clone()],
+            vec![field1.into_data(), field2.into_data()],
         )
         .unwrap();
     }
@@ -2540,7 +2565,7 @@ mod tests {
             None,
             0,
             vec![type_ids, offsets],
-            vec![field1.data().clone(), field2.data().clone()],
+            vec![field1.into_data(), field2.into_data()],
         )
         .unwrap();
     }
@@ -2765,7 +2790,7 @@ mod tests {
                 None,
                 0,
                 vec![offsets],
-                vec![values_sliced.data().clone()],
+                vec![values_sliced.into_data()],
             )
         };
 

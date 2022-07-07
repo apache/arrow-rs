@@ -86,7 +86,6 @@ impl ArrowReaderOptions {
     ///
     /// For example:[ARROW-16184](https://issues.apache.org/jira/browse/ARROW-16184)
     ///
-
     /// Set `skip_arrow_metadata` to true, to skip decoding this
     pub fn with_skip_arrow_metadata(self, skip_arrow_metadata: bool) -> Self {
         Self {

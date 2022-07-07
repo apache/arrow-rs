@@ -177,7 +177,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         let array_data = ArrayData::builder(data_type)
             .len(null_buf.len())
             .add_buffer(offsets.into())
-            .add_child_data(values.data().clone())
+            .add_child_data(values.into_data())
             .null_bit_buffer(Some(null_buf.into()));
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -190,6 +190,14 @@ impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericListArray<OffsetSiz
         Self::try_new_from_array_data(data).expect(
             "Expected infallable creation of GenericListArray from ArrayDataRef failed",
         )
+    }
+}
+
+impl<OffsetSize: 'static + OffsetSizeTrait> From<GenericListArray<OffsetSize>>
+    for ArrayData
+{
+    fn from(array: GenericListArray<OffsetSize>) -> Self {
+        array.data
     }
 }
 
@@ -244,6 +252,10 @@ impl<OffsetSize: 'static + OffsetSizeTrait> Array for GenericListArray<OffsetSiz
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 }
 
@@ -434,6 +446,12 @@ impl From<ArrayData> for FixedSizeListArray {
     }
 }
 
+impl From<FixedSizeListArray> for ArrayData {
+    fn from(array: FixedSizeListArray) -> Self {
+        array.data
+    }
+}
+
 impl Array for FixedSizeListArray {
     fn as_any(&self) -> &dyn Any {
         self
@@ -441,6 +459,10 @@ impl Array for FixedSizeListArray {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 }
 

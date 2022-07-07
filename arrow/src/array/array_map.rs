@@ -107,6 +107,12 @@ impl From<ArrayData> for MapArray {
     }
 }
 
+impl From<MapArray> for ArrayData {
+    fn from(array: MapArray) -> Self {
+        array.data
+    }
+}
+
 impl MapArray {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
         if data.buffers().len() != 1 {
@@ -188,7 +194,7 @@ impl MapArray {
         let map_data = ArrayData::builder(map_data_type)
             .len(entry_offsets.len() - 1)
             .add_buffer(entry_offsets_buffer)
-            .add_child_data(entry_struct.data().clone())
+            .add_child_data(entry_struct.into_data())
             .build()?;
 
         Ok(MapArray::from(map_data))
@@ -202,6 +208,10 @@ impl Array for MapArray {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 
     /// Returns the total number of bytes of memory occupied by the buffers owned by this [MapArray].
@@ -277,7 +287,7 @@ mod tests {
         let map_data = ArrayData::builder(map_data_type)
             .len(3)
             .add_buffer(entry_offsets)
-            .add_child_data(entry_struct.data().clone())
+            .add_child_data(entry_struct.into_data())
             .build()
             .unwrap();
         MapArray::from(map_data)
@@ -323,7 +333,7 @@ mod tests {
         let map_data = ArrayData::builder(map_data_type)
             .len(3)
             .add_buffer(entry_offsets)
-            .add_child_data(entry_struct.data().clone())
+            .add_child_data(entry_struct.into_data())
             .build()
             .unwrap();
         let map_array = MapArray::from(map_data);
@@ -345,7 +355,7 @@ mod tests {
         ]);
         assert_eq!(
             struct_array,
-            StructArray::from(map_array.value(0).data().clone())
+            StructArray::from(map_array.value(0).into_data())
         );
         assert_eq!(
             &struct_array,
@@ -454,7 +464,7 @@ mod tests {
         let expected_map_data = ArrayData::builder(map_data_type)
             .len(2)
             .add_buffer(entry_offsets)
-            .add_child_data(entry_struct.data().clone())
+            .add_child_data(entry_struct.into_data())
             .build()
             .unwrap();
         let expected_map_array = MapArray::from(expected_map_data);
@@ -505,7 +515,7 @@ mod tests {
             StructArray::from(vec![(keys_field, key_array), (values_field, value_array)]);
         assert_eq!(
             struct_array,
-            StructArray::from(map_array.value(0).data().clone())
+            StructArray::from(map_array.value(0).into_data())
         );
         assert_eq!(
             &struct_array,

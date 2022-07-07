@@ -113,10 +113,10 @@ impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
 
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
         read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
-        let buffer = self.record_reader.consume_record_data()?;
-        let null_buffer = self.record_reader.consume_bitmap_buffer()?;
-        self.def_levels_buffer = self.record_reader.consume_def_levels()?;
-        self.rep_levels_buffer = self.record_reader.consume_rep_levels()?;
+        let buffer = self.record_reader.consume_record_data();
+        let null_buffer = self.record_reader.consume_bitmap_buffer();
+        self.def_levels_buffer = self.record_reader.consume_def_levels();
+        self.rep_levels_buffer = self.record_reader.consume_rep_levels();
         self.record_reader.reset();
 
         Ok(buffer.into_array(null_buffer, self.data_type.clone()))

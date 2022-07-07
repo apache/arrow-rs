@@ -453,7 +453,7 @@ fn create_primitive_array(
                 let values = Arc::new(Int64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
-                casted.data().clone()
+                casted.into_data()
             } else {
                 let builder = ArrayData::builder(data_type.clone())
                     .len(length)
@@ -477,7 +477,7 @@ fn create_primitive_array(
                 let values = Arc::new(Float64Array::from(data)) as ArrayRef;
                 // this cast is infallible, the unwrap is safe
                 let casted = cast(&values, data_type).unwrap();
-                casted.data().clone()
+                casted.into_data()
             } else {
                 let builder = ArrayData::builder(data_type.clone())
                     .len(length)
@@ -536,7 +536,7 @@ fn create_list_array(
             .len(field_node.length() as usize)
             .buffers(buffers[1..2].to_vec())
             .offset(0)
-            .child_data(vec![child_array.data().clone()])
+            .child_data(vec![child_array.into_data()])
             .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
         make_array(unsafe { builder.build_unchecked() })
@@ -546,7 +546,7 @@ fn create_list_array(
             .len(field_node.length() as usize)
             .buffers(buffers[1..1].to_vec())
             .offset(0)
-            .child_data(vec![child_array.data().clone()])
+            .child_data(vec![child_array.into_data()])
             .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
         make_array(unsafe { builder.build_unchecked() })
@@ -556,7 +556,7 @@ fn create_list_array(
             .len(field_node.length() as usize)
             .buffers(buffers[1..2].to_vec())
             .offset(0)
-            .child_data(vec![child_array.data().clone()])
+            .child_data(vec![child_array.into_data()])
             .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
         make_array(unsafe { builder.build_unchecked() })
@@ -579,7 +579,7 @@ fn create_dictionary_array(
             .len(field_node.length() as usize)
             .buffers(buffers[1..2].to_vec())
             .offset(0)
-            .child_data(vec![value_array.data().clone()])
+            .child_data(vec![value_array.into_data()])
             .null_bit_buffer((null_count > 0).then(|| buffers[0].clone()));
 
         make_array(unsafe { builder.build_unchecked() })
@@ -1509,8 +1509,8 @@ mod tests {
                 Some(vec![Some(-30)]),
             ]));
         let array9 = ArrayDataBuilder::new(schema.field(9).data_type().clone())
-            .add_child_data(array9_id.data().clone())
-            .add_child_data(array9_list.data().clone())
+            .add_child_data(array9_id.into_data())
+            .add_child_data(array9_list.into_data())
             .len(3)
             .build()
             .unwrap();
@@ -1800,8 +1800,8 @@ mod tests {
             false,
         );
         let entry_struct = StructArray::from(vec![
-            (keys_field, make_array(key_dict_array.data().clone())),
-            (values_field, make_array(value_dict_array.data().clone())),
+            (keys_field, make_array(key_dict_array.into_data())),
+            (values_field, make_array(value_dict_array.into_data())),
         ]);
         let map_data_type = DataType::Map(
             Box::new(Field::new(
@@ -1816,7 +1816,7 @@ mod tests {
         let map_data = ArrayData::builder(map_data_type)
             .len(3)
             .add_buffer(entry_offsets)
-            .add_child_data(entry_struct.data().clone())
+            .add_child_data(entry_struct.into_data())
             .build()
             .unwrap();
         let map_array = MapArray::from(map_data);

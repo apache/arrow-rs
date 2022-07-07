@@ -1755,7 +1755,7 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                         .map(|bitmap| bitmap.bits),
                     cast_keys.data().offset(),
                     cast_keys.data().buffers().to_vec(),
-                    vec![cast_values.data().clone()],
+                    vec![cast_values.into_data()],
                 )
             };
 
@@ -1973,7 +1973,7 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
                 .map(|bitmap| bitmap.bits),
             0,
             vec![offsets.into()],
-            vec![cast_array.data().clone()],
+            vec![cast_array.into_data()],
         )
     };
     let list_array =
@@ -2001,7 +2001,7 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
             array.offset(),
             // reuse offset buffer
             data.buffers().to_vec(),
-            vec![cast_array.data().clone()],
+            vec![cast_array.into_data()],
         )
     };
     let list = GenericListArray::<OffsetSize>::from(array_data);

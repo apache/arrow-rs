@@ -645,7 +645,7 @@ mod tests {
             DataType::Int8,
             false,
         ))))
-        .add_child_data(a2_child.data().clone())
+        .add_child_data(a2_child.into_data())
         .len(2)
         .add_buffer(Buffer::from(vec![0i32, 3, 4].to_byte_slice()))
         .build()
@@ -655,8 +655,8 @@ mod tests {
             Field::new("aa1", DataType::Int32, false),
             Field::new("a2", a2.data_type().clone(), false),
         ]))
-        .add_child_data(a1.data().clone())
-        .add_child_data(a2.data().clone())
+        .add_child_data(a1.into_data())
+        .add_child_data(a2.into_data())
         .len(2)
         .build()
         .unwrap();
