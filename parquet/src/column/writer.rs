@@ -17,7 +17,7 @@
 
 //! Contains column writer API.
 use parquet_format::{ColumnIndex, OffsetIndex};
-use std::{cmp, collections::VecDeque, convert::TryFrom, marker::PhantomData};
+use std::{collections::VecDeque, convert::TryFrom, marker::PhantomData};
 
 use crate::basic::{Compression, ConvertedType, Encoding, LogicalType, PageType, Type};
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
@@ -37,7 +37,7 @@ use crate::file::{
     metadata::ColumnChunkMetaData,
     properties::{WriterProperties, WriterPropertiesPtr, WriterVersion},
 };
-use crate::schema::types::ColumnDescPtr;
+use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 use crate::util::bit_util::FromBytes;
 use crate::util::memory::ByteBufferPtr;
 
@@ -321,49 +321,16 @@ impl<'a, T: DataType> ColumnWriterImpl<'a, T> {
         if self.statistics_enabled == EnabledStatistics::Chunk {
             match (min, max) {
                 (Some(min), Some(max)) => {
-                    if self
-                        .min_column_value
-                        .as_ref()
-                        .map_or(true, |v| self.compare_greater(v, min))
-                    {
-                        self.min_column_value = Some(min.clone());
-                    }
-
-                    if self
-                        .max_column_value
-                        .as_ref()
-                        .map_or(true, |v| self.compare_greater(max, v))
-                    {
-                        self.max_column_value = Some(max.clone());
-                    }
+                    Self::update_min(&self.descr, min, &mut self.min_column_value);
+                    Self::update_max(&self.descr, max, &mut self.max_column_value);
                 }
                 (None, Some(_)) | (Some(_), None) => {
                     panic!("min/max should be both set or both None")
                 }
                 (None, None) => {
                     for val in values {
-                        if let Type::FLOAT | Type::DOUBLE = T::get_physical_type() {
-                            // Skip NaN values
-                            if val != val {
-                                continue;
-                            }
-                        }
-
-                        if self
-                            .min_column_value
-                            .as_ref()
-                            .map_or(true, |v| self.compare_greater(v, val))
-                        {
-                            self.min_column_value = Some(val.clone());
-                        }
-
-                        if self
-                            .max_column_value
-                            .as_ref()
-                            .map_or(true, |v| self.compare_greater(val, v))
-                        {
-                            self.max_column_value = Some(val.clone());
-                        }
+                        Self::update_min(&self.descr, val, &mut self.min_column_value);
+                        Self::update_max(&self.descr, val, &mut self.max_column_value);
                     }
                 }
             };
@@ -1058,8 +1025,36 @@ impl<'a, T: DataType> ColumnWriterImpl<'a, T> {
         }
     }
 
-    #[allow(clippy::eq_op)]
     fn update_page_min_max(&mut self, val: &T::T) {
+        Self::update_min(&self.descr, val, &mut self.min_page_value);
+        Self::update_max(&self.descr, val, &mut self.max_page_value);
+    }
+
+    fn update_column_min_max(&mut self) {
+        let min = self.min_page_value.as_ref().unwrap();
+        Self::update_min(&self.descr, min, &mut self.min_column_value);
+
+        let max = self.max_page_value.as_ref().unwrap();
+        Self::update_max(&self.descr, max, &mut self.max_column_value);
+    }
+
+    fn update_min(descr: &ColumnDescriptor, val: &T::T, min: &mut Option<T::T>) {
+        Self::update_stat(val, min, |cur| Self::compare_greater(descr, cur, val))
+    }
+
+    fn update_max(descr: &ColumnDescriptor, val: &T::T, max: &mut Option<T::T>) {
+        Self::update_stat(val, max, |cur| Self::compare_greater(descr, val, cur))
+    }
+
+    /// Perform a conditional update of `cur`, skipping any NaN values
+    ///
+    /// If `cur` is `None`, sets `cur` to `Some(val)`, otherwise calls `should_update` with
+    /// the value of `cur`, and updates `cur` to `Some(val)` if it returns `true`
+    #[allow(clippy::eq_op)]
+    fn update_stat<F>(val: &T::T, cur: &mut Option<T::T>, should_update: F)
+    where
+        F: Fn(&T::T) -> bool,
+    {
         if let Type::FLOAT | Type::DOUBLE = T::get_physical_type() {
             // Skip NaN values
             if val != val {
@@ -1067,50 +1062,21 @@ impl<'a, T: DataType> ColumnWriterImpl<'a, T> {
             }
         }
 
-        if self
-            .min_page_value
-            .as_ref()
-            .map_or(true, |min| self.compare_greater(min, val))
-        {
-            self.min_page_value = Some(val.clone());
-        }
-        if self
-            .max_page_value
-            .as_ref()
-            .map_or(true, |max| self.compare_greater(val, max))
-        {
-            self.max_page_value = Some(val.clone());
-        }
-    }
-
-    fn update_column_min_max(&mut self) {
-        let update_min = self.min_column_value.as_ref().map_or(true, |min| {
-            let page_value = self.min_page_value.as_ref().unwrap();
-            self.compare_greater(min, page_value)
-        });
-        if update_min {
-            self.min_column_value = self.min_page_value.clone();
-        }
-
-        let update_max = self.max_column_value.as_ref().map_or(true, |max| {
-            let page_value = self.max_page_value.as_ref().unwrap();
-            self.compare_greater(page_value, max)
-        });
-        if update_max {
-            self.max_column_value = self.max_page_value.clone();
+        if cur.as_ref().map_or(true, should_update) {
+            *cur = Some(val.clone());
         }
     }
 
     /// Evaluate `a > b` according to underlying logical type.
-    fn compare_greater(&self, a: &T::T, b: &T::T) -> bool {
-        if let Some(LogicalType::Integer { is_signed, .. }) = self.descr.logical_type() {
+    fn compare_greater(descr: &ColumnDescriptor, a: &T::T, b: &T::T) -> bool {
+        if let Some(LogicalType::Integer { is_signed, .. }) = descr.logical_type() {
             if !is_signed {
                 // need to compare unsigned
                 return a.as_u64().unwrap() > b.as_u64().unwrap();
             }
         }
 
-        match self.descr.converted_type() {
+        match descr.converted_type() {
             ConvertedType::UINT_8
             | ConvertedType::UINT_16
             | ConvertedType::UINT_32
@@ -1120,8 +1086,8 @@ impl<'a, T: DataType> ColumnWriterImpl<'a, T> {
             _ => {}
         };
 
-        if let Some(LogicalType::Decimal { .. }) = self.descr.logical_type() {
-            match self.descr.physical_type() {
+        if let Some(LogicalType::Decimal { .. }) = descr.logical_type() {
+            match T::get_physical_type() {
                 Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
                     return compare_greater_byte_array_decimals(
                         a.as_bytes(),
@@ -1132,8 +1098,8 @@ impl<'a, T: DataType> ColumnWriterImpl<'a, T> {
             };
         }
 
-        if self.descr.converted_type() == ConvertedType::DECIMAL {
-            match self.descr.physical_type() {
+        if descr.converted_type() == ConvertedType::DECIMAL {
+            match T::get_physical_type() {
                 Type::FIXED_LEN_BYTE_ARRAY | Type::BYTE_ARRAY => {
                     return compare_greater_byte_array_decimals(
                         a.as_bytes(),
@@ -2362,10 +2328,10 @@ mod tests {
 
         let mut max_batch_size = values.len();
         if let Some(levels) = def_levels {
-            max_batch_size = cmp::max(max_batch_size, levels.len());
+            max_batch_size = max_batch_size.max(levels.len());
         }
         if let Some(levels) = rep_levels {
-            max_batch_size = cmp::max(max_batch_size, levels.len());
+            max_batch_size = max_batch_size.max(levels.len());
         }
 
         let mut writer = get_test_column_writer::<T>(

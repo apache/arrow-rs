@@ -154,7 +154,7 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(
 
     let meta = props
         .key_value_metadata
-        .get_or_insert_with(|| Default::default());
+        .get_or_insert_with(Default::default);
 
     // check if ARROW:schema exists, and overwrite it
     let schema_meta = meta
