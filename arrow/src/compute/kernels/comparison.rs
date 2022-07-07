@@ -1964,100 +1964,100 @@ macro_rules! typed_compares {
 
 /// Applies $OP to $LEFT and $RIGHT which are two dictionaries which have (the same) key type $KT
 macro_rules! typed_dict_cmp {
-    ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_BOOL: expr, $KT: tt) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_REF: expr, $KT: tt) => {{
         match ($LEFT.value_type(), $RIGHT.value_type()) {
             (DataType::Boolean, DataType::Boolean) => {
-                cmp_dict_bool::<$KT, _>($LEFT, $RIGHT, $OP_BOOL)
+                cmp_dict_bool::<$KT, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Int8, DataType::Int8) => {
-                cmp_dict::<$KT, Int8Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, Int8Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Int16, DataType::Int16) => {
-                cmp_dict::<$KT, Int16Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, Int16Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Int32, DataType::Int32) => {
-                cmp_dict::<$KT, Int32Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, Int32Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Int64, DataType::Int64) => {
-                cmp_dict::<$KT, Int64Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, Int64Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt8, DataType::UInt8) => {
-                cmp_dict::<$KT, UInt8Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, UInt8Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt16, DataType::UInt16) => {
-                cmp_dict::<$KT, UInt16Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, UInt16Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt32, DataType::UInt32) => {
-                cmp_dict::<$KT, UInt32Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, UInt32Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt64, DataType::UInt64) => {
-                cmp_dict::<$KT, UInt64Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, UInt64Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Float32, DataType::Float32) => {
-                cmp_dict::<$KT, Float32Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, Float32Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Float64, DataType::Float64) => {
-                cmp_dict::<$KT, Float64Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, Float64Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Utf8, DataType::Utf8) => {
-                cmp_dict_utf8::<$KT, i32, _>($LEFT, $RIGHT, |l, r| $OP(l, r))
+                cmp_dict_utf8::<$KT, i32, _>($LEFT, $RIGHT, $OP_REF)
             }
             (DataType::LargeUtf8, DataType::LargeUtf8) => {
-                cmp_dict_utf8::<$KT, i64, _>($LEFT, $RIGHT, |l, r| $OP(l, r))
+                cmp_dict_utf8::<$KT, i64, _>($LEFT, $RIGHT, $OP_REF)
             }
             (DataType::Binary, DataType::Binary) => {
-               cmp_dict_binary::<$KT, i32, _>($LEFT, $RIGHT, |l, r| $OP(l, r))
+               cmp_dict_binary::<$KT, i32, _>($LEFT, $RIGHT, $OP_REF)
             }
             (DataType::LargeBinary, DataType::LargeBinary) => {
-                cmp_dict_binary::<$KT, i64, _>($LEFT, $RIGHT, |l, r| $OP(l, r))
+                cmp_dict_binary::<$KT, i64, _>($LEFT, $RIGHT, $OP_REF)
             }
             (
                 DataType::Timestamp(TimeUnit::Nanosecond, _),
                 DataType::Timestamp(TimeUnit::Nanosecond, _),
             ) => {
-                cmp_dict::<$KT, TimestampNanosecondType, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, TimestampNanosecondType, _>($LEFT, $RIGHT, $OP)
             }
             (
                 DataType::Timestamp(TimeUnit::Microsecond, _),
                 DataType::Timestamp(TimeUnit::Microsecond, _),
             ) => {
-                cmp_dict::<$KT, TimestampMicrosecondType, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, TimestampMicrosecondType, _>($LEFT, $RIGHT, $OP)
             }
             (
                 DataType::Timestamp(TimeUnit::Millisecond, _),
                 DataType::Timestamp(TimeUnit::Millisecond, _),
             ) => {
-                cmp_dict::<$KT, TimestampMillisecondType, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, TimestampMillisecondType, _>($LEFT, $RIGHT, $OP)
             }
             (
                 DataType::Timestamp(TimeUnit::Second, _),
                 DataType::Timestamp(TimeUnit::Second, _),
             ) => {
-                cmp_dict::<$KT, TimestampSecondType, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, TimestampSecondType, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Date32, DataType::Date32) => {
-                cmp_dict::<$KT, Date32Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, Date32Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Date64, DataType::Date64) => {
-                cmp_dict::<$KT, Date64Type, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, Date64Type, _>($LEFT, $RIGHT, $OP)
             }
             (
                 DataType::Interval(IntervalUnit::YearMonth),
                 DataType::Interval(IntervalUnit::YearMonth),
             ) => {
-                cmp_dict::<$KT, IntervalYearMonthType, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, IntervalYearMonthType, _>($LEFT, $RIGHT, $OP)
             }
             (
                 DataType::Interval(IntervalUnit::DayTime),
                 DataType::Interval(IntervalUnit::DayTime),
             ) => {
-                cmp_dict::<$KT, IntervalDayTimeType, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, IntervalDayTimeType, _>($LEFT, $RIGHT, $OP)
             }
             (
                 DataType::Interval(IntervalUnit::MonthDayNano),
                 DataType::Interval(IntervalUnit::MonthDayNano),
             ) => {
-                cmp_dict::<$KT, IntervalMonthDayNanoType, _>($LEFT, $RIGHT, $OP)
+                cmp_dict_bit_equal::<$KT, IntervalMonthDayNanoType, _>($LEFT, $RIGHT, $OP)
             }
             (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                 "Comparing dictionary arrays of value type {} is not yet implemented",
@@ -2073,49 +2073,49 @@ macro_rules! typed_dict_cmp {
 
 macro_rules! typed_dict_compares {
    // Applies `LEFT OP RIGHT` when `LEFT` and `RIGHT` both are `DictionaryArray`
-    ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_BOOL: expr) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP: expr, $OP_REF: expr) => {{
         match ($LEFT.data_type(), $RIGHT.data_type()) {
             (DataType::Dictionary(left_key_type, _), DataType::Dictionary(right_key_type, _))=> {
                 match (left_key_type.as_ref(), right_key_type.as_ref()) {
                     (DataType::Int8, DataType::Int8) => {
                         let left = as_dictionary_array::<Int8Type>($LEFT);
                         let right = as_dictionary_array::<Int8Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, Int8Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_REF, Int8Type)
                     }
                     (DataType::Int16, DataType::Int16) => {
                         let left = as_dictionary_array::<Int16Type>($LEFT);
                         let right = as_dictionary_array::<Int16Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, Int16Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_REF, Int16Type)
                     }
                     (DataType::Int32, DataType::Int32) => {
                         let left = as_dictionary_array::<Int32Type>($LEFT);
                         let right = as_dictionary_array::<Int32Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, Int32Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_REF, Int32Type)
                     }
                     (DataType::Int64, DataType::Int64) => {
                         let left = as_dictionary_array::<Int64Type>($LEFT);
                         let right = as_dictionary_array::<Int64Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, Int64Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_REF, Int64Type)
                     }
                     (DataType::UInt8, DataType::UInt8) => {
                         let left = as_dictionary_array::<UInt8Type>($LEFT);
                         let right = as_dictionary_array::<UInt8Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, UInt8Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_REF, UInt8Type)
                     }
                     (DataType::UInt16, DataType::UInt16) => {
                         let left = as_dictionary_array::<UInt16Type>($LEFT);
                         let right = as_dictionary_array::<UInt16Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, UInt16Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_REF, UInt16Type)
                     }
                     (DataType::UInt32, DataType::UInt32) => {
                         let left = as_dictionary_array::<UInt32Type>($LEFT);
                         let right = as_dictionary_array::<UInt32Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, UInt32Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_REF, UInt32Type)
                     }
                     (DataType::UInt64, DataType::UInt64) => {
                         let left = as_dictionary_array::<UInt64Type>($LEFT);
                         let right = as_dictionary_array::<UInt64Type>($RIGHT);
-                        typed_dict_cmp!(left, right, $OP, $OP_BOOL, UInt64Type)
+                        typed_dict_cmp!(left, right, $OP, $OP_REF, UInt64Type)
                     }
                     (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                         "Comparing dictionary arrays of type {} is not yet implemented",
@@ -2135,9 +2135,60 @@ macro_rules! typed_dict_compares {
     }};
 }
 
+fn comparer<T>(
+    mut op: impl FnMut(T, T) -> bool,
+) -> impl FnMut((Option<T>, Option<T>)) -> Option<bool> {
+    move |(left_value, right_value)| {
+        if let (Some(left), Some(right)) = (left_value, right_value) {
+            Some(op(left, right))
+        } else {
+            None
+        }
+    }
+}
+
 /// Helper function to perform boolean lambda function on values from two dictionary arrays, this
 /// version does not attempt to use SIMD explicitly (though the compiler may auto vectorize)
 macro_rules! compare_dict_op {
+    ($left: expr, $right:expr, $op:expr, $value_ty:ty, $cmp_ty: ty) => {{
+        if $left.len() != $right.len() {
+            return Err(ArrowError::ComputeError(
+                "Cannot perform comparison operation on arrays of different length"
+                    .to_string(),
+            ));
+        }
+
+        // Safety justification: Since the inputs are valid Arrow arrays, all values are
+        // valid indexes into the dictionary (which is verified during construction)
+
+        let left;
+        let left_iter = unsafe {
+            left = $left
+                .values()
+                .as_any()
+                .downcast_ref::<$value_ty>()
+                .unwrap()
+                .as_array_view()
+                .cast::<$cmp_ty>();
+            left.take_iter_unchecked($left.keys_iter())
+        };
+
+        let right;
+        let right_iter = unsafe {
+            right = $right
+                .values()
+                .as_any()
+                .downcast_ref::<$value_ty>()
+                .unwrap()
+                .as_array_view()
+                .cast::<$cmp_ty>();
+            right.take_iter_unchecked($right.keys_iter())
+        };
+
+        let result = left_iter.zip(right_iter).map(comparer($op)).collect();
+
+        Ok(result)
+    }};
     ($left: expr, $right:expr, $op:expr, $value_ty:ty) => {{
         if $left.len() != $right.len() {
             return Err(ArrowError::ComputeError(
@@ -2195,6 +2246,74 @@ where
     F: Fn(T::Native, T::Native) -> bool,
 {
     compare_dict_op!(left, right, op, PrimitiveArray<T>)
+}
+
+fn cmp_dict_bit_equal<K, T, F>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+    op: F,
+) -> Result<BooleanArray>
+where
+    K: ArrowNumericType,
+    T: ArrowNumericType,
+    T::Native: CmpRepr,
+    F: Fn(<T::Native as CmpRepr>::Repr, <T::Native as CmpRepr>::Repr) -> bool,
+{
+    compare_dict_op!(
+        left,
+        right,
+        op,
+        PrimitiveArray<T>,
+        <T::Native as CmpRepr>::Repr
+    )
+}
+
+// Trait to help reduce the number of function instantiations by merging types which compare the
+// same (u8/i8 are compared the same way)
+trait CmpRepr: Copy {
+    type Repr: Copy;
+}
+
+impl CmpRepr for u8 {
+    type Repr = u8;
+}
+impl CmpRepr for i8 {
+    type Repr = u8;
+}
+
+impl CmpRepr for u16 {
+    type Repr = u16;
+}
+impl CmpRepr for i16 {
+    type Repr = u16;
+}
+
+impl CmpRepr for u32 {
+    type Repr = u32;
+}
+impl CmpRepr for i32 {
+    type Repr = u32;
+}
+
+impl CmpRepr for u64 {
+    type Repr = u64;
+}
+impl CmpRepr for i64 {
+    type Repr = u64;
+}
+
+impl CmpRepr for u128 {
+    type Repr = u128;
+}
+impl CmpRepr for i128 {
+    type Repr = u128;
+}
+
+impl CmpRepr for f32 {
+    type Repr = f32;
+}
+impl CmpRepr for f64 {
+    type Repr = f64;
 }
 
 /// Perform the given operation on two `DictionaryArray`s which value type is
@@ -2263,7 +2382,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             {
                 l != r
             }
-            typed_dict_compares!(left, right, op_eq, op_eq)
+            typed_dict_compares!(left, right, op_eq, <_ as PartialEq>::eq)
         }
         _ => typed_compares!(left, right, |a, b| !(a ^ b), |a, b| a == b),
     }
@@ -2295,7 +2414,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             {
                 l != r
             }
-            typed_dict_compares!(left, right, op_neq, op_neq)
+            typed_dict_compares!(left, right, op_neq, <_ as PartialEq>::ne)
         }
         _ => typed_compares!(left, right, |a, b| (a ^ b), |a, b| a != b),
     }
@@ -2327,7 +2446,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             {
                 l < r
             }
-            typed_dict_compares!(left, right, op_lt, op_lt)
+            typed_dict_compares!(left, right, op_lt, <_ as PartialOrd>::lt)
         }
         _ => typed_compares!(left, right, |a, b| ((!a) & b), |a, b| a < b),
     }
@@ -2358,7 +2477,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             {
                 l > r
             }
-            typed_dict_compares!(left, right, op_le, op_le)
+            typed_dict_compares!(left, right, op_le, <_ as PartialOrd>::le)
         }
         _ => typed_compares!(left, right, |a, b| !(a & (!b)), |a, b| a <= b),
     }
@@ -2389,7 +2508,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             {
                 l > r
             }
-            typed_dict_compares!(left, right, op_gt, op_gt)
+            typed_dict_compares!(left, right, op_gt, <_ as PartialOrd>::gt)
         }
         _ => typed_compares!(left, right, |a, b| (a & (!b)), |a, b| a > b),
     }
@@ -2419,7 +2538,7 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
             {
                 l >= r
             }
-            typed_dict_compares!(left, right, op_ge, op_ge)
+            typed_dict_compares!(left, right, op_ge, <_ as PartialOrd>::ge)
         }
         _ => typed_compares!(left, right, |a, b| !((!a) & b), |a, b| a >= b),
     }

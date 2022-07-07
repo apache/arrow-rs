@@ -167,6 +167,16 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     ) -> impl Iterator<Item = Option<T::Native>> + 'a {
         indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
     }
+
+    pub(crate) fn as_array_view(&self) -> NativeArrayView<'_, T::Native> {
+        // Safety: The constructed `RawPtrBox` will not outlive `&self.data`
+        unsafe {
+            NativeArrayView {
+                data: &self.data,
+                raw_values: RawPtrBox::new(self.raw_values.as_ptr() as *const u8),
+            }
+        }
+    }
 }
 
 impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
@@ -198,6 +208,45 @@ impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
         PrimitiveArray::value_unchecked(self, index)
+    }
+}
+
+pub(crate) struct NativeArrayView<'a, T> {
+    /// Underlying ArrayData
+    /// # Safety
+    /// must have exactly one buffer, aligned to type T
+    data: &'a ArrayData,
+    /// Pointer to the value array. The lifetime of this must be <= to the value buffer
+    /// stored in `data`, so it's safe to store.
+    /// # Safety
+    /// raw_values must have a value equivalent to `data.buffers()[0].raw_data()`
+    /// raw_values must have alignment for type T::NativeType
+    raw_values: RawPtrBox<T>,
+}
+
+impl<'a, T> NativeArrayView<'a, T>
+where
+    T: Copy,
+{
+    #[inline]
+    pub unsafe fn value_unchecked(&self, i: usize) -> T {
+        let offset = i + self.data.offset();
+        *self.raw_values.as_ptr().add(offset)
+    }
+
+    pub unsafe fn take_iter_unchecked<'b>(
+        &'b self,
+        indexes: impl Iterator<Item = Option<usize>> + 'b,
+    ) -> impl Iterator<Item = Option<T>> + 'b {
+        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
+    }
+
+    pub unsafe fn cast<U>(self) -> NativeArrayView<'a, U> {
+        assert_eq!(mem::size_of::<U>(), mem::size_of::<T>());
+        NativeArrayView {
+            data: self.data,
+            raw_values: RawPtrBox::new(self.raw_values.as_ptr() as *const u8),
+        }
     }
 }
 
