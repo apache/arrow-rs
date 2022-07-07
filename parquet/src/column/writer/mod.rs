@@ -154,6 +154,7 @@ type ColumnCloseResult = (
 );
 
 // Metrics per page
+#[derive(Default)]
 struct PageMetrics {
     num_buffered_values: u32,
     num_buffered_rows: u32,
@@ -749,9 +750,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         // Reset state.
         self.rep_levels_sink.clear();
         self.def_levels_sink.clear();
-        self.page_metrics.num_buffered_values = 0;
-        self.page_metrics.num_buffered_rows = 0;
-        self.page_metrics.num_page_nulls = 0;
+        self.page_metrics = PageMetrics::default();
 
         Ok(())
     }
