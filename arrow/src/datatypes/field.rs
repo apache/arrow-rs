@@ -145,7 +145,7 @@ impl Field {
         &self.name
     }
 
-    /// Set the name of the [`Field`].
+    /// Set the name of the [`Field`] and returns self.
     ///
     /// ```
     /// # use arrow::datatypes::*;
@@ -165,7 +165,7 @@ impl Field {
         &self.data_type
     }
 
-    /// Set [`DataType`] of the [`Field`]
+    /// Set [`DataType`] of the [`Field`] and returns self.
     ///
     /// ```
     /// # use arrow::datatypes::*;
@@ -185,7 +185,7 @@ impl Field {
         self.nullable
     }
 
-    /// Set `nullable` of the [`Field`]
+    /// Set `nullable` of the [`Field`] and returns self.
     ///
     /// ```
     /// # use arrow::datatypes::*;
