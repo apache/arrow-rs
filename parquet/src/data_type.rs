@@ -565,7 +565,7 @@ impl AsBytes for str {
 
 pub(crate) mod private {
     use crate::encodings::decoding::PlainDecoderDetails;
-    use crate::util::bit_util::{BitReader, BitWriter};
+    use crate::util::bit_util::{read_num_bytes, BitReader, BitWriter};
     use crate::util::memory::ByteBufferPtr;
 
     use crate::basic::Type;
@@ -907,21 +907,6 @@ pub(crate) mod private {
         }
     }
 
-    // TODO - Why does macro importing fail?
-    /// Reads `$size` of bytes from `$src`, and reinterprets them as type `$ty`, in
-    /// little-endian order. `$ty` must implement the `Default` trait. Otherwise this won't
-    /// compile.
-    /// This is copied and modified from byteorder crate.
-    macro_rules! read_num_bytes {
-        ($ty:ty, $size:expr, $src:expr) => {{
-            assert!($size <= $src.len());
-            let mut buffer =
-                <$ty as $crate::util::bit_util::FromBytes>::Buffer::default();
-            buffer.as_mut()[..$size].copy_from_slice(&$src[..$size]);
-            <$ty>::from_ne_bytes(buffer)
-        }};
-    }
-
     impl ParquetValueType for super::ByteArray {
         const PHYSICAL_TYPE: Type = Type::BYTE_ARRAY;
 
@@ -963,7 +948,7 @@ pub(crate) mod private {
             let num_values = std::cmp::min(buffer.len(), decoder.num_values);
             for i in 0..num_values {
                 let len: usize =
-                    read_num_bytes!(u32, 4, data.start_from(decoder.start).as_ref())
+                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref())
                         as usize;
                 decoder.start += std::mem::size_of::<u32>();
 
@@ -990,7 +975,7 @@ pub(crate) mod private {
 
             for _ in 0..num_values {
                 let len: usize =
-                    read_num_bytes!(u32, 4, data.start_from(decoder.start).as_ref())
+                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref())
                         as usize;
                 decoder.start += std::mem::size_of::<u32>() + len;
             }

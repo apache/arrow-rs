@@ -23,7 +23,7 @@ use crate::basic::Encoding;
 use crate::data_type::AsBytes;
 use crate::errors::Result;
 use crate::util::{
-    bit_util::{ceil, num_required_bits, BitReader, BitWriter},
+    bit_util::{ceil, num_required_bits, read_num_bytes, BitReader, BitWriter},
     memory::ByteBufferPtr,
 };
 
@@ -190,7 +190,7 @@ impl LevelDecoder {
             LevelDecoder::Rle(ref mut num_values, ref mut decoder) => {
                 *num_values = Some(num_buffered_values);
                 let i32_size = mem::size_of::<i32>();
-                let data_size = read_num_bytes!(i32, i32_size, data.as_ref()) as usize;
+                let data_size = read_num_bytes::<i32>(i32_size, data.as_ref()) as usize;
                 decoder.set_data(data.range(i32_size, data_size));
                 i32_size + data_size
             }

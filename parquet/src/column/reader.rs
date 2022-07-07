@@ -28,7 +28,7 @@ use crate::column::reader::decoder::{
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{ceil, num_required_bits};
+use crate::util::bit_util::{ceil, num_required_bits, read_num_bytes};
 use crate::util::memory::ByteBufferPtr;
 
 pub(crate) mod decoder;
@@ -520,7 +520,7 @@ fn parse_v1_level(
     match encoding {
         Encoding::RLE => {
             let i32_size = std::mem::size_of::<i32>();
-            let data_size = read_num_bytes!(i32, i32_size, buf.as_ref()) as usize;
+            let data_size = read_num_bytes::<i32>(i32_size, buf.as_ref()) as usize;
             Ok((i32_size + data_size, buf.range(i32_size, data_size)))
         }
         Encoding::BIT_PACKED => {
