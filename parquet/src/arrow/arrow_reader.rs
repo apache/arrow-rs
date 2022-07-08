@@ -1532,7 +1532,6 @@ mod tests {
     #[test]
     fn test_row_group_exact_multiple() {
         let schema = Arc::new(Schema::new(vec![
-            Field::new("int", ArrowDataType::Int32, false),
             Field::new(
                 "list",
                 ArrowDataType::List(Box::new(Field::new(
@@ -1557,16 +1556,13 @@ mod tests {
         )
         .unwrap();
         for _ in 0..2 {
-            let mut int_builder = Int32Builder::new(10);
             let mut list_builder = ListBuilder::new(Int32Builder::new(10));
-            for i in 0..10 {
-                int_builder.append_value(i).unwrap();
+            for _ in 0..10 {
                 list_builder.append(true).unwrap();
             }
             let batch = RecordBatch::try_new(
                 schema.clone(),
                 vec![
-                    Arc::new(int_builder.finish()),
                     Arc::new(list_builder.finish()),
                 ],
             )

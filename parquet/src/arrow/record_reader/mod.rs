@@ -361,7 +361,7 @@ where
                 // If reached end of column chunk => end of a record
                 if records_read != records_to_read
                     && end_of_column
-                    && self.values_written != 0
+                    && self.values_written != self.num_values
                 {
                     records_read += 1;
                     end_of_last_record = self.values_written;
@@ -772,15 +772,21 @@ mod tests {
         assert_eq!(record_reader.num_records(), 4);
         assert_eq!(record_reader.num_values(), 7);
 
-        let mut record_reader = RecordReader::<Int32Type>::new(desc);
-        let page_reader = Box::new(InMemoryPageReader::new(vec![page]));
-        record_reader.set_page_reader(page_reader).unwrap();
-        assert_eq!(record_reader.read_records(3).unwrap(), 3);
-        assert_eq!(record_reader.num_records(), 3);
-        assert_eq!(record_reader.num_values(), 5);
-
-        assert_eq!(record_reader.read_records(3).unwrap(), 1);
+        assert_eq!(record_reader.read_records(4).unwrap(), 0);
         assert_eq!(record_reader.num_records(), 4);
         assert_eq!(record_reader.num_values(), 7);
+
+        record_reader.read_records(4).unwrap();
+
+        let page_reader = Box::new(InMemoryPageReader::new(vec![page.clone()]));
+        record_reader.set_page_reader(page_reader).unwrap();
+
+        assert_eq!(record_reader.read_records(4).unwrap(), 4);
+        assert_eq!(record_reader.num_records(), 8);
+        assert_eq!(record_reader.num_values(), 14);
+
+        assert_eq!(record_reader.read_records(4).unwrap(), 0);
+        assert_eq!(record_reader.num_records(), 8);
+        assert_eq!(record_reader.num_values(), 14);
     }
 }
