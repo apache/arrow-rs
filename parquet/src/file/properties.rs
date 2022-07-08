@@ -205,6 +205,16 @@ impl WriterProperties {
             .or_else(|| self.default_column_properties.statistics_enabled())
             .unwrap_or(DEFAULT_STATISTICS_ENABLED)
     }
+
+    /// Returns max size for statistics.
+    /// Only applicable if statistics are enabled.
+    pub fn max_statistics_size(&self, col: &ColumnPath) -> usize {
+        self.column_properties
+            .get(col)
+            .and_then(|c| c.max_statistics_size())
+            .or_else(|| self.default_column_properties.max_statistics_size())
+            .unwrap_or(DEFAULT_MAX_STATISTICS_SIZE)
+    }
 }
 
 /// Writer properties builder.
@@ -334,6 +344,14 @@ impl WriterPropertiesBuilder {
         self
     }
 
+    /// Sets max statistics size for any column.
+    /// Applicable only if statistics are enabled.
+    pub fn set_max_statistics_size(mut self, value: usize) -> Self {
+        self.default_column_properties
+            .set_max_statistics_size(value);
+        self
+    }
+
     // ----------------------------------------------------------------------
     // Setters for a specific column
 
@@ -384,6 +402,17 @@ impl WriterPropertiesBuilder {
         self.get_mut_props(col).set_statistics_enabled(value);
         self
     }
+
+    /// Sets max size for statistics for a column.
+    /// Takes precedence over globally defined settings.
+    pub fn set_column_max_statistics_size(
+        mut self,
+        col: ColumnPath,
+        value: usize,
+    ) -> Self {
+        self.get_mut_props(col).set_max_statistics_size(value);
+        self
+    }
 }
 
 /// Controls the level of statistics to be computed by the writer
@@ -393,7 +422,7 @@ pub enum EnabledStatistics {
     None,
     /// Compute chunk-level statistics but not page-level
     Chunk,
-    /// Compute page-level statistics
+    /// Compute page-level and chunk-level statistics
     Page,
 }
 
@@ -413,6 +442,7 @@ struct ColumnProperties {
     codec: Option<Compression>,
     dictionary_enabled: Option<bool>,
     statistics_enabled: Option<EnabledStatistics>,
+    max_statistics_size: Option<usize>,
 }
 
 impl ColumnProperties {
@@ -423,6 +453,7 @@ impl ColumnProperties {
             codec: None,
             dictionary_enabled: None,
             statistics_enabled: None,
+            max_statistics_size: None,
         }
     }
 
@@ -457,6 +488,11 @@ impl ColumnProperties {
         self.statistics_enabled = Some(enabled);
     }
 
+    /// Sets max size for statistics for this column.
+    fn set_max_statistics_size(&mut self, value: usize) {
+        self.max_statistics_size = Some(value);
+    }
+
     /// Returns optional encoding for this column.
     fn encoding(&self) -> Option<Encoding> {
         self.encoding
@@ -478,6 +514,11 @@ impl ColumnProperties {
     /// returns `Some(false)`. If result is `None`, then no setting has been provided.
     fn statistics_enabled(&self) -> Option<EnabledStatistics> {
         self.statistics_enabled
+    }
+
+    /// Returns optional max size in bytes for statistics.
+    fn max_statistics_size(&self) -> Option<usize> {
+        self.max_statistics_size
     }
 }
 
@@ -516,6 +557,10 @@ mod tests {
         assert_eq!(
             props.statistics_enabled(&ColumnPath::from("col")),
             DEFAULT_STATISTICS_ENABLED
+        );
+        assert_eq!(
+            props.max_statistics_size(&ColumnPath::from("col")),
+            DEFAULT_MAX_STATISTICS_SIZE
         );
     }
 
@@ -590,6 +635,7 @@ mod tests {
             .set_compression(Compression::GZIP)
             .set_dictionary_enabled(false)
             .set_statistics_enabled(EnabledStatistics::None)
+            .set_max_statistics_size(50)
             // specific column settings
             .set_column_encoding(ColumnPath::from("col"), Encoding::RLE)
             .set_column_compression(ColumnPath::from("col"), Compression::SNAPPY)
@@ -598,6 +644,7 @@ mod tests {
                 ColumnPath::from("col"),
                 EnabledStatistics::Chunk,
             )
+            .set_column_max_statistics_size(ColumnPath::from("col"), 123)
             .build();
 
         assert_eq!(props.writer_version(), WriterVersion::PARQUET_2_0);
@@ -623,6 +670,7 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("a")),
             EnabledStatistics::None
         );
+        assert_eq!(props.max_statistics_size(&ColumnPath::from("a")), 50);
 
         assert_eq!(
             props.encoding(&ColumnPath::from("col")),
@@ -637,6 +685,7 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("col")),
             EnabledStatistics::Chunk
         );
+        assert_eq!(props.max_statistics_size(&ColumnPath::from("col")), 123);
     }
 
     #[test]

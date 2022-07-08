@@ -318,6 +318,9 @@ impl<'a, T: DataType> ColumnWriterImpl<'a, T> {
         let write_batch_size = self.props.write_batch_size();
         let num_batches = min_len / write_batch_size;
 
+        // If only computing chunk-level statistics compute them here, page-level statistics
+        // are computed in [`Self::write_mini_batch`] and used to update chunk statistics in
+        // [`Self::add_data_page`]
         if self.statistics_enabled == EnabledStatistics::Chunk {
             match (min, max) {
                 (Some(min), Some(max)) => {
@@ -389,11 +392,13 @@ impl<'a, T: DataType> ColumnWriterImpl<'a, T> {
         self.write_batch_internal(values, def_levels, rep_levels, None, None, None, None)
     }
 
-    /// Writer may optionally provide pre-calculated statistics for this batch
+    /// Writer may optionally provide pre-calculated statistics for use when computing
+    /// chunk-level statistics
     ///
-    /// Note: Unless disabled using by using [`WriterProperties`] to set
-    /// enabled statistics to [`EnabledStatistics::Chunk`], this will still compute
-    /// per-page statistics ignoring the data passed
+    /// NB: [`WriterProperties::statistics_enabled`] must be set to [`EnabledStatistics::Chunk`]
+    /// for these statistics to take effect. If [`EnabledStatistics::None`] they will be ignored,
+    /// and if [`EnabledStatistics::Page`] the chunk statistics will instead be computed from the
+    /// computed page statistics
     pub fn write_batch_with_statistics(
         &mut self,
         values: &[T::T],
