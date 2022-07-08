@@ -138,7 +138,7 @@ fn deserialize_column_index(
     column_type: Type,
 ) -> Result<Index, ParquetError> {
     if data.is_empty() {
-        return Ok(Index::None);
+        return Ok(Index::NONE);
     }
     let mut d = Cursor::new(data);
     let mut prot = TCompactInputProtocol::new(&mut d);
