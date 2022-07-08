@@ -783,9 +783,9 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                 .as_any()
                 .downcast_ref::<PrimitiveArray<Date32Type>>()
                 .ok_or_else(|| {
-                    ArrowError::CastError(format!(
-                        "Left array cannot be cast to Date32Type",
-                    ))
+                    ArrowError::CastError(
+                        "Left array cannot be cast to Date32Type".to_string(),
+                    )
                 })?;
             match right.data_type() {
                 DataType::Interval(IntervalUnit::YearMonth) => {
@@ -793,11 +793,12 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                         .as_any()
                         .downcast_ref::<PrimitiveArray<IntervalYearMonthType>>()
                         .ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Right array cannot be cast to IntervalYearMonthType",
-                            ))
+                            ArrowError::CastError(
+                                "Right array cannot be cast to IntervalYearMonthType"
+                                    .to_string(),
+                            )
                         })?;
-                    let res = math_op(l, r, |a, b| Date32Type::add_year_months(a, b))?;
+                    let res = math_op(l, r, Date32Type::add_year_months)?;
                     return Ok(Arc::new(res));
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
@@ -805,11 +806,12 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                         .as_any()
                         .downcast_ref::<PrimitiveArray<IntervalDayTimeType>>()
                         .ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Right array cannot be cast to IntervalDayTimeType",
-                            ))
+                            ArrowError::CastError(
+                                "Right array cannot be cast to IntervalDayTimeType"
+                                    .to_string(),
+                            )
                         })?;
-                    let res = math_op(l, r, |a, b| Date32Type::add_day_time(a, b))?;
+                    let res = math_op(l, r, Date32Type::add_day_time)?;
                     return Ok(Arc::new(res));
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
@@ -817,11 +819,12 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                         .as_any()
                         .downcast_ref::<PrimitiveArray<IntervalMonthDayNanoType>>()
                         .ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Right array cannot be cast to IntervalMonthDayNanoType",
-                            ))
+                            ArrowError::CastError(
+                                "Right array cannot be cast to IntervalMonthDayNanoType"
+                                    .to_string(),
+                            )
                         })?;
-                    let res = math_op(l, r, |a, b| Date32Type::add_month_day_nano(a, b))?;
+                    let res = math_op(l, r, Date32Type::add_month_day_nano)?;
                     return Ok(Arc::new(res));
                 }
                 t => Err(ArrowError::CastError(format!(
@@ -835,9 +838,9 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                 .as_any()
                 .downcast_ref::<PrimitiveArray<Date64Type>>()
                 .ok_or_else(|| {
-                    ArrowError::CastError(format!(
-                        "Left array cannot be cast to Date64Type",
-                    ))
+                    ArrowError::CastError(
+                        "Left array cannot be cast to Date64Type".to_string(),
+                    )
                 })?;
             match right.data_type() {
                 DataType::Interval(IntervalUnit::YearMonth) => {
@@ -845,11 +848,12 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                         .as_any()
                         .downcast_ref::<PrimitiveArray<IntervalYearMonthType>>()
                         .ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Right array cannot be cast to IntervalYearMonthType",
-                            ))
+                            ArrowError::CastError(
+                                "Right array cannot be cast to IntervalYearMonthType"
+                                    .to_string(),
+                            )
                         })?;
-                    let res = math_op(l, r, |a, b| Date64Type::add_year_months(a, b))?;
+                    let res = math_op(l, r, Date64Type::add_year_months)?;
                     return Ok(Arc::new(res));
                 }
                 DataType::Interval(IntervalUnit::DayTime) => {
@@ -857,11 +861,12 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                         .as_any()
                         .downcast_ref::<PrimitiveArray<IntervalDayTimeType>>()
                         .ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Right array cannot be cast to IntervalDayTimeType",
-                            ))
+                            ArrowError::CastError(
+                                "Right array cannot be cast to IntervalDayTimeType"
+                                    .to_string(),
+                            )
                         })?;
-                    let res = math_op(l, r, |a, b| Date64Type::add_day_time(a, b))?;
+                    let res = math_op(l, r, Date64Type::add_day_time)?;
                     return Ok(Arc::new(res));
                 }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
@@ -869,11 +874,12 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                         .as_any()
                         .downcast_ref::<PrimitiveArray<IntervalMonthDayNanoType>>()
                         .ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "Right array cannot be cast to IntervalMonthDayNanoType",
-                            ))
+                            ArrowError::CastError(
+                                "Right array cannot be cast to IntervalMonthDayNanoType"
+                                    .to_string(),
+                            )
                         })?;
-                    let res = math_op(l, r, |a, b| Date64Type::add_month_day_nano(a, b))?;
+                    let res = math_op(l, r, Date64Type::add_month_day_nano)?;
                     return Ok(Arc::new(res));
                 }
                 t => Err(ArrowError::CastError(format!(
