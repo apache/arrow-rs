@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::min;
+use std::ops::{Add, Sub};
+use chrono::{Datelike, Duration, NaiveDate};
 use super::{ArrowPrimitiveType, DataType, IntervalUnit, TimeUnit};
 use half::f16;
 
@@ -191,3 +194,127 @@ impl ArrowTimestampType for TimestampNanosecondType {
         TimeUnit::Nanosecond
     }
 }
+
+impl IntervalYearMonthType {
+    pub fn from(years: i32, months: i32) -> <IntervalYearMonthType as ArrowPrimitiveType>::Native {
+        years * 12 + months
+    }
+
+    pub fn to_months(i: <IntervalYearMonthType as ArrowPrimitiveType>::Native) -> i32 {
+        i
+    }
+}
+
+impl IntervalDayTimeType {
+    pub fn from(days: i32, millis: i32) -> <IntervalDayTimeType as ArrowPrimitiveType>::Native {
+        let m = millis as u64 & u32::MAX as u64;
+        let d = (days as u64 & u32::MAX as u64) << 32;
+        (m | d) as <IntervalDayTimeType as ArrowPrimitiveType>::Native
+    }
+
+    pub fn to_parts(i: <IntervalDayTimeType as ArrowPrimitiveType>::Native) -> (i32, i32) {
+        let days = (i >> 32) as i32;
+        let ms = i as i32;
+        (days, ms)
+    }
+}
+
+impl IntervalMonthDayNanoType {
+    pub fn from(months: i32, days: i32, nanos: i64) -> <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native {
+        let m = months as u128 & u32::MAX as u128;
+        let d = (days as u128 & u32::MAX as u128) << 32;
+        let n = (nanos as u128) << 64;
+        (m | d | n) as <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native
+    }
+
+    pub fn to_parts(i: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native) -> (i32, i32, i64) {
+        let nanos = (i >> 64) as i64;
+        let days = (i >> 32) as i32;
+        let months = i as i32;
+        (months, days, nanos)
+    }
+}
+
+
+impl Date32Type {
+    pub fn to_naive_date(i: <Date32Type as ArrowPrimitiveType>::Native) -> NaiveDate {
+        let epoch = NaiveDate::from_ymd(1970, 1, 1);
+        epoch.add(Duration::days(i as i64))
+    }
+
+    pub fn from_naive_date(d: NaiveDate) -> <Date32Type as ArrowPrimitiveType>::Native {
+        let epoch = NaiveDate::from_ymd(1970, 1, 1);
+        d.sub(epoch).num_days() as <Date32Type as ArrowPrimitiveType>::Native
+    }
+
+    pub fn add_year_months(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native
+    ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        let prior = Date32Type::to_naive_date(date);
+        let months = IntervalYearMonthType::to_months(delta);
+        let posterior = add_months(prior, months);
+        Date32Type::from_naive_date(posterior)
+    }
+
+    pub fn add_day_time(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native
+    ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
+        let res = Date32Type::to_naive_date(date);
+        let res = res.add(Duration::days(days as i64));
+        let res = res.add(Duration::milliseconds(ms as i64));
+        Date32Type::from_naive_date(res)
+    }
+
+    pub fn add_month_day_nano(
+        date: <Date32Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native
+    ) -> <Date32Type as ArrowPrimitiveType>::Native {
+        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+        let res = Date32Type::to_naive_date(date);
+        let res = add_months(res, months);
+        let res = res.add(Duration::days(days as i64));
+        let res = res.add(Duration::nanoseconds(nanos));
+        Date32Type::from_naive_date(res)
+    }
+}
+
+impl Date64Type {
+    pub fn to_naive_date(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDate {
+        let epoch = NaiveDate::from_ymd(1970, 1, 1);
+        epoch.add(Duration::milliseconds(i as i64))
+    }
+
+    pub fn from_naive_date(d: NaiveDate) -> <Date64Type as ArrowPrimitiveType>::Native {
+        let epoch = NaiveDate::from_ymd(1970, 1, 1);
+        d.sub(epoch).num_milliseconds() as <Date64Type as ArrowPrimitiveType>::Native
+    }
+}
+
+// Chrono PR https://github.com/apache/arrow-datafusion/pull/2797
+fn add_months(prior: NaiveDate, months: i32) -> NaiveDate {
+    let target = chrono_add_months(prior, months);
+    let target_plus = chrono_add_months(target, 1);
+    let last_day = target_plus.sub(chrono::Duration::days(1));
+    let day = min(prior.day(), last_day.day());
+    NaiveDate::from_ymd(target.year(), target.month(), day)
+}
+
+// Chrono PR https://github.com/apache/arrow-datafusion/pull/2797
+fn chrono_add_months(dt: NaiveDate, delta: i32) -> NaiveDate {
+    let ay = dt.year();
+    let am = dt.month() as i32 - 1; // zero-based for modulo operations
+    let bm = am + delta as i32;
+    let by = ay
+        + if bm < 0 {
+        (bm as f32 / 12.0).floor() as i32
+    } else {
+        bm / 12
+    };
+    let cm = bm % 12;
+    let dm = if cm < 0 { cm + 12 } else { cm };
+    NaiveDate::from_ymd(by, dm as u32 + 1, 1)
+}
+

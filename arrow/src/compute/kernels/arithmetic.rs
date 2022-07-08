@@ -34,7 +34,7 @@ use crate::compute::kernels::arity::unary;
 use crate::compute::unary_dyn;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes;
-use crate::datatypes::{ArrowNumericType, DataType};
+use crate::datatypes::{ArrowNumericType, DataType, Date32Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType};
 use crate::datatypes::{
     Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
     UInt32Type, UInt64Type, UInt8Type,
@@ -55,14 +55,15 @@ use std::sync::Arc;
 /// # Errors
 ///
 /// This function errors if the arrays have different lengths
-pub fn math_op<T, F>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
+pub fn math_op<LT, RT, F>(
+    left: &PrimitiveArray<LT>,
+    right: &PrimitiveArray<RT>,
     op: F,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<LT>>
 where
-    T: ArrowNumericType,
-    F: Fn(T::Native, T::Native) -> T::Native,
+    LT: ArrowNumericType,
+    RT: ArrowNumericType,
+    F: Fn(LT::Native, RT::Native) -> LT::Native,
 {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
@@ -87,7 +88,7 @@ where
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            T::DATA_TYPE,
+            LT::DATA_TYPE,
             left.len(),
             None,
             null_bit_buffer,
@@ -96,7 +97,7 @@ where
             vec![],
         )
     };
-    Ok(PrimitiveArray::<T>::from(data))
+    Ok(PrimitiveArray::<LT>::from(data))
 }
 
 /// Helper function for operations where a valid `0` on the right array should
@@ -774,6 +775,52 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
         DataType::Dictionary(_, _) => {
             typed_dict_math_op!(left, right, |a, b| a + b, math_op_dict)
         }
+        DataType::Date32 => {
+            let l = left.as_any()
+                .downcast_ref::<PrimitiveArray<Date32Type>>()
+                .ok_or_else(|| {ArrowError::CastError(format!(
+                    "Left array cannot be cast to Date32Type",
+                ))})?;
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right.as_any()
+                            .downcast_ref::<PrimitiveArray<IntervalYearMonthType>>()
+                            .ok_or_else(|| {ArrowError::CastError(format!(
+                        "Right array cannot be cast to IntervalYearMonthType",
+                    ))})?;
+                    let res = math_op(l, r, |a, b| {
+                        Date32Type::add_year_months(a, b)
+                    })?;
+                    return Ok(Arc::new(res));
+                },
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right.as_any()
+                        .downcast_ref::<PrimitiveArray<IntervalDayTimeType>>()
+                        .ok_or_else(|| {ArrowError::CastError(format!(
+                            "Right array cannot be cast to IntervalDayTimeType",
+                        ))})?;
+                    let res = math_op(l, r, |a, b| {
+                        Date32Type::add_day_time(a, b)
+                    })?;
+                    return Ok(Arc::new(res));
+                },
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right.as_any()
+                        .downcast_ref::<PrimitiveArray<IntervalMonthDayNanoType>>()
+                        .ok_or_else(|| {ArrowError::CastError(format!(
+                            "Right array cannot be cast to IntervalMonthDayNanoType",
+                        ))})?;
+                    let res = math_op(l, r, |a, b| {
+                        Date32Type::add_month_day_nano(a, b)
+                    })?;
+                    return Ok(Arc::new(res));
+                },
+                t => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation on arrays of type {}",
+                    t
+                ))),
+            }
+        }
         _ => typed_math_op!(left, right, |a, b| a + b, math_op),
     }
 }
@@ -1053,6 +1100,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use chrono::NaiveDate;
     use super::*;
     use crate::array::Int32Array;
 
@@ -1066,6 +1114,33 @@ mod tests {
         assert_eq!(15, c.value(2));
         assert_eq!(17, c.value(3));
         assert_eq!(17, c.value(4));
+    }
+
+    #[test]
+    fn test_date32_month_add() {
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
+        let b = IntervalYearMonthArray::from(vec![IntervalYearMonthType::from(1, 1)]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(c.value(0), Date32Type::from_naive_date(NaiveDate::from_ymd(2001, 02, 01)));
+    }
+
+    #[test]
+    fn test_date32_day_time_add() {
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
+        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::from(1, 1)]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(c.value(0), Date32Type::from_naive_date(NaiveDate::from_ymd(2001, 01, 02)));
+    }
+
+    #[test]
+    fn test_date32_month_day_nano_add() {
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
+        let b = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::from(1, 1, 1)]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(c.value(0), Date32Type::from_naive_date(NaiveDate::from_ymd(2001, 02, 01)));
     }
 
     #[test]
