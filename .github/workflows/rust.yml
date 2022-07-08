@@ -107,6 +107,7 @@ jobs:
           cargo check -p parquet
           cargo check -p parquet --no-default-features
           cargo check -p parquet --no-default-features --features arrow
+          cargo check -p parquet --all-features
       - name: Test compilation of parquet targets with different feature combinations
         run: |
           cargo check -p parquet --all-targets
