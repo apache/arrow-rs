@@ -291,4 +291,37 @@ impl Date64Type {
         let epoch = NaiveDate::from_ymd(1970, 1, 1);
         d.sub(epoch).num_milliseconds() as <Date64Type as ArrowPrimitiveType>::Native
     }
+
+    pub fn add_year_months(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native
+    ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        let prior = Date64Type::to_naive_date(date);
+        let months = IntervalYearMonthType::to_months(delta);
+        let posterior = shift_months(prior, months);
+        Date64Type::from_naive_date(posterior)
+    }
+
+    pub fn add_day_time(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native
+    ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        let (days, ms) = IntervalDayTimeType::to_parts(delta);
+        let res = Date64Type::to_naive_date(date);
+        let res = res.add(Duration::days(days as i64));
+        let res = res.add(Duration::milliseconds(ms as i64));
+        Date64Type::from_naive_date(res)
+    }
+
+    pub fn add_month_day_nano(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native
+    ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
+        let res = Date64Type::to_naive_date(date);
+        let res = shift_months(res, months);
+        let res = res.add(Duration::days(days as i64));
+        let res = res.add(Duration::nanoseconds(nanos));
+        Date64Type::from_naive_date(res)
+    }
 }

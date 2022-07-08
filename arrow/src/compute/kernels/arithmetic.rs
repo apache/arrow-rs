@@ -1103,6 +1103,7 @@ mod tests {
     use chrono::NaiveDate;
     use super::*;
     use crate::array::Int32Array;
+    use crate::datatypes::Date64Type;
 
     #[test]
     fn test_primitive_array_add() {
@@ -1141,6 +1142,33 @@ mod tests {
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(c.value(0), Date32Type::from_naive_date(NaiveDate::from_ymd(2001, 02, 01)));
+    }
+
+    #[test]
+    fn test_date64_month_add() {
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
+        let b = IntervalYearMonthArray::from(vec![IntervalYearMonthType::from(1, 1)]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(c.value(0), Date64Type::from_naive_date(NaiveDate::from_ymd(2001, 02, 01)));
+    }
+
+    #[test]
+    fn test_date64_day_time_add() {
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
+        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::from(1, 1)]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(c.value(0), Date64Type::from_naive_date(NaiveDate::from_ymd(2001, 01, 02)));
+    }
+
+    #[test]
+    fn test_date64_month_day_nano_add() {
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
+        let b = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::from(1, 1, 1)]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(c.value(0), Date64Type::from_naive_date(NaiveDate::from_ymd(2001, 02, 01)));
     }
 
     #[test]
