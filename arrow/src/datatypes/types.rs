@@ -209,6 +209,13 @@ impl IntervalYearMonthType {
         years * 12 + months
     }
 
+    /// Turns a IntervalYearMonthType type into an i32 of months.
+    ///
+    /// This operation is technically a no-op, it is included for comprehensiveness.
+    ///
+    /// # Arguments
+    ///
+    /// * `i` - The IntervalYearMonthType::Native to convert
     pub fn to_months(i: <IntervalYearMonthType as ArrowPrimitiveType>::Native) -> i32 {
         i
     }
@@ -230,6 +237,11 @@ impl IntervalDayTimeType {
         (m | d) as <IntervalDayTimeType as ArrowPrimitiveType>::Native
     }
 
+    /// Turns a IntervalDayTimeType into a tuple of (days, milliseconds)
+    ///
+    /// # Arguments
+    ///
+    /// * `i` - The IntervalDayTimeType to convert
     pub fn to_parts(
         i: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> (i32, i32) {
@@ -258,6 +270,11 @@ impl IntervalMonthDayNanoType {
         (m | d | n) as <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native
     }
 
+    /// Turns a IntervalMonthDayNanoType into a tuple of (months, days, nanos)
+    ///
+    /// # Arguments
+    ///
+    /// * `i` - The IntervalMonthDayNanoType to convert
     pub fn to_parts(
         i: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> (i32, i32, i64) {
@@ -269,16 +286,32 @@ impl IntervalMonthDayNanoType {
 }
 
 impl Date32Type {
+    /// Converts an arrow Date32Type into a chrono::NaiveDate
+    ///
+    /// # Arguments
+    ///
+    /// * `i` - The Date32Type to convert
     pub fn to_naive_date(i: <Date32Type as ArrowPrimitiveType>::Native) -> NaiveDate {
         let epoch = NaiveDate::from_ymd(1970, 1, 1);
         epoch.add(Duration::days(i as i64))
     }
 
+    /// Converts a chrono::NaiveDate into an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - The NaiveDate to convert
     pub fn from_naive_date(d: NaiveDate) -> <Date32Type as ArrowPrimitiveType>::Native {
         let epoch = NaiveDate::from_ymd(1970, 1, 1);
         d.sub(epoch).num_days() as <Date32Type as ArrowPrimitiveType>::Native
     }
 
+    /// Adds the given IntervalYearMonthType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
     pub fn add_year_months(
         date: <Date32Type as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -289,6 +322,12 @@ impl Date32Type {
         Date32Type::from_naive_date(posterior)
     }
 
+    /// Adds the given IntervalDayTimeType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
     pub fn add_day_time(
         date: <Date32Type as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -300,6 +339,12 @@ impl Date32Type {
         Date32Type::from_naive_date(res)
     }
 
+    /// Adds the given IntervalMonthDayNanoType to an arrow Date32Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
     pub fn add_month_day_nano(
         date: <Date32Type as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
@@ -314,16 +359,32 @@ impl Date32Type {
 }
 
 impl Date64Type {
+    /// Converts an arrow Date64Type into a chrono::NaiveDate
+    ///
+    /// # Arguments
+    ///
+    /// * `i` - The Date64Type to convert
     pub fn to_naive_date(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDate {
         let epoch = NaiveDate::from_ymd(1970, 1, 1);
         epoch.add(Duration::milliseconds(i as i64))
     }
 
+    /// Converts a chrono::NaiveDate into an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `d` - The NaiveDate to convert
     pub fn from_naive_date(d: NaiveDate) -> <Date64Type as ArrowPrimitiveType>::Native {
         let epoch = NaiveDate::from_ymd(1970, 1, 1);
         d.sub(epoch).num_milliseconds() as <Date64Type as ArrowPrimitiveType>::Native
     }
 
+    /// Adds the given IntervalYearMonthType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
     pub fn add_year_months(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
@@ -334,6 +395,12 @@ impl Date64Type {
         Date64Type::from_naive_date(posterior)
     }
 
+    /// Adds the given IntervalDayTimeType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
     pub fn add_day_time(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
@@ -345,6 +412,12 @@ impl Date64Type {
         Date64Type::from_naive_date(res)
     }
 
+    /// Adds the given IntervalMonthDayNanoType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
     pub fn add_month_day_nano(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,

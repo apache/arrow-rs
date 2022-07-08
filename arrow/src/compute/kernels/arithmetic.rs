@@ -796,9 +796,9 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                     let res = math_op(l, r, Date32Type::add_month_day_nano)?;
                     Ok(Arc::new(res))
                 }
-                t => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation on arrays of type {}",
-                    t
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
                 ))),
             }
         }
@@ -820,9 +820,9 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                     let res = math_op(l, r, Date64Type::add_month_day_nano)?;
                     Ok(Arc::new(res))
                 }
-                t => Err(ArrowError::CastError(format!(
-                    "Cannot perform arithmetic operation on arrays of type {}",
-                    t
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
                 ))),
             }
         }
