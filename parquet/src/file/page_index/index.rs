@@ -56,6 +56,9 @@ pub enum Index {
     DOUBLE(NativeIndex<f64>),
     BYTE_ARRAY(ByteArrayIndex),
     FIXED_LEN_BYTE_ARRAY(ByteArrayIndex),
+    /// Sometimes reading page index from parquet file
+    /// will only return pageLocations without min_max index,
+    /// Use `EMPTY_ARRAY` representing None will be more convenient.
     EMPTY_ARRAY,
 }
 

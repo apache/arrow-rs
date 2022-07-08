@@ -1249,7 +1249,7 @@ mod tests {
         };
         //col11->timestamp_col: INT96 UNCOMPRESSED DO:0 FPO:490093 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[num_nulls: 0, min/max not defined]
         //Notice: min_max values for each page for this col not exits.
-        if let Index::EMPTY_ARRAY() = &page_indexes[0][10] {
+        if let Index::EMPTY_ARRAY = &page_indexes[0][10] {
             assert_eq!(row_group_offset_indexes[10].len(), 974);
         } else {
             unreachable!()
