@@ -765,7 +765,7 @@ mod tests {
         pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
         let page = pb.consume();
 
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone());
+        let mut record_reader = RecordReader::<Int32Type>::new(desc);
         let page_reader = Box::new(InMemoryPageReader::new(vec![page.clone()]));
         record_reader.set_page_reader(page_reader).unwrap();
         assert_eq!(record_reader.read_records(4).unwrap(), 4);
@@ -778,7 +778,7 @@ mod tests {
 
         record_reader.read_records(4).unwrap();
 
-        let page_reader = Box::new(InMemoryPageReader::new(vec![page.clone()]));
+        let page_reader = Box::new(InMemoryPageReader::new(vec![page]));
         record_reader.set_page_reader(page_reader).unwrap();
 
         assert_eq!(record_reader.read_records(4).unwrap(), 4);

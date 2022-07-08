@@ -1531,17 +1531,11 @@ mod tests {
 
     #[test]
     fn test_row_group_exact_multiple() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "list",
-                ArrowDataType::List(Box::new(Field::new(
-                    "item",
-                    ArrowDataType::Int32,
-                    true,
-                ))),
-                true,
-            ),
-        ]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "list",
+            ArrowDataType::List(Box::new(Field::new("item", ArrowDataType::Int32, true))),
+            true,
+        )]));
 
         let mut buf = Vec::with_capacity(1024);
 
@@ -1562,9 +1556,7 @@ mod tests {
             }
             let batch = RecordBatch::try_new(
                 schema.clone(),
-                vec![
-                    Arc::new(list_builder.finish()),
-                ],
+                vec![Arc::new(list_builder.finish())],
             )
             .unwrap();
             writer.write(&batch).unwrap();
