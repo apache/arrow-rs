@@ -59,7 +59,7 @@ pub enum Index {
     /// Sometimes reading page index from parquet file
     /// will only return pageLocations without min_max index,
     /// `None` represents this lack of index information
-    EMPTY_ARRAY,
+    None,
 }
 
 /// An index of a column of [`Type`] physical representation
