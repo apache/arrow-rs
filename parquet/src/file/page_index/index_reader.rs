@@ -101,13 +101,7 @@ fn get_index_offset_and_lengths(
         .iter()
         .map(|x| x.column_index_length())
         .map(|maybe_length| {
-            let index_length = maybe_length.ok_or_else(|| {
-                ParquetError::General(
-                    "The column_index_length must exist if offset_index_offset exists"
-                        .to_string(),
-                )
-            })?;
-
+            let index_length = maybe_length.unwrap_or(0);
             Ok(index_length.try_into().unwrap())
         })
         .collect::<Result<Vec<_>, ParquetError>>()?;
@@ -143,6 +137,9 @@ fn deserialize_column_index(
     data: &[u8],
     column_type: Type,
 ) -> Result<Index, ParquetError> {
+    if data.is_empty() {
+        return Ok(Index::NONE);
+    }
     let mut d = Cursor::new(data);
     let mut prot = TCompactInputProtocol::new(&mut d);
 

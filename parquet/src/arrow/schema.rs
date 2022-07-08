@@ -152,7 +152,10 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(
         value: Some(encoded),
     };
 
-    let mut meta = props.key_value_metadata.clone().unwrap_or_default();
+    let meta = props
+        .key_value_metadata
+        .get_or_insert_with(Default::default);
+
     // check if ARROW:schema exists, and overwrite it
     let schema_meta = meta
         .iter()
@@ -167,7 +170,6 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(
             meta.push(schema_kv);
         }
     }
-    props.key_value_metadata = Some(meta);
 }
 
 /// Convert arrow schema to parquet schema

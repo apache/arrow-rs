@@ -48,6 +48,10 @@ impl<T> PageIndex<T> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Index {
+    /// Sometimes reading page index from parquet file
+    /// will only return pageLocations without min_max index,
+    /// `NONE` represents this lack of index information
+    NONE,
     BOOLEAN(BooleanIndex),
     INT32(NativeIndex<i32>),
     INT64(NativeIndex<i64>),

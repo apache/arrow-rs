@@ -72,7 +72,7 @@ arrow = ["dep:arrow", "base64"]
 # Enable CLI tools
 cli = ["serde_json", "base64", "clap","arrow/csv"]
 # Enable internal testing APIs
-test_common = []
+test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
 experimental = []
 # Enable async APIs
