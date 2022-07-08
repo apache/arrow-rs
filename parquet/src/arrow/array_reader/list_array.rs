@@ -124,7 +124,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 
         // The output offsets for the computed ListArray
         let mut list_offsets: Vec<OffsetSize> =
-            Vec::with_capacity(next_batch_array.len());
+            Vec::with_capacity(next_batch_array.len() + 1);
 
         // The validity mask of the computed ListArray if nullable
         let mut validity = self

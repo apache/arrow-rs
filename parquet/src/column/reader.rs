@@ -474,7 +474,7 @@ where
     }
 
     #[inline]
-    fn has_next(&mut self) -> Result<bool> {
+    pub(crate) fn has_next(&mut self) -> Result<bool> {
         if self.num_buffered_values == 0
             || self.num_buffered_values == self.num_decoded_values
         {
