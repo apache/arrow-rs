@@ -38,7 +38,8 @@ use crate::schema::types::ColumnDescPtr;
 pub(crate) mod buffer;
 mod definition_levels;
 
-const MIN_BATCH_SIZE: usize = 1024;
+/// The minimum number of levels read when reading a repeated field
+pub(crate) const MIN_BATCH_SIZE: usize = 1024;
 
 /// A `RecordReader` is a stateful column reader that delimits semantic records.
 pub type RecordReader<T> =
