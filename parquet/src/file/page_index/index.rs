@@ -56,7 +56,7 @@ pub enum Index {
     DOUBLE(NativeIndex<f64>),
     BYTE_ARRAY(ByteArrayIndex),
     FIXED_LEN_BYTE_ARRAY(ByteArrayIndex),
-    EMPTY_ARRAY(),
+    EMPTY_ARRAY,
 }
 
 /// An index of a column of [`Type`] physical representation
