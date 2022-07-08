@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::{Add, Sub};
+use super::{ArrowPrimitiveType, DataType, IntervalUnit, TimeUnit};
 use chrono::{Duration, NaiveDate};
 use chronoutil::shift_months;
-use super::{ArrowPrimitiveType, DataType, IntervalUnit, TimeUnit};
 use half::f16;
+use std::ops::{Add, Sub};
 
 // BooleanType is special: its bit-width is not the size of the primitive type, and its `index`
 // operation assumes bit-packing.
@@ -196,7 +196,10 @@ impl ArrowTimestampType for TimestampNanosecondType {
 }
 
 impl IntervalYearMonthType {
-    pub fn from(years: i32, months: i32) -> <IntervalYearMonthType as ArrowPrimitiveType>::Native {
+    pub fn from(
+        years: i32,
+        months: i32,
+    ) -> <IntervalYearMonthType as ArrowPrimitiveType>::Native {
         years * 12 + months
     }
 
@@ -206,13 +209,18 @@ impl IntervalYearMonthType {
 }
 
 impl IntervalDayTimeType {
-    pub fn from(days: i32, millis: i32) -> <IntervalDayTimeType as ArrowPrimitiveType>::Native {
+    pub fn from(
+        days: i32,
+        millis: i32,
+    ) -> <IntervalDayTimeType as ArrowPrimitiveType>::Native {
         let m = millis as u64 & u32::MAX as u64;
         let d = (days as u64 & u32::MAX as u64) << 32;
         (m | d) as <IntervalDayTimeType as ArrowPrimitiveType>::Native
     }
 
-    pub fn to_parts(i: <IntervalDayTimeType as ArrowPrimitiveType>::Native) -> (i32, i32) {
+    pub fn to_parts(
+        i: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> (i32, i32) {
         let days = (i >> 32) as i32;
         let ms = i as i32;
         (days, ms)
@@ -220,21 +228,26 @@ impl IntervalDayTimeType {
 }
 
 impl IntervalMonthDayNanoType {
-    pub fn from(months: i32, days: i32, nanos: i64) -> <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native {
+    pub fn from(
+        months: i32,
+        days: i32,
+        nanos: i64,
+    ) -> <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native {
         let m = months as u128 & u32::MAX as u128;
         let d = (days as u128 & u32::MAX as u128) << 32;
         let n = (nanos as u128) << 64;
         (m | d | n) as <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native
     }
 
-    pub fn to_parts(i: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native) -> (i32, i32, i64) {
+    pub fn to_parts(
+        i: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> (i32, i32, i64) {
         let nanos = (i >> 64) as i64;
         let days = (i >> 32) as i32;
         let months = i as i32;
         (months, days, nanos)
     }
 }
-
 
 impl Date32Type {
     pub fn to_naive_date(i: <Date32Type as ArrowPrimitiveType>::Native) -> NaiveDate {
@@ -249,7 +262,7 @@ impl Date32Type {
 
     pub fn add_year_months(
         date: <Date32Type as ArrowPrimitiveType>::Native,
-        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         let prior = Date32Type::to_naive_date(date);
         let months = IntervalYearMonthType::to_months(delta);
@@ -259,7 +272,7 @@ impl Date32Type {
 
     pub fn add_day_time(
         date: <Date32Type as ArrowPrimitiveType>::Native,
-        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = Date32Type::to_naive_date(date);
@@ -270,7 +283,7 @@ impl Date32Type {
 
     pub fn add_month_day_nano(
         date: <Date32Type as ArrowPrimitiveType>::Native,
-        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date32Type::to_naive_date(date);
@@ -294,7 +307,7 @@ impl Date64Type {
 
     pub fn add_year_months(
         date: <Date64Type as ArrowPrimitiveType>::Native,
-        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         let prior = Date64Type::to_naive_date(date);
         let months = IntervalYearMonthType::to_months(delta);
@@ -304,7 +317,7 @@ impl Date64Type {
 
     pub fn add_day_time(
         date: <Date64Type as ArrowPrimitiveType>::Native,
-        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
         let res = Date64Type::to_naive_date(date);
@@ -315,7 +328,7 @@ impl Date64Type {
 
     pub fn add_month_day_nano(
         date: <Date64Type as ArrowPrimitiveType>::Native,
-        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date64Type::to_naive_date(date);

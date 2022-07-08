@@ -34,7 +34,10 @@ use crate::compute::kernels::arity::unary;
 use crate::compute::unary_dyn;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes;
-use crate::datatypes::{ArrowNumericType, DataType, Date32Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType};
+use crate::datatypes::{
+    ArrowNumericType, DataType, Date32Type, Date64Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+};
 use crate::datatypes::{
     Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
     UInt32Type, UInt64Type, UInt8Type,
@@ -776,45 +779,103 @@ pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
             typed_dict_math_op!(left, right, |a, b| a + b, math_op_dict)
         }
         DataType::Date32 => {
-            let l = left.as_any()
+            let l = left
+                .as_any()
                 .downcast_ref::<PrimitiveArray<Date32Type>>()
-                .ok_or_else(|| {ArrowError::CastError(format!(
-                    "Left array cannot be cast to Date32Type",
-                ))})?;
+                .ok_or_else(|| {
+                    ArrowError::CastError(format!(
+                        "Left array cannot be cast to Date32Type",
+                    ))
+                })?;
             match right.data_type() {
                 DataType::Interval(IntervalUnit::YearMonth) => {
-                    let r = right.as_any()
-                            .downcast_ref::<PrimitiveArray<IntervalYearMonthType>>()
-                            .ok_or_else(|| {ArrowError::CastError(format!(
-                        "Right array cannot be cast to IntervalYearMonthType",
-                    ))})?;
-                    let res = math_op(l, r, |a, b| {
-                        Date32Type::add_year_months(a, b)
-                    })?;
+                    let r = right
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<IntervalYearMonthType>>()
+                        .ok_or_else(|| {
+                            ArrowError::CastError(format!(
+                                "Right array cannot be cast to IntervalYearMonthType",
+                            ))
+                        })?;
+                    let res = math_op(l, r, |a, b| Date32Type::add_year_months(a, b))?;
                     return Ok(Arc::new(res));
-                },
+                }
                 DataType::Interval(IntervalUnit::DayTime) => {
-                    let r = right.as_any()
+                    let r = right
+                        .as_any()
                         .downcast_ref::<PrimitiveArray<IntervalDayTimeType>>()
-                        .ok_or_else(|| {ArrowError::CastError(format!(
-                            "Right array cannot be cast to IntervalDayTimeType",
-                        ))})?;
-                    let res = math_op(l, r, |a, b| {
-                        Date32Type::add_day_time(a, b)
-                    })?;
+                        .ok_or_else(|| {
+                            ArrowError::CastError(format!(
+                                "Right array cannot be cast to IntervalDayTimeType",
+                            ))
+                        })?;
+                    let res = math_op(l, r, |a, b| Date32Type::add_day_time(a, b))?;
                     return Ok(Arc::new(res));
-                },
+                }
                 DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    let r = right.as_any()
+                    let r = right
+                        .as_any()
                         .downcast_ref::<PrimitiveArray<IntervalMonthDayNanoType>>()
-                        .ok_or_else(|| {ArrowError::CastError(format!(
-                            "Right array cannot be cast to IntervalMonthDayNanoType",
-                        ))})?;
-                    let res = math_op(l, r, |a, b| {
-                        Date32Type::add_month_day_nano(a, b)
-                    })?;
+                        .ok_or_else(|| {
+                            ArrowError::CastError(format!(
+                                "Right array cannot be cast to IntervalMonthDayNanoType",
+                            ))
+                        })?;
+                    let res = math_op(l, r, |a, b| Date32Type::add_month_day_nano(a, b))?;
                     return Ok(Arc::new(res));
-                },
+                }
+                t => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation on arrays of type {}",
+                    t
+                ))),
+            }
+        }
+        DataType::Date64 => {
+            let l = left
+                .as_any()
+                .downcast_ref::<PrimitiveArray<Date64Type>>()
+                .ok_or_else(|| {
+                    ArrowError::CastError(format!(
+                        "Left array cannot be cast to Date64Type",
+                    ))
+                })?;
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = right
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<IntervalYearMonthType>>()
+                        .ok_or_else(|| {
+                            ArrowError::CastError(format!(
+                                "Right array cannot be cast to IntervalYearMonthType",
+                            ))
+                        })?;
+                    let res = math_op(l, r, |a, b| Date64Type::add_year_months(a, b))?;
+                    return Ok(Arc::new(res));
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = right
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<IntervalDayTimeType>>()
+                        .ok_or_else(|| {
+                            ArrowError::CastError(format!(
+                                "Right array cannot be cast to IntervalDayTimeType",
+                            ))
+                        })?;
+                    let res = math_op(l, r, |a, b| Date64Type::add_day_time(a, b))?;
+                    return Ok(Arc::new(res));
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = right
+                        .as_any()
+                        .downcast_ref::<PrimitiveArray<IntervalMonthDayNanoType>>()
+                        .ok_or_else(|| {
+                            ArrowError::CastError(format!(
+                                "Right array cannot be cast to IntervalMonthDayNanoType",
+                            ))
+                        })?;
+                    let res = math_op(l, r, |a, b| Date64Type::add_month_day_nano(a, b))?;
+                    return Ok(Arc::new(res));
+                }
                 t => Err(ArrowError::CastError(format!(
                     "Cannot perform arithmetic operation on arrays of type {}",
                     t
@@ -1100,10 +1161,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
     use super::*;
     use crate::array::Int32Array;
     use crate::datatypes::Date64Type;
+    use chrono::NaiveDate;
 
     #[test]
     fn test_primitive_array_add() {
@@ -1119,56 +1180,90 @@ mod tests {
 
     #[test]
     fn test_date32_month_add() {
-        let a = Date32Array::from(vec![Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
-        let b = IntervalYearMonthArray::from(vec![IntervalYearMonthType::from(1, 1)]);
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 01, 01),
+        )]);
+        let b = IntervalYearMonthArray::from(vec![IntervalYearMonthType::from(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
-        assert_eq!(c.value(0), Date32Type::from_naive_date(NaiveDate::from_ymd(2001, 02, 01)));
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd(2001, 03, 01))
+        );
     }
 
     #[test]
     fn test_date32_day_time_add() {
-        let a = Date32Array::from(vec![Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
-        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::from(1, 1)]);
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 01, 01),
+        )]);
+        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::from(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
-        assert_eq!(c.value(0), Date32Type::from_naive_date(NaiveDate::from_ymd(2001, 01, 02)));
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 02))
+        );
     }
 
     #[test]
     fn test_date32_month_day_nano_add() {
-        let a = Date32Array::from(vec![Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
-        let b = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::from(1, 1, 1)]);
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 01, 01),
+        )]);
+        let b = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::from(
+            1, 2, 3,
+        )]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
-        assert_eq!(c.value(0), Date32Type::from_naive_date(NaiveDate::from_ymd(2001, 02, 01)));
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 02, 03))
+        );
     }
 
     #[test]
     fn test_date64_month_add() {
-        let a = Date64Array::from(vec![Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
-        let b = IntervalYearMonthArray::from(vec![IntervalYearMonthType::from(1, 1)]);
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 01, 01),
+        )]);
+        let b = IntervalYearMonthArray::from(vec![IntervalYearMonthType::from(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
-        assert_eq!(c.value(0), Date64Type::from_naive_date(NaiveDate::from_ymd(2001, 02, 01)));
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd(2001, 03, 01))
+        );
     }
 
     #[test]
     fn test_date64_day_time_add() {
-        let a = Date64Array::from(vec![Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
-        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::from(1, 1)]);
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 01, 01),
+        )]);
+        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::from(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
-        assert_eq!(c.value(0), Date64Type::from_naive_date(NaiveDate::from_ymd(2001, 01, 02)));
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 02))
+        );
     }
 
     #[test]
     fn test_date64_month_day_nano_add() {
-        let a = Date64Array::from(vec![Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 01, 01))]);
-        let b = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::from(1, 1, 1)]);
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 01, 01),
+        )]);
+        let b = IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::from(
+            1, 2, 3,
+        )]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
-        assert_eq!(c.value(0), Date64Type::from_naive_date(NaiveDate::from_ymd(2001, 02, 01)));
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 02, 03))
+        );
     }
 
     #[test]
