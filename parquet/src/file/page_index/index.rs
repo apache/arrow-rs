@@ -56,6 +56,10 @@ pub enum Index {
     DOUBLE(NativeIndex<f64>),
     BYTE_ARRAY(ByteArrayIndex),
     FIXED_LEN_BYTE_ARRAY(ByteArrayIndex),
+    /// Sometimes reading page index from parquet file
+    /// will only return pageLocations without min_max index,
+    /// `None` represents this lack of index information
+    None,
 }
 
 /// An index of a column of [`Type`] physical representation
