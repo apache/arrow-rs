@@ -58,7 +58,7 @@ pub enum Index {
     FIXED_LEN_BYTE_ARRAY(ByteArrayIndex),
     /// Sometimes reading page index from parquet file
     /// will only return pageLocations without min_max index,
-    /// Use `EMPTY_ARRAY` representing None will be more convenient.
+    /// `None` represents this lack of index information
     EMPTY_ARRAY,
 }
 
