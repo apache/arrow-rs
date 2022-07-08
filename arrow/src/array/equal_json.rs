@@ -16,7 +16,9 @@
 // under the License.
 
 use super::*;
+use crate::array::BasicDecimalArray;
 use crate::datatypes::*;
+use crate::util::decimal::BasicDecimal;
 use array::Array;
 use hex::FromHex;
 use serde_json::value::Value::{Null as JNull, Object, String as JString};
@@ -372,6 +374,20 @@ impl JsonEqual for DecimalArray {
                         .parse::<i128>()
                         .map_or_else(|_| false, |v| v == self.value(i).as_i128()))
             }
+            JNull => self.is_null(i),
+            _ => false,
+        })
+    }
+}
+
+impl JsonEqual for Decimal256Array {
+    fn equals_json(&self, json: &[&Value]) -> bool {
+        if self.len() != json.len() {
+            return false;
+        }
+
+        (0..self.len()).all(|i| match json[i] {
+            JString(s) => self.is_valid(i) && (s == &self.value(i).to_string()),
             JNull => self.is_null(i),
             _ => false,
         })

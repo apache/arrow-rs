@@ -354,6 +354,11 @@ pub const DECIMAL_DEFAULT_SCALE: usize = 10;
 /// interpreted as a Decimal number with precision `precision`
 #[inline]
 pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Result<i128> {
+    // TODO: add validation logic for precision > 38
+    if precision > 38 {
+        return Ok(value);
+    }
+
     let max = MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1];
     let min = MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1];
 
