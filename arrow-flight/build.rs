@@ -88,6 +88,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         file.write_all(buffer.as_bytes())?;
     }
 
+    // Prost currently generates an empty file, this was fixed but then reverted
+    // https://github.com/tokio-rs/prost/pull/639
+    let google_protobuf_rs = Path::new("src/sql/google.protobuf.rs");
+    if google_protobuf_rs.exists() && google_protobuf_rs.metadata().unwrap().len() == 0 {
+        std::fs::remove_file(google_protobuf_rs).unwrap();
+    }
+
     // As the proto file is checked in, the build should not fail if the file is not found
     Ok(())
 }
