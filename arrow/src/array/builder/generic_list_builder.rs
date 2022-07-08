@@ -28,33 +28,30 @@ use crate::error::Result;
 
 use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
 
-///  Array builder for `ListArray`
+///  Array builder for [`GenericListArray`]
 #[derive(Debug)]
 pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
     offsets_builder: BufferBuilder<OffsetSize>,
     bitmap_builder: BooleanBufferBuilder,
     values_builder: T,
-    len: OffsetSize,
 }
 
 impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize, T> {
-    /// Creates a new `ListArrayBuilder` from a given values array builder
+    /// Creates a new [`GenericListBuilder`] from a given values array builder
     pub fn new(values_builder: T) -> Self {
         let capacity = values_builder.len();
         Self::with_capacity(values_builder, capacity)
     }
 
-    /// Creates a new `ListArrayBuilder` from a given values array builder
+    /// Creates a new [`GenericListBuilder`] from a given values array builder
     /// `capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(values_builder: T, capacity: usize) -> Self {
         let mut offsets_builder = BufferBuilder::<OffsetSize>::new(capacity + 1);
-        let len = OffsetSize::zero();
-        offsets_builder.append(len);
+        offsets_builder.append(OffsetSize::zero());
         Self {
             offsets_builder,
             bitmap_builder: BooleanBufferBuilder::new(capacity),
             values_builder,
-            len,
         }
     }
 }
@@ -81,12 +78,12 @@ where
 
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
-        self.len.to_usize().unwrap()
+        self.bitmap_builder.len()
     }
 
     /// Returns whether the number of array slots is zero
     fn is_empty(&self) -> bool {
-        self.len == OffsetSize::zero()
+        self.bitmap_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -102,7 +99,7 @@ where
     /// Returns the child array builder as a mutable reference.
     ///
     /// This mutable reference can be used to append values into the child array builder,
-    /// but you must call `append` to delimit each distinct list value.
+    /// but you must call [`append`](#method.append) to delimit each distinct list value.
     pub fn values(&mut self) -> &mut T {
         &mut self.values_builder
     }
@@ -118,14 +115,12 @@ where
         self.offsets_builder
             .append(OffsetSize::from_usize(self.values_builder.len()).unwrap());
         self.bitmap_builder.append(is_valid);
-        self.len += OffsetSize::one();
         Ok(())
     }
 
-    /// Builds the `ListArray` and reset this builder.
+    /// Builds the [`GenericListArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericListArray<OffsetSize> {
         let len = self.len();
-        self.len = OffsetSize::zero();
         let values_arr = self
             .values_builder
             .as_any_mut()
@@ -136,7 +131,6 @@ where
 
         let offset_buffer = self.offsets_builder.finish();
         let null_bit_buffer = self.bitmap_builder.finish();
-        self.offsets_builder.append(self.len);
         let field = Box::new(Field::new(
             "item",
             values_data.data_type().clone(),
@@ -147,13 +141,13 @@ where
         } else {
             DataType::List(field)
         };
-        let array_data = ArrayData::builder(data_type)
+        let array_data_builder = ArrayData::builder(data_type)
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(values_data.clone())
             .null_bit_buffer(Some(null_bit_buffer));
 
-        let array_data = unsafe { array_data.build_unchecked() };
+        let array_data = unsafe { array_data_builder.build_unchecked() };
 
         GenericListArray::<OffsetSize>::from(array_data)
     }
