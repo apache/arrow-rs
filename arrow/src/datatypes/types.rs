@@ -16,8 +16,8 @@
 // under the License.
 
 use super::{ArrowPrimitiveType, DataType, IntervalUnit, TimeUnit};
+use crate::datatypes::delta::shift_months;
 use chrono::{Duration, NaiveDate};
-use chronoutil::shift_months;
 use half::f16;
 use std::ops::{Add, Sub};
 
@@ -196,7 +196,13 @@ impl ArrowTimestampType for TimestampNanosecondType {
 }
 
 impl IntervalYearMonthType {
-    pub fn from(
+    /// Creates a IntervalYearMonthType
+    ///
+    /// # Arguments
+    ///
+    /// * `years` - The number of years (+/-) represented in this interval
+    /// * `months` - The number of months (+/-) represented in this interval
+    pub fn new(
         years: i32,
         months: i32,
     ) -> <IntervalYearMonthType as ArrowPrimitiveType>::Native {
@@ -209,7 +215,13 @@ impl IntervalYearMonthType {
 }
 
 impl IntervalDayTimeType {
-    pub fn from(
+    /// Creates a IntervalDayTimeType
+    ///
+    /// # Arguments
+    ///
+    /// * `days` - The number of days (+/-) represented in this interval
+    /// * `millis` - The number of milliseconds (+/-) represented in this interval
+    pub fn new(
         days: i32,
         millis: i32,
     ) -> <IntervalDayTimeType as ArrowPrimitiveType>::Native {
@@ -228,7 +240,14 @@ impl IntervalDayTimeType {
 }
 
 impl IntervalMonthDayNanoType {
-    pub fn from(
+    /// Creates a IntervalMonthDayNanoType
+    ///
+    /// # Arguments
+    ///
+    /// * `months` - The number of months (+/-) represented in this interval
+    /// * `days` - The number of days (+/-) represented in this interval
+    /// * `nanos` - The number of nanoseconds (+/-) represented in this interval
+    pub fn new(
         months: i32,
         days: i32,
         nanos: i64,
