@@ -51,7 +51,7 @@ csv_crate = { version = "1.1", default-features = false, optional = true, packag
 regex = { version = "1.5.6", default-features = false, features = ["std", "unicode"] }
 lazy_static = { version = "1.4", default-features = false }
 packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
-chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = {version = "0.6", default-features = false, optional = true}
 chronoutil = "0.2.3"
 flatbuffers = { version = "2.1.2", default-features = false, features = ["thiserror"], optional = true }
