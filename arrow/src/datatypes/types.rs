@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cmp::min;
 use std::ops::{Add, Sub};
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Duration, NaiveDate};
+use chronoutil::shift_months;
 use super::{ArrowPrimitiveType, DataType, IntervalUnit, TimeUnit};
 use half::f16;
 
@@ -253,7 +253,7 @@ impl Date32Type {
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         let prior = Date32Type::to_naive_date(date);
         let months = IntervalYearMonthType::to_months(delta);
-        let posterior = add_months(prior, months);
+        let posterior = shift_months(prior, months);
         Date32Type::from_naive_date(posterior)
     }
 
@@ -274,7 +274,7 @@ impl Date32Type {
     ) -> <Date32Type as ArrowPrimitiveType>::Native {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
         let res = Date32Type::to_naive_date(date);
-        let res = add_months(res, months);
+        let res = shift_months(res, months);
         let res = res.add(Duration::days(days as i64));
         let res = res.add(Duration::nanoseconds(nanos));
         Date32Type::from_naive_date(res)
@@ -292,29 +292,3 @@ impl Date64Type {
         d.sub(epoch).num_milliseconds() as <Date64Type as ArrowPrimitiveType>::Native
     }
 }
-
-// Chrono PR https://github.com/apache/arrow-datafusion/pull/2797
-fn add_months(prior: NaiveDate, months: i32) -> NaiveDate {
-    let target = chrono_add_months(prior, months);
-    let target_plus = chrono_add_months(target, 1);
-    let last_day = target_plus.sub(chrono::Duration::days(1));
-    let day = min(prior.day(), last_day.day());
-    NaiveDate::from_ymd(target.year(), target.month(), day)
-}
-
-// Chrono PR https://github.com/apache/arrow-datafusion/pull/2797
-fn chrono_add_months(dt: NaiveDate, delta: i32) -> NaiveDate {
-    let ay = dt.year();
-    let am = dt.month() as i32 - 1; // zero-based for modulo operations
-    let bm = am + delta as i32;
-    let by = ay
-        + if bm < 0 {
-        (bm as f32 / 12.0).floor() as i32
-    } else {
-        bm / 12
-    };
-    let cm = bm % 12;
-    let dm = if cm < 0 { cm + 12 } else { cm };
-    NaiveDate::from_ymd(by, dm as u32 + 1, 1)
-}
-
