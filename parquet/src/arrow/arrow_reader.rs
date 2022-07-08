@@ -1528,4 +1528,45 @@ mod tests {
 
         assert_eq!(total_rows, expected_rows);
     }
+
+    #[test]
+    fn test_row_group_exact_multiple() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "list",
+            ArrowDataType::List(Box::new(Field::new("item", ArrowDataType::Int32, true))),
+            true,
+        )]));
+
+        let mut buf = Vec::with_capacity(1024);
+
+        let mut writer = ArrowWriter::try_new(
+            &mut buf,
+            schema.clone(),
+            Some(
+                WriterProperties::builder()
+                    .set_max_row_group_size(8)
+                    .build(),
+            ),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let mut list_builder = ListBuilder::new(Int32Builder::new(10));
+            for _ in 0..10 {
+                list_builder.append(true).unwrap();
+            }
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(list_builder.finish())],
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.close().unwrap();
+
+        let mut file_reader = ParquetFileArrowReader::try_new(Bytes::from(buf)).unwrap();
+        let mut record_reader = file_reader.get_record_reader(8).unwrap();
+        assert_eq!(8, record_reader.next().unwrap().unwrap().num_rows());
+        assert_eq!(8, record_reader.next().unwrap().unwrap().num_rows());
+        assert_eq!(4, record_reader.next().unwrap().unwrap().num_rows());
+    }
 }
