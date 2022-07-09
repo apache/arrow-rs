@@ -131,6 +131,7 @@ where
 
         let offset_buffer = self.offsets_builder.finish();
         let null_bit_buffer = self.bitmap_builder.finish();
+        self.offsets_builder.append(OffsetSize::zero());
         let field = Box::new(Field::new(
             "item",
             values_data.data_type().clone(),
