@@ -610,44 +610,54 @@ where
 {
     let data_len = indices.len();
 
-    let num_byte = bit_util::ceil(data_len, 8);
-    let mut val_buf = MutableBuffer::from_len_zeroed(num_byte);
+    let mut val_buf = MutableBuffer::new_null(data_len);
 
     let val_slice = val_buf.as_slice_mut();
 
     let null_count = values.null_count();
 
     let nulls = if null_count == 0 {
-        (0..data_len).try_for_each::<_, Result<()>>(|i| {
-            let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
-                ArrowError::ComputeError("Cast to usize failed".to_string())
+        indices
+            .iter()
+            .enumerate()
+            .try_for_each::<_, Result<()>>(|(i, index)| {
+                if let Some(index) = index {
+                    let index = ToPrimitive::to_usize(&index).ok_or_else(|| {
+                        ArrowError::ComputeError("Cast to usize failed".to_string())
+                    })?;
+
+                    if values.value(index) {
+                        bit_util::set_bit(val_slice, i);
+                    }
+                }
+
+                Ok(())
             })?;
-
-            if values.value(index) {
-                bit_util::set_bit(val_slice, i);
-            }
-
-            Ok(())
-        })?;
 
         indices.data_ref().null_buffer().cloned()
     } else {
-        let mut null_buf = MutableBuffer::new(num_byte).with_bitset(num_byte, true);
+        let mut null_buf = MutableBuffer::new_null(data_len);
         let null_slice = null_buf.as_slice_mut();
 
-        (0..data_len).try_for_each::<_, Result<()>>(|i| {
-            let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
-                ArrowError::ComputeError("Cast to usize failed".to_string())
+        indices
+            .iter()
+            .enumerate()
+            .try_for_each::<_, Result<()>>(|(i, index)| {
+                if let Some(index) = index {
+                    let index = ToPrimitive::to_usize(&index).ok_or_else(|| {
+                        ArrowError::ComputeError("Cast to usize failed".to_string())
+                    })?;
+
+                    if values.is_valid(index) {
+                        bit_util::set_bit(null_slice, i);
+                        if values.value(index) {
+                            bit_util::set_bit(val_slice, i);
+                        }
+                    }
+                }
+
+                Ok(())
             })?;
-
-            if values.is_null(index) {
-                bit_util::unset_bit(null_slice, i);
-            } else if values.value(index) {
-                bit_util::set_bit(val_slice, i);
-            }
-
-            Ok(())
-        })?;
 
         match indices.data_ref().null_buffer() {
             Some(buffer) => Some(buffer_bin_and(
