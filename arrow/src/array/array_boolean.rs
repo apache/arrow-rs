@@ -222,38 +222,7 @@ impl<'a> BooleanArray {
 
 impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray {
     fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
-        let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
-
-        let num_bytes = bit_util::ceil(data_len, 8);
-        let mut null_buf = MutableBuffer::from_len_zeroed(num_bytes);
-        let mut val_buf = MutableBuffer::from_len_zeroed(num_bytes);
-
-        let data = val_buf.as_slice_mut();
-
-        let null_slice = null_buf.as_slice_mut();
-        iter.enumerate().for_each(|(i, item)| {
-            if let Some(a) = item.borrow() {
-                bit_util::set_bit(null_slice, i);
-                if *a {
-                    bit_util::set_bit(data, i);
-                }
-            }
-        });
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                data_len,
-                None,
-                Some(null_buf.into()),
-                0,
-                vec![val_buf.into()],
-                vec![],
-            )
-        };
-        BooleanArray::from(data)
+        iter.into_iter().collect::<BooleanBuilder>().finish()
     }
 }
 

@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::array::ArrayBuilder;
@@ -56,6 +57,24 @@ use super::BooleanBufferBuilder;
 ///     assert_eq!(true, arr.value(3));
 ///     assert!(arr.is_valid(3));
 ///     assert!(!arr.is_null(3));
+/// ```
+///
+/// Using `from_iter`
+/// ```
+///     use arrow::array::{Array, BooleanBuilder};
+///     let v = vec![Some(false), Some(true), Some(false), Some(true)];
+///     let arr = v.into_iter().collect::<BooleanBuilder>().finish();
+///     assert_eq!(4, arr.len());
+///     assert_eq!(0, arr.offset());
+///     assert_eq!(0, arr.null_count());
+///     assert!(arr.is_valid(0));
+///     assert_eq!(false, arr.value(0));
+///     assert!(arr.is_valid(1));
+///     assert_eq!(true, arr.value(1));
+///     assert!(arr.is_valid(2));
+///     assert_eq!(false, arr.value(2));
+///     assert!(arr.is_valid(3));
+///     assert_eq!(true, arr.value(3));
 /// ```
 #[derive(Debug)]
 pub struct BooleanBuilder {
@@ -140,21 +159,6 @@ impl BooleanBuilder {
 }
 
 impl ArrayBuilder for BooleanBuilder {
-    /// Returns the builder as a non-mutable `Any` reference.
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    /// Returns the builder as a mutable `Any` reference.
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    /// Returns the boxed builder as a box of `Any`.
-    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
-        self
-    }
-
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.values_builder.len()
@@ -169,11 +173,52 @@ impl ArrayBuilder for BooleanBuilder {
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
     }
+
+    /// Returns the builder as a non-mutable `Any` reference.
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Returns the builder as a mutable `Any` reference.
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    /// Returns the boxed builder as a box of `Any`.
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
+impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanBuilder {
+    fn from_iter<T: IntoIterator<Item = Ptr>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let (_, data_len) = iter.size_hint();
+        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
+
+        let mut bitmap_builder = BooleanBufferBuilder::new_null(data_len);
+        let mut values_builder = BooleanBufferBuilder::new_null(data_len);
+
+        iter.enumerate().for_each(|(i, item)| {
+            if let Some(a) = item.borrow() {
+                bitmap_builder.set_bit(i, true);
+                if *a {
+                    values_builder.set_bit(i, true);
+                }
+            }
+        });
+
+        BooleanBuilder {
+            values_builder,
+            bitmap_builder,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::array::Array;
 
     #[test]
     fn test_boolean_array_builder_append_slice() {
@@ -199,5 +244,19 @@ mod tests {
         let arr2 = builder.finish();
 
         assert_eq!(arr1, arr2);
+    }
+
+    #[test]
+    fn test_boolean_array_builder_from_iter() {
+        let v = vec![Some(false), Some(true), Some(false), Some(true)];
+        let arr = v.into_iter().collect::<BooleanBuilder>().finish();
+        assert_eq!(4, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(0, arr.null_count());
+        for i in 0..3 {
+            assert!(!arr.is_null(i));
+            assert!(arr.is_valid(i));
+            assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {}", i)
+        }
     }
 }
