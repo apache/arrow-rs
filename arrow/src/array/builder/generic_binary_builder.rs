@@ -109,3 +109,67 @@ impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSi
         Arc::new(self.finish())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::array::builder::{BinaryBuilder, LargeBinaryBuilder};
+    use crate::array::Array;
+
+    #[test]
+    fn test_binary_array_builder() {
+        let mut builder = BinaryBuilder::new(20);
+
+        builder.append_byte(b'h').unwrap();
+        builder.append_byte(b'e').unwrap();
+        builder.append_byte(b'l').unwrap();
+        builder.append_byte(b'l').unwrap();
+        builder.append_byte(b'o').unwrap();
+        builder.append(true).unwrap();
+        builder.append(true).unwrap();
+        builder.append_byte(b'w').unwrap();
+        builder.append_byte(b'o').unwrap();
+        builder.append_byte(b'r').unwrap();
+        builder.append_byte(b'l').unwrap();
+        builder.append_byte(b'd').unwrap();
+        builder.append(true).unwrap();
+
+        let binary_array = builder.finish();
+
+        assert_eq!(3, binary_array.len());
+        assert_eq!(0, binary_array.null_count());
+        assert_eq!([b'h', b'e', b'l', b'l', b'o'], binary_array.value(0));
+        assert_eq!([] as [u8; 0], binary_array.value(1));
+        assert_eq!([b'w', b'o', b'r', b'l', b'd'], binary_array.value(2));
+        assert_eq!(5, binary_array.value_offsets()[2]);
+        assert_eq!(5, binary_array.value_length(2));
+    }
+
+    #[test]
+    fn test_large_binary_array_builder() {
+        let mut builder = LargeBinaryBuilder::new(20);
+
+        builder.append_byte(b'h').unwrap();
+        builder.append_byte(b'e').unwrap();
+        builder.append_byte(b'l').unwrap();
+        builder.append_byte(b'l').unwrap();
+        builder.append_byte(b'o').unwrap();
+        builder.append(true).unwrap();
+        builder.append(true).unwrap();
+        builder.append_byte(b'w').unwrap();
+        builder.append_byte(b'o').unwrap();
+        builder.append_byte(b'r').unwrap();
+        builder.append_byte(b'l').unwrap();
+        builder.append_byte(b'd').unwrap();
+        builder.append(true).unwrap();
+
+        let binary_array = builder.finish();
+
+        assert_eq!(3, binary_array.len());
+        assert_eq!(0, binary_array.null_count());
+        assert_eq!([b'h', b'e', b'l', b'l', b'o'], binary_array.value(0));
+        assert_eq!([] as [u8; 0], binary_array.value(1));
+        assert_eq!([b'w', b'o', b'r', b'l', b'd'], binary_array.value(2));
+        assert_eq!(5, binary_array.value_offsets()[2]);
+        assert_eq!(5, binary_array.value_length(2));
+    }
+}
