@@ -286,7 +286,7 @@ impl FFI_ArrowSchema {
     }
 
     pub fn map_keys_sorted(&self) -> bool {
-        (self.flags / 4) & 1 == 1
+        self.flags & 0b00000100 != 0
     }
 }
 

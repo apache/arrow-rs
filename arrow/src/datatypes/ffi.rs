@@ -411,4 +411,26 @@ mod tests {
         assert!(result.is_err());
         Ok(())
     }
+
+    #[test]
+    fn test_map_keys_sorted() {
+        let keys = Field::new("keys", DataType::Int32, false);
+        let values = Field::new("values", DataType::UInt32, false);
+        let entry_struct = DataType::Struct(vec![keys, values]);
+
+        // Construct a map array from the above two
+        let map_data_type =
+            DataType::Map(Box::new(Field::new("entries", entry_struct, true)), false);
+
+        let flags = Flags::MAP_KEYS_SORTED;
+
+        let arrow_schema = FFI_ArrowSchema::try_from(map_data_type)
+            .unwrap()
+            .with_name("map")
+            .unwrap()
+            .with_flags(flags)
+            .unwrap();
+
+        assert!(arrow_schema.map_keys_sorted());
+    }
 }
