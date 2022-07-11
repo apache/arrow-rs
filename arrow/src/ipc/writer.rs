@@ -871,11 +871,7 @@ fn buffer_need_truncate(
     spec: &BufferSpec,
     min_length: usize,
 ) -> bool {
-    if spec == &BufferSpec::AlwaysNull {
-        false
-    } else {
-        array_offset != 0 || min_length < buffer.len()
-    }
+    spec != &BufferSpec::AlwaysNull && (array_offset != 0 || min_length < buffer.len())
 }
 
 /// Returns byte width for a buffer spec. Only for `BufferSpec::FixedWidth`.
@@ -1705,7 +1701,7 @@ mod tests {
 
     #[test]
     fn truncate_ipc_record_batch() {
-        pub fn serialize(record: &RecordBatch) -> Vec<u8> {
+        fn serialize(record: &RecordBatch) -> Vec<u8> {
             let buffer: Vec<u8> = Vec::new();
             let mut stream_writer =
                 StreamWriter::try_new(buffer, &record.schema()).unwrap();
@@ -1714,7 +1710,7 @@ mod tests {
             stream_writer.into_inner().unwrap()
         }
 
-        pub fn deserialize(bytes: Vec<u8>) -> RecordBatch {
+        fn deserialize(bytes: Vec<u8>) -> RecordBatch {
             let mut stream_reader =
                 ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None)
                     .unwrap();
