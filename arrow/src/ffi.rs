@@ -284,6 +284,10 @@ impl FFI_ArrowSchema {
     pub fn dictionary(&self) -> Option<&Self> {
         unsafe { self.dictionary.as_ref() }
     }
+
+    pub fn map_keys_sorted(&self) -> bool {
+        (self.flags / 4) & 1 == 1
+    }
 }
 
 impl Drop for FFI_ArrowSchema {
@@ -348,11 +352,18 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
                 data_type, i
             )))
         },
+        // Variable-size list and map have one i32 buffer.
         // Variable-sized binaries: have two buffers.
         // "small": first buffer is i32, second is in bytes
-        (DataType::Utf8, 1) | (DataType::Binary, 1) | (DataType::List(_), 1) => size_of::<i32>() * 8,
-        (DataType::Utf8, 2) | (DataType::Binary, 2) | (DataType::List(_), 2) => size_of::<u8>() * 8,
-        (DataType::Utf8, _) | (DataType::Binary, _) | (DataType::List(_), _)=> {
+        (DataType::Utf8, 1) | (DataType::Binary, 1) | (DataType::List(_), 1) | (DataType::Map(_, _), 1) => size_of::<i32>() * 8,
+        (DataType::Utf8, 2) | (DataType::Binary, 2) => size_of::<u8>() * 8,
+        (DataType::List(_), _) | (DataType::Map(_, _), _) => {
+            return Err(ArrowError::CDataInterface(format!(
+                "The datatype \"{:?}\" expects 2 buffers, but requested {}. Please verify that the C data interface is correctly implemented.",
+                data_type, i
+            )))
+        }
+        (DataType::Utf8, _) | (DataType::Binary, _) => {
             return Err(ArrowError::CDataInterface(format!(
                 "The datatype \"{:?}\" expects 3 buffers, but requested {}. Please verify that the C data interface is correctly implemented.",
                 data_type, i
@@ -674,13 +685,14 @@ pub trait ArrowArrayRef {
             | (DataType::Binary, 1)
             | (DataType::LargeBinary, 1)
             | (DataType::List(_), 1)
-            | (DataType::LargeList(_), 1) => {
+            | (DataType::LargeList(_), 1)
+            | (DataType::Map(_, _), 1) => {
                 // the len of the offset buffer (buffer 1) equals length + 1
                 let bits = bit_width(data_type, i)?;
                 debug_assert_eq!(bits % 8, 0);
                 (self.array().length as usize + 1) * (bits / 8)
             }
-            (DataType::Utf8, 2) | (DataType::Binary, 2) | (DataType::List(_), 2) => {
+            (DataType::Utf8, 2) | (DataType::Binary, 2) => {
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1)?;
                 // first buffer is the null buffer => add(1)
@@ -692,9 +704,7 @@ pub trait ArrowArrayRef {
                 // get last offset
                 (unsafe { *offset_buffer.add(len / size_of::<i32>() - 1) }) as usize
             }
-            (DataType::LargeUtf8, 2)
-            | (DataType::LargeBinary, 2)
-            | (DataType::LargeList(_), 2) => {
+            (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) => {
                 // the len of the data buffer (buffer 2) equals the last value of the offset buffer (buffer 1)
                 let len = self.buffer_len(1)?;
                 // first buffer is the null buffer => add(1)
@@ -897,8 +907,9 @@ mod tests {
     use crate::array::{
         export_array_into_raw, make_array, Array, ArrayData, BooleanArray, DecimalArray,
         DictionaryArray, DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray,
-        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array, NullArray,
-        OffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray,
+        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array, MapArray,
+        NullArray, OffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray,
+        UInt32Array,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
@@ -1433,6 +1444,36 @@ mod tests {
         assert_eq!(0, private_data.buffers_ptr.len());
 
         Box::into_raw(private_data);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_array() -> Result<()> {
+        let keys = vec!["a", "b", "c", "d", "e", "f", "g", "h"];
+        let values_data = UInt32Array::from(vec![0u32, 10, 20, 30, 40, 50, 60, 70]);
+
+        // Construct a buffer for value offsets, for the nested array:
+        //  [[a, b, c], [d, e, f], [g, h]]
+        let entry_offsets = [0, 3, 6, 8];
+
+        let map_array = MapArray::new_from_strings(
+            keys.clone().into_iter(),
+            &values_data,
+            &entry_offsets,
+        )
+        .unwrap();
+
+        // export it
+        let array = ArrowArray::try_from(map_array.data().clone())?;
+
+        // (simulate consumer) import it
+        let data = ArrayData::try_from(array)?;
+        let array = make_array(data);
+
+        // perform some operation
+        let array = array.as_any().downcast_ref::<MapArray>().unwrap();
+        assert_eq!(array, &map_array);
 
         Ok(())
     }

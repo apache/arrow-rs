@@ -68,6 +68,11 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                 let fields = c_schema.children().map(Field::try_from);
                 DataType::Struct(fields.collect::<Result<Vec<_>>>()?)
             }
+            "+m" => {
+                let c_child = c_schema.child(0);
+                let map_keys_sorted = c_schema.map_keys_sorted();
+                DataType::Map(Box::new(Field::try_from(c_child)?), map_keys_sorted)
+            }
             // Parametrized types, requiring string parse
             other => {
                 match other.splitn(2, ':').collect::<Vec<&str>>().as_slice() {
@@ -201,7 +206,8 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
         let children = match dtype {
             DataType::List(child)
             | DataType::LargeList(child)
-            | DataType::FixedSizeList(child, _) => {
+            | DataType::FixedSizeList(child, _)
+            | DataType::Map(child, _) => {
                 vec![FFI_ArrowSchema::try_from(child.as_ref())?]
             }
             DataType::Struct(fields) => fields
@@ -262,6 +268,7 @@ fn get_format_string(dtype: &DataType) -> Result<String> {
         DataType::List(_) => Ok("+l".to_string()),
         DataType::LargeList(_) => Ok("+L".to_string()),
         DataType::Struct(_) => Ok("+s".to_string()),
+        DataType::Map(_, _) => Ok("+m".to_string()),
         DataType::Dictionary(key_data_type, _) => get_format_string(key_data_type),
         other => Err(ArrowError::CDataInterface(format!(
             "The datatype \"{:?}\" is still not supported in Rust implementation",
