@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::array_primitive::NativeAdapter;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -36,21 +37,6 @@ pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
 }
 
 impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
-    /// Returns the builder as a non-mutable `Any` reference.
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    /// Returns the builder as a mutable `Any` reference.
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    /// Returns the boxed builder as a box of `Any`.
-    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
-        self
-    }
-
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.values_builder.len()
@@ -64,6 +50,21 @@ impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
     /// Builds the array and reset this builder.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
+    }
+
+    /// Returns the builder as a non-mutable `Any` reference.
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Returns the builder as a mutable `Any` reference.
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    /// Returns the boxed builder as a box of `Any`.
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+        self
     }
 }
 
@@ -208,6 +209,41 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Returns the current values buffer as a slice
     pub fn values_slice(&self) -> &[T::Native] {
         self.values_builder.as_slice()
+    }
+}
+
+impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr>
+    for PrimitiveBuilder<T>
+{
+    fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let size_hint = upper.unwrap_or(lower);
+
+        let mut bitmap_builder = BooleanBufferBuilder::new(size_hint);
+        let mut values_builder = BufferBuilder::<T::Native>::new(size_hint);
+
+        let mut materialize = false;
+
+        iter.for_each(|item| {
+            if let Some(a) = item.into().native {
+                bitmap_builder.append(true);
+                values_builder.append(a);
+            } else {
+                materialize = true;
+                bitmap_builder.append(false);
+                values_builder.append(T::Native::default());
+            }
+        });
+
+        PrimitiveBuilder {
+            values_builder,
+            bitmap_builder: if materialize {
+                Some(bitmap_builder)
+            } else {
+                None
+            },
+        }
     }
 }
 
