@@ -1711,8 +1711,7 @@ mod tests {
                 StreamWriter::try_new(buffer, &record.schema()).unwrap();
             stream_writer.write(record).unwrap();
             stream_writer.finish().unwrap();
-            let serialized_batch = stream_writer.into_inner().unwrap();
-            serialized_batch
+            stream_writer.into_inner().unwrap()
         }
 
         fn create_batch(rows: usize) -> RecordBatch {
@@ -1724,11 +1723,10 @@ mod tests {
             let a = Int32Array::from(vec![1; rows]);
             let b = StringArray::from(vec!["a"; rows]);
 
-            let record_batch =
-                RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
-                    .unwrap();
-            record_batch
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
+                .unwrap()
         }
+
         let big_record_batch = create_batch(65536);
 
         let length = 5;
