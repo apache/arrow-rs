@@ -889,7 +889,7 @@ fn get_buffer_byte_width(spec: &BufferSpec) -> usize {
 
 /// Returns the number of total bytes in base binary arrays.
 fn get_total_bytes(array_data: &ArrayData) -> usize {
-    if array_data.len() == 0 {
+    if array_data.is_empty() {
         return 0;
     }
     match array_data.data_type() {
