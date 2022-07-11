@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::DecimalBuilder;
 use std::borrow::Borrow;
 use std::convert::From;
 use std::fmt;
 use std::{any::Any, iter::FromIterator};
 
-use super::BooleanBufferBuilder;
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, FixedSizeListArray,
 };
@@ -350,37 +350,7 @@ impl<'a> DecimalArray {
 
 impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalArray {
     fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
-        let iter = iter.into_iter();
-        let (lower, upper) = iter.size_hint();
-        let size_hint = upper.unwrap_or(lower);
-
-        let mut null_buf = BooleanBufferBuilder::new(size_hint);
-
-        let buffer: Buffer = iter
-            .map(|item| {
-                if let Some(a) = item.borrow() {
-                    null_buf.append(true);
-                    *a
-                } else {
-                    null_buf.append(false);
-                    // arbitrary value for NULL
-                    0
-                }
-            })
-            .collect();
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                Self::default_type(),
-                null_buf.len(),
-                None,
-                Some(null_buf.into()),
-                0,
-                vec![buffer],
-                vec![],
-            )
-        };
-        DecimalArray::from(data)
+        iter.into_iter().collect::<DecimalBuilder>().finish()
     }
 }
 
