@@ -1714,6 +1714,13 @@ mod tests {
             stream_writer.into_inner().unwrap()
         }
 
+        pub fn deserialize(bytes: Vec<u8>) -> RecordBatch {
+            let mut stream_reader =
+                ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None)
+                    .unwrap();
+            stream_reader.next().unwrap().unwrap()
+        }
+
         fn create_batch(rows: usize) -> RecordBatch {
             let schema = Schema::new(vec![
                 Field::new("a", DataType::Int32, false),
@@ -1740,6 +1747,15 @@ mod tests {
         assert_eq!(
             serialize(&small_record_batch).len(),
             serialize(&record_batch_slice).len()
+        );
+
+        assert_eq!(
+            deserialize(serialize(&record_batch_slice)),
+            small_record_batch
+        );
+        assert_eq!(
+            deserialize(serialize(&record_batch_slice)),
+            record_batch_slice
         );
     }
 }
