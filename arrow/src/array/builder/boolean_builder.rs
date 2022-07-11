@@ -193,10 +193,11 @@ impl ArrayBuilder for BooleanBuilder {
 impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanBuilder {
     fn from_iter<T: IntoIterator<Item = Ptr>>(iter: T) -> Self {
         let iter = iter.into_iter();
-        let (data_len, _) = iter.size_hint();
+        let (lower, upper) = iter.size_hint();
+        let size_hint = upper.unwrap_or(lower);
 
-        let mut bitmap_builder = BooleanBufferBuilder::new(data_len);
-        let mut values_builder = BooleanBufferBuilder::new(data_len);
+        let mut bitmap_builder = BooleanBufferBuilder::new(size_hint);
+        let mut values_builder = BooleanBufferBuilder::new(size_hint);
 
         iter.for_each(|item| {
             if let Some(a) = item.borrow() {
