@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 use crate::basic::Encoding;
 use crate::column::writer::{compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min};
 use crate::data_type::private::ParquetValueType;
@@ -8,14 +25,21 @@ use crate::file::properties::WriterProperties;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 use crate::util::memory::ByteBufferPtr;
 
+/// A collection of [`ParquetValueType`] encoded by a [`ColumnValueEncoder`]
 pub trait ColumnValues {
+    /// The underlying value type
     type T: ParquetValueType;
 
+    /// The number of values in this collection
     fn len(&self) -> usize;
 
+    /// Returns the min and max values in this collection, skipping any NaN values
+    ///
+    /// Returns `None` if no values found
     fn min_max(&self, descr: &ColumnDescriptor) -> Option<(&Self::T, &Self::T)>;
 }
 
+/// The encoded data for a dictionary page
 pub struct DictionaryPage {
     pub buf: ByteBufferPtr,
     pub num_values: usize,
@@ -31,9 +55,15 @@ pub struct DataPageValues<T> {
     pub max_value: Option<T>,
 }
 
+/// A generic encoder of [`ColumnValues`] to data and dictionary pages used by
+/// [super::GenericColumnWriter`]
 pub trait ColumnValueEncoder {
+    /// The underlying value type of [`Self::Values`]
+    ///
+    /// Note: this avoids needing to fully qualify `<Self::Values as ColumnValues>::T`
     type T: ParquetValueType;
 
+    /// The values encoded by this encoder
     type Values: ColumnValues<T = Self::T> + ?Sized;
 
     /// Create a new [`ColumnValueEncoder`]
