@@ -20,6 +20,7 @@
 //! The `FileWriter` and `StreamWriter` have similar interfaces,
 //! however the `FileWriter` expects a reader that supports `Seek`ing
 
+use std::cmp::min;
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 
@@ -27,7 +28,8 @@ use flatbuffers::FlatBufferBuilder;
 
 use crate::array::{
     as_large_list_array, as_list_array, as_map_array, as_struct_array, as_union_array,
-    make_array, Array, ArrayData, ArrayRef, FixedSizeListArray,
+    layout, make_array, Array, ArrayData, ArrayRef, BinaryArray, BufferSpec,
+    FixedSizeListArray, LargeBinaryArray, LargeStringArray, StringArray,
 };
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::*;
@@ -861,6 +863,145 @@ fn has_validity_bitmap(data_type: &DataType, write_options: &IpcWriteOptions) ->
     }
 }
 
+/// Whether to truncate the buffer
+#[inline]
+fn buffer_need_truncate(
+    array_offset: usize,
+    buffer: &Buffer,
+    spec: &BufferSpec,
+    min_length: usize,
+) -> bool {
+    if spec == &BufferSpec::AlwaysNull {
+        false
+    } else {
+        array_offset != 0 || min_length < buffer.len()
+    }
+}
+
+/// Returns byte width for a buffer spec. Only for `BufferSpec::FixedWidth`.
+#[inline]
+fn get_buffer_byte_width(spec: &BufferSpec) -> usize {
+    match spec {
+        BufferSpec::FixedWidth { byte_width } => *byte_width,
+        _ => 0,
+    }
+}
+
+/// Returns the number of total bytes in base binary arrays.
+fn get_total_bytes(array_data: &ArrayData) -> usize {
+    if array_data.len() == 0 {
+        return 0;
+    }
+    match array_data.data_type() {
+        DataType::Binary => {
+            let array: BinaryArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+            (offsets[array_data.len()] - offsets[0]) as usize
+        }
+        DataType::LargeBinary => {
+            let array: LargeBinaryArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+            (offsets[array_data.len()] - offsets[0]) as usize
+        }
+        DataType::Utf8 => {
+            let array: StringArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+            (offsets[array_data.len()] - offsets[0]) as usize
+        }
+        DataType::LargeUtf8 => {
+            let array: LargeStringArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+            (offsets[array_data.len()] - offsets[0]) as usize
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Rebase value offsets for given ArrayData to zero-based.
+fn get_zero_based_value_offsets(array_data: &ArrayData) -> Buffer {
+    match array_data.data_type() {
+        DataType::Binary => {
+            let array: BinaryArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+            let start_offset = offsets[0];
+
+            let mut new_offsets = vec![0_i32; array_data.len() + 1];
+            for (idx, x) in offsets.iter().enumerate() {
+                new_offsets[idx] = x - start_offset;
+            }
+
+            Buffer::from_slice_ref(&new_offsets)
+        }
+        DataType::LargeBinary => {
+            let array: LargeBinaryArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+
+            let start_offset = offsets[0];
+
+            let mut new_offsets = vec![0_i64; array_data.len() + 1];
+            for (idx, x) in offsets.iter().enumerate() {
+                new_offsets[idx] = x - start_offset;
+            }
+
+            Buffer::from_slice_ref(&new_offsets)
+        }
+        DataType::Utf8 => {
+            let array: StringArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+
+            let start_offset = offsets[0];
+
+            let mut new_offsets = vec![0_i32; array_data.len() + 1];
+            for (idx, x) in offsets.iter().enumerate() {
+                new_offsets[idx] = x - start_offset;
+            }
+
+            Buffer::from_slice_ref(&new_offsets)
+        }
+        DataType::LargeUtf8 => {
+            let array: LargeStringArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+
+            let start_offset = offsets[0];
+
+            let mut new_offsets = vec![0_i64; array_data.len() + 1];
+            for (idx, x) in offsets.iter().enumerate() {
+                new_offsets[idx] = x - start_offset;
+            }
+
+            Buffer::from_slice_ref(&new_offsets)
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Returns the start offset of base binary array.
+fn get_buffer_offset(array_data: &ArrayData) -> usize {
+    match array_data.data_type() {
+        DataType::Binary => {
+            let array: BinaryArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+            offsets[0] as usize
+        }
+        DataType::LargeBinary => {
+            let array: LargeBinaryArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+            offsets[0] as usize
+        }
+        DataType::Utf8 => {
+            let array: StringArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+            offsets[0] as usize
+        }
+        DataType::LargeUtf8 => {
+            let array: LargeStringArray = array_data.clone().into();
+            let offsets = array.value_offsets();
+            offsets[0] as usize
+        }
+        _ => unreachable!(),
+    }
+}
+
 /// Write array data to a vector of bytes
 #[allow(clippy::too_many_arguments)]
 fn write_array_data(
@@ -894,12 +1035,66 @@ fn write_array_data(
             Some(buffer) => buffer.clone(),
         };
 
-        offset = write_buffer(&null_buffer, buffers, arrow_data, offset);
+        offset = write_buffer(null_buffer.as_slice(), buffers, arrow_data, offset);
     }
 
-    array_data.buffers().iter().for_each(|buffer| {
-        offset = write_buffer(buffer, buffers, arrow_data, offset);
-    });
+    let data_type = array_data.data_type();
+    if matches!(
+        data_type,
+        DataType::Binary | DataType::LargeBinary | DataType::Utf8 | DataType::LargeUtf8
+    ) {
+        let total_bytes = get_total_bytes(array_data);
+        let value_buffer = &array_data.buffers()[1];
+        if buffer_need_truncate(
+            array_data.offset(),
+            value_buffer,
+            &BufferSpec::VariableWidth,
+            total_bytes,
+        ) {
+            // Rebase offsets and truncate values
+            let new_offsets = get_zero_based_value_offsets(array_data);
+            offset = write_buffer(new_offsets.as_slice(), buffers, arrow_data, offset);
+
+            let byte_offset = get_buffer_offset(array_data);
+            let buffer_length = min(total_bytes, value_buffer.len() - byte_offset);
+            let buffer_slice =
+                &value_buffer.as_slice()[byte_offset..(byte_offset + buffer_length)];
+            offset = write_buffer(buffer_slice, buffers, arrow_data, offset);
+        } else {
+            array_data.buffers().iter().for_each(|buffer| {
+                offset = write_buffer(buffer.as_slice(), buffers, arrow_data, offset);
+            });
+        }
+    } else if DataType::is_numeric(data_type)
+        || DataType::is_temporal(data_type)
+        || matches!(array_data.data_type(), DataType::FixedSizeBinary(_))
+    {
+        // Truncate values
+        let layout = layout(data_type);
+
+        array_data
+            .buffers()
+            .iter()
+            .zip(layout.buffers.iter())
+            .for_each(|(buffer, spec)| {
+                // Truncate values
+                let byte_width = get_buffer_byte_width(spec);
+                let min_length = array_data.len() * byte_width;
+                if buffer_need_truncate(array_data.offset(), buffer, spec, min_length) {
+                    let byte_offset = array_data.offset() * byte_width;
+                    let buffer_length = min(min_length, buffer.len() - byte_offset);
+                    let buffer_slice =
+                        &buffer.as_slice()[byte_offset..(byte_offset + buffer_length)];
+                    offset = write_buffer(buffer_slice, buffers, arrow_data, offset);
+                } else {
+                    offset = write_buffer(buffer.as_slice(), buffers, arrow_data, offset);
+                }
+            });
+    } else {
+        array_data.buffers().iter().for_each(|buffer| {
+            offset = write_buffer(buffer, buffers, arrow_data, offset);
+        });
+    }
 
     if !matches!(array_data.data_type(), DataType::Dictionary(_, _)) {
         // recursively write out nested structures
@@ -923,7 +1118,7 @@ fn write_array_data(
 
 /// Write a buffer to a vector of bytes, and add its ipc::Buffer to a vector
 fn write_buffer(
-    buffer: &Buffer,
+    buffer: &[u8],
     buffers: &mut Vec<ipc::Buffer>,
     arrow_data: &mut Vec<u8>,
     offset: i64,
@@ -933,7 +1128,7 @@ fn write_buffer(
     let total_len: i64 = (len + pad_len) as i64;
     // assert_eq!(len % 8, 0, "Buffer width not a multiple of 8 bytes");
     buffers.push(ipc::Buffer::new(offset, total_len));
-    arrow_data.extend_from_slice(buffer.as_slice());
+    arrow_data.extend_from_slice(buffer);
     arrow_data.extend_from_slice(&vec![0u8; pad_len][..]);
     offset + total_len
 }
@@ -1505,6 +1700,48 @@ mod tests {
         );
         write_union_file(
             IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap(),
+        );
+    }
+
+    #[test]
+    fn truncate_ipc_record_batch() {
+        pub fn serialize(record: &RecordBatch) -> Vec<u8> {
+            let buffer: Vec<u8> = Vec::new();
+            let mut stream_writer =
+                StreamWriter::try_new(buffer, &record.schema()).unwrap();
+            stream_writer.write(record).unwrap();
+            stream_writer.finish().unwrap();
+            let serialized_batch = stream_writer.into_inner().unwrap();
+            serialized_batch
+        }
+
+        fn create_batch(rows: usize) -> RecordBatch {
+            let schema = Schema::new(vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, false),
+            ]);
+
+            let a = Int32Array::from(vec![1; rows]);
+            let b = StringArray::from(vec!["a"; rows]);
+
+            let record_batch =
+                RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
+                    .unwrap();
+            record_batch
+        }
+        let big_record_batch = create_batch(65536);
+
+        let length = 5;
+        let small_record_batch = create_batch(length);
+
+        let offset = 2;
+        let record_batch_slice = big_record_batch.slice(offset, length);
+        assert!(
+            serialize(&big_record_batch).len() > serialize(&small_record_batch).len()
+        );
+        assert_eq!(
+            serialize(&small_record_batch).len(),
+            serialize(&record_batch_slice).len()
         );
     }
 }
