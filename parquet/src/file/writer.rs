@@ -1052,6 +1052,7 @@ mod tests {
                 total_num_values,
                 codec,
                 physical_type,
+                i64::MIN,
             )
             .unwrap();
 

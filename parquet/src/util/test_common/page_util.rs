@@ -173,7 +173,7 @@ impl<P: Iterator<Item = Page> + Send> PageReader for InMemoryPageReader<P> {
         Ok(self.page_iter.next())
     }
 
-    fn peek_next_page(&self) -> Result<Option<PageMetadata>> {
+    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
         unimplemented!()
     }
 

@@ -205,7 +205,7 @@ pub trait PageReader: Iterator<Item = Result<Page>> + Send {
 
     /// Gets metadata about the next page, returns an error if no
     /// column index information
-    fn peek_next_page(&self) -> Result<Option<PageMetadata>>;
+    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>>;
 
     /// Skips reading the next page, returns an error if no
     /// column index information

@@ -15,18 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod io;
-pub mod memory;
-#[macro_use]
-pub mod bit_util;
-mod bit_packing;
-pub mod cursor;
-pub mod hash_util;
-#[cfg(any(test, feature = "test_common"))]
-pub(crate) mod test_common;
-pub(crate)mod page_util;
+use crate::errors::Result;
+use parquet_format::PageLocation;
 
-#[cfg(any(test, feature = "test_common"))]
-pub use self::test_common::page_util::{
-    DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator,
-};
+pub(crate) fn calculate_row_count(indexes: &[PageLocation], page_num: usize, total_row_count: i64) -> Result<usize> {
+    if page_num == indexes.len() - 1 {
+        Ok((total_row_count - indexes[page_num].first_row_index + 1) as usize)
+    } else {
+        Ok((indexes[page_num + 1].first_row_index - indexes[page_num].first_row_index) as usize)
+    }
+}
