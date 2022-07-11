@@ -131,3 +131,82 @@ impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericStringBuilder<OffsetSi
         Arc::new(a)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::array::builder::StringBuilder;
+    use crate::array::{Array, ArrayBuilder};
+
+    #[test]
+    fn test_string_array_builder() {
+        let mut builder = StringBuilder::new(20);
+
+        builder.append_value("hello").unwrap();
+        builder.append(true).unwrap();
+        builder.append_value("world").unwrap();
+
+        let string_array = builder.finish();
+
+        assert_eq!(3, string_array.len());
+        assert_eq!(0, string_array.null_count());
+        assert_eq!("hello", string_array.value(0));
+        assert_eq!("", string_array.value(1));
+        assert_eq!("world", string_array.value(2));
+        assert_eq!(5, string_array.value_offsets()[2]);
+        assert_eq!(5, string_array.value_length(2));
+    }
+
+    #[test]
+    fn test_string_array_builder_finish() {
+        let mut builder = StringBuilder::new(10);
+
+        builder.append_value("hello").unwrap();
+        builder.append_value("world").unwrap();
+
+        let mut arr = builder.finish();
+        assert_eq!(2, arr.len());
+        assert_eq!(0, builder.len());
+
+        builder.append_value("arrow").unwrap();
+        arr = builder.finish();
+        assert_eq!(1, arr.len());
+        assert_eq!(0, builder.len());
+    }
+
+    #[test]
+    fn test_string_array_builder_append_string() {
+        let mut builder = StringBuilder::new(20);
+
+        let var = "hello".to_owned();
+        builder.append_value(&var).unwrap();
+        builder.append(true).unwrap();
+        builder.append_value("world").unwrap();
+
+        let string_array = builder.finish();
+
+        assert_eq!(3, string_array.len());
+        assert_eq!(0, string_array.null_count());
+        assert_eq!("hello", string_array.value(0));
+        assert_eq!("", string_array.value(1));
+        assert_eq!("world", string_array.value(2));
+        assert_eq!(5, string_array.value_offsets()[2]);
+        assert_eq!(5, string_array.value_length(2));
+    }
+
+    #[test]
+    fn test_string_array_builder_append_option() {
+        let mut builder = StringBuilder::new(20);
+        builder.append_option(Some("hello")).unwrap();
+        builder.append_option(None::<&str>).unwrap();
+        builder.append_option(None::<String>).unwrap();
+        builder.append_option(Some("world")).unwrap();
+
+        let string_array = builder.finish();
+
+        assert_eq!(4, string_array.len());
+        assert_eq!("hello", string_array.value(0));
+        assert!(string_array.is_null(1));
+        assert!(string_array.is_null(2));
+        assert_eq!("world", string_array.value(3));
+    }
+}

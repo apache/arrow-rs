@@ -28,33 +28,30 @@ use crate::error::Result;
 
 use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
 
-///  Array builder for `ListArray`
+///  Array builder for [`GenericListArray`]
 #[derive(Debug)]
 pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
     offsets_builder: BufferBuilder<OffsetSize>,
     bitmap_builder: BooleanBufferBuilder,
     values_builder: T,
-    len: OffsetSize,
 }
 
 impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize, T> {
-    /// Creates a new `ListArrayBuilder` from a given values array builder
+    /// Creates a new [`GenericListBuilder`] from a given values array builder
     pub fn new(values_builder: T) -> Self {
         let capacity = values_builder.len();
         Self::with_capacity(values_builder, capacity)
     }
 
-    /// Creates a new `ListArrayBuilder` from a given values array builder
+    /// Creates a new [`GenericListBuilder`] from a given values array builder
     /// `capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(values_builder: T, capacity: usize) -> Self {
         let mut offsets_builder = BufferBuilder::<OffsetSize>::new(capacity + 1);
-        let len = OffsetSize::zero();
-        offsets_builder.append(len);
+        offsets_builder.append(OffsetSize::zero());
         Self {
             offsets_builder,
             bitmap_builder: BooleanBufferBuilder::new(capacity),
             values_builder,
-            len,
         }
     }
 }
@@ -81,12 +78,12 @@ where
 
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
-        self.len.to_usize().unwrap()
+        self.bitmap_builder.len()
     }
 
     /// Returns whether the number of array slots is zero
     fn is_empty(&self) -> bool {
-        self.len == OffsetSize::zero()
+        self.bitmap_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -102,7 +99,7 @@ where
     /// Returns the child array builder as a mutable reference.
     ///
     /// This mutable reference can be used to append values into the child array builder,
-    /// but you must call `append` to delimit each distinct list value.
+    /// but you must call [`append`](#method.append) to delimit each distinct list value.
     pub fn values(&mut self) -> &mut T {
         &mut self.values_builder
     }
@@ -118,14 +115,12 @@ where
         self.offsets_builder
             .append(OffsetSize::from_usize(self.values_builder.len()).unwrap());
         self.bitmap_builder.append(is_valid);
-        self.len += OffsetSize::one();
         Ok(())
     }
 
-    /// Builds the `ListArray` and reset this builder.
+    /// Builds the [`GenericListArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericListArray<OffsetSize> {
         let len = self.len();
-        self.len = OffsetSize::zero();
         let values_arr = self
             .values_builder
             .as_any_mut()
@@ -136,7 +131,7 @@ where
 
         let offset_buffer = self.offsets_builder.finish();
         let null_bit_buffer = self.bitmap_builder.finish();
-        self.offsets_builder.append(self.len);
+        self.offsets_builder.append(OffsetSize::zero());
         let field = Box::new(Field::new(
             "item",
             values_data.data_type().clone(),
@@ -147,13 +142,13 @@ where
         } else {
             DataType::List(field)
         };
-        let array_data = ArrayData::builder(data_type)
+        let array_data_builder = ArrayData::builder(data_type)
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(values_data.clone())
             .null_bit_buffer(Some(null_bit_buffer));
 
-        let array_data = unsafe { array_data.build_unchecked() };
+        let array_data = unsafe { array_data_builder.build_unchecked() };
 
         GenericListArray::<OffsetSize>::from(array_data)
     }
@@ -167,20 +162,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::array::Array;
-    use crate::array::Int32Array;
-    use crate::array::Int32Builder;
+    use crate::array::builder::ListBuilder;
+    use crate::array::{Array, Int32Array, Int32Builder};
     use crate::buffer::Buffer;
 
-    use crate::array::builder::{
-        BinaryBuilder, LargeBinaryBuilder, LargeListBuilder, ListBuilder, StringBuilder,
-    };
-
-    #[test]
-    fn test_list_array_builder() {
+    fn _test_generic_list_array_builder<O: OffsetSizeTrait>() {
         let values_builder = Int32Builder::new(10);
-        let mut builder = ListBuilder::new(values_builder);
+        let mut builder = GenericListBuilder::<O, _>::new(values_builder);
 
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
         builder.values().append_value(0).unwrap();
@@ -199,32 +187,42 @@ mod tests {
         let values = list_array.values().data().buffers()[0].clone();
         assert_eq!(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]), values);
         assert_eq!(
-            Buffer::from_slice_ref(&[0, 3, 6, 8]),
+            Buffer::from_slice_ref(&[0, 3, 6, 8].map(|n| O::from_usize(n).unwrap())),
             list_array.data().buffers()[0].clone()
         );
         assert_eq!(DataType::Int32, list_array.value_type());
         assert_eq!(3, list_array.len());
         assert_eq!(0, list_array.null_count());
-        assert_eq!(6, list_array.value_offsets()[2]);
-        assert_eq!(2, list_array.value_length(2));
+        assert_eq!(O::from_usize(6).unwrap(), list_array.value_offsets()[2]);
+        assert_eq!(O::from_usize(2).unwrap(), list_array.value_length(2));
         for i in 0..3 {
             assert!(list_array.is_valid(i));
             assert!(!list_array.is_null(i));
         }
+    }
+
+    #[test]
+    fn test_list_array_builder() {
+        _test_generic_list_array_builder::<i32>()
     }
 
     #[test]
     fn test_large_list_array_builder() {
-        let values_builder = Int32Builder::new(10);
-        let mut builder = LargeListBuilder::new(values_builder);
+        _test_generic_list_array_builder::<i64>()
+    }
 
-        //  [[0, 1, 2], [3, 4, 5], [6, 7]]
+    fn _test_generic_list_array_builder_nulls<O: OffsetSizeTrait>() {
+        let values_builder = Int32Builder::new(10);
+        let mut builder = GenericListBuilder::<O, _>::new(values_builder);
+
+        //  [[0, 1, 2], null, [3, null, 5], [6, 7]]
         builder.values().append_value(0).unwrap();
         builder.values().append_value(1).unwrap();
         builder.values().append_value(2).unwrap();
         builder.append(true).unwrap();
+        builder.append(false).unwrap();
         builder.values().append_value(3).unwrap();
-        builder.values().append_value(4).unwrap();
+        builder.values().append_null().unwrap();
         builder.values().append_value(5).unwrap();
         builder.append(true).unwrap();
         builder.values().append_value(6).unwrap();
@@ -232,75 +230,21 @@ mod tests {
         builder.append(true).unwrap();
         let list_array = builder.finish();
 
-        let values = list_array.values().data().buffers()[0].clone();
-        assert_eq!(Buffer::from_slice_ref(&[0, 1, 2, 3, 4, 5, 6, 7]), values);
-        assert_eq!(
-            Buffer::from_slice_ref(&[0i64, 3, 6, 8]),
-            list_array.data().buffers()[0].clone()
-        );
         assert_eq!(DataType::Int32, list_array.value_type());
-        assert_eq!(3, list_array.len());
-        assert_eq!(0, list_array.null_count());
-        assert_eq!(6, list_array.value_offsets()[2]);
-        assert_eq!(2, list_array.value_length(2));
-        for i in 0..3 {
-            assert!(list_array.is_valid(i));
-            assert!(!list_array.is_null(i));
-        }
+        assert_eq!(4, list_array.len());
+        assert_eq!(1, list_array.null_count());
+        assert_eq!(O::from_usize(3).unwrap(), list_array.value_offsets()[2]);
+        assert_eq!(O::from_usize(3).unwrap(), list_array.value_length(2));
     }
 
     #[test]
     fn test_list_array_builder_nulls() {
-        let values_builder = Int32Builder::new(10);
-        let mut builder = ListBuilder::new(values_builder);
-
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7]]
-        builder.values().append_value(0).unwrap();
-        builder.values().append_value(1).unwrap();
-        builder.values().append_value(2).unwrap();
-        builder.append(true).unwrap();
-        builder.append(false).unwrap();
-        builder.values().append_value(3).unwrap();
-        builder.values().append_null().unwrap();
-        builder.values().append_value(5).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_value(6).unwrap();
-        builder.values().append_value(7).unwrap();
-        builder.append(true).unwrap();
-        let list_array = builder.finish();
-
-        assert_eq!(DataType::Int32, list_array.value_type());
-        assert_eq!(4, list_array.len());
-        assert_eq!(1, list_array.null_count());
-        assert_eq!(3, list_array.value_offsets()[2]);
-        assert_eq!(3, list_array.value_length(2));
+        _test_generic_list_array_builder_nulls::<i32>()
     }
 
     #[test]
     fn test_large_list_array_builder_nulls() {
-        let values_builder = Int32Builder::new(10);
-        let mut builder = LargeListBuilder::new(values_builder);
-
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7]]
-        builder.values().append_value(0).unwrap();
-        builder.values().append_value(1).unwrap();
-        builder.values().append_value(2).unwrap();
-        builder.append(true).unwrap();
-        builder.append(false).unwrap();
-        builder.values().append_value(3).unwrap();
-        builder.values().append_null().unwrap();
-        builder.values().append_value(5).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_value(6).unwrap();
-        builder.values().append_value(7).unwrap();
-        builder.append(true).unwrap();
-        let list_array = builder.finish();
-
-        assert_eq!(DataType::Int32, list_array.value_type());
-        assert_eq!(4, list_array.len());
-        assert_eq!(1, list_array.null_count());
-        assert_eq!(3, list_array.value_offsets()[2]);
-        assert_eq!(3, list_array.value_length(2));
+        _test_generic_list_array_builder_nulls::<i64>()
     }
 
     #[test]
@@ -315,13 +259,13 @@ mod tests {
 
         let mut arr = builder.finish();
         assert_eq!(2, arr.len());
-        assert_eq!(0, builder.len());
+        assert!(builder.is_empty());
 
         builder.values().append_slice(&[7, 8, 9]).unwrap();
         builder.append(true).unwrap();
         arr = builder.finish();
         assert_eq!(1, arr.len());
-        assert_eq!(0, builder.len());
+        assert!(builder.is_empty());
     }
 
     #[test]
@@ -377,136 +321,5 @@ mod tests {
             Buffer::from_slice_ref(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
             list_array.values().data().child_data()[0].buffers()[0].clone()
         );
-    }
-
-    #[test]
-    fn test_binary_array_builder() {
-        let mut builder = BinaryBuilder::new(20);
-
-        builder.append_byte(b'h').unwrap();
-        builder.append_byte(b'e').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'o').unwrap();
-        builder.append(true).unwrap();
-        builder.append(true).unwrap();
-        builder.append_byte(b'w').unwrap();
-        builder.append_byte(b'o').unwrap();
-        builder.append_byte(b'r').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'd').unwrap();
-        builder.append(true).unwrap();
-
-        let binary_array = builder.finish();
-
-        assert_eq!(3, binary_array.len());
-        assert_eq!(0, binary_array.null_count());
-        assert_eq!([b'h', b'e', b'l', b'l', b'o'], binary_array.value(0));
-        assert_eq!([] as [u8; 0], binary_array.value(1));
-        assert_eq!([b'w', b'o', b'r', b'l', b'd'], binary_array.value(2));
-        assert_eq!(5, binary_array.value_offsets()[2]);
-        assert_eq!(5, binary_array.value_length(2));
-    }
-
-    #[test]
-    fn test_large_binary_array_builder() {
-        let mut builder = LargeBinaryBuilder::new(20);
-
-        builder.append_byte(b'h').unwrap();
-        builder.append_byte(b'e').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'o').unwrap();
-        builder.append(true).unwrap();
-        builder.append(true).unwrap();
-        builder.append_byte(b'w').unwrap();
-        builder.append_byte(b'o').unwrap();
-        builder.append_byte(b'r').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'd').unwrap();
-        builder.append(true).unwrap();
-
-        let binary_array = builder.finish();
-
-        assert_eq!(3, binary_array.len());
-        assert_eq!(0, binary_array.null_count());
-        assert_eq!([b'h', b'e', b'l', b'l', b'o'], binary_array.value(0));
-        assert_eq!([] as [u8; 0], binary_array.value(1));
-        assert_eq!([b'w', b'o', b'r', b'l', b'd'], binary_array.value(2));
-        assert_eq!(5, binary_array.value_offsets()[2]);
-        assert_eq!(5, binary_array.value_length(2));
-    }
-
-    #[test]
-    fn test_string_array_builder() {
-        let mut builder = StringBuilder::new(20);
-
-        builder.append_value("hello").unwrap();
-        builder.append(true).unwrap();
-        builder.append_value("world").unwrap();
-
-        let string_array = builder.finish();
-
-        assert_eq!(3, string_array.len());
-        assert_eq!(0, string_array.null_count());
-        assert_eq!("hello", string_array.value(0));
-        assert_eq!("", string_array.value(1));
-        assert_eq!("world", string_array.value(2));
-        assert_eq!(5, string_array.value_offsets()[2]);
-        assert_eq!(5, string_array.value_length(2));
-    }
-
-    #[test]
-    fn test_string_array_builder_finish() {
-        let mut builder = StringBuilder::new(10);
-
-        builder.append_value("hello").unwrap();
-        builder.append_value("world").unwrap();
-
-        let mut arr = builder.finish();
-        assert_eq!(2, arr.len());
-        assert_eq!(0, builder.len());
-
-        builder.append_value("arrow").unwrap();
-        arr = builder.finish();
-        assert_eq!(1, arr.len());
-        assert_eq!(0, builder.len());
-    }
-
-    #[test]
-    fn test_string_array_builder_append_string() {
-        let mut builder = StringBuilder::new(20);
-
-        let var = "hello".to_owned();
-        builder.append_value(&var).unwrap();
-        builder.append(true).unwrap();
-        builder.append_value("world").unwrap();
-
-        let string_array = builder.finish();
-
-        assert_eq!(3, string_array.len());
-        assert_eq!(0, string_array.null_count());
-        assert_eq!("hello", string_array.value(0));
-        assert_eq!("", string_array.value(1));
-        assert_eq!("world", string_array.value(2));
-        assert_eq!(5, string_array.value_offsets()[2]);
-        assert_eq!(5, string_array.value_length(2));
-    }
-
-    #[test]
-    fn test_string_array_builder_append_option() {
-        let mut builder = StringBuilder::new(20);
-        builder.append_option(Some("hello")).unwrap();
-        builder.append_option(None::<&str>).unwrap();
-        builder.append_option(None::<String>).unwrap();
-        builder.append_option(Some("world")).unwrap();
-
-        let string_array = builder.finish();
-
-        assert_eq!(4, string_array.len());
-        assert_eq!("hello", string_array.value(0));
-        assert!(string_array.is_null(1));
-        assert!(string_array.is_null(2));
-        assert_eq!("world", string_array.value(3));
     }
 }
