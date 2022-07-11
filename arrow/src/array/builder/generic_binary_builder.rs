@@ -79,6 +79,21 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSize> {
+    /// Returns the number of array slots in the builder
+    fn len(&self) -> usize {
+        self.builder.len()
+    }
+
+    /// Returns whether the number of array slots is zero
+    fn is_empty(&self) -> bool {
+        self.builder.is_empty()
+    }
+
+    /// Builds the array and reset this builder.
+    fn finish(&mut self) -> ArrayRef {
+        Arc::new(self.finish())
+    }
+
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -93,20 +108,33 @@ impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSi
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
+}
 
-    /// Returns the number of array slots in the builder
-    fn len(&self) -> usize {
-        self.builder.len()
-    }
+impl<Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
+    for GenericBinaryBuilder<OffsetSize>
+where
+    Ptr: AsRef<[u8]>,
+{
+    fn from_iter<T: IntoIterator<Item = Option<Ptr>>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let size_hint = upper.unwrap_or(lower);
 
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.builder.is_empty()
-    }
+        let mut builder = GenericListBuilder::with_capacity(
+            UInt8Builder::new(size_hint),
+            size_hint,
+        );
 
-    /// Builds the array and reset this builder.
-    fn finish(&mut self) -> ArrayRef {
-        Arc::new(self.finish())
+        iter.for_each(|item| {
+            if let Some(a) = item {
+                builder.values().append_slice(a.as_ref()).unwrap();
+                builder.append(true).unwrap();
+            } else {
+                builder.append(false).unwrap();
+            }
+        });
+
+        GenericBinaryBuilder { builder }
     }
 }
 

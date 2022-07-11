@@ -186,10 +186,7 @@ impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalBuilder {
             if let Some(a) = item.borrow() {
                 let values = Self::from_i128_to_fixed_size_bytes(*a, fixed_len)
                     .expect("Conversion should be possible.");
-                builder
-                    .values()
-                    .append_values(&values, &[true; 16])
-                    .unwrap();
+                builder.values().append_slice(&values).unwrap();
                 builder.append(true).unwrap();
             } else {
                 builder.values().append_nulls(fixed_len).unwrap();
