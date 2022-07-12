@@ -21,8 +21,8 @@ use std::iter::IntoIterator;
 use std::{convert::From, iter::FromIterator};
 
 use super::{
-    make_array, Array, ArrayData, ArrayRef, PrimitiveArray, PrimitiveBuilder,
-    StringArray, StringBuilder, StringDictionaryBuilder,
+    make_array, Array, ArrayData, ArrayRef, PrimitiveArray, StringArray,
+    StringDictionaryBuilder,
 };
 use crate::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, ArrowPrimitiveType, DataType,
@@ -284,26 +284,9 @@ impl<'a, T: ArrowPrimitiveType + ArrowDictionaryKeyType> FromIterator<Option<&'a
     for DictionaryArray<T>
 {
     fn from_iter<I: IntoIterator<Item = Option<&'a str>>>(iter: I) -> Self {
-        let it = iter.into_iter();
-        let (lower, _) = it.size_hint();
-        let key_builder = PrimitiveBuilder::<T>::new(lower);
-        let value_builder = StringBuilder::new(256);
-        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
-        it.for_each(|i| {
-            if let Some(i) = i {
-                // Note: impl ... for Result<DictionaryArray<T>> fails with
-                // error[E0117]: only traits defined in the current crate can be implemented for arbitrary types
-                builder
-                    .append(i)
-                    .expect("Unable to append a value to a dictionary array.");
-            } else {
-                builder
-                    .append_null()
-                    .expect("Unable to append a null value to a dictionary array.");
-            }
-        });
-
-        builder.finish()
+        iter.into_iter()
+            .collect::<StringDictionaryBuilder<T>>()
+            .finish()
     }
 }
 
@@ -326,18 +309,10 @@ impl<'a, T: ArrowPrimitiveType + ArrowDictionaryKeyType> FromIterator<&'a str>
     for DictionaryArray<T>
 {
     fn from_iter<I: IntoIterator<Item = &'a str>>(iter: I) -> Self {
-        let it = iter.into_iter();
-        let (lower, _) = it.size_hint();
-        let key_builder = PrimitiveBuilder::<T>::new(lower);
-        let value_builder = StringBuilder::new(256);
-        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
-        it.for_each(|i| {
-            builder
-                .append(i)
-                .expect("Unable to append a value to a dictionary array.");
-        });
-
-        builder.finish()
+        iter.into_iter()
+            .map(Some)
+            .collect::<StringDictionaryBuilder<T>>()
+            .finish()
     }
 }
 
@@ -369,6 +344,7 @@ impl<T: ArrowPrimitiveType> fmt::Debug for DictionaryArray<T> {
 mod tests {
     use super::*;
 
+    use crate::array::PrimitiveBuilder;
     use crate::array::{Float32Array, Int8Array};
     use crate::datatypes::{Float32Type, Int16Type};
     use crate::{

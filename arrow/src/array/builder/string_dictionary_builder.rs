@@ -19,7 +19,9 @@ use super::PrimitiveBuilder;
 use crate::array::{
     Array, ArrayBuilder, ArrayRef, DictionaryArray, StringArray, StringBuilder,
 };
-use crate::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType};
+use crate::datatypes::{
+    ArrowDictionaryKeyType, ArrowNativeType, ArrowPrimitiveType, DataType,
+};
 use crate::error::{ArrowError, Result};
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
@@ -172,21 +174,6 @@ impl<K> ArrayBuilder for StringDictionaryBuilder<K>
 where
     K: ArrowDictionaryKeyType,
 {
-    /// Returns the builder as an non-mutable `Any` reference.
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    /// Returns the builder as an mutable `Any` reference.
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    /// Returns the boxed builder as a box of `Any`.
-    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
-        self
-    }
-
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.keys_builder.len()
@@ -200,6 +187,21 @@ where
     /// Builds the array and reset this builder.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
+    }
+
+    /// Returns the builder as an non-mutable `Any` reference.
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Returns the builder as an mutable `Any` reference.
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    /// Returns the boxed builder as a box of `Any`.
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+        self
     }
 }
 
@@ -263,6 +265,34 @@ where
             .child_data(vec![values.into_data()]);
 
         DictionaryArray::from(unsafe { builder.build_unchecked() })
+    }
+}
+
+impl<'a, T: ArrowPrimitiveType + ArrowDictionaryKeyType> FromIterator<Option<&'a str>>
+    for StringDictionaryBuilder<T>
+{
+    fn from_iter<I: IntoIterator<Item = Option<&'a str>>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let size_hint = upper.unwrap_or(lower);
+
+        let key_builder = PrimitiveBuilder::<T>::new(size_hint);
+        let value_builder = StringBuilder::new(256);
+        let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
+
+        iter.for_each(|item| {
+            if let Some(a) = item {
+                builder
+                    .append(a)
+                    .expect("Unable to append a value to a dictionary array.");
+            } else {
+                builder
+                    .append_null()
+                    .expect("Unable to append a null value to a dictionary array.");
+            }
+        });
+
+        builder
     }
 }
 
