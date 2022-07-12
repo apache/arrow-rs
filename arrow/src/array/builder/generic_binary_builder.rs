@@ -115,15 +115,13 @@ impl<Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
 where
     Ptr: AsRef<[u8]>,
 {
-    fn from_iter<T: IntoIterator<Item = Option<Ptr>>>(iter: T) -> Self {
+    fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
         let iter = iter.into_iter();
         let (lower, upper) = iter.size_hint();
         let size_hint = upper.unwrap_or(lower);
 
-        let mut builder = GenericListBuilder::with_capacity(
-            UInt8Builder::new(size_hint),
-            size_hint,
-        );
+        let mut builder =
+            GenericListBuilder::with_capacity(UInt8Builder::new(size_hint), size_hint);
 
         iter.for_each(|item| {
             if let Some(a) = item {

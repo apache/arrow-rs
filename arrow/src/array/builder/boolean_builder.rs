@@ -191,7 +191,7 @@ impl ArrayBuilder for BooleanBuilder {
 }
 
 impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanBuilder {
-    fn from_iter<T: IntoIterator<Item = Ptr>>(iter: T) -> Self {
+    fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
         let iter = iter.into_iter();
         let (lower, upper) = iter.size_hint();
         let size_hint = upper.unwrap_or(lower);
