@@ -19,7 +19,9 @@
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
 use bytes::{Buf, Bytes};
-use std::{convert::TryFrom, fs::File, io, io::Read, path::Path, sync::Arc};
+use std::borrow::BorrowMut;
+use std::collections::VecDeque;
+use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
 
 use parquet_format::{PageHeader, PageLocation, PageType};
 use thrift::protocol::TCompactInputProtocol;
@@ -37,7 +39,7 @@ use crate::util::{io::TryClone, memory::ByteBufferPtr};
 
 // export `SliceableCursor` and `FileSource` publically so clients can
 // re-use the logic in their own ParquetFileWriter wrappers
-use crate::util::page_util::calculate_row_count;
+use crate::util::page_util::{calculate_row_count, get_pages_readable_slices};
 #[allow(deprecated)]
 pub use crate::util::{cursor::SliceableCursor, io::FileSource};
 
@@ -357,12 +359,24 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
             self.metadata.num_rows(),
         )?;
         if let Some(offset_index) = self.metadata.page_offset_index() {
-            let first_data_page_offset = offset_index[i][0].offset;
-            let has_dictionary_page = first_data_page_offset != col.file_offset();
-            page_reader.with_page_offset_index_and_has_dictionary_to_read(
-                offset_index[i].clone(),
-                has_dictionary_page,
-            );
+            let col_chunk_offset_index = &offset_index[i];
+            let (page_bufs, has_dict) = get_pages_readable_slices(
+                col_chunk_offset_index,
+                col_start,
+                self.chunk_reader.clone(),
+            )?;
+            let file_chunk =
+                self.chunk_reader.get_read(col_start, col_length as usize)?;
+            page_reader = SerializedPageReader::new_with_page_offsets(
+                file_chunk,
+                col.num_values(),
+                col.compression(),
+                col.column_descr().physical_type(),
+                self.metadata.num_rows(),
+                col_chunk_offset_index.clone(),
+                has_dict,
+                page_bufs,
+            )?;
         }
         Ok(Box::new(page_reader))
     }
@@ -504,6 +518,9 @@ pub struct SerializedPageReader<T: Read> {
 
     // A flag to check whether a dictionary page should read first
     has_dictionary_page_to_read: bool,
+
+    // A list of readable slice in 'SerializedPageReader' for skipping page with offset index.
+    page_bufs: VecDeque<T>,
 }
 
 impl<T: Read> SerializedPageReader<T> {
@@ -526,6 +543,34 @@ impl<T: Read> SerializedPageReader<T> {
             page_offset_index: None,
             seen_num_data_pages: 0,
             has_dictionary_page_to_read: false,
+            page_bufs: Default::default(),
+        };
+        Ok(result)
+    }
+
+    /// Creates a new serialized page reader from file source.
+    pub fn new_with_page_offsets(
+        buf: T,
+        total_num_values: i64,
+        compression: Compression,
+        physical_type: Type,
+        num_rows: i64,
+        offset_index: Vec<PageLocation>,
+        has_dictionary_page_to_read: bool,
+        page_bufs: VecDeque<T>,
+    ) -> Result<Self> {
+        let decompressor = create_codec(compression)?;
+        let result = Self {
+            buf,
+            total_num_values,
+            seen_num_values: 0,
+            decompressor,
+            physical_type,
+            num_rows,
+            page_offset_index: Some(offset_index),
+            seen_num_data_pages: 0,
+            has_dictionary_page_to_read,
+            page_bufs,
         };
         Ok(result)
     }
@@ -550,22 +595,29 @@ impl<T: Read + Send> Iterator for SerializedPageReader<T> {
 
 impl<T: Read + Send> PageReader for SerializedPageReader<T> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
+        let mut cursor = &mut self.buf;
+        let mut dictionary_cursor;
         while self.seen_num_values < self.total_num_values {
-            // For now we can not update `seen_num_values` in `skip_next_page`,
-            // so we need add this check.
             if let Some(indexes) = &self.page_offset_index {
-                if indexes.len() == self.seen_num_data_pages {
+                // For now we can not update `seen_num_values` in `skip_next_page`,
+                // so we need add this check.
+                if indexes.len() <= self.seen_num_data_pages {
                     return Ok(None);
+                } else if self.seen_num_data_pages == 0
+                    && self.has_dictionary_page_to_read
+                {
+                    dictionary_cursor = self.page_bufs.pop_front().unwrap();
+                    cursor = dictionary_cursor.borrow_mut();
+                } else {
+                    cursor = self.page_bufs.get_mut(self.seen_num_data_pages).unwrap();
                 }
             }
 
-            let page_header = read_page_header(&mut self.buf)?;
+            let page_header = read_page_header(cursor)?;
 
             let to_read = page_header.compressed_page_size as usize;
             let mut buffer = Vec::with_capacity(to_read);
-            let read = (&mut self.buf)
-                .take(to_read as u64)
-                .read_to_end(&mut buffer)?;
+            let read = cursor.take(to_read as u64).read_to_end(&mut buffer)?;
 
             if read != to_read {
                 return Err(eof_err!(
@@ -588,12 +640,15 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
                     self.seen_num_data_pages += 1;
                     decoded
                 }
-                PageType::DictionaryPage => decode_page(
-                    page_header,
-                    buffer,
-                    self.physical_type,
-                    self.decompressor.as_mut(),
-                )?,
+                PageType::DictionaryPage => {
+                    self.has_dictionary_page_to_read = false;
+                    decode_page(
+                        page_header,
+                        buffer,
+                        self.physical_type,
+                        self.decompressor.as_mut(),
+                    )?
+                }
                 _ => {
                     // For unknown page type (e.g., INDEX_PAGE), skip and read next.
                     continue;
@@ -611,7 +666,8 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
             if self.seen_num_data_pages == page_offset_index.len() {
                 Ok(None)
             } else if self.seen_num_data_pages == 0 && self.has_dictionary_page_to_read {
-                self.has_dictionary_page_to_read = false;
+                // Will set `has_dictionary_page_to_read` false in `get_next_page`,
+                // assume dictionary page must be read and cannot be skipped.
                 Ok(Some(PageMetadata {
                     num_rows: usize::MIN,
                     is_dict: true,
@@ -634,21 +690,14 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
 
     fn skip_next_page(&mut self) -> Result<()> {
         if let Some(page_offset_index) = &self.page_offset_index {
-            let location = &page_offset_index[self.seen_num_data_pages];
-            let compressed_page_size = location.compressed_page_size;
-            //skip page bytes
-            let skip_size = io::copy(
-                self.buf.by_ref().take(compressed_page_size as u64).by_ref(),
-                &mut io::sink(),
-            )?;
-            if skip_size == compressed_page_size as u64 {
-                self.seen_num_data_pages += 1;
-                // Notice: 'self.seen_num_values += xxx', for now we can not get skip values in skip_next_page.
-                Ok(())
-            } else {
+            if page_offset_index.len() <= self.seen_num_data_pages {
                 Err(general_err!(
-                    "skip_next_page size is not equal compressed_page_size"
+                    "seen_num_data_pages is out of bound in SerializedPageReader."
                 ))
+            } else {
+                self.seen_num_data_pages += 1;
+                // Notice: maybe need 'self.seen_num_values += xxx', for now we can not get skip values in skip_next_page.
+                Ok(())
             }
         } else {
             Err(general_err!("Must set page_offset_index when using skip_next_page in SerializedPageReader."))

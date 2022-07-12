@@ -267,7 +267,7 @@ impl RowGroupMetaData {
         self.columns.iter().map(|c| c.total_compressed_size).sum()
     }
 
-    /// Returns reference of page offset index.
+    /// Returns reference of page offset index of all column in this row group.
     pub fn page_offset_index(&self) -> &Option<Vec<Vec<PageLocation>>> {
         &self.page_offset_index
     }
