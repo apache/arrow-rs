@@ -37,8 +37,8 @@ fn create_binary_array_data(length: i32) -> ArrayData {
     .unwrap()
 }
 
-fn validate_utf8_array(arr: &StringArray) -> () {
-    arr.data().validate_values();
+fn validate_utf8_array(arr: &StringArray) {
+    arr.data().validate_values().unwrap();
 }
 
 fn validate_benchmark(c: &mut Criterion) {
@@ -48,9 +48,9 @@ fn validate_benchmark(c: &mut Criterion) {
     });
 
     //Utf8 Array
-    let stringArr = StringArray::from(vec!["test"; 20000]);
+    let str_arr = StringArray::from(vec!["test"; 20000]);
     c.bench_function("validate_utf8_array_data 20000", |b| {
-        b.iter(|| validate_utf8_array(&stringArr))
+        b.iter(|| validate_utf8_array(&str_arr))
     });
 }
 
