@@ -120,7 +120,7 @@ trait ChronoDateExt {
     /// Returns a value in range `0..=3` indicating the quarter (zero-based) this date falls into
     fn quarter0(&self) -> u32;
 
-    fn weekday_from_sunday(&self) -> i32;
+    fn weekday0(&self) -> i32;
 }
 
 impl<T: Datelike> ChronoDateExt for T {
@@ -132,42 +132,9 @@ impl<T: Datelike> ChronoDateExt for T {
         self.month0() / 3
     }
 
-    fn weekday_from_sunday(&self) -> i32 {
+    fn weekday0(&self) -> i32 {
         self.weekday().num_days_from_sunday() as i32
     }
-}
-
-/// Extracts the day of week of a given temporal array as an array of integers
-pub fn dow<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
-where
-    T: ArrowTemporalType + ArrowNumericType,
-    i64: std::convert::From<T::Native>,
-{
-    let mut b = Int32Builder::new(array.len());
-    match array.data_type() {
-        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(
-                array,
-                b,
-                weekday_from_sunday,
-                value_as_datetime
-            )
-        }
-        &DataType::Timestamp(_, Some(ref tz)) => {
-            let mut scratch = Parsed::new();
-            extract_component_from_array!(
-                array,
-                b,
-                weekday_from_sunday,
-                value_as_datetime_with_tz,
-                tz,
-                scratch
-            )
-        }
-        dt => return_compute_error_with!("dow does not support", dt),
-    }
-
-    Ok(b.finish())
 }
 
 #[cfg(not(feature = "chrono-tz"))]
@@ -317,6 +284,37 @@ where
                 array,
                 b,
                 weekday,
+                value_as_datetime_with_tz,
+                tz,
+                scratch
+            )
+        }
+        dt => return_compute_error_with!("weekday does not support", dt),
+    }
+
+    Ok(b.finish())
+}
+
+/// Extracts the day of week of a given temporal array as an array of
+/// integers.
+///
+/// Sunday is encoded as `0`, Monday as `1`, etc.
+pub fn weekday0<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::new(array.len());
+    match array.data_type() {
+        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
+            extract_component_from_array!(array, b, weekday0, value_as_datetime)
+        }
+        &DataType::Timestamp(_, Some(ref tz)) => {
+            let mut scratch = Parsed::new();
+            extract_component_from_array!(
+                array,
+                b,
+                weekday0,
                 value_as_datetime_with_tz,
                 tz,
                 scratch
@@ -549,38 +547,6 @@ mod tests {
     }
 
     #[test]
-    fn test_temporal_array_date64_dow() {
-        //1657486800 ->  2022-07-11
-        //1657573200 -> 2022-07-12
-        //1658005200 -> 2022-07-17
-        let a: PrimitiveArray<Date64Type> = vec![
-            Some(1657486800000),
-            Some(1657573200000),
-            Some(1658005200000),
-            None,
-        ]
-        .into();
-
-        let b = dow(&a).unwrap();
-        assert_eq!(0, b.value(0));
-        assert_eq!(1, b.value(1));
-        assert_eq!(6, b.value(2));
-        assert!(!b.is_valid(3));
-    }
-
-    #[test]
-    fn test_temporal_array_date32_dow() {
-        let a: PrimitiveArray<Date32Type> =
-            vec![Some(1657497600), Some(1657584000), Some(1658016000), None].into();
-
-        let b = dow(&a).unwrap();
-        assert_eq!(0, b.value(0));
-        assert_eq!(1, b.value(1));
-        assert_eq!(6, b.value(2));
-        assert!(!b.is_valid(3));
-    }
-
-    #[test]
     fn test_temporal_array_date64_month() {
         //1514764800000 -> 2018-01-01
         //1550636625000 -> 2019-02-20
@@ -652,6 +618,26 @@ mod tests {
         assert_eq!(0, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_weekday0() {
+        //1483228800000 -> 2017-01-01 (Sunday)
+        //1514764800000 -> 2018-01-01 (Monday)
+        //1550636625000 -> 2019-02-20 (Wednesday)
+        let a: PrimitiveArray<Date64Type> = vec![
+            Some(1483228800000),
+            None,
+            Some(1514764800000),
+            Some(1550636625000),
+        ]
+        .into();
+
+        let b = weekday0(&a).unwrap();
+        assert_eq!(0, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(1, b.value(2));
+        assert_eq!(3, b.value(3));
     }
 
     #[test]
