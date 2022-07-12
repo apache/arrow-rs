@@ -398,6 +398,7 @@ impl fmt::Display for Statistics {
 /// Typed implementation for [`Statistics`].
 pub type TypedStatistics<T> = ValueStatistics<<T as DataType>::T>;
 
+#[doc(hidden)]
 /// Statistics for a particular [`ParquetValueType`]
 #[derive(Clone, Eq, PartialEq)]
 pub struct ValueStatistics<T> {
