@@ -245,7 +245,7 @@ impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray {
         let null_buf: Buffer = null_builder.into();
         let valid_count = null_buf.count_set_bits();
         let null_count = data_len - valid_count;
-        let opt_null_buf = (null_count != 0).then(|| null_buf.into());
+        let opt_null_buf = (null_count != 0).then(|| null_buf);
 
         let data = unsafe {
             ArrayData::new_unchecked(
