@@ -17,6 +17,7 @@
 
 use std::convert::TryFrom;
 
+use crate::datatypes::DataType::Map;
 use crate::{
     datatypes::{DataType, Field, Schema, TimeUnit},
     error::{ArrowError, Result},
@@ -221,7 +222,13 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
         } else {
             None
         };
-        FFI_ArrowSchema::try_new(&format, children, dictionary)
+
+        let flags = match dtype {
+            Map(_, true) => Flags::MAP_KEYS_SORTED,
+            _ => Flags::empty(),
+        };
+
+        FFI_ArrowSchema::try_new(&format, children, dictionary)?.with_flags(flags)
     }
 }
 
@@ -286,6 +293,7 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
         } else {
             Flags::empty()
         };
+
         FFI_ArrowSchema::try_from(field.data_type())?
             .with_name(field.name())?
             .with_flags(flags)
@@ -413,24 +421,18 @@ mod tests {
     }
 
     #[test]
-    fn test_map_keys_sorted() {
+    fn test_map_keys_sorted() -> Result<()> {
         let keys = Field::new("keys", DataType::Int32, false);
         let values = Field::new("values", DataType::UInt32, false);
         let entry_struct = DataType::Struct(vec![keys, values]);
 
         // Construct a map array from the above two
         let map_data_type =
-            DataType::Map(Box::new(Field::new("entries", entry_struct, true)), false);
+            DataType::Map(Box::new(Field::new("entries", entry_struct, true)), true);
 
-        let flags = Flags::MAP_KEYS_SORTED;
-
-        let arrow_schema = FFI_ArrowSchema::try_from(map_data_type)
-            .unwrap()
-            .with_name("map")
-            .unwrap()
-            .with_flags(flags)
-            .unwrap();
-
+        let arrow_schema = FFI_ArrowSchema::try_from(map_data_type)?;
         assert!(arrow_schema.map_keys_sorted());
+
+        Ok(())
     }
 }
