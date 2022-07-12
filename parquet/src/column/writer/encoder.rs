@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::basic::Encoding;
-use crate::column::writer::{compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max, update_min};
+use crate::column::writer::{
+    compare_greater, fallback_encoding, has_dictionary_support, is_nan, update_max,
+    update_min,
+};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
@@ -113,7 +116,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
         let dict_supported = props.dictionary_enabled(descr.path())
-            && has_dictionary_support(T::get_physical_type(), &props);
+            && has_dictionary_support(T::get_physical_type(), props);
         let dict_encoder = dict_supported.then(|| DictEncoder::new(descr.clone()));
 
         // Set either main encoder or fallback encoder.
@@ -121,7 +124,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             descr.clone(),
             props
                 .encoding(descr.path())
-                .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), &props)),
+                .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), props)),
         )?;
 
         Ok(Self {
@@ -225,7 +228,7 @@ impl<T: ParquetValueType> ColumnValues for [T] {
         let first = loop {
             let next = iter.next()?;
             if !is_nan(next) {
-                break next
+                break next;
             }
         };
 
@@ -233,7 +236,7 @@ impl<T: ParquetValueType> ColumnValues for [T] {
         let mut max = first;
         for val in iter {
             if is_nan(val) {
-                continue
+                continue;
             }
             if compare_greater(descr, min, val) {
                 min = val;

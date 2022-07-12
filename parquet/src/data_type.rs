@@ -1139,27 +1139,9 @@ macro_rules! make_type {
 
 // Generate struct definitions for all physical types
 
-make_type!(
-    BoolType,
-    BoolColumnReader,
-    BoolColumnWriter,
-    bool,
-    1
-);
-make_type!(
-    Int32Type,
-    Int32ColumnReader,
-    Int32ColumnWriter,
-    i32,
-    4
-);
-make_type!(
-    Int64Type,
-    Int64ColumnReader,
-    Int64ColumnWriter,
-    i64,
-    8
-);
+make_type!(BoolType, BoolColumnReader, BoolColumnWriter, bool, 1);
+make_type!(Int32Type, Int32ColumnReader, Int32ColumnWriter, i32, 4);
+make_type!(Int64Type, Int64ColumnReader, Int64ColumnWriter, i64, 8);
 make_type!(
     Int96Type,
     Int96ColumnReader,
@@ -1167,20 +1149,8 @@ make_type!(
     Int96,
     mem::size_of::<Int96>()
 );
-make_type!(
-    FloatType,
-    FloatColumnReader,
-    FloatColumnWriter,
-    f32,
-    4
-);
-make_type!(
-    DoubleType,
-    DoubleColumnReader,
-    DoubleColumnWriter,
-    f64,
-    8
-);
+make_type!(FloatType, FloatColumnReader, FloatColumnWriter, f32, 4);
+make_type!(DoubleType, DoubleColumnReader, DoubleColumnWriter, f64, 8);
 make_type!(
     ByteArrayType,
     ByteArrayColumnReader,

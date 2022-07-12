@@ -59,7 +59,10 @@ pub(crate) mod private {
     macro_rules! gen_make_statistics {
         ($value_ty:ty, $stat:ident) => {
             impl MakeStatistics for $value_ty {
-                fn make_statistics(statistics: ValueStatistics<Self>) -> Statistics where Self: Sized {
+                fn make_statistics(statistics: ValueStatistics<Self>) -> Statistics
+                where
+                    Self: Sized,
+                {
                     Statistics::$stat(statistics)
                 }
             }

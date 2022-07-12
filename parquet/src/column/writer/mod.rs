@@ -312,7 +312,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let mut levels_offset = 0;
         for _ in 0..num_batches {
             values_offset += self.write_mini_batch(
-                &values,
+                values,
                 values_offset,
                 write_batch_size,
                 def_levels.map(|lv| &lv[levels_offset..levels_offset + write_batch_size]),
@@ -754,7 +754,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let statistics = Statistics::new(
             self.min_column_value.clone(),
             self.max_column_value.clone(),
-            self.column_distinct_count.clone(),
+            self.column_distinct_count,
             self.num_column_nulls,
             false,
         );
