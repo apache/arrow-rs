@@ -17,7 +17,7 @@
 
 //! Defines temporal kernels for time and date related functions.
 
-use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
+use chrono::{Datelike, Timelike};
 
 use crate::array::*;
 use crate::datatypes::*;
@@ -112,15 +112,18 @@ macro_rules! return_compute_error_with {
     };
 }
 
-trait ChronoDateQuarter {
+// Internal trait, which is used for mapping values from DateLike structures
+trait ChronoDateExt {
     /// Returns a value in range `1..=4` indicating the quarter this date falls into
     fn quarter(&self) -> u32;
 
     /// Returns a value in range `0..=3` indicating the quarter (zero-based) this date falls into
     fn quarter0(&self) -> u32;
+
+    fn weekday_from_sunday(&self) -> i32;
 }
 
-impl ChronoDateQuarter for NaiveDateTime {
+impl<T: Datelike> ChronoDateExt for T {
     fn quarter(&self) -> u32 {
         self.quarter0() + 1
     }
@@ -128,16 +131,43 @@ impl ChronoDateQuarter for NaiveDateTime {
     fn quarter0(&self) -> u32 {
         self.month0() / 3
     }
+
+    fn weekday_from_sunday(&self) -> i32 {
+        self.weekday().num_days_from_sunday() as i32
+    }
 }
 
-impl ChronoDateQuarter for NaiveDate {
-    fn quarter(&self) -> u32 {
-        self.quarter0() + 1
+/// Extracts the day of week of a given temporal array as an array of integers
+pub fn dow<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::new(array.len());
+    match array.data_type() {
+        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
+            extract_component_from_array!(
+                array,
+                b,
+                weekday_from_sunday,
+                value_as_datetime
+            )
+        }
+        &DataType::Timestamp(_, Some(ref tz)) => {
+            let mut scratch = Parsed::new();
+            extract_component_from_array!(
+                array,
+                b,
+                weekday_from_sunday,
+                value_as_datetime_with_tz,
+                tz,
+                scratch
+            )
+        }
+        dt => return_compute_error_with!("dow does not support", dt),
     }
 
-    fn quarter0(&self) -> u32 {
-        self.month0() / 3
-    }
+    Ok(b.finish())
 }
 
 #[cfg(not(feature = "chrono-tz"))]
@@ -516,6 +546,38 @@ mod tests {
         ));
         let b = quarter(&a).unwrap();
         assert_eq!(1, b.value(0));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_dow() {
+        //1657486800 ->  2022-07-11
+        //1657573200 -> 2022-07-12
+        //1658005200 -> 2022-07-17
+        let a: PrimitiveArray<Date64Type> = vec![
+            Some(1657486800000),
+            Some(1657573200000),
+            Some(1658005200000),
+            None,
+        ]
+        .into();
+
+        let b = dow(&a).unwrap();
+        assert_eq!(0, b.value(0));
+        assert_eq!(1, b.value(1));
+        assert_eq!(6, b.value(2));
+        assert!(!b.is_valid(3));
+    }
+
+    #[test]
+    fn test_temporal_array_date32_dow() {
+        let a: PrimitiveArray<Date32Type> =
+            vec![Some(1657497600), Some(1657584000), Some(1658016000), None].into();
+
+        let b = dow(&a).unwrap();
+        assert_eq!(0, b.value(0));
+        assert_eq!(1, b.value(1));
+        assert_eq!(6, b.value(2));
+        assert!(!b.is_valid(3));
     }
 
     #[test]
