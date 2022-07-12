@@ -86,11 +86,11 @@ _supported_pyarrow_types = [
         ]
     ),
     pa.dictionary(pa.int8(), pa.string()),
+    pa.map_(pa.string(), pa.int32()),
 ]
 
 _unsupported_pyarrow_types = [
     pa.decimal256(76, 38),
-    pa.map_(pa.string(), pa.int32()),
     pa.union(
         [pa.field("a", pa.binary(10)), pa.field("b", pa.string())],
         mode=pa.lib.UnionMode_DENSE,
@@ -222,6 +222,22 @@ def test_list_array():
     Python -> Rust -> Python
     """
     a = pa.array([[], None, [1, 2], [4, 5, 6]], pa.list_(pa.int64()))
+    b = rust.round_trip_array(a)
+    b.validate(full=True)
+    assert a.to_pylist() == b.to_pylist()
+    assert a.type == b.type
+    del a
+    del b
+
+def test_map_array():
+    """
+    Python -> Rust -> Python
+    """
+    data = [
+        [{'key': "a", 'value': 1}, {'key': "b", 'value': 2}],
+        [{'key': "c", 'value': 3}, {'key': "d", 'value': 4}]
+    ]
+    a = pa.array(data, pa.map_(pa.string(), pa.int32()))
     b = rust.round_trip_array(a)
     b.validate(full=True)
     assert a.to_pylist() == b.to_pylist()
