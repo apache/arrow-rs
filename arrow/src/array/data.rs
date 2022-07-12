@@ -1119,16 +1119,24 @@ impl ArrayData {
         T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
     {
         let values_buffer = &self.buffers[1].as_slice();
-
-        self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
-            std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
-                ArrowError::InvalidArgumentError(format!(
-                    "Invalid UTF8 sequence at string index {} ({:?}): {}",
-                    string_index, range, e
-                ))
-            })?;
-            Ok(())
-        })
+        if std::str::from_utf8(values_buffer).is_err() {
+            // find specific offset that failed utf8 validation
+            self.validate_each_offset::<T, _>(
+                values_buffer.len(),
+                |string_index, range| {
+                    std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
+                        ArrowError::InvalidArgumentError(format!(
+                            "Invalid UTF8 sequence at string index {} ({:?}): {}",
+                            string_index, range, e
+                        ))
+                    })?;
+                    Ok(())
+                },
+            )
+        } else {
+            // Validate that offsets are sorted
+            self.validate_each_offset::<T, _>(values_buffer.len(), |_, _| Ok(()))
+        }
     }
 
     /// Ensures that all offsets in `buffers[0]` into `buffers[1]` are
