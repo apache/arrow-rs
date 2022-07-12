@@ -176,8 +176,11 @@ impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalBuilder {
         let size_hint = upper.unwrap_or(lower);
         let fixed_len = 16_usize;
 
-        let mut builder =
-            DecimalBuilder::new(size_hint * fixed_len, DECIMAL_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+        let mut builder = DecimalBuilder::new(
+            size_hint * fixed_len,
+            DECIMAL_MAX_PRECISION,
+            DECIMAL_DEFAULT_SCALE,
+        );
 
         iter.for_each(|item| {
             if let Some(a) = item.borrow() {
