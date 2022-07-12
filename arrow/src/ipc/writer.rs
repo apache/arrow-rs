@@ -28,9 +28,9 @@ use flatbuffers::FlatBufferBuilder;
 
 use crate::array::{
     as_large_list_array, as_list_array, as_map_array, as_struct_array, as_union_array,
-    layout, make_array, Array, ArrayData, ArrayRef, BinaryArray, BufferSpec,
-    FixedSizeListArray, GenericBinaryArray, GenericStringArray, LargeBinaryArray,
-    LargeStringArray, OffsetSizeTrait, StringArray,
+    layout, make_array, Array, ArrayData, ArrayRef, BinaryArray, BufferBuilder,
+    BufferSpec, FixedSizeListArray, GenericBinaryArray, GenericStringArray,
+    LargeBinaryArray, LargeStringArray, OffsetSizeTrait, StringArray,
 };
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::*;
@@ -924,24 +924,24 @@ fn get_zero_based_value_offsets<OffsetSize: OffsetSizeTrait>(
             let offsets = array.value_offsets();
             let start_offset = offsets[0];
 
-            let mut new_offsets = Vec::with_capacity(array_data.len() + 1);
+            let mut builder = BufferBuilder::<OffsetSize>::new(array_data.len() + 1);
             for x in offsets {
-                new_offsets.push(*x - start_offset);
+                builder.append(*x - start_offset);
             }
 
-            Buffer::from_slice_ref(&new_offsets)
+            builder.finish()
         }
         DataType::Utf8 | DataType::LargeUtf8 => {
             let array: GenericStringArray<OffsetSize> = array_data.clone().into();
             let offsets = array.value_offsets();
             let start_offset = offsets[0];
 
-            let mut new_offsets = Vec::with_capacity(array_data.len() + 1);
+            let mut builder = BufferBuilder::<OffsetSize>::new(array_data.len() + 1);
             for x in offsets {
-                new_offsets.push(*x - start_offset);
+                builder.append(*x - start_offset);
             }
 
-            Buffer::from_slice_ref(&new_offsets)
+            builder.finish()
         }
         _ => unreachable!(),
     }
