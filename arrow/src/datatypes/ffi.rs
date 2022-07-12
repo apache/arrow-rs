@@ -288,11 +288,15 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
     type Error = ArrowError;
 
     fn try_from(field: &Field) -> Result<Self> {
-        let flags = if field.is_nullable() {
+        let mut flags = if field.is_nullable() {
             Flags::NULLABLE
         } else {
             Flags::empty()
         };
+
+        if let Some(true) = field.dict_is_ordered() {
+            flags = flags | Flags::DICTIONARY_ORDERED;
+        }
 
         FFI_ArrowSchema::try_from(field.data_type())?
             .with_name(field.name())?
@@ -432,6 +436,22 @@ mod tests {
 
         let arrow_schema = FFI_ArrowSchema::try_from(map_data_type)?;
         assert!(arrow_schema.map_keys_sorted());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dictionary_ordered() -> Result<()> {
+        let schema = Schema::new(vec![Field::new_dict(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+            0,
+            true,
+        )]);
+
+        let arrow_schema = FFI_ArrowSchema::try_from(schema)?;
+        assert!(arrow_schema.child(0).dictionary_ordered());
 
         Ok(())
     }

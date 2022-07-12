@@ -288,6 +288,10 @@ impl FFI_ArrowSchema {
     pub fn map_keys_sorted(&self) -> bool {
         self.flags & 0b00000100 != 0
     }
+
+    pub fn dictionary_ordered(&self) -> bool {
+        self.flags & 0b00000001 != 0
+    }
 }
 
 impl Drop for FFI_ArrowSchema {
