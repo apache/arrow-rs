@@ -295,7 +295,7 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
         };
 
         if let Some(true) = field.dict_is_ordered() {
-            flags = flags | Flags::DICTIONARY_ORDERED;
+            flags |= Flags::DICTIONARY_ORDERED;
         }
 
         FFI_ArrowSchema::try_from(field.data_type())?
