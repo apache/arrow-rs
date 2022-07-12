@@ -220,30 +220,21 @@ impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr>
         let (lower, upper) = iter.size_hint();
         let size_hint = upper.unwrap_or(lower);
 
-        let mut bitmap_builder = BooleanBufferBuilder::new(size_hint);
-        let mut values_builder = BufferBuilder::<T::Native>::new(size_hint);
-
-        let mut materialize = false;
+        let mut builder = PrimitiveBuilder::new(size_hint);
 
         iter.for_each(|item| {
             if let Some(a) = item.into().native {
-                bitmap_builder.append(true);
-                values_builder.append(a);
+                builder
+                    .append_value(a)
+                    .expect("Unable to append a value to a primitive array builder.");
             } else {
-                materialize = true;
-                bitmap_builder.append(false);
-                values_builder.append(T::Native::default());
+                builder.append_null().expect(
+                    "Unable to append a null value to a primitive array builder.",
+                );
             }
         });
 
-        PrimitiveBuilder {
-            values_builder,
-            bitmap_builder: if materialize {
-                Some(bitmap_builder)
-            } else {
-                None
-            },
-        }
+        builder
     }
 }
 

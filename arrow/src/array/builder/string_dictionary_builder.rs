@@ -284,11 +284,11 @@ impl<'a, T: ArrowPrimitiveType + ArrowDictionaryKeyType> FromIterator<Option<&'a
             if let Some(a) = item {
                 builder
                     .append(a)
-                    .expect("Unable to append a value to a dictionary array.");
+                    .expect("Unable to append a value to a dictionary array builder.");
             } else {
-                builder
-                    .append_null()
-                    .expect("Unable to append a null value to a dictionary array.");
+                builder.append_null().expect(
+                    "Unable to append a null value to a dictionary array builder.",
+                );
             }
         });
 

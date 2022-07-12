@@ -120,19 +120,21 @@ where
         let (lower, upper) = iter.size_hint();
         let size_hint = upper.unwrap_or(lower);
 
-        let mut builder =
-            GenericListBuilder::with_capacity(UInt8Builder::new(size_hint), size_hint);
+        let mut builder = GenericBinaryBuilder::new(size_hint);
 
         iter.for_each(|item| {
             if let Some(a) = item {
-                builder.values().append_slice(a.as_ref()).unwrap();
-                builder.append(true).unwrap();
+                builder
+                    .append_value(a.as_ref())
+                    .expect("Unable to append a value to a binary array builder.");
             } else {
-                builder.append(false).unwrap();
+                builder
+                    .append_null()
+                    .expect("Unable to append a null value to a binary array builder.");
             }
         });
 
-        GenericBinaryBuilder { builder }
+        builder
     }
 }
 

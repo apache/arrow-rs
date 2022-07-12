@@ -176,30 +176,22 @@ impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalBuilder {
         let size_hint = upper.unwrap_or(lower);
         let fixed_len = 16_usize;
 
-        let mut builder = FixedSizeListBuilder::with_capacity(
-            UInt8Builder::new(size_hint),
-            fixed_len as i32,
-            size_hint,
-        );
+        let mut builder =
+            DecimalBuilder::new(size_hint * fixed_len, DECIMAL_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
 
         iter.for_each(|item| {
             if let Some(a) = item.borrow() {
-                let values = Self::from_i128_to_fixed_size_bytes(*a, fixed_len)
-                    .expect("Conversion should be possible.");
-                builder.values().append_slice(&values).unwrap();
-                builder.append(true).unwrap();
+                builder
+                    .append_value(*a)
+                    .expect("Unable to append a value to a decimal array builder.");
             } else {
-                builder.values().append_nulls(fixed_len).unwrap();
-                builder.append(false).unwrap();
+                builder
+                    .append_null()
+                    .expect("Unable to append a null value to a decimal array builder.");
             }
         });
 
-        DecimalBuilder {
-            builder,
-            precision: DECIMAL_MAX_PRECISION,
-            scale: DECIMAL_DEFAULT_SCALE,
-            value_validation: true,
-        }
+        builder
     }
 }
 
