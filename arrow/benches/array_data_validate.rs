@@ -37,11 +37,22 @@ fn create_binary_array_data(length: i32) -> ArrayData {
     .unwrap()
 }
 
-fn array_slice_benchmark(c: &mut Criterion) {
+fn validate_utf8_array(arr: &StringArray) -> () {
+    arr.data().validate_values();
+}
+
+fn validate_benchmark(c: &mut Criterion) {
+    //Binary Array
     c.bench_function("validate_binary_array_data 20000", |b| {
         b.iter(|| create_binary_array_data(20000))
     });
+
+    //Utf8 Array
+    let stringArr = StringArray::from(vec!["test"; 20000]);
+    c.bench_function("validate_utf8_array_data 20000", |b| {
+        b.iter(|| validate_utf8_array(&stringArr))
+    });
 }
 
-criterion_group!(benches, array_slice_benchmark);
+criterion_group!(benches, validate_benchmark);
 criterion_main!(benches);
