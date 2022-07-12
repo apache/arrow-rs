@@ -29,7 +29,8 @@ use flatbuffers::FlatBufferBuilder;
 use crate::array::{
     as_large_list_array, as_list_array, as_map_array, as_struct_array, as_union_array,
     layout, make_array, Array, ArrayData, ArrayRef, BinaryArray, BufferSpec,
-    FixedSizeListArray, LargeBinaryArray, LargeStringArray, StringArray,
+    FixedSizeListArray, GenericBinaryArray, GenericStringArray, LargeBinaryArray,
+    LargeStringArray, OffsetSizeTrait, StringArray,
 };
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::datatypes::*;
@@ -876,7 +877,7 @@ fn buffer_need_truncate(
 
 /// Returns byte width for a buffer spec. Only for `BufferSpec::FixedWidth`.
 #[inline]
-fn get_buffer_byte_width(spec: &BufferSpec) -> usize {
+fn get_buffer_element_width(spec: &BufferSpec) -> usize {
     match spec {
         BufferSpec::FixedWidth { byte_width } => *byte_width,
         _ => 0,
@@ -884,7 +885,7 @@ fn get_buffer_byte_width(spec: &BufferSpec) -> usize {
 }
 
 /// Returns the number of total bytes in base binary arrays.
-fn get_total_bytes(array_data: &ArrayData) -> usize {
+fn get_binary_buffer_len(array_data: &ArrayData) -> usize {
     if array_data.is_empty() {
         return 0;
     }
@@ -914,55 +915,30 @@ fn get_total_bytes(array_data: &ArrayData) -> usize {
 }
 
 /// Rebase value offsets for given ArrayData to zero-based.
-fn get_zero_based_value_offsets(array_data: &ArrayData) -> Buffer {
+fn get_zero_based_value_offsets<OffsetSize: OffsetSizeTrait>(
+    array_data: &ArrayData,
+) -> Buffer {
     match array_data.data_type() {
-        DataType::Binary => {
-            let array: BinaryArray = array_data.clone().into();
+        DataType::Binary | DataType::LargeBinary => {
+            let array: GenericBinaryArray<OffsetSize> = array_data.clone().into();
             let offsets = array.value_offsets();
             let start_offset = offsets[0];
 
-            let mut new_offsets = vec![0_i32; array_data.len() + 1];
-            for (idx, x) in offsets.iter().enumerate() {
-                new_offsets[idx] = x - start_offset;
+            let mut new_offsets = Vec::with_capacity(array_data.len() + 1);
+            for x in offsets {
+                new_offsets.push(*x - start_offset);
             }
 
             Buffer::from_slice_ref(&new_offsets)
         }
-        DataType::LargeBinary => {
-            let array: LargeBinaryArray = array_data.clone().into();
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            let array: GenericStringArray<OffsetSize> = array_data.clone().into();
             let offsets = array.value_offsets();
-
             let start_offset = offsets[0];
 
-            let mut new_offsets = vec![0_i64; array_data.len() + 1];
-            for (idx, x) in offsets.iter().enumerate() {
-                new_offsets[idx] = x - start_offset;
-            }
-
-            Buffer::from_slice_ref(&new_offsets)
-        }
-        DataType::Utf8 => {
-            let array: StringArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-
-            let start_offset = offsets[0];
-
-            let mut new_offsets = vec![0_i32; array_data.len() + 1];
-            for (idx, x) in offsets.iter().enumerate() {
-                new_offsets[idx] = x - start_offset;
-            }
-
-            Buffer::from_slice_ref(&new_offsets)
-        }
-        DataType::LargeUtf8 => {
-            let array: LargeStringArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-
-            let start_offset = offsets[0];
-
-            let mut new_offsets = vec![0_i64; array_data.len() + 1];
-            for (idx, x) in offsets.iter().enumerate() {
-                new_offsets[idx] = x - start_offset;
+            let mut new_offsets = Vec::with_capacity(array_data.len() + 1);
+            for x in offsets {
+                new_offsets.push(*x - start_offset);
             }
 
             Buffer::from_slice_ref(&new_offsets)
@@ -972,27 +948,17 @@ fn get_zero_based_value_offsets(array_data: &ArrayData) -> Buffer {
 }
 
 /// Returns the start offset of base binary array.
-fn get_buffer_offset(array_data: &ArrayData) -> usize {
+fn get_buffer_offset<OffsetSize: OffsetSizeTrait>(array_data: &ArrayData) -> OffsetSize {
     match array_data.data_type() {
-        DataType::Binary => {
-            let array: BinaryArray = array_data.clone().into();
+        DataType::Binary | DataType::LargeBinary => {
+            let array: GenericBinaryArray<OffsetSize> = array_data.clone().into();
             let offsets = array.value_offsets();
-            offsets[0] as usize
+            offsets[0]
         }
-        DataType::LargeBinary => {
-            let array: LargeBinaryArray = array_data.clone().into();
+        DataType::Utf8 | DataType::LargeUtf8 => {
+            let array: GenericStringArray<OffsetSize> = array_data.clone().into();
             let offsets = array.value_offsets();
-            offsets[0] as usize
-        }
-        DataType::Utf8 => {
-            let array: StringArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-            offsets[0] as usize
-        }
-        DataType::LargeUtf8 => {
-            let array: LargeStringArray = array_data.clone().into();
-            let offsets = array.value_offsets();
-            offsets[0] as usize
+            offsets[0]
         }
         _ => unreachable!(),
     }
@@ -1031,7 +997,9 @@ fn write_array_data(
             Some(buffer) => buffer.clone(),
         };
 
-        offset = write_buffer(null_buffer.as_slice(), buffers, arrow_data, offset);
+        let sliced_null_buffer =
+            null_buffer.bit_slice(array_data.offset(), array_data.len());
+        offset = write_buffer(sliced_null_buffer.as_slice(), buffers, arrow_data, offset);
     }
 
     let data_type = array_data.data_type();
@@ -1039,7 +1007,7 @@ fn write_array_data(
         data_type,
         DataType::Binary | DataType::LargeBinary | DataType::Utf8 | DataType::LargeUtf8
     ) {
-        let total_bytes = get_total_bytes(array_data);
+        let total_bytes = get_binary_buffer_len(array_data);
         let value_buffer = &array_data.buffers()[1];
         if buffer_need_truncate(
             array_data.offset(),
@@ -1048,10 +1016,21 @@ fn write_array_data(
             total_bytes,
         ) {
             // Rebase offsets and truncate values
-            let new_offsets = get_zero_based_value_offsets(array_data);
+            let (new_offsets, byte_offset) =
+                if matches!(data_type, DataType::Binary | DataType::Utf8) {
+                    (
+                        get_zero_based_value_offsets::<i32>(array_data),
+                        get_buffer_offset::<i32>(array_data) as usize,
+                    )
+                } else {
+                    (
+                        get_zero_based_value_offsets::<i64>(array_data),
+                        get_buffer_offset::<i64>(array_data) as usize,
+                    )
+                };
+
             offset = write_buffer(new_offsets.as_slice(), buffers, arrow_data, offset);
 
-            let byte_offset = get_buffer_offset(array_data);
             let buffer_length = min(total_bytes, value_buffer.len() - byte_offset);
             let buffer_slice =
                 &value_buffer.as_slice()[byte_offset..(byte_offset + buffer_length)];
@@ -1063,29 +1042,29 @@ fn write_array_data(
         }
     } else if DataType::is_numeric(data_type)
         || DataType::is_temporal(data_type)
-        || matches!(array_data.data_type(), DataType::FixedSizeBinary(_))
+        || matches!(
+            array_data.data_type(),
+            DataType::FixedSizeBinary(_) | DataType::Dictionary(_, _)
+        )
     {
         // Truncate values
-        let layout = layout(data_type);
+        assert!(array_data.buffers().len() == 1);
 
-        array_data
-            .buffers()
-            .iter()
-            .zip(layout.buffers.iter())
-            .for_each(|(buffer, spec)| {
-                // Truncate values
-                let byte_width = get_buffer_byte_width(spec);
-                let min_length = array_data.len() * byte_width;
-                if buffer_need_truncate(array_data.offset(), buffer, spec, min_length) {
-                    let byte_offset = array_data.offset() * byte_width;
-                    let buffer_length = min(min_length, buffer.len() - byte_offset);
-                    let buffer_slice =
-                        &buffer.as_slice()[byte_offset..(byte_offset + buffer_length)];
-                    offset = write_buffer(buffer_slice, buffers, arrow_data, offset);
-                } else {
-                    offset = write_buffer(buffer.as_slice(), buffers, arrow_data, offset);
-                }
-            });
+        let buffer = &array_data.buffers()[0];
+        let layout = layout(data_type);
+        let spec = &layout.buffers[0];
+
+        let byte_width = get_buffer_element_width(spec);
+        let min_length = array_data.len() * byte_width;
+        if buffer_need_truncate(array_data.offset(), buffer, spec, min_length) {
+            let byte_offset = array_data.offset() * byte_width;
+            let buffer_length = min(min_length, buffer.len() - byte_offset);
+            let buffer_slice =
+                &buffer.as_slice()[byte_offset..(byte_offset + buffer_length)];
+            offset = write_buffer(buffer_slice, buffers, arrow_data, offset);
+        } else {
+            offset = write_buffer(buffer.as_slice(), buffers, arrow_data, offset);
+        }
     } else {
         array_data.buffers().iter().for_each(|buffer| {
             offset = write_buffer(buffer, buffers, arrow_data, offset);
@@ -1699,24 +1678,23 @@ mod tests {
         );
     }
 
+    fn serialize(record: &RecordBatch) -> Vec<u8> {
+        let buffer: Vec<u8> = Vec::new();
+        let mut stream_writer = StreamWriter::try_new(buffer, &record.schema()).unwrap();
+        stream_writer.write(record).unwrap();
+        stream_writer.finish().unwrap();
+        stream_writer.into_inner().unwrap()
+    }
+
+    fn deserialize(bytes: Vec<u8>) -> RecordBatch {
+        let mut stream_reader =
+            ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None)
+                .unwrap();
+        stream_reader.next().unwrap().unwrap()
+    }
+
     #[test]
     fn truncate_ipc_record_batch() {
-        fn serialize(record: &RecordBatch) -> Vec<u8> {
-            let buffer: Vec<u8> = Vec::new();
-            let mut stream_writer =
-                StreamWriter::try_new(buffer, &record.schema()).unwrap();
-            stream_writer.write(record).unwrap();
-            stream_writer.finish().unwrap();
-            stream_writer.into_inner().unwrap()
-        }
-
-        fn deserialize(bytes: Vec<u8>) -> RecordBatch {
-            let mut stream_reader =
-                ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None)
-                    .unwrap();
-            stream_reader.next().unwrap().unwrap()
-        }
-
         fn create_batch(rows: usize) -> RecordBatch {
             let schema = Schema::new(vec![
                 Field::new("a", DataType::Int32, false),
@@ -1753,5 +1731,63 @@ mod tests {
             deserialize(serialize(&record_batch_slice)),
             record_batch_slice
         );
+    }
+
+    #[test]
+    fn truncate_ipc_record_batch_with_nulls() {
+        fn create_batch() -> RecordBatch {
+            let schema = Schema::new(vec![
+                Field::new("a", DataType::Int32, true),
+                Field::new("b", DataType::Utf8, true),
+            ]);
+
+            let a = Int32Array::from(vec![Some(1), None, Some(1), None, Some(1)]);
+            let b = StringArray::from(vec![None, Some("a"), Some("a"), None, Some("a")]);
+
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
+                .unwrap()
+        }
+
+        let record_batch = create_batch();
+        let record_batch_slice = record_batch.slice(1, 2);
+        let deserialized_batch = deserialize(serialize(&record_batch_slice));
+
+        assert!(serialize(&record_batch).len() > serialize(&record_batch_slice).len());
+
+        assert!(deserialized_batch.column(0).is_null(0));
+        assert!(deserialized_batch.column(0).is_valid(1));
+        assert!(deserialized_batch.column(1).is_valid(0));
+        assert!(deserialized_batch.column(1).is_valid(1));
+
+        assert_eq!(record_batch_slice, deserialized_batch);
+    }
+
+    #[test]
+    fn truncate_ipc_dictionary_array() {
+        fn create_batch() -> RecordBatch {
+            let values: StringArray = [Some("foo"), Some("bar"), Some("baz")]
+                .into_iter()
+                .collect();
+            let keys: Int32Array =
+                [Some(0), Some(2), None, Some(1)].into_iter().collect();
+
+            let array = DictionaryArray::<Int32Type>::try_new(&keys, &values).unwrap();
+
+            let schema =
+                Schema::new(vec![Field::new("dict", array.data_type().clone(), true)]);
+
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
+        }
+
+        let record_batch = create_batch();
+        let record_batch_slice = record_batch.slice(1, 2);
+        let deserialized_batch = deserialize(serialize(&record_batch_slice));
+
+        assert!(serialize(&record_batch).len() > serialize(&record_batch_slice).len());
+
+        assert!(deserialized_batch.column(0).is_valid(0));
+        assert!(deserialized_batch.column(0).is_null(1));
+
+        assert_eq!(record_batch_slice, deserialized_batch);
     }
 }
