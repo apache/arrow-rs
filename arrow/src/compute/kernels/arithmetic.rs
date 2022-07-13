@@ -1127,7 +1127,7 @@ mod tests {
         let a = Date32Array::from(vec![Date32Type::from_naive_date(
             NaiveDate::from_ymd(2000, 1, 1),
         )]);
-        let b = IntervalYearMonthArray::from(vec![IntervalYearMonthType::new(1, 2)]);
+        let b = IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
@@ -1141,7 +1141,7 @@ mod tests {
         let a = Date32Array::from(vec![Date32Type::from_naive_date(
             NaiveDate::from_ymd(2000, 1, 1),
         )]);
-        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::new(1, 2)]);
+        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
@@ -1156,7 +1156,7 @@ mod tests {
             NaiveDate::from_ymd(2000, 1, 1),
         )]);
         let b =
-            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::new(1, 2, 3)]);
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(1, 2, 3)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
         assert_eq!(
@@ -1170,7 +1170,7 @@ mod tests {
         let a = Date64Array::from(vec![Date64Type::from_naive_date(
             NaiveDate::from_ymd(2000, 1, 1),
         )]);
-        let b = IntervalYearMonthArray::from(vec![IntervalYearMonthType::new(1, 2)]);
+        let b = IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
@@ -1184,7 +1184,7 @@ mod tests {
         let a = Date64Array::from(vec![Date64Type::from_naive_date(
             NaiveDate::from_ymd(2000, 1, 1),
         )]);
-        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::new(1, 2)]);
+        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(
@@ -1199,7 +1199,7 @@ mod tests {
             NaiveDate::from_ymd(2000, 1, 1),
         )]);
         let b =
-            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::new(1, 2, 3)]);
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(1, 2, 3)]);
         let c = add_dyn(&a, &b).unwrap();
         let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
         assert_eq!(

@@ -196,13 +196,13 @@ impl ArrowTimestampType for TimestampNanosecondType {
 }
 
 impl IntervalYearMonthType {
-    /// Creates a IntervalYearMonthType
+    /// Creates a IntervalYearMonthType::Native
     ///
     /// # Arguments
     ///
     /// * `years` - The number of years (+/-) represented in this interval
     /// * `months` - The number of months (+/-) represented in this interval
-    pub fn new(
+    pub fn make_value(
         years: i32,
         months: i32,
     ) -> <IntervalYearMonthType as ArrowPrimitiveType>::Native {
@@ -222,13 +222,13 @@ impl IntervalYearMonthType {
 }
 
 impl IntervalDayTimeType {
-    /// Creates a IntervalDayTimeType
+    /// Creates a IntervalDayTimeType::Native
     ///
     /// # Arguments
     ///
     /// * `days` - The number of days (+/-) represented in this interval
     /// * `millis` - The number of milliseconds (+/-) represented in this interval
-    pub fn new(
+    pub fn make_value(
         days: i32,
         millis: i32,
     ) -> <IntervalDayTimeType as ArrowPrimitiveType>::Native {
@@ -252,14 +252,14 @@ impl IntervalDayTimeType {
 }
 
 impl IntervalMonthDayNanoType {
-    /// Creates a IntervalMonthDayNanoType
+    /// Creates a IntervalMonthDayNanoType::Native
     ///
     /// # Arguments
     ///
     /// * `months` - The number of months (+/-) represented in this interval
     /// * `days` - The number of days (+/-) represented in this interval
     /// * `nanos` - The number of nanoseconds (+/-) represented in this interval
-    pub fn new(
+    pub fn make_value(
         months: i32,
         days: i32,
         nanos: i64,
