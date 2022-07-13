@@ -1792,7 +1792,6 @@ mod tests {
             7,
             Compression::UNCOMPRESSED,
             Type::INT32,
-            i64::MIN,
         )
         .unwrap();
 
@@ -1976,7 +1975,6 @@ mod tests {
                 data.len() as i64,
                 Compression::UNCOMPRESSED,
                 Int32Type::get_physical_type(),
-                i64::MIN,
             )
             .unwrap(),
         );
@@ -2360,7 +2358,6 @@ mod tests {
                 column_metadata.num_values(),
                 column_metadata.compression(),
                 T::get_physical_type(),
-                i64::MIN,
             )
             .unwrap(),
         );

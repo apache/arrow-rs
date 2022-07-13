@@ -19,7 +19,6 @@
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
 use bytes::{Buf, Bytes};
-use std::borrow::BorrowMut;
 use std::collections::VecDeque;
 use std::{convert::TryFrom, fs::File, io::Read, path::Path, sync::Arc};
 
@@ -356,7 +355,6 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
             col.num_values(),
             col.compression(),
             col.column_descr().physical_type(),
-            self.metadata.num_rows(),
         )?;
         if let Some(offset_index) = self.metadata.page_offset_index() {
             let col_chunk_offset_index = &offset_index[i];
@@ -372,7 +370,6 @@ impl<'a, R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'
                 col.num_values(),
                 col.compression(),
                 col.column_descr().physical_type(),
-                self.metadata.num_rows(),
                 col_chunk_offset_index.clone(),
                 has_dict,
                 page_bufs,
@@ -506,9 +503,6 @@ pub struct SerializedPageReader<T: Read> {
     // Column chunk type.
     physical_type: Type,
 
-    // total row count.
-    num_rows: i64,
-
     //Page offset index.
     page_offset_index: Option<Vec<PageLocation>>,
 
@@ -530,7 +524,6 @@ impl<T: Read> SerializedPageReader<T> {
         total_num_values: i64,
         compression: Compression,
         physical_type: Type,
-        num_rows: i64,
     ) -> Result<Self> {
         let decompressor = create_codec(compression)?;
         let result = Self {
@@ -539,7 +532,6 @@ impl<T: Read> SerializedPageReader<T> {
             seen_num_values: 0,
             decompressor,
             physical_type,
-            num_rows,
             page_offset_index: None,
             seen_num_data_pages: 0,
             has_dictionary_page_to_read: false,
@@ -554,7 +546,6 @@ impl<T: Read> SerializedPageReader<T> {
         total_num_values: i64,
         compression: Compression,
         physical_type: Type,
-        num_rows: i64,
         offset_index: Vec<PageLocation>,
         has_dictionary_page_to_read: bool,
         page_bufs: VecDeque<T>,
@@ -566,22 +557,12 @@ impl<T: Read> SerializedPageReader<T> {
             seen_num_values: 0,
             decompressor,
             physical_type,
-            num_rows,
             page_offset_index: Some(offset_index),
             seen_num_data_pages: 0,
             has_dictionary_page_to_read,
             page_bufs,
         };
         Ok(result)
-    }
-
-    pub fn with_page_offset_index_and_has_dictionary_to_read(
-        &mut self,
-        offset_index: Vec<PageLocation>,
-        has_dictionary_to_read: bool,
-    ) {
-        self.page_offset_index = Some(offset_index);
-        self.has_dictionary_page_to_read = has_dictionary_to_read;
     }
 }
 
@@ -607,7 +588,7 @@ impl<T: Read + Send> PageReader for SerializedPageReader<T> {
                     && self.has_dictionary_page_to_read
                 {
                     dictionary_cursor = self.page_bufs.pop_front().unwrap();
-                    cursor = dictionary_cursor.borrow_mut();
+                    cursor = &mut dictionary_cursor;
                 } else {
                     cursor = self.page_bufs.get_mut(self.seen_num_data_pages).unwrap();
                 }
