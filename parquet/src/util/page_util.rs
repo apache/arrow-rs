@@ -33,7 +33,7 @@ pub(crate) fn calculate_row_count(indexes: &[PageLocation], page_num: usize, tot
 
 /// Use column chunk's offset index to get each page serially readable slice
 /// and a flag indicates whether having one dictionary page in this column chunk.
-pub(crate) fn get_pages_readable_slices<T: Read + Send, R: ChunkReader + ChunkReader<T=T>>(col_chunk_offset_index: &[PageLocation], col_start: u64, chunk_reader: Arc<R>) -> Result<(VecDeque<T>, bool)> {
+pub(crate) fn get_pages_readable_slices<T: Read + Send, R: ChunkReader<T=T>>(col_chunk_offset_index: &[PageLocation], col_start: u64, chunk_reader: Arc<R>) -> Result<(VecDeque<T>, bool)> {
     let first_data_page_offset = col_chunk_offset_index[0].offset as u64;
     let has_dictionary_page = first_data_page_offset != col_start;
     let mut page_readers = VecDeque::with_capacity(col_chunk_offset_index.len() + 1);
