@@ -120,6 +120,7 @@ trait ChronoDateExt {
     /// Returns a value in range `0..=3` indicating the quarter (zero-based) this date falls into
     fn quarter0(&self) -> u32;
 
+    /// Returns the day of week; Sunday is encoded as `0`, Monday as `1`, etc.
     fn weekday0(&self) -> i32;
 }
 
