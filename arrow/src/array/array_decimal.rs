@@ -150,8 +150,8 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
 
     /// Build a decimal array from [`FixedSizeBinaryArray`].
     ///
-    /// This function does not check the validation of each
-    /// value for performance reason.
+    /// NB: This function does not validate that each value is in the permissible
+    /// range for a decimal
     fn from_fixed_size_binary_array(
         v: FixedSizeBinaryArray,
         precision: usize,
