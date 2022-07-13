@@ -297,7 +297,7 @@ where
 }
 
 /// Extracts the day of week of a given temporal array as an array of
-/// integers.
+/// integers, starting at Sunday. This is different than [`weekday`] which starts at Monday.
 ///
 /// Sunday is encoded as `0`, Monday as `1`, etc.
 pub fn weekday0<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
