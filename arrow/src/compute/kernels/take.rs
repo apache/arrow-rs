@@ -1457,6 +1457,29 @@ mod tests {
     }
 
     #[test]
+    fn test_take_bool_nullable_index() {
+        // indices where the masked invalid elements would be out of bounds
+        let index_data = ArrayData::try_new(
+            DataType::Int32,
+            6,
+            Some(Buffer::from_iter(vec![
+                false, true, false, true, false, true,
+            ])),
+            0,
+            vec![Buffer::from_iter(vec![99, 0, 999, 1, 9999, 2])],
+            vec![],
+        )
+        .unwrap();
+        let index = UInt32Array::from(index_data);
+        test_take_boolean_arrays(
+            vec![Some(true), None, Some(false)],
+            &index,
+            None,
+            vec![None, Some(true), None, None, None, Some(false)],
+        );
+    }
+
+    #[test]
     fn test_take_bool_with_offset() {
         let index =
             UInt32Array::from(vec![Some(3), None, Some(1), Some(3), Some(2), None]);
