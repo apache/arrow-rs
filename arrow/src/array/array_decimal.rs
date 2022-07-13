@@ -163,12 +163,10 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
             v.value_length(),
             Self::VALUE_LENGTH,
         );
-
-        let builder = ArrayData::builder(DataType::Decimal(precision, scale))
-            .len(v.len())
-            .add_buffer(v.value_data())
-            .null_bit_buffer(v.data_ref().null_buffer().cloned())
-            .offset(v.offset());
+        let builder = v
+            .into_data()
+            .into_builder()
+            .data_type(DataType::Decimal(precision, scale));
 
         let array_data = unsafe { builder.build_unchecked() };
         U::from(array_data)
