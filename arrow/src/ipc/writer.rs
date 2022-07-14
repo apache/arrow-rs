@@ -1001,15 +1001,16 @@ fn write_array_data(
                 let buffer = buffer.with_bitset(num_bytes, true);
                 buffer.into()
             }
-            Some(buffer) => buffer.clone(),
+            Some(buffer) => {
+                if write_options.enable_truncate_array {
+                    buffer.bit_slice(array_data.offset(), array_data.len())
+                } else {
+                    buffer.clone()
+                }
+            }
         };
 
-        let sliced_null_buffer = if write_options.enable_truncate_array {
-            null_buffer.bit_slice(array_data.offset(), array_data.len())
-        } else {
-            null_buffer
-        };
-        offset = write_buffer(sliced_null_buffer.as_slice(), buffers, arrow_data, offset);
+        offset = write_buffer(null_buffer.as_slice(), buffers, arrow_data, offset);
     }
 
     let data_type = array_data.data_type();
