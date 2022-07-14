@@ -647,7 +647,10 @@ where
         Some(buf) if values.null_count() > 0 => {
             Some(take_bits(buf, values.offset(), indices)?)
         }
-        _ => None,
+        _ => indices
+            .data()
+            .null_buffer()
+            .map(|b| b.bit_slice(indices.offset(), indices.len())),
     };
 
     let data = unsafe {
@@ -1476,6 +1479,29 @@ mod tests {
             &index,
             None,
             vec![None, Some(true), None, None, None, Some(false)],
+        );
+    }
+
+    #[test]
+    fn test_take_bool_nullable_index_nonnull_values() {
+        // indices where the masked invalid elements would be out of bounds
+        let index_data = ArrayData::try_new(
+            DataType::Int32,
+            6,
+            Some(Buffer::from_iter(vec![
+                false, true, false, true, false, true,
+            ])),
+            0,
+            vec![Buffer::from_iter(vec![99, 0, 999, 1, 9999, 2])],
+            vec![],
+        )
+        .unwrap();
+        let index = UInt32Array::from(index_data);
+        test_take_boolean_arrays(
+            vec![Some(true), Some(true), Some(false)],
+            &index,
+            None,
+            vec![None, Some(true), None, Some(true), None, Some(false)],
         );
     }
 
