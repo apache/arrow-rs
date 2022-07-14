@@ -2141,6 +2141,38 @@ mod tests {
         check_utf8_validation::<i64>(DataType::LargeUtf8);
     }
 
+    /// Tests that offsets are at valid codepoint boundaries
+    fn check_utf8_char_boundary<T: ArrowNativeType>(data_type: DataType) {
+        let data_buffer = Buffer::from("🙀".as_bytes());
+        let offsets: Vec<T> = [0, 1, data_buffer.len()]
+            .iter()
+            .map(|&v| T::from_usize(v).unwrap())
+            .collect();
+
+        let offsets_buffer = Buffer::from_slice_ref(&offsets);
+        ArrayData::try_new(
+            data_type,
+            2,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "incomplete utf-8 byte sequence from index 0")]
+    fn test_validate_utf8_char_boundary() {
+        check_utf8_char_boundary::<i32>(DataType::Utf8);
+    }
+
+    #[test]
+    #[should_panic(expected = "incomplete utf-8 byte sequence from index 0")]
+    fn test_validate_large_utf8_char_boundary() {
+        check_utf8_char_boundary::<i64>(DataType::LargeUtf8);
+    }
+
     /// Test that the array of type `data_type` that has invalid indexes (out of bounds)
     fn check_index_out_of_bounds_validation<T: ArrowNativeType>(data_type: DataType) {
         let data_buffer = Buffer::from_slice_ref(&[b'a', b'b', b'c', b'd']);
