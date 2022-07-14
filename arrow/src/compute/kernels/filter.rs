@@ -786,7 +786,13 @@ where
         )
     };
 
-    DictionaryArray::<T>::from(data)
+    unsafe {
+        DictionaryArray::<T>::try_new_unchecked(
+            filtered_keys,
+            array.values().clone(),
+            data,
+        )
+    }
 }
 
 #[cfg(test)]
