@@ -34,11 +34,11 @@ use crate::file::{footer, metadata::*, reader::*, statistics};
 use crate::record::reader::RowIter;
 use crate::record::Row;
 use crate::schema::types::Type as SchemaType;
+use crate::util::page_util::{calculate_row_count, get_pages_readable_slices};
 use crate::util::{io::TryClone, memory::ByteBufferPtr};
 
 // export `SliceableCursor` and `FileSource` publically so clients can
 // re-use the logic in their own ParquetFileWriter wrappers
-use crate::util::page_util::{calculate_row_count, get_pages_readable_slices};
 #[allow(deprecated)]
 pub use crate::util::{cursor::SliceableCursor, io::FileSource};
 
@@ -513,18 +513,6 @@ pub struct SerializedPageReader<T: Read> {
 
     // Column chunk type.
     physical_type: Type,
-    // //Page offset index.
-    // page_offset_index: Option<Vec<PageLocation>>,
-    //
-    // // The number of data pages we have seen so far,
-    // // include the skipped page.
-    // seen_num_data_pages: usize,
-    //
-    // // A flag to check whether a dictionary page should read first
-    // has_dictionary_page_to_read: bool,
-    //
-    // // A list of readable slice in 'SerializedPageReader' for skipping page with offset index.
-    // page_bufs: VecDeque<T>,
 }
 
 impl<T: Read> SerializedPageReader<T> {
