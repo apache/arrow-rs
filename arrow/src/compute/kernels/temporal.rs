@@ -276,7 +276,9 @@ where
 /// integers.
 ///
 /// Monday is encoded as `0`, Tuesday as `1`, etc.
-pub fn weekday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+///
+/// See also [`num_days_from_sunday`] which starts at Sunday.
+pub fn num_days_from_monday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
@@ -309,10 +311,12 @@ where
 }
 
 /// Extracts the day of week of a given temporal array as an array of
-/// integers, starting at Sunday. This is different than [`weekday`] which starts at Monday.
+/// integers, starting at Sunday.
 ///
 /// Sunday is encoded as `0`, Monday as `1`, etc.
-pub fn weekday0<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+///
+/// See also [`num_days_from_monday`] which starts at Monday.
+pub fn num_days_from_sunday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
@@ -632,7 +636,7 @@ mod tests {
         let a: PrimitiveArray<Date64Type> =
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
-        let b = weekday(&a).unwrap();
+        let b = num_days_from_monday(&a).unwrap();
         assert_eq!(0, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2, b.value(2));
@@ -651,7 +655,7 @@ mod tests {
         ]
         .into();
 
-        let b = weekday0(&a).unwrap();
+        let b = num_days_from_sunday(&a).unwrap();
         assert_eq!(0, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(1, b.value(2));
