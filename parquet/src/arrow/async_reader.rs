@@ -552,7 +552,7 @@ impl PageReader for InMemoryColumnChunkReader {
         Ok(None)
     }
 
-    fn peek_next_page(&self) -> Result<Option<PageMetadata>> {
+    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
         Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 
