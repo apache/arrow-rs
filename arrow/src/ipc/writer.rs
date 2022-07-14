@@ -58,9 +58,6 @@ pub struct IpcWriteOptions {
     /// version 2.0.0: V4, with legacy format enabled
     /// version 4.0.0: V5
     metadata_version: ipc::MetadataVersion,
-    /// Whether to truncate underlying buffers of array based on array offset/length
-    /// when serializing it through IPC. Default is true.
-    enable_truncate_array: bool,
 }
 
 impl IpcWriteOptions {
@@ -69,7 +66,6 @@ impl IpcWriteOptions {
         alignment: usize,
         write_legacy_ipc_format: bool,
         metadata_version: ipc::MetadataVersion,
-        enable_truncate_array: bool,
     ) -> Result<Self> {
         if alignment == 0 || alignment % 8 != 0 {
             return Err(ArrowError::InvalidArgumentError(
@@ -86,7 +82,6 @@ impl IpcWriteOptions {
                 alignment,
                 write_legacy_ipc_format,
                 metadata_version,
-                enable_truncate_array,
             }),
             ipc::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
@@ -99,7 +94,6 @@ impl IpcWriteOptions {
                         alignment,
                         write_legacy_ipc_format,
                         metadata_version,
-                        enable_truncate_array,
                     })
                 }
             }
@@ -114,7 +108,6 @@ impl Default for IpcWriteOptions {
             alignment: 8,
             write_legacy_ipc_format: false,
             metadata_version: ipc::MetadataVersion::V5,
-            enable_truncate_array: true,
         }
     }
 }
@@ -1001,28 +994,17 @@ fn write_array_data(
                 let buffer = buffer.with_bitset(num_bytes, true);
                 buffer.into()
             }
-            Some(buffer) => {
-                if write_options.enable_truncate_array {
-                    buffer.bit_slice(array_data.offset(), array_data.len())
-                } else {
-                    buffer.clone()
-                }
-            }
+            Some(buffer) => buffer.bit_slice(array_data.offset(), array_data.len()),
         };
 
         offset = write_buffer(null_buffer.as_slice(), buffers, arrow_data, offset);
     }
 
     let data_type = array_data.data_type();
-    if write_options.enable_truncate_array
-        && matches!(
-            data_type,
-            DataType::Binary
-                | DataType::LargeBinary
-                | DataType::Utf8
-                | DataType::LargeUtf8
-        )
-    {
+    if matches!(
+        data_type,
+        DataType::Binary | DataType::LargeBinary | DataType::Utf8 | DataType::LargeUtf8
+    ) {
         let total_bytes = get_binary_buffer_len(array_data);
         let value_buffer = &array_data.buffers()[1];
         if buffer_need_truncate(
@@ -1056,13 +1038,12 @@ fn write_array_data(
                 offset = write_buffer(buffer.as_slice(), buffers, arrow_data, offset);
             });
         }
-    } else if write_options.enable_truncate_array
-        && (DataType::is_numeric(data_type)
-            || DataType::is_temporal(data_type)
-            || matches!(
-                array_data.data_type(),
-                DataType::FixedSizeBinary(_) | DataType::Dictionary(_, _)
-            ))
+    } else if DataType::is_numeric(data_type)
+        || DataType::is_temporal(data_type)
+        || matches!(
+            array_data.data_type(),
+            DataType::FixedSizeBinary(_) | DataType::Dictionary(_, _)
+        )
     {
         // Truncate values
         assert!(array_data.buffers().len() == 1);
@@ -1245,19 +1226,19 @@ mod tests {
     #[test]
     fn test_write_null_file_v4() {
         write_null_file(
-            IpcWriteOptions::try_new(8, false, MetadataVersion::V4, false).unwrap(),
+            IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap(),
             "v4_a8",
         );
         write_null_file(
-            IpcWriteOptions::try_new(8, true, MetadataVersion::V4, false).unwrap(),
+            IpcWriteOptions::try_new(8, true, MetadataVersion::V4).unwrap(),
             "v4_a8l",
         );
         write_null_file(
-            IpcWriteOptions::try_new(64, false, MetadataVersion::V4, false).unwrap(),
+            IpcWriteOptions::try_new(64, false, MetadataVersion::V4).unwrap(),
             "v4_a64",
         );
         write_null_file(
-            IpcWriteOptions::try_new(64, true, MetadataVersion::V4, false).unwrap(),
+            IpcWriteOptions::try_new(64, true, MetadataVersion::V4).unwrap(),
             "v4_a64l",
         );
     }
@@ -1265,11 +1246,11 @@ mod tests {
     #[test]
     fn test_write_null_file_v5() {
         write_null_file(
-            IpcWriteOptions::try_new(8, false, MetadataVersion::V5, false).unwrap(),
+            IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap(),
             "v5_a8",
         );
         write_null_file(
-            IpcWriteOptions::try_new(64, false, MetadataVersion::V5, false).unwrap(),
+            IpcWriteOptions::try_new(64, false, MetadataVersion::V5).unwrap(),
             "v5_a64",
         );
     }
@@ -1419,8 +1400,7 @@ mod tests {
                 .unwrap();
                 // write IPC version 5
                 let options =
-                    IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5, false)
-                        .unwrap();
+                    IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5).unwrap();
                 let mut writer =
                     FileWriter::try_new_with_options(file, &reader.schema(), options)
                         .unwrap();
@@ -1483,8 +1463,7 @@ mod tests {
                 ))
                 .unwrap();
                 let options =
-                    IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5, false)
-                        .unwrap();
+                    IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5).unwrap();
                 let mut writer =
                     StreamWriter::try_new_with_options(file, &reader.schema(), options)
                         .unwrap();
@@ -1690,29 +1669,16 @@ mod tests {
     #[test]
     fn test_write_union_file_v4_v5() {
         write_union_file(
-            IpcWriteOptions::try_new(8, false, MetadataVersion::V4, false).unwrap(),
+            IpcWriteOptions::try_new(8, false, MetadataVersion::V4).unwrap(),
         );
         write_union_file(
-            IpcWriteOptions::try_new(8, false, MetadataVersion::V5, false).unwrap(),
+            IpcWriteOptions::try_new(8, false, MetadataVersion::V5).unwrap(),
         );
     }
 
-    fn serialize_with_truncate(record: &RecordBatch) -> Vec<u8> {
-        let write_options = IpcWriteOptions::default();
-        serialize(record, write_options)
-    }
-
-    fn serialize_without_truncate(record: &RecordBatch) -> Vec<u8> {
-        let write_options =
-            IpcWriteOptions::try_new(8, false, MetadataVersion::V5, false).unwrap();
-        serialize(record, write_options)
-    }
-
-    fn serialize(record: &RecordBatch, write_options: IpcWriteOptions) -> Vec<u8> {
+    fn serialize(record: &RecordBatch) -> Vec<u8> {
         let buffer: Vec<u8> = Vec::new();
-        let mut stream_writer =
-            StreamWriter::try_new_with_options(buffer, &record.schema(), write_options)
-                .unwrap();
+        let mut stream_writer = StreamWriter::try_new(buffer, &record.schema()).unwrap();
         stream_writer.write(record).unwrap();
         stream_writer.finish().unwrap();
         stream_writer.into_inner().unwrap()
@@ -1733,8 +1699,8 @@ mod tests {
                 Field::new("b", DataType::Utf8, false),
             ]);
 
-            let a = Int32Array::from(vec![1; rows]);
-            let b = StringArray::from(vec!["a"; rows]);
+            let a = Int32Array::from_iter_values(0..rows as i32);
+            let b = StringArray::from_iter_values((0..rows).map(|i| i.to_string()));
 
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])
                 .unwrap()
@@ -1748,27 +1714,16 @@ mod tests {
         let offset = 2;
         let record_batch_slice = big_record_batch.slice(offset, length);
         assert!(
-            serialize_with_truncate(&big_record_batch).len()
-                > serialize_with_truncate(&small_record_batch).len()
+            serialize(&big_record_batch).len() > serialize(&small_record_batch).len()
         );
         assert_eq!(
-            serialize_with_truncate(&small_record_batch).len(),
-            serialize_with_truncate(&record_batch_slice).len()
+            serialize(&small_record_batch).len(),
+            serialize(&record_batch_slice).len()
         );
 
         assert_eq!(
-            deserialize(serialize_with_truncate(&record_batch_slice)),
-            small_record_batch
-        );
-        assert_eq!(
-            deserialize(serialize_with_truncate(&record_batch_slice)),
+            deserialize(serialize(&record_batch_slice)),
             record_batch_slice
-        );
-
-        // Disable truncation
-        assert!(
-            serialize_without_truncate(&record_batch_slice).len()
-                > serialize_without_truncate(&small_record_batch).len()
         );
     }
 
@@ -1789,13 +1744,9 @@ mod tests {
 
         let record_batch = create_batch();
         let record_batch_slice = record_batch.slice(1, 2);
-        let deserialized_batch =
-            deserialize(serialize_with_truncate(&record_batch_slice));
+        let deserialized_batch = deserialize(serialize(&record_batch_slice));
 
-        assert!(
-            serialize_with_truncate(&record_batch).len()
-                > serialize_with_truncate(&record_batch_slice).len()
-        );
+        assert!(serialize(&record_batch).len() > serialize(&record_batch_slice).len());
 
         assert!(deserialized_batch.column(0).is_null(0));
         assert!(deserialized_batch.column(0).is_valid(1));
@@ -1824,13 +1775,9 @@ mod tests {
 
         let record_batch = create_batch();
         let record_batch_slice = record_batch.slice(1, 2);
-        let deserialized_batch =
-            deserialize(serialize_with_truncate(&record_batch_slice));
+        let deserialized_batch = deserialize(serialize(&record_batch_slice));
 
-        assert!(
-            serialize_with_truncate(&record_batch).len()
-                > serialize_with_truncate(&record_batch_slice).len()
-        );
+        assert!(serialize(&record_batch).len() > serialize(&record_batch_slice).len());
 
         assert!(deserialized_batch.column(0).is_valid(0));
         assert!(deserialized_batch.column(0).is_null(1));
