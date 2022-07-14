@@ -176,6 +176,7 @@ pub(crate) use self::data::layout;
 pub use self::data::ArrayData;
 pub use self::data::ArrayDataBuilder;
 pub use self::data::ArrayDataRef;
+pub(crate) use self::data::BufferSpec;
 
 pub use self::array_binary::BinaryArray;
 pub use self::array_binary::FixedSizeBinaryArray;
