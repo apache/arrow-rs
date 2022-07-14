@@ -159,7 +159,7 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
     /// # Safety
     ///
     /// The input keys, values and data must form a valid DictionaryArray,
-    /// or undefined behavior can results.
+    /// or undefined behavior can occur.
     pub(crate) unsafe fn try_new_unchecked(
         keys: PrimitiveArray<K>,
         values: ArrayRef,
