@@ -29,7 +29,7 @@ pub struct GenericStringBuilder<OffsetSize: OffsetSizeTrait> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
-    /// Creates a new `StringBuilder`,
+    /// Creates a new `GenericStringBuilder`,
     /// `capacity` is the number of bytes of string data to pre-allocate space for in this builder
     pub fn new(capacity: usize) -> Self {
         let values_builder = UInt8Builder::new(capacity);
@@ -38,7 +38,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
         }
     }
 
-    /// Creates a new `StringBuilder`,
+    /// Creates a new `GenericStringBuilder`,
     /// `data_capacity` is the number of bytes of string data to pre-allocate space for in this builder
     /// `item_capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
@@ -142,7 +142,7 @@ where
         let (lower, upper) = iter.size_hint();
         let size_hint = upper.unwrap_or(lower);
 
-        let mut builder = GenericStringBuilder::new(size_hint);
+        let mut builder = GenericStringBuilder::with_capacity(size_hint, 0);
 
         iter.for_each(|item| {
             if let Some(a) = item {

@@ -39,6 +39,16 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
         }
     }
 
+    /// Creates a new `GenericBinaryBuilder`,
+    /// `data_capacity` is the number of bytes of string data to pre-allocate space for in this builder
+    /// `item_capacity` is the number of items to pre-allocate space for in this builder
+    pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
+        let values_builder = UInt8Builder::new(data_capacity);
+        Self {
+            builder: GenericListBuilder::with_capacity(values_builder, item_capacity),
+        }
+    }
+
     /// Appends a single byte value into the builder's values array.
     ///
     /// Note, when appending individual byte values you must call `append` to delimit each
@@ -120,7 +130,7 @@ where
         let (lower, upper) = iter.size_hint();
         let size_hint = upper.unwrap_or(lower);
 
-        let mut builder = GenericBinaryBuilder::new(size_hint);
+        let mut builder = GenericBinaryBuilder::with_capacity(size_hint, 0);
 
         iter.for_each(|item| {
             if let Some(a) = item {
