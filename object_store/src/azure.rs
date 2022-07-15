@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 //! An object store implementation for Azure blob storage
 use crate::{
     path::{Path, DELIMITER},
@@ -116,7 +133,11 @@ enum Error {
         to: String,
     },
 
-    #[snafu(display("Unable parse source url. Container: {}, Error: {}", container, source))]
+    #[snafu(display(
+        "Unable parse source url. Container: {}, Error: {}",
+        container,
+        source
+    ))]
     UnableToParseUrl {
         source: url::ParseError,
         container: String,
@@ -224,7 +245,11 @@ impl ObjectStore for MicrosoftAzure {
         ))
     }
 
-    async fn get_range(&self, location: &Path, range: std::ops::Range<usize>) -> Result<Bytes> {
+    async fn get_range(
+        &self,
+        location: &Path,
+        range: std::ops::Range<usize>,
+    ) -> Result<Bytes> {
         let blob = self
             .container_client
             .as_blob_client(location.as_ref())
@@ -291,7 +316,10 @@ impl ObjectStore for MicrosoftAzure {
         Ok(())
     }
 
-    async fn list(&self, prefix: Option<&Path>) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
         let stream = self
             .list_impl(prefix, false)
             .await?
@@ -500,7 +528,11 @@ pub fn new_azure(
     } else {
         (
             false,
-            StorageAccountClient::new_access_key(Arc::clone(&http_client), &account, &access_key),
+            StorageAccountClient::new_access_key(
+                Arc::clone(&http_client),
+                &account,
+                &access_key,
+            ),
         )
     };
 
@@ -583,7 +615,8 @@ mod tests {
                 return;
             } else {
                 AzureConfig {
-                    storage_account: env::var("AZURE_STORAGE_ACCOUNT").unwrap_or_default(),
+                    storage_account: env::var("AZURE_STORAGE_ACCOUNT")
+                        .unwrap_or_default(),
                     access_key: env::var("AZURE_STORAGE_ACCESS_KEY").unwrap_or_default(),
                     bucket: env::var("OBJECT_STORE_BUCKET")
                         .expect("already checked OBJECT_STORE_BUCKET"),

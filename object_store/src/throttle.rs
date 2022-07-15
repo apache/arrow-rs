@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 //! A throttling object store wrapper
 use parking_lot::Mutex;
 use std::ops::Range;
@@ -182,7 +199,10 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.delete(location).await
     }
 
-    async fn list(&self, prefix: Option<&Path>) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
         sleep(self.config().wait_list_per_call).await;
 
         // need to copy to avoid moving / referencing `self`
@@ -209,7 +229,8 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         match self.inner.list_with_delimiter(prefix).await {
             Ok(list_result) => {
                 let entries_len = usize_to_u32_saturate(list_result.objects.len());
-                sleep(self.config().wait_list_with_delimiter_per_entry * entries_len).await;
+                sleep(self.config().wait_list_with_delimiter_per_entry * entries_len)
+                    .await;
                 Ok(list_result)
             }
             Err(err) => Err(err),
@@ -385,7 +406,10 @@ mod tests {
         assert_bounds!(measure_put(&store, 0).await, 0);
     }
 
-    async fn place_test_object(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Path {
+    async fn place_test_object(
+        store: &ThrottledStore<InMemory>,
+        n_bytes: Option<usize>,
+    ) -> Path {
         let path = Path::from("foo");
 
         if let Some(n_bytes) = n_bytes {
@@ -400,7 +424,10 @@ mod tests {
         path
     }
 
-    async fn place_test_objects(store: &ThrottledStore<InMemory>, n_entries: usize) -> Path {
+    async fn place_test_objects(
+        store: &ThrottledStore<InMemory>,
+        n_entries: usize,
+    ) -> Path {
         let prefix = Path::from("foo");
 
         // clean up store
@@ -427,7 +454,10 @@ mod tests {
         prefix
     }
 
-    async fn measure_delete(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Duration {
+    async fn measure_delete(
+        store: &ThrottledStore<InMemory>,
+        n_bytes: Option<usize>,
+    ) -> Duration {
         let path = place_test_object(store, n_bytes).await;
 
         let t0 = Instant::now();
@@ -436,7 +466,10 @@ mod tests {
         t0.elapsed()
     }
 
-    async fn measure_get(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Duration {
+    async fn measure_get(
+        store: &ThrottledStore<InMemory>,
+        n_bytes: Option<usize>,
+    ) -> Duration {
         let path = place_test_object(store, n_bytes).await;
 
         let t0 = Instant::now();
@@ -459,7 +492,10 @@ mod tests {
         t0.elapsed()
     }
 
-    async fn measure_list(store: &ThrottledStore<InMemory>, n_entries: usize) -> Duration {
+    async fn measure_list(
+        store: &ThrottledStore<InMemory>,
+        n_entries: usize,
+    ) -> Duration {
         let prefix = place_test_objects(store, n_entries).await;
 
         let t0 = Instant::now();

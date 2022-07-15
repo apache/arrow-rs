@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 //! An object store implementation for a local filesystem
 use crate::{
     maybe_spawn_blocking,
@@ -227,7 +244,9 @@ impl ObjectStore for LocalFileSystem {
 
                     match File::create(&path) {
                         Ok(f) => f,
-                        Err(err) => return Err(Error::UnableToCreateFile { path, err }.into()),
+                        Err(err) => {
+                            return Err(Error::UnableToCreateFile { path, err }.into())
+                        }
                     }
                 }
                 Err(err) => return Err(Error::UnableToCreateFile { path, err }.into()),
@@ -284,10 +303,11 @@ impl ObjectStore for LocalFileSystem {
 
         maybe_spawn_blocking(move || {
             let file = open_file(&path)?;
-            let metadata = file.metadata().map_err(|e| Error::UnableToAccessMetadata {
-                source: e.into(),
-                path: location.to_string(),
-            })?;
+            let metadata =
+                file.metadata().map_err(|e| Error::UnableToAccessMetadata {
+                    source: e.into(),
+                    path: location.to_string(),
+                })?;
 
             convert_metadata(metadata, location)
         })
@@ -303,7 +323,10 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn list(&self, prefix: Option<&Path>) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
         let config = Arc::clone(&self.config);
 
         let root_path = match prefix {
@@ -315,19 +338,18 @@ impl ObjectStore for LocalFileSystem {
             // Don't include the root directory itself
             .min_depth(1);
 
-        let s =
-            walkdir.into_iter().flat_map(move |result_dir_entry| {
-                match convert_walkdir_result(result_dir_entry) {
-                    Err(e) => Some(Err(e)),
-                    Ok(None) => None,
-                    Ok(entry @ Some(_)) => entry
-                        .filter(|dir_entry| dir_entry.file_type().is_file())
-                        .map(|entry| {
-                            let location = config.filesystem_to_path(entry.path())?;
-                            convert_entry(entry, location)
-                        }),
-                }
-            });
+        let s = walkdir.into_iter().flat_map(move |result_dir_entry| {
+            match convert_walkdir_result(result_dir_entry) {
+                Err(e) => Some(Err(e)),
+                Ok(None) => None,
+                Ok(entry @ Some(_)) => entry
+                    .filter(|dir_entry| dir_entry.file_type().is_file())
+                    .map(|entry| {
+                        let location = config.filesystem_to_path(entry.path())?;
+                        convert_entry(entry, location)
+                    }),
+            }
+        });
 
         // If no tokio context, return iterator directly as no
         // need to perform chunked spawn_blocking reads
@@ -339,26 +361,27 @@ impl ObjectStore for LocalFileSystem {
         const CHUNK_SIZE: usize = 1024;
 
         let buffer = VecDeque::with_capacity(CHUNK_SIZE);
-        let stream = futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
-            if buffer.is_empty() {
-                (s, buffer) = tokio::task::spawn_blocking(move || {
-                    for _ in 0..CHUNK_SIZE {
-                        match s.next() {
-                            Some(r) => buffer.push_back(r),
-                            None => break,
+        let stream =
+            futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
+                if buffer.is_empty() {
+                    (s, buffer) = tokio::task::spawn_blocking(move || {
+                        for _ in 0..CHUNK_SIZE {
+                            match s.next() {
+                                Some(r) => buffer.push_back(r),
+                                None => break,
+                            }
                         }
-                    }
-                    (s, buffer)
-                })
-                .await?;
-            }
+                        (s, buffer)
+                    })
+                    .await?;
+                }
 
-            match buffer.pop_front() {
-                Some(Err(e)) => Err(e),
-                Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
-                None => Ok(None),
-            }
-        });
+                match buffer.pop_front() {
+                    Some(Err(e)) => Err(e),
+                    Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
+                    None => Ok(None),
+                }
+            });
 
         Ok(stream.boxed())
     }

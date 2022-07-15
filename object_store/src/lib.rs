@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 #![deny(rustdoc::broken_intra_doc_links, rustdoc::bare_urls, rust_2018_idioms)]
 #![warn(
     missing_copy_implementations,
@@ -78,7 +95,10 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`.
-    async fn list(&self, prefix: Option<&Path>) -> Result<BoxStream<'_, Result<ObjectMeta>>>;
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>>;
 
     /// List objects with the given prefix and an implementation specific
     /// delimiter. Returns common prefixes (directories) in addition to object
@@ -166,22 +186,24 @@ impl GetResult {
         match self {
             Self::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
-                    let len = file
-                        .seek(SeekFrom::End(0))
-                        .map_err(|source| local::Error::Seek {
+                    let len = file.seek(SeekFrom::End(0)).map_err(|source| {
+                        local::Error::Seek {
                             source,
                             path: path.clone(),
-                        })?;
+                        }
+                    })?;
 
-                    file.seek(SeekFrom::Start(0))
-                        .map_err(|source| local::Error::Seek {
+                    file.seek(SeekFrom::Start(0)).map_err(|source| {
+                        local::Error::Seek {
                             source,
                             path: path.clone(),
-                        })?;
+                        }
+                    })?;
 
                     let mut buffer = Vec::with_capacity(len as usize);
-                    file.read_to_end(&mut buffer)
-                        .map_err(|source| local::Error::UnableToReadBytes { source, path })?;
+                    file.read_to_end(&mut buffer).map_err(|source| {
+                        local::Error::UnableToReadBytes { source, path }
+                    })?;
 
                     Ok(buffer.into())
                 })
@@ -210,25 +232,28 @@ impl GetResult {
             Self::File(file, path) => {
                 const CHUNK_SIZE: usize = 8 * 1024;
 
-                futures::stream::try_unfold((file, path, false), |(mut file, path, finished)| {
-                    maybe_spawn_blocking(move || {
-                        if finished {
-                            return Ok(None);
-                        }
+                futures::stream::try_unfold(
+                    (file, path, false),
+                    |(mut file, path, finished)| {
+                        maybe_spawn_blocking(move || {
+                            if finished {
+                                return Ok(None);
+                            }
 
-                        let mut buffer = Vec::with_capacity(CHUNK_SIZE);
-                        let read = file
-                            .by_ref()
-                            .take(CHUNK_SIZE as u64)
-                            .read_to_end(&mut buffer)
-                            .map_err(|e| local::Error::UnableToReadBytes {
-                                source: e,
-                                path: path.clone(),
-                            })?;
+                            let mut buffer = Vec::with_capacity(CHUNK_SIZE);
+                            let read = file
+                                .by_ref()
+                                .take(CHUNK_SIZE as u64)
+                                .read_to_end(&mut buffer)
+                                .map_err(|e| local::Error::UnableToReadBytes {
+                                    source: e,
+                                    path: path.clone(),
+                                })?;
 
-                        Ok(Some((buffer.into(), (file, path, read != CHUNK_SIZE))))
-                    })
-                })
+                            Ok(Some((buffer.into(), (file, path, read != CHUNK_SIZE))))
+                        })
+                    },
+                )
                 .boxed()
             }
             Self::Stream(s) => s,
@@ -472,7 +497,9 @@ mod tests {
         Ok(())
     }
 
-    pub(crate) async fn list_uses_directories_correctly(storage: &DynObjectStore) -> Result<()> {
+    pub(crate) async fn list_uses_directories_correctly(
+        storage: &DynObjectStore,
+    ) -> Result<()> {
         delete_fixtures(storage).await;
 
         let content_list = flatten_list_stream(storage, None).await?;
@@ -576,7 +603,8 @@ mod tests {
         storage: &DynObjectStore,
         location: Option<Path>,
     ) -> crate::Result<Bytes> {
-        let location = location.unwrap_or_else(|| Path::from("this_file_should_not_exist"));
+        let location =
+            location.unwrap_or_else(|| Path::from("this_file_should_not_exist"));
 
         let err = storage.head(&location).await.unwrap_err();
         assert!(matches!(err, crate::Error::NotFound { .. }));

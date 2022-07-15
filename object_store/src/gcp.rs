@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 //! An object store implementation for Google Cloud Storage
 use std::collections::BTreeSet;
 use std::fs::File;
@@ -157,7 +174,8 @@ impl GoogleCloudStorage {
     }
 
     fn object_url(&self, path: &Path) -> String {
-        let encoded = percent_encoding::utf8_percent_encode(path.as_ref(), NON_ALPHANUMERIC);
+        let encoded =
+            percent_encoding::utf8_percent_encode(path.as_ref(), NON_ALPHANUMERIC);
         format!(
             "{}/storage/v1/b/{}/o/{}",
             self.base_url, self.bucket_name_encoded, encoded
@@ -247,14 +265,25 @@ impl GoogleCloudStorage {
     }
 
     /// Perform a copy request <https://cloud.google.com/storage/docs/json_api/v1/objects/copy>
-    async fn copy_request(&self, from: &Path, to: &Path, if_not_exists: bool) -> Result<()> {
+    async fn copy_request(
+        &self,
+        from: &Path,
+        to: &Path,
+        if_not_exists: bool,
+    ) -> Result<()> {
         let token = self.get_token().await?;
 
-        let source = percent_encoding::utf8_percent_encode(from.as_ref(), NON_ALPHANUMERIC);
-        let destination = percent_encoding::utf8_percent_encode(to.as_ref(), NON_ALPHANUMERIC);
+        let source =
+            percent_encoding::utf8_percent_encode(from.as_ref(), NON_ALPHANUMERIC);
+        let destination =
+            percent_encoding::utf8_percent_encode(to.as_ref(), NON_ALPHANUMERIC);
         let url = format!(
             "{}/storage/v1/b/{}/o/{}/copyTo/b/{}/o/{}",
-            self.base_url, self.bucket_name_encoded, source, self.bucket_name_encoded, destination
+            self.base_url,
+            self.bucket_name_encoded,
+            source,
+            self.bucket_name_encoded,
+            destination
         );
 
         let mut builder = self.client.request(Method::POST, url);
@@ -410,10 +439,17 @@ impl ObjectStore for GoogleCloudStorage {
         self.delete_request(location).await
     }
 
-    async fn list(&self, prefix: Option<&Path>) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
         let stream = self
             .list_paginated(prefix, false)?
-            .map_ok(|r| futures::stream::iter(r.items.into_iter().map(|x| convert_object_meta(&x))))
+            .map_ok(|r| {
+                futures::stream::iter(
+                    r.items.into_iter().map(|x| convert_object_meta(&x)),
+                )
+            })
             .try_flatten()
             .boxed();
 
@@ -486,7 +522,8 @@ pub fn new_gcs(
         .transpose()?;
 
     let bucket_name = bucket_name.into();
-    let encoded_bucket_name = percent_encode(bucket_name.as_bytes(), NON_ALPHANUMERIC).to_string();
+    let encoded_bucket_name =
+        percent_encode(bucket_name.as_bytes(), NON_ALPHANUMERIC).to_string();
 
     // The cloud storage crate currently only supports authentication via
     // environment variables. Set the environment variable explicitly so
@@ -674,7 +711,9 @@ mod test {
             .unwrap_err()
             .to_string();
         assert!(
-            err.contains("Error performing put request: HTTP status client error (404 Not Found)"),
+            err.contains(
+                "Error performing put request: HTTP status client error (404 Not Found)"
+            ),
             "{}",
             err
         )

@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 //! An object store implementation for S3
 use crate::util::format_http_range;
 use crate::{
@@ -20,7 +37,9 @@ use rusoto_s3::S3;
 use rusoto_sts::WebIdentityProvider;
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::ops::Range;
-use std::{convert::TryFrom, fmt, num::NonZeroUsize, ops::Deref, sync::Arc, time::Duration};
+use std::{
+    convert::TryFrom, fmt, num::NonZeroUsize, ops::Deref, sync::Arc, time::Duration,
+};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, warn};
 
@@ -31,10 +50,18 @@ pub const MAX_NUM_RETRIES: u32 = 3;
 #[derive(Debug, Snafu)]
 #[allow(missing_docs)]
 enum Error {
-    #[snafu(display("Expected streamed data to have length {}, got {}", expected, actual))]
+    #[snafu(display(
+        "Expected streamed data to have length {}, got {}",
+        expected,
+        actual
+    ))]
     DataDoesNotMatchLength { expected: usize, actual: usize },
 
-    #[snafu(display("Did not receive any data. Bucket: {}, Location: {}", bucket, path))]
+    #[snafu(display(
+        "Did not receive any data. Bucket: {}, Location: {}",
+        bucket,
+        path
+    ))]
     NoData { bucket: String, path: String },
 
     #[snafu(display(
@@ -270,12 +297,12 @@ impl ObjectStore for AmazonS3 {
             .head_object(head_request)
             .await
             .map_err(|e| match e {
-                rusoto_core::RusotoError::Service(rusoto_s3::HeadObjectError::NoSuchKey(_)) => {
-                    Error::NotFound {
-                        path: key.clone(),
-                        source: e.into(),
-                    }
-                }
+                rusoto_core::RusotoError::Service(
+                    rusoto_s3::HeadObjectError::NoSuchKey(_),
+                ) => Error::NotFound {
+                    path: key.clone(),
+                    source: e.into(),
+                },
                 rusoto_core::RusotoError::Unknown(h) if h.status.as_u16() == 404 => {
                     Error::NotFound {
                         path: key.clone(),
@@ -337,7 +364,10 @@ impl ObjectStore for AmazonS3 {
         Ok(())
     }
 
-    async fn list(&self, prefix: Option<&Path>) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
         Ok(self
             .list_objects_v2(prefix, None)
             .await?
@@ -372,11 +402,13 @@ impl ObjectStore for AmazonS3 {
 
                     res.objects.append(&mut objects);
 
-                    let prefixes = list_objects_v2_result.common_prefixes.unwrap_or_default();
+                    let prefixes =
+                        list_objects_v2_result.common_prefixes.unwrap_or_default();
                     res.common_prefixes.reserve(prefixes.len());
 
                     for p in prefixes {
-                        let prefix = p.prefix.expect("can't have a prefix without a value");
+                        let prefix =
+                            p.prefix.expect("can't have a prefix without a value");
                         res.common_prefixes.push(Path::parse(prefix)?);
                     }
 
@@ -430,8 +462,8 @@ fn convert_object_meta(object: rusoto_s3::Object, bucket: &str) -> Result<Object
             .with_timezone(&Utc),
         None => Utc::now(),
     };
-    let size =
-        usize::try_from(object.size.unwrap_or(0)).expect("unsupported size on this platform");
+    let size = usize::try_from(object.size.unwrap_or(0))
+        .expect("unsupported size on this platform");
 
     Ok(ObjectMeta {
         location,
@@ -494,16 +526,26 @@ pub fn new_s3(
             rusoto_s3::S3Client::new_with(http_client, credentials_provider, region)
         }
         (Some(access_key_id), Some(secret_access_key), None) => {
-            let credentials_provider =
-                StaticProvider::new_minimal(access_key_id.into(), secret_access_key.into());
+            let credentials_provider = StaticProvider::new_minimal(
+                access_key_id.into(),
+                secret_access_key.into(),
+            );
             rusoto_s3::S3Client::new_with(http_client, credentials_provider, region)
         }
         (None, Some(_), _) => return Err(Error::MissingAccessKey.into()),
         (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
         _ if std::env::var_os("AWS_WEB_IDENTITY_TOKEN_FILE").is_some() => {
-            rusoto_s3::S3Client::new_with(http_client, WebIdentityProvider::from_k8s_env(), region)
+            rusoto_s3::S3Client::new_with(
+                http_client,
+                WebIdentityProvider::from_k8s_env(),
+                region,
+            )
         }
-        _ => rusoto_s3::S3Client::new_with(http_client, InstanceMetadataProvider::new(), region),
+        _ => rusoto_s3::S3Client::new_with(
+            http_client,
+            InstanceMetadataProvider::new(),
+            region,
+        ),
     };
 
     Ok(AmazonS3 {
@@ -579,12 +621,12 @@ impl AmazonS3 {
             .get_object(get_request)
             .await
             .map_err(|e| match e {
-                rusoto_core::RusotoError::Service(rusoto_s3::GetObjectError::NoSuchKey(_)) => {
-                    Error::NotFound {
-                        path: key.clone(),
-                        source: e.into(),
-                    }
-                }
+                rusoto_core::RusotoError::Service(
+                    rusoto_s3::GetObjectError::NoSuchKey(_),
+                ) => Error::NotFound {
+                    path: key.clone(),
+                    source: e.into(),
+                },
                 _ => Error::UnableToGetData {
                     bucket: self.bucket_name.to_owned(),
                     path: key.clone(),
@@ -669,12 +711,13 @@ impl AmazonS3 {
                 // `next_continuation_token`, and we're assuming that `next_continuation_token`
                 // is only set when `is_truncated` is true (and therefore not
                 // checking `is_truncated`).
-                let next_state =
-                    if let Some(next_continuation_token) = &resp.next_continuation_token {
-                        ListState::HasMore(next_continuation_token.to_string())
-                    } else {
-                        ListState::Done
-                    };
+                let next_state = if let Some(next_continuation_token) =
+                    &resp.next_continuation_token
+                {
+                    ListState::HasMore(next_continuation_token.to_string())
+                } else {
+                    ListState::Done
+                };
 
                 Some((Ok(resp), next_state))
             }
@@ -705,7 +748,9 @@ impl AmazonS3 {
 /// this function will return the last encountered error.
 ///
 /// Client errors (4xx) will never be retried by this function.
-async fn s3_request<E, F, G, R>(future_factory: F) -> Result<R, rusoto_core::RusotoError<E>>
+async fn s3_request<E, F, G, R>(
+    future_factory: F,
+) -> Result<R, rusoto_core::RusotoError<E>>
 where
     E: std::error::Error + Send,
     F: Fn() -> G + Send,

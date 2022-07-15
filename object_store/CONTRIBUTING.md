@@ -1,25 +1,23 @@
-# Contributing
+<!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
 
-Thank you for thinking of contributing! We very much welcome contributions from the community. To make the process
-easier and more valuable for everyone involved we have a few rules and guidelines to follow.
+    http://www.apache.org/licenses/LICENSE-2.0
 
-Anyone with a Github account is free to file issues on the project. However, if you want to contribute documentation or
-code then you will need to sign InfluxData's Individual Contributor License Agreement (CLA), which can be found with
-more information [on our website](https://www.influxdata.com/legal/cla/).
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
 
-## Submitting Issues and Feature Requests
-
-Before you file an [issue](https://github.com/influxdata/object_store_rs/issues/new), please search existing issues in
-case
-the same or similar issues have already been filed. If you find an existing open ticket covering your issue then please
-avoid adding "👍" or "me too" comments; Github notifications can cause a lot of noise for the project maintainers who
-triage the back-log.
-
-However, if you have a new piece of information for an existing ticket and you think it may help the investigation or
-resolution, then please do add it as a comment!
-
-You can signal to the team that you're experiencing an existing issue with one of Github's emoji reactions (these are a
-good way to add "weight" to an issue from a prioritization perspective).
+# Development instructions
 
 ## Running Tests
 

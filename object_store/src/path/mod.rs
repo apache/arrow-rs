@@ -1,3 +1,20 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 //! Path abstraction for Object Storage
 
 use itertools::Itertools;
@@ -148,7 +165,9 @@ impl Path {
     ///
     /// This will return an error if the path does not exist, or contains illegal
     /// character sequences as defined by [`Path::parse`]
-    pub fn from_filesystem_path(path: impl AsRef<std::path::Path>) -> Result<Self, Error> {
+    pub fn from_filesystem_path(
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<Self, Error> {
         Self::from_filesystem_path_with_base(path, None)
     }
 
@@ -163,14 +182,12 @@ impl Path {
     ) -> Result<Self, Error> {
         let url = filesystem_path_to_url(path)?;
         let path = match base {
-            Some(prefix) => {
-                url.path()
-                    .strip_prefix(prefix.path())
-                    .ok_or_else(|| Error::PrefixMismatch {
-                        path: url.path().to_string(),
-                        prefix: prefix.to_string(),
-                    })?
-            }
+            Some(prefix) => url.path().strip_prefix(prefix.path()).ok_or_else(|| {
+                Error::PrefixMismatch {
+                    path: url.path().to_string(),
+                    prefix: prefix.to_string(),
+                }
+            })?,
             None => url.path(),
         };
 
@@ -197,16 +214,23 @@ impl Path {
     /// Returns an iterator of the [`PathPart`] of this [`Path`] after `prefix`
     ///
     /// Returns `None` if the prefix does not match
-    pub fn prefix_match(&self, prefix: &Self) -> Option<impl Iterator<Item = PathPart<'_>> + '_> {
+    pub fn prefix_match(
+        &self,
+        prefix: &Self,
+    ) -> Option<impl Iterator<Item = PathPart<'_>> + '_> {
         let diff = itertools::diff_with(self.parts(), prefix.parts(), |a, b| a == b);
 
         match diff {
             // Both were equal
             None => Some(itertools::Either::Left(std::iter::empty())),
             // Mismatch or prefix was longer => None
-            Some(itertools::Diff::FirstMismatch(_, _, _) | itertools::Diff::Longer(_, _)) => None,
+            Some(
+                itertools::Diff::FirstMismatch(_, _, _) | itertools::Diff::Longer(_, _),
+            ) => None,
             // Match with remaining
-            Some(itertools::Diff::Shorter(_, back)) => Some(itertools::Either::Right(back)),
+            Some(itertools::Diff::Shorter(_, back)) => {
+                Some(itertools::Either::Right(back))
+            }
         }
     }
 
@@ -273,7 +297,9 @@ where
 
 /// Given a filesystem path, convert it to its canonical URL representation,
 /// returning an error if the file doesn't exist on the local filesystem
-pub(crate) fn filesystem_path_to_url(path: impl AsRef<std::path::Path>) -> Result<Url, Error> {
+pub(crate) fn filesystem_path_to_url(
+    path: impl AsRef<std::path::Path>,
+) -> Result<Url, Error> {
     let path = path.as_ref().canonicalize().context(CanonicalizeSnafu {
         path: path.as_ref(),
     })?;
@@ -457,7 +483,8 @@ mod tests {
 
     #[test]
     fn prefix_matches_with_file_name() {
-        let haystack = Path::from_iter(["foo/bar", "baz%2Ftest", "something", "foo.segment"]);
+        let haystack =
+            Path::from_iter(["foo/bar", "baz%2Ftest", "something", "foo.segment"]);
 
         // All directories match and file name is a prefix
         let needle = Path::from_iter(["foo/bar", "baz%2Ftest", "something", "foo"]);
