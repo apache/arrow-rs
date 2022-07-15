@@ -73,6 +73,9 @@ enum Error {
 
     #[snafu(display("Error decoding object size: {}", source))]
     InvalidSize { source: std::num::ParseIntError },
+
+    #[snafu(display("Error creating http client: {}", source))]
+    CreatingHttpClient { source: reqwest::Error },
 }
 
 impl From<Error> for super::Error {
@@ -498,13 +501,24 @@ fn reader_credentials_file(
     Ok(serde_json::from_reader(reader).context(DecodeCredentialsSnafu)?)
 }
 
+fn get_client() -> Result<Client> {
+    let mut builder = Client::builder();
+
+    if std::env::var("GCP_ACCEPT_INVALID_CERTIFICATES").is_ok() {
+        println!("WARNING: accepting invalid certifcates");
+        builder = builder.danger_accept_invalid_certs(true);
+    }
+    let client = builder.build().context(CreatingHttpClientSnafu)?;
+    Ok(client)
+}
+
 /// Configure a connection to Google Cloud Storage.
 pub fn new_gcs(
     service_account_path: impl AsRef<std::path::Path>,
     bucket_name: impl Into<String>,
 ) -> Result<GoogleCloudStorage> {
     let credentials = reader_credentials_file(service_account_path)?;
-    let client = Client::new();
+    let client = get_client()?;
 
     // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
     let scope = "https://www.googleapis.com/auth/devstorage.full_control";
