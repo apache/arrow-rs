@@ -613,6 +613,8 @@ pub(crate) mod private {
             decoder: &mut PlainDecoderDetails,
         ) -> Result<usize>;
 
+        fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize>;
+
         /// Return the encoded size for a type
         fn dict_encoding_size(&self) -> (usize, usize) {
             (std::mem::size_of::<Self>(), 1)
@@ -690,6 +692,16 @@ pub(crate) mod private {
             Ok(values_read)
         }
 
+        fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
+            let bit_reader = decoder.bit_reader.as_mut().unwrap();
+            let num_values = std::cmp::min(num_values, decoder.num_values);
+            let mut buffer = vec![false; num_values];
+            let values_read = bit_reader.get_batch(&mut buffer[..num_values], 1);
+            decoder.num_values -= values_read;
+            Ok(values_read)
+        }
+
+
         #[inline]
         fn as_i64(&self) -> Result<i64> {
             Ok(*self as i64)
@@ -759,6 +771,23 @@ pub(crate) mod private {
                         raw_buffer.copy_from_slice(data.range(decoder.start, bytes_to_decode).as_ref());
                     };
                     decoder.start += bytes_to_decode;
+                    decoder.num_values -= num_values;
+
+                    Ok(num_values)
+                }
+
+                #[inline]
+                fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
+                    let data = decoder.data.as_ref().expect("set_data should have been called");
+                    let num_values = std::cmp::min(num_values, decoder.num_values);
+                    let bytes_left = data.len() - decoder.start;
+                    let bytes_to_skip = std::mem::size_of::<Self>() * num_values;
+
+                    if bytes_left < bytes_to_skip {
+                        return Err(eof_err!("Not enough bytes to skip"));
+                    }
+
+                    decoder.start += bytes_to_skip;
                     decoder.num_values -= num_values;
 
                     Ok(num_values)
@@ -853,6 +882,25 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
+        fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
+            let data = decoder
+                .data
+                .as_ref()
+                .expect("set_data should have been called");
+            let num_values = std::cmp::min(num_values, decoder.num_values);
+            let bytes_left = data.len() - decoder.start;
+            let bytes_to_skip = 12 * num_values;
+
+            if bytes_left < bytes_to_skip {
+                return Err(eof_err!("Not enough bytes to skip"));
+            }
+            decoder.start += bytes_to_skip;
+            decoder.num_values -= num_values;
+
+            Ok(num_values)
+        }
+
+
         #[inline]
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -936,6 +984,25 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
+        fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
+            let data = decoder
+                .data
+                .as_mut()
+                .expect("set_data should have been called");
+            let num_values = std::cmp::min(num_values, decoder.num_values);
+
+            for _ in 0..num_values {
+                let len: usize =
+                    read_num_bytes!(u32, 4, data.start_from(decoder.start).as_ref())
+                        as usize;
+                decoder.start += std::mem::size_of::<u32>() + len;
+            }
+            decoder.num_values -= num_values;
+
+            Ok(num_values)
+        }
+
+
         #[inline]
         fn dict_encoding_size(&self) -> (usize, usize) {
             (std::mem::size_of::<u32>(), self.len())
@@ -1004,6 +1071,30 @@ pub(crate) mod private {
 
             Ok(num_values)
         }
+
+        fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
+            assert!(decoder.type_length > 0);
+
+            let data = decoder
+                .data
+                .as_mut()
+                .expect("set_data should have been called");
+            let num_values = std::cmp::min(num_values, decoder.num_values);
+            for _ in 0..num_values {
+                let len = decoder.type_length as usize;
+
+                if data.len() < decoder.start + len {
+                    return Err(eof_err!("Not enough bytes to skip"));
+                }
+
+                decoder.start += len;
+            }
+            decoder.num_values -= num_values;
+
+            Ok(num_values)
+
+        }
+
 
         #[inline]
         fn dict_encoding_size(&self) -> (usize, usize) {

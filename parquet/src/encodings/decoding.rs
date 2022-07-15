@@ -206,6 +206,9 @@ pub trait Decoder<T: DataType>: Send {
 
     /// Returns the encoding for this decoder.
     fn encoding(&self) -> Encoding;
+
+    /// Skip the specified number of values in this decoder stream.
+    fn skip(&mut self, num_values: usize) -> Result<usize>;
 }
 
 /// Gets a decoder for the column descriptor `descr` and encoding type `encoding`.
@@ -291,6 +294,10 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
     fn get(&mut self, buffer: &mut [T::T]) -> Result<usize> {
         T::T::decode(buffer, &mut self.inner)
     }
+
+    fn skip(&mut self, num_values: usize) -> Result<usize> {
+        T::T::skip(&mut self.inner, num_values)
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -355,6 +362,8 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
         rle.get_batch_with_dict(&self.dictionary[..], buffer, num_values)
     }
 
+
+
     /// Number of values left in this decoder stream
     fn values_left(&self) -> usize {
         self.num_values
@@ -362,6 +371,10 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
 
     fn encoding(&self) -> Encoding {
         Encoding::RLE_DICTIONARY
+    }
+
+    fn skip(&mut self, num_values: usize) -> Result<usize> {
+        todo!()
     }
 }
 
@@ -418,6 +431,11 @@ impl<T: DataType> Decoder<T> for RleValueDecoder<T> {
         let values_read = self.decoder.get_batch(&mut buffer[..num_values])?;
         self.values_left -= values_read;
         Ok(values_read)
+    }
+
+    #[inline]
+    fn skip(&mut self, num_values: usize) -> Result<usize> {
+        todo!()
     }
 }
 
@@ -681,12 +699,18 @@ where
         Ok(to_read)
     }
 
+
+
     fn values_left(&self) -> usize {
         self.values_left
     }
 
     fn encoding(&self) -> Encoding {
         Encoding::DELTA_BINARY_PACKED
+    }
+
+    fn skip(&mut self, num_values: usize) -> Result<usize> {
+        todo!()
     }
 }
 
@@ -790,6 +814,10 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
 
     fn encoding(&self) -> Encoding {
         Encoding::DELTA_LENGTH_BYTE_ARRAY
+    }
+
+    fn skip(&mut self, num_values: usize) -> Result<usize> {
+        todo!()
     }
 }
 
@@ -921,6 +949,10 @@ impl<T: DataType> Decoder<T> for DeltaByteArrayDecoder<T> {
 
     fn encoding(&self) -> Encoding {
         Encoding::DELTA_BYTE_ARRAY
+    }
+
+    fn skip(&mut self, num_values: usize) -> Result<usize> {
+        todo!()
     }
 }
 
