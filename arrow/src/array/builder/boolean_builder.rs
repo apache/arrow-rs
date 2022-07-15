@@ -60,6 +60,8 @@ use super::BooleanBufferBuilder;
 #[derive(Debug)]
 pub struct BooleanBuilder {
     values_builder: BooleanBufferBuilder,
+    /// We only materialize the builder when we add `false`.
+    /// This optimization is **very** important for the performance.
     bitmap_builder: Option<BooleanBufferBuilder>,
 }
 
