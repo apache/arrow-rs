@@ -29,7 +29,7 @@ github:
   enabled_merge_buttons:
     squash: true
     merge: false
-    rebase: false
+    rebase: true
   features:
     issues: true
   protected_branches:
