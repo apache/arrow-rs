@@ -111,7 +111,7 @@ impl From<ArrayData> for StructArray {
         let boxed_fields = data
             .child_data()
             .iter()
-            .map(|cd| make_array(cd.clone()))
+            .map(|cd| make_array(cd.slice(data.offset(), data.len())))
             .collect();
 
         Self { data, boxed_fields }
