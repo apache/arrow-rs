@@ -151,6 +151,28 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
         Ok(array.into())
     }
 
+    /// Create a new DictionaryArray directly from specified keys
+    /// (indexes into the dictionary) and values (dictionary)
+    /// array, and the corresponding ArrayData. This is used internally
+    /// for the usage like filter kernel.
+    ///
+    /// # Safety
+    ///
+    /// The input keys, values and data must form a valid DictionaryArray,
+    /// or undefined behavior can occur.
+    pub(crate) unsafe fn try_new_unchecked(
+        keys: PrimitiveArray<K>,
+        values: ArrayRef,
+        data: ArrayData,
+    ) -> Self {
+        Self {
+            data,
+            keys,
+            values,
+            is_ordered: false,
+        }
+    }
+
     /// Return an array view of the keys of this dictionary as a PrimitiveArray.
     pub fn keys(&self) -> &PrimitiveArray<K> {
         &self.keys

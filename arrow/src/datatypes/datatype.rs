@@ -721,6 +721,21 @@ impl DataType {
         )
     }
 
+    /// Returns true if this type is temporal: (Date*, Time*, Duration, or Interval).
+    pub fn is_temporal(t: &DataType) -> bool {
+        use DataType::*;
+        matches!(
+            t,
+            Date32
+                | Date64
+                | Timestamp(_, _)
+                | Time32(_)
+                | Time64(_)
+                | Duration(_)
+                | Interval(_)
+        )
+    }
+
     /// Returns true if this type is valid as a dictionary key
     /// (e.g. [`super::ArrowDictionaryKeyType`]
     pub fn is_dictionary_key_type(t: &DataType) -> bool {

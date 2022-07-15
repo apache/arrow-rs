@@ -42,10 +42,9 @@ pub fn set_bits(
     let chunks = BitChunks::new(data, offset_read + bits_to_align, len - bits_to_align);
     chunks.iter().for_each(|chunk| {
         null_count += chunk.count_zeros();
-        chunk.to_le_bytes().iter().for_each(|b| {
-            write_data[write_byte_index] = *b;
-            write_byte_index += 1;
-        })
+        write_data[write_byte_index..write_byte_index + 8]
+            .copy_from_slice(&chunk.to_le_bytes());
+        write_byte_index += 8;
     });
 
     // Set individual bits both to align write_data to a byte offset and the remainder bits not covered by the bit chunk iterator
