@@ -20,10 +20,10 @@ use std::convert::From;
 use std::fmt;
 use std::{any::Any, iter::FromIterator};
 
-use super::BooleanBufferBuilder;
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, FixedSizeListArray,
 };
+use super::{BooleanBufferBuilder, FixedSizeBinaryArray};
 pub use crate::array::DecimalIter;
 use crate::buffer::Buffer;
 use crate::datatypes::DataType;
@@ -146,6 +146,30 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     #[inline]
     fn value_as_string(&self, row: usize) -> String {
         self.value(row).to_string()
+    }
+
+    /// Build a decimal array from [`FixedSizeBinaryArray`].
+    ///
+    /// NB: This function does not validate that each value is in the permissible
+    /// range for a decimal
+    fn from_fixed_size_binary_array(
+        v: FixedSizeBinaryArray,
+        precision: usize,
+        scale: usize,
+    ) -> U {
+        assert!(
+            v.value_length() == Self::VALUE_LENGTH,
+            "Value length of the array ({}) must equal to the byte width of the decimal ({})",
+            v.value_length(),
+            Self::VALUE_LENGTH,
+        );
+        let builder = v
+            .into_data()
+            .into_builder()
+            .data_type(DataType::Decimal(precision, scale));
+
+        let array_data = unsafe { builder.build_unchecked() };
+        U::from(array_data)
     }
 
     fn from_fixed_size_list_array(
@@ -644,6 +668,42 @@ mod tests {
             "DecimalArray<23, 6>\n[\n  8887.000000,\n  -8887.000000,\n  null,\n]",
             format!("{:?}", arr)
         );
+    }
+
+    #[test]
+    fn test_decimal_array_from_fixed_size_binary() {
+        let value_data = ArrayData::builder(DataType::FixedSizeBinary(16))
+            .offset(1)
+            .len(3)
+            .add_buffer(Buffer::from_slice_ref(&[99999_i128, 2, 34, 560]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b1010])))
+            .build()
+            .unwrap();
+
+        let binary_array = FixedSizeBinaryArray::from(value_data);
+        let decimal = DecimalArray::from_fixed_size_binary_array(binary_array, 38, 1);
+
+        assert_eq!(decimal.len(), 3);
+        assert_eq!(decimal.value_as_string(0), "0.2".to_string());
+        assert!(decimal.is_null(1));
+        assert_eq!(decimal.value_as_string(2), "56.0".to_string());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Value length of the array (8) must equal to the byte width of the decimal (16)"
+    )]
+    fn test_decimal_array_from_fixed_size_binary_wrong_length() {
+        let value_data = ArrayData::builder(DataType::FixedSizeBinary(8))
+            .offset(1)
+            .len(3)
+            .add_buffer(Buffer::from_slice_ref(&[99999_i64, 2, 34, 560]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b1010])))
+            .build()
+            .unwrap();
+
+        let binary_array = FixedSizeBinaryArray::from(value_data);
+        let _ = DecimalArray::from_fixed_size_binary_array(binary_array, 38, 1);
     }
 
     #[test]
