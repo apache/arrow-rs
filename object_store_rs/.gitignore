@@ -1,0 +1,11 @@
+**/target
+**/*.rs.bk
+.idea/
+.env
+.gdb_history
+*.tsm
+**/.DS_Store
+**/.vscode
+massif.out.*
+valgrind-out.txt
+Cargo.lock

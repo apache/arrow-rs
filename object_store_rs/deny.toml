@@ -1,0 +1,28 @@
+# Configuration documentation:
+#   https://embarkstudios.github.io/cargo-deny/index.html
+
+[advisories]
+vulnerability = "deny"
+yanked = "deny"
+unmaintained = "warn"
+notice = "warn"
+ignore = [
+]
+git-fetch-with-cli = true
+
+[licenses]
+default = "allow"
+unlicensed = "allow"
+copyleft = "allow"
+
+[bans]
+multiple-versions = "warn"
+deny = [
+    # We are using rustls as the TLS implementation, so we shouldn't be linking
+    # in OpenSSL too.
+    #
+    # If you're hitting this, you might want to take a look at what new
+    # dependencies you have introduced and check if there's a way to depend on
+    # rustls instead of OpenSSL (tip: check the crate's feature flags).
+    { name = "openssl-sys" }
+]
