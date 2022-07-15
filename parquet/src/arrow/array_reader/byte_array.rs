@@ -392,9 +392,7 @@ impl ByteArrayDecoderPlain {
         &mut self,
         to_skip: usize,
     ) -> Result<usize> {
-        if self.max_remaining_values < to_skip {
-            return Err(general_err!("skip in ByteArrayDecoderPlain out of bound."));
-        }
+        let to_skip = to_skip.min( self.max_remaining_values);
         let mut skip = 0;
         let buf = self.buf.as_ref();
 
@@ -484,9 +482,7 @@ impl ByteArrayDecoderDeltaLength {
         to_skip: usize,
     ) -> Result<usize> {
         let remain_values = self.lengths.len() - self.length_offset;
-        if remain_values < to_skip {
-            return Err(general_err!("skip in ByteArrayDecoderDeltaLength out of bound."));
-        }
+        let to_skip = remain_values.min(to_skip);
 
         let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_skip];
         let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
@@ -590,10 +586,7 @@ impl ByteArrayDecoderDelta {
         &mut self,
         to_skip: usize,
     ) -> Result<usize> {
-        let remain_values = self.prefix_lengths.len() - self.length_offset;
-        if remain_values < to_skip {
-            return Err(general_err!("skip in ByteArrayDecoderDelta out of bound."));
-        }
+        let to_skip = to_skip.min(self.prefix_lengths.len() - self.length_offset);
 
         let length_range = self.length_offset..self.length_offset + to_skip;
         let iter = self.prefix_lengths[length_range.clone()]
@@ -693,14 +686,10 @@ impl ByteArrayDecoderDictionary {
         dict: &OffsetBuffer<I>,
         to_skip: usize,
     ) -> Result<usize> {
-        if self.max_remaining_values < to_skip {
-            return Err(general_err!("skip in ByteArrayDecoderDictionary out of bound."));
-        }
-
+        let to_skip = to_skip.min(self.max_remaining_values);
         // All data must be NULL
         if dict.is_empty() {
-            self.max_remaining_values -= to_skip;
-            return Ok(to_skip);
+            return Ok(0);
         }
 
         let mut values_skip = 0;
@@ -849,10 +838,17 @@ mod tests {
             .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
             .unwrap();
 
-        for (encoding, page) in pages {
+        // test nulls read
+        for (encoding, page) in pages.clone() {
             let mut output = OffsetBuffer::<i32>::default();
             decoder.set_data(encoding, page, 4, None).unwrap();
             assert_eq!(decoder.read(&mut output, 0..1024).unwrap(), 0);
+        }
+
+        // test nulls skip
+        for (encoding, page) in pages {
+            decoder.set_data(encoding, page, 4, None).unwrap();
+            assert_eq!(decoder.skip_values(1024).unwrap(), 0);
         }
     }
 }
