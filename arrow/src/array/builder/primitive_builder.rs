@@ -216,12 +216,10 @@ mod tests {
     use super::*;
 
     use crate::array::Array;
-    use crate::array::BooleanArray;
     use crate::array::Date32Array;
     use crate::array::Int32Array;
     use crate::array::Int32Builder;
     use crate::array::TimestampSecondArray;
-    use crate::buffer::Buffer;
 
     #[test]
     fn test_primitive_array_builder_i32() {
@@ -300,31 +298,6 @@ mod tests {
             assert!(!arr.is_null(i));
             assert!(arr.is_valid(i));
             assert_eq!(i as i64, arr.value(i));
-        }
-    }
-
-    #[test]
-    fn test_primitive_array_builder_bool() {
-        // 00000010 01001000
-        let buf = Buffer::from([72_u8, 2_u8]);
-        let mut builder = BooleanArray::builder(10);
-        for i in 0..10 {
-            if i == 3 || i == 6 || i == 9 {
-                builder.append_value(true).unwrap();
-            } else {
-                builder.append_value(false).unwrap();
-            }
-        }
-
-        let arr = builder.finish();
-        assert_eq!(&buf, arr.values());
-        assert_eq!(10, arr.len());
-        assert_eq!(0, arr.offset());
-        assert_eq!(0, arr.null_count());
-        for i in 0..10 {
-            assert!(!arr.is_null(i));
-            assert!(arr.is_valid(i));
-            assert_eq!(i == 3 || i == 6 || i == 9, arr.value(i), "failed at {}", i)
         }
     }
 
