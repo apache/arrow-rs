@@ -20,7 +20,19 @@
 use crate::array::*;
 use crate::datatypes::*;
 
-/// Force downcast ArrayRef to PrimitiveArray<T>
+/// Force downcast of an [`Array`], such as an [`ArrayRef`], to
+/// [`PrimitiveArray<T>`], panic'ing on failure:
+///
+/// ```
+/// # use arrow::array::*;
+/// # use arrow::datatypes::*;
+/// # let arr: ArrayRef = std::sync::Arc::new(Int32Array::from(vec![Some(1)]));
+/// // Downcast an `ArrayRef` to Int32Array / PrimiveArray<Int32>:
+/// let primitive_array: &Int32Array = as_primitive_array(&arr);
+///
+/// // Equivalently:
+/// let primitive_array  = as_primitive_array::<Int32Type>(&arr);
+/// ```
 pub fn as_primitive_array<T>(arr: &dyn Array) -> &PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
