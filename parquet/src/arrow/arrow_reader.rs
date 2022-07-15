@@ -1578,6 +1578,8 @@ mod tests {
     fn test_row_group_exact_multiple() {
         use crate::arrow::record_reader::MIN_BATCH_SIZE;
         test_row_group_batch(8, 8);
+        test_row_group_batch(10, 8);
+        test_row_group_batch(8, 10);
         test_row_group_batch(MIN_BATCH_SIZE, MIN_BATCH_SIZE);
         test_row_group_batch(MIN_BATCH_SIZE + 1, MIN_BATCH_SIZE);
         test_row_group_batch(MIN_BATCH_SIZE, MIN_BATCH_SIZE + 1);
