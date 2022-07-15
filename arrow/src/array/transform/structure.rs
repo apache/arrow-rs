@@ -20,16 +20,16 @@ use crate::array::ArrayData;
 use super::{Extend, _MutableArrayData};
 
 pub(super) fn build_extend(array: &ArrayData) -> Extend {
+    let offset = array.offset();
     if array.null_count() == 0 {
         Box::new(
             move |mutable: &mut _MutableArrayData,
                   index: usize,
                   start: usize,
                   len: usize| {
-                mutable
-                    .child_data
-                    .iter_mut()
-                    .for_each(|child| child.extend(index, start, start + len))
+                mutable.child_data.iter_mut().for_each(|child| {
+                    child.extend(index, offset + start, offset + start + len)
+                })
             },
         )
     } else {
@@ -40,10 +40,9 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend {
                   len: usize| {
                 (start..start + len).for_each(|i| {
                     if array.is_valid(i) {
-                        mutable
-                            .child_data
-                            .iter_mut()
-                            .for_each(|child| child.extend(index, i, i + 1))
+                        mutable.child_data.iter_mut().for_each(|child| {
+                            child.extend(index, offset + i, offset + i + 1)
+                        })
                     } else {
                         mutable
                             .child_data
