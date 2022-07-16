@@ -110,9 +110,9 @@ pub type ColumnReaderImpl<T> = GenericColumnReader<
 
 /// Reads data for a given column chunk, using the provided decoders:
 ///
-/// - R: [`ColumnLevelDecoder`] used to decode repetition levels
-/// - D: [`ColumnLevelDecoder`] used to decode definition levels
-/// - V: [`ColumnValueDecoder`] used to decode value data
+/// - R: `ColumnLevelDecoder` used to decode repetition levels
+/// - D: `ColumnLevelDecoder` used to decode definition levels
+/// - V: `ColumnValueDecoder` used to decode value data
 pub struct GenericColumnReader<R, D, V> {
     descr: ColumnDescPtr,
 
