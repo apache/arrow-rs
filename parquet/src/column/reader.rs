@@ -108,7 +108,6 @@ pub type ColumnReaderImpl<T> = GenericColumnReader<
     decoder::ColumnValueDecoderImpl<T>,
 >;
 
-#[doc(hidden)]
 /// Reads data for a given column chunk, using the provided decoders:
 ///
 /// - R: [`ColumnLevelDecoder`] used to decode repetition levels

@@ -45,7 +45,6 @@ pub(crate) const MIN_BATCH_SIZE: usize = 1024;
 pub type RecordReader<T> =
     GenericRecordReader<ScalarBuffer<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
 
-#[doc(hidden)]
 /// A generic stateful column reader that delimits semantic records
 ///
 /// This type is hidden from the docs, and relies on private traits with no
