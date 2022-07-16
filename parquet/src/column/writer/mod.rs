@@ -256,7 +256,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         rep_levels: Option<&[i16]>,
         min: Option<&E::T>,
         max: Option<&E::T>,
-        null_count: Option<u64>,
         distinct_count: Option<u64>,
     ) -> Result<usize> {
         // We check for DataPage limits only after we have inserted the values. If a user
@@ -306,10 +305,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             self.column_distinct_count = None;
         }
 
-        if let Some(nulls) = null_count {
-            self.num_column_nulls += nulls;
-        }
-
         let mut values_offset = 0;
         let mut levels_offset = 0;
         for _ in 0..num_batches {
@@ -353,7 +348,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) -> Result<usize> {
-        self.write_batch_internal(values, def_levels, rep_levels, None, None, None, None)
+        self.write_batch_internal(values, def_levels, rep_levels, None, None, None)
     }
 
     /// Writer may optionally provide pre-calculated statistics for use when computing
@@ -370,7 +365,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         rep_levels: Option<&[i16]>,
         min: Option<&E::T>,
         max: Option<&E::T>,
-        nulls_count: Option<u64>,
         distinct_count: Option<u64>,
     ) -> Result<usize> {
         self.write_batch_internal(
@@ -379,7 +373,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             rep_levels,
             min,
             max,
-            nulls_count,
             distinct_count,
         )
     }
@@ -1566,7 +1559,6 @@ mod tests {
                 None,
                 Some(&-17),
                 Some(&9000),
-                Some(21),
                 Some(55),
             )
             .unwrap();
@@ -1585,7 +1577,7 @@ mod tests {
         assert_eq!(metadata.dictionary_page_offset(), Some(0));
         if let Some(stats) = metadata.statistics() {
             assert!(stats.has_min_max_set());
-            assert_eq!(stats.null_count(), 21);
+            assert_eq!(stats.null_count(), 0);
             assert_eq!(stats.distinct_count().unwrap_or(0), 55);
             if let Statistics::Int32(stats) = stats {
                 assert_eq!(stats.min(), &-17);
@@ -1614,7 +1606,6 @@ mod tests {
                 None,
                 Some(&5),
                 Some(&7),
-                Some(0),
                 Some(3),
             )
             .unwrap();

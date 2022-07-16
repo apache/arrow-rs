@@ -17,6 +17,7 @@
 
 use std::convert::TryFrom;
 
+use crate::datatypes::DataType::Map;
 use crate::{
     datatypes::{DataType, Field, Schema, TimeUnit},
     error::{ArrowError, Result},
@@ -67,6 +68,11 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
             "+s" => {
                 let fields = c_schema.children().map(Field::try_from);
                 DataType::Struct(fields.collect::<Result<Vec<_>>>()?)
+            }
+            "+m" => {
+                let c_child = c_schema.child(0);
+                let map_keys_sorted = c_schema.map_keys_sorted();
+                DataType::Map(Box::new(Field::try_from(c_child)?), map_keys_sorted)
             }
             // Parametrized types, requiring string parse
             other => {
@@ -201,7 +207,8 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
         let children = match dtype {
             DataType::List(child)
             | DataType::LargeList(child)
-            | DataType::FixedSizeList(child, _) => {
+            | DataType::FixedSizeList(child, _)
+            | DataType::Map(child, _) => {
                 vec![FFI_ArrowSchema::try_from(child.as_ref())?]
             }
             DataType::Struct(fields) => fields
@@ -215,7 +222,13 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
         } else {
             None
         };
-        FFI_ArrowSchema::try_new(&format, children, dictionary)
+
+        let flags = match dtype {
+            Map(_, true) => Flags::MAP_KEYS_SORTED,
+            _ => Flags::empty(),
+        };
+
+        FFI_ArrowSchema::try_new(&format, children, dictionary)?.with_flags(flags)
     }
 }
 
@@ -262,6 +275,7 @@ fn get_format_string(dtype: &DataType) -> Result<String> {
         DataType::List(_) => Ok("+l".to_string()),
         DataType::LargeList(_) => Ok("+L".to_string()),
         DataType::Struct(_) => Ok("+s".to_string()),
+        DataType::Map(_, _) => Ok("+m".to_string()),
         DataType::Dictionary(key_data_type, _) => get_format_string(key_data_type),
         other => Err(ArrowError::CDataInterface(format!(
             "The datatype \"{:?}\" is still not supported in Rust implementation",
@@ -274,11 +288,16 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
     type Error = ArrowError;
 
     fn try_from(field: &Field) -> Result<Self> {
-        let flags = if field.is_nullable() {
+        let mut flags = if field.is_nullable() {
             Flags::NULLABLE
         } else {
             Flags::empty()
         };
+
+        if let Some(true) = field.dict_is_ordered() {
+            flags |= Flags::DICTIONARY_ORDERED;
+        }
+
         FFI_ArrowSchema::try_from(field.data_type())?
             .with_name(field.name())?
             .with_flags(flags)
@@ -402,6 +421,38 @@ mod tests {
         let c_schema = FFI_ArrowSchema::try_from(&DataType::Float64)?;
         let result = Schema::try_from(&c_schema);
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_keys_sorted() -> Result<()> {
+        let keys = Field::new("keys", DataType::Int32, false);
+        let values = Field::new("values", DataType::UInt32, false);
+        let entry_struct = DataType::Struct(vec![keys, values]);
+
+        // Construct a map array from the above two
+        let map_data_type =
+            DataType::Map(Box::new(Field::new("entries", entry_struct, true)), true);
+
+        let arrow_schema = FFI_ArrowSchema::try_from(map_data_type)?;
+        assert!(arrow_schema.map_keys_sorted());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_dictionary_ordered() -> Result<()> {
+        let schema = Schema::new(vec![Field::new_dict(
+            "dict",
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            false,
+            0,
+            true,
+        )]);
+
+        let arrow_schema = FFI_ArrowSchema::try_from(schema)?;
+        assert!(arrow_schema.child(0).dictionary_ordered());
+
         Ok(())
     }
 }

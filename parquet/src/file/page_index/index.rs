@@ -48,6 +48,10 @@ impl<T> PageIndex<T> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Index {
+    /// Sometimes reading page index from parquet file
+    /// will only return pageLocations without min_max index,
+    /// `NONE` represents this lack of index information
+    NONE,
     BOOLEAN(BooleanIndex),
     INT32(NativeIndex<i32>),
     INT64(NativeIndex<i64>),
@@ -56,10 +60,6 @@ pub enum Index {
     DOUBLE(NativeIndex<f64>),
     BYTE_ARRAY(ByteArrayIndex),
     FIXED_LEN_BYTE_ARRAY(ByteArrayIndex),
-    /// Sometimes reading page index from parquet file
-    /// will only return pageLocations without min_max index,
-    /// `None` represents this lack of index information
-    None,
 }
 
 /// An index of a column of [`Type`] physical representation

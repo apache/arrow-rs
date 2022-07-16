@@ -228,7 +228,7 @@ pub struct RowGroupMetaData {
     num_rows: i64,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
-    // Todo add filter result -> row range
+    page_offset_index: Option<Vec<Vec<PageLocation>>>,
 }
 
 impl RowGroupMetaData {
@@ -267,6 +267,11 @@ impl RowGroupMetaData {
         self.columns.iter().map(|c| c.total_compressed_size).sum()
     }
 
+    /// Returns reference of page offset index of all column in this row group.
+    pub fn page_offset_index(&self) -> &Option<Vec<Vec<PageLocation>>> {
+        &self.page_offset_index
+    }
+
     /// Returns reference to a schema descriptor.
     pub fn schema_descr(&self) -> &SchemaDescriptor {
         self.schema_descr.as_ref()
@@ -275,6 +280,11 @@ impl RowGroupMetaData {
     /// Returns reference counted clone of schema descriptor.
     pub fn schema_descr_ptr(&self) -> SchemaDescPtr {
         self.schema_descr.clone()
+    }
+
+    /// Sets page offset index for this row group.
+    pub fn set_page_offset(&mut self, page_offset: Vec<Vec<PageLocation>>) {
+        self.page_offset_index = Some(page_offset);
     }
 
     /// Method to convert from Thrift.
@@ -295,6 +305,7 @@ impl RowGroupMetaData {
             num_rows,
             total_byte_size,
             schema_descr,
+            page_offset_index: None,
         })
     }
 
@@ -318,6 +329,7 @@ pub struct RowGroupMetaDataBuilder {
     schema_descr: SchemaDescPtr,
     num_rows: i64,
     total_byte_size: i64,
+    page_offset_index: Option<Vec<Vec<PageLocation>>>,
 }
 
 impl RowGroupMetaDataBuilder {
@@ -328,6 +340,7 @@ impl RowGroupMetaDataBuilder {
             schema_descr,
             num_rows: 0,
             total_byte_size: 0,
+            page_offset_index: None,
         }
     }
 
@@ -349,6 +362,12 @@ impl RowGroupMetaDataBuilder {
         self
     }
 
+    /// Sets page offset index for this row group.
+    pub fn set_page_offset(mut self, page_offset: Vec<Vec<PageLocation>>) -> Self {
+        self.page_offset_index = Some(page_offset);
+        self
+    }
+
     /// Builds row group metadata.
     pub fn build(self) -> Result<RowGroupMetaData> {
         if self.schema_descr.num_columns() != self.columns.len() {
@@ -364,6 +383,7 @@ impl RowGroupMetaDataBuilder {
             num_rows: self.num_rows,
             total_byte_size: self.total_byte_size,
             schema_descr: self.schema_descr,
+            page_offset_index: self.page_offset_index,
         })
     }
 }

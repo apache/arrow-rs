@@ -17,7 +17,7 @@
 
 //! Defines temporal kernels for time and date related functions.
 
-use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
+use chrono::{Datelike, Timelike};
 
 use crate::array::*;
 use crate::datatypes::*;
@@ -112,15 +112,22 @@ macro_rules! return_compute_error_with {
     };
 }
 
-trait ChronoDateQuarter {
+// Internal trait, which is used for mapping values from DateLike structures
+trait ChronoDateExt {
     /// Returns a value in range `1..=4` indicating the quarter this date falls into
     fn quarter(&self) -> u32;
 
     /// Returns a value in range `0..=3` indicating the quarter (zero-based) this date falls into
     fn quarter0(&self) -> u32;
+
+    /// Returns the day of week; Monday is encoded as `0`, Tuesday as `1`, etc.
+    fn num_days_from_monday(&self) -> i32;
+
+    /// Returns the day of week; Sunday is encoded as `0`, Monday as `1`, etc.
+    fn num_days_from_sunday(&self) -> i32;
 }
 
-impl ChronoDateQuarter for NaiveDateTime {
+impl<T: Datelike> ChronoDateExt for T {
     fn quarter(&self) -> u32 {
         self.quarter0() + 1
     }
@@ -128,15 +135,13 @@ impl ChronoDateQuarter for NaiveDateTime {
     fn quarter0(&self) -> u32 {
         self.month0() / 3
     }
-}
 
-impl ChronoDateQuarter for NaiveDate {
-    fn quarter(&self) -> u32 {
-        self.quarter0() + 1
+    fn num_days_from_monday(&self) -> i32 {
+        self.weekday().num_days_from_monday() as i32
     }
 
-    fn quarter0(&self) -> u32 {
-        self.month0() / 3
+    fn num_days_from_sunday(&self) -> i32 {
+        self.weekday().num_days_from_sunday() as i32
     }
 }
 
@@ -271,7 +276,9 @@ where
 /// integers.
 ///
 /// Monday is encoded as `0`, Tuesday as `1`, etc.
-pub fn weekday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+///
+/// See also [`num_days_from_sunday`] which starts at Sunday.
+pub fn num_days_from_monday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
 where
     T: ArrowTemporalType + ArrowNumericType,
     i64: std::convert::From<T::Native>,
@@ -279,14 +286,57 @@ where
     let mut b = Int32Builder::new(array.len());
     match array.data_type() {
         &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
-            extract_component_from_array!(array, b, weekday, value_as_datetime)
+            extract_component_from_array!(
+                array,
+                b,
+                num_days_from_monday,
+                value_as_datetime
+            )
         }
         &DataType::Timestamp(_, Some(ref tz)) => {
             let mut scratch = Parsed::new();
             extract_component_from_array!(
                 array,
                 b,
-                weekday,
+                num_days_from_monday,
+                value_as_datetime_with_tz,
+                tz,
+                scratch
+            )
+        }
+        dt => return_compute_error_with!("weekday does not support", dt),
+    }
+
+    Ok(b.finish())
+}
+
+/// Extracts the day of week of a given temporal array as an array of
+/// integers, starting at Sunday.
+///
+/// Sunday is encoded as `0`, Monday as `1`, etc.
+///
+/// See also [`num_days_from_monday`] which starts at Monday.
+pub fn num_days_from_sunday<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::new(array.len());
+    match array.data_type() {
+        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
+            extract_component_from_array!(
+                array,
+                b,
+                num_days_from_sunday,
+                value_as_datetime
+            )
+        }
+        &DataType::Timestamp(_, Some(ref tz)) => {
+            let mut scratch = Parsed::new();
+            extract_component_from_array!(
+                array,
+                b,
+                num_days_from_sunday,
                 value_as_datetime_with_tz,
                 tz,
                 scratch
@@ -586,10 +636,30 @@ mod tests {
         let a: PrimitiveArray<Date64Type> =
             vec![Some(1514764800000), None, Some(1550636625000)].into();
 
-        let b = weekday(&a).unwrap();
+        let b = num_days_from_monday(&a).unwrap();
         assert_eq!(0, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(2, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_weekday0() {
+        //1483228800000 -> 2017-01-01 (Sunday)
+        //1514764800000 -> 2018-01-01 (Monday)
+        //1550636625000 -> 2019-02-20 (Wednesday)
+        let a: PrimitiveArray<Date64Type> = vec![
+            Some(1483228800000),
+            None,
+            Some(1514764800000),
+            Some(1550636625000),
+        ]
+        .into();
+
+        let b = num_days_from_sunday(&a).unwrap();
+        assert_eq!(0, b.value(0));
+        assert!(!b.is_valid(1));
+        assert_eq!(1, b.value(2));
+        assert_eq!(3, b.value(3));
     }
 
     #[test]
