@@ -751,7 +751,7 @@ mod tests {
             "eee", "fff", "ddd", "eee", "fff", "eee", "fff",
             "fff",
         ];
-        let skipped = decoder.skip(4).expect("skipping two values");
+        let skipped = decoder.skip(4).expect("skipping four values");
         assert_eq!(skipped, 4);
         let remainder = decoder.get_batch_with_dict::<&str>(
             dict.as_slice(),

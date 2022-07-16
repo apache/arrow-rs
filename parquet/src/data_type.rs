@@ -695,8 +695,7 @@ pub(crate) mod private {
         fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
             let bit_reader = decoder.bit_reader.as_mut().unwrap();
             let num_values = std::cmp::min(num_values, decoder.num_values);
-            let mut buffer = vec![false; num_values];
-            let values_read = bit_reader.get_batch(&mut buffer[..num_values], 1);
+            let values_read = bit_reader.skip(num_values, 1);
             decoder.num_values -= values_read;
             Ok(values_read)
         }
@@ -778,7 +777,7 @@ pub(crate) mod private {
                 #[inline]
                 fn skip(decoder: &mut PlainDecoderDetails, num_values: usize) -> Result<usize> {
                     let data = decoder.data.as_ref().expect("set_data should have been called");
-                    let num_values = std::cmp::min(num_values, decoder.num_values);
+                    let num_values = num_values.min(decoder.num_values);
                     let bytes_left = data.len() - decoder.start;
                     let bytes_to_skip = std::mem::size_of::<Self>() * num_values;
 
@@ -987,7 +986,7 @@ pub(crate) mod private {
                 .data
                 .as_mut()
                 .expect("set_data should have been called");
-            let num_values = std::cmp::min(num_values, decoder.num_values);
+            let num_values = num_values.min(decoder.num_values);
 
             for _ in 0..num_values {
                 let len: usize =

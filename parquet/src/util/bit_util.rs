@@ -642,15 +642,6 @@ impl BitReader {
 
         let mut values_skipped = 0;
 
-        if num_bits > 32 {
-            // No fast path - read values individually
-            while values_skipped < num_values {
-                self.skip_value(num_bits);
-                values_skipped += 1;
-            }
-            return num_values;
-        }
-
         // First align bit offset to byte offset
         if self.bit_offset != 0 {
             while values_skipped < num_values && self.bit_offset != 0 {

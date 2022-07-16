@@ -59,7 +59,7 @@ brotli = { version = "3.3", default-features = false, features = [ "std" ] }
 flate2 = { version = "1.0", default-features = false, features = [ "rust_backend" ] }
 lz4 = { version = "1.23", default-features = false }
 zstd = { version = "0.11", default-features = false }
-serde_json = { version = "1.0", default-features = false, features = ["preserve_order","std"] }
+serde_json = { version = "1.0", default-features = false, features = ["preserve_order"] }
 arrow = { path = "../arrow", version = "18.0.0", default-features = false, features = ["ipc", "test_utils", "prettyprint"] }
 
 [package.metadata.docs.rs]
