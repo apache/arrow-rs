@@ -19,12 +19,14 @@
 extern crate criterion;
 use criterion::Criterion;
 
+use rand::Rng;
 use std::sync::Arc;
 
 extern crate arrow;
 
 use arrow::compute::kernels::sort::{lexsort, SortColumn};
 use arrow::util::bench_util::*;
+use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, datatypes::Float32Type};
 
 fn create_f32_array(size: usize, with_nulls: bool) -> ArrayRef {
@@ -38,6 +40,36 @@ fn create_bool_array(size: usize, with_nulls: bool) -> ArrayRef {
     let true_density = 0.5;
     let array = create_boolean_array(size, null_density, true_density);
     Arc::new(array)
+}
+
+fn create_string_array(
+    size: usize,
+    max_len: usize,
+    cardinality: usize,
+    with_nulls: bool,
+) -> ArrayRef {
+    let null_density = if with_nulls { 0.5 } else { 0.0 };
+
+    let strings = create_string_array_with_len::<i32>(cardinality, 0.0, max_len);
+    let rng = &mut seedable_rng();
+
+    let values = (0..size)
+        .map(|_| {
+            if rng.gen_bool(null_density) {
+                None
+            } else {
+                let idx = rng.gen_range(0..strings.len());
+                Some(strings.value(idx))
+            }
+        })
+        .collect::<StringArray>();
+
+    Arc::new(values)
+}
+
+fn create_string_dict_array(string_array: &ArrayRef) -> ArrayRef {
+    let strings = string_array.as_any().downcast_ref::<StringArray>().unwrap();
+    Arc::new(Int32DictionaryArray::from_iter(strings.into_iter()))
 }
 
 fn bench_sort(array_a: &ArrayRef, array_b: &ArrayRef, limit: Option<usize>) {
@@ -89,6 +121,60 @@ fn add_benchmark(c: &mut Criterion) {
     let arr_a = create_bool_array(2u64.pow(12) as usize, true);
     let arr_b = create_bool_array(2u64.pow(12) as usize, true);
     c.bench_function("bool sort nulls 2^12", |b| {
+        b.iter(|| bench_sort(&arr_a, &arr_b, None))
+    });
+
+    let arr_a: ArrayRef = create_string_array(2_usize.pow(12), 32, 32, true);
+    let arr_b: ArrayRef = create_string_array(2_usize.pow(12), 16, 64, true);
+    c.bench_function("string sort nulls 2^12", |b| {
+        b.iter(|| bench_sort(&arr_a, &arr_b, None))
+    });
+
+    let arr_a = create_string_dict_array(&arr_a);
+    let arr_b = create_string_dict_array(&arr_b);
+    c.bench_function("dict string sort nulls 2^12", |b| {
+        b.iter(|| bench_sort(&arr_a, &arr_b, None))
+    });
+
+    c.bench_function("make_ordered dict string sort nulls 2^12", |b| {
+        b.iter(|| {
+            let arr_a: ArrayRef = Arc::new(
+                arr_a
+                    .as_any()
+                    .downcast_ref::<Int32DictionaryArray>()
+                    .unwrap()
+                    .make_ordered()
+                    .unwrap(),
+            );
+            let arr_b: ArrayRef = Arc::new(
+                arr_b
+                    .as_any()
+                    .downcast_ref::<Int32DictionaryArray>()
+                    .unwrap()
+                    .make_ordered()
+                    .unwrap(),
+            );
+            bench_sort(&arr_a, &arr_b, None);
+        });
+    });
+
+    let arr_a: ArrayRef = Arc::new(
+        arr_a
+            .as_any()
+            .downcast_ref::<Int32DictionaryArray>()
+            .unwrap()
+            .make_ordered()
+            .unwrap(),
+    );
+    let arr_b: ArrayRef = Arc::new(
+        arr_b
+            .as_any()
+            .downcast_ref::<Int32DictionaryArray>()
+            .unwrap()
+            .make_ordered()
+            .unwrap(),
+    );
+    c.bench_function("presorted dict string sort nulls 2^12", |b| {
         b.iter(|| bench_sort(&arr_a, &arr_b, None))
     });
 

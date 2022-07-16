@@ -23,6 +23,7 @@ use crate::buffer::MutableBuffer;
 use crate::compute::take;
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
+use crate::util::bit_util::get_bit_raw;
 use std::cmp::Ordering;
 use TimeUnit::*;
 
@@ -152,8 +153,21 @@ fn partition_validity(array: &ArrayRef) -> (Vec<u32>, Vec<u32>) {
         // faster path
         0 => ((0..(array.len() as u32)).collect(), vec![]),
         _ => {
-            let indices = 0..(array.len() as u32);
-            indices.partition(|index| array.is_valid(*index as usize))
+            let validity = array.data().null_buffer().unwrap();
+            let offset = array.data().offset();
+            let mut vecs = [
+                Vec::with_capacity(array.null_count()),
+                Vec::with_capacity(array.len() - array.null_count()),
+            ];
+            for i in 0..array.len() {
+                // Safety:
+                // Index is in bounds for this array and raw access to the validity needs to take offset into account
+                let bit = unsafe { get_bit_raw(validity.as_ptr(), offset + i) };
+                vecs[bit as usize].push(i as u32);
+            }
+            let nulls = std::mem::take(&mut vecs[0]);
+            let valids = std::mem::take(&mut vecs[1]);
+            (valids, nulls)
         }
     }
 }
@@ -328,42 +342,35 @@ pub fn sort_to_indices(
                 )));
             }
         },
-        DataType::Dictionary(key_type, value_type)
-            if *value_type.as_ref() == DataType::Utf8 =>
-        {
-            match key_type.as_ref() {
-                DataType::Int8 => {
-                    sort_string_dictionary::<Int8Type>(values, v, n, &options, limit)
-                }
-                DataType::Int16 => {
-                    sort_string_dictionary::<Int16Type>(values, v, n, &options, limit)
-                }
-                DataType::Int32 => {
-                    sort_string_dictionary::<Int32Type>(values, v, n, &options, limit)
-                }
-                DataType::Int64 => {
-                    sort_string_dictionary::<Int64Type>(values, v, n, &options, limit)
-                }
-                DataType::UInt8 => {
-                    sort_string_dictionary::<UInt8Type>(values, v, n, &options, limit)
-                }
-                DataType::UInt16 => {
-                    sort_string_dictionary::<UInt16Type>(values, v, n, &options, limit)
-                }
-                DataType::UInt32 => {
-                    sort_string_dictionary::<UInt32Type>(values, v, n, &options, limit)
-                }
-                DataType::UInt64 => {
-                    sort_string_dictionary::<UInt64Type>(values, v, n, &options, limit)
-                }
-                t => {
-                    return Err(ArrowError::ComputeError(format!(
-                        "Sort not supported for dictionary key type {:?}",
-                        t
-                    )));
-                }
+
+        DataType::Dictionary(key_type, _value_type) => match key_type.as_ref() {
+            DataType::Int8 => sort_dictionary::<Int8Type>(values, v, n, &options, limit),
+            DataType::Int16 => {
+                sort_dictionary::<Int16Type>(values, v, n, &options, limit)
             }
-        }
+            DataType::Int32 => {
+                sort_dictionary::<Int32Type>(values, v, n, &options, limit)
+            }
+            DataType::Int64 => {
+                sort_dictionary::<Int64Type>(values, v, n, &options, limit)
+            }
+            DataType::UInt8 => {
+                sort_dictionary::<UInt8Type>(values, v, n, &options, limit)
+            }
+            DataType::UInt16 => {
+                sort_dictionary::<UInt16Type>(values, v, n, &options, limit)
+            }
+            DataType::UInt32 => {
+                sort_dictionary::<UInt32Type>(values, v, n, &options, limit)
+            }
+            DataType::UInt64 => {
+                sort_dictionary::<UInt64Type>(values, v, n, &options, limit)
+            }
+            t => Err(ArrowError::ComputeError(format!(
+                "Sort not supported for dictionary key type {:?}",
+                t
+            ))),
+        }?,
         DataType::Binary | DataType::FixedSizeBinary(_) => {
             sort_binary::<i32>(values, v, n, &options, limit)
         }
@@ -506,7 +513,7 @@ where
         .into_iter()
         .map(|index| (index, decimal_array.value(index as usize).as_i128()))
         .collect::<Vec<(u32, i128)>>();
-    sort_primitive_inner(decimal_values, null_indices, cmp, options, limit, valids)
+    sort_primitive_inner(null_indices, cmp, options, limit, valids)
 }
 
 /// Sort primitive values
@@ -531,12 +538,11 @@ where
             .map(|index| (index, values.value(index as usize)))
             .collect::<Vec<(u32, T::Native)>>()
     };
-    sort_primitive_inner(values, null_indices, cmp, options, limit, valids)
+    sort_primitive_inner(null_indices, cmp, options, limit, valids)
 }
 
 // sort is instantiated a lot so we only compile this inner version for each native type
 fn sort_primitive_inner<T, F>(
-    values: &ArrayRef,
     null_indices: Vec<u32>,
     cmp: F,
     options: &SortOptions,
@@ -552,7 +558,7 @@ where
 
     let valids_len = valids.len();
     let nulls_len = nulls.len();
-    let mut len = values.len();
+    let mut len = valids_len + nulls_len;
 
     if let Some(limit) = limit {
         len = limit.min(len);
@@ -636,31 +642,54 @@ fn sort_string<Offset: OffsetSizeTrait>(
 }
 
 /// Sort dictionary encoded strings
-fn sort_string_dictionary<T: ArrowDictionaryKeyType>(
+fn sort_dictionary<T: ArrowDictionaryKeyType>(
     values: &ArrayRef,
     value_indices: Vec<u32>,
     null_indices: Vec<u32>,
     options: &SortOptions,
     limit: Option<usize>,
-) -> UInt32Array {
-    let values: &DictionaryArray<T> = as_dictionary_array::<T>(values);
+) -> Result<UInt32Array>
+where
+    T::Native: Ord,
+{
+    let dictionary_array: &DictionaryArray<T> = as_dictionary_array::<T>(values);
+    let keys: &PrimitiveArray<T> = dictionary_array.keys();
 
-    let keys: &PrimitiveArray<T> = values.keys();
+    if dictionary_array.is_ordered() {
+        // create tuples that are used for sorting
+        let valids = value_indices
+            .into_iter()
+            .map(|index| (index, keys.value(index as usize)))
+            .collect::<Vec<(u32, T::Native)>>();
 
-    let dict = values.values();
-    let dict: &StringArray = as_string_array(dict);
+        Ok(sort_primitive_inner(
+            null_indices,
+            cmp,
+            options,
+            limit,
+            valids,
+        ))
+    } else if dictionary_array.value_type() == DataType::Utf8 {
+        let dict = dictionary_array.values();
+        let dict: &StringArray = as_string_array(dict);
 
-    sort_string_helper(
-        keys,
-        value_indices,
-        null_indices,
-        options,
-        limit,
-        |array: &PrimitiveArray<T>, idx| -> &str {
-            let key: T::Native = array.value(idx as usize);
-            dict.value(key.to_usize().unwrap())
-        },
-    )
+        Ok(sort_string_helper(
+            keys,
+            value_indices,
+            null_indices,
+            options,
+            limit,
+            |array: &PrimitiveArray<T>, idx| -> &str {
+                let key: T::Native = array.value(idx as usize);
+                dict.value(key.to_usize().unwrap())
+            },
+        ))
+    } else {
+        Err(ArrowError::ComputeError(format!(
+            "Sort not supported for dictionary values of data type {:?}",
+            dictionary_array.data_type()
+        )))
+    }
 }
 
 /// shared implementation between dictionary encoded and plain string arrays
@@ -1018,11 +1047,8 @@ impl LexicographicalComparator<'_> {
                 // use ArrayData for is_valid checks later to avoid dynamic call
                 let values = column.values.as_ref();
                 let data = values.data_ref();
-                Ok((
-                    data,
-                    build_compare(values, values)?,
-                    column.options.unwrap_or_default(),
-                ))
+                let options = column.options.unwrap_or_default();
+                Ok((data, build_compare(values, values)?, options))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(LexicographicalComparator { compare_items })
@@ -1209,10 +1235,16 @@ mod tests {
     fn test_sort_string_dict_arrays<T: ArrowDictionaryKeyType>(
         data: Vec<Option<&str>>,
         options: Option<SortOptions>,
+        ordered: bool,
         limit: Option<usize>,
         expected_data: Vec<Option<&str>>,
     ) {
-        let array = data.into_iter().collect::<DictionaryArray<T>>();
+        let mut array = data.into_iter().collect::<DictionaryArray<T>>();
+
+        if ordered {
+            array = array.as_ordered();
+        }
+
         let array_values = array.values().clone();
         let dict = array_values
             .as_any()
@@ -2417,6 +2449,7 @@ mod tests {
                 Some("-ad"),
             ],
             None,
+            false,
             None,
             vec![
                 None,
@@ -2441,6 +2474,7 @@ mod tests {
                 descending: true,
                 nulls_first: false,
             }),
+            false,
             None,
             vec![
                 Some("sad"),
@@ -2465,6 +2499,7 @@ mod tests {
                 descending: false,
                 nulls_first: true,
             }),
+            false,
             None,
             vec![
                 None,
@@ -2489,6 +2524,7 @@ mod tests {
                 descending: true,
                 nulls_first: true,
             }),
+            false,
             None,
             vec![
                 None,
@@ -2513,6 +2549,7 @@ mod tests {
                 descending: true,
                 nulls_first: true,
             }),
+            false,
             Some(3),
             vec![None, None, Some("sad")],
         );
@@ -2524,6 +2561,7 @@ mod tests {
                 descending: false,
                 nulls_first: false,
             }),
+            false,
             Some(3),
             vec![Some("abc"), Some("def"), None],
         );
@@ -2534,6 +2572,7 @@ mod tests {
                 descending: false,
                 nulls_first: true,
             }),
+            false,
             Some(3),
             vec![None, None, Some("abc")],
         );
@@ -2545,6 +2584,7 @@ mod tests {
                 descending: false,
                 nulls_first: true,
             }),
+            false,
             Some(2),
             vec![None, None],
         );
@@ -2555,8 +2595,117 @@ mod tests {
                 descending: false,
                 nulls_first: false,
             }),
+            false,
             Some(2),
             vec![Some("def"), None],
+        );
+    }
+
+    #[test]
+    fn test_sort_dicts_by_key() {
+        // this test sorts the dictionary by its keys instead of values
+        // since we do not specify the keys here directly,
+        // they get assigned in the order of the values in the vector
+        // For example values of ["B", "A", "A"] result in the keys [0, 1, 1]
+
+        test_sort_string_dict_arrays::<Int8Type>(
+            vec![None, Some("B"), Some("A"), None, Some("C"), Some("A")],
+            Some(SortOptions {
+                ..Default::default()
+            }),
+            true,
+            None,
+            vec![None, None, Some("B"), Some("A"), Some("A"), Some("C")],
+        );
+
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![None, Some("B"), Some("A"), None, Some("C"), Some("A")],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: false,
+            }),
+            true,
+            None,
+            vec![Some("C"), Some("A"), Some("A"), Some("B"), None, None],
+        );
+
+        test_sort_string_dict_arrays::<Int32Type>(
+            vec![None, Some("B"), Some("A"), None, Some("C"), Some("A")],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            true,
+            None,
+            vec![None, None, Some("B"), Some("A"), Some("A"), Some("C")],
+        );
+
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![None, Some("B"), Some("A"), None, Some("C"), Some("A")],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            true,
+            None,
+            vec![None, None, Some("C"), Some("A"), Some("A"), Some("B")],
+        );
+
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![None, Some("B"), Some("A"), None, Some("C"), Some("A")],
+            Some(SortOptions {
+                descending: true,
+                nulls_first: true,
+            }),
+            true,
+            Some(3),
+            vec![None, None, Some("C")],
+        );
+
+        // valid values less than limit with extra nulls
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![Some("B"), None, None, Some("A")],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            true,
+            Some(3),
+            vec![Some("B"), Some("A"), None],
+        );
+
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![Some("B"), None, None, Some("A")],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            true,
+            Some(3),
+            vec![None, None, Some("B")],
+        );
+
+        // more nulls than limit
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![Some("A"), None, None, None],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: true,
+            }),
+            true,
+            Some(2),
+            vec![None, None],
+        );
+
+        test_sort_string_dict_arrays::<Int16Type>(
+            vec![Some("A"), None, None, None],
+            Some(SortOptions {
+                descending: false,
+                nulls_first: false,
+            }),
+            true,
+            Some(2),
+            vec![Some("A"), None],
         );
     }
 

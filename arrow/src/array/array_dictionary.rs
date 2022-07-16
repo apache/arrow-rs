@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::buffer::Buffer;
+use crate::compute::{sort_to_indices, take, TakeOptions};
 use std::any::Any;
 use std::fmt;
 use std::iter::IntoIterator;
@@ -27,7 +29,7 @@ use super::{
 use crate::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, ArrowPrimitiveType, DataType,
 };
-use crate::error::Result;
+use crate::error::{ArrowError, Result};
 
 /// A dictionary array where each element is a single value indexed by an integer key.
 /// This is mostly used to represent strings or a limited set of primitive types as integers,
@@ -215,6 +217,92 @@ impl<K: ArrowPrimitiveType> DictionaryArray<K> {
     /// Currently exists for compatibility purposes with Arrow IPC.
     pub fn is_ordered(&self) -> bool {
         self.is_ordered
+    }
+
+    /// Returns a DictionaryArray referencing the same data
+    /// with the [DictionaryArray::is_ordered] flag set to `true`.
+    /// Note that this does not actually reorder the values in the dictionary.
+    pub fn as_ordered(&self) -> Self {
+        Self {
+            data: self.data.clone(),
+            values: self.values.clone(),
+            keys: PrimitiveArray::<K>::from(self.keys.data().clone()),
+            is_ordered: true,
+        }
+    }
+
+    pub fn make_ordered(&self) -> Result<Self> {
+        let values = self.values();
+        if self.is_ordered || values.is_empty() {
+            Ok(self.as_ordered())
+        } else {
+            // validate up front that we can do conversions from/to usize for the whole range of keys
+            // this allows using faster unchecked conversions below
+            K::Native::from_usize(values.len())
+                .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+            // sort indices are u32 so we cannot sort larger dictionaries
+            u32::try_from(values.len())
+                .map_err(|_| ArrowError::DictionaryKeyOverflowError)?;
+
+            // sort the dictionary values
+            let sort_indices = sort_to_indices(values, None, None)?;
+            let sorted_dictionary = take(
+                values.as_ref(),
+                &sort_indices,
+                Some(TakeOptions {
+                    check_bounds: false,
+                }),
+            )?;
+
+            // build a lookup table from old to new key
+            let mut lookup = vec![0; sort_indices.len()];
+            sort_indices
+                .values()
+                .iter()
+                .enumerate()
+                .for_each(|(i, idx)| {
+                    lookup[*idx as usize] = i;
+                });
+
+            let mapped_keys_iter = self.keys_iter().map(|opt_key| {
+                if let Some(key) = opt_key {
+                    // Safety:
+                    // lookup has the same length as the dictionary values
+                    // so if the keys were valid for values they will be valid indices into lookup
+                    unsafe {
+                        debug_assert!(key < lookup.len());
+                        let new_key = *lookup.get_unchecked(key);
+                        debug_assert!(new_key < values.len());
+                        K::Native::from_usize(new_key).unwrap_unchecked()
+                    }
+                } else {
+                    K::default_value()
+                }
+            });
+
+            // Safety:
+            // PrimitiveIter has a trusted len
+            let new_key_buffer =
+                unsafe { Buffer::from_trusted_len_iter(mapped_keys_iter) };
+
+            // Safety:
+            // after remapping the keys will be in the same range as before
+            let new_data = unsafe {
+                ArrayData::new_unchecked(
+                    self.data_type().clone(),
+                    self.len(),
+                    Some(self.data.null_count()),
+                    self.data
+                        .null_buffer()
+                        .map(|b| b.bit_slice(self.data.offset(), self.len())),
+                    0,
+                    vec![new_key_buffer],
+                    vec![sorted_dictionary.data().clone()],
+                )
+            };
+
+            Ok(DictionaryArray::from(new_data).as_ordered())
+        }
     }
 
     /// Return an iterator over the keys (indexes into the dictionary)
@@ -558,6 +646,36 @@ mod tests {
             .data()
             .validate_full()
             .expect("All null array has valid array data");
+    }
+
+    #[test]
+    fn test_dictionary_make_ordered() {
+        let test = vec![
+            Some("b"),
+            Some("b"),
+            None,
+            Some("d"),
+            Some("d"),
+            Some("c"),
+            Some("a"),
+        ];
+        let array: DictionaryArray<Int32Type> = test.into_iter().collect();
+
+        let ordered = array.make_ordered().unwrap();
+        let actual_keys = ordered.keys.iter().collect::<Vec<_>>();
+
+        let expected_keys =
+            vec![Some(1), Some(1), None, Some(3), Some(3), Some(2), Some(0)];
+        assert_eq!(&expected_keys, &actual_keys);
+
+        let expected_values = StringArray::from(vec!["a", "b", "c", "d"]);
+        let actual_values = ordered
+            .values
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+
+        assert_eq!(&expected_values, actual_values);
     }
 
     #[test]

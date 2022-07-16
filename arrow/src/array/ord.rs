@@ -84,6 +84,7 @@ where
 fn compare_dict_string<T>(left: &dyn Array, right: &dyn Array) -> DynComparator
 where
     T: ArrowDictionaryKeyType,
+    T::Native: Ord,
 {
     let left = left.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
     let right = right.as_any().downcast_ref::<DictionaryArray<T>>().unwrap();
@@ -93,13 +94,22 @@ where
     let left_values = StringArray::from(left.values().data().clone());
     let right_values = StringArray::from(right.values().data().clone());
 
-    Box::new(move |i: usize, j: usize| {
-        let key_left = left_keys.value(i).to_usize().unwrap();
-        let key_right = right_keys.value(j).to_usize().unwrap();
-        let left = left_values.value(key_left);
-        let right = right_values.value(key_right);
-        left.cmp(right)
-    })
+    // only compare by keys if both arrays actually point to the same value buffers
+    if left.is_ordered() && ArrayData::ptr_eq(left_values.data(), right_values.data()) {
+        Box::new(move |i: usize, j: usize| {
+            let key_left = left_keys.value(i);
+            let key_right = right_keys.value(j);
+            <T::Native as Ord>::cmp(&key_left, &key_right)
+        })
+    } else {
+        Box::new(move |i: usize, j: usize| {
+            let key_left = left_keys.value(i).to_usize().unwrap();
+            let key_right = right_keys.value(j).to_usize().unwrap();
+            let left = left_values.value(key_left);
+            let right = right_values.value(key_right);
+            left.cmp(right)
+        })
+    }
 }
 
 /// returns a comparison function that compares two values at two different positions
@@ -120,8 +130,9 @@ where
 /// # Ok(())
 /// # }
 /// ```
+/// The returned comparator should only be called for non-null elements as the result is undefined otherwise.
+/// The caller should check the validity of both indices and then decide whether NULLs should come first or last.
 // This is a factory of comparisons.
-// The lifetime 'a enforces that we cannot use the closure beyond any of the array's lifetime.
 pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparator> {
     use DataType::*;
     use IntervalUnit::*;
@@ -317,6 +328,22 @@ pub mod tests {
     fn test_dict() -> Result<()> {
         let data = vec!["a", "b", "c", "a", "a", "c", "c"];
         let array = data.into_iter().collect::<DictionaryArray<Int16Type>>();
+
+        let cmp = build_compare(&array, &array)?;
+
+        assert_eq!(Ordering::Less, (cmp)(0, 1));
+        assert_eq!(Ordering::Equal, (cmp)(3, 4));
+        assert_eq!(Ordering::Greater, (cmp)(2, 3));
+        Ok(())
+    }
+
+    #[test]
+    fn test_dict_keys() -> Result<()> {
+        let data = vec!["a", "b", "c", "a", "a", "c", "c"];
+        let array = data
+            .into_iter()
+            .collect::<DictionaryArray<Int16Type>>()
+            .as_ordered();
 
         let cmp = build_compare(&array, &array)?;
 
