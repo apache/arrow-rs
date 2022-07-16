@@ -519,6 +519,28 @@ impl BitReader {
         Some(from_ne_slice(v.as_bytes()))
     }
 
+    /// Skip one value of size `num_bits`.
+    ///
+    /// Returns `false` if there are no more values to skip, `true` otherwise.
+    pub fn skip_value(&mut self, num_bits: usize) -> bool {
+        assert!(num_bits <= 64);
+
+        if self.byte_offset * 8 + self.bit_offset + num_bits > self.total_bytes * 8 {
+            return false;
+        }
+
+        self.bit_offset += num_bits;
+
+        if self.bit_offset >= 64 {
+            self.byte_offset += 8;
+            self.bit_offset -= 64;
+
+            self.reload_buffer_values();
+        }
+
+        true
+    }
+
     /// Read multiple values from their packed representation
     ///
     /// # Panics
@@ -603,6 +625,56 @@ impl BitReader {
         }
 
         values_to_read
+    }
+
+    /// Skip num_value values with num_bits bit width
+    ///
+    /// Return the number of values skipped (up to num_values)
+    pub fn skip(&mut self, num_values: usize, num_bits: usize) -> usize {
+        assert!(num_bits <= 64);
+
+        let mut num_values = num_values;
+        let needed_bits = num_bits * num_values;
+        let remaining_bits = (self.total_bytes - self.byte_offset) * 8 - self.bit_offset;
+        if remaining_bits < needed_bits {
+            num_values = remaining_bits / num_bits;
+        }
+
+        let mut values_skipped = 0;
+
+        if num_bits > 32 {
+            // No fast path - read values individually
+            while values_skipped < num_values {
+                self.skip_value(num_bits);
+                values_skipped += 1;
+            }
+            return num_values;
+        }
+
+        // First align bit offset to byte offset
+        if self.bit_offset != 0 {
+            while values_skipped < num_values && self.bit_offset != 0 {
+                self
+                    .skip_value(num_bits);
+                values_skipped += 1;
+            }
+        }
+
+        while num_values - values_skipped >= 32 {
+            self.byte_offset += 4 * num_bits;
+            values_skipped += 32;
+        }
+
+
+        assert!(num_values - values_skipped < 32);
+
+        self.reload_buffer_values();
+        while values_skipped < num_values {
+            self.skip_value(num_bits);
+            values_skipped += 1;
+        }
+
+        num_values
     }
 
     /// Reads up to `num_bytes` to `buf` returning the number of bytes read
@@ -760,11 +832,59 @@ mod tests {
     }
 
     #[test]
+    fn test_bit_reader_skip_value() {
+        let buffer = vec![255, 0];
+        let mut bit_reader = BitReader::from(buffer);
+        let skipped = bit_reader.skip_value(1);
+        assert!(skipped);
+        assert_eq!(bit_reader.get_value::<i32>(1), Some(1));
+        let skipped = bit_reader.skip_value(2);
+        assert!(skipped);
+        assert_eq!(bit_reader.get_value::<i32>(2), Some(3));
+        let skipped = bit_reader.skip_value(1);
+        assert!(skipped);
+        assert_eq!(bit_reader.get_value::<i32>(4), Some(1));
+        let skipped = bit_reader.skip_value(1);
+        assert!(skipped);
+        assert_eq!(bit_reader.get_value::<i32>(4), Some(0));
+        let skipped = bit_reader.skip_value(1);
+        assert!(!skipped);
+    }
+
+    #[test]
+    fn test_bit_reader_skip() {
+        let buffer = vec![255, 0];
+        let mut bit_reader = BitReader::from(buffer);
+        let skipped = bit_reader.skip(1,1);
+        assert_eq!(skipped, 1);
+        assert_eq!(bit_reader.get_value::<i32>(1), Some(1));
+        let skipped = bit_reader.skip(2,2);
+        assert_eq!(skipped, 2);
+        assert_eq!(bit_reader.get_value::<i32>(2), Some(3));
+        let skipped = bit_reader.skip(4,1);
+        assert_eq!(skipped, 4);
+        assert_eq!(bit_reader.get_value::<i32>(4), Some(0));
+        let skipped = bit_reader.skip(1,1);
+        assert_eq!(skipped, 0);
+    }
+
+    #[test]
     fn test_bit_reader_get_value_boundary() {
         let buffer = vec![10, 0, 0, 0, 20, 0, 30, 0, 0, 0, 40, 0];
         let mut bit_reader = BitReader::from(buffer);
         assert_eq!(bit_reader.get_value::<i64>(32), Some(10));
         assert_eq!(bit_reader.get_value::<i64>(16), Some(20));
+        assert_eq!(bit_reader.get_value::<i64>(32), Some(30));
+        assert_eq!(bit_reader.get_value::<i64>(16), Some(40));
+    }
+
+    #[test]
+    fn test_bit_reader_skip_boundary() {
+        let buffer = vec![10, 0, 0, 0, 20, 0, 30, 0, 0, 0, 40, 0];
+        let mut bit_reader = BitReader::from(buffer);
+        assert_eq!(bit_reader.get_value::<i64>(32), Some(10));
+        let skipped = bit_reader.skip_value(16);
+        assert!(skipped);
         assert_eq!(bit_reader.get_value::<i64>(32), Some(30));
         assert_eq!(bit_reader.get_value::<i64>(16), Some(40));
     }

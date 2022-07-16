@@ -701,7 +701,6 @@ pub(crate) mod private {
             Ok(values_read)
         }
 
-
         #[inline]
         fn as_i64(&self) -> Result<i64> {
             Ok(*self as i64)
@@ -900,7 +899,6 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
-
         #[inline]
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -1002,7 +1000,6 @@ pub(crate) mod private {
             Ok(num_values)
         }
 
-
         #[inline]
         fn dict_encoding_size(&self) -> (usize, usize) {
             (std::mem::size_of::<u32>(), self.len())
@@ -1092,9 +1089,7 @@ pub(crate) mod private {
             decoder.num_values -= num_values;
 
             Ok(num_values)
-
         }
-
 
         #[inline]
         fn dict_encoding_size(&self) -> (usize, usize) {
