@@ -163,7 +163,7 @@ jobs:
       # with a OS-dependent path.
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
+          rustup toolchain install ${{ matrix.rust }} --no-self-update
           rustup default ${{ matrix.rust }}
       - name: Run tests
         shell: bash
