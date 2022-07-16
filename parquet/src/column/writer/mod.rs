@@ -156,7 +156,6 @@ type ColumnCloseResult = (
 /// Typed column writer for a primitive column.
 pub type ColumnWriterImpl<'a, T> = GenericColumnWriter<'a, ColumnValueEncoderImpl<T>>;
 
-#[doc(hidden)]
 pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     // Column writer properties
     descr: ColumnDescPtr,
@@ -188,6 +187,9 @@ pub struct GenericColumnWriter<'a, E: ColumnValueEncoder> {
     max_column_value: Option<E::T>,
     num_column_nulls: u64,
     column_distinct_count: Option<u64>,
+
+    /// The order of encodings within the generated metadata does not impact its meaning,
+    /// but we use a BTreeSet so that the output is deterministic
     encodings: BTreeSet<Encoding>,
 
     // Reused buffers
