@@ -838,8 +838,8 @@ impl<T: DataType> Decoder<T> for DeltaLengthByteArrayDecoder<T> {
                 self.num_values -= num_values;
                 Ok(num_values)
             }
-            _ => Err(general_err!(
-                "DeltaLengthByteArrayDecoder only support ByteArrayType"
+           other_type => Err(general_err!(
+                "DeltaLengthByteArrayDecoder not support {}, only support byte array", other_type
             )),
         }
     }
