@@ -800,7 +800,7 @@ mod tests {
             assert_eq!(decoder.skip_values(1).unwrap(), 1);
             assert_eq!(decoder.skip_values(1).unwrap(), 1);
 
-            assert_eq!(decoder.read(&mut output, 0..1).unwrap(), 1);
+            assert_eq!(decoder.read(&mut output, 1..2).unwrap(), 1);
             assert_eq!(output.values.as_slice(), "hellob".as_bytes());
             assert_eq!(output.offsets.as_slice(), &[0, 5, 6]);
 
