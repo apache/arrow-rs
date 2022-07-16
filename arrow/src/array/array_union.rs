@@ -961,19 +961,7 @@ mod tests {
     #[test]
     fn slice_union_array() {
         // [1, null, 3.0, null, 4]
-        fn create_sparse_union() -> UnionArray {
-            let mut builder = UnionBuilder::new_sparse(5);
-            builder.append::<Int32Type>("a", 1).unwrap();
-            builder.append_null::<Int32Type>("a").unwrap();
-            builder.append::<Float64Type>("c", 3.0).unwrap();
-            builder.append_null::<Float64Type>("c").unwrap();
-            builder.append::<Int32Type>("a", 4).unwrap();
-            builder.build().unwrap()
-        }
-
-        // [1, null, 3.0, null, 4]
-        fn create_dense_union() -> UnionArray {
-            let mut builder = UnionBuilder::new_dense(5);
+        fn create_union(mut builder: UnionBuilder) -> UnionArray {
             builder.append::<Int32Type>("a", 1).unwrap();
             builder.append_null::<Int32Type>("a").unwrap();
             builder.append::<Float64Type>("c", 3.0).unwrap();
@@ -1021,13 +1009,15 @@ mod tests {
         }
 
         // Sparse Union
-        let record_batch = create_batch(create_sparse_union());
+        let builder = UnionBuilder::new_sparse(5);
+        let record_batch = create_batch(create_union(builder));
         // [null, 3.0, null]
         let record_batch_slice = record_batch.slice(1, 3);
         test_slice_union(record_batch_slice);
 
         // Dense Union
-        let record_batch = create_batch(create_dense_union());
+        let builder = UnionBuilder::new_dense(5);
+        let record_batch = create_batch(create_union(builder));
         // [null, 3.0, null]
         let record_batch_slice = record_batch.slice(1, 3);
         test_slice_union(record_batch_slice);
