@@ -295,6 +295,7 @@ impl<T: DataType> Decoder<T> for PlainDecoder<T> {
         T::T::decode(buffer, &mut self.inner)
     }
 
+    #[inline]
     fn skip(&mut self, num_values: usize) -> Result<usize> {
         T::T::skip(&mut self.inner, num_values)
     }
@@ -361,8 +362,6 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
         let num_values = cmp::min(buffer.len(), self.num_values);
         rle.get_batch_with_dict(&self.dictionary[..], buffer, num_values)
     }
-
-
 
     /// Number of values left in this decoder stream
     fn values_left(&self) -> usize {
