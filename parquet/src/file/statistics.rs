@@ -398,7 +398,7 @@ impl fmt::Display for Statistics {
 /// Typed implementation for [`Statistics`].
 pub type TypedStatistics<T> = ValueStatistics<<T as DataType>::T>;
 
-/// Statistics for a particular [`ParquetValueType`]
+/// Statistics for a particular `ParquetValueType`
 #[derive(Clone, Eq, PartialEq)]
 pub struct ValueStatistics<T> {
     min: Option<T>,
