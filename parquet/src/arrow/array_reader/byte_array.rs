@@ -147,7 +147,7 @@ struct ByteArrayColumnValueDecoder<I: ScalarValue> {
 }
 
 impl<I: OffsetSizeTrait + ScalarValue> ColumnValueDecoder
-    for ByteArrayColumnValueDecoder<I>
+for ByteArrayColumnValueDecoder<I>
 {
     type Slice = OffsetBuffer<I>;
 
@@ -263,7 +263,7 @@ impl ByteArrayDecoder {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
                     encoding
-                ))
+                ));
             }
         };
 
@@ -303,6 +303,20 @@ impl ByteArrayDecoder {
                     .ok_or_else(|| general_err!("missing dictionary page for column"))?;
 
                 d.skip(dict, len)
+            }
+            ByteArrayDecoder::DeltaLength(d) => d.skip(len),
+            ByteArrayDecoder::DeltaByteArray(d) => d.skip(len),
+        }
+    }
+
+    pub(crate) fn skip_without_dict(
+        &mut self,
+        len: usize,
+    ) -> Result<usize> {
+        match self {
+            ByteArrayDecoder::Plain(d) => d.skip(len),
+            ByteArrayDecoder::Dictionary(_) => {
+                unreachable!()
             }
             ByteArrayDecoder::DeltaLength(d) => d.skip(len),
             ByteArrayDecoder::DeltaByteArray(d) => d.skip(len),
@@ -392,7 +406,7 @@ impl ByteArrayDecoderPlain {
         &mut self,
         to_skip: usize,
     ) -> Result<usize> {
-        let to_skip = to_skip.min( self.max_remaining_values);
+        let to_skip = to_skip.min(self.max_remaining_values);
         let mut skip = 0;
         let buf = self.buf.as_ref();
 
@@ -406,6 +420,7 @@ impl ByteArrayDecoderPlain {
             skip += 1;
             self.offset = self.offset + 4 + len;
         }
+        self.max_remaining_values -= skip;
         Ok(skip)
     }
 }
