@@ -338,7 +338,7 @@ where
                 scratch
             )
         }
-        dt => return_compute_error_with!("weekday0 does not support", dt),
+        dt => return_compute_error_with!("num_days_from_sunday does not support", dt),
     }
 
     Ok(b.finish())
