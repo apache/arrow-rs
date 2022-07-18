@@ -267,7 +267,10 @@ impl ArrayData {
     /// Create a new ArrayData instance;
     ///
     /// If `null_count` is not specified, the number of nulls in
-    /// null_bit_buffer is calculated
+    /// null_bit_buffer is calculated.
+    ///
+    /// If the number of nulls is 0 then the null_bit_buffer
+    /// is set to `None`.
     ///
     /// # Safety
     ///
@@ -291,7 +294,7 @@ impl ArrayData {
             None => count_nulls(null_bit_buffer.as_ref(), offset, len),
             Some(null_count) => null_count,
         };
-        let null_bitmap = null_bit_buffer.map(Bitmap::from);
+        let null_bitmap = null_bit_buffer.filter(|_| null_count > 0).map(Bitmap::from);
         let new_self = Self {
             data_type,
             len,
@@ -310,6 +313,9 @@ impl ArrayData {
 
     /// Create a new ArrayData, validating that the provided buffers
     /// form a valid Arrow array of the specified data type.
+    ///
+    /// If the number of nulls in `null_bit_buffer` is 0 then the null_bit_buffer
+    /// is set to `None`.
     ///
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
