@@ -276,6 +276,7 @@ fn write_leaves<W: Write>(
         | ArrowDataType::Utf8
         | ArrowDataType::LargeUtf8
         | ArrowDataType::Decimal(_, _)
+        | ArrowDataType::Decimal256(_, _)
         | ArrowDataType::FixedSizeBinary(_) => {
             let mut col_writer = get_col_writer(row_group_writer)?;
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {

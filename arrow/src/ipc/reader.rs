@@ -506,7 +506,7 @@ fn create_primitive_array(
 
             unsafe { builder.build_unchecked() }
         }
-        Decimal(_, _) => {
+        Decimal(_, _) | Decimal256(_, _) => {
             // read 3 buffers
             let builder = ArrayData::builder(data_type.clone())
                 .len(length)

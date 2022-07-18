@@ -241,7 +241,9 @@ fn build_extend(array: &ArrayData) -> Extend {
         DataType::LargeList(_) => list::build_extend::<i64>(array),
         DataType::Dictionary(_, _) => unreachable!("should use build_extend_dictionary"),
         DataType::Struct(_) => structure::build_extend(array),
-        DataType::FixedSizeBinary(_) => fixed_binary::build_extend(array),
+        DataType::FixedSizeBinary(_) | DataType::Decimal256(_, _) => {
+            fixed_binary::build_extend(array)
+        }
         DataType::Float16 => primitive::build_extend::<f16>(array),
         DataType::FixedSizeList(_, _) => fixed_size_list::build_extend(array),
         DataType::Union(_, _, mode) => match mode {
@@ -292,7 +294,9 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
             _ => unreachable!(),
         },
         DataType::Struct(_) => structure::extend_nulls,
-        DataType::FixedSizeBinary(_) => fixed_binary::extend_nulls,
+        DataType::FixedSizeBinary(_) | DataType::Decimal256(_, _) => {
+            fixed_binary::extend_nulls
+        }
         DataType::Float16 => primitive::extend_nulls::<f16>,
         DataType::FixedSizeList(_, _) => fixed_size_list::extend_nulls,
         DataType::Union(_, _, mode) => match mode {
@@ -407,6 +411,7 @@ impl<'a> MutableArrayData<'a> {
 
         let child_data = match &data_type {
             DataType::Decimal(_, _)
+            | DataType::Decimal256(_, _)
             | DataType::Null
             | DataType::Boolean
             | DataType::UInt8
