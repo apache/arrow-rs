@@ -670,7 +670,7 @@ mod tests {
 
     use super::*;
 
-    use crate::array::DecimalArray;
+    use crate::array::Decimal128Array;
     use crate::{
         array::{
             Array, ArrayData, ArrayRef, BooleanArray, DictionaryArray,
@@ -690,10 +690,10 @@ mod tests {
         array: &[Option<i128>],
         precision: usize,
         scale: usize,
-    ) -> DecimalArray {
+    ) -> Decimal128Array {
         array
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
             .unwrap()
     }
@@ -708,7 +708,7 @@ mod tests {
         a.extend(0, 0, 3);
         a.extend(0, 2, 3);
         let result = a.freeze();
-        let array = DecimalArray::from(result);
+        let array = Decimal128Array::from(result);
         let expected = create_decimal_array(&[Some(1), Some(2), None, None], 10, 3);
         assert_eq!(array, expected);
     }
@@ -722,7 +722,7 @@ mod tests {
         let mut a = MutableArrayData::new(arrays, true, 2);
         a.extend(0, 0, 2); // 2, null
         let result = a.freeze();
-        let array = DecimalArray::from(result);
+        let array = Decimal128Array::from(result);
         let expected = create_decimal_array(&[Some(2), None], 10, 3);
         assert_eq!(array, expected);
     }
@@ -739,7 +739,7 @@ mod tests {
         a.extend_nulls(3); // 2, null, null, null, null
         a.extend(0, 1, 3); //2, null, null, null, null, null, 3
         let result = a.freeze();
-        let array = DecimalArray::from(result);
+        let array = Decimal128Array::from(result);
         let expected = create_decimal_array(
             &[Some(2), None, None, None, None, None, Some(3)],
             10,

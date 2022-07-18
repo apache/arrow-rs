@@ -500,7 +500,7 @@ where
     // downcast to decimal array
     let decimal_array = decimal_values
         .as_any()
-        .downcast_ref::<DecimalArray>()
+        .downcast_ref::<Decimal128Array>()
         .expect("Unable to downcast to decimal array");
     let valids = value_indices
         .into_iter()
@@ -1079,9 +1079,9 @@ mod tests {
     use std::convert::TryFrom;
     use std::sync::Arc;
 
-    fn create_decimal_array(data: &[Option<i128>]) -> DecimalArray {
+    fn create_decimal_array(data: &[Option<i128>]) -> Decimal128Array {
         data.iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap()
     }

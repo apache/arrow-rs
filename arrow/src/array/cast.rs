@@ -96,7 +96,7 @@ array_downcast_fn!(as_null_array, NullArray);
 array_downcast_fn!(as_struct_array, StructArray);
 array_downcast_fn!(as_union_array, UnionArray);
 array_downcast_fn!(as_map_array, MapArray);
-array_downcast_fn!(as_decimal_array, DecimalArray);
+array_downcast_fn!(as_decimal_array, Decimal128Array);
 
 #[cfg(test)]
 mod tests {
@@ -106,9 +106,9 @@ mod tests {
 
     #[test]
     fn test_as_decimal_array_ref() {
-        let array: DecimalArray = vec![Some(123), None, Some(1111)]
+        let array: Decimal128Array = vec![Some(123), None, Some(1111)]
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(10, 2)
             .unwrap();
         assert!(!as_decimal_array(&array).is_empty());

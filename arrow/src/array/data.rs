@@ -1513,7 +1513,7 @@ mod tests {
     use std::ptr::NonNull;
 
     use crate::array::{
-        make_array, Array, BooleanBuilder, DecimalBuilder, FixedSizeListBuilder,
+        make_array, Array, BooleanBuilder, Decimal128Builder, FixedSizeListBuilder,
         Int32Array, Int32Builder, Int64Array, StringArray, StructBuilder, UInt64Array,
         UInt8Builder,
     };
@@ -2769,7 +2769,7 @@ mod tests {
         let byte_width = 16;
         let mut fixed_size_builder =
             FixedSizeListBuilder::new(values_builder, byte_width);
-        let value_as_bytes = DecimalBuilder::from_i128_to_fixed_size_bytes(
+        let value_as_bytes = Decimal128Builder::from_i128_to_fixed_size_bytes(
             123456,
             fixed_size_builder.value_length() as usize,
         )
@@ -2796,7 +2796,7 @@ mod tests {
 
     #[test]
     fn test_decimal_validation() {
-        let mut builder = DecimalBuilder::new(4, 10, 4);
+        let mut builder = Decimal128Builder::new(4, 10, 4);
         builder.append_value(10000).unwrap();
         builder.append_value(20000).unwrap();
         let array = builder.finish();

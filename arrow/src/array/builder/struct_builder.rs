@@ -19,6 +19,7 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::array::builder::decimal_builder::Decimal128Builder;
 use crate::array::*;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
@@ -111,7 +112,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
             Box::new(FixedSizeBinaryBuilder::new(capacity, *len))
         }
         DataType::Decimal(precision, scale) => {
-            Box::new(DecimalBuilder::new(capacity, *precision, *scale))
+            Box::new(Decimal128Builder::new(capacity, *precision, *scale))
         }
         DataType::Utf8 => Box::new(StringBuilder::new(capacity)),
         DataType::Date32 => Box::new(Date32Builder::new(capacity)),
