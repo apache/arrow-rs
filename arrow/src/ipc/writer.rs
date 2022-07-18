@@ -226,7 +226,7 @@ impl IpcDataGenerator {
             }
             DataType::Union(fields, _, _) => {
                 let union = as_union_array(column);
-                for (field, ref column) in fields
+                for (field, column) in fields
                     .iter()
                     .enumerate()
                     .map(|(n, f)| (f, union.child(n as i8)))
