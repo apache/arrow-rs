@@ -108,7 +108,7 @@ impl DecimalBuilder {
 
     /// Append a null value to the array.
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.builder.append_null()
     }
 
@@ -167,6 +167,8 @@ impl Decimal256Builder {
     }
 
     /// Appends a [`Decimal256`] number into the builder.
+    ///
+    /// Returns an error if `value` has different precision, scale or length in bytes than this builder
     #[inline]
     pub fn append_value(&mut self, value: &Decimal256) -> Result<()> {
         if self.precision != value.precision() || self.scale != value.scale() {
@@ -187,7 +189,7 @@ impl Decimal256Builder {
 
     /// Append a null value to the array.
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.builder.append_null()
     }
 
@@ -215,7 +217,7 @@ mod tests {
         let mut builder = DecimalBuilder::new(30, 38, 6);
 
         builder.append_value(8_887_000_000_i128).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(-8_887_000_000_i128).unwrap();
         let decimal_array: DecimalArray = builder.finish();
 
@@ -233,7 +235,7 @@ mod tests {
         builder
             .append_value(Decimal128::new_from_i128(30, 38, 8_887_000_000_i128))
             .unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder
             .append_value(Decimal128::new_from_i128(30, 38, -8_887_000_000_i128))
             .unwrap();
@@ -255,7 +257,7 @@ mod tests {
         let value = Decimal256::try_new_from_bytes(40, 6, bytes.as_slice()).unwrap();
         builder.append_value(&value).unwrap();
 
-        builder.append_null().unwrap();
+        builder.append_null();
 
         bytes = vec![255; 32];
         let value = Decimal256::try_new_from_bytes(40, 6, bytes.as_slice()).unwrap();

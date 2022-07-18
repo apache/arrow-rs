@@ -1040,10 +1040,10 @@ mod tests {
     fn test_filter_string_array_with_negated_boolean_array() {
         let a = StringArray::from(vec!["hello", " ", "world", "!"]);
         let mut bb = BooleanBuilder::new(2);
-        bb.append_value(false).unwrap();
-        bb.append_value(true).unwrap();
-        bb.append_value(false).unwrap();
-        bb.append_value(true).unwrap();
+        bb.append_value(false);
+        bb.append_value(true);
+        bb.append_value(false);
+        bb.append_value(true);
         let b = bb.finish();
         let b = crate::compute::not(&b).unwrap();
 
@@ -1418,18 +1418,18 @@ mod tests {
         let mut builder =
             MapBuilder::new(None, StringBuilder::new(16), Int64Builder::new(4));
         // [{"key1": 1}, {"key2": 2, "key3": 3}, null, {"key1": 1}
-        builder.keys().append_value("key1").unwrap();
-        builder.values().append_value(1).unwrap();
-        builder.append(true).unwrap();
-        builder.keys().append_value("key2").unwrap();
-        builder.keys().append_value("key3").unwrap();
-        builder.values().append_value(2).unwrap();
-        builder.values().append_value(3).unwrap();
-        builder.append(true).unwrap();
-        builder.append(false).unwrap();
-        builder.keys().append_value("key1").unwrap();
-        builder.values().append_value(1).unwrap();
-        builder.append(true).unwrap();
+        builder.keys().append_value("key1");
+        builder.values().append_value(1);
+        builder.append(true);
+        builder.keys().append_value("key2");
+        builder.keys().append_value("key3");
+        builder.values().append_value(2);
+        builder.values().append_value(3);
+        builder.append(true);
+        builder.append(false);
+        builder.keys().append_value("key1");
+        builder.values().append_value(1);
+        builder.append(true);
         let maparray = Arc::new(builder.finish()) as ArrayRef;
 
         let indices = vec![Some(true), Some(false), Some(false), Some(true)]
@@ -1439,12 +1439,12 @@ mod tests {
 
         let mut builder =
             MapBuilder::new(None, StringBuilder::new(8), Int64Builder::new(2));
-        builder.keys().append_value("key1").unwrap();
-        builder.values().append_value(1).unwrap();
-        builder.append(true).unwrap();
-        builder.keys().append_value("key1").unwrap();
-        builder.values().append_value(1).unwrap();
-        builder.append(true).unwrap();
+        builder.keys().append_value("key1");
+        builder.values().append_value(1);
+        builder.append(true);
+        builder.keys().append_value("key1");
+        builder.values().append_value(1);
+        builder.append(true);
         let expected = Arc::new(builder.finish()) as ArrayRef;
 
         assert_eq!(&expected, &got);

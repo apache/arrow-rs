@@ -79,13 +79,13 @@
 //! let mut builder = Int16Array::builder(100);
 //!
 //! // Append a single primitive value
-//! builder.append_value(1).unwrap();
+//! builder.append_value(1);
 //!
 //! // Append a null value
-//! builder.append_null().unwrap();
+//! builder.append_null();
 //!
 //! // Append a slice of primitive values
-//! builder.append_slice(&[2, 3, 4]).unwrap();
+//! builder.append_slice(&[2, 3, 4]);
 //!
 //! // Build the array
 //! let array = builder.finish();

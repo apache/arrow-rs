@@ -19,7 +19,6 @@ use crate::array::{
     ArrayBuilder, ArrayRef, GenericListBuilder, GenericStringArray, OffsetSizeTrait,
     UInt8Builder,
 };
-use crate::error::Result;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -53,34 +52,32 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
     /// Automatically calls the `append` method to delimit the string appended in as a
     /// distinct array element.
     #[inline]
-    pub fn append_value(&mut self, value: impl AsRef<str>) -> Result<()> {
+    pub fn append_value(&mut self, value: impl AsRef<str>) {
         self.builder
             .values()
-            .append_slice(value.as_ref().as_bytes())?;
-        self.builder.append(true)?;
-        Ok(())
+            .append_slice(value.as_ref().as_bytes());
+        self.builder.append(true);
     }
 
     /// Finish the current variable-length list array slot.
     #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<()> {
+    pub fn append(&mut self, is_valid: bool) {
         self.builder.append(is_valid)
     }
 
     /// Append a null value to the array.
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.append(false)
     }
 
     /// Append an `Option` value to the array.
     #[inline]
-    pub fn append_option(&mut self, value: Option<impl AsRef<str>>) -> Result<()> {
+    pub fn append_option(&mut self, value: Option<impl AsRef<str>>) {
         match value {
-            None => self.append_null()?,
-            Some(v) => self.append_value(v)?,
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
         };
-        Ok(())
     }
 
     /// Builds the `StringArray` and reset this builder.
@@ -141,9 +138,9 @@ mod tests {
     fn test_string_array_builder() {
         let mut builder = StringBuilder::new(20);
 
-        builder.append_value("hello").unwrap();
-        builder.append(true).unwrap();
-        builder.append_value("world").unwrap();
+        builder.append_value("hello");
+        builder.append(true);
+        builder.append_value("world");
 
         let string_array = builder.finish();
 
@@ -160,14 +157,14 @@ mod tests {
     fn test_string_array_builder_finish() {
         let mut builder = StringBuilder::new(10);
 
-        builder.append_value("hello").unwrap();
-        builder.append_value("world").unwrap();
+        builder.append_value("hello");
+        builder.append_value("world");
 
         let mut arr = builder.finish();
         assert_eq!(2, arr.len());
         assert_eq!(0, builder.len());
 
-        builder.append_value("arrow").unwrap();
+        builder.append_value("arrow");
         arr = builder.finish();
         assert_eq!(1, arr.len());
         assert_eq!(0, builder.len());
@@ -178,9 +175,9 @@ mod tests {
         let mut builder = StringBuilder::new(20);
 
         let var = "hello".to_owned();
-        builder.append_value(&var).unwrap();
-        builder.append(true).unwrap();
-        builder.append_value("world").unwrap();
+        builder.append_value(&var);
+        builder.append(true);
+        builder.append_value("world");
 
         let string_array = builder.finish();
 
@@ -196,10 +193,10 @@ mod tests {
     #[test]
     fn test_string_array_builder_append_option() {
         let mut builder = StringBuilder::new(20);
-        builder.append_option(Some("hello")).unwrap();
-        builder.append_option(None::<&str>).unwrap();
-        builder.append_option(None::<String>).unwrap();
-        builder.append_option(Some("world")).unwrap();
+        builder.append_option(Some("hello"));
+        builder.append_option(None::<&str>);
+        builder.append_option(None::<String>);
+        builder.append_option(Some("world"));
 
         let string_array = builder.finish();
 

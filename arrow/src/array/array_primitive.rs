@@ -937,9 +937,9 @@ mod tests {
     #[test]
     fn test_int32_with_null_fmt_debug() {
         let mut builder = Int32Array::builder(3);
-        builder.append_slice(&[0, 1]).unwrap();
-        builder.append_null().unwrap();
-        builder.append_slice(&[3, 4]).unwrap();
+        builder.append_slice(&[0, 1]);
+        builder.append_null();
+        builder.append_slice(&[3, 4]);
         let arr = builder.finish();
         assert_eq!(
             "PrimitiveArray<Int32>\n[\n  0,\n  1,\n  null,\n  3,\n  4,\n]",

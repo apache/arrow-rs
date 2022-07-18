@@ -1200,52 +1200,47 @@ mod tests {
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_value(1)
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_value(1);
+        values.append(true);
+        list_builder.append(true);
 
         // []
-        list_builder.append(true).unwrap();
+        list_builder.append(true);
 
         // null
-        list_builder.append(false).unwrap();
+        list_builder.append(false);
 
         // [null, null]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(false).unwrap();
+            .append_null();
+        values.append(false);
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(false).unwrap();
-        list_builder.append(true).unwrap();
+            .append_null();
+        values.append(false);
+        list_builder.append(true);
 
         // [{a: null}]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_null();
+        values.append(true);
+        list_builder.append(true);
 
         // [{a: 2}]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_value(2)
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_value(2);
+        values.append(true);
+        list_builder.append(true);
 
         let array = Arc::new(list_builder.finish());
 

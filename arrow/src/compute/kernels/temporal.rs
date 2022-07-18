@@ -31,11 +31,11 @@ macro_rules! extract_component_from_array {
     ($array:ident, $builder:ident, $extract_fn:ident, $using:ident) => {
         for i in 0..$array.len() {
             if $array.is_null(i) {
-                $builder.append_null()?;
+                $builder.append_null();
             } else {
                 match $array.$using(i) {
-                    Some(dt) => $builder.append_value(dt.$extract_fn() as i32)?,
-                    None => $builder.append_null()?,
+                    Some(dt) => $builder.append_value(dt.$extract_fn() as i32),
+                    None => $builder.append_null(),
                 }
             }
         }
@@ -43,13 +43,13 @@ macro_rules! extract_component_from_array {
     ($array:ident, $builder:ident, $extract_fn1:ident, $extract_fn2:ident, $using:ident) => {
         for i in 0..$array.len() {
             if $array.is_null(i) {
-                $builder.append_null()?;
+                $builder.append_null();
             } else {
                 match $array.$using(i) {
                     Some(dt) => {
-                        $builder.append_value(dt.$extract_fn1().$extract_fn2() as i32)?
+                        $builder.append_value(dt.$extract_fn1().$extract_fn2() as i32);
                     }
-                    None => $builder.append_null()?,
+                    None => $builder.append_null(),
                 }
             }
         }
@@ -72,7 +72,7 @@ macro_rules! extract_component_from_array {
 
             for i in 0..$array.len() {
                 if $array.is_null(i) {
-                    $builder.append_null()?;
+                    $builder.append_null();
                 } else {
                     match $array.value_as_datetime(i) {
                         Some(utc) => {
@@ -90,9 +90,9 @@ macro_rules! extract_component_from_array {
                             };
                             match $array.$using(i, fixed_offset) {
                                 Some(dt) => {
-                                    $builder.append_value(dt.$extract_fn() as i32)?
+                                    $builder.append_value(dt.$extract_fn() as i32);
                                 }
-                                None => $builder.append_null()?,
+                                None => $builder.append_null(),
                             }
                         }
                         err => return_compute_error_with!(

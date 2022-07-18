@@ -704,12 +704,12 @@ fn build_decimal_array(
         match col_s {
             None => {
                 // No data for this row
-                decimal_builder.append_null()?;
+                decimal_builder.append_null();
             }
             Some(s) => {
                 if s.is_empty() {
                     // append null
-                    decimal_builder.append_null()?;
+                    decimal_builder.append_null();
                 } else {
                     let decimal_value: Result<i128> =
                         parse_decimal_with_parameter(s, precision, scale);

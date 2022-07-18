@@ -58,9 +58,9 @@ impl Converter<Vec<Option<FixedLenByteArray>>, FixedSizeBinaryArray>
         let mut builder = FixedSizeBinaryBuilder::new(source.len(), self.byte_width);
         for v in source {
             match v {
-                Some(array) => builder.append_value(array.data()),
+                Some(array) => builder.append_value(array.data())?,
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -117,7 +117,7 @@ impl Converter<Vec<Option<FixedLenByteArray>>, IntervalYearMonthArray>
                     array.data()[0..4].try_into().unwrap(),
                 )),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -142,7 +142,7 @@ impl Converter<Vec<Option<FixedLenByteArray>>, IntervalDayTimeArray>
                     array.data()[4..12].try_into().unwrap(),
                 )),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -179,7 +179,7 @@ impl Converter<Vec<Option<ByteArray>>, StringArray> for Utf8ArrayConverter {
             match v {
                 Some(array) => builder.append_value(array.as_utf8()?),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -200,7 +200,7 @@ impl Converter<Vec<Option<ByteArray>>, LargeStringArray> for LargeUtf8ArrayConve
             match v {
                 Some(array) => builder.append_value(array.as_utf8()?),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -216,7 +216,7 @@ impl Converter<Vec<Option<ByteArray>>, BinaryArray> for BinaryArrayConverter {
             match v {
                 Some(array) => builder.append_value(array.data()),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -232,7 +232,7 @@ impl Converter<Vec<Option<ByteArray>>, LargeBinaryArray> for LargeBinaryArrayCon
             match v {
                 Some(array) => builder.append_value(array.data()),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())

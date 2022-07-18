@@ -2619,66 +2619,56 @@ mod tests {
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(10))
-            .unwrap();
+            .append_option(Some(10));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(true))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(true));
+        builder.append(true);
 
         // struct[1] = null
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(None)
-            .unwrap();
+            .append_option(None);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(None)
-            .unwrap();
-        builder.append(false).unwrap();
+            .append_option(None);
+        builder.append(false);
 
         // struct[2] = { a: null, b: false }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(None)
-            .unwrap();
+            .append_option(None);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(false))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(false));
+        builder.append(true);
 
         // struct[3] = { a: 21, b: null }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(21))
-            .unwrap();
+            .append_option(Some(21));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(None)
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(None);
+        builder.append(true);
 
         // struct[4] = { a: 18, b: false }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(18))
-            .unwrap();
+            .append_option(Some(18));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(false))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(false));
+        builder.append(true);
 
         let struct_array = builder.finish();
         let struct_array_slice = struct_array.slice(1, 3);
@@ -2776,9 +2766,8 @@ mod tests {
         .unwrap();
         fixed_size_builder
             .values()
-            .append_slice(value_as_bytes.as_slice())
-            .unwrap();
-        fixed_size_builder.append(true).unwrap();
+            .append_slice(value_as_bytes.as_slice());
+        fixed_size_builder.append(true);
         let fixed_size_array = fixed_size_builder.finish();
 
         // Build ArrayData for Decimal

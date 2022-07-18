@@ -1551,7 +1551,7 @@ mod tests {
         for _ in 0..2 {
             let mut list_builder = ListBuilder::new(Int32Builder::new(batch_size));
             for _ in 0..(batch_size) {
-                list_builder.append(true).unwrap();
+                list_builder.append(true);
             }
             let batch = RecordBatch::try_new(
                 schema.clone(),

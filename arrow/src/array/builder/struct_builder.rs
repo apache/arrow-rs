@@ -22,7 +22,6 @@ use std::sync::Arc;
 use crate::array::*;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
-use crate::error::Result;
 
 /// Array builder for Struct types.
 ///
@@ -201,15 +200,14 @@ impl StructBuilder {
     /// Appends an element (either null or non-null) to the struct. The actual elements
     /// should be appended for each child sub-array in a consistent way.
     #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<()> {
+    pub fn append(&mut self, is_valid: bool) {
         self.bitmap_builder.append(is_valid);
         self.len += 1;
-        Ok(())
     }
 
     /// Appends a null element to the struct.
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.append(false)
     }
 
@@ -263,23 +261,23 @@ mod tests {
         let string_builder = builder
             .field_builder::<StringBuilder>(0)
             .expect("builder at field 0 should be string builder");
-        string_builder.append_value("joe").unwrap();
-        string_builder.append_null().unwrap();
-        string_builder.append_null().unwrap();
-        string_builder.append_value("mark").unwrap();
+        string_builder.append_value("joe");
+        string_builder.append_null();
+        string_builder.append_null();
+        string_builder.append_value("mark");
 
         let int_builder = builder
             .field_builder::<Int32Builder>(1)
             .expect("builder at field 1 should be int builder");
-        int_builder.append_value(1).unwrap();
-        int_builder.append_value(2).unwrap();
-        int_builder.append_null().unwrap();
-        int_builder.append_value(4).unwrap();
+        int_builder.append_value(1);
+        int_builder.append_value(2);
+        int_builder.append_null();
+        int_builder.append_value(4);
 
-        builder.append(true).unwrap();
-        builder.append(true).unwrap();
-        builder.append_null().unwrap();
-        builder.append(true).unwrap();
+        builder.append(true);
+        builder.append(true);
+        builder.append_null();
+        builder.append(true);
 
         let arr = builder.finish();
 
@@ -326,19 +324,17 @@ mod tests {
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_slice(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-            .unwrap();
+            .append_slice(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
             .append_slice(&[
                 false, true, false, true, false, true, false, true, false, true,
-            ])
-            .unwrap();
+            ]);
 
         // Append slot values - all are valid.
         for _ in 0..10 {
-            assert!(builder.append(true).is_ok())
+            builder.append(true);
         }
 
         assert_eq!(10, builder.len());
@@ -351,17 +347,15 @@ mod tests {
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_slice(&[1, 3, 5, 7, 9])
-            .unwrap();
+            .append_slice(&[1, 3, 5, 7, 9]);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_slice(&[false, true, false, true, false])
-            .unwrap();
+            .append_slice(&[false, true, false, true, false]);
 
         // Append slot values - all are valid.
         for _ in 0..5 {
-            assert!(builder.append(true).is_ok())
+            builder.append(true);
         }
 
         assert_eq!(5, builder.len());

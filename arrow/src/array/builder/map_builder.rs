@@ -25,7 +25,6 @@ use crate::array::MapArray;
 use crate::array::StructArray;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
-use crate::error::{ArrowError, Result};
 
 use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
 
@@ -96,18 +95,14 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
 
     /// Finish the current map array slot
     #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<()> {
-        if self.key_builder.len() != self.value_builder.len() {
-            return Err(ArrowError::InvalidArgumentError(format!(
+    pub fn append(&mut self, is_valid: bool) {
+        assert_eq!(self.key_builder.len(), self.value_builder.len(),
                 "Cannot append to a map builder when its keys and values have unequal lengths of {} and {}",
                 self.key_builder.len(),
-                self.value_builder.len()
-            )));
-        }
+                self.value_builder.len());
         self.offsets_builder.append(self.key_builder.len() as i32);
         self.bitmap_builder.append(is_valid);
         self.len += 1;
-        Ok(())
     }
 
     pub fn finish(&mut self) -> MapArray {
@@ -209,20 +204,20 @@ mod tests {
         let mut builder = MapBuilder::new(None, string_builder, int_builder);
 
         let string_builder = builder.keys();
-        string_builder.append_value("joe").unwrap();
-        string_builder.append_null().unwrap();
-        string_builder.append_null().unwrap();
-        string_builder.append_value("mark").unwrap();
+        string_builder.append_value("joe");
+        string_builder.append_null();
+        string_builder.append_null();
+        string_builder.append_value("mark");
 
         let int_builder = builder.values();
-        int_builder.append_value(1).unwrap();
-        int_builder.append_value(2).unwrap();
-        int_builder.append_null().unwrap();
-        int_builder.append_value(4).unwrap();
+        int_builder.append_value(1);
+        int_builder.append_value(2);
+        int_builder.append_null();
+        int_builder.append_value(4);
 
-        builder.append(true).unwrap();
-        builder.append(false).unwrap();
-        builder.append(true).unwrap();
+        builder.append(true);
+        builder.append(false);
+        builder.append(true);
 
         let arr = builder.finish();
 
