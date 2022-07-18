@@ -16,27 +16,44 @@
 // under the License.
 
 //! An object store implementation for Google Cloud Storage
+//!
+//! ## Multi-part uploads
+//!
+//! [Multi-part uploads](https://cloud.google.com/storage/docs/multipart-uploads)
+//! can be initiated with the [ObjectStore::put_multipart] method.
+//! Data passed to the writer is automatically buffered to meet the minimum size
+//! requirements for a part. Multiple parts are uploaded concurrently.
+//!
+//! If the writer fails for any reason, you may have parts uploaded to GCS but not
+//! used that you may be charged for. Use the [ObjectStore::abort_multipart] method
+//! to abort the upload and drop those unneeded parts. In addition, you may wish to
+//! consider implementing automatic clean up of unused parts that are older than one
+//! week.
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{self, BufReader};
 use std::ops::Range;
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
+use futures::future::BoxFuture;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use percent_encoding::{percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::RANGE;
 use reqwest::{header, Client, Method, Response, StatusCode};
 use snafu::{ResultExt, Snafu};
+use tokio::io::AsyncWrite;
 
+use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
 use crate::util::format_http_range;
 use crate::{
     oauth::OAuthProvider,
     path::{Path, DELIMITER},
     token::TokenCache,
     util::format_prefix,
-    GetResult, ListResult, ObjectMeta, ObjectStore, Result,
+    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
 };
 
 #[derive(Debug, Snafu)]
@@ -46,6 +63,14 @@ enum Error {
 
     #[snafu(display("Unable to decode service account file: {}", source))]
     DecodeCredentials { source: serde_json::Error },
+
+    #[snafu(display("Got invalid XML response for {} {}: {}", method, url, source))]
+    InvalidXMLResponse {
+        source: quick_xml::de::DeError,
+        method: String,
+        url: String,
+        data: Bytes,
+    },
 
     #[snafu(display("Error performing list request: {}", source))]
     ListRequest { source: reqwest::Error },
@@ -139,9 +164,42 @@ struct Object {
     updated: DateTime<Utc>,
 }
 
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+struct InitiateMultipartUploadResult {
+    upload_id: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "PascalCase", rename(serialize = "Part"))]
+struct MultipartPart {
+    #[serde(rename = "$unflatten=PartNumber")]
+    part_number: usize,
+    #[serde(rename = "$unflatten=ETag")]
+    e_tag: String,
+}
+
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "PascalCase")]
+struct CompleteMultipartUpload {
+    #[serde(rename = "Part", default)]
+    parts: Vec<MultipartPart>,
+}
+
 /// Configuration for connecting to [Google Cloud Storage](https://cloud.google.com/storage/).
 #[derive(Debug)]
 pub struct GoogleCloudStorage {
+    client: Arc<GoogleCloudStorageClient>,
+}
+
+impl std::fmt::Display for GoogleCloudStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "GoogleCloudStorage({})", self.client.bucket_name)
+    }
+}
+
+#[derive(Debug)]
+struct GoogleCloudStorageClient {
     client: Client,
     base_url: String,
 
@@ -155,13 +213,7 @@ pub struct GoogleCloudStorage {
     max_list_results: Option<String>,
 }
 
-impl std::fmt::Display for GoogleCloudStorage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GoogleCloudStorage({})", self.bucket_name)
-    }
-}
-
-impl GoogleCloudStorage {
+impl GoogleCloudStorageClient {
     async fn get_token(&self) -> Result<String> {
         if let Some(oauth_provider) = &self.oauth_provider {
             Ok(self
@@ -234,6 +286,57 @@ impl GoogleCloudStorage {
             .header(header::CONTENT_LENGTH, payload.len())
             .query(&[("uploadType", "media"), ("name", path.as_ref())])
             .body(payload)
+            .send()
+            .await
+            .context(PutRequestSnafu)?
+            .error_for_status()
+            .context(PutRequestSnafu)?;
+
+        Ok(())
+    }
+
+    /// Initiate a multi-part upload <https://cloud.google.com/storage/docs/xml-api/post-object-multipart>
+    async fn multipart_initiate(&self, path: &Path) -> Result<MultipartId> {
+        let token = self.get_token().await?;
+        let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
+
+        let response = self
+            .client
+            .request(Method::POST, &url)
+            .bearer_auth(token)
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .header(header::CONTENT_LENGTH, "0")
+            .query(&[("uploads", "")])
+            .send()
+            .await
+            .context(PutRequestSnafu)?
+            .error_for_status()
+            .context(PutRequestSnafu)?;
+
+        let data = response.bytes().await.context(PutRequestSnafu)?;
+        let result: InitiateMultipartUploadResult = quick_xml::de::from_reader(
+            data.as_ref().reader(),
+        )
+        .context(InvalidXMLResponseSnafu {
+            method: "POST".to_string(),
+            url,
+            data,
+        })?;
+
+        Ok(result.upload_id)
+    }
+
+    /// Cleanup unused parts <https://cloud.google.com/storage/docs/xml-api/delete-multipart>
+    async fn multipart_cleanup(&self, path: &str, multipart_id: &MultipartId) -> Result<()> {
+        let token = self.get_token().await?;
+        let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
+
+        self.client
+            .request(Method::DELETE, &url)
+            .bearer_auth(token)
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .header(header::CONTENT_LENGTH, "0")
+            .query(&[("uploadId", multipart_id)])
             .send()
             .await
             .context(PutRequestSnafu)?
@@ -401,14 +504,175 @@ impl GoogleCloudStorage {
     }
 }
 
+fn reqwest_error_as_io(err: reqwest::Error) -> io::Error {
+    if err.is_builder() || err.is_request() {
+        io::Error::new(io::ErrorKind::InvalidInput, err)
+    } else if err.is_status() {
+        match err.status() {
+            Some(StatusCode::NOT_FOUND) => io::Error::new(io::ErrorKind::NotFound, err),
+            Some(StatusCode::BAD_REQUEST) => io::Error::new(io::ErrorKind::InvalidInput, err),
+            Some(_) => io::Error::new(io::ErrorKind::Other, err),
+            None => io::Error::new(io::ErrorKind::Other, err),
+        }
+    } else if err.is_timeout() {
+        io::Error::new(io::ErrorKind::TimedOut, err)
+    } else if err.is_connect() {
+        io::Error::new(io::ErrorKind::NotConnected, err)
+    } else {
+        io::Error::new(io::ErrorKind::Other, err)
+    }
+}
+
+struct GCSMultipartUpload {
+    client: Arc<GoogleCloudStorageClient>,
+    encoded_path: String,
+    multipart_id: MultipartId,
+}
+
+impl CloudMultiPartUploadImpl for GCSMultipartUpload {
+    /// Upload an object part <https://cloud.google.com/storage/docs/xml-api/put-object-multipart>
+    fn put_multipart_part(
+        &self,
+        buf: Vec<u8>,
+        part_idx: usize,
+    ) -> BoxFuture<'static, Result<(usize, UploadPart), io::Error>> {
+        let upload_id = self.multipart_id.clone();
+        let url = format!(
+            "{}/{}/{}",
+            self.client.base_url, self.client.bucket_name_encoded, self.encoded_path
+        );
+        let client = Arc::clone(&self.client);
+
+        Box::pin(async move {
+            let token = client
+                .get_token()
+                .await
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+
+            let response = client
+                .client
+                .request(Method::PUT, &url)
+                .bearer_auth(token)
+                .query(&[
+                    ("partNumber", format!("{}", part_idx + 1)),
+                    ("uploadId", upload_id),
+                ])
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(header::CONTENT_LENGTH, format!("{}", buf.len()))
+                .body(buf)
+                .send()
+                .await
+                .map_err(reqwest_error_as_io)?
+                .error_for_status()
+                .map_err(reqwest_error_as_io)?;
+
+            let content_id = response
+                .headers()
+                .get("ETag")
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "response headers missing ETag")
+                })?
+                .to_str()
+                .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
+                .to_string();
+
+            Ok((part_idx, UploadPart { content_id }))
+        })
+    }
+
+    /// Complete a multipart upload <https://cloud.google.com/storage/docs/xml-api/post-object-complete>
+    fn complete(
+        &self,
+        completed_parts: Vec<Option<UploadPart>>,
+    ) -> BoxFuture<'static, Result<(), io::Error>> {
+        let client = Arc::clone(&self.client);
+        let upload_id = self.multipart_id.clone();
+        let url = format!(
+            "{}/{}/{}",
+            self.client.base_url, self.client.bucket_name_encoded, self.encoded_path
+        );
+
+        Box::pin(async move {
+            let parts: Vec<MultipartPart> = completed_parts
+                .into_iter()
+                .enumerate()
+                .map(|(part_number, maybe_part)| match maybe_part {
+                    Some(part) => Ok(MultipartPart {
+                        e_tag: part.content_id,
+                        part_number: part_number + 1,
+                    }),
+                    None => Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Missing information for upload part {:?}", part_number),
+                    )),
+                })
+                .collect::<Result<Vec<MultipartPart>, io::Error>>()?;
+
+            let token = client
+                .get_token()
+                .await
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+
+            let upload_info = CompleteMultipartUpload { parts };
+
+            let data = quick_xml::se::to_string(&upload_info)
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?
+                // We cannot disable the escaping that transforms "/" to "&quote;" :(
+                // https://github.com/tafia/quick-xml/issues/362
+                // https://github.com/tafia/quick-xml/issues/350
+                .replace("&quot;", "\"");
+
+            client
+                .client
+                .request(Method::POST, &url)
+                .bearer_auth(token)
+                .query(&[("uploadId", upload_id)])
+                .body(data)
+                .send()
+                .await
+                .map_err(reqwest_error_as_io)?
+                .error_for_status()
+                .map_err(reqwest_error_as_io)?;
+
+            Ok(())
+        })
+    }
+}
+
 #[async_trait]
 impl ObjectStore for GoogleCloudStorage {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
-        self.put_request(location, bytes).await
+        self.client.put_request(location, bytes).await
+    }
+
+    async fn put_multipart(
+        &self,
+        location: &Path,
+    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+        let upload_id = self.client.multipart_initiate(location).await?;
+
+        let encoded_path =
+            percent_encode(location.to_string().as_bytes(), NON_ALPHANUMERIC).to_string();
+
+        let inner = GCSMultipartUpload {
+            client: Arc::clone(&self.client),
+            encoded_path,
+            multipart_id: upload_id.clone(),
+        };
+
+        Ok((upload_id, Box::new(CloudMultiPartUpload::new(inner, 8))))
+    }
+
+    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
+        self.client
+            .multipart_cleanup(location.as_ref(), multipart_id)
+            .await?;
+
+        Ok(())
     }
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
-        let response = self.get_request(location, None, false).await?;
+        let response = self.client.get_request(location, None, false).await?;
         let stream = response
             .bytes_stream()
             .map_err(|source| crate::Error::Generic {
@@ -421,14 +685,17 @@ impl ObjectStore for GoogleCloudStorage {
     }
 
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
-        let response = self.get_request(location, Some(range), false).await?;
+        let response = self
+            .client
+            .get_request(location, Some(range), false)
+            .await?;
         Ok(response.bytes().await.context(GetRequestSnafu {
             path: location.as_ref(),
         })?)
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let response = self.get_request(location, None, true).await?;
+        let response = self.client.get_request(location, None, true).await?;
         let object = response.json().await.context(GetRequestSnafu {
             path: location.as_ref(),
         })?;
@@ -436,7 +703,7 @@ impl ObjectStore for GoogleCloudStorage {
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
-        self.delete_request(location).await
+        self.client.delete_request(location).await
     }
 
     async fn list(
@@ -444,6 +711,7 @@ impl ObjectStore for GoogleCloudStorage {
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
         let stream = self
+            .client
             .list_paginated(prefix, false)?
             .map_ok(|r| {
                 futures::stream::iter(
@@ -457,7 +725,7 @@ impl ObjectStore for GoogleCloudStorage {
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.list_paginated(prefix, true)?;
+        let mut stream = self.client.list_paginated(prefix, true)?;
 
         let mut common_prefixes = BTreeSet::new();
         let mut objects = Vec::new();
@@ -482,11 +750,11 @@ impl ObjectStore for GoogleCloudStorage {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.copy_request(from, to, false).await
+        self.client.copy_request(from, to, false).await
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        self.copy_request(from, to, true).await
+        self.client.copy_request(from, to, true).await
     }
 }
 
@@ -529,13 +797,15 @@ pub fn new_gcs(
     // environment variables. Set the environment variable explicitly so
     // that we can optionally accept command line arguments instead.
     Ok(GoogleCloudStorage {
-        client,
-        base_url: credentials.gcs_base_url,
-        oauth_provider,
-        token_cache: Default::default(),
-        bucket_name,
-        bucket_name_encoded: encoded_bucket_name,
-        max_list_results: None,
+        client: Arc::new(GoogleCloudStorageClient {
+            client,
+            base_url: credentials.gcs_base_url,
+            oauth_provider,
+            token_cache: Default::default(),
+            bucket_name,
+            bucket_name_encoded: encoded_bucket_name,
+            max_list_results: None,
+        }),
     })
 }
 
@@ -560,7 +830,7 @@ mod test {
     use crate::{
         tests::{
             get_nonexistent_object, list_uses_directories_correctly, list_with_delimiter,
-            put_get_delete_list, rename_and_copy,
+            put_get_delete_list, rename_and_copy, stream_get,
         },
         Error as ObjectStoreError, ObjectStore,
     };
@@ -628,6 +898,11 @@ mod test {
         list_uses_directories_correctly(&integration).await.unwrap();
         list_with_delimiter(&integration).await.unwrap();
         rename_and_copy(&integration).await.unwrap();
+        if integration.client.base_url == default_gcs_base_url() {
+            // Fake GCS server does not yet implement XML Multipart uploads
+            // https://github.com/fsouza/fake-gcs-server/issues/852
+            stream_get(&integration).await.unwrap();
+        }
     }
 
     #[tokio::test]

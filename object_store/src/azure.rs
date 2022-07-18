@@ -16,10 +16,21 @@
 // under the License.
 
 //! An object store implementation for Azure blob storage
+//!
+//! ## Streaming uploads
+//!
+//! [ObjectStore::put_multipart] will upload data in blocks and write a blob from those
+//! blocks. Data is buffered internally to make blocks of at least 5MB and blocks
+//! are uploaded concurrently.
+//!
+//! [ObjectStore::abort_multipart] is a no-op, since Azure Blob Store doesn't provide
+//! a way to drop old blocks. Instead unused blocks are automatically cleaned up
+//! after 7 days.
 use crate::{
+    multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
     util::format_prefix,
-    GetResult, ListResult, ObjectMeta, ObjectStore, Result,
+    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
 };
 use async_trait::async_trait;
 use azure_core::{prelude::*, HttpClient};
@@ -32,12 +43,15 @@ use azure_storage_blobs::{
 };
 use bytes::Bytes;
 use futures::{
+    future::BoxFuture,
     stream::{self, BoxStream},
     StreamExt, TryStreamExt,
 };
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeSet;
+use std::io;
 use std::{convert::TryInto, sync::Arc};
+use tokio::io::AsyncWrite;
 
 /// A specialized `Error` for Azure object store-related errors
 #[derive(Debug, Snafu)]
@@ -216,6 +230,23 @@ impl ObjectStore for MicrosoftAzure {
                 path: location.to_owned(),
             })?;
 
+        Ok(())
+    }
+
+    async fn put_multipart(
+        &self,
+        location: &Path,
+    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+        let inner = AzureMultiPartUpload {
+            container_client: Arc::clone(&self.container_client),
+            location: location.to_owned(),
+        };
+        Ok((String::new(), Box::new(CloudMultiPartUpload::new(inner, 8))))
+    }
+
+    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
+        // There is no way to drop blocks that have been uploaded. Instead, they simply
+        // expire in 7 days.
         Ok(())
     }
 
@@ -554,6 +585,91 @@ pub fn new_azure(
         blob_base_url,
         is_emulator,
     })
+}
+
+// Relevant docs: https://azure.github.io/Storage/docs/application-and-user-data/basics/azure-blob-storage-upload-apis/
+// In Azure Blob Store, parts are "blocks"
+// put_multipart_part -> PUT block
+// complete -> PUT block list
+// abort -> No equivalent; blocks are simply dropped after 7 days
+#[derive(Debug, Clone)]
+struct AzureMultiPartUpload {
+    container_client: Arc<ContainerClient>,
+    location: Path,
+}
+
+impl AzureMultiPartUpload {
+    /// Gets the block id corresponding to the part index.
+    ///
+    /// In Azure, the user determines what id each block has. They must be
+    /// unique within an upload and of consistent length.
+    fn get_block_id(&self, part_idx: usize) -> String {
+        format!("{:20}", part_idx)
+    }
+}
+
+impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
+    fn put_multipart_part(
+        &self,
+        buf: Vec<u8>,
+        part_idx: usize,
+    ) -> BoxFuture<'static, Result<(usize, UploadPart), io::Error>> {
+        let client = Arc::clone(&self.container_client);
+        let location = self.location.clone();
+        let block_id = self.get_block_id(part_idx);
+
+        Box::pin(async move {
+            client
+                .as_blob_client(location.as_ref())
+                .put_block(block_id.clone(), buf)
+                .execute()
+                .await
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+
+            Ok((
+                part_idx,
+                UploadPart {
+                    content_id: block_id,
+                },
+            ))
+        })
+    }
+
+    fn complete(
+        &self,
+        completed_parts: Vec<Option<UploadPart>>,
+    ) -> BoxFuture<'static, Result<(), io::Error>> {
+        let parts = completed_parts
+            .into_iter()
+            .enumerate()
+            .map(|(part_number, maybe_part)| match maybe_part {
+                Some(part) => Ok(azure_storage_blobs::blob::BlobBlockType::Uncommitted(
+                    azure_storage_blobs::BlockId::new(part.content_id),
+                )),
+                None => Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Missing information for upload part {:?}", part_number),
+                )),
+            });
+
+        let client = Arc::clone(&self.container_client);
+        let location = self.location.clone();
+
+        Box::pin(async move {
+            let block_list = azure_storage_blobs::blob::BlockList {
+                blocks: parts.collect::<Result<_, io::Error>>()?,
+            };
+
+            client
+                .as_blob_client(location.as_ref())
+                .put_block_list(&block_list)
+                .execute()
+                .await
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+
+            Ok(())
+        })
+    }
 }
 
 #[cfg(test)]
