@@ -406,6 +406,7 @@ impl ByteArrayDecoderPlain {
             skip += 1;
             self.offset = self.offset + 4 + len;
         }
+        self.max_remaining_values -= skip;
         Ok(skip)
     }
 }
