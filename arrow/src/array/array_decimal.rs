@@ -172,6 +172,11 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
         U::from(array_data)
     }
 
+    /// Build a decimal array from [`FixedSizeListArray`].
+    ///
+    /// NB: This function does not validate that each value is in the permissible
+    /// range for a decimal. And, the null buffer of the child array will be ignored.
+    #[deprecated(note = "please use `from_fixed_size_binary_array` instead")]
     fn from_fixed_size_list_array(
         v: FixedSizeListArray,
         precision: usize,
@@ -707,6 +712,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_decimal_array_from_fixed_size_list() {
         let value_data = ArrayData::builder(DataType::UInt8)
             .offset(16)
