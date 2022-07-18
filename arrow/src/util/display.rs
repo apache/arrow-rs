@@ -434,7 +434,7 @@ fn union_to_string(
     let name = fields.get(field_idx).unwrap().name();
 
     let value = array_value_to_string(
-        &list.child(type_id),
+        list.child(type_id),
         match mode {
             UnionMode::Dense => list.value_offset(row) as usize,
             UnionMode::Sparse => row,

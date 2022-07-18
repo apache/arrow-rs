@@ -231,10 +231,10 @@ impl UnionArray {
     ///
     /// Panics if the `type_id` provided is less than zero or greater than the number of types
     /// in the `Union`.
-    pub fn child(&self, type_id: i8) -> ArrayRef {
+    pub fn child(&self, type_id: i8) -> &ArrayRef {
         assert!(0 <= type_id);
         assert!((type_id as usize) < self.boxed_fields.len());
-        self.boxed_fields[type_id as usize].clone()
+        &self.boxed_fields[type_id as usize]
     }
 
     /// Returns the `type_id` for the array slot at `index`.
