@@ -1420,16 +1420,16 @@ mod tests {
         // [{"key1": 1}, {"key2": 2, "key3": 3}, null, {"key1": 1}
         builder.keys().append_value("key1");
         builder.values().append_value(1);
-        builder.append(true);
+        builder.append(true).unwrap();
         builder.keys().append_value("key2");
         builder.keys().append_value("key3");
         builder.values().append_value(2);
         builder.values().append_value(3);
-        builder.append(true);
-        builder.append(false);
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
         builder.keys().append_value("key1");
         builder.values().append_value(1);
-        builder.append(true);
+        builder.append(true).unwrap();
         let maparray = Arc::new(builder.finish()) as ArrayRef;
 
         let indices = vec![Some(true), Some(false), Some(false), Some(true)]
@@ -1441,10 +1441,10 @@ mod tests {
             MapBuilder::new(None, StringBuilder::new(8), Int64Builder::new(2));
         builder.keys().append_value("key1");
         builder.values().append_value(1);
-        builder.append(true);
+        builder.append(true).unwrap();
         builder.keys().append_value("key1");
         builder.values().append_value(1);
-        builder.append(true);
+        builder.append(true).unwrap();
         let expected = Arc::new(builder.finish()) as ArrayRef;
 
         assert_eq!(&expected, &got);

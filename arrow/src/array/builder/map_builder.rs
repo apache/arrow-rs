@@ -18,6 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
 use crate::array::array::Array;
 use crate::array::ArrayData;
 use crate::array::ArrayRef;
@@ -25,8 +26,8 @@ use crate::array::MapArray;
 use crate::array::StructArray;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
-
-use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
+use crate::error::ArrowError;
+use crate::error::Result;
 
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
@@ -94,15 +95,21 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     }
 
     /// Finish the current map array slot
+    ///
+    /// Returns an error if the key and values builders are in an inconsistent state.
     #[inline]
-    pub fn append(&mut self, is_valid: bool) {
-        assert_eq!(self.key_builder.len(), self.value_builder.len(),
+    pub fn append(&mut self, is_valid: bool) -> Result<()> {
+        if self.key_builder.len() != self.value_builder.len() {
+            return Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot append to a map builder when its keys and values have unequal lengths of {} and {}",
                 self.key_builder.len(),
-                self.value_builder.len());
+                self.value_builder.len()
+            )));
+        }
         self.offsets_builder.append(self.key_builder.len() as i32);
         self.bitmap_builder.append(is_valid);
         self.len += 1;
+        Ok(())
     }
 
     pub fn finish(&mut self) -> MapArray {
@@ -215,9 +222,9 @@ mod tests {
         int_builder.append_null();
         int_builder.append_value(4);
 
-        builder.append(true);
-        builder.append(false);
-        builder.append(true);
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+        builder.append(true).unwrap();
 
         let arr = builder.finish();
 

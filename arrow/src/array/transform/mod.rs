@@ -1361,17 +1361,17 @@ mod tests {
         );
         builder.keys().append_slice(&[1, 2, 3]);
         builder.values().append_slice(&[1, 2, 3]);
-        builder.append(true);
+        builder.append(true).unwrap();
         builder.keys().append_slice(&[4, 5]);
         builder.values().append_slice(&[4, 5]);
-        builder.append(true);
-        builder.append(false);
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
         builder.keys().append_slice(&[6, 7, 8, 100, 101, 9, 10, 11]);
         builder.values().append_slice(&[6, 7, 8]);
         builder.values().append_null();
         builder.values().append_null();
         builder.values().append_slice(&[9, 10, 11]);
-        builder.append(true);
+        builder.append(true).unwrap();
 
         let a = builder.finish();
         let a = a.data();
@@ -1384,14 +1384,14 @@ mod tests {
 
         builder.keys().append_slice(&[12, 13]);
         builder.values().append_slice(&[12, 13]);
-        builder.append(true);
-        builder.append(false);
-        builder.append(true);
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+        builder.append(true).unwrap();
         builder.keys().append_slice(&[100, 101, 14, 15]);
         builder.values().append_null();
         builder.values().append_null();
         builder.values().append_slice(&[14, 15]);
-        builder.append(true);
+        builder.append(true).unwrap();
 
         let b = builder.finish();
         let b = b.data();
