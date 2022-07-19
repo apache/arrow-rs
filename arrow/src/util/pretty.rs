@@ -120,7 +120,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::array::{DecimalArray, FixedSizeListBuilder};
+    use crate::array::{Decimal128Array, FixedSizeListBuilder};
     use std::fmt::Write;
     use std::sync::Arc;
 
@@ -523,7 +523,7 @@ mod tests {
 
         let array = [Some(101), None, Some(200), Some(3040)]
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
             .unwrap();
 
@@ -563,7 +563,7 @@ mod tests {
 
         let array = [Some(101), None, Some(200), Some(3040)]
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
             .unwrap();
 

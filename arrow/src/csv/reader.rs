@@ -50,7 +50,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use crate::array::{
-    ArrayRef, BooleanArray, DecimalBuilder, DictionaryArray, PrimitiveArray, StringArray,
+    ArrayRef, BooleanArray, Decimal128Builder, DictionaryArray, PrimitiveArray,
+    StringArray,
 };
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
@@ -698,7 +699,7 @@ fn build_decimal_array(
     precision: usize,
     scale: usize,
 ) -> Result<ArrayRef> {
-    let mut decimal_builder = DecimalBuilder::new(rows.len(), precision, scale);
+    let mut decimal_builder = Decimal128Builder::new(rows.len(), precision, scale);
     for row in rows {
         let col_s = row.get(col_idx);
         match col_s {
@@ -1218,7 +1219,7 @@ mod tests {
         let lat = batch
             .column(1)
             .as_any()
-            .downcast_ref::<DecimalArray>()
+            .downcast_ref::<Decimal128Array>()
             .unwrap();
 
         assert_eq!("57.653484", lat.value_as_string(0));

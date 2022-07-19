@@ -19,7 +19,7 @@ use crate::array::BasicDecimalArray;
 use crate::datatypes::ArrowPrimitiveType;
 
 use super::{
-    Array, ArrayRef, BooleanArray, DecimalArray, GenericBinaryArray, GenericListArray,
+    Array, ArrayRef, BooleanArray, Decimal128Array, GenericBinaryArray, GenericListArray,
     GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 
@@ -394,16 +394,16 @@ impl<'a, S: OffsetSizeTrait> std::iter::ExactSizeIterator
 }
 
 /// an iterator that returns `Some(i128)` or `None`, that can be used on a
-/// [`DecimalArray`]
+/// [`Decimal128Array`]
 #[derive(Debug)]
 pub struct DecimalIter<'a> {
-    array: &'a DecimalArray,
+    array: &'a Decimal128Array,
     current: usize,
     current_end: usize,
 }
 
 impl<'a> DecimalIter<'a> {
-    pub fn new(array: &'a DecimalArray) -> Self {
+    pub fn new(array: &'a Decimal128Array) -> Self {
         Self {
             array,
             current: 0,

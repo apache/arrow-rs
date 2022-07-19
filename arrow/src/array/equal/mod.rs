@@ -20,9 +20,10 @@
 //! depend on dynamic casting of `Array`.
 
 use super::{
-    Array, ArrayData, BooleanArray, DecimalArray, DictionaryArray, FixedSizeBinaryArray,
-    FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-    MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, StructArray,
+    Array, ArrayData, BooleanArray, Decimal128Array, DictionaryArray,
+    FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
+    GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
+    StructArray,
 };
 use crate::datatypes::{ArrowPrimitiveType, DataType, IntervalUnit};
 use half::f16;
@@ -109,7 +110,7 @@ impl PartialEq for FixedSizeBinaryArray {
     }
 }
 
-impl PartialEq for DecimalArray {
+impl PartialEq for Decimal128Array {
     fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
@@ -840,7 +841,7 @@ mod tests {
 
     fn create_decimal_array(data: &[Option<i128>]) -> ArrayData {
         data.iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap()
             .into()

@@ -149,7 +149,8 @@ where
             Ok(Arc::new(take_boolean(values, indices)?))
         }
         DataType::Decimal(_, _) => {
-            let decimal_values = values.as_any().downcast_ref::<DecimalArray>().unwrap();
+            let decimal_values =
+                values.as_any().downcast_ref::<Decimal128Array>().unwrap();
             Ok(Arc::new(take_decimal128(decimal_values, indices)?))
         }
         DataType::Int8 => downcast_take!(Int8Type, values, indices),
@@ -506,9 +507,9 @@ where
 
 /// `take` implementation for decimal arrays
 fn take_decimal128<IndexType>(
-    decimal_values: &DecimalArray,
+    decimal_values: &Decimal128Array,
     indices: &PrimitiveArray<IndexType>,
-) -> Result<DecimalArray>
+) -> Result<Decimal128Array>
 where
     IndexType: ArrowNumericType,
     IndexType::Native: ToPrimitive,
@@ -533,9 +534,9 @@ where
             let t: Result<Option<_>> = t.map(|t| t.flatten());
             t
         })
-        .collect::<Result<DecimalArray>>()?
+        .collect::<Result<Decimal128Array>>()?
         // PERF: we could avoid re-validating that the data in
-        // DecimalArray was in range as we know it came from a valid DecimalArray
+        // Decimal128Array was in range as we know it came from a valid Decimal128Array
         .with_precision_and_scale(decimal_values.precision(), decimal_values.scale())
 }
 
@@ -976,13 +977,13 @@ mod tests {
     ) -> Result<()> {
         let output = data
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(*precision, *scale)
             .unwrap();
 
         let expected = expected_data
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(*precision, *scale)
             .unwrap();
 

@@ -717,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_read_decimal_file() {
-        use arrow::array::DecimalArray;
+        use arrow::array::Decimal128Array;
         let testdata = arrow::util::test_util::parquet_test_data();
         let file_variants = vec![("fixed_length", 25), ("int32", 4), ("int64", 10)];
         for (prefix, target_precision) in file_variants {
@@ -732,7 +732,7 @@ mod tests {
             let col = batch
                 .column(0)
                 .as_any()
-                .downcast_ref::<DecimalArray>()
+                .downcast_ref::<Decimal128Array>()
                 .unwrap();
 
             let expected = 1..25;

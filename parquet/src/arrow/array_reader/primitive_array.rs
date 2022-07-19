@@ -25,7 +25,7 @@ use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::{
-    ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder, DecimalArray,
+    ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder, Decimal128Array,
     Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use arrow::buffer::Buffer;
@@ -203,7 +203,7 @@ where
                         .unwrap()
                         .iter()
                         .map(|v| v.map(|v| v.into()))
-                        .collect::<DecimalArray>(),
+                        .collect::<Decimal128Array>(),
 
                     ArrowType::Int64 => array
                         .as_any()
@@ -211,7 +211,7 @@ where
                         .unwrap()
                         .iter()
                         .map(|v| v.map(|v| v.into()))
-                        .collect::<DecimalArray>(),
+                        .collect::<Decimal128Array>(),
                     _ => {
                         return Err(arrow_err!(
                             "Cannot convert {:?} to decimal",

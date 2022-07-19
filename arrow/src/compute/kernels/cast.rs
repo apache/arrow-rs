@@ -284,7 +284,7 @@ macro_rules! cast_integer_to_decimal {
                     mul * v
                 })
             })
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(*$PRECISION, *$SCALE)?;
         Ok(Arc::new(decimal_array))
     }};
@@ -304,7 +304,7 @@ macro_rules! cast_floating_point_to_decimal {
                     ((v as f64) * mul) as i128
                 })
             })
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(*$PRECISION, *$SCALE)?;
         Ok(Arc::new(decimal_array))
     }};
@@ -313,7 +313,7 @@ macro_rules! cast_floating_point_to_decimal {
 // cast the decimal array to integer array
 macro_rules! cast_decimal_to_integer {
     ($ARRAY:expr, $SCALE : ident, $VALUE_BUILDER: ident, $NATIVE_TYPE : ident, $DATA_TYPE : expr) => {{
-        let array = $ARRAY.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array = $ARRAY.as_any().downcast_ref::<Decimal128Array>().unwrap();
         let mut value_builder = $VALUE_BUILDER::new(array.len());
         let div: i128 = 10_i128.pow(*$SCALE as u32);
         let min_bound = ($NATIVE_TYPE::MIN) as i128;
@@ -343,7 +343,7 @@ macro_rules! cast_decimal_to_integer {
 // cast the decimal array to floating-point array
 macro_rules! cast_decimal_to_float {
     ($ARRAY:expr, $SCALE : ident, $VALUE_BUILDER: ident, $NATIVE_TYPE : ty) => {{
-        let array = $ARRAY.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array = $ARRAY.as_any().downcast_ref::<Decimal128Array>().unwrap();
         let div = 10_f64.powi(*$SCALE as i32);
         let mut value_builder = $VALUE_BUILDER::new(array.len());
         for i in 0..array.len() {
@@ -1196,7 +1196,7 @@ fn cast_decimal_to_decimal(
     output_precision: &usize,
     output_scale: &usize,
 ) -> Result<ArrayRef> {
-    let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+    let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
 
     let output_array = if input_scale > output_scale {
         // For example, input_scale is 4 and output_scale is 3;
@@ -1205,7 +1205,7 @@ fn cast_decimal_to_decimal(
         array
             .iter()
             .map(|v| v.map(|v| v / div))
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
     } else {
         // For example, input_scale is 3 and output_scale is 4;
         // Original value is 1123_i128, and will be cast to 11230_i128.
@@ -1213,7 +1213,7 @@ fn cast_decimal_to_decimal(
         array
             .iter()
             .map(|v| v.map(|v| v * mul))
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
     }
     .with_precision_and_scale(*output_precision, *output_scale)?;
 
@@ -2168,10 +2168,10 @@ mod tests {
         array: &[Option<i128>],
         precision: usize,
         scale: usize,
-    ) -> Result<DecimalArray> {
+    ) -> Result<Decimal128Array> {
         array
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
     }
 
@@ -2185,7 +2185,7 @@ mod tests {
         let array = Arc::new(input_decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            DecimalArray,
+            Decimal128Array,
             &output_type,
             vec![
                 Some(Decimal128::new_from_i128(20, 4, 11234560_i128)),
@@ -2364,7 +2364,7 @@ mod tests {
         for array in input_datas {
             generate_cast_test_case!(
                 &array,
-                DecimalArray,
+                Decimal128Array,
                 &decimal_type,
                 vec![
                     Some(Decimal128::new_from_i128(38, 6, 1000000_i128)),
@@ -2396,7 +2396,7 @@ mod tests {
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            DecimalArray,
+            Decimal128Array,
             &decimal_type,
             vec![
                 Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),
@@ -2421,7 +2421,7 @@ mod tests {
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            DecimalArray,
+            Decimal128Array,
             &decimal_type,
             vec![
                 Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),

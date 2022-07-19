@@ -256,7 +256,7 @@ macro_rules! make_string_from_fixed_size_list {
 pub fn make_string_from_decimal(column: &Arc<dyn Array>, row: usize) -> Result<String> {
     let array = column
         .as_any()
-        .downcast_ref::<array::DecimalArray>()
+        .downcast_ref::<array::Decimal128Array>()
         .unwrap();
 
     let formatted_decimal = array.value_as_string(row);

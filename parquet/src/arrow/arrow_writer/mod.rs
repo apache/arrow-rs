@@ -572,7 +572,7 @@ fn write_leaf(
                 ArrowDataType::Decimal(_, _) => {
                     let array = column
                         .as_any()
-                        .downcast_ref::<arrow_array::DecimalArray>()
+                        .downcast_ref::<arrow_array::Decimal128Array>()
                         .unwrap();
                     get_decimal_array_slice(array, indices)
                 }
@@ -689,7 +689,7 @@ fn get_interval_dt_array_slice(
 }
 
 fn get_decimal_array_slice(
-    array: &arrow_array::DecimalArray,
+    array: &arrow_array::Decimal128Array,
     indices: &[usize],
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
@@ -932,7 +932,7 @@ mod tests {
         let decimal_values = vec![10_000, 50_000, 0, -100]
             .into_iter()
             .map(Some)
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(5, 2)
             .unwrap();
 
