@@ -33,7 +33,7 @@ use super::schema::{
     decimal_length_from_precision,
 };
 
-use crate::column::writer::ColumnWriter;
+use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::RowGroupMetaDataPtr;
 use crate::file::properties::WriterProperties;
@@ -373,33 +373,25 @@ fn write_leaf(
     let indices = levels.non_null_indices();
     let written = match writer {
         ColumnWriter::Int32ColumnWriter(ref mut typed) => {
-            let values = match column.data_type() {
+            match column.data_type() {
                 ArrowDataType::Date64 => {
                     // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
-                    let array = if let ArrowDataType::Date64 = column.data_type() {
-                        let array = arrow::compute::cast(column, &ArrowDataType::Date32)?;
-                        arrow::compute::cast(&array, &ArrowDataType::Int32)?
-                    } else {
-                        arrow::compute::cast(column, &ArrowDataType::Int32)?
-                    };
+                    let array = arrow::compute::cast(column, &ArrowDataType::Date32)?;
+                    let array = arrow::compute::cast(&array, &ArrowDataType::Int32)?;
+
                     let array = array
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
                         .expect("Unable to get int32 array");
-                    get_numeric_array_slice::<Int32Type, _>(array, indices)
+                    write_primitive(typed, array.values(), levels)?
                 }
                 ArrowDataType::UInt32 => {
+                    let data = column.data();
+                    let offset = data.offset();
                     // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
                     // `(i32::MAX as u32)..u32::MAX` to `i32::MIN..0`
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::UInt32Array>()
-                        .expect("Unable to get u32 array");
-                    let array = arrow::compute::unary::<_, _, arrow::datatypes::Int32Type>(
-                        array,
-                        |x| x as i32,
-                    );
-                    get_numeric_array_slice::<Int32Type, _>(&array, indices)
+                    let array: &[i32] = data.buffers()[0].typed_data();
+                    write_primitive(typed, &array[offset..offset + data.len()], levels)?
                 }
                 _ => {
                     let array = arrow::compute::cast(column, &ArrowDataType::Int32)?;
@@ -407,14 +399,9 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
                         .expect("Unable to get i32 array");
-                    get_numeric_array_slice::<Int32Type, _>(array, indices)
+                    write_primitive(typed, array.values(), levels)?
                 }
-            };
-            typed.write_batch(
-                values.as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
-            )?
+            }
         }
         ColumnWriter::BoolColumnWriter(ref mut typed) => {
             let array = column
@@ -428,26 +415,21 @@ fn write_leaf(
             )?
         }
         ColumnWriter::Int64ColumnWriter(ref mut typed) => {
-            let values = match column.data_type() {
+            match column.data_type() {
                 ArrowDataType::Int64 => {
                     let array = column
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
                         .expect("Unable to get i64 array");
-                    get_numeric_array_slice::<Int64Type, _>(array, indices)
+                    write_primitive(typed, array.values(), levels)?
                 }
                 ArrowDataType::UInt64 => {
                     // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
                     // `(i64::MAX as u64)..u64::MAX` to `i64::MIN..0`
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::UInt64Array>()
-                        .expect("Unable to get u64 array");
-                    let array = arrow::compute::unary::<_, _, arrow::datatypes::Int64Type>(
-                        array,
-                        |x| x as i64,
-                    );
-                    get_numeric_array_slice::<Int64Type, _>(&array, indices)
+                    let data = column.data();
+                    let offset = data.offset();
+                    let array: &[i64] = data.buffers()[0].typed_data();
+                    write_primitive(typed, &array[offset..offset + data.len()], levels)?
                 }
                 _ => {
                     let array = arrow::compute::cast(column, &ArrowDataType::Int64)?;
@@ -455,14 +437,9 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
                         .expect("Unable to get i64 array");
-                    get_numeric_array_slice::<Int64Type, _>(array, indices)
+                    write_primitive(typed, array.values(), levels)?
                 }
-            };
-            typed.write_batch(
-                values.as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
-            )?
+            }
         }
         ColumnWriter::Int96ColumnWriter(ref mut _typed) => {
             unreachable!("Currently unreachable because data type not supported")
@@ -472,22 +449,14 @@ fn write_leaf(
                 .as_any()
                 .downcast_ref::<arrow_array::Float32Array>()
                 .expect("Unable to get Float32 array");
-            typed.write_batch(
-                get_numeric_array_slice::<FloatType, _>(array, indices).as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
-            )?
+            write_primitive(typed, array.values(), levels)?
         }
         ColumnWriter::DoubleColumnWriter(ref mut typed) => {
             let array = column
                 .as_any()
                 .downcast_ref::<arrow_array::Float64Array>()
                 .expect("Unable to get Float64 array");
-            typed.write_batch(
-                get_numeric_array_slice::<DoubleType, _>(array, indices).as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
-            )?
+            write_primitive(typed, array.values(), levels)?
         }
         ColumnWriter::ByteArrayColumnWriter(ref mut typed) => match column.data_type() {
             ArrowDataType::Binary => {
@@ -619,30 +588,27 @@ macro_rules! def_get_binary_array_fn {
     };
 }
 
+fn write_primitive<'a, T: DataType>(
+    writer: &mut ColumnWriterImpl<'a, T>,
+    values: &[T::T],
+    levels: LevelInfo,
+) -> Result<usize> {
+    writer.write_batch_internal(
+        values,
+        Some(levels.non_null_indices()),
+        levels.def_levels(),
+        levels.rep_levels(),
+        None,
+        None,
+        None,
+    )
+}
+
 // TODO: These methods don't handle non null indices correctly (#1753)
 def_get_binary_array_fn!(get_binary_array, arrow_array::BinaryArray);
 def_get_binary_array_fn!(get_string_array, arrow_array::StringArray);
 def_get_binary_array_fn!(get_large_binary_array, arrow_array::LargeBinaryArray);
 def_get_binary_array_fn!(get_large_string_array, arrow_array::LargeStringArray);
-
-/// Get the underlying numeric array slice, skipping any null values.
-/// If there are no null values, it might be quicker to get the slice directly instead of
-/// calling this function.
-fn get_numeric_array_slice<T, A>(
-    array: &arrow_array::PrimitiveArray<A>,
-    indices: &[usize],
-) -> Vec<T::T>
-where
-    T: DataType,
-    A: arrow::datatypes::ArrowNumericType,
-    T::T: From<A::Native>,
-{
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        values.push(array.value(*i).into())
-    }
-    values
-}
 
 fn get_bool_array_slice(
     array: &arrow_array::BooleanArray,

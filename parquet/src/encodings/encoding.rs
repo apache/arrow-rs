@@ -42,6 +42,9 @@ pub trait Encoder<T: DataType> {
     /// Encodes data from `values`.
     fn put(&mut self, values: &[T::T]) -> Result<()>;
 
+    /// Encodes data from `values` with the corresponding indexes
+    fn put_gather(&mut self, values: &[T::T], value_indices: &[usize]) -> Result<()>;
+
     /// Encodes data from `values`, which contains spaces for null values, that is
     /// identified by `valid_bits`.
     ///
@@ -150,6 +153,17 @@ impl<T: DataType> Encoder<T> for PlainEncoder<T> {
     #[inline]
     fn put(&mut self, values: &[T::T]) -> Result<()> {
         T::T::encode(values, &mut self.buffer, &mut self.bit_writer)?;
+        Ok(())
+    }
+
+    fn put_gather(&mut self, values: &[T::T], value_indices: &[usize]) -> Result<()> {
+        for idx in value_indices {
+            T::T::encode(
+                std::slice::from_ref(&values[*idx]),
+                &mut self.buffer,
+                &mut self.bit_writer,
+            )?;
+        }
         Ok(())
     }
 }
@@ -352,6 +366,13 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
         Ok(())
     }
 
+    fn put_gather(&mut self, values: &[T::T], value_indices: &[usize]) -> Result<()> {
+        for idx in value_indices {
+            self.put_one(&values[*idx])?
+        }
+        Ok(())
+    }
+
     // Performance Note:
     // As far as can be seen these functions are rarely called and as such we can hint to the
     // compiler that they dont need to be folded into hot locations in the final output.
@@ -413,6 +434,12 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
             }
         }
         Ok(())
+    }
+
+    fn put_gather(&mut self, _values: &[T::T], _value_indices: &[usize]) -> Result<()> {
+        Err(nyi_err!(
+            "put_gather not yet implemented for RleValueEncoder"
+        ))
     }
 
     // Performance Note:
@@ -587,7 +614,8 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             }
 
             // Compute bit width to store (max_delta - min_delta)
-            let bit_width = num_required_bits(self.subtract_u64(max_delta, min_delta)) as usize;
+            let bit_width =
+                num_required_bits(self.subtract_u64(max_delta, min_delta)) as usize;
             self.bit_writer.write_at(offset + i, bit_width as u8);
 
             // Encode values in current mini block using min_delta and bit_width
@@ -645,6 +673,12 @@ impl<T: DataType> Encoder<T> for DeltaBitPackEncoder<T> {
             }
         }
         Ok(())
+    }
+
+    fn put_gather(&mut self, _values: &[T::T], _value_indices: &[usize]) -> Result<()> {
+        Err(nyi_err!(
+            "put_gather not yet implemented for DeltaBitPackEncoder"
+        ))
     }
 
     // Performance Note:
@@ -782,6 +816,12 @@ impl<T: DataType> Encoder<T> for DeltaLengthByteArrayEncoder<T> {
         Ok(())
     }
 
+    fn put_gather(&mut self, _values: &[T::T], _value_indices: &[usize]) -> Result<()> {
+        Err(nyi_err!(
+            "put_gather not yet implemented for DeltaLengthByteArrayEncoder"
+        ))
+    }
+
     // Performance Note:
     // As far as can be seen these functions are rarely called and as such we can hint to the
     // compiler that they dont need to be folded into hot locations in the final output.
@@ -872,6 +912,12 @@ impl<T: DataType> Encoder<T> for DeltaByteArrayEncoder<T> {
         self.suffix_writer.put(&suffixes)?;
 
         Ok(())
+    }
+
+    fn put_gather(&mut self, _values: &[T::T], _value_indices: &[usize]) -> Result<()> {
+        Err(nyi_err!(
+            "put_gather not yet implemented for DeltaByteArrayEncoder"
+        ))
     }
 
     // Performance Note:
