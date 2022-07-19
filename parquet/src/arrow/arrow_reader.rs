@@ -33,6 +33,7 @@ use crate::arrow::ProjectionMask;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::reader::{ChunkReader, FileReader, SerializedFileReader};
+use crate::file::serialized_reader::ReadOptionsBuilder;
 use crate::schema::types::SchemaDescriptor;
 
 /// Arrow reader api.
@@ -217,7 +218,12 @@ impl ParquetFileArrowReader {
         chunk_reader: R,
         options: ArrowReaderOptions,
     ) -> Result<Self> {
-        let file_reader = Arc::new(SerializedFileReader::new(chunk_reader)?);
+        let file_reader=  if options.selection.is_some() {
+            let options = ReadOptionsBuilder::new().with_page_index().build();
+            Arc::new(SerializedFileReader::new_with_options(chunk_reader,options)?)
+        }else {
+            Arc::new(SerializedFileReader::new(chunk_reader)?)
+        };
         Ok(Self::new_with_options(file_reader, options))
     }
 
@@ -388,9 +394,7 @@ mod tests {
     use arrow::error::Result as ArrowResult;
     use arrow::record_batch::{RecordBatch, RecordBatchReader};
 
-    use crate::arrow::arrow_reader::{
-        ArrowReader, ArrowReaderOptions, ParquetFileArrowReader,
-    };
+    use crate::arrow::arrow_reader::{ArrowReader, ArrowReaderOptions, ParquetFileArrowReader, RowSelection};
     use crate::arrow::buffer::converter::{
         BinaryArrayConverter, Converter, FixedSizeArrayConverter, FromConverter,
         IntervalDayTimeArrayConverter, LargeUtf8ArrayConverter, Utf8ArrayConverter,
@@ -405,6 +409,7 @@ mod tests {
     use crate::errors::Result;
     use crate::file::properties::{WriterProperties, WriterVersion};
     use crate::file::reader::{FileReader, SerializedFileReader};
+    use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
@@ -1585,5 +1590,37 @@ mod tests {
         test_row_group_batch(MIN_BATCH_SIZE, MIN_BATCH_SIZE + 1);
         test_row_group_batch(MIN_BATCH_SIZE, MIN_BATCH_SIZE - 1);
         test_row_group_batch(MIN_BATCH_SIZE - 1, MIN_BATCH_SIZE);
+    }
+
+    #[test]
+    fn test_scan_row_with_selection() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let test_file = File::open(&path).unwrap();
+        // total row count 7300
+        // 1. test selection size more than one page row count
+        let selections = create_test_selection(50, 7300);
+        let arrow_reader_options = ArrowReaderOptions::new().with_row_selection(selections);
+        let mut arrow_reader = ParquetFileArrowReader::try_new_with_options(test_file, arrow_reader_options).unwrap();
+        let reader = arrow_reader.get_record_reader(50).unwrap();
+
+        for batch in reader {
+            assert_eq!(batch.unwrap().num_rows(), 50)
+        }
+    }
+
+    fn create_test_selection(step_len: usize, total_len: usize) -> Vec<RowSelection> {
+        let mut cur_offset = 0;
+        let mut skip = false;
+        let mut vec = vec![];
+        while cur_offset < total_len {
+            vec.push(RowSelection{
+                row_count: step_len,
+                skip
+            });
+            cur_offset += step_len;
+            skip = !skip;
+        }
+        vec
     }
 }
