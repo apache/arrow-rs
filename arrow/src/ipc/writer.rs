@@ -226,7 +226,7 @@ impl IpcDataGenerator {
             }
             DataType::Union(fields, _, _) => {
                 let union = as_union_array(column);
-                for (field, ref column) in fields
+                for (field, column) in fields
                     .iter()
                     .enumerate()
                     .map(|(n, f)| (f, union.child(n as i8)))
@@ -1782,6 +1782,54 @@ mod tests {
         assert!(deserialized_batch.column(0).is_valid(0));
         assert!(deserialized_batch.column(0).is_null(1));
 
+        assert_eq!(record_batch_slice, deserialized_batch);
+    }
+
+    #[test]
+    fn truncate_ipc_struct_array() {
+        fn create_batch() -> RecordBatch {
+            let strings: StringArray = [Some("foo"), None, Some("bar"), Some("baz")]
+                .into_iter()
+                .collect();
+            let ints: Int32Array =
+                [Some(0), Some(2), None, Some(1)].into_iter().collect();
+
+            let struct_array = StructArray::from(vec![
+                (
+                    Field::new("s", DataType::Utf8, true),
+                    Arc::new(strings) as ArrayRef,
+                ),
+                (
+                    Field::new("c", DataType::Int32, false),
+                    Arc::new(ints) as ArrayRef,
+                ),
+            ]);
+
+            let schema = Schema::new(vec![Field::new(
+                "struct_array",
+                struct_array.data_type().clone(),
+                true,
+            )]);
+
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(struct_array)]).unwrap()
+        }
+
+        let record_batch = create_batch();
+        let record_batch_slice = record_batch.slice(1, 2);
+        let deserialized_batch = deserialize(serialize(&record_batch_slice));
+
+        assert!(serialize(&record_batch).len() > serialize(&record_batch_slice).len());
+
+        let structs = deserialized_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+
+        assert!(structs.column(0).is_null(0));
+        assert!(structs.column(0).is_valid(1));
+        assert!(structs.column(1).is_valid(0));
+        assert!(structs.column(1).is_null(1));
         assert_eq!(record_batch_slice, deserialized_batch);
     }
 }

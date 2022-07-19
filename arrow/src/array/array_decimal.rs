@@ -20,10 +20,10 @@ use std::convert::From;
 use std::fmt;
 use std::{any::Any, iter::FromIterator};
 
-use super::BooleanBufferBuilder;
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, FixedSizeListArray,
 };
+use super::{BooleanBufferBuilder, FixedSizeBinaryArray};
 pub use crate::array::DecimalIter;
 use crate::buffer::Buffer;
 use crate::datatypes::DataType;
@@ -34,17 +34,17 @@ use crate::datatypes::{
 use crate::error::{ArrowError, Result};
 use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
 
-/// `DecimalArray` stores fixed width decimal numbers,
+/// `Decimal128Array` stores fixed width decimal numbers,
 /// with a fixed precision and scale.
 ///
 /// # Examples
 ///
 /// ```
-///    use arrow::array::{Array, BasicDecimalArray, DecimalArray};
+///    use arrow::array::{Array, BasicDecimalArray, Decimal128Array};
 ///    use arrow::datatypes::DataType;
 ///
 ///    // Create a DecimalArray with the default precision and scale
-///    let decimal_array: DecimalArray = vec![
+///    let decimal_array: Decimal128Array = vec![
 ///       Some(8_887_000_000),
 ///       None,
 ///       Some(-8_887_000_000),
@@ -68,7 +68,7 @@ use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
 ///    assert_eq!(6, decimal_array.scale());
 /// ```
 ///
-pub struct DecimalArray {
+pub struct Decimal128Array {
     data: ArrayData,
     value_data: RawPtrBox<u8>,
     precision: usize,
@@ -148,6 +148,35 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
         self.value(row).to_string()
     }
 
+    /// Build a decimal array from [`FixedSizeBinaryArray`].
+    ///
+    /// NB: This function does not validate that each value is in the permissible
+    /// range for a decimal
+    fn from_fixed_size_binary_array(
+        v: FixedSizeBinaryArray,
+        precision: usize,
+        scale: usize,
+    ) -> U {
+        assert!(
+            v.value_length() == Self::VALUE_LENGTH,
+            "Value length of the array ({}) must equal to the byte width of the decimal ({})",
+            v.value_length(),
+            Self::VALUE_LENGTH,
+        );
+        let builder = v
+            .into_data()
+            .into_builder()
+            .data_type(DataType::Decimal(precision, scale));
+
+        let array_data = unsafe { builder.build_unchecked() };
+        U::from(array_data)
+    }
+
+    /// Build a decimal array from [`FixedSizeListArray`].
+    ///
+    /// NB: This function does not validate that each value is in the permissible
+    /// range for a decimal. And, the null buffer of the child array will be ignored.
+    #[deprecated(note = "please use `from_fixed_size_binary_array` instead")]
     fn from_fixed_size_list_array(
         v: FixedSizeListArray,
         precision: usize,
@@ -157,13 +186,13 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
         assert_eq!(
             child_data.child_data().len(),
             0,
-            "DecimalArray can only be created from list array of u8 values \
+            "Decimal128Array can only be created from list array of u8 values \
              (i.e. FixedSizeList<PrimitiveArray<u8>>)."
         );
         assert_eq!(
             child_data.data_type(),
             &DataType::UInt8,
-            "DecimalArray can only be created from FixedSizeList<u8> arrays, mismatched data types."
+            "Decimal128Array can only be created from FixedSizeList<u8> arrays, mismatched data types."
         );
 
         let list_offset = v.offset();
@@ -179,7 +208,7 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     }
 }
 
-impl BasicDecimalArray<Decimal128, DecimalArray> for DecimalArray {
+impl BasicDecimalArray<Decimal128, Decimal128Array> for Decimal128Array {
     const VALUE_LENGTH: i32 = 16;
 
     fn data(&self) -> &ArrayData {
@@ -211,8 +240,8 @@ impl BasicDecimalArray<Decimal256, Decimal256Array> for Decimal256Array {
     }
 }
 
-impl DecimalArray {
-    /// Creates a [DecimalArray] with default precision and scale,
+impl Decimal128Array {
+    /// Creates a [Decimal128Array] with default precision and scale,
     /// based on an iterator of `i128` values without nulls
     pub fn from_iter_values<I: IntoIterator<Item = i128>>(iter: I) -> Self {
         let val_buf: Buffer = iter.into_iter().collect();
@@ -227,10 +256,10 @@ impl DecimalArray {
                 vec![],
             )
         };
-        DecimalArray::from(data)
+        Decimal128Array::from(data)
     }
 
-    /// Returns a DecimalArray with the same data as self, with the
+    /// Returns a Decimal128Array with the same data as self, with the
     /// specified precision.
     ///
     /// Returns an Error if:
@@ -290,12 +319,12 @@ impl DecimalArray {
     }
 }
 
-impl From<ArrayData> for DecimalArray {
+impl From<ArrayData> for Decimal128Array {
     fn from(data: ArrayData) -> Self {
         assert_eq!(
             data.buffers().len(),
             1,
-            "DecimalArray data should contain 1 buffer only (values)"
+            "Decimal128Array data should contain 1 buffer only (values)"
         );
         let values = data.buffers()[0].as_ptr();
         let (precision, scale) = match data.data_type() {
@@ -316,7 +345,7 @@ impl From<ArrayData> for Decimal256Array {
         assert_eq!(
             data.buffers().len(),
             1,
-            "DecimalArray data should contain 1 buffer only (values)"
+            "Decimal128Array data should contain 1 buffer only (values)"
         );
         let values = data.buffers()[0].as_ptr();
         let (precision, scale) = match data.data_type() {
@@ -332,7 +361,7 @@ impl From<ArrayData> for Decimal256Array {
     }
 }
 
-impl<'a> IntoIterator for &'a DecimalArray {
+impl<'a> IntoIterator for &'a Decimal128Array {
     type Item = Option<i128>;
     type IntoIter = DecimalIter<'a>;
 
@@ -341,14 +370,14 @@ impl<'a> IntoIterator for &'a DecimalArray {
     }
 }
 
-impl<'a> DecimalArray {
+impl<'a> Decimal128Array {
     /// constructs a new iterator
     pub fn iter(&'a self) -> DecimalIter<'a> {
         DecimalIter::new(self)
     }
 }
 
-impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalArray {
+impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for Decimal128Array {
     fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
         let iter = iter.into_iter();
         let (lower, upper) = iter.size_hint();
@@ -380,7 +409,7 @@ impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalArray {
                 vec![],
             )
         };
-        DecimalArray::from(data)
+        Decimal128Array::from(data)
     }
 }
 
@@ -430,12 +459,12 @@ macro_rules! def_decimal_array {
     };
 }
 
-def_decimal_array!(DecimalArray, "DecimalArray");
+def_decimal_array!(Decimal128Array, "Decimal128Array");
 def_decimal_array!(Decimal256Array, "Decimal256Array");
 
 #[cfg(test)]
 mod tests {
-    use crate::{array::DecimalBuilder, datatypes::Field};
+    use crate::{array::Decimal128Builder, datatypes::Field};
 
     use super::*;
 
@@ -452,7 +481,7 @@ mod tests {
             .add_buffer(Buffer::from(&values[..]))
             .build()
             .unwrap();
-        let decimal_array = DecimalArray::from(array_data);
+        let decimal_array = Decimal128Array::from(array_data);
         assert_eq!(8_887_000_000_i128, decimal_array.value(0).into());
         assert_eq!(-8_887_000_000_i128, decimal_array.value(1).into());
         assert_eq!(16, decimal_array.value_length());
@@ -461,7 +490,7 @@ mod tests {
     #[test]
     #[cfg(not(feature = "force_validate"))]
     fn test_decimal_append_error_value() {
-        let mut decimal_builder = DecimalBuilder::new(10, 5, 3);
+        let mut decimal_builder = Decimal128Builder::new(10, 5, 3);
         let mut result = decimal_builder.append_value(123456);
         let mut error = result.unwrap_err();
         assert_eq!(
@@ -478,7 +507,7 @@ mod tests {
         let arr = decimal_builder.finish();
         assert_eq!("12.345", arr.value_as_string(1));
 
-        decimal_builder = DecimalBuilder::new(10, 2, 1);
+        decimal_builder = Decimal128Builder::new(10, 2, 1);
         result = decimal_builder.append_value(100);
         error = result.unwrap_err();
         assert_eq!(
@@ -502,7 +531,7 @@ mod tests {
 
     #[test]
     fn test_decimal_from_iter_values() {
-        let array = DecimalArray::from_iter_values(vec![-100, 0, 101].into_iter());
+        let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
         assert_eq!(-100_i128, array.value(0).into());
@@ -515,7 +544,8 @@ mod tests {
 
     #[test]
     fn test_decimal_from_iter() {
-        let array: DecimalArray = vec![Some(-100), None, Some(101)].into_iter().collect();
+        let array: Decimal128Array =
+            vec![Some(-100), None, Some(101)].into_iter().collect();
         assert_eq!(array.len(), 3);
         assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
         assert_eq!(-100_i128, array.value(0).into());
@@ -528,7 +558,7 @@ mod tests {
     #[test]
     fn test_decimal_iter() {
         let data = vec![Some(-100), None, Some(101)];
-        let array: DecimalArray = data.clone().into_iter().collect();
+        let array: Decimal128Array = data.clone().into_iter().collect();
 
         let collected: Vec<_> = array.iter().collect();
         assert_eq!(data, collected);
@@ -537,7 +567,7 @@ mod tests {
     #[test]
     fn test_decimal_into_iter() {
         let data = vec![Some(-100), None, Some(101)];
-        let array: DecimalArray = data.clone().into_iter().collect();
+        let array: Decimal128Array = data.clone().into_iter().collect();
 
         let collected: Vec<_> = array.into_iter().collect();
         assert_eq!(data, collected);
@@ -546,7 +576,7 @@ mod tests {
     #[test]
     fn test_decimal_iter_sized() {
         let data = vec![Some(-100), None, Some(101)];
-        let array: DecimalArray = data.into_iter().collect();
+        let array: Decimal128Array = data.into_iter().collect();
         let mut iter = array.into_iter();
 
         // is exact sized
@@ -568,7 +598,7 @@ mod tests {
         let arr = [123450, -123450, 100, -100, 10, -10, 0]
             .into_iter()
             .map(Some)
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(6, 3)
             .unwrap();
 
@@ -583,7 +613,7 @@ mod tests {
 
     #[test]
     fn test_decimal_array_with_precision_and_scale() {
-        let arr = DecimalArray::from_iter_values([12345, 456, 7890, -123223423432432])
+        let arr = Decimal128Array::from_iter_values([12345, 456, 7890, -123223423432432])
             .with_precision_and_scale(20, 2)
             .unwrap();
 
@@ -602,7 +632,7 @@ mod tests {
         expected = "-123223423432432 is too small to store in a Decimal of precision 5. Min is -99999"
     )]
     fn test_decimal_array_with_precision_and_scale_out_of_range() {
-        DecimalArray::from_iter_values([12345, 456, 7890, -123223423432432])
+        Decimal128Array::from_iter_values([12345, 456, 7890, -123223423432432])
             // precision is too small to hold value
             .with_precision_and_scale(5, 2)
             .unwrap();
@@ -611,7 +641,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "precision 40 is greater than max 38")]
     fn test_decimal_array_with_precision_and_scale_invalid_precision() {
-        DecimalArray::from_iter_values([12345, 456])
+        Decimal128Array::from_iter_values([12345, 456])
             .with_precision_and_scale(40, 2)
             .unwrap();
     }
@@ -619,7 +649,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "scale 40 is greater than max 38")]
     fn test_decimal_array_with_precision_and_scale_invalid_scale() {
-        DecimalArray::from_iter_values([12345, 456])
+        Decimal128Array::from_iter_values([12345, 456])
             .with_precision_and_scale(20, 40)
             .unwrap();
     }
@@ -627,7 +657,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "scale 10 is greater than precision 4")]
     fn test_decimal_array_with_precision_and_scale_invalid_precision_and_scale() {
-        DecimalArray::from_iter_values([12345, 456])
+        Decimal128Array::from_iter_values([12345, 456])
             .with_precision_and_scale(4, 10)
             .unwrap();
     }
@@ -636,17 +666,54 @@ mod tests {
     fn test_decimal_array_fmt_debug() {
         let arr = [Some(8887000000), Some(-8887000000), None]
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap();
 
         assert_eq!(
-            "DecimalArray<23, 6>\n[\n  8887.000000,\n  -8887.000000,\n  null,\n]",
+            "Decimal128Array<23, 6>\n[\n  8887.000000,\n  -8887.000000,\n  null,\n]",
             format!("{:?}", arr)
         );
     }
 
     #[test]
+    fn test_decimal_array_from_fixed_size_binary() {
+        let value_data = ArrayData::builder(DataType::FixedSizeBinary(16))
+            .offset(1)
+            .len(3)
+            .add_buffer(Buffer::from_slice_ref(&[99999_i128, 2, 34, 560]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b1010])))
+            .build()
+            .unwrap();
+
+        let binary_array = FixedSizeBinaryArray::from(value_data);
+        let decimal = Decimal128Array::from_fixed_size_binary_array(binary_array, 38, 1);
+
+        assert_eq!(decimal.len(), 3);
+        assert_eq!(decimal.value_as_string(0), "0.2".to_string());
+        assert!(decimal.is_null(1));
+        assert_eq!(decimal.value_as_string(2), "56.0".to_string());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Value length of the array (8) must equal to the byte width of the decimal (16)"
+    )]
+    fn test_decimal_array_from_fixed_size_binary_wrong_length() {
+        let value_data = ArrayData::builder(DataType::FixedSizeBinary(8))
+            .offset(1)
+            .len(3)
+            .add_buffer(Buffer::from_slice_ref(&[99999_i64, 2, 34, 560]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b1010])))
+            .build()
+            .unwrap();
+
+        let binary_array = FixedSizeBinaryArray::from(value_data);
+        let _ = Decimal128Array::from_fixed_size_binary_array(binary_array, 38, 1);
+    }
+
+    #[test]
+    #[allow(deprecated)]
     fn test_decimal_array_from_fixed_size_list() {
         let value_data = ArrayData::builder(DataType::UInt8)
             .offset(16)
@@ -670,7 +737,7 @@ mod tests {
             .build()
             .unwrap();
         let list_array = FixedSizeListArray::from(list_data);
-        let decimal = DecimalArray::from_fixed_size_list_array(list_array, 38, 0);
+        let decimal = Decimal128Array::from_fixed_size_list_array(list_array, 38, 0);
 
         assert_eq!(decimal.len(), 2);
         assert!(decimal.is_null(0));

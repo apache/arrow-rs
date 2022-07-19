@@ -183,8 +183,12 @@ pub use self::array_binary::FixedSizeBinaryArray;
 pub use self::array_binary::LargeBinaryArray;
 pub use self::array_boolean::BooleanArray;
 pub use self::array_decimal::BasicDecimalArray;
+pub use self::array_decimal::Decimal128Array;
 pub use self::array_decimal::Decimal256Array;
-pub use self::array_decimal::DecimalArray;
+
+#[deprecated(note = "Please use `Decimal128Array` instead")]
+pub type DecimalArray = Decimal128Array;
+
 pub use self::array_dictionary::DictionaryArray;
 pub use self::array_list::FixedSizeListArray;
 pub use self::array_list::LargeListArray;
@@ -471,8 +475,12 @@ pub use self::builder::BinaryBuilder;
 pub use self::builder::BooleanBufferBuilder;
 pub use self::builder::BooleanBuilder;
 pub use self::builder::BufferBuilder;
+pub use self::builder::Decimal128Builder;
 pub use self::builder::Decimal256Builder;
-pub use self::builder::DecimalBuilder;
+
+#[deprecated(note = "Please use `Decimal128Builder` instead")]
+pub type DecimalBuilder = Decimal128Builder;
+
 pub use self::builder::FixedSizeBinaryBuilder;
 pub use self::builder::FixedSizeListBuilder;
 pub use self::builder::GenericListBuilder;

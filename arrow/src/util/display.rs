@@ -256,7 +256,7 @@ macro_rules! make_string_from_fixed_size_list {
 pub fn make_string_from_decimal(column: &Arc<dyn Array>, row: usize) -> Result<String> {
     let array = column
         .as_any()
-        .downcast_ref::<array::DecimalArray>()
+        .downcast_ref::<array::Decimal128Array>()
         .unwrap();
 
     let formatted_decimal = array.value_as_string(row);
@@ -434,7 +434,7 @@ fn union_to_string(
     let name = fields.get(field_idx).unwrap().name();
 
     let value = array_value_to_string(
-        &list.child(type_id),
+        list.child(type_id),
         match mode {
             UnionMode::Dense => list.value_offset(row) as usize,
             UnionMode::Sparse => row,

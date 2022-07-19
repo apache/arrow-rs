@@ -361,7 +361,7 @@ impl PartialEq<FixedSizeBinaryArray> for Value {
     }
 }
 
-impl JsonEqual for DecimalArray {
+impl JsonEqual for Decimal128Array {
     fn equals_json(&self, json: &[&Value]) -> bool {
         if self.len() != json.len() {
             return false;
@@ -394,7 +394,7 @@ impl JsonEqual for Decimal256Array {
     }
 }
 
-impl PartialEq<Value> for DecimalArray {
+impl PartialEq<Value> for Decimal128Array {
     fn eq(&self, json: &Value) -> bool {
         match json {
             Value::Array(json_array) => self.equals_json_values(json_array),
@@ -403,8 +403,8 @@ impl PartialEq<Value> for DecimalArray {
     }
 }
 
-impl PartialEq<DecimalArray> for Value {
-    fn eq(&self, arrow: &DecimalArray) -> bool {
+impl PartialEq<Decimal128Array> for Value {
+    fn eq(&self, arrow: &Decimal128Array) -> bool {
         match self {
             Value::Array(json_array) => arrow.equals_json_values(json_array),
             _ => false,
@@ -947,7 +947,7 @@ mod tests {
         // Test the equal case
         let arrow_array = [Some(1_000), None, Some(-250)]
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap();
         let json_array: Value = serde_json::from_str(
@@ -966,7 +966,7 @@ mod tests {
         // Test unequal case
         let arrow_array = [Some(1_000), None, Some(55)]
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap();
         let json_array: Value = serde_json::from_str(

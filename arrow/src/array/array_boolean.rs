@@ -227,12 +227,12 @@ impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray {
         let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
 
         let num_bytes = bit_util::ceil(data_len, 8);
-        let mut null_buf = MutableBuffer::from_len_zeroed(num_bytes);
-        let mut val_buf = MutableBuffer::from_len_zeroed(num_bytes);
+        let mut null_builder = MutableBuffer::from_len_zeroed(num_bytes);
+        let mut val_builder = MutableBuffer::from_len_zeroed(num_bytes);
 
-        let data = val_buf.as_slice_mut();
+        let data = val_builder.as_slice_mut();
 
-        let null_slice = null_buf.as_slice_mut();
+        let null_slice = null_builder.as_slice_mut();
         iter.enumerate().for_each(|(i, item)| {
             if let Some(a) = item.borrow() {
                 bit_util::set_bit(null_slice, i);
@@ -247,9 +247,9 @@ impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray {
                 DataType::Boolean,
                 data_len,
                 None,
-                Some(null_buf.into()),
+                Some(null_builder.into()),
                 0,
-                vec![val_buf.into()],
+                vec![val_builder.into()],
                 vec![],
             )
         };
@@ -328,11 +328,30 @@ mod tests {
         assert_eq!(4, arr.len());
         assert_eq!(0, arr.offset());
         assert_eq!(0, arr.null_count());
+        assert!(arr.data().null_buffer().is_none());
         for i in 0..3 {
             assert!(!arr.is_null(i));
             assert!(arr.is_valid(i));
             assert_eq!(i == 1 || i == 3, arr.value(i), "failed at {}", i)
         }
+    }
+
+    #[test]
+    fn test_boolean_array_from_nullable_iter() {
+        let v = vec![Some(true), None, Some(false), None];
+        let arr = v.into_iter().collect::<BooleanArray>();
+        assert_eq!(4, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(2, arr.null_count());
+        assert!(arr.data().null_buffer().is_some());
+
+        assert!(arr.is_valid(0));
+        assert!(arr.is_null(1));
+        assert!(arr.is_valid(2));
+        assert!(arr.is_null(3));
+
+        assert!(arr.value(0));
+        assert!(!arr.value(2));
     }
 
     #[test]
