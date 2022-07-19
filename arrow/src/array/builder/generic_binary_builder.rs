@@ -39,6 +39,16 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
         }
     }
 
+    /// Creates a new `GenericBinaryBuilder`,
+    /// `data_capacity` is the number of bytes of string data to pre-allocate space for in this builder
+    /// `item_capacity` is the number of items to pre-allocate space for in this builder
+    pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
+        let values_builder = UInt8Builder::new(data_capacity);
+        Self {
+            builder: GenericListBuilder::with_capacity(values_builder, item_capacity),
+        }
+    }
+
     /// Appends a single byte value into the builder's values array.
     ///
     /// Note, when appending individual byte values you must call `append` to delimit each
@@ -79,6 +89,21 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSize> {
+    /// Returns the number of array slots in the builder
+    fn len(&self) -> usize {
+        self.builder.len()
+    }
+
+    /// Returns whether the number of array slots is zero
+    fn is_empty(&self) -> bool {
+        self.builder.is_empty()
+    }
+
+    /// Builds the array and reset this builder.
+    fn finish(&mut self) -> ArrayRef {
+        Arc::new(self.finish())
+    }
+
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -93,20 +118,33 @@ impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSi
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
+}
 
-    /// Returns the number of array slots in the builder
-    fn len(&self) -> usize {
-        self.builder.len()
-    }
+impl<Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
+    for GenericBinaryBuilder<OffsetSize>
+where
+    Ptr: AsRef<[u8]>,
+{
+    fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let size_hint = upper.unwrap_or(lower);
 
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.builder.is_empty()
-    }
+        let mut builder = GenericBinaryBuilder::with_capacity(size_hint, 0);
 
-    /// Builds the array and reset this builder.
-    fn finish(&mut self) -> ArrayRef {
-        Arc::new(self.finish())
+        iter.for_each(|item| {
+            if let Some(a) = item {
+                builder
+                    .append_value(a.as_ref())
+                    .expect("Unable to append a value to a binary array builder.");
+            } else {
+                builder
+                    .append_null()
+                    .expect("Unable to append a null value to a binary array builder.");
+            }
+        });
+
+        builder
     }
 }
 

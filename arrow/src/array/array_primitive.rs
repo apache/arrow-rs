@@ -404,44 +404,7 @@ impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr>
     for PrimitiveArray<T>
 {
     fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
-        let iter = iter.into_iter();
-        let (lower, _) = iter.size_hint();
-
-        let mut null_builder = BooleanBufferBuilder::new(lower);
-
-        let buffer: Buffer = iter
-            .map(|item| {
-                if let Some(a) = item.into().native {
-                    null_builder.append(true);
-                    a
-                } else {
-                    null_builder.append(false);
-                    // this ensures that null items on the buffer are not arbitrary.
-                    // This is important because fallible operations can use null values (e.g. a vectorized "add")
-                    // which may panic (e.g. overflow if the number on the slots happen to be very large).
-                    T::Native::default()
-                }
-            })
-            .collect();
-
-        let len = null_builder.len();
-        let null_buf: Buffer = null_builder.into();
-        let valid_count = null_buf.count_set_bits();
-        let null_count = len - valid_count;
-        let opt_null_buf = (null_count != 0).then(|| null_buf);
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                T::DATA_TYPE,
-                len,
-                Some(null_count),
-                opt_null_buf,
-                0,
-                vec![buffer],
-                vec![],
-            )
-        };
-        PrimitiveArray::from(data)
+        iter.into_iter().collect::<PrimitiveBuilder<T>>().finish()
     }
 }
 

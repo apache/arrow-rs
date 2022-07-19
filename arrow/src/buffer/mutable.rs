@@ -391,7 +391,7 @@ unsafe fn reallocate(
 
 impl<A: ArrowNativeType> Extend<A> for MutableBuffer {
     #[inline]
-    fn extend<T: IntoIterator<Item = A>>(&mut self, iter: T) {
+    fn extend<I: IntoIterator<Item = A>>(&mut self, iter: I) {
         let iterator = iter.into_iter();
         self.extend_from_iter(iterator)
     }

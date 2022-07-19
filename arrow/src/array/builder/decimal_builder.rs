@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::array::array_decimal::{BasicDecimalArray, Decimal256Array};
@@ -25,7 +26,9 @@ use crate::array::{ArrayBuilder, FixedSizeBinaryBuilder};
 
 use crate::error::{ArrowError, Result};
 
-use crate::datatypes::validate_decimal_precision;
+use crate::datatypes::{
+    validate_decimal_precision, DECIMAL_DEFAULT_SCALE, DECIMAL_MAX_PRECISION,
+};
 use crate::util::decimal::{BasicDecimal, Decimal256};
 
 /// Array Builder for [`DecimalArray`]
@@ -123,6 +126,21 @@ impl DecimalBuilder {
 }
 
 impl ArrayBuilder for DecimalBuilder {
+    /// Returns the number of array slots in the builder
+    fn len(&self) -> usize {
+        self.builder.len()
+    }
+
+    /// Returns whether the number of array slots is zero
+    fn is_empty(&self) -> bool {
+        self.builder.is_empty()
+    }
+
+    /// Builds the array and reset this builder.
+    fn finish(&mut self) -> ArrayRef {
+        Arc::new(self.finish())
+    }
+
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -137,20 +155,34 @@ impl ArrayBuilder for DecimalBuilder {
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
+}
 
-    /// Returns the number of array slots in the builder
-    fn len(&self) -> usize {
-        self.builder.len()
-    }
+impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for DecimalBuilder {
+    fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let size_hint = upper.unwrap_or(lower);
+        let fixed_len = 16_usize;
 
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.builder.is_empty()
-    }
+        let mut builder = DecimalBuilder::new(
+            size_hint * fixed_len,
+            DECIMAL_MAX_PRECISION,
+            DECIMAL_DEFAULT_SCALE,
+        );
 
-    /// Builds the array and reset this builder.
-    fn finish(&mut self) -> ArrayRef {
-        Arc::new(self.finish())
+        iter.for_each(|item| {
+            if let Some(a) = item.borrow() {
+                builder
+                    .append_value(*a)
+                    .expect("Unable to append a value to a decimal array builder.");
+            } else {
+                builder
+                    .append_null()
+                    .expect("Unable to append a null value to a decimal array builder.");
+            }
+        });
+
+        builder
     }
 }
 

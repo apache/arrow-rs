@@ -23,8 +23,8 @@ use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, GenericListArray,
     GenericStringIter, OffsetSizeTrait,
 };
+use crate::array::GenericStringBuilder;
 use crate::buffer::Buffer;
-use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
 
 /// Generic struct for \[Large\]StringArray
@@ -207,7 +207,9 @@ where
         // Convert each owned Ptr into &str and wrap in an owned `Option`
         let iter = iter.into_iter().map(|o| o.as_ref().map(|p| p.as_ref()));
         // Build a `GenericStringArray` with the resulting iterator
-        iter.collect::<GenericStringArray<OffsetSize>>()
+        iter.into_iter()
+            .collect::<GenericStringBuilder<OffsetSize>>()
+            .finish()
     }
 }
 
@@ -218,41 +220,9 @@ where
 {
     /// Creates a [`GenericStringArray`] based on an iterator of [`Option`]s
     fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
-        let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
-
-        let offset_size = std::mem::size_of::<OffsetSize>();
-        let mut offsets = MutableBuffer::new((data_len + 1) * offset_size);
-        let mut values = MutableBuffer::new(0);
-        let mut null_buf = MutableBuffer::new_null(data_len);
-        let null_slice = null_buf.as_slice_mut();
-        let mut length_so_far = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        for (i, s) in iter.enumerate() {
-            let value_bytes = if let Some(ref s) = s {
-                // set null bit
-                bit_util::set_bit(null_slice, i);
-                let s_bytes = s.as_ref().as_bytes();
-                length_so_far += OffsetSize::from_usize(s_bytes.len()).unwrap();
-                s_bytes
-            } else {
-                b""
-            };
-            values.extend_from_slice(value_bytes);
-            offsets.push(length_so_far);
-        }
-
-        // calculate actual data_len, which may be different from the iterator's upper bound
-        let data_len = (offsets.len() / offset_size) - 1;
-        let array_data = ArrayData::builder(Self::get_data_type())
-            .len(data_len)
-            .add_buffer(offsets.into())
-            .add_buffer(values.into())
-            .null_bit_buffer(Some(null_buf.into()));
-        let array_data = unsafe { array_data.build_unchecked() };
-        Self::from(array_data)
+        iter.into_iter()
+            .collect::<GenericStringBuilder<OffsetSize>>()
+            .finish()
     }
 }
 

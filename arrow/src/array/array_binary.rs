@@ -23,6 +23,7 @@ use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
 };
+use crate::array::builder::GenericBinaryBuilder;
 pub use crate::array::DecimalIter;
 use crate::buffer::Buffer;
 use crate::error::{ArrowError, Result};
@@ -279,40 +280,9 @@ where
     Ptr: AsRef<[u8]>,
 {
     fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
-        let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
-
-        let mut offsets = Vec::with_capacity(data_len + 1);
-        let mut values = Vec::new();
-        let mut null_buf = MutableBuffer::new_null(data_len);
-        let mut length_so_far: OffsetSize = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        {
-            let null_slice = null_buf.as_slice_mut();
-
-            for (i, s) in iter.enumerate() {
-                if let Some(s) = s {
-                    let s = s.as_ref();
-                    bit_util::set_bit(null_slice, i);
-                    length_so_far += OffsetSize::from_usize(s.len()).unwrap();
-                    values.extend_from_slice(s);
-                }
-                // always add an element in offsets
-                offsets.push(length_so_far);
-            }
-        }
-
-        // calculate actual data_len, which may be different from the iterator's upper bound
-        let data_len = offsets.len() - 1;
-        let array_data = ArrayData::builder(Self::get_data_type())
-            .len(data_len)
-            .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_buffer(Buffer::from_slice_ref(&values))
-            .null_bit_buffer(Some(null_buf.into()));
-        let array_data = unsafe { array_data.build_unchecked() };
-        Self::from(array_data)
+        iter.into_iter()
+            .collect::<GenericBinaryBuilder<OffsetSize>>()
+            .finish()
     }
 }
 

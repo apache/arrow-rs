@@ -29,7 +29,7 @@ pub struct GenericStringBuilder<OffsetSize: OffsetSizeTrait> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
-    /// Creates a new `StringBuilder`,
+    /// Creates a new `GenericStringBuilder`,
     /// `capacity` is the number of bytes of string data to pre-allocate space for in this builder
     pub fn new(capacity: usize) -> Self {
         let values_builder = UInt8Builder::new(capacity);
@@ -38,7 +38,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
         }
     }
 
-    /// Creates a new `StringBuilder`,
+    /// Creates a new `GenericStringBuilder`,
     /// `data_capacity` is the number of bytes of string data to pre-allocate space for in this builder
     /// `item_capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
@@ -100,21 +100,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericStringBuilder<OffsetSize> {
-    /// Returns the builder as a non-mutable `Any` reference.
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    /// Returns the builder as a mutable `Any` reference.
-    fn as_any_mut(&mut self) -> &mut dyn Any {
-        self
-    }
-
-    /// Returns the boxed builder as a box of `Any`.
-    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
-        self
-    }
-
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.builder.len()
@@ -129,6 +114,49 @@ impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericStringBuilder<OffsetSi
     fn finish(&mut self) -> ArrayRef {
         let a = GenericStringBuilder::<OffsetSize>::finish(self);
         Arc::new(a)
+    }
+
+    /// Returns the builder as a non-mutable `Any` reference.
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Returns the builder as a mutable `Any` reference.
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    /// Returns the boxed builder as a box of `Any`.
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
+impl<Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
+    for GenericStringBuilder<OffsetSize>
+where
+    Ptr: AsRef<str>,
+{
+    fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let size_hint = upper.unwrap_or(lower);
+
+        let mut builder = GenericStringBuilder::with_capacity(size_hint, 0);
+
+        iter.for_each(|item| {
+            if let Some(a) = item {
+                builder
+                    .append_value(a.as_ref())
+                    .expect("Unable to append a value to a string array builder.");
+            } else {
+                builder
+                    .append_null()
+                    .expect("Unable to append a null value to a string array builder.");
+            }
+        });
+
+        builder
     }
 }
 

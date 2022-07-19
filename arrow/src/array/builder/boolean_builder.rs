@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::borrow::Borrow;
 use std::sync::Arc;
 
 use crate::array::ArrayBuilder;
@@ -56,6 +57,24 @@ use super::BooleanBufferBuilder;
 ///     assert_eq!(true, arr.value(3));
 ///     assert!(arr.is_valid(3));
 ///     assert!(!arr.is_null(3));
+/// ```
+///
+/// Using `from_iter`
+/// ```
+///     use arrow::array::{Array, BooleanBuilder};
+///     let v = vec![Some(false), Some(true), Some(false), Some(true)];
+///     let arr = v.into_iter().collect::<BooleanBuilder>().finish();
+///     assert_eq!(4, arr.len());
+///     assert_eq!(0, arr.offset());
+///     assert_eq!(0, arr.null_count());
+///     assert!(arr.is_valid(0));
+///     assert_eq!(false, arr.value(0));
+///     assert!(arr.is_valid(1));
+///     assert_eq!(true, arr.value(1));
+///     assert!(arr.is_valid(2));
+///     assert_eq!(false, arr.value(2));
+///     assert!(arr.is_valid(3));
+///     assert_eq!(true, arr.value(3));
 /// ```
 #[derive(Debug)]
 pub struct BooleanBuilder {
@@ -162,6 +181,21 @@ impl BooleanBuilder {
 }
 
 impl ArrayBuilder for BooleanBuilder {
+    /// Returns the number of array slots in the builder
+    fn len(&self) -> usize {
+        self.values_builder.len()
+    }
+
+    /// Returns whether the number of array slots is zero
+    fn is_empty(&self) -> bool {
+        self.values_builder.is_empty()
+    }
+
+    /// Builds the array and reset this builder.
+    fn finish(&mut self) -> ArrayRef {
+        Arc::new(self.finish())
+    }
+
     /// Returns the builder as a non-mutable `Any` reference.
     fn as_any(&self) -> &dyn Any {
         self
@@ -176,20 +210,29 @@ impl ArrayBuilder for BooleanBuilder {
     fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }
+}
 
-    /// Returns the number of array slots in the builder
-    fn len(&self) -> usize {
-        self.values_builder.len()
-    }
+impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanBuilder {
+    fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let size_hint = upper.unwrap_or(lower);
 
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.values_builder.is_empty()
-    }
+        let mut builder = BooleanBuilder::new(size_hint);
 
-    /// Builds the array and reset this builder.
-    fn finish(&mut self) -> ArrayRef {
-        Arc::new(self.finish())
+        iter.for_each(|item| {
+            if let Some(a) = item.borrow() {
+                builder
+                    .append_value(*a)
+                    .expect("Unable to append a value to a boolean array builder.");
+            } else {
+                builder
+                    .append_null()
+                    .expect("Unable to append a null value to a boolean array builder.");
+            }
+        });
+
+        builder
     }
 }
 
