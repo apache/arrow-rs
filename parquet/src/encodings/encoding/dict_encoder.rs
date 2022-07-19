@@ -148,12 +148,7 @@ impl<T: DataType> DictEncoder<T> {
 
     #[inline]
     fn bit_width(&self) -> u8 {
-        let num_entries = self.num_entries();
-        if num_entries <= 1 {
-            num_entries as u8
-        } else {
-            num_required_bits(num_entries as u64 - 1)
-        }
+        num_required_bits(self.num_entries().saturating_sub(1) as u64)
     }
 }
 
