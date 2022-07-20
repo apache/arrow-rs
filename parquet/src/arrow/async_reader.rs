@@ -77,6 +77,7 @@
 
 use std::collections::VecDeque;
 use std::fmt::Formatter;
+
 use std::io::{Cursor, SeekFrom};
 use std::ops::Range;
 use std::pin::Pin;
@@ -86,6 +87,7 @@ use std::task::{Context, Poll};
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::Stream;
+use futures::StreamExt;
 use parquet_format::PageType;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
@@ -110,6 +112,27 @@ use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
 pub trait AsyncFileReader {
     /// Retrieve the bytes in `range`
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
+
+    /// Retrieve multiple byte ranges. The default implementation will call `get_bytes` sequentially
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+    ) -> BoxFuture<'_, Result<Vec<Bytes>>>
+    where
+        Self: Send,
+    {
+        async move {
+            let mut result = Vec::with_capacity(ranges.len());
+
+            for range in ranges.into_iter() {
+                let data = self.get_bytes(range).await?;
+                result.push(data);
+            }
+
+            Ok(result)
+        }
+        .boxed()
+    }
 
     /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
     /// allowing fine-grained control over how metadata is sourced, in particular allowing
@@ -366,25 +389,42 @@ where
                             let mut column_chunks =
                                 vec![None; row_group_metadata.columns().len()];
 
+                            let mut fetch_ranges =
+                                Vec::with_capacity(column_chunks.len());
+                            let mut skip_idx = vec![];
                             // TODO: Combine consecutive ranges
-                            for (idx, chunk) in column_chunks.iter_mut().enumerate() {
+                            for idx in 0..column_chunks.len() {
                                 if !projection.leaf_included(idx) {
+                                    skip_idx.push(idx);
                                     continue;
                                 }
 
                                 let column = row_group_metadata.column(idx);
                                 let (start, length) = column.byte_range();
 
-                                let data = input
-                                    .get_bytes(start as usize..(start + length) as usize)
-                                    .await?;
+                                fetch_ranges
+                                    .push(start as usize..(start + length) as usize);
+                            }
 
-                                *chunk = Some(InMemoryColumnChunk {
-                                    num_values: column.num_values(),
-                                    compression: column.compression(),
-                                    physical_type: column.column_type(),
-                                    data,
-                                });
+                            let mut chunks = VecDeque::from(
+                                input.get_byte_ranges(fetch_ranges).await?,
+                            );
+
+                            for (idx, chunk) in column_chunks.iter_mut().enumerate() {
+                                if skip_idx.contains(&idx) {
+                                    continue;
+                                }
+
+                                if let Some(data) = chunks.pop_front() {
+                                    let column = row_group_metadata.column(idx);
+
+                                    *chunk = Some(InMemoryColumnChunk {
+                                        num_values: column.num_values(),
+                                        compression: column.compression(),
+                                        physical_type: column.column_type(),
+                                        data,
+                                    });
+                                }
                             }
 
                             Ok((
