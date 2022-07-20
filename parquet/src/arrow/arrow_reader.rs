@@ -304,9 +304,14 @@ impl Iterator for ParquetRecordBatchReader {
                     continue;
                 }
 
+                // try to read record
                 let to_read = match front.row_count.checked_sub(self.batch_size) {
                     Some(remaining) => {
-                        selection.push_front(RowSelection::skip(remaining));
+                        // if page row count less than batch_size we must set batch size to page row count.
+                        // add check avoid dead loop
+                        if remaining != 0 {
+                            selection.push_front(RowSelection::select(remaining));
+                        }
                         self.batch_size
                     }
                     None => front.row_count,
@@ -409,7 +414,6 @@ mod tests {
     use crate::errors::Result;
     use crate::file::properties::{WriterProperties, WriterVersion};
     use crate::file::reader::{FileReader, SerializedFileReader};
-    use crate::file::serialized_reader::ReadOptionsBuilder;
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
@@ -1599,13 +1603,16 @@ mod tests {
         let test_file = File::open(&path).unwrap();
         // total row count 7300
         // 1. test selection size more than one page row count
-        let selections = create_test_selection(50, 7300);
+        let selections = create_test_selection(1000, 7300);
         let arrow_reader_options = ArrowReaderOptions::new().with_row_selection(selections);
         let mut arrow_reader = ParquetFileArrowReader::try_new_with_options(test_file, arrow_reader_options).unwrap();
-        let reader = arrow_reader.get_record_reader(50).unwrap();
+        let reader = arrow_reader.get_record_reader(1000).unwrap();
 
+        let mut batch_count = 0;
         for batch in reader {
-            assert_eq!(batch.unwrap().num_rows(), 50)
+            println!("batch_count: {}", batch_count);
+            assert_eq!(batch.unwrap().num_rows(), 1000);
+            batch_count += 1;
         }
     }
 
