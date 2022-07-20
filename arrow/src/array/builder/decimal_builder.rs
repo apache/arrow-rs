@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use num::BigInt;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -25,7 +26,7 @@ use crate::array::{ArrayBuilder, FixedSizeBinaryBuilder};
 
 use crate::error::{ArrowError, Result};
 
-use crate::datatypes::validate_decimal_precision;
+use crate::datatypes::{validate_decimal256_precision, validate_decimal_precision};
 use crate::util::decimal::{BasicDecimal, Decimal256};
 
 /// Array Builder for [`Decimal128Array`]
@@ -51,6 +52,10 @@ pub struct Decimal256Builder {
     builder: FixedSizeBinaryBuilder,
     precision: usize,
     scale: usize,
+
+    /// Should decimal values be validated for compatibility with scale and precision?
+    /// defaults to true
+    value_validation: bool,
 }
 
 impl Decimal128Builder {
@@ -163,12 +168,33 @@ impl Decimal256Builder {
             builder: FixedSizeBinaryBuilder::new(capacity, Self::BYTE_LENGTH),
             precision,
             scale,
+            value_validation: true,
         }
+    }
+
+    /// Disable validation
+    ///
+    /// # Safety
+    ///
+    /// After disabling validation, caller must ensure that appended values are compatible
+    /// for the specified precision and scale.
+    pub unsafe fn disable_value_validation(&mut self) {
+        self.value_validation = false;
     }
 
     /// Appends a [`Decimal256`] number into the builder.
     #[inline]
     pub fn append_value(&mut self, value: &Decimal256) -> Result<()> {
+        let value = if self.value_validation {
+            let raw_bytes = value.raw_value();
+            let integer = BigInt::from_signed_bytes_le(raw_bytes);
+            let value_str = integer.to_string();
+            validate_decimal256_precision(&value_str, self.precision)?;
+            value
+        } else {
+            value
+        };
+
         if self.precision != value.precision() || self.scale != value.scale() {
             return Err(ArrowError::InvalidArgumentError(
                 "Decimal value does not have the same precision or scale as Decimal256Builder".to_string()
@@ -204,6 +230,7 @@ impl Decimal256Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num::Num;
 
     use crate::array::array_decimal::{BasicDecimalArray, Decimal128Array};
     use crate::array::Array;
@@ -294,6 +321,19 @@ mod tests {
         let mut bytes = vec![0; 32];
         bytes[0..16].clone_from_slice(&8_887_000_000_i128.to_le_bytes());
         let value = Decimal256::try_new_from_bytes(40, 6, bytes.as_slice()).unwrap();
+        builder.append_value(&value).unwrap();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 76. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
+    )]
+    fn test_decimal256_builder_out_of_range_precision_scale() {
+        let mut builder = Decimal256Builder::new(30, 76, 6);
+
+        let big_value = BigInt::from_str_radix("9999999999999999999999999999999999999999999999999999999999999999999999999999", 10).unwrap();
+        let bytes = big_value.to_signed_bytes_le();
+        let value = Decimal256::try_new_from_bytes(76, 6, &bytes).unwrap();
         builder.append_value(&value).unwrap();
     }
 }

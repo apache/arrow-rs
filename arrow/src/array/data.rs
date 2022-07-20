@@ -1011,6 +1011,7 @@ impl ArrayData {
                 }
                 Ok(())
             }
+            // TODO: call validate_decimal256_precision for Decimal256 type
             DataType::Utf8 => self.validate_utf8::<i32>(),
             DataType::LargeUtf8 => self.validate_utf8::<i64>(),
             DataType::Binary => self.validate_offsets_full::<i32>(self.buffers[1].len()),
