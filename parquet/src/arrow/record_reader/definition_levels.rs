@@ -216,10 +216,27 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
 impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
     fn skip_def_levels(
         &mut self,
-        _num_levels: usize,
-        _max_def_level: i16,
+        num_levels: usize,
+        max_def_level: i16,
     ) -> Result<(usize, usize)> {
-        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
+        // For now only support max_def_level == 1
+        if max_def_level == 1 {
+            let decoder = match self.data.take() {
+                Some(data) => self
+                    .packed_decoder
+                    .insert(PackedDecoder::new(self.encoding, data)),
+                None => self
+                    .packed_decoder
+                    .as_mut()
+                    .expect("consistent null_mask_only"),
+            };
+            let skip = decoder.skip(num_levels).unwrap();
+            Ok((skip, skip))
+        } else {
+            Err(nyi_err!(
+                "For now only support skip when max_def_level == 1 && max_rep_level == 0"
+            ))
+        }
     }
 }
 
@@ -248,7 +265,9 @@ struct PackedDecoder {
 
 impl PackedDecoder {
     fn next_rle_block(&mut self) -> Result<()> {
-        let indicator_value = self.decode_header()?;
+        let indicator_value = self
+            .decode_header()
+            .expect("decode_header fail in PackedDecoder");
         if indicator_value & 1 == 1 {
             let len = (indicator_value >> 1) as usize;
             self.packed_count = len * 8;
@@ -346,6 +365,30 @@ impl PackedDecoder {
         }
         Ok(read)
     }
+
+    fn skip(&mut self, len: usize) -> Result<usize> {
+        let mut skipped = 0;
+        while skipped != len {
+            if self.rle_left != 0 {
+                let to_skip = self.rle_left.min(len - skipped);
+                self.rle_left -= to_skip;
+                skipped += to_skip;
+            } else if self.packed_count != self.packed_offset {
+                let to_skip = (self.packed_count - self.packed_offset).min(len - skipped);
+                self.packed_offset += to_skip;
+                skipped += to_skip;
+
+                if self.packed_offset == self.packed_count {
+                    self.data_offset += self.packed_count / 8;
+                }
+            } else if self.data_offset == self.data.len() {
+                break;
+            } else {
+                self.next_rle_block()?
+            }
+        }
+        Ok(skipped)
+    }
 }
 
 #[cfg(test)]
@@ -390,6 +433,55 @@ mod tests {
 
         assert_eq!(decoded.len(), len);
         assert_eq!(decoded.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn test_packed_decoder_skip() {
+        let mut rng = thread_rng();
+        let len: usize = rng.gen_range(512..1024) * 8;
+
+        let mut expected = BooleanBufferBuilder::new(len);
+        let mut encoder = RleEncoder::new(1, 1024 * 8);
+
+        for _ in 0..len {
+            let bool = rng.gen_bool(0.8);
+            assert!(encoder.put(bool as u64).unwrap());
+            expected.append(bool);
+        }
+        assert_eq!(expected.len(), len);
+
+        let encoded = encoder.consume().unwrap();
+        let mut decoder = PackedDecoder::new(Encoding::RLE, ByteBufferPtr::new(encoded));
+
+        let mut skip_value = 0;
+        let mut read_value = 0;
+        let mut read_data = vec![];
+
+        loop {
+            let remaining = len - read_value - skip_value;
+            if remaining == 0 {
+                break;
+            }
+            let to_read = (rng.gen_range(1..=remaining)) / 8 * 8;
+            if rng.gen_bool(0.5) {
+                skip_value += decoder.skip(to_read).unwrap();
+            } else if to_read > 0 {
+                let mut decoded = BooleanBufferBuilder::new(to_read);
+                read_value += decoder.read(&mut decoded, to_read).unwrap();
+                read_data.push(decoded.as_slice().to_vec());
+            }
+        }
+
+        assert_eq!(read_value + skip_value, len);
+
+        let expected = expected.as_slice();
+        for data in read_data.iter().enumerate() {
+            assert!(find_subsequence(expected, data.1).is_some());
+        }
+    }
+
+    fn find_subsequence(u1: &[u8], u2: &Vec<u8>) -> Option<usize> {
+        u1.windows(u2.len()).position(|window| window == u2)
     }
 
     #[test]
