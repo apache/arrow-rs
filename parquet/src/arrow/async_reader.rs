@@ -103,7 +103,7 @@ use crate::column::page::{Page, PageIterator, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
-use crate::file::metadata::ParquetMetaData;
+use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use crate::file::serialized_reader::{decode_page, read_page_header};
 use crate::file::FOOTER_SIZE;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
@@ -391,11 +391,14 @@ where
 
                             let mut fetch_ranges =
                                 Vec::with_capacity(column_chunks.len());
-                            let mut skip_idx = vec![];
+
+                            let mut update_chunks: Vec<(
+                                &mut Option<InMemoryColumnChunk>,
+                                &ColumnChunkMetaData,
+                            )> = Vec::with_capacity(column_chunks.len());
                             // TODO: Combine consecutive ranges
-                            for idx in 0..column_chunks.len() {
+                            for (idx, chunk) in column_chunks.iter_mut().enumerate() {
                                 if !projection.leaf_included(idx) {
-                                    skip_idx.push(idx);
                                     continue;
                                 }
 
@@ -404,21 +407,19 @@ where
 
                                 fetch_ranges
                                     .push(start as usize..(start + length) as usize);
+
+                                update_chunks.push((chunk, column));
                             }
 
-                            let mut chunks = VecDeque::from(
-                                input.get_byte_ranges(fetch_ranges).await?,
-                            );
-
-                            for (idx, chunk) in column_chunks.iter_mut().enumerate() {
-                                if skip_idx.contains(&idx) {
-                                    continue;
-                                }
-
-                                if let Some(data) = chunks.pop_front() {
-                                    let column = row_group_metadata.column(idx);
-
-                                    *chunk = Some(InMemoryColumnChunk {
+                            for (idx, data) in input
+                                .get_byte_ranges(fetch_ranges)
+                                .await?
+                                .into_iter()
+                                .enumerate()
+                            {
+                                if let Some((chunk, column)) = update_chunks.get_mut(idx)
+                                {
+                                    **chunk = Some(InMemoryColumnChunk {
                                         num_values: column.num_values(),
                                         compression: column.compression(),
                                         physical_type: column.column_type(),
