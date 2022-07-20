@@ -319,9 +319,7 @@ impl<'a, T: ArrowPrimitiveType + ArrowDictionaryKeyType> FromIterator<Option<&'a
                     .append(i)
                     .expect("Unable to append a value to a dictionary array.");
             } else {
-                builder
-                    .append_null()
-                    .expect("Unable to append a null value to a dictionary array.");
+                builder.append_null();
             }
         });
 
@@ -463,7 +461,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(22345678).unwrap();
         let array = builder.finish();
         assert_eq!(

@@ -48,7 +48,7 @@ use std::sync::Arc;
 ///
 /// // The builder builds the dictionary value by value
 /// builder.append("abc").unwrap();
-/// builder.append_null().unwrap();
+/// builder.append_null();
 /// builder.append("def").unwrap();
 /// builder.append("def").unwrap();
 /// builder.append("abc").unwrap();
@@ -113,7 +113,7 @@ where
     ///
     /// let mut builder = StringDictionaryBuilder::new_with_dictionary(PrimitiveBuilder::<Int16Type>::new(3), &dictionary_values).unwrap();
     /// builder.append("def").unwrap();
-    /// builder.append_null().unwrap();
+    /// builder.append_null();
     /// builder.append("abc").unwrap();
     ///
     /// let dictionary_array = builder.finish();
@@ -153,9 +153,9 @@ where
                         });
                     }
 
-                    values_builder.append_value(value)?;
+                    values_builder.append_value(value);
                 }
-                None => values_builder.append_null()?,
+                None => values_builder.append_null(),
             }
         }
 
@@ -210,6 +210,8 @@ where
     /// Append a primitive value to the array. Return an existing index
     /// if already present in the values array or a new index if the
     /// value is appended to the values array.
+    ///
+    /// Returns an error if the new index would overflow the key type.
     pub fn append(&mut self, value: impl AsRef<str>) -> Result<K::Native> {
         let value = value.as_ref();
 
@@ -226,7 +228,7 @@ where
             RawEntryMut::Occupied(entry) => *entry.into_key(),
             RawEntryMut::Vacant(entry) => {
                 let index = storage.len();
-                storage.append_value(value)?;
+                storage.append_value(value);
                 let key = K::Native::from_usize(index)
                     .ok_or(ArrowError::DictionaryKeyOverflowError)?;
 
@@ -237,13 +239,13 @@ where
                     .0
             }
         };
-        self.keys_builder.append_value(key)?;
+        self.keys_builder.append_value(key);
 
         Ok(key)
     }
 
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.keys_builder.append_null()
     }
 
@@ -299,7 +301,7 @@ mod tests {
         let value_builder = StringBuilder::new(2);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
@@ -327,7 +329,7 @@ mod tests {
             StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
                 .unwrap();
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
@@ -359,7 +361,7 @@ mod tests {
             StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
                 .unwrap();
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
         let array = builder.finish();

@@ -235,7 +235,7 @@ mod tests {
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(9).unwrap();
         let dictionary_array = builder.finish();
 
@@ -246,7 +246,7 @@ mod tests {
         builder.append(7).unwrap();
         builder.append(8).unwrap();
         builder.append(9).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(10).unwrap();
         let expected = builder.finish();
 

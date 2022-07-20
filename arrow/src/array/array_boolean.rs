@@ -276,9 +276,9 @@ mod tests {
     #[test]
     fn test_boolean_with_null_fmt_debug() {
         let mut builder = BooleanArray::builder(3);
-        builder.append_value(true).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(false).unwrap();
+        builder.append_value(true);
+        builder.append_null();
+        builder.append_value(false);
         let arr = builder.finish();
         assert_eq!(
             "BooleanArray\n[\n  true,\n  null,\n  false,\n]",

@@ -806,15 +806,15 @@ mod tests {
     }
 
     #[test]
-    fn test_list_null_offset() -> Result<()> {
+    fn test_list_null_offset() {
         let int_builder = Int64Builder::new(24);
         let mut builder = ListBuilder::<Int64Builder>::new(int_builder);
-        builder.values().append_slice(&[1, 2, 3])?;
-        builder.append(true)?;
-        builder.values().append_slice(&[4, 5])?;
-        builder.append(true)?;
-        builder.values().append_slice(&[6, 7, 8])?;
-        builder.append(true)?;
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5]);
+        builder.append(true);
+        builder.values().append_slice(&[6, 7, 8]);
+        builder.append(true);
         let array = builder.finish();
         let arrays = vec![array.data()];
 
@@ -826,13 +826,11 @@ mod tests {
 
         let int_builder = Int64Builder::new(24);
         let mut builder = ListBuilder::<Int64Builder>::new(int_builder);
-        builder.values().append_slice(&[1, 2, 3])?;
-        builder.append(true)?;
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
         let expected = builder.finish();
 
         assert_eq!(array, expected);
-
-        Ok(())
     }
 
     /// tests extending from a variable-sized (strings and binary) array w/ offset with nulls
@@ -974,7 +972,7 @@ mod tests {
             if let Some(v) = key {
                 builder.append(v).unwrap();
             } else {
-                builder.append_null().unwrap()
+                builder.append_null()
             }
         }
         builder.finish().into_data()
@@ -1176,24 +1174,24 @@ mod tests {
     }
 
     #[test]
-    fn test_list_append() -> Result<()> {
+    fn test_list_append() {
         let mut builder = ListBuilder::<Int64Builder>::new(Int64Builder::new(24));
-        builder.values().append_slice(&[1, 2, 3])?;
-        builder.append(true)?;
-        builder.values().append_slice(&[4, 5])?;
-        builder.append(true)?;
-        builder.values().append_slice(&[6, 7, 8])?;
-        builder.values().append_slice(&[9, 10, 11])?;
-        builder.append(true)?;
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5]);
+        builder.append(true);
+        builder.values().append_slice(&[6, 7, 8]);
+        builder.values().append_slice(&[9, 10, 11]);
+        builder.append(true);
         let a = builder.finish();
 
         let a_builder = Int64Builder::new(24);
         let mut a_builder = ListBuilder::<Int64Builder>::new(a_builder);
-        a_builder.values().append_slice(&[12, 13])?;
-        a_builder.append(true)?;
-        a_builder.append(true)?;
-        a_builder.values().append_slice(&[14, 15])?;
-        a_builder.append(true)?;
+        a_builder.values().append_slice(&[12, 13]);
+        a_builder.append(true);
+        a_builder.append(true);
+        a_builder.values().append_slice(&[14, 15]);
+        a_builder.append(true);
         let b = a_builder.finish();
 
         let c = b.slice(1, 2);
@@ -1239,35 +1237,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(finished, expected_list_data);
-
-        Ok(())
     }
 
     #[test]
     fn test_list_nulls_append() -> Result<()> {
         let mut builder = ListBuilder::<Int64Builder>::new(Int64Builder::new(32));
-        builder.values().append_slice(&[1, 2, 3])?;
-        builder.append(true)?;
-        builder.values().append_slice(&[4, 5])?;
-        builder.append(true)?;
-        builder.append(false)?;
-        builder.values().append_slice(&[6, 7, 8])?;
-        builder.values().append_null()?;
-        builder.values().append_null()?;
-        builder.values().append_slice(&[9, 10, 11])?;
-        builder.append(true)?;
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5]);
+        builder.append(true);
+        builder.append(false);
+        builder.values().append_slice(&[6, 7, 8]);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.values().append_slice(&[9, 10, 11]);
+        builder.append(true);
         let a = builder.finish();
         let a = a.data();
 
         let mut builder = ListBuilder::<Int64Builder>::new(Int64Builder::new(32));
-        builder.values().append_slice(&[12, 13])?;
-        builder.append(true)?;
-        builder.append(false)?;
-        builder.append(true)?;
-        builder.values().append_null()?;
-        builder.values().append_null()?;
-        builder.values().append_slice(&[14, 15])?;
-        builder.append(true)?;
+        builder.values().append_slice(&[12, 13]);
+        builder.append(true);
+        builder.append(false);
+        builder.append(true);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.values().append_slice(&[14, 15]);
+        builder.append(true);
         let b = builder.finish();
         let b = b.data();
         let c = b.slice(1, 2);
@@ -1325,24 +1321,24 @@ mod tests {
     }
 
     #[test]
-    fn test_list_append_with_capacities() -> Result<()> {
+    fn test_list_append_with_capacities() {
         let mut builder = ListBuilder::<Int64Builder>::new(Int64Builder::new(24));
-        builder.values().append_slice(&[1, 2, 3])?;
-        builder.append(true)?;
-        builder.values().append_slice(&[4, 5])?;
-        builder.append(true)?;
-        builder.values().append_slice(&[6, 7, 8])?;
-        builder.values().append_slice(&[9, 10, 11])?;
-        builder.append(true)?;
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5]);
+        builder.append(true);
+        builder.values().append_slice(&[6, 7, 8]);
+        builder.values().append_slice(&[9, 10, 11]);
+        builder.append(true);
         let a = builder.finish();
 
         let a_builder = Int64Builder::new(24);
         let mut a_builder = ListBuilder::<Int64Builder>::new(a_builder);
-        a_builder.values().append_slice(&[12, 13])?;
-        a_builder.append(true)?;
-        a_builder.append(true)?;
-        a_builder.values().append_slice(&[14, 15, 16, 17])?;
-        a_builder.append(true)?;
+        a_builder.values().append_slice(&[12, 13]);
+        a_builder.append(true);
+        a_builder.append(true);
+        a_builder.values().append_slice(&[14, 15, 16, 17]);
+        a_builder.append(true);
         let b = a_builder.finish();
 
         let mutable = MutableArrayData::with_capacities(
@@ -1354,8 +1350,6 @@ mod tests {
         // capacities are rounded up to multiples of 64 by MutableBuffer
         assert_eq!(mutable.data.buffer1.capacity(), 64);
         assert_eq!(mutable.data.child_data[0].data.buffer1.capacity(), 192);
-
-        Ok(())
     }
 
     #[test]
@@ -1365,21 +1359,19 @@ mod tests {
             Int64Builder::new(32),
             Int64Builder::new(32),
         );
-        builder.keys().append_slice(&[1, 2, 3])?;
-        builder.values().append_slice(&[1, 2, 3])?;
-        builder.append(true)?;
-        builder.keys().append_slice(&[4, 5])?;
-        builder.values().append_slice(&[4, 5])?;
-        builder.append(true)?;
-        builder.append(false)?;
-        builder
-            .keys()
-            .append_slice(&[6, 7, 8, 100, 101, 9, 10, 11])?;
-        builder.values().append_slice(&[6, 7, 8])?;
-        builder.values().append_null()?;
-        builder.values().append_null()?;
-        builder.values().append_slice(&[9, 10, 11])?;
-        builder.append(true)?;
+        builder.keys().append_slice(&[1, 2, 3]);
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true).unwrap();
+        builder.keys().append_slice(&[4, 5]);
+        builder.values().append_slice(&[4, 5]);
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+        builder.keys().append_slice(&[6, 7, 8, 100, 101, 9, 10, 11]);
+        builder.values().append_slice(&[6, 7, 8]);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.values().append_slice(&[9, 10, 11]);
+        builder.append(true).unwrap();
 
         let a = builder.finish();
         let a = a.data();
@@ -1390,16 +1382,16 @@ mod tests {
             Int64Builder::new(32),
         );
 
-        builder.keys().append_slice(&[12, 13])?;
-        builder.values().append_slice(&[12, 13])?;
-        builder.append(true)?;
-        builder.append(false)?;
-        builder.append(true)?;
-        builder.keys().append_slice(&[100, 101, 14, 15])?;
-        builder.values().append_null()?;
-        builder.values().append_null()?;
-        builder.values().append_slice(&[14, 15])?;
-        builder.append(true)?;
+        builder.keys().append_slice(&[12, 13]);
+        builder.values().append_slice(&[12, 13]);
+        builder.append(true).unwrap();
+        builder.append(false).unwrap();
+        builder.append(true).unwrap();
+        builder.keys().append_slice(&[100, 101, 14, 15]);
+        builder.values().append_null();
+        builder.values().append_null();
+        builder.values().append_slice(&[14, 15]);
+        builder.append(true).unwrap();
 
         let b = builder.finish();
         let b = b.data();
@@ -1512,23 +1504,23 @@ mod tests {
     fn test_list_of_strings_append() -> Result<()> {
         // [["alpha", "beta", None]]
         let mut builder = ListBuilder::new(StringBuilder::new(32));
-        builder.values().append_value("Hello")?;
-        builder.values().append_value("Arrow")?;
-        builder.values().append_null()?;
-        builder.append(true)?;
+        builder.values().append_value("Hello");
+        builder.values().append_value("Arrow");
+        builder.values().append_null();
+        builder.append(true);
         let a = builder.finish();
 
         // [["alpha", "beta"], [None], ["gamma", "delta", None]]
         let mut builder = ListBuilder::new(StringBuilder::new(32));
-        builder.values().append_value("alpha")?;
-        builder.values().append_value("beta")?;
-        builder.append(true)?;
-        builder.values().append_null()?;
-        builder.append(true)?;
-        builder.values().append_value("gamma")?;
-        builder.values().append_value("delta")?;
-        builder.values().append_null()?;
-        builder.append(true)?;
+        builder.values().append_value("alpha");
+        builder.values().append_value("beta");
+        builder.append(true);
+        builder.values().append_null();
+        builder.append(true);
+        builder.values().append_value("gamma");
+        builder.values().append_value("delta");
+        builder.values().append_null();
+        builder.append(true);
         let b = builder.finish();
 
         let mut mutable = MutableArrayData::new(vec![a.data(), b.data()], false, 10);
