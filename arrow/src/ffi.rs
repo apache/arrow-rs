@@ -909,11 +909,11 @@ impl<'a> ArrowArrayChild<'a> {
 mod tests {
     use super::*;
     use crate::array::{
-        export_array_into_raw, make_array, Array, ArrayData, BooleanArray, DecimalArray,
-        DictionaryArray, DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray,
-        GenericBinaryArray, GenericListArray, GenericStringArray, Int32Array, MapArray,
-        NullArray, OffsetSizeTrait, Time32MillisecondArray, TimestampMillisecondArray,
-        UInt32Array,
+        export_array_into_raw, make_array, Array, ArrayData, BooleanArray,
+        Decimal128Array, DictionaryArray, DurationSecondArray, FixedSizeBinaryArray,
+        FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
+        Int32Array, MapArray, NullArray, OffsetSizeTrait, Time32MillisecondArray,
+        TimestampMillisecondArray, UInt32Array,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
@@ -948,7 +948,7 @@ mod tests {
         // create an array natively
         let original_array = [Some(12345_i128), Some(-12345_i128), None]
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(6, 2)
             .unwrap();
 
@@ -960,7 +960,7 @@ mod tests {
         let array = make_array(data);
 
         // perform some operation
-        let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
 
         // verify
         assert_eq!(array, &original_array);

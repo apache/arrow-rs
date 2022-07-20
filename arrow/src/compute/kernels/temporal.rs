@@ -31,11 +31,11 @@ macro_rules! extract_component_from_array {
     ($array:ident, $builder:ident, $extract_fn:ident, $using:ident) => {
         for i in 0..$array.len() {
             if $array.is_null(i) {
-                $builder.append_null()?;
+                $builder.append_null();
             } else {
                 match $array.$using(i) {
-                    Some(dt) => $builder.append_value(dt.$extract_fn() as i32)?,
-                    None => $builder.append_null()?,
+                    Some(dt) => $builder.append_value(dt.$extract_fn() as i32),
+                    None => $builder.append_null(),
                 }
             }
         }
@@ -43,13 +43,13 @@ macro_rules! extract_component_from_array {
     ($array:ident, $builder:ident, $extract_fn1:ident, $extract_fn2:ident, $using:ident) => {
         for i in 0..$array.len() {
             if $array.is_null(i) {
-                $builder.append_null()?;
+                $builder.append_null();
             } else {
                 match $array.$using(i) {
                     Some(dt) => {
-                        $builder.append_value(dt.$extract_fn1().$extract_fn2() as i32)?
+                        $builder.append_value(dt.$extract_fn1().$extract_fn2() as i32);
                     }
-                    None => $builder.append_null()?,
+                    None => $builder.append_null(),
                 }
             }
         }
@@ -72,7 +72,7 @@ macro_rules! extract_component_from_array {
 
             for i in 0..$array.len() {
                 if $array.is_null(i) {
-                    $builder.append_null()?;
+                    $builder.append_null();
                 } else {
                     match $array.value_as_datetime(i) {
                         Some(utc) => {
@@ -90,9 +90,9 @@ macro_rules! extract_component_from_array {
                             };
                             match $array.$using(i, fixed_offset) {
                                 Some(dt) => {
-                                    $builder.append_value(dt.$extract_fn() as i32)?
+                                    $builder.append_value(dt.$extract_fn() as i32);
                                 }
-                                None => $builder.append_null()?,
+                                None => $builder.append_null(),
                             }
                         }
                         err => return_compute_error_with!(
@@ -342,7 +342,7 @@ where
                 scratch
             )
         }
-        dt => return_compute_error_with!("weekday does not support", dt),
+        dt => return_compute_error_with!("num_days_from_sunday does not support", dt),
     }
 
     Ok(b.finish())
@@ -371,6 +371,35 @@ where
             )
         }
         dt => return_compute_error_with!("day does not support", dt),
+    }
+
+    Ok(b.finish())
+}
+
+/// Extracts the day of year of a given temporal array as an array of integers
+/// The day of year that ranges from 1 to 366
+pub fn doy<T>(array: &PrimitiveArray<T>) -> Result<Int32Array>
+where
+    T: ArrowTemporalType + ArrowNumericType,
+    i64: std::convert::From<T::Native>,
+{
+    let mut b = Int32Builder::new(array.len());
+    match array.data_type() {
+        &DataType::Date32 | &DataType::Date64 | &DataType::Timestamp(_, None) => {
+            extract_component_from_array!(array, b, ordinal, value_as_datetime)
+        }
+        &DataType::Timestamp(_, Some(ref tz)) => {
+            let mut scratch = Parsed::new();
+            extract_component_from_array!(
+                array,
+                b,
+                ordinal,
+                value_as_datetime_with_tz,
+                tz,
+                scratch
+            )
+        }
+        dt => return_compute_error_with!("doy does not support", dt),
     }
 
     Ok(b.finish())
@@ -683,6 +712,26 @@ mod tests {
         assert_eq!(1, b.value(0));
         assert!(!b.is_valid(1));
         assert_eq!(1, b.value(2));
+    }
+
+    #[test]
+    fn test_temporal_array_date64_doy() {
+        //1483228800000 -> 2017-01-01 (Sunday)
+        //1514764800000 -> 2018-01-01
+        //1550636625000 -> 2019-02-20
+        let a: PrimitiveArray<Date64Type> = vec![
+            Some(1483228800000),
+            Some(1514764800000),
+            None,
+            Some(1550636625000),
+        ]
+        .into();
+
+        let b = doy(&a).unwrap();
+        assert_eq!(1, b.value(0));
+        assert_eq!(1, b.value(1));
+        assert!(!b.is_valid(2));
+        assert_eq!(51, b.value(3));
     }
 
     #[test]

@@ -18,6 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
 use crate::array::array::Array;
 use crate::array::ArrayData;
 use crate::array::ArrayRef;
@@ -25,9 +26,8 @@ use crate::array::MapArray;
 use crate::array::StructArray;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
-use crate::error::{ArrowError, Result};
-
-use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
+use crate::error::ArrowError;
+use crate::error::Result;
 
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
@@ -95,6 +95,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
     }
 
     /// Finish the current map array slot
+    ///
+    /// Returns an error if the key and values builders are in an inconsistent state.
     #[inline]
     pub fn append(&mut self, is_valid: bool) -> Result<()> {
         if self.key_builder.len() != self.value_builder.len() {
@@ -209,16 +211,16 @@ mod tests {
         let mut builder = MapBuilder::new(None, string_builder, int_builder);
 
         let string_builder = builder.keys();
-        string_builder.append_value("joe").unwrap();
-        string_builder.append_null().unwrap();
-        string_builder.append_null().unwrap();
-        string_builder.append_value("mark").unwrap();
+        string_builder.append_value("joe");
+        string_builder.append_null();
+        string_builder.append_null();
+        string_builder.append_value("mark");
 
         let int_builder = builder.values();
-        int_builder.append_value(1).unwrap();
-        int_builder.append_value(2).unwrap();
-        int_builder.append_null().unwrap();
-        int_builder.append_value(4).unwrap();
+        int_builder.append_value(1);
+        int_builder.append_value(2);
+        int_builder.append_null();
+        int_builder.append_value(4);
 
         builder.append(true).unwrap();
         builder.append(false).unwrap();

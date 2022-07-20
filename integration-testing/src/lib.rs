@@ -121,7 +121,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_bool().unwrap()),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -142,7 +142,7 @@ fn array_from_json(
                         ))
                     })? as i8),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -158,7 +158,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i16),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -177,7 +177,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i32),
                     _ => b.append_null(),
-                }?;
+                };
             }
             let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
@@ -238,7 +238,7 @@ fn array_from_json(
                         _ => panic!("Unable to parse {:?} as number", value),
                     }),
                     _ => b.append_null(),
-                }?;
+                };
             }
             let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
@@ -255,7 +255,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u8),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -271,7 +271,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u16),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -287,7 +287,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u32),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -309,7 +309,7 @@ fn array_from_json(
                             .expect("Unable to parse string as u64"),
                     ),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -352,7 +352,7 @@ fn array_from_json(
                         _ => panic!("Unable to parse {:?} as MonthDayNano", value),
                     }),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -368,7 +368,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_f64().unwrap() as f32),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -384,7 +384,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_f64().unwrap()),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -403,7 +403,7 @@ fn array_from_json(
                         b.append_value(&v)
                     }
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -422,7 +422,7 @@ fn array_from_json(
                         b.append_value(&v)
                     }
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -438,7 +438,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap()),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -454,7 +454,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap()),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -470,10 +470,10 @@ fn array_from_json(
                 match is_valid {
                     1 => {
                         let v = hex::decode(value.as_str().unwrap()).unwrap();
-                        b.append_value(&v)
+                        b.append_value(&v)?
                     }
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -592,7 +592,7 @@ fn array_from_json(
             }
         }
         DataType::Decimal(precision, scale) => {
-            let mut b = DecimalBuilder::new(json_col.count, *precision, *scale);
+            let mut b = Decimal128Builder::new(json_col.count, *precision, *scale);
             // C++ interop tests involve incompatible decimal values
             unsafe {
                 b.disable_value_validation();
@@ -605,9 +605,11 @@ fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_str().unwrap().parse::<i128>().unwrap()),
+                    1 => {
+                        b.append_value(value.as_str().unwrap().parse::<i128>().unwrap())?
+                    }
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }

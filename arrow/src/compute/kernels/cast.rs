@@ -40,6 +40,7 @@ use std::sync::Arc;
 
 use crate::array::BasicDecimalArray;
 use crate::buffer::MutableBuffer;
+use crate::compute::divide_scalar;
 use crate::compute::kernels::arithmetic::{divide, multiply};
 use crate::compute::kernels::arity::unary;
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
@@ -284,7 +285,7 @@ macro_rules! cast_integer_to_decimal {
                     mul * v
                 })
             })
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(*$PRECISION, *$SCALE)?;
         Ok(Arc::new(decimal_array))
     }};
@@ -304,7 +305,7 @@ macro_rules! cast_floating_point_to_decimal {
                     ((v as f64) * mul) as i128
                 })
             })
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(*$PRECISION, *$SCALE)?;
         Ok(Arc::new(decimal_array))
     }};
@@ -313,21 +314,21 @@ macro_rules! cast_floating_point_to_decimal {
 // cast the decimal array to integer array
 macro_rules! cast_decimal_to_integer {
     ($ARRAY:expr, $SCALE : ident, $VALUE_BUILDER: ident, $NATIVE_TYPE : ident, $DATA_TYPE : expr) => {{
-        let array = $ARRAY.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array = $ARRAY.as_any().downcast_ref::<Decimal128Array>().unwrap();
         let mut value_builder = $VALUE_BUILDER::new(array.len());
         let div: i128 = 10_i128.pow(*$SCALE as u32);
         let min_bound = ($NATIVE_TYPE::MIN) as i128;
         let max_bound = ($NATIVE_TYPE::MAX) as i128;
         for i in 0..array.len() {
             if array.is_null(i) {
-                value_builder.append_null()?;
+                value_builder.append_null();
             } else {
                 let v = array.value(i).as_i128() / div;
                 // check the overflow
                 // For example: Decimal(128,10,0) as i8
                 // 128 is out of range i8
                 if v <= max_bound && v >= min_bound {
-                    value_builder.append_value(v as $NATIVE_TYPE)?;
+                    value_builder.append_value(v as $NATIVE_TYPE);
                 } else {
                     return Err(ArrowError::CastError(format!(
                         "value of {} is out of range {}",
@@ -343,17 +344,17 @@ macro_rules! cast_decimal_to_integer {
 // cast the decimal array to floating-point array
 macro_rules! cast_decimal_to_float {
     ($ARRAY:expr, $SCALE : ident, $VALUE_BUILDER: ident, $NATIVE_TYPE : ty) => {{
-        let array = $ARRAY.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array = $ARRAY.as_any().downcast_ref::<Decimal128Array>().unwrap();
         let div = 10_f64.powi(*$SCALE as i32);
         let mut value_builder = $VALUE_BUILDER::new(array.len());
         for i in 0..array.len() {
             if array.is_null(i) {
-                value_builder.append_null()?;
+                value_builder.append_null();
             } else {
                 // The range of f32 or f64 is larger than i128, we don't need to check overflow.
                 // cast the i128 to f64 will lose precision, for example the `112345678901234568` will be as `112345678901234560`.
                 let v = (array.value(i).as_i128() as f64 / div) as $NATIVE_TYPE;
-                value_builder.append_value(v)?;
+                value_builder.append_value(v);
             }
         }
         Ok(Arc::new(value_builder.finish()))
@@ -1042,10 +1043,7 @@ pub fn cast_with_options(
             // we either divide or multiply, depending on size of each unit
             // units are never the same when the types are the same
             let converted = if from_size >= to_size {
-                divide(
-                    &time_array,
-                    &Int64Array::from(vec![from_size / to_size; array.len()]),
-                )?
+                divide_scalar(&time_array, from_size / to_size)?
             } else {
                 multiply(
                     &time_array,
@@ -1075,12 +1073,15 @@ pub fn cast_with_options(
         (Timestamp(from_unit, _), Date32) => {
             let time_array = Int64Array::from(array.data().clone());
             let from_size = time_unit_multiple(from_unit) * SECONDS_IN_DAY;
+
+            // Int32Array::from_iter(tim.iter)
             let mut b = Date32Builder::new(array.len());
+
             for i in 0..array.len() {
-                if array.is_null(i) {
-                    b.append_null()?;
+                if time_array.is_null(i) {
+                    b.append_null();
                 } else {
-                    b.append_value((time_array.value(i) / from_size) as i32)?;
+                    b.append_value((time_array.value(i) / from_size) as i32);
                 }
             }
 
@@ -1196,7 +1197,7 @@ fn cast_decimal_to_decimal(
     output_precision: &usize,
     output_scale: &usize,
 ) -> Result<ArrayRef> {
-    let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+    let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
 
     let output_array = if input_scale > output_scale {
         // For example, input_scale is 4 and output_scale is 3;
@@ -1205,7 +1206,7 @@ fn cast_decimal_to_decimal(
         array
             .iter()
             .map(|v| v.map(|v| v / div))
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
     } else {
         // For example, input_scale is 3 and output_scale is 4;
         // Original value is 1123_i128, and will be cast to 11230_i128.
@@ -1213,7 +1214,7 @@ fn cast_decimal_to_decimal(
         array
             .iter()
             .map(|v| v.map(|v| v * mul))
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
     }
     .with_precision_and_scale(*output_precision, *output_scale)?;
 
@@ -1650,11 +1651,11 @@ where
 
     for i in 0..from.len() {
         if from.is_null(i) {
-            b.append_null()?;
+            b.append_null();
         } else if from.value(i) != T::default_value() {
-            b.append_value(true)?;
+            b.append_value(true);
         } else {
-            b.append_value(false)?;
+            b.append_value(false);
         }
     }
 
@@ -1908,7 +1909,7 @@ where
     // copy each element one at a time
     for i in 0..values.len() {
         if values.is_null(i) {
-            b.append_null()?;
+            b.append_null();
         } else {
             b.append(values.value(i))?;
         }
@@ -1935,7 +1936,7 @@ where
     // copy each element one at a time
     for i in 0..values.len() {
         if values.is_null(i) {
-            b.append_null()?;
+            b.append_null();
         } else {
             b.append(values.value(i))?;
         }
@@ -2168,10 +2169,10 @@ mod tests {
         array: &[Option<i128>],
         precision: usize,
         scale: usize,
-    ) -> Result<DecimalArray> {
+    ) -> Result<Decimal128Array> {
         array
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
     }
 
@@ -2185,7 +2186,7 @@ mod tests {
         let array = Arc::new(input_decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            DecimalArray,
+            Decimal128Array,
             &output_type,
             vec![
                 Some(Decimal128::new_from_i128(20, 4, 11234560_i128)),
@@ -2364,7 +2365,7 @@ mod tests {
         for array in input_datas {
             generate_cast_test_case!(
                 &array,
-                DecimalArray,
+                Decimal128Array,
                 &decimal_type,
                 vec![
                     Some(Decimal128::new_from_i128(38, 6, 1000000_i128)),
@@ -2396,7 +2397,7 @@ mod tests {
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            DecimalArray,
+            Decimal128Array,
             &decimal_type,
             vec![
                 Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),
@@ -2421,7 +2422,7 @@ mod tests {
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            DecimalArray,
+            Decimal128Array,
             &decimal_type,
             vec![
                 Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),
@@ -4072,7 +4073,7 @@ mod tests {
         let values_builder = StringBuilder::new(10);
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
         builder.append("one").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("three").unwrap();
         let array: ArrayRef = Arc::new(builder.finish());
 
@@ -4195,7 +4196,7 @@ mod tests {
         let values_builder = PrimitiveBuilder::<Int32Type>::new(10);
         let mut builder = PrimitiveDictionaryBuilder::new(keys_builder, values_builder);
         builder.append(1).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(3).unwrap();
         let array: ArrayRef = Arc::new(builder.finish());
 
@@ -4216,9 +4217,9 @@ mod tests {
         use DataType::*;
 
         let mut builder = PrimitiveBuilder::<Int32Type>::new(10);
-        builder.append_value(1).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(3).unwrap();
+        builder.append_value(1);
+        builder.append_null();
+        builder.append_value(3);
         let array: ArrayRef = Arc::new(builder.finish());
 
         let expected = vec!["1", "null", "3"];

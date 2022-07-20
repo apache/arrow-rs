@@ -45,8 +45,8 @@ use super::ArrayRef;
 pub use boolean_buffer_builder::BooleanBufferBuilder;
 pub use boolean_builder::BooleanBuilder;
 pub use buffer_builder::BufferBuilder;
+pub use decimal_builder::Decimal128Builder;
 pub use decimal_builder::Decimal256Builder;
-pub use decimal_builder::DecimalBuilder;
 pub use fixed_size_binary_builder::FixedSizeBinaryBuilder;
 pub use fixed_size_list_builder::FixedSizeListBuilder;
 pub use generic_binary_builder::GenericBinaryBuilder;
@@ -81,17 +81,17 @@ pub use union_builder::UnionBuilder;
 ///     .as_any_mut()
 ///     .downcast_mut::<Float64Builder>()
 ///     .unwrap()
-///     .append_value(3.14)?;
+///     .append_value(3.14);
 /// data_builders[1]
 ///     .as_any_mut()
 ///     .downcast_mut::<Int64Builder>()
 ///     .unwrap()
-///     .append_value(-1)?;
+///     .append_value(-1);
 /// data_builders[2]
 ///     .as_any_mut()
 ///     .downcast_mut::<StringBuilder>()
 ///     .unwrap()
-///     .append_value("🍎")?;
+///     .append_value("🍎");
 ///
 /// // Finish
 /// let array_refs: Vec<ArrayRef> = data_builders

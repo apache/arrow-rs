@@ -20,9 +20,10 @@
 //! depend on dynamic casting of `Array`.
 
 use super::{
-    Array, ArrayData, BooleanArray, DecimalArray, DictionaryArray, FixedSizeBinaryArray,
-    FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-    MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, StructArray,
+    Array, ArrayData, BooleanArray, Decimal128Array, DictionaryArray,
+    FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
+    GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
+    StructArray,
 };
 use crate::datatypes::{ArrowPrimitiveType, DataType, IntervalUnit};
 use half::f16;
@@ -109,7 +110,7 @@ impl PartialEq for FixedSizeBinaryArray {
     }
 }
 
-impl PartialEq for DecimalArray {
+impl PartialEq for Decimal128Array {
     fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
@@ -610,10 +611,10 @@ mod tests {
         let mut builder = ListBuilder::new(Int32Builder::new(10));
         for d in data.as_ref() {
             if let Some(v) = d {
-                builder.values().append_slice(v.as_ref()).unwrap();
-                builder.append(true).unwrap()
+                builder.values().append_slice(v.as_ref());
+                builder.append(true);
             } else {
-                builder.append(false).unwrap()
+                builder.append(false);
             }
         }
         builder.finish().into_data()
@@ -771,7 +772,7 @@ mod tests {
             if let Some(v) = d {
                 builder.append_value(v.as_ref()).unwrap();
             } else {
-                builder.append_null().unwrap();
+                builder.append_null();
             }
         }
         builder.finish().into_data()
@@ -840,7 +841,7 @@ mod tests {
 
     fn create_decimal_array(data: &[Option<i128>]) -> ArrayData {
         data.iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap()
             .into()
@@ -932,13 +933,13 @@ mod tests {
 
         for d in data.as_ref() {
             if let Some(v) = d {
-                builder.values().append_slice(v.as_ref()).unwrap();
-                builder.append(true).unwrap()
+                builder.values().append_slice(v.as_ref());
+                builder.append(true);
             } else {
                 for _ in 0..builder.value_length() {
-                    builder.values().append_null().unwrap();
+                    builder.values().append_null();
                 }
-                builder.append(false).unwrap()
+                builder.append(false);
             }
         }
         builder.finish().into_data()
@@ -1247,7 +1248,7 @@ mod tests {
             if let Some(v) = key {
                 builder.append(v).unwrap();
             } else {
-                builder.append_null().unwrap()
+                builder.append_null()
             }
         }
         builder.finish().into_data()

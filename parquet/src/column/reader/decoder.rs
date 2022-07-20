@@ -250,8 +250,17 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         current_decoder.get(&mut out[range])
     }
 
-    fn skip_values(&mut self, _num_values: usize) -> Result<usize> {
-        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
+    fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        let encoding = self
+            .current_encoding
+            .expect("current_encoding should be set");
+
+        let current_decoder = self
+            .decoders
+            .get_mut(&encoding)
+            .unwrap_or_else(|| panic!("decoder for encoding {} should be set", encoding));
+
+        current_decoder.skip(num_values)
     }
 }
 

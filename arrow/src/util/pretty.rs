@@ -120,7 +120,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::array::{DecimalArray, FixedSizeListBuilder};
+    use crate::array::{Decimal128Array, FixedSizeListBuilder};
     use std::fmt::Write;
     use std::sync::Arc;
 
@@ -247,7 +247,7 @@ mod tests {
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
 
         builder.append("one")?;
-        builder.append_null()?;
+        builder.append_null();
         builder.append("three")?;
         let array = Arc::new(builder.finish());
 
@@ -284,12 +284,12 @@ mod tests {
         let keys_builder = Int32Array::builder(3);
         let mut builder = FixedSizeListBuilder::new(keys_builder, 3);
 
-        builder.values().append_slice(&[1, 2, 3]).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_slice(&[4, 5, 6]).unwrap();
-        builder.append(false).unwrap();
-        builder.values().append_slice(&[7, 8, 9]).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(false);
+        builder.values().append_slice(&[7, 8, 9]);
+        builder.append(true);
 
         let array = Arc::new(builder.finish());
 
@@ -321,7 +321,7 @@ mod tests {
         let mut builder = FixedSizeBinaryBuilder::new(3, 3);
 
         builder.append_value(&[1, 2, 3]).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(&[7, 8, 9]).unwrap();
 
         let array = Arc::new(builder.finish());
@@ -351,8 +351,8 @@ mod tests {
     macro_rules! check_datetime {
         ($ARRAYTYPE:ident, $VALUE:expr, $EXPECTED_RESULT:expr) => {
             let mut builder = $ARRAYTYPE::builder(10);
-            builder.append_value($VALUE).unwrap();
-            builder.append_null().unwrap();
+            builder.append_value($VALUE);
+            builder.append_null();
             let array = builder.finish();
 
             let schema = Arc::new(Schema::new(vec![Field::new(
@@ -523,7 +523,7 @@ mod tests {
 
         let array = [Some(101), None, Some(200), Some(3040)]
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
             .unwrap();
 
@@ -563,7 +563,7 @@ mod tests {
 
         let array = [Some(101), None, Some(200), Some(3040)]
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
             .unwrap();
 

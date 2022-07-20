@@ -267,7 +267,10 @@ impl ArrayData {
     /// Create a new ArrayData instance;
     ///
     /// If `null_count` is not specified, the number of nulls in
-    /// null_bit_buffer is calculated
+    /// null_bit_buffer is calculated.
+    ///
+    /// If the number of nulls is 0 then the null_bit_buffer
+    /// is set to `None`.
     ///
     /// # Safety
     ///
@@ -291,7 +294,7 @@ impl ArrayData {
             None => count_nulls(null_bit_buffer.as_ref(), offset, len),
             Some(null_count) => null_count,
         };
-        let null_bitmap = null_bit_buffer.map(Bitmap::from);
+        let null_bitmap = null_bit_buffer.filter(|_| null_count > 0).map(Bitmap::from);
         let new_self = Self {
             data_type,
             len,
@@ -310,6 +313,9 @@ impl ArrayData {
 
     /// Create a new ArrayData, validating that the provided buffers
     /// form a valid Arrow array of the specified data type.
+    ///
+    /// If the number of nulls in `null_bit_buffer` is 0 then the null_bit_buffer
+    /// is set to `None`.
     ///
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
@@ -1513,7 +1519,7 @@ mod tests {
     use std::ptr::NonNull;
 
     use crate::array::{
-        make_array, Array, BooleanBuilder, DecimalBuilder, FixedSizeListBuilder,
+        make_array, Array, BooleanBuilder, Decimal128Builder, FixedSizeListBuilder,
         Int32Array, Int32Builder, Int64Array, StringArray, StructBuilder, UInt64Array,
         UInt8Builder,
     };
@@ -2619,66 +2625,56 @@ mod tests {
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(10))
-            .unwrap();
+            .append_option(Some(10));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(true))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(true));
+        builder.append(true);
 
         // struct[1] = null
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(None)
-            .unwrap();
+            .append_option(None);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(None)
-            .unwrap();
-        builder.append(false).unwrap();
+            .append_option(None);
+        builder.append(false);
 
         // struct[2] = { a: null, b: false }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(None)
-            .unwrap();
+            .append_option(None);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(false))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(false));
+        builder.append(true);
 
         // struct[3] = { a: 21, b: null }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(21))
-            .unwrap();
+            .append_option(Some(21));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(None)
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(None);
+        builder.append(true);
 
         // struct[4] = { a: 18, b: false }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(18))
-            .unwrap();
+            .append_option(Some(18));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(false))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(false));
+        builder.append(true);
 
         let struct_array = builder.finish();
         let struct_array_slice = struct_array.slice(1, 3);
@@ -2769,16 +2765,15 @@ mod tests {
         let byte_width = 16;
         let mut fixed_size_builder =
             FixedSizeListBuilder::new(values_builder, byte_width);
-        let value_as_bytes = DecimalBuilder::from_i128_to_fixed_size_bytes(
+        let value_as_bytes = Decimal128Builder::from_i128_to_fixed_size_bytes(
             123456,
             fixed_size_builder.value_length() as usize,
         )
         .unwrap();
         fixed_size_builder
             .values()
-            .append_slice(value_as_bytes.as_slice())
-            .unwrap();
-        fixed_size_builder.append(true).unwrap();
+            .append_slice(value_as_bytes.as_slice());
+        fixed_size_builder.append(true);
         let fixed_size_array = fixed_size_builder.finish();
 
         // Build ArrayData for Decimal
@@ -2796,7 +2791,7 @@ mod tests {
 
     #[test]
     fn test_decimal_validation() {
-        let mut builder = DecimalBuilder::new(4, 10, 4);
+        let mut builder = Decimal128Builder::new(4, 10, 4);
         builder.append_value(10000).unwrap();
         builder.append_value(20000).unwrap();
         let array = builder.finish();

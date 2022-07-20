@@ -745,6 +745,21 @@ mod tests {
 
     use super::*;
 
+    /// Asserts that the NDJSON `input` is semantically identical to `expected`
+    fn assert_json_eq(input: &[u8], expected: &str) {
+        let expected: Vec<Option<Value>> = expected
+            .split('\n')
+            .map(|s| (!s.is_empty()).then(|| serde_json::from_str(s).unwrap()))
+            .collect();
+
+        let actual: Vec<Option<Value>> = input
+            .split(|b| *b == b'\n')
+            .map(|s| (!s.is_empty()).then(|| serde_json::from_slice(s).unwrap()))
+            .collect();
+
+        assert_eq!(expected, actual);
+    }
+
     #[test]
     fn write_simple_rows() {
         let schema = Schema::new(vec![
@@ -765,14 +780,14 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":1,"c2":"a"}
 {"c1":2,"c2":"b"}
 {"c1":3,"c2":"c"}
 {"c2":"d"}
 {"c1":5}
-"#
+"#,
         );
     }
 
@@ -796,14 +811,14 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":"a","c2":"a"}
 {"c2":"b"}
 {"c1":"c"}
 {"c1":"d","c2":"d"}
 {}
-"#
+"#,
         );
     }
 
@@ -846,14 +861,14 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":"cupcakes","c2":"sdsd"}
 {"c1":"foo","c2":"sdsd"}
 {"c1":"foo"}
 {"c2":"sd"}
 {"c1":"cupcakes","c2":"sdsd"}
-"#
+"#,
         );
     }
 
@@ -905,11 +920,11 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"nanos":"2018-11-13 17:11:10.011375885","micros":"2018-11-13 17:11:10.011375","millis":"2018-11-13 17:11:10.011","secs":"2018-11-13 17:11:10","name":"a"}
 {"name":"b"}
-"#
+"#,
         );
     }
 
@@ -951,11 +966,11 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"date32":"2018-11-13","date64":"2018-11-13","name":"a"}
 {"name":"b"}
-"#
+"#,
         );
     }
 
@@ -994,11 +1009,11 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"time32sec":"00:02:00","time32msec":"00:00:00.120","time64usec":"00:00:00.000120","time64nsec":"00:00:00.000000120","name":"a"}
 {"name":"b"}
-"#
+"#,
         );
     }
 
@@ -1037,11 +1052,11 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"duration_sec":"PT120S","duration_msec":"PT0.120S","duration_usec":"PT0.000120S","duration_nsec":"PT0.000000120S","name":"a"}
 {"name":"b"}
-"#
+"#,
         );
     }
 
@@ -1093,12 +1108,12 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":{"c11":1,"c12":{"c121":"e"}},"c2":"a"}
 {"c1":{"c12":{"c121":"f"}},"c2":"b"}
 {"c1":{"c11":5,"c12":{"c121":"g"}},"c2":"c"}
-"#
+"#,
         );
     }
 
@@ -1136,14 +1151,14 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":["a","a1"],"c2":1}
 {"c1":["b"],"c2":2}
 {"c1":["c"],"c2":3}
 {"c1":["d"],"c2":4}
 {"c1":["e"],"c2":5}
-"#
+"#,
         );
     }
 
@@ -1196,12 +1211,12 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":[[1,2],[3]],"c2":"foo"}
 {"c1":[],"c2":"bar"}
 {"c1":[[4,5,6]]}
-"#
+"#,
         );
     }
 
@@ -1271,12 +1286,12 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":[{"c11":1,"c12":{"c121":"e"}},{"c12":{"c121":"f"}}],"c2":1}
 {"c2":2}
 {"c1":[{"c11":5,"c12":{"c121":"g"}}],"c2":3}
-"#
+"#,
         );
     }
 
@@ -1396,15 +1411,15 @@ mod tests {
         // that implementations differ on the treatment of a null struct.
         // It would be more accurate to return a null struct, so this can be done
         // as a follow up.
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"list":[{"ints":1}]}
 {"list":[{}]}
 {"list":[]}
 {}
 {"list":[{}]}
 {"list":[{}]}
-"#
+"#,
         );
     }
 
@@ -1455,15 +1470,15 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"map":{"foo":10}}
 {"map":null}
 {"map":{}}
 {"map":{"bar":20,"baz":30,"qux":40}}
 {"map":{"quux":50}}
 {"map":{}}
-"#
+"#,
         );
     }
 
