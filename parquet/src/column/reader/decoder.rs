@@ -318,10 +318,28 @@ impl ColumnLevelDecoder for ColumnLevelDecoderImpl {
 impl DefinitionLevelDecoder for ColumnLevelDecoderImpl {
     fn skip_def_levels(
         &mut self,
-        _num_levels: usize,
-        _max_def_level: i16,
+        num_levels: usize,
+        max_def_level: i16,
     ) -> Result<(usize, usize)> {
-        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
+        // For now only support max_def_level == 1
+        if max_def_level == 1 {
+            let mut skip = num_levels;
+            match &mut self.inner {
+                LevelDecoderInner::Packed(reader, _bit_width) => {
+                    while !reader.skip_value(skip) {
+                        skip /= 2;
+                    }
+                }
+                LevelDecoderInner::Rle(reader) => {
+                    skip = reader.skip(skip).unwrap();
+                }
+            }
+            Ok((skip, skip))
+        } else {
+            Err(nyi_err!(
+                "For now only support skip when max_def_level == 1 && max_rep_level == 0"
+            ))
+        }
     }
 }
 
