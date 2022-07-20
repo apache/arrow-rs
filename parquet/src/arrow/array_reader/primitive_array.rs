@@ -59,17 +59,6 @@ where
         column_desc: ColumnDescPtr,
         arrow_type: Option<ArrowType>,
     ) -> Result<Self> {
-        Self::new_with_options(pages, column_desc, arrow_type, false)
-    }
-
-    /// Construct primitive array reader with ability to only compute null mask and not
-    /// buffer level data
-    pub fn new_with_options(
-        pages: Box<dyn PageIterator>,
-        column_desc: ColumnDescPtr,
-        arrow_type: Option<ArrowType>,
-        null_mask_only: bool,
-    ) -> Result<Self> {
         // Check if Arrow type is specified, else create it from Parquet type
         let data_type = match arrow_type {
             Some(t) => t,
@@ -78,8 +67,7 @@ where
                 .clone(),
         };
 
-        let record_reader =
-            RecordReader::<T>::new_with_options(column_desc.clone(), null_mask_only);
+        let record_reader = RecordReader::<T>::new(column_desc.clone());
 
         Ok(Self {
             data_type,

@@ -146,32 +146,54 @@ impl LevelsBufferSlice for DefinitionLevelBuffer {
     }
 }
 
+enum MaybePacked {
+    Packed(PackedDecoder),
+    Fallback(ColumnLevelDecoderImpl),
+}
+
+impl MaybePacked {
+    fn packed(&mut self) -> &mut PackedDecoder {
+        match self {
+            Self::Packed(d) => d,
+            _ => panic!("expected packed"),
+        }
+    }
+
+    fn fallback(&mut self) -> &mut ColumnLevelDecoderImpl {
+        match self {
+            Self::Fallback(d) => d,
+            _ => panic!("expected packed"),
+        }
+    }
+}
+
 pub struct DefinitionLevelBufferDecoder {
     max_level: i16,
-    encoding: Encoding,
-    data: Option<ByteBufferPtr>,
-    column_decoder: Option<ColumnLevelDecoderImpl>,
-    packed_decoder: Option<PackedDecoder>,
+    decoder: MaybePacked,
+}
+
+impl DefinitionLevelBufferDecoder {
+    pub fn new(max_level: i16, packed: bool) -> Self {
+        let decoder = match packed {
+            true => MaybePacked::Packed(PackedDecoder::new()),
+            false => MaybePacked::Fallback(ColumnLevelDecoderImpl::new(max_level)),
+        };
+
+        Self { max_level, decoder }
+    }
 }
 
 impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
     type Slice = DefinitionLevelBuffer;
 
-    fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self {
-        Self {
-            max_level,
-            encoding,
-            data: Some(data),
-            column_decoder: None,
-            packed_decoder: None,
+    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
+        match &mut self.decoder {
+            MaybePacked::Packed(d) => d.set_data(encoding, data),
+            MaybePacked::Fallback(d) => d.set_data(encoding, data),
         }
     }
 
-    fn read(
-        &mut self,
-        writer: &mut Self::Slice,
-        range: Range<usize>,
-    ) -> crate::errors::Result<usize> {
+    fn read(&mut self, writer: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
         match &mut writer.inner {
             BufferInner::Full {
                 levels,
@@ -181,16 +203,7 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
                 assert_eq!(self.max_level, *max_level);
                 assert_eq!(range.start + writer.len, nulls.len());
 
-                let decoder = match self.data.take() {
-                    Some(data) => self.column_decoder.insert(
-                        ColumnLevelDecoderImpl::new(self.max_level, self.encoding, data),
-                    ),
-                    None => self
-                        .column_decoder
-                        .as_mut()
-                        .expect("consistent null_mask_only"),
-                };
-
+                let decoder = self.decoder.fallback();
                 levels.resize(range.end + writer.len);
 
                 let slice = &mut levels.as_slice_mut()[writer.len..];
@@ -207,16 +220,7 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
                 assert_eq!(self.max_level, 1);
                 assert_eq!(range.start + writer.len, nulls.len());
 
-                let decoder = match self.data.take() {
-                    Some(data) => self
-                        .packed_decoder
-                        .insert(PackedDecoder::new(self.encoding, data)),
-                    None => self
-                        .packed_decoder
-                        .as_mut()
-                        .expect("consistent null_mask_only"),
-                };
-
+                let decoder = self.decoder.packed();
                 decoder.read(nulls, range.end - range.start)
             }
         }
@@ -248,7 +252,7 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
 /// [RLE]: https://github.com/apache/parquet-format/blob/master/Encodings.md#run-length-encoding--bit-packing-hybrid-rle--3
 /// [BIT_PACKED]: https://github.com/apache/parquet-format/blob/master/Encodings.md#bit-packed-deprecated-bit_packed--4
 struct PackedDecoder {
-    data: ByteBufferPtr,
+    data: Option<ByteBufferPtr>,
     data_offset: usize,
     rle_left: usize,
     rle_value: bool,
@@ -257,6 +261,11 @@ struct PackedDecoder {
 }
 
 impl PackedDecoder {
+    #[inline]
+    fn data(&self) -> &[u8] {
+        self.data.as_ref().unwrap().data()
+    }
+
     fn next_rle_block(&mut self) -> Result<()> {
         let indicator_value = self.decode_header()?;
         if indicator_value & 1 == 1 {
@@ -265,7 +274,7 @@ impl PackedDecoder {
             self.packed_offset = 0;
         } else {
             self.rle_left = (indicator_value >> 1) as usize;
-            let byte = *self.data.as_ref().get(self.data_offset).ok_or_else(|| {
+            let byte = *self.data().get(self.data_offset).ok_or_else(|| {
                 ParquetError::EOF(
                     "unexpected end of file whilst decoding definition levels rle value"
                         .into(),
@@ -282,17 +291,14 @@ impl PackedDecoder {
     fn decode_header(&mut self) -> Result<i64> {
         let mut offset = 0;
         let mut v: i64 = 0;
+        let data = self.data();
         while offset < 10 {
-            let byte = *self
-                .data
-                .as_ref()
-                .get(self.data_offset + offset)
-                .ok_or_else(|| {
-                    ParquetError::EOF(
-                        "unexpected end of file whilst decoding definition levels rle header"
-                            .into(),
-                    )
-                })?;
+            let byte = *data.get(self.data_offset + offset).ok_or_else(|| {
+                ParquetError::EOF(
+                    "unexpected end of file whilst decoding definition levels rle header"
+                        .into(),
+                )
+            })?;
 
             v |= ((byte & 0x7F) as i64) << (offset * 7);
             offset += 1;
@@ -306,26 +312,28 @@ impl PackedDecoder {
 }
 
 impl PackedDecoder {
-    fn new(encoding: Encoding, data: ByteBufferPtr) -> Self {
-        match encoding {
-            Encoding::RLE => Self {
-                data,
-                data_offset: 0,
-                rle_left: 0,
-                rle_value: false,
-                packed_count: 0,
-                packed_offset: 0,
-            },
-            Encoding::BIT_PACKED => Self {
-                data_offset: 0,
-                rle_left: 0,
-                rle_value: false,
-                packed_count: data.len() * 8,
-                packed_offset: 0,
-                data,
-            },
-            _ => unreachable!("invalid level encoding: {}", encoding),
+    fn new() -> Self {
+        Self {
+            data: None,
+            data_offset: 0,
+            rle_left: 0,
+            rle_value: false,
+            packed_count: 0,
+            packed_offset: 0,
         }
+    }
+
+    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
+        self.rle_left = 0;
+        self.rle_value = false;
+        self.packed_offset = 0;
+        self.packed_count = match encoding {
+            Encoding::RLE => 0,
+            Encoding::BIT_PACKED => data.len() * 8,
+            _ => unreachable!("invalid level encoding: {}", encoding),
+        };
+        self.data = Some(data);
+        self.data_offset = 0;
     }
 
     fn read(&mut self, buffer: &mut BooleanBufferBuilder, len: usize) -> Result<usize> {
@@ -339,14 +347,14 @@ impl PackedDecoder {
             } else if self.packed_count != self.packed_offset {
                 let to_read = (self.packed_count - self.packed_offset).min(len - read);
                 let offset = self.data_offset * 8 + self.packed_offset;
-                buffer.append_packed_range(offset..offset + to_read, self.data.as_ref());
+                buffer.append_packed_range(offset..offset + to_read, self.data());
                 self.packed_offset += to_read;
                 read += to_read;
 
                 if self.packed_offset == self.packed_count {
                     self.data_offset += self.packed_count / 8;
                 }
-            } else if self.data_offset == self.data.len() {
+            } else if self.data_offset == self.data().len() {
                 break;
             } else {
                 self.next_rle_block()?
@@ -381,7 +389,8 @@ mod tests {
         assert_eq!(expected.len(), len);
 
         let encoded = encoder.consume().unwrap();
-        let mut decoder = PackedDecoder::new(Encoding::RLE, ByteBufferPtr::new(encoded));
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, ByteBufferPtr::new(encoded));
 
         // Decode data in random length intervals
         let mut decoded = BooleanBufferBuilder::new(len);

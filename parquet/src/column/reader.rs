@@ -22,8 +22,8 @@ use std::cmp::min;
 use super::page::{Page, PageReader};
 use crate::basic::*;
 use crate::column::reader::decoder::{
-    ColumnValueDecoder, DefinitionLevelDecoder, LevelsBufferSlice,
-    RepetitionLevelDecoder, ValuesBufferSlice,
+    ColumnLevelDecoderImpl, ColumnValueDecoder, ColumnValueDecoderImpl,
+    DefinitionLevelDecoder, LevelsBufferSlice, RepetitionLevelDecoder, ValuesBufferSlice,
 };
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
@@ -103,9 +103,9 @@ pub fn get_typed_column_reader<T: DataType>(
 
 /// Typed value reader for a particular primitive column.
 pub type ColumnReaderImpl<T> = GenericColumnReader<
-    decoder::ColumnLevelDecoderImpl,
-    decoder::ColumnLevelDecoderImpl,
-    decoder::ColumnValueDecoderImpl<T>,
+    ColumnLevelDecoderImpl,
+    ColumnLevelDecoderImpl,
+    ColumnValueDecoderImpl<T>,
 >;
 
 /// Reads data for a given column chunk, using the provided decoders:
@@ -135,27 +135,47 @@ pub struct GenericColumnReader<R, D, V> {
     values_decoder: V,
 }
 
+impl<V> GenericColumnReader<ColumnLevelDecoderImpl, ColumnLevelDecoderImpl, V>
+where
+    V: ColumnValueDecoder,
+{
+    /// Creates new column reader based on column descriptor and page reader.
+    pub fn new(descr: ColumnDescPtr, page_reader: Box<dyn PageReader>) -> Self {
+        let values_decoder = V::new(&descr);
+
+        let def_level_decoder = (descr.max_def_level() != 0)
+            .then(|| ColumnLevelDecoderImpl::new(descr.max_def_level()));
+
+        let rep_level_decoder = (descr.max_rep_level() != 0)
+            .then(|| ColumnLevelDecoderImpl::new(descr.max_rep_level()));
+
+        Self::new_with_decoders(
+            descr,
+            page_reader,
+            values_decoder,
+            def_level_decoder,
+            rep_level_decoder,
+        )
+    }
+}
+
 impl<R, D, V> GenericColumnReader<R, D, V>
 where
     R: RepetitionLevelDecoder,
     D: DefinitionLevelDecoder,
     V: ColumnValueDecoder,
 {
-    /// Creates new column reader based on column descriptor and page reader.
-    pub fn new(descr: ColumnDescPtr, page_reader: Box<dyn PageReader>) -> Self {
-        let values_decoder = V::new(&descr);
-        Self::new_with_decoder(descr, page_reader, values_decoder)
-    }
-
-    fn new_with_decoder(
+    pub(crate) fn new_with_decoders(
         descr: ColumnDescPtr,
         page_reader: Box<dyn PageReader>,
         values_decoder: V,
+        def_level_decoder: Option<D>,
+        rep_level_decoder: Option<R>,
     ) -> Self {
         Self {
             descr,
-            def_level_decoder: None,
-            rep_level_decoder: None,
+            def_level_decoder,
+            rep_level_decoder,
             page_reader,
             num_buffered_values: 0,
             num_decoded_values: 0,
@@ -383,10 +403,10 @@ where
                                 )?;
                                 offset += bytes_read;
 
-                                let decoder =
-                                    R::new(max_rep_level, rep_level_encoding, level_data);
-
-                                self.rep_level_decoder = Some(decoder);
+                                self.rep_level_decoder
+                                    .as_mut()
+                                    .unwrap()
+                                    .set_data(rep_level_encoding, level_data);
                             }
 
                             if max_def_level > 0 {
@@ -398,10 +418,10 @@ where
                                 )?;
                                 offset += bytes_read;
 
-                                let decoder =
-                                    D::new(max_def_level, def_level_encoding, level_data);
-
-                                self.def_level_decoder = Some(decoder);
+                                self.def_level_decoder
+                                    .as_mut()
+                                    .unwrap()
+                                    .set_data(def_level_encoding, level_data);
                             }
 
                             self.values_decoder.set_data(
@@ -434,26 +454,22 @@ where
                             // DataPage v2 only supports RLE encoding for repetition
                             // levels
                             if self.descr.max_rep_level() > 0 {
-                                let decoder = R::new(
-                                    self.descr.max_rep_level(),
+                                self.rep_level_decoder.as_mut().unwrap().set_data(
                                     Encoding::RLE,
                                     buf.range(0, rep_levels_byte_len as usize),
                                 );
-                                self.rep_level_decoder = Some(decoder);
                             }
 
                             // DataPage v2 only supports RLE encoding for definition
                             // levels
                             if self.descr.max_def_level() > 0 {
-                                let decoder = D::new(
-                                    self.descr.max_def_level(),
+                                self.def_level_decoder.as_mut().unwrap().set_data(
                                     Encoding::RLE,
                                     buf.range(
                                         rep_levels_byte_len as usize,
                                         def_levels_byte_len as usize,
                                     ),
                                 );
-                                self.def_level_decoder = Some(decoder);
                             }
 
                             self.values_decoder.set_data(
