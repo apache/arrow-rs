@@ -623,6 +623,8 @@ mod tests {
 
     #[tokio::test]
     #[cfg(target_family = "unix")]
+    // Fails on github actions runner (which runs the tests as root)
+    #[ignore]
     async fn bubble_up_io_errors() {
         use std::{fs::set_permissions, os::unix::prelude::PermissionsExt};
 
