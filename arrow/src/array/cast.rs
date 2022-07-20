@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines helper functions for force Array type downcast
+//! Defines helper functions for force [`Array`] downcasts
 
 use crate::array::*;
 use crate::datatypes::*;
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`], to
-/// [`PrimitiveArray<T>`], panic'ing on failure:
+/// [`PrimitiveArray<T>`], panic'ing on failure.
+///
+/// # Example
 ///
 /// ```
 /// # use arrow::array::*;
@@ -39,6 +41,7 @@ use crate::datatypes::*;
 ///     .downcast_ref::<Int32Array>()
 ///     .unwrap();
 /// ```
+
 pub fn as_primitive_array<T>(arr: &dyn Array) -> &PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
@@ -50,6 +53,8 @@ where
 
 /// Force downcast of an [`Array`], such as an [`ArrayRef`] to
 /// [`DictionaryArray<T>`], panic'ing on failure:
+///
+/// # Example
 ///
 /// ```
 /// # use arrow::array::*;
