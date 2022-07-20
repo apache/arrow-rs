@@ -218,10 +218,10 @@ impl ParquetFileArrowReader {
         chunk_reader: R,
         options: ArrowReaderOptions,
     ) -> Result<Self> {
-        let file_reader=  if options.selection.is_some() {
+        let file_reader = if options.selection.is_some() {
             let options = ReadOptionsBuilder::new().with_page_index().build();
-            Arc::new(SerializedFileReader::new_with_options(chunk_reader,options)?)
-        }else {
+            Arc::new(SerializedFileReader::new_with_options(chunk_reader, options)?)
+        } else {
             Arc::new(SerializedFileReader::new(chunk_reader)?)
         };
         Ok(Self::new_with_options(file_reader, options))
@@ -299,7 +299,7 @@ impl Iterator for ParquetRecordBatchReader {
                             front.row_count,
                             skipped
                         )
-                        .into()));
+                            .into()));
                     }
                     continue;
                 }
@@ -496,7 +496,7 @@ mod tests {
             Some(Field::new("int32", ArrowDataType::Null, true)),
             &Default::default(),
         )
-        .unwrap();
+            .unwrap();
 
         file.rewind().unwrap();
 
@@ -941,8 +941,8 @@ mod tests {
                         std::iter::from_fn(|| {
                             Some((rng.next_u32() as usize % 100 >= *null_percent) as i16)
                         })
-                        .take(opts.num_rows)
-                        .collect()
+                            .take(opts.num_rows)
+                            .collect()
                     })
                     .collect();
                 (Repetition::OPTIONAL, Some(def_levels))
@@ -996,7 +996,7 @@ mod tests {
             arrow_field,
             &opts,
         )
-        .unwrap();
+            .unwrap();
 
         file.rewind().unwrap();
 
@@ -1228,7 +1228,7 @@ mod tests {
                 schema,
                 writer_props,
             )
-            .unwrap();
+                .unwrap();
 
             {
                 let mut row_group_writer = writer.next_row_group().unwrap();
@@ -1355,7 +1355,7 @@ mod tests {
             Some(arrow_field),
             &opts,
         )
-        .unwrap();
+            .unwrap();
 
         file.rewind().unwrap();
 
@@ -1471,7 +1471,7 @@ mod tests {
                 batch.schema(),
                 Some(props),
             )
-            .unwrap();
+                .unwrap();
             writer.write(&batch).unwrap();
             writer.close().unwrap();
             file
@@ -1556,7 +1556,7 @@ mod tests {
                     .build(),
             ),
         )
-        .unwrap();
+            .unwrap();
         for _ in 0..2 {
             let mut list_builder = ListBuilder::new(Int32Builder::new(batch_size));
             for _ in 0..(batch_size) {
@@ -1566,7 +1566,7 @@ mod tests {
                 schema.clone(),
                 vec![Arc::new(list_builder.finish())],
             )
-            .unwrap();
+                .unwrap();
             writer.write(&batch).unwrap();
         }
         writer.close().unwrap();
@@ -1603,29 +1603,78 @@ mod tests {
         let test_file = File::open(&path).unwrap();
         // total row count 7300
         // 1. test selection size more than one page row count
-        let selections = create_test_selection(1000, 7300);
+        let batch_size = 1000;
+        let selections = create_test_selection(batch_size, 7300);
         let arrow_reader_options = ArrowReaderOptions::new().with_row_selection(selections);
-        let mut arrow_reader = ParquetFileArrowReader::try_new_with_options(test_file, arrow_reader_options).unwrap();
-        let reader = arrow_reader.get_record_reader(1000).unwrap();
 
-        let mut batch_count = 0;
-        for batch in reader {
-            println!("batch_count: {}", batch_count);
-            assert_eq!(batch.unwrap().num_rows(), 1000);
-            batch_count += 1;
+        let mut skip_arrow_reader = ParquetFileArrowReader::try_new_with_options(test_file.try_clone().unwrap(), arrow_reader_options).unwrap();
+        let skip_reader = skip_arrow_reader.get_record_reader(batch_size).unwrap();
+
+        let mut serial_arrow_reader = ParquetFileArrowReader::try_new(test_file.try_clone().unwrap()).unwrap();
+        let serial_reader = serial_arrow_reader.get_record_reader(batch_size).unwrap();
+
+        let mut expected_data = vec![];
+        for batch in serial_reader {
+            expected_data.push(batch.unwrap());
         }
+
+        let mut total_row_count = 0;
+        let mut index = 0;
+        for batch in skip_reader {
+            let batch = batch.unwrap();
+            assert!(batch.eq(expected_data.get(index).unwrap()));
+            index += 2;
+            let num = batch.num_rows();
+            assert!(num == 1000 || num == 300);
+            total_row_count += num;
+        }
+        assert_eq!(total_row_count, 4000);
+
+        // 2. test selection size less than one page row count
+        let batch_size = 10;
+        let selections = create_test_selection(batch_size, 7300);
+        let arrow_reader_options = ArrowReaderOptions::new().with_row_selection(selections);
+
+        let mut skip_arrow_reader = ParquetFileArrowReader::try_new_with_options(test_file.try_clone().unwrap(), arrow_reader_options).unwrap();
+        let skip_reader = skip_arrow_reader.get_record_reader(batch_size).unwrap();
+
+        let mut serial_arrow_reader = ParquetFileArrowReader::try_new(test_file.try_clone().unwrap()).unwrap();
+        let serial_reader = serial_arrow_reader.get_record_reader(batch_size).unwrap();
+
+        let mut expected_data = vec![];
+        for batch in serial_reader {
+            expected_data.push(batch.unwrap());
+        }
+
+        let mut total_row_count = 0;
+        let mut index = 0;
+        for batch in skip_reader {
+            let batch = batch.unwrap();
+            assert!(batch.eq(expected_data.get(index).unwrap()));
+            index += 2;
+            let num = batch.num_rows();
+            assert_eq!(num, 10);
+            total_row_count += num;
+        }
+        assert_eq!(total_row_count, 3650);
+
     }
 
     fn create_test_selection(step_len: usize, total_len: usize) -> Vec<RowSelection> {
-        let mut cur_offset = 0;
+        let mut remaining = total_len;
         let mut skip = false;
         let mut vec = vec![];
-        while cur_offset < total_len {
-            vec.push(RowSelection{
-                row_count: step_len,
-                skip
+        while remaining != 0 {
+            let step = if remaining > step_len {
+                step_len
+            } else {
+                remaining
+            };
+            vec.push(RowSelection {
+                row_count: step,
+                skip,
             });
-            cur_offset += step_len;
+            remaining -= step;
             skip = !skip;
         }
         vec
