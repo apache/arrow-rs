@@ -31,7 +31,13 @@ use crate::datatypes::*;
 /// let primitive_array: &Int32Array = as_primitive_array(&arr);
 ///
 /// // Equivalently:
-/// let primitive_array  = as_primitive_array::<Int32Type>(&arr);
+/// let primitive_array = as_primitive_array::<Int32Type>(&arr);
+///
+/// // Most verbosely:
+/// let primitive_array = arr
+///     .as_any()
+///     .downcast_ref::<Int32Array>()
+///     .unwrap();
 /// ```
 pub fn as_primitive_array<T>(arr: &dyn Array) -> &PrimitiveArray<T>
 where
@@ -42,7 +48,17 @@ where
         .expect("Unable to downcast to primitive array")
 }
 
-/// Force downcast ArrayRef to DictionaryArray<T>
+/// Force downcast of an [`Array`], such as an [`ArrayRef`] to
+/// [`DictionaryArray<T>`], panic'ing on failure:
+///
+/// ```
+/// # use arrow::array::*;
+/// # use arrow::datatypes::*;
+/// # let arr: DictionaryArray<Int32Type> = vec![Some("foo")].into_iter().collect();
+/// # let arr: ArrayRef = std::sync::Arc::new(arr);
+/// // Downcast an `ArrayRef` to DictionaryArray with Int32 keys:
+/// let dict_array: &DictionaryArray<Int32Type> = as_dictionary_array::<Int32Type>(&arr);
+/// ```
 pub fn as_dictionary_array<T>(arr: &dyn Array) -> &DictionaryArray<T>
 where
     T: ArrowDictionaryKeyType,
