@@ -87,7 +87,6 @@ use std::task::{Context, Poll};
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::Stream;
-use futures::StreamExt;
 use parquet_format::PageType;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
