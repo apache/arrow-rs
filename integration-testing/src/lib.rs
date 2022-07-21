@@ -640,10 +640,10 @@ fn array_from_json(
                         let decimal =
                             Decimal256::try_new_from_bytes(*precision, *scale, &bytes)
                                 .unwrap();
-                        b.append_value(&decimal)
+                        b.append_value(&decimal)?;
                     }
-                    _ => Ok(b.append_null()),
-                }?;
+                    _ => b.append_null(),
+                }
             }
             Ok(Arc::new(b.finish()))
         }
