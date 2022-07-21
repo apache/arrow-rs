@@ -803,7 +803,7 @@ impl Decoder {
             }
             DataType::Dictionary(_, _) => {
                 let values_builder =
-                    self.build_string_dictionary_builder::<DT>(rows.len() * 5)?;
+                    self.build_string_dictionary_builder::<DT>(rows.len() * 5);
                 Box::new(ListBuilder::new(values_builder))
             }
             e => {
@@ -855,14 +855,14 @@ impl Decoder {
                             ))?;
                         for val in vals {
                             if let Some(v) = val {
-                                builder.values().append_value(&v)?
+                                builder.values().append_value(&v);
                             } else {
-                                builder.values().append_null()?
+                                builder.values().append_null();
                             };
                         }
 
                         // Append to the list
-                        builder.append(true)?;
+                        builder.append(true);
                     }
                     DataType::Dictionary(_, _) => {
                         let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<DT>>>().ok_or_else(||ArrowError::JsonError(
@@ -870,14 +870,14 @@ impl Decoder {
                         ))?;
                         for val in vals {
                             if let Some(v) = val {
-                                let _ = builder.values().append(&v)?;
+                                let _ = builder.values().append(&v);
                             } else {
-                                builder.values().append_null()?
+                                builder.values().append_null();
                             };
                         }
 
                         // Append to the list
-                        builder.append(true)?;
+                        builder.append(true);
                     }
                     e => {
                         return Err(ArrowError::JsonError(format!(
@@ -897,13 +897,13 @@ impl Decoder {
     fn build_string_dictionary_builder<T>(
         &self,
         row_len: usize,
-    ) -> Result<StringDictionaryBuilder<T>>
+    ) -> StringDictionaryBuilder<T>
     where
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
         let key_builder = PrimitiveBuilder::<T>::new(row_len);
         let values_builder = StringBuilder::new(row_len * 5);
-        Ok(StringDictionaryBuilder::new(key_builder, values_builder))
+        StringDictionaryBuilder::new(key_builder, values_builder)
     }
 
     #[inline(always)]
@@ -954,12 +954,12 @@ impl Decoder {
         for row in rows {
             if let Some(value) = row.get(&col_name) {
                 if let Some(boolean) = value.as_bool() {
-                    builder.append_value(boolean)?
+                    builder.append_value(boolean);
                 } else {
-                    builder.append_null()?;
+                    builder.append_null();
                 }
             } else {
-                builder.append_null()?;
+                builder.append_null();
             }
         }
         Ok(Arc::new(builder.finish()))
@@ -1479,16 +1479,16 @@ impl Decoder {
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
         let mut builder: StringDictionaryBuilder<T> =
-            self.build_string_dictionary_builder(rows.len())?;
+            self.build_string_dictionary_builder(rows.len());
         for row in rows {
             if let Some(value) = row.get(&col_name) {
                 if let Some(str_v) = value.as_str() {
                     builder.append(str_v).map(drop)?
                 } else {
-                    builder.append_null()?
+                    builder.append_null();
                 }
             } else {
-                builder.append_null()?
+                builder.append_null();
             }
         }
         Ok(Arc::new(builder.finish()) as ArrayRef)

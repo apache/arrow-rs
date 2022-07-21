@@ -43,7 +43,7 @@ use super::PrimitiveBuilder;
 ///  let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
 ///  let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
 ///  builder.append(12345678).unwrap();
-///  builder.append_null().unwrap();
+///  builder.append_null();
 ///  builder.append(22345678).unwrap();
 ///  let array = builder.finish();
 ///
@@ -140,21 +140,21 @@ where
     pub fn append(&mut self, value: V::Native) -> Result<K::Native> {
         if let Some(&key) = self.map.get(value.to_byte_slice()) {
             // Append existing value.
-            self.keys_builder.append_value(key)?;
+            self.keys_builder.append_value(key);
             Ok(key)
         } else {
             // Append new value.
             let key = K::Native::from_usize(self.values_builder.len())
                 .ok_or(ArrowError::DictionaryKeyOverflowError)?;
-            self.values_builder.append_value(value)?;
-            self.keys_builder.append_value(key as K::Native)?;
+            self.values_builder.append_value(value);
+            self.keys_builder.append_value(key as K::Native);
             self.map.insert(value.to_byte_slice().into(), key);
             Ok(key)
         }
     }
 
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.keys_builder.append_null()
     }
 
@@ -193,7 +193,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(22345678).unwrap();
         let array = builder.finish();
 

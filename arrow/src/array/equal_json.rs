@@ -468,10 +468,10 @@ mod tests {
     ) -> Result<ListArray> {
         for d in data.as_ref() {
             if let Some(v) = d {
-                builder.values().append_slice(v.as_ref())?;
-                builder.append(true)?
+                builder.values().append_slice(v.as_ref());
+                builder.append(true);
             } else {
-                builder.append(false)?
+                builder.append(false);
             }
         }
         Ok(builder.finish())
@@ -484,13 +484,13 @@ mod tests {
     ) -> Result<FixedSizeListArray> {
         for d in data.as_ref() {
             if let Some(v) = d {
-                builder.values().append_slice(v.as_ref())?;
-                builder.append(true)?
+                builder.values().append_slice(v.as_ref());
+                builder.append(true);
             } else {
                 for _ in 0..builder.value_length() {
-                    builder.values().append_null()?;
+                    builder.values().append_null();
                 }
-                builder.append(false)?
+                builder.append(false);
             }
         }
         Ok(builder.finish())
@@ -766,12 +766,12 @@ mod tests {
     fn test_binary_json_equal() {
         // Test the equal case
         let mut builder = BinaryBuilder::new(6);
-        builder.append_value(b"hello").unwrap();
-        builder.append_null().unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(b"world").unwrap();
-        builder.append_null().unwrap();
-        builder.append_null().unwrap();
+        builder.append_value(b"hello");
+        builder.append_null();
+        builder.append_null();
+        builder.append_value(b"world");
+        builder.append_null();
+        builder.append_null();
         let arrow_array = builder.finish();
         let json_array: Value = serde_json::from_str(
             r#"
@@ -866,7 +866,7 @@ mod tests {
         // Test the equal case
         let mut builder = FixedSizeBinaryBuilder::new(15, 5);
         builder.append_value(b"hello").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(b"world").unwrap();
         let arrow_array: FixedSizeBinaryArray = builder.finish();
         let json_array: Value = serde_json::from_str(
@@ -884,7 +884,7 @@ mod tests {
 
         // Test unequal case
         builder.append_value(b"hello").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(b"world").unwrap();
         let arrow_array: FixedSizeBinaryArray = builder.finish();
         let json_array: Value = serde_json::from_str(

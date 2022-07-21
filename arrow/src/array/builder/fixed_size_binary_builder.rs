@@ -71,11 +71,10 @@ impl FixedSizeBinaryBuilder {
 
     /// Append a null value to the array.
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.values_builder
             .append_slice(&vec![0u8; self.value_length as usize][..]);
         self.bitmap_builder.append(false);
-        Ok(())
     }
 
     /// Builds the [`FixedSizeBinaryArray`] and reset this builder.
@@ -137,7 +136,7 @@ mod tests {
 
         //  [b"hello", null, "arrow"]
         builder.append_value(b"hello").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(b"arrow").unwrap();
         let array: FixedSizeBinaryArray = builder.finish();
 
@@ -153,7 +152,7 @@ mod tests {
         let mut builder = FixedSizeBinaryBuilder::new(0, 0);
 
         builder.append_value(b"").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(b"").unwrap();
         assert!(!builder.is_empty());
 

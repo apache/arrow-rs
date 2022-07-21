@@ -24,9 +24,11 @@
 //! Arrays are often passed around as a dynamically typed [`&dyn Array`] or [`ArrayRef`].
 //! For example, [`RecordBatch`](`crate::record_batch::RecordBatch`) stores columns as [`ArrayRef`].
 //!
-//! Whilst these arrays can be passed directly to the [`compute`](crate::compute),
-//! [`csv`](crate::csv), [`json`](crate::json), etc... APIs, it is often the case that you wish
-//! to interact with the data directly. This requires downcasting to the concrete type of the array:
+//! Whilst these arrays can be passed directly to the
+//! [`compute`](crate::compute), [`csv`](crate::csv),
+//! [`json`](crate::json), etc... APIs, it is often the case that you
+//! wish to interact with the data directly. This requires downcasting
+//! to the concrete type of the array:
 //!
 //! ```
 //! # use arrow::array::{Array, Float32Array, Int32Array};
@@ -42,6 +44,19 @@
 //! }
 //! ```
 //!
+//! Additionally, there are convenient functions to do this casting
+//! such as [`as_primitive_array<T>`] and [`as_string_array`]:
+//!
+//! ```
+//! # use arrow::array::*;
+//! # use arrow::datatypes::*;
+//! #
+//! fn as_f32_slice(array: &dyn Array) -> &[f32] {
+//!     // use as_primtive_array
+//!     as_primitive_array::<Float32Type>(array).values()
+//! }
+//! ```
+
 //! # Building an Array
 //!
 //! Most [`Array`] implementations can be constructed directly from iterators or [`Vec`]
@@ -79,13 +94,13 @@
 //! let mut builder = Int16Array::builder(100);
 //!
 //! // Append a single primitive value
-//! builder.append_value(1).unwrap();
+//! builder.append_value(1);
 //!
 //! // Append a null value
-//! builder.append_null().unwrap();
+//! builder.append_null();
 //!
 //! // Append a slice of primitive values
-//! builder.append_slice(&[2, 3, 4]).unwrap();
+//! builder.append_slice(&[2, 3, 4]);
 //!
 //! // Build the array
 //! let array = builder.finish();

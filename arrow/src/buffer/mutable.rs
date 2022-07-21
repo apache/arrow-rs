@@ -377,7 +377,7 @@ impl MutableBuffer {
 
 /// # Safety
 /// `ptr` must be allocated for `old_capacity`.
-#[inline]
+#[cold]
 unsafe fn reallocate(
     ptr: NonNull<u8>,
     old_capacity: usize,

@@ -1077,14 +1077,12 @@ mod tests {
             struct_builder
                 .field_builder::<BooleanBuilder>(0)
                 .unwrap()
-                .append_option(value.and_then(|v| v.0))
-                .unwrap();
+                .append_option(value.and_then(|v| v.0));
             struct_builder
                 .field_builder::<Int32Builder>(1)
                 .unwrap()
-                .append_option(value.and_then(|v| v.1))
-                .unwrap();
-            struct_builder.append(value.is_some()).unwrap();
+                .append_option(value.and_then(|v| v.1));
+            struct_builder.append(value.is_some());
         }
         struct_builder.finish()
     }
@@ -2034,7 +2032,7 @@ mod tests {
         dict_builder.append("foo").unwrap();
         dict_builder.append("bar").unwrap();
         dict_builder.append("").unwrap();
-        dict_builder.append_null().unwrap();
+        dict_builder.append_null();
         dict_builder.append("foo").unwrap();
         dict_builder.append("bar").unwrap();
         dict_builder.append("bar").unwrap();
