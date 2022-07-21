@@ -151,24 +151,6 @@ enum MaybePacked {
     Fallback(ColumnLevelDecoderImpl),
 }
 
-impl MaybePacked {
-    #[inline]
-    fn packed(&mut self) -> &mut PackedDecoder {
-        match self {
-            Self::Packed(d) => d,
-            _ => panic!("expected packed"),
-        }
-    }
-
-    #[inline]
-    fn fallback(&mut self) -> &mut ColumnLevelDecoderImpl {
-        match self {
-            Self::Fallback(d) => d,
-            _ => panic!("expected packed"),
-        }
-    }
-}
-
 pub struct DefinitionLevelBufferDecoder {
     max_level: i16,
     decoder: MaybePacked,
@@ -196,16 +178,18 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
     }
 
     fn read(&mut self, writer: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
-        match &mut writer.inner {
-            BufferInner::Full {
-                levels,
-                nulls,
-                max_level,
-            } => {
+        match (&mut writer.inner, &mut self.decoder) {
+            (
+                BufferInner::Full {
+                    levels,
+                    nulls,
+                    max_level,
+                },
+                MaybePacked::Fallback(decoder),
+            ) => {
                 assert_eq!(self.max_level, *max_level);
                 assert_eq!(range.start + writer.len, nulls.len());
 
-                let decoder = self.decoder.fallback();
                 levels.resize(range.end + writer.len);
 
                 let slice = &mut levels.as_slice_mut()[writer.len..];
@@ -218,13 +202,13 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
 
                 Ok(levels_read)
             }
-            BufferInner::Mask { nulls } => {
+            (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
                 assert_eq!(self.max_level, 1);
                 assert_eq!(range.start + writer.len, nulls.len());
 
-                let decoder = self.decoder.packed();
                 decoder.read(nulls, range.end - range.start)
             }
+            _ => unreachable!("inconsistent null mask"),
         }
     }
 }
