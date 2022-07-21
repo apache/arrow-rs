@@ -446,15 +446,12 @@ mod tests {
         let string_builder = StringBuilder::new(3);
         let mut list_of_string_builder = ListBuilder::new(string_builder);
 
-        list_of_string_builder.values().append_value("foo").unwrap();
-        list_of_string_builder.values().append_value("bar").unwrap();
-        list_of_string_builder.append(true).unwrap();
+        list_of_string_builder.values().append_value("foo");
+        list_of_string_builder.values().append_value("bar");
+        list_of_string_builder.append(true);
 
-        list_of_string_builder
-            .values()
-            .append_value("foobar")
-            .unwrap();
-        list_of_string_builder.append(true).unwrap();
+        list_of_string_builder.values().append_value("foobar");
+        list_of_string_builder.append(true);
         let list_of_strings = list_of_string_builder.finish();
 
         assert_eq!(list_of_strings.len(), 2);

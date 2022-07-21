@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{
+use crate::{array::{
     ArrayBuilder, ArrayDataBuilder, ArrayRef, GenericBinaryArray, OffsetSizeTrait,
     UInt8BufferBuilder,
-};
-use crate::datatypes::DataType;
-use crate::error::Result;
+}, datatypes::DataType};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -49,21 +47,17 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
 
     /// Appends a byte slice into the builder.
     #[inline]
-    pub fn append_value(&mut self, value: impl AsRef<[u8]>) -> Result<()> {
+    pub fn append_value(&mut self, value: impl AsRef<[u8]>) {
         self.value_builder.append_slice(value.as_ref());
         self.null_buffer_builder.append(true);
-        self.offsets_builder
-            .append(OffsetSize::from_usize(self.value_builder.len()).unwrap());
-        Ok(())
+        self.offsets_builder.append(OffsetSize::from_usize(self.value_builder.len()).unwrap());
     }
 
     /// Append a null value to the array.
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.null_buffer_builder.append(false);
-        self.offsets_builder
-            .append(OffsetSize::from_usize(self.value_builder.len()).unwrap());
-        Ok(())
+        self.offsets_builder.append(OffsetSize::from_usize(self.value_builder.len()).unwrap());
     }
 
     /// Builds the [`GenericBinaryArray`] and reset this builder.
@@ -124,9 +118,9 @@ mod tests {
     fn test_binary_array_builder() {
         let mut builder = BinaryBuilder::new(20);
 
-        builder.append_value(b"hello").unwrap();
-        builder.append_value(b"").unwrap();
-        builder.append_value(b"world").unwrap();
+        builder.append_value(b"hello");
+        builder.append_value(b"");
+        builder.append_value(b"world");
 
         let binary_array = builder.finish();
 
@@ -143,9 +137,9 @@ mod tests {
     fn test_large_binary_array_builder() {
         let mut builder = LargeBinaryBuilder::new(20);
 
-        builder.append_value(b"hello").unwrap();
-        builder.append_value(b"").unwrap();
-        builder.append_value(b"world").unwrap();
+        builder.append_value(b"hello");
+        builder.append_value(b"");
+        builder.append_value(b"world");
 
         let binary_array = builder.finish();
 

@@ -1245,7 +1245,7 @@ mod tests {
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(10).unwrap();
         let b = builder.finish();
 
@@ -1274,7 +1274,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(5).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
         builder.append(9).unwrap();
@@ -1329,7 +1329,7 @@ mod tests {
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(10).unwrap();
         let b = builder.finish();
 
@@ -1358,7 +1358,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(5).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
         builder.append(9).unwrap();
@@ -1413,7 +1413,7 @@ mod tests {
         builder.append(6).unwrap();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(10).unwrap();
         let b = builder.finish();
 
@@ -1457,7 +1457,7 @@ mod tests {
         builder.append(5).unwrap();
         builder.append(3).unwrap();
         builder.append(1).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(3).unwrap();
         let b = builder.finish();
 
@@ -1486,7 +1486,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(5).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
         builder.append(9).unwrap();
@@ -1672,7 +1672,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(5).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(7).unwrap();
         builder.append(8).unwrap();
         builder.append(9).unwrap();

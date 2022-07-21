@@ -1517,7 +1517,7 @@ mod tests {
     fn fixed_size_binary_single_column() {
         let mut builder = FixedSizeBinaryBuilder::new(16, 4);
         builder.append_value(b"0123").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(b"8910").unwrap();
         builder.append_value(b"1112").unwrap();
         let array = Arc::new(builder.finish());
@@ -1697,7 +1697,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(22345678).unwrap();
         builder.append(12345678).unwrap();
         let d = builder.finish();
@@ -1833,77 +1833,67 @@ mod tests {
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_value(1)
-            .unwrap();
+            .append_value(1);
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_value(2)
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_value(2);
+        values.append(true);
+        list_builder.append(true);
 
         // []
-        list_builder.append(true).unwrap();
+        list_builder.append(true);
 
         // null
-        list_builder.append(false).unwrap();
+        list_builder.append(false);
 
         // [null, null]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
+            .append_null();
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(false).unwrap();
+            .append_null();
+        values.append(false);
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
+            .append_null();
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(false).unwrap();
-        list_builder.append(true).unwrap();
+            .append_null();
+        values.append(false);
+        list_builder.append(true);
 
         // [{a: null, b: 3}]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
+            .append_null();
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_value(3)
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_value(3);
+        values.append(true);
+        list_builder.append(true);
 
         // [{a: 2, b: null}]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_value(2)
-            .unwrap();
+            .append_value(2);
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_null();
+        values.append(true);
+        list_builder.append(true);
 
         let array = Arc::new(list_builder.finish());
 
