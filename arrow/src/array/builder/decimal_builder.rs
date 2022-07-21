@@ -271,7 +271,7 @@ mod tests {
 
         let decimal_array: Decimal256Array = builder.finish();
 
-        assert_eq!(&DataType::Decimal(40, 6), decimal_array.data_type());
+        assert_eq!(&DataType::Decimal256(40, 6), decimal_array.data_type());
         assert_eq!(4, decimal_array.len());
         assert_eq!(1, decimal_array.null_count());
         assert_eq!(64, decimal_array.value_offset(2));

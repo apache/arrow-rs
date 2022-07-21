@@ -195,6 +195,8 @@ pub enum DataType {
     ///
     /// For example the number 123.45 has precision 5 and scale 2.
     Decimal(usize, usize),
+    /// Exact decimal value with 256 bits width
+    Decimal256(usize, usize),
     /// A Map is a logical nested type that is represented as
     ///
     /// `List<entries: Struct<key: K, value: V>>`
@@ -406,15 +408,27 @@ impl DataType {
                         None => Err(ArrowError::ParseError(
                             "Expecting a precision for decimal".to_string(),
                         )),
-                    };
+                    }?;
                     let scale = match map.get("scale") {
                         Some(s) => Ok(s.as_u64().unwrap() as usize),
                         _ => Err(ArrowError::ParseError(
                             "Expecting a scale for decimal".to_string(),
                         )),
+                    }?;
+                    let bit_width: usize = match map.get("bitWidth") {
+                        Some(b) => b.as_u64().unwrap() as usize,
+                        _ => 128, // Default bit width
                     };
 
-                    Ok(DataType::Decimal(precision?, scale?))
+                    if bit_width == 128 {
+                        Ok(DataType::Decimal(precision, scale))
+                    } else if bit_width == 256 {
+                        Ok(DataType::Decimal256(precision, scale))
+                    } else {
+                        Err(ArrowError::ParseError(
+                            "Decimal bit_width invalid".to_string(),
+                        ))
+                    }
                 }
                 Some(s) if s == "floatingpoint" => match map.get("precision") {
                     Some(p) if p == "HALF" => Ok(DataType::Float16),
@@ -695,7 +709,10 @@ impl DataType {
             }}),
             DataType::Dictionary(_, _) => json!({ "name": "dictionary"}),
             DataType::Decimal(precision, scale) => {
-                json!({"name": "decimal", "precision": precision, "scale": scale})
+                json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 128})
+            }
+            DataType::Decimal256(precision, scale) => {
+                json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 256})
             }
             DataType::Map(_, keys_sorted) => {
                 json!({"name": "map", "keysSorted": keys_sorted})
