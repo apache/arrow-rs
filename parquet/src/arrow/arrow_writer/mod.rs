@@ -33,7 +33,7 @@ use super::schema::{
     decimal_length_from_precision,
 };
 
-use crate::column::writer::ColumnWriter;
+use crate::column::writer::{get_column_writer, ColumnWriter};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::RowGroupMetaDataPtr;
 use crate::file::properties::WriterProperties;
@@ -42,6 +42,44 @@ use crate::{data_type::*, file::writer::SerializedFileWriter};
 use levels::{calculate_array_levels, LevelInfo};
 
 mod levels;
+
+/// An object-safe API for writing an [`ArrayRef`]
+trait ArrayWriter {
+    fn write(&mut self, array: &ArrayRef, levels: LevelInfo) -> Result<()>;
+
+    fn close(&mut self) -> Result<()>;
+}
+
+/// Fallback implementation for writing an [`ArrayRef`] that uses [`SerializedColumnWriter`]
+struct ColumnArrayWriter<'a>(Option<SerializedColumnWriter<'a>>);
+
+impl<'a> ArrayWriter for ColumnArrayWriter<'a> {
+    fn write(&mut self, array: &ArrayRef, levels: LevelInfo) -> Result<()> {
+        write_leaf(self.0.as_mut().unwrap().untyped(), array, levels)?;
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<()> {
+        self.0.take().unwrap().close()
+    }
+}
+
+fn get_writer<'a, W: Write>(
+    row_group_writer: &'a mut SerializedRowGroupWriter<'_, W>,
+) -> Result<Box<dyn ArrayWriter + 'a>> {
+    let array_writer = row_group_writer
+        .next_column_with_factory(|descr, props, page_writer, on_close| {
+            // TODO: Special case array readers (#1764)
+
+            let column_writer = get_column_writer(descr, props.clone(), page_writer);
+            let serialized_writer =
+                SerializedColumnWriter::new(column_writer, Some(on_close));
+
+            Ok(Box::new(ColumnArrayWriter(Some(serialized_writer))))
+        })?
+        .expect("Unable to get column writer");
+    Ok(array_writer)
+}
 
 /// Arrow writer
 ///
@@ -229,17 +267,6 @@ impl<W: Write> ArrowWriter<W> {
     }
 }
 
-/// Convenience method to get the next ColumnWriter from the RowGroupWriter
-#[inline]
-fn get_col_writer<'a, W: Write>(
-    row_group_writer: &'a mut SerializedRowGroupWriter<'_, W>,
-) -> Result<SerializedColumnWriter<'a>> {
-    let col_writer = row_group_writer
-        .next_column()?
-        .expect("Unable to get column writer");
-    Ok(col_writer)
-}
-
 fn write_leaves<W: Write>(
     row_group_writer: &mut SerializedRowGroupWriter<'_, W>,
     arrays: &[ArrayRef],
@@ -276,16 +303,16 @@ fn write_leaves<W: Write>(
         | ArrowDataType::Utf8
         | ArrowDataType::LargeUtf8
         | ArrowDataType::Decimal(_, _)
+        | ArrowDataType::Decimal256(_, _)
         | ArrowDataType::FixedSizeBinary(_) => {
-            let mut col_writer = get_col_writer(row_group_writer)?;
+            let mut writer = get_writer(row_group_writer)?;
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
-                write_leaf(
-                    col_writer.untyped(),
+                writer.write(
                     array,
                     levels.pop().expect("Levels exhausted"),
                 )?;
             }
-            col_writer.close()?;
+            writer.close()?;
             Ok(())
         }
         ArrowDataType::List(_) | ArrowDataType::LargeList(_) => {
@@ -338,17 +365,16 @@ fn write_leaves<W: Write>(
             Ok(())
         }
         ArrowDataType::Dictionary(_, value_type) => {
-            let mut col_writer = get_col_writer(row_group_writer)?;
+            let mut writer = get_writer(row_group_writer)?;
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
                 // cast dictionary to a primitive
                 let array = arrow::compute::cast(array, value_type)?;
-                write_leaf(
-                    col_writer.untyped(),
+                writer.write(
                     &array,
                     levels.pop().expect("Levels exhausted"),
                 )?;
             }
-            col_writer.close()?;
+            writer.close()?;
             Ok(())
         }
         ArrowDataType::Float16 => Err(ParquetError::ArrowError(

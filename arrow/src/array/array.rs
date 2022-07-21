@@ -404,6 +404,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         },
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
         DataType::Decimal(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
+        DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
         dt => panic!("Unexpected data type {:?}", dt),
     }
 }
@@ -567,7 +568,10 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                 )
             })
         }
-        DataType::Decimal(_, _) => new_null_sized_decimal(data_type, length),
+        DataType::Decimal(_, _) => {
+            new_null_sized_decimal(data_type, length, std::mem::size_of::<i128>())
+        }
+        DataType::Decimal256(_, _) => new_null_sized_decimal(data_type, length, 32),
     }
 }
 
@@ -632,7 +636,11 @@ fn new_null_sized_array<T: ArrowPrimitiveType>(
 }
 
 #[inline]
-fn new_null_sized_decimal(data_type: &DataType, length: usize) -> ArrayRef {
+fn new_null_sized_decimal(
+    data_type: &DataType,
+    length: usize,
+    byte_width: usize,
+) -> ArrayRef {
     make_array(unsafe {
         ArrayData::new_unchecked(
             data_type.clone(),
@@ -640,10 +648,7 @@ fn new_null_sized_decimal(data_type: &DataType, length: usize) -> ArrayRef {
             Some(length),
             Some(MutableBuffer::new_null(length).into()),
             0,
-            vec![Buffer::from(vec![
-                0u8;
-                length * std::mem::size_of::<i128>()
-            ])],
+            vec![Buffer::from(vec![0u8; length * byte_width])],
             vec![],
         )
     })

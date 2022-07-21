@@ -37,7 +37,9 @@ use crate::file::{
     metadata::*, properties::WriterPropertiesPtr,
     statistics::to_thrift as statistics_to_thrift, FOOTER_SIZE, PARQUET_MAGIC,
 };
-use crate::schema::types::{self, SchemaDescPtr, SchemaDescriptor, TypePtr};
+use crate::schema::types::{
+    self, ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr,
+};
 use crate::util::io::TryClone;
 
 /// A wrapper around a [`Write`] that keeps track of the number
@@ -367,22 +369,26 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
         }
     }
 
-    /// Returns the next column writer, if available; otherwise returns `None`.
-    /// In case of any IO error or Thrift error, or if row group writer has already been
-    /// closed returns `Err`.
-    pub fn next_column(&mut self) -> Result<Option<SerializedColumnWriter<'_>>> {
+    /// Returns the next column writer, if available, using the factory function;
+    /// otherwise returns `None`.
+    pub(crate) fn next_column_with_factory<'b, F, C>(
+        &'b mut self,
+        factory: F,
+    ) -> Result<Option<C>>
+    where
+        F: FnOnce(
+            ColumnDescPtr,
+            &'b WriterPropertiesPtr,
+            Box<dyn PageWriter + 'b>,
+            OnCloseColumnChunk<'b>,
+        ) -> Result<C>,
+    {
         self.assert_previous_writer_closed()?;
 
         if self.column_index >= self.descr.num_columns() {
             return Ok(None);
         }
         let page_writer = Box::new(SerializedPageWriter::new(self.buf));
-        let column_writer = get_column_writer(
-            self.descr.column(self.column_index),
-            self.props.clone(),
-            page_writer,
-        );
-        self.column_index += 1;
 
         let total_bytes_written = &mut self.total_bytes_written;
         let total_rows_written = &mut self.total_rows_written;
@@ -413,10 +419,25 @@ impl<'a, W: Write> SerializedRowGroupWriter<'a, W> {
                 Ok(())
             };
 
-        Ok(Some(SerializedColumnWriter::new(
-            column_writer,
-            Some(Box::new(on_close)),
-        )))
+        let column = self.descr.column(self.column_index);
+        self.column_index += 1;
+
+        Ok(Some(factory(
+            column,
+            &self.props,
+            page_writer,
+            Box::new(on_close),
+        )?))
+    }
+
+    /// Returns the next column writer, if available; otherwise returns `None`.
+    /// In case of any IO error or Thrift error, or if row group writer has already been
+    /// closed returns `Err`.
+    pub fn next_column(&mut self) -> Result<Option<SerializedColumnWriter<'_>>> {
+        self.next_column_with_factory(|descr, props, page_writer, on_close| {
+            let column_writer = get_column_writer(descr, props.clone(), page_writer);
+            Ok(SerializedColumnWriter::new(column_writer, Some(on_close)))
+        })
     }
 
     /// Closes this row group writer and returns row group metadata.

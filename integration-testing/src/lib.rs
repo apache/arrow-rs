@@ -33,6 +33,9 @@ use arrow::{
     util::{bit_util, integration_util::*},
 };
 
+use arrow::util::decimal::{BasicDecimal, Decimal256};
+use num::bigint::BigInt;
+use num::Signed;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
@@ -610,6 +613,37 @@ fn array_from_json(
                     }
                     _ => b.append_null(),
                 };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Decimal256(precision, scale) => {
+            let mut b = Decimal256Builder::new(json_col.count, *precision, *scale);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => {
+                        let str = value.as_str().unwrap();
+                        let integer = BigInt::parse_bytes(str.as_bytes(), 10).unwrap();
+                        let integer_bytes = integer.to_signed_bytes_le();
+                        let mut bytes = if integer.is_positive() {
+                            [0_u8; 32]
+                        } else {
+                            [255_u8; 32]
+                        };
+                        bytes[0..integer_bytes.len()]
+                            .copy_from_slice(integer_bytes.as_slice());
+                        let decimal =
+                            Decimal256::try_new_from_bytes(*precision, *scale, &bytes)
+                                .unwrap();
+                        b.append_value(&decimal)
+                    }
+                    _ => Ok(b.append_null()),
+                }?;
             }
             Ok(Arc::new(b.finish()))
         }
