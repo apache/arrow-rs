@@ -54,7 +54,6 @@ pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
     ///     .expect("Failed to downcast");
     /// # Ok(())
     /// # }
-    ///
     /// ```
     fn as_any(&self) -> &dyn Any;
 

@@ -44,8 +44,8 @@
 //! }
 //! ```
 //!
-//! There are convient functions to do this casting for you such as
-//! [`as_primtive_array`] and [`as_string_array`]:
+//! Additionally, there are convenient functions to do this casting
+//! such as [`as_primitive_array<T>`] and [`as_string_array`]:
 //!
 //! ```
 //! # use arrow::array::*;
@@ -53,7 +53,7 @@
 //! #
 //! fn as_f32_slice(array: &dyn Array) -> &[f32] {
 //!     // use as_primtive_array
-//!     as_primitive_array<Int32Type>().values()
+//!     as_primitive_array<Float32Type>().values()
 //! }
 //! ```
 
