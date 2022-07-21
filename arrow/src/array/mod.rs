@@ -53,7 +53,7 @@
 //! #
 //! fn as_f32_slice(array: &dyn Array) -> &[f32] {
 //!     // use as_primtive_array
-//!     as_primitive_array<Float32Type>().values()
+//!     as_primitive_array::<Float32Type>(array).values()
 //! }
 //! ```
 
