@@ -392,6 +392,38 @@ impl RleDecoder {
         Ok(Some(value))
     }
 
+    // These functions inline badly, they tend to inline and then create very large loop unrolls
+    // that damage L1d-cache occupancy. This results in a ~18% performance drop
+    #[inline(never)]
+    pub fn peek<T: FromBytes>(&mut self) -> Result<Option<T>> {
+        assert!(size_of::<T>() <= 8);
+
+        while self.rle_left == 0 && self.bit_packed_left == 0 {
+            if !self.reload() {
+                return Ok(None);
+            }
+        }
+
+        let value = if self.rle_left > 0 {
+            let rle_value = from_ne_slice(
+                &self
+                    .current_value
+                    .as_mut()
+                    .expect("current_value should be Some")
+                    .to_ne_bytes(),
+            );
+            rle_value
+        } else {
+            // self.bit_packed_left > 0
+            let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be Some");
+            bit_reader
+                .peek_value(self.bit_width as usize)
+                .ok_or_else(|| eof_err!("Not enough data for 'bit_packed_value'"))?
+        };
+
+        Ok(Some(value))
+    }
+
     #[inline(never)]
     pub fn get_batch<T: FromBytes>(&mut self, buffer: &mut [T]) -> Result<usize> {
         assert!(size_of::<T>() <= 8);
@@ -568,6 +600,26 @@ mod tests {
         let expected = vec![0, 1, 2, 3, 4, 5, 6, 7];
         let result = decoder.get_batch::<i32>(&mut buffer);
         assert!(result.is_ok());
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_rle_peek_int32() {
+        // Test data: 0-7 with bit width 3
+        // 00000011 10001000 11000110 11111010
+        let data = ByteBufferPtr::new(vec![0x03, 0x88, 0xC6, 0xFA]);
+        let mut decoder: RleDecoder = RleDecoder::new(3);
+        decoder.set_data(data);
+        let mut buffer = vec![0; 8];
+        let expected = vec![0, 1, 2, 3, 4, 5, 6, 7];
+
+        for idx in 0..8 {
+            let peek = decoder.peek::<i32>().expect("peeking");
+            assert_eq!(peek, Some(idx));
+
+            let taken = decoder.get::<i32>().expect("getting");
+            buffer[idx as usize] = taken.expect("missing get value");
+        }
         assert_eq!(buffer, expected);
     }
 

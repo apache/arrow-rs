@@ -357,7 +357,57 @@ impl DefinitionLevelDecoder for ColumnLevelDecoderImpl {
 }
 
 impl RepetitionLevelDecoder for ColumnLevelDecoderImpl {
-    fn skip_rep_levels(&mut self, _num_records: usize) -> Result<(usize, usize)> {
-        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
+    fn skip_rep_levels(&mut self, num_records: usize) -> Result<(usize, usize)> {
+        let mut levels_skipped = 0;
+        let mut records_skipped = 0;
+        match &mut self.inner {
+            LevelDecoderInner::Packed(bit_reader, bit_width) => {
+                // Records are delimited by 0 so take values until we hit `num_records` 0s or
+                // we run out of values
+                while records_skipped < num_records {
+                    if let Some(next) = bit_reader.get_value::<i16>(*bit_width as usize) {
+                        levels_skipped += 1;
+                        if next == 0 {
+                            records_skipped += 1;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                // Take the remaining non-zero values in the current record
+                while let Some(peek) = bit_reader.peek_value::<i16>(*bit_width as usize) {
+                    if peek == 0 {
+                        break;
+                    } else {
+                        bit_reader.get_value::<i16>(*bit_width as usize);
+                    }
+                }
+            }
+            LevelDecoderInner::Rle(rle_decoder) => {
+                // Records are delimited by 0 so take values until we hit `num_records` 0s or
+                // we run out of values
+                while records_skipped <= num_records {
+                    if let Some(next) = rle_decoder.get::<i16>()? {
+                        levels_skipped += 1;
+                        if next == 0 {
+                            records_skipped += 1;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                // Take the remaining non-zero values in the current record
+                while let Some(peek) = rle_decoder.peek::<i16>()? {
+                    if peek == 0 {
+                        break;
+                    } else {
+                        rle_decoder.get::<i16>()?;
+                    }
+                }
+            }
+        }
+        Ok((levels_skipped, records_skipped))
     }
 }
