@@ -77,6 +77,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
             .add_buffer(self.offsets_builder.finish())
             .add_buffer(self.value_builder.finish())
             .null_bit_buffer(Some(self.null_buffer_builder.finish()));
+
+        self.offsets_builder.append_n_zeroed(1);
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericBinaryArray::<OffsetSize>::from(array_data)
     }
@@ -119,7 +121,7 @@ mod tests {
     use super::*;
     use crate::array::{Array, OffsetSizeTrait};
 
-    fn _test_generic_binary_array_builder<O: OffsetSizeTrait>() {
+    fn _test_generic_binary_builder<O: OffsetSizeTrait>() {
         let mut builder = GenericBinaryBuilder::<O>::new(20);
 
         builder.append_value(b"hello");
@@ -127,25 +129,89 @@ mod tests {
         builder.append_null();
         builder.append_value(b"rust");
 
-        let binary_array = builder.finish();
+        let array = builder.finish();
 
-        assert_eq!(4, binary_array.len());
-        assert_eq!(1, binary_array.null_count());
-        assert_eq!(b"hello", binary_array.value(0));
-        assert_eq!([] as [u8; 0], binary_array.value(1));
-        assert!(binary_array.is_null(2));
-        assert_eq!(b"rust", binary_array.value(3));
-        assert_eq!(O::from_usize(5).unwrap(), binary_array.value_offsets()[2]);
-        assert_eq!(O::from_usize(4).unwrap(), binary_array.value_length(3));
+        assert_eq!(4, array.len());
+        assert_eq!(1, array.null_count());
+        assert_eq!(b"hello", array.value(0));
+        assert_eq!([] as [u8; 0], array.value(1));
+        assert!(array.is_null(2));
+        assert_eq!(b"rust", array.value(3));
+        assert_eq!(O::from_usize(5).unwrap(), array.value_offsets()[2]);
+        assert_eq!(O::from_usize(4).unwrap(), array.value_length(3));
     }
 
     #[test]
-    fn test_binary_array_builder() {
-        _test_generic_binary_array_builder::<i32>()
+    fn test_binary_builder() {
+        _test_generic_binary_builder::<i32>()
     }
 
     #[test]
-    fn test_large_binary_array_builder() {
-        _test_generic_binary_array_builder::<i64>()
+    fn test_large_binary_builder() {
+        _test_generic_binary_builder::<i64>()
+    }
+
+    fn _test_generic_binary_builder_all_nulls<O: OffsetSizeTrait>() {
+        let mut builder = GenericBinaryBuilder::<O>::new(10);
+        builder.append_null();
+        builder.append_null();
+        builder.append_null();
+        assert_eq!(3, builder.len());
+        assert!(!builder.is_empty());
+
+        let array = builder.finish();
+        assert_eq!(3, array.null_count());
+        assert_eq!(3, array.len());
+        assert!(array.is_null(0));
+        assert!(array.is_null(1));
+        assert!(array.is_null(2));
+    }
+
+    #[test]
+    fn test_binary_builder_all_nulls() {
+        _test_generic_binary_builder_all_nulls::<i32>()
+    }
+
+    #[test]
+    fn test_large_binary_builder_all_nulls() {
+        _test_generic_binary_builder_all_nulls::<i64>()
+    }
+
+    fn _test_generic_binary_builder_reset<O: OffsetSizeTrait>() {
+        let mut builder = GenericBinaryBuilder::<O>::new(20);
+
+        builder.append_value(b"hello");
+        builder.append_value(b"");
+        builder.append_null();
+        builder.append_value(b"rust");
+        builder.finish();
+
+        assert!(builder.is_empty());
+
+        builder.append_value(b"parquet");
+        builder.append_null();
+        builder.append_value(b"arrow");
+        builder.append_value(b"");
+        let array = builder.finish();
+
+        assert_eq!(4, array.len());
+        assert_eq!(1, array.null_count());
+        assert_eq!(b"parquet", array.value(0));
+        assert!(array.is_null(1));
+        assert_eq!(b"arrow", array.value(2));
+        assert_eq!(b"", array.value(1));
+        assert_eq!(O::zero(), array.value_offsets()[0]);
+        assert_eq!(O::from_usize(7).unwrap(), array.value_offsets()[2]);
+        assert_eq!(O::from_usize(5).unwrap(), array.value_length(2));
+    }
+
+    #[test]
+    fn test_binary_builder_reset() {
+        _test_generic_binary_builder_reset::<i32>()
+    }
+
+    #[test]
+    fn test_large_binary_builder_reset() {
+        _test_generic_binary_builder_reset::<i64>()
     }
 }
