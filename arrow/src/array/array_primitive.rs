@@ -425,17 +425,13 @@ impl<T: ArrowPrimitiveType, Ptr: Into<NativeAdapter<T>>> FromIterator<Ptr>
             .collect();
 
         let len = null_builder.len();
-        let null_buf: Buffer = null_builder.into();
-        let valid_count = null_buf.count_set_bits();
-        let null_count = len - valid_count;
-        let opt_null_buf = (null_count != 0).then(|| null_buf);
 
         let data = unsafe {
             ArrayData::new_unchecked(
                 T::DATA_TYPE,
                 len,
-                Some(null_count),
-                opt_null_buf,
+                None,
+                Some(null_builder.into()),
                 0,
                 vec![buffer],
                 vec![],
@@ -937,9 +933,9 @@ mod tests {
     #[test]
     fn test_int32_with_null_fmt_debug() {
         let mut builder = Int32Array::builder(3);
-        builder.append_slice(&[0, 1]).unwrap();
-        builder.append_null().unwrap();
-        builder.append_slice(&[3, 4]).unwrap();
+        builder.append_slice(&[0, 1]);
+        builder.append_null();
+        builder.append_slice(&[3, 4]);
         let arr = builder.finish();
         assert_eq!(
             "PrimitiveArray<Int32>\n[\n  0,\n  1,\n  null,\n  3,\n  4,\n]",

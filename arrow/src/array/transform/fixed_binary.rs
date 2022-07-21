@@ -22,6 +22,7 @@ use super::{Extend, _MutableArrayData};
 pub(super) fn build_extend(array: &ArrayData) -> Extend {
     let size = match array.data_type() {
         DataType::FixedSizeBinary(i) => *i as usize,
+        DataType::Decimal256(_, _) => 32,
         _ => unreachable!(),
     };
 
@@ -57,6 +58,7 @@ pub(super) fn build_extend(array: &ArrayData) -> Extend {
 pub(super) fn extend_nulls(mutable: &mut _MutableArrayData, len: usize) {
     let size = match mutable.data_type {
         DataType::FixedSizeBinary(i) => i as usize,
+        DataType::Decimal256(_, _) => 32,
         _ => unreachable!(),
     };
 

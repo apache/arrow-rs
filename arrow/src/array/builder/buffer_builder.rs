@@ -362,7 +362,6 @@ mod tests {
     use crate::array::Int32BufferBuilder;
     use crate::array::Int8Builder;
     use crate::array::UInt8BufferBuilder;
-    use crate::error::Result;
 
     #[test]
     fn test_builder_i32_empty() {
@@ -457,17 +456,17 @@ mod tests {
     }
 
     #[test]
-    fn test_append_values() -> Result<()> {
+    fn test_append_values() {
         let mut a = Int8Builder::new(0);
-        a.append_value(1)?;
-        a.append_null()?;
-        a.append_value(-2)?;
+        a.append_value(1);
+        a.append_null();
+        a.append_value(-2);
         assert_eq!(a.len(), 3);
 
         // append values
         let values = &[1, 2, 3, 4];
         let is_valid = &[true, true, false, true];
-        a.append_values(values, is_valid)?;
+        a.append_values(values, is_valid);
 
         assert_eq!(a.len(), 7);
         let array = a.finish();
@@ -478,7 +477,5 @@ mod tests {
         assert_eq!(array.value(4), 2);
         assert!(array.is_null(5));
         assert_eq!(array.value(6), 4);
-
-        Ok(())
     }
 }

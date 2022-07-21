@@ -19,7 +19,6 @@ use crate::array::{
     ArrayBuilder, ArrayRef, GenericBinaryArray, GenericListBuilder, OffsetSizeTrait,
     UInt8Builder,
 };
-use crate::error::Result;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -44,9 +43,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
     /// Note, when appending individual byte values you must call `append` to delimit each
     /// distinct list value.
     #[inline]
-    pub fn append_byte(&mut self, value: u8) -> Result<()> {
-        self.builder.values().append_value(value)?;
-        Ok(())
+    pub fn append_byte(&mut self, value: u8) {
+        self.builder.values().append_value(value);
     }
 
     /// Appends a byte slice into the builder.
@@ -54,21 +52,20 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
     /// Automatically calls the `append` method to delimit the slice appended in as a
     /// distinct array element.
     #[inline]
-    pub fn append_value(&mut self, value: impl AsRef<[u8]>) -> Result<()> {
-        self.builder.values().append_slice(value.as_ref())?;
-        self.builder.append(true)?;
-        Ok(())
+    pub fn append_value(&mut self, value: impl AsRef<[u8]>) {
+        self.builder.values().append_slice(value.as_ref());
+        self.builder.append(true);
     }
 
     /// Finish the current variable-length list array slot.
     #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<()> {
+    pub fn append(&mut self, is_valid: bool) {
         self.builder.append(is_valid)
     }
 
     /// Append a null value to the array.
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.append(false)
     }
 
@@ -119,19 +116,19 @@ mod tests {
     fn test_binary_array_builder() {
         let mut builder = BinaryBuilder::new(20);
 
-        builder.append_byte(b'h').unwrap();
-        builder.append_byte(b'e').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'o').unwrap();
-        builder.append(true).unwrap();
-        builder.append(true).unwrap();
-        builder.append_byte(b'w').unwrap();
-        builder.append_byte(b'o').unwrap();
-        builder.append_byte(b'r').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'd').unwrap();
-        builder.append(true).unwrap();
+        builder.append_byte(b'h');
+        builder.append_byte(b'e');
+        builder.append_byte(b'l');
+        builder.append_byte(b'l');
+        builder.append_byte(b'o');
+        builder.append(true);
+        builder.append(true);
+        builder.append_byte(b'w');
+        builder.append_byte(b'o');
+        builder.append_byte(b'r');
+        builder.append_byte(b'l');
+        builder.append_byte(b'd');
+        builder.append(true);
 
         let binary_array = builder.finish();
 
@@ -148,19 +145,19 @@ mod tests {
     fn test_large_binary_array_builder() {
         let mut builder = LargeBinaryBuilder::new(20);
 
-        builder.append_byte(b'h').unwrap();
-        builder.append_byte(b'e').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'o').unwrap();
-        builder.append(true).unwrap();
-        builder.append(true).unwrap();
-        builder.append_byte(b'w').unwrap();
-        builder.append_byte(b'o').unwrap();
-        builder.append_byte(b'r').unwrap();
-        builder.append_byte(b'l').unwrap();
-        builder.append_byte(b'd').unwrap();
-        builder.append(true).unwrap();
+        builder.append_byte(b'h');
+        builder.append_byte(b'e');
+        builder.append_byte(b'l');
+        builder.append_byte(b'l');
+        builder.append_byte(b'o');
+        builder.append(true);
+        builder.append(true);
+        builder.append_byte(b'w');
+        builder.append_byte(b'o');
+        builder.append_byte(b'r');
+        builder.append_byte(b'l');
+        builder.append_byte(b'd');
+        builder.append(true);
 
         let binary_array = builder.finish();
 

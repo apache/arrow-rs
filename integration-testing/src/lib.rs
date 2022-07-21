@@ -33,6 +33,9 @@ use arrow::{
     util::{bit_util, integration_util::*},
 };
 
+use arrow::util::decimal::{BasicDecimal, Decimal256};
+use num::bigint::BigInt;
+use num::Signed;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
@@ -121,7 +124,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_bool().unwrap()),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -142,7 +145,7 @@ fn array_from_json(
                         ))
                     })? as i8),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -158,7 +161,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i16),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -177,7 +180,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_i64().unwrap() as i32),
                     _ => b.append_null(),
-                }?;
+                };
             }
             let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
@@ -238,7 +241,7 @@ fn array_from_json(
                         _ => panic!("Unable to parse {:?} as number", value),
                     }),
                     _ => b.append_null(),
-                }?;
+                };
             }
             let array = Arc::new(b.finish()) as ArrayRef;
             arrow::compute::cast(&array, field.data_type())
@@ -255,7 +258,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u8),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -271,7 +274,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u16),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -287,7 +290,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_u64().unwrap() as u32),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -309,7 +312,7 @@ fn array_from_json(
                             .expect("Unable to parse string as u64"),
                     ),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -352,7 +355,7 @@ fn array_from_json(
                         _ => panic!("Unable to parse {:?} as MonthDayNano", value),
                     }),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -368,7 +371,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_f64().unwrap() as f32),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -384,7 +387,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_f64().unwrap()),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -403,7 +406,7 @@ fn array_from_json(
                         b.append_value(&v)
                     }
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -422,7 +425,7 @@ fn array_from_json(
                         b.append_value(&v)
                     }
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -438,7 +441,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap()),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -454,7 +457,7 @@ fn array_from_json(
                 match is_valid {
                     1 => b.append_value(value.as_str().unwrap()),
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -470,10 +473,10 @@ fn array_from_json(
                 match is_valid {
                     1 => {
                         let v = hex::decode(value.as_str().unwrap()).unwrap();
-                        b.append_value(&v)
+                        b.append_value(&v)?
                     }
                     _ => b.append_null(),
-                }?;
+                };
             }
             Ok(Arc::new(b.finish()))
         }
@@ -605,7 +608,40 @@ fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(value.as_str().unwrap().parse::<i128>().unwrap()),
+                    1 => {
+                        b.append_value(value.as_str().unwrap().parse::<i128>().unwrap())?
+                    }
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Decimal256(precision, scale) => {
+            let mut b = Decimal256Builder::new(json_col.count, *precision, *scale);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => {
+                        let str = value.as_str().unwrap();
+                        let integer = BigInt::parse_bytes(str.as_bytes(), 10).unwrap();
+                        let integer_bytes = integer.to_signed_bytes_le();
+                        let mut bytes = if integer.is_positive() {
+                            [0_u8; 32]
+                        } else {
+                            [255_u8; 32]
+                        };
+                        bytes[0..integer_bytes.len()]
+                            .copy_from_slice(integer_bytes.as_slice());
+                        let decimal =
+                            Decimal256::try_new_from_bytes(*precision, *scale, &bytes)
+                                .unwrap();
+                        b.append_value(&decimal)
+                    }
                     _ => b.append_null(),
                 }?;
             }

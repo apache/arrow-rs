@@ -189,7 +189,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         DataType::FixedSizeList(_, _) | DataType::Struct(_) => {
             [empty_buffer, MutableBuffer::new(0)]
         }
-        DataType::Decimal(_, _) => [
+        DataType::Decimal(_, _) | DataType::Decimal256(_, _) => [
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
         ],
@@ -267,7 +267,10 @@ impl ArrayData {
     /// Create a new ArrayData instance;
     ///
     /// If `null_count` is not specified, the number of nulls in
-    /// null_bit_buffer is calculated
+    /// null_bit_buffer is calculated.
+    ///
+    /// If the number of nulls is 0 then the null_bit_buffer
+    /// is set to `None`.
     ///
     /// # Safety
     ///
@@ -291,7 +294,7 @@ impl ArrayData {
             None => count_nulls(null_bit_buffer.as_ref(), offset, len),
             Some(null_count) => null_count,
         };
-        let null_bitmap = null_bit_buffer.map(Bitmap::from);
+        let null_bitmap = null_bit_buffer.filter(|_| null_count > 0).map(Bitmap::from);
         let new_self = Self {
             data_type,
             len,
@@ -310,6 +313,9 @@ impl ArrayData {
 
     /// Create a new ArrayData, validating that the provided buffers
     /// form a valid Arrow array of the specified data type.
+    ///
+    /// If the number of nulls in `null_bit_buffer` is 0 then the null_bit_buffer
+    /// is set to `None`.
     ///
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
@@ -572,7 +578,8 @@ impl ArrayData {
             | DataType::LargeBinary
             | DataType::Interval(_)
             | DataType::FixedSizeBinary(_)
-            | DataType::Decimal(_, _) => vec![],
+            | DataType::Decimal(_, _)
+            | DataType::Decimal256(_, _) => vec![],
             DataType::List(field) => {
                 vec![Self::new_empty(field.data_type())]
             }
@@ -1307,6 +1314,10 @@ pub(crate) fn layout(data_type: &DataType) -> DataTypeLayout {
             // Decimals are always some fixed width; The rust implementation
             // always uses 16 bytes / size of i128
             DataTypeLayout::new_fixed_width(size_of::<i128>())
+        }
+        DataType::Decimal256(_, _) => {
+            // Decimals are always some fixed width.
+            DataTypeLayout::new_fixed_width(32)
         }
         DataType::Map(_, _) => {
             // same as ListType
@@ -2620,66 +2631,56 @@ mod tests {
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(10))
-            .unwrap();
+            .append_option(Some(10));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(true))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(true));
+        builder.append(true);
 
         // struct[1] = null
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(None)
-            .unwrap();
+            .append_option(None);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(None)
-            .unwrap();
-        builder.append(false).unwrap();
+            .append_option(None);
+        builder.append(false);
 
         // struct[2] = { a: null, b: false }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(None)
-            .unwrap();
+            .append_option(None);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(false))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(false));
+        builder.append(true);
 
         // struct[3] = { a: 21, b: null }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(21))
-            .unwrap();
+            .append_option(Some(21));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(None)
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(None);
+        builder.append(true);
 
         // struct[4] = { a: 18, b: false }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(18))
-            .unwrap();
+            .append_option(Some(18));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(false))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(false));
+        builder.append(true);
 
         let struct_array = builder.finish();
         let struct_array_slice = struct_array.slice(1, 3);
@@ -2777,9 +2778,8 @@ mod tests {
         .unwrap();
         fixed_size_builder
             .values()
-            .append_slice(value_as_bytes.as_slice())
-            .unwrap();
-        fixed_size_builder.append(true).unwrap();
+            .append_slice(value_as_bytes.as_slice());
+        fixed_size_builder.append(true);
         let fixed_size_array = fixed_size_builder.finish();
 
         // Build ArrayData for Decimal
