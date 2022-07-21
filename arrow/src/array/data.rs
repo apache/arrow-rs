@@ -18,7 +18,10 @@
 //! Contains `ArrayData`, a generic representation of Arrow array data which encapsulates
 //! common attributes and operations for Arrow array.
 
-use crate::datatypes::{validate_decimal_precision, DataType, IntervalUnit, UnionMode};
+use crate::datatypes::{
+    validate_decimal256_precision, validate_decimal_precision, DataType, IntervalUnit,
+    UnionMode,
+};
 use crate::error::{ArrowError, Result};
 use crate::{bitmap::Bitmap, datatypes::ArrowNativeType};
 use crate::{
@@ -26,6 +29,7 @@ use crate::{
     util::bit_util,
 };
 use half::f16;
+use num::BigInt;
 use std::convert::TryInto;
 use std::mem;
 use std::ops::Range;
@@ -1018,7 +1022,17 @@ impl ArrayData {
                 }
                 Ok(())
             }
-            // TODO: call validate_decimal256_precision for Decimal256 type
+            DataType::Decimal256(p, _) => {
+                let values = self.buffers()[0].as_slice();
+                for pos in 0..self.len() {
+                    let offset = pos * 32;
+                    let raw_bytes = &values[offset..offset + 32];
+                    let integer = BigInt::from_signed_bytes_le(raw_bytes);
+                    let value_str = integer.to_string();
+                    validate_decimal256_precision(&value_str, *p)?;
+                }
+                Ok(())
+            }
             DataType::Utf8 => self.validate_utf8::<i32>(),
             DataType::LargeUtf8 => self.validate_utf8::<i64>(),
             DataType::Binary => self.validate_offsets_full::<i32>(self.buffers[1].len()),
