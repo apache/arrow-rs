@@ -642,7 +642,7 @@ fn array_from_json(
                                 .unwrap();
                         b.append_value(&decimal)
                     }
-                    _ => b.append_null(),
+                    _ => Ok(b.append_null()),
                 }?;
             }
             Ok(Arc::new(b.finish()))
