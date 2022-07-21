@@ -24,7 +24,6 @@ use crate::array::GenericListArray;
 use crate::array::OffsetSizeTrait;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
-use crate::error::Result;
 
 use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
 
@@ -111,11 +110,10 @@ where
 
     /// Finish the current variable-length list array slot
     #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<()> {
+    pub fn append(&mut self, is_valid: bool) {
         self.offsets_builder
             .append(OffsetSize::from_usize(self.values_builder.len()).unwrap());
         self.bitmap_builder.append(is_valid);
-        Ok(())
     }
 
     /// Builds the [`GenericListArray`] and reset this builder.
@@ -171,17 +169,17 @@ mod tests {
         let mut builder = GenericListBuilder::<O, _>::new(values_builder);
 
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
-        builder.values().append_value(0).unwrap();
-        builder.values().append_value(1).unwrap();
-        builder.values().append_value(2).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_value(3).unwrap();
-        builder.values().append_value(4).unwrap();
-        builder.values().append_value(5).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_value(6).unwrap();
-        builder.values().append_value(7).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+        builder.values().append_value(3);
+        builder.values().append_value(4);
+        builder.values().append_value(5);
+        builder.append(true);
+        builder.values().append_value(6);
+        builder.values().append_value(7);
+        builder.append(true);
         let list_array = builder.finish();
 
         let values = list_array.values().data().buffers()[0].clone();
@@ -216,18 +214,19 @@ mod tests {
         let mut builder = GenericListBuilder::<O, _>::new(values_builder);
 
         //  [[0, 1, 2], null, [3, null, 5], [6, 7]]
-        builder.values().append_value(0).unwrap();
-        builder.values().append_value(1).unwrap();
-        builder.values().append_value(2).unwrap();
-        builder.append(true).unwrap();
-        builder.append(false).unwrap();
-        builder.values().append_value(3).unwrap();
-        builder.values().append_null().unwrap();
-        builder.values().append_value(5).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_value(6).unwrap();
-        builder.values().append_value(7).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_value(0);
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+        builder.append(false);
+        builder.values().append_value(3);
+        builder.values().append_null();
+        builder.values().append_value(5);
+        builder.append(true);
+        builder.values().append_value(6);
+        builder.values().append_value(7);
+        builder.append(true);
+
         let list_array = builder.finish();
 
         assert_eq!(DataType::Int32, list_array.value_type());
@@ -252,17 +251,17 @@ mod tests {
         let values_builder = Int32Array::builder(5);
         let mut builder = ListBuilder::new(values_builder);
 
-        builder.values().append_slice(&[1, 2, 3]).unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_slice(&[4, 5, 6]).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_slice(&[1, 2, 3]);
+        builder.append(true);
+        builder.values().append_slice(&[4, 5, 6]);
+        builder.append(true);
 
         let mut arr = builder.finish();
         assert_eq!(2, arr.len());
         assert!(builder.is_empty());
 
-        builder.values().append_slice(&[7, 8, 9]).unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_slice(&[7, 8, 9]);
+        builder.append(true);
         arr = builder.finish();
         assert_eq!(1, arr.len());
         assert!(builder.is_empty());
@@ -275,29 +274,29 @@ mod tests {
         let mut builder = ListBuilder::new(values_builder);
 
         //  [[[1, 2], [3, 4]], [[5, 6, 7], null, [8]], null, [[9, 10]]]
-        builder.values().values().append_value(1).unwrap();
-        builder.values().values().append_value(2).unwrap();
-        builder.values().append(true).unwrap();
-        builder.values().values().append_value(3).unwrap();
-        builder.values().values().append_value(4).unwrap();
-        builder.values().append(true).unwrap();
-        builder.append(true).unwrap();
+        builder.values().values().append_value(1);
+        builder.values().values().append_value(2);
+        builder.values().append(true);
+        builder.values().values().append_value(3);
+        builder.values().values().append_value(4);
+        builder.values().append(true);
+        builder.append(true);
 
-        builder.values().values().append_value(5).unwrap();
-        builder.values().values().append_value(6).unwrap();
-        builder.values().values().append_value(7).unwrap();
-        builder.values().append(true).unwrap();
-        builder.values().append(false).unwrap();
-        builder.values().values().append_value(8).unwrap();
-        builder.values().append(true).unwrap();
-        builder.append(true).unwrap();
+        builder.values().values().append_value(5);
+        builder.values().values().append_value(6);
+        builder.values().values().append_value(7);
+        builder.values().append(true);
+        builder.values().append(false);
+        builder.values().values().append_value(8);
+        builder.values().append(true);
+        builder.append(true);
 
-        builder.append(false).unwrap();
+        builder.append(false);
 
-        builder.values().values().append_value(9).unwrap();
-        builder.values().values().append_value(10).unwrap();
-        builder.values().append(true).unwrap();
-        builder.append(true).unwrap();
+        builder.values().values().append_value(9);
+        builder.values().values().append_value(10);
+        builder.values().append(true);
+        builder.append(true);
 
         let list_array = builder.finish();
 

@@ -3680,17 +3680,17 @@ mod tests {
         let values_builder = StringBuilder::new(10);
         let mut builder = ListBuilder::new(values_builder);
 
-        builder.values().append_value("Lorem").unwrap();
-        builder.values().append_value("ipsum").unwrap();
-        builder.values().append_null().unwrap();
-        builder.append(true).unwrap();
-        builder.values().append_value("sit").unwrap();
-        builder.values().append_value("amet").unwrap();
-        builder.values().append_value("Lorem").unwrap();
-        builder.append(true).unwrap();
-        builder.append(false).unwrap();
-        builder.values().append_value("ipsum").unwrap();
-        builder.append(true).unwrap();
+        builder.values().append_value("Lorem");
+        builder.values().append_value("ipsum");
+        builder.values().append_null();
+        builder.append(true);
+        builder.values().append_value("sit");
+        builder.values().append_value("amet");
+        builder.values().append_value("Lorem");
+        builder.append(true);
+        builder.append(false);
+        builder.values().append_value("ipsum");
+        builder.append(true);
 
         //  [["Lorem", "ipsum", null], ["sit", "amet", "Lorem"], null, ["ipsum"]]
         // value_offsets = [0, 3, 6, 6]
@@ -4261,7 +4261,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(123).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
         let a_eq = eq_dyn_scalar(&array, 123).unwrap();
@@ -4305,7 +4305,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(123).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
         let a_eq = lt_dyn_scalar(&array, 123).unwrap();
@@ -4348,7 +4348,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(123).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
         let a_eq = lt_eq_dyn_scalar(&array, 23).unwrap();
@@ -4392,7 +4392,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(123).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
         let a_eq = gt_dyn_scalar(&array, 23).unwrap();
@@ -4436,7 +4436,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(22).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
         let a_eq = gt_eq_dyn_scalar(&array, 23).unwrap();
@@ -4480,7 +4480,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(22).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(23).unwrap();
         let array = builder.finish();
         let a_eq = neq_dyn_scalar(&array, 23).unwrap();
@@ -4624,7 +4624,7 @@ mod tests {
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
@@ -4652,7 +4652,7 @@ mod tests {
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
@@ -4681,7 +4681,7 @@ mod tests {
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("xyz").unwrap();
@@ -4710,7 +4710,7 @@ mod tests {
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("xyz").unwrap();
@@ -4740,7 +4740,7 @@ mod tests {
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("xyz").unwrap();
@@ -4769,7 +4769,7 @@ mod tests {
         let value_builder = StringBuilder::new(100);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();

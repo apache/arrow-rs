@@ -320,7 +320,14 @@ pub(crate) fn get_data_type(field: ipc::Field, may_be_dictionary: bool) -> DataT
         }
         ipc::Type::Decimal => {
             let fsb = field.type_as_decimal().unwrap();
-            DataType::Decimal(fsb.precision() as usize, fsb.scale() as usize)
+            let bit_width = fsb.bitWidth();
+            if bit_width == 128 {
+                DataType::Decimal(fsb.precision() as usize, fsb.scale() as usize)
+            } else if bit_width == 256 {
+                DataType::Decimal256(fsb.precision() as usize, fsb.scale() as usize)
+            } else {
+                panic!("Unexpected decimal bit width {}", bit_width)
+            }
         }
         ipc::Type::Union => {
             let union = field.type_as_union().unwrap();
@@ -665,6 +672,17 @@ pub(crate) fn get_fb_field_type<'a>(
             builder.add_precision(*precision as i32);
             builder.add_scale(*scale as i32);
             builder.add_bitWidth(128);
+            FBFieldType {
+                type_type: ipc::Type::Decimal,
+                type_: builder.finish().as_union_value(),
+                children: Some(fbb.create_vector(&empty_fields[..])),
+            }
+        }
+        Decimal256(precision, scale) => {
+            let mut builder = ipc::DecimalBuilder::new(fbb);
+            builder.add_precision(*precision as i32);
+            builder.add_scale(*scale as i32);
+            builder.add_bitWidth(256);
             FBFieldType {
                 type_type: ipc::Type::Decimal,
                 type_: builder.finish().as_union_value(),
