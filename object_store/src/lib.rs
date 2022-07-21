@@ -684,9 +684,9 @@ mod tests {
     }
 
     /// Test that the returned stream does not borrow the lifetime of Path
-    async fn list_store<'a>(
+    async fn list_store<'a, 'b>(
         store: &'a dyn ObjectStore,
-        path_str: &str,
+        path_str: &'b str,
     ) -> super::Result<BoxStream<'a, super::Result<ObjectMeta>>> {
         let path = Path::from(path_str);
         store.list(Some(&path)).await
