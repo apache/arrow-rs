@@ -36,11 +36,11 @@ pub struct GenericBinaryBuilder<OffsetSize: OffsetSizeTrait> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
-    /// Creates a new `GenericBinaryBuilder`, `capacity` is the number of bytes in the values
-    /// array
+    /// Creates a new [`GenericBinaryBuilder`].
+    /// `capacity` is the number of bytes in the values array.
     pub fn new(capacity: usize) -> Self {
         let mut offsets_builder = BufferBuilder::<OffsetSize>::new(1024);
-        offsets_builder.append_n_zeroed(1);
+        offsets_builder.append(OffsetSize::zero());
         Self {
             value_builder: UInt8BufferBuilder::new(capacity),
             offsets_builder,
@@ -78,7 +78,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
             .add_buffer(self.value_builder.finish())
             .null_bit_buffer(Some(self.null_buffer_builder.finish()));
 
-        self.offsets_builder.append_n_zeroed(1);
+        self.offsets_builder.append(OffsetSize::zero());
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericBinaryArray::<OffsetSize>::from(array_data)
     }
@@ -100,12 +100,12 @@ impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSi
         self
     }
 
-    /// Returns the number of array slots in the builder
+    /// Returns the number of binary slots in the builder
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
     }
 
-    /// Returns whether the number of array slots is zero
+    /// Returns whether the number of binary slots is zero
     fn is_empty(&self) -> bool {
         self.null_buffer_builder.is_empty()
     }
