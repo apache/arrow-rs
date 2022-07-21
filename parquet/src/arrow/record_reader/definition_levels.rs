@@ -455,10 +455,10 @@ mod tests {
 
         let mut skip_value = 0;
         let mut read_value = 0;
-        let mut read_data = vec![];
 
         loop {
-            let remaining = len - read_value - skip_value;
+            let offset = read_value + skip_value;
+            let remaining = len - offset;
             if remaining == 0 {
                 break;
             }
@@ -468,20 +468,15 @@ mod tests {
             } else if to_read > 0 {
                 let mut decoded = BooleanBufferBuilder::new(to_read);
                 read_value += decoder.read(&mut decoded, to_read).unwrap();
-                read_data.push(decoded.as_slice().to_vec());
+                for i in 0..to_read {
+                    //check each bit
+                    let read_bit = decoded.get_bit(i);
+                    let expect_bit = expected.get_bit(i + offset);
+                    assert_eq!(read_bit, expect_bit);
+                }
             }
         }
-
         assert_eq!(read_value + skip_value, len);
-
-        let expected = expected.as_slice();
-        for data in read_data.iter().enumerate() {
-            assert!(find_subsequence(expected, data.1).is_some());
-        }
-    }
-
-    fn find_subsequence(u1: &[u8], u2: &Vec<u8>) -> Option<usize> {
-        u1.windows(u2.len()).position(|window| window == u2)
     }
 
     #[test]
