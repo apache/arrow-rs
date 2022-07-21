@@ -163,10 +163,12 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
             v.value_length(),
             Self::VALUE_LENGTH,
         );
-        let builder = v
-            .into_data()
-            .into_builder()
-            .data_type(DataType::Decimal(precision, scale));
+        let data_type = if Self::VALUE_LENGTH == 16 {
+            DataType::Decimal(precision, scale)
+        } else {
+            DataType::Decimal256(precision, scale)
+        };
+        let builder = v.into_data().into_builder().data_type(data_type);
 
         let array_data = unsafe { builder.build_unchecked() };
         U::from(array_data)
@@ -197,7 +199,12 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
 
         let list_offset = v.offset();
         let child_offset = child_data.offset();
-        let builder = ArrayData::builder(DataType::Decimal(precision, scale))
+        let data_type = if Self::VALUE_LENGTH == 16 {
+            DataType::Decimal(precision, scale)
+        } else {
+            DataType::Decimal256(precision, scale)
+        };
+        let builder = ArrayData::builder(data_type)
             .len(v.len())
             .add_buffer(child_data.buffers()[0].slice(child_offset))
             .null_bit_buffer(v.data_ref().null_buffer().cloned())
@@ -349,8 +356,8 @@ impl From<ArrayData> for Decimal256Array {
         );
         let values = data.buffers()[0].as_ptr();
         let (precision, scale) = match data.data_type() {
-            DataType::Decimal(precision, scale) => (*precision, *scale),
-            _ => panic!("Expected data type to be Decimal"),
+            DataType::Decimal256(precision, scale) => (*precision, *scale),
+            _ => panic!("Expected data type to be Decimal256"),
         };
         Self {
             data,

@@ -33,7 +33,7 @@ use super::schema::{
     decimal_length_from_precision,
 };
 
-use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
+use crate::column::writer::{get_column_writer, ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::RowGroupMetaDataPtr;
 use crate::file::properties::WriterProperties;
@@ -42,6 +42,44 @@ use crate::{data_type::*, file::writer::SerializedFileWriter};
 use levels::{calculate_array_levels, LevelInfo};
 
 mod levels;
+
+/// An object-safe API for writing an [`ArrayRef`]
+trait ArrayWriter {
+    fn write(&mut self, array: &ArrayRef, levels: LevelInfo) -> Result<()>;
+
+    fn close(&mut self) -> Result<()>;
+}
+
+/// Fallback implementation for writing an [`ArrayRef`] that uses [`SerializedColumnWriter`]
+struct ColumnArrayWriter<'a>(Option<SerializedColumnWriter<'a>>);
+
+impl<'a> ArrayWriter for ColumnArrayWriter<'a> {
+    fn write(&mut self, array: &ArrayRef, levels: LevelInfo) -> Result<()> {
+        write_leaf(self.0.as_mut().unwrap().untyped(), array, levels)?;
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<()> {
+        self.0.take().unwrap().close()
+    }
+}
+
+fn get_writer<'a, W: Write>(
+    row_group_writer: &'a mut SerializedRowGroupWriter<'_, W>,
+) -> Result<Box<dyn ArrayWriter + 'a>> {
+    let array_writer = row_group_writer
+        .next_column_with_factory(|descr, props, page_writer, on_close| {
+            // TODO: Special case array readers (#1764)
+
+            let column_writer = get_column_writer(descr, props.clone(), page_writer);
+            let serialized_writer =
+                SerializedColumnWriter::new(column_writer, Some(on_close));
+
+            Ok(Box::new(ColumnArrayWriter(Some(serialized_writer))))
+        })?
+        .expect("Unable to get column writer");
+    Ok(array_writer)
+}
 
 /// Arrow writer
 ///
@@ -229,17 +267,6 @@ impl<W: Write> ArrowWriter<W> {
     }
 }
 
-/// Convenience method to get the next ColumnWriter from the RowGroupWriter
-#[inline]
-fn get_col_writer<'a, W: Write>(
-    row_group_writer: &'a mut SerializedRowGroupWriter<'_, W>,
-) -> Result<SerializedColumnWriter<'a>> {
-    let col_writer = row_group_writer
-        .next_column()?
-        .expect("Unable to get column writer");
-    Ok(col_writer)
-}
-
 fn write_leaves<W: Write>(
     row_group_writer: &mut SerializedRowGroupWriter<'_, W>,
     arrays: &[ArrayRef],
@@ -276,16 +303,16 @@ fn write_leaves<W: Write>(
         | ArrowDataType::Utf8
         | ArrowDataType::LargeUtf8
         | ArrowDataType::Decimal(_, _)
+        | ArrowDataType::Decimal256(_, _)
         | ArrowDataType::FixedSizeBinary(_) => {
-            let mut col_writer = get_col_writer(row_group_writer)?;
+            let mut writer = get_writer(row_group_writer)?;
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
-                write_leaf(
-                    col_writer.untyped(),
+                writer.write(
                     array,
                     levels.pop().expect("Levels exhausted"),
                 )?;
             }
-            col_writer.close()?;
+            writer.close()?;
             Ok(())
         }
         ArrowDataType::List(_) | ArrowDataType::LargeList(_) => {
@@ -338,17 +365,16 @@ fn write_leaves<W: Write>(
             Ok(())
         }
         ArrowDataType::Dictionary(_, value_type) => {
-            let mut col_writer = get_col_writer(row_group_writer)?;
+            let mut writer = get_writer(row_group_writer)?;
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
                 // cast dictionary to a primitive
                 let array = arrow::compute::cast(array, value_type)?;
-                write_leaf(
-                    col_writer.untyped(),
+                writer.write(
                     &array,
                     levels.pop().expect("Levels exhausted"),
                 )?;
             }
-            col_writer.close()?;
+            writer.close()?;
             Ok(())
         }
         ArrowDataType::Float16 => Err(ParquetError::ArrowError(
@@ -1483,7 +1509,7 @@ mod tests {
     fn fixed_size_binary_single_column() {
         let mut builder = FixedSizeBinaryBuilder::new(16, 4);
         builder.append_value(b"0123").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(b"8910").unwrap();
         builder.append_value(b"1112").unwrap();
         let array = Arc::new(builder.finish());
@@ -1663,7 +1689,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(22345678).unwrap();
         builder.append(12345678).unwrap();
         let d = builder.finish();
@@ -1799,77 +1825,67 @@ mod tests {
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_value(1)
-            .unwrap();
+            .append_value(1);
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_value(2)
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_value(2);
+        values.append(true);
+        list_builder.append(true);
 
         // []
-        list_builder.append(true).unwrap();
+        list_builder.append(true);
 
         // null
-        list_builder.append(false).unwrap();
+        list_builder.append(false);
 
         // [null, null]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
+            .append_null();
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(false).unwrap();
+            .append_null();
+        values.append(false);
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
+            .append_null();
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(false).unwrap();
-        list_builder.append(true).unwrap();
+            .append_null();
+        values.append(false);
+        list_builder.append(true);
 
         // [{a: null, b: 3}]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
+            .append_null();
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_value(3)
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_value(3);
+        values.append(true);
+        list_builder.append(true);
 
         // [{a: 2, b: null}]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_value(2)
-            .unwrap();
+            .append_value(2);
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_null();
+        values.append(true);
+        list_builder.append(true);
 
         let array = Arc::new(list_builder.finish());
 

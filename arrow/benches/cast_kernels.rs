@@ -49,12 +49,12 @@ fn build_utf8_date_array(size: usize, with_nulls: bool) -> ArrayRef {
 
     for _ in 0..size {
         if with_nulls && rng.gen::<f32>() > 0.8 {
-            builder.append_null().unwrap();
+            builder.append_null();
         } else {
             let string = NaiveDate::from_num_days_from_ce(rng.sample(range))
                 .format("%Y-%m-%d")
                 .to_string();
-            builder.append_value(&string).unwrap();
+            builder.append_value(&string);
         }
     }
     Arc::new(builder.finish())
@@ -70,12 +70,12 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
 
     for _ in 0..size {
         if with_nulls && rng.gen::<f32>() > 0.8 {
-            builder.append_null().unwrap();
+            builder.append_null();
         } else {
             let string = NaiveDateTime::from_timestamp(rng.sample(range), 0)
                 .format("%Y-%m-%dT%H:%M:%S")
                 .to_string();
-            builder.append_value(&string).unwrap();
+            builder.append_value(&string);
         }
     }
     Arc::new(builder.finish())

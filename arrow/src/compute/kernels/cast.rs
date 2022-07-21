@@ -40,6 +40,7 @@ use std::sync::Arc;
 
 use crate::array::BasicDecimalArray;
 use crate::buffer::MutableBuffer;
+use crate::compute::divide_scalar;
 use crate::compute::kernels::arithmetic::{divide, multiply};
 use crate::compute::kernels::arity::unary;
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
@@ -320,14 +321,14 @@ macro_rules! cast_decimal_to_integer {
         let max_bound = ($NATIVE_TYPE::MAX) as i128;
         for i in 0..array.len() {
             if array.is_null(i) {
-                value_builder.append_null()?;
+                value_builder.append_null();
             } else {
                 let v = array.value(i).as_i128() / div;
                 // check the overflow
                 // For example: Decimal(128,10,0) as i8
                 // 128 is out of range i8
                 if v <= max_bound && v >= min_bound {
-                    value_builder.append_value(v as $NATIVE_TYPE)?;
+                    value_builder.append_value(v as $NATIVE_TYPE);
                 } else {
                     return Err(ArrowError::CastError(format!(
                         "value of {} is out of range {}",
@@ -348,12 +349,12 @@ macro_rules! cast_decimal_to_float {
         let mut value_builder = $VALUE_BUILDER::new(array.len());
         for i in 0..array.len() {
             if array.is_null(i) {
-                value_builder.append_null()?;
+                value_builder.append_null();
             } else {
                 // The range of f32 or f64 is larger than i128, we don't need to check overflow.
                 // cast the i128 to f64 will lose precision, for example the `112345678901234568` will be as `112345678901234560`.
                 let v = (array.value(i).as_i128() as f64 / div) as $NATIVE_TYPE;
-                value_builder.append_value(v)?;
+                value_builder.append_value(v);
             }
         }
         Ok(Arc::new(value_builder.finish()))
@@ -1042,10 +1043,7 @@ pub fn cast_with_options(
             // we either divide or multiply, depending on size of each unit
             // units are never the same when the types are the same
             let converted = if from_size >= to_size {
-                divide(
-                    &time_array,
-                    &Int64Array::from(vec![from_size / to_size; array.len()]),
-                )?
+                divide_scalar(&time_array, from_size / to_size)?
             } else {
                 multiply(
                     &time_array,
@@ -1075,12 +1073,15 @@ pub fn cast_with_options(
         (Timestamp(from_unit, _), Date32) => {
             let time_array = Int64Array::from(array.data().clone());
             let from_size = time_unit_multiple(from_unit) * SECONDS_IN_DAY;
+
+            // Int32Array::from_iter(tim.iter)
             let mut b = Date32Builder::new(array.len());
+
             for i in 0..array.len() {
-                if array.is_null(i) {
-                    b.append_null()?;
+                if time_array.is_null(i) {
+                    b.append_null();
                 } else {
-                    b.append_value((time_array.value(i) / from_size) as i32)?;
+                    b.append_value((time_array.value(i) / from_size) as i32);
                 }
             }
 
@@ -1650,11 +1651,11 @@ where
 
     for i in 0..from.len() {
         if from.is_null(i) {
-            b.append_null()?;
+            b.append_null();
         } else if from.value(i) != T::default_value() {
-            b.append_value(true)?;
+            b.append_value(true);
         } else {
-            b.append_value(false)?;
+            b.append_value(false);
         }
     }
 
@@ -1908,7 +1909,7 @@ where
     // copy each element one at a time
     for i in 0..values.len() {
         if values.is_null(i) {
-            b.append_null()?;
+            b.append_null();
         } else {
             b.append(values.value(i))?;
         }
@@ -1935,7 +1936,7 @@ where
     // copy each element one at a time
     for i in 0..values.len() {
         if values.is_null(i) {
-            b.append_null()?;
+            b.append_null();
         } else {
             b.append(values.value(i))?;
         }
@@ -4072,7 +4073,7 @@ mod tests {
         let values_builder = StringBuilder::new(10);
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
         builder.append("one").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("three").unwrap();
         let array: ArrayRef = Arc::new(builder.finish());
 
@@ -4195,7 +4196,7 @@ mod tests {
         let values_builder = PrimitiveBuilder::<Int32Type>::new(10);
         let mut builder = PrimitiveDictionaryBuilder::new(keys_builder, values_builder);
         builder.append(1).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(3).unwrap();
         let array: ArrayRef = Arc::new(builder.finish());
 
@@ -4216,9 +4217,9 @@ mod tests {
         use DataType::*;
 
         let mut builder = PrimitiveBuilder::<Int32Type>::new(10);
-        builder.append_value(1).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(3).unwrap();
+        builder.append_value(1);
+        builder.append_null();
+        builder.append_value(3);
         let array: ArrayRef = Arc::new(builder.finish());
 
         let expected = vec!["1", "null", "3"];
