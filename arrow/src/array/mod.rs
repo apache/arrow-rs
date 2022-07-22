@@ -186,6 +186,7 @@ use crate::datatypes::*;
 // --------------------- Array & ArrayData ---------------------
 
 pub use self::array::Array;
+pub use self::array::ArrayAccessor;
 pub use self::array::ArrayRef;
 pub(crate) use self::data::layout;
 pub use self::data::ArrayData;
