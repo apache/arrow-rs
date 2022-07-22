@@ -60,6 +60,14 @@ impl NullBufferBuilder {
         self.append_n_false(1);
     }
 
+    pub fn append(&mut self, v: bool) {
+        if v {
+            self.append_true()
+        } else {
+            self.append_false()
+        }
+    }
+
     pub fn append_slice(&mut self, slice: &[bool]) {
         if slice.iter().any(|v| !v) {
             self.materialize()

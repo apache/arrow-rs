@@ -23,7 +23,7 @@ use crate::error::{ArrowError, Result};
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{NullBufferBuilder};
+use super::NullBufferBuilder;
 
 #[derive(Debug)]
 pub struct FixedSizeBinaryBuilder {
