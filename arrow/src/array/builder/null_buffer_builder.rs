@@ -1,0 +1,73 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::buffer::Buffer;
+
+use super::BooleanBufferBuilder;
+
+#[derive(Debug)]
+pub struct NullBufferBuilder {
+    bitmap_builder: Option<BooleanBufferBuilder>,
+    len: usize,
+}
+
+impl NullBufferBuilder {
+    pub fn new() -> Self {
+        Self { 
+            bitmap_builder: None, 
+            len: 0 
+        }
+    }
+
+    pub fn append_n_true(&mut self, n: usize) {
+        if let Some(buf) = self.bitmap_builder.as_mut() {
+            buf.append_n(n, true)
+        }        
+        self.len += n;
+    }
+
+    pub fn append_n_false(&mut self, n: usize) {
+        self.materialize();
+        self.bitmap_builder.as_mut().unwrap().append_n(n, false);
+        self.len += n;
+    }
+
+    pub fn append_slice(&mut self, slice: &[bool]) {
+        if slice.iter().any(|v| !v) {
+            self.materialize()
+        }
+        if let Some(buf) = self.bitmap_builder.as_mut() {
+            buf.append_slice(slice)
+        }
+        self.len += slice.len();
+    }
+
+    pub fn finish(&mut self) -> Option<Buffer> {
+        let buf = self.bitmap_builder.as_mut().map(|b| b.finish());
+        self.bitmap_builder = None;
+        self.len = 0;
+        buf
+    }
+
+    fn materialize(&mut self) {
+        if self.bitmap_builder.is_none() {
+            let mut b = BooleanBufferBuilder::new(self.len);
+            b.append_n(self.len, true);
+            self.bitmap_builder = Some(b);
+        }
+    }
+}
