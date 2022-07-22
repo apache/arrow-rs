@@ -365,8 +365,14 @@ impl<'a, T: Array> Array for &'a T {
 pub trait ArrayAccessor: Array {
     type Item: Send + Sync;
 
+    /// Returns the element at index `i`
+    /// # Panics
+    /// Panics if the value is outside the bounds of the array
     fn value(&self, index: usize) -> Self::Item;
 
+    /// Returns the element at index `i`
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
 }
 
