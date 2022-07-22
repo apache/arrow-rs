@@ -19,17 +19,21 @@ use crate::buffer::Buffer;
 
 use super::BooleanBufferBuilder;
 
+/// We only materialize the builder when we add `false`.
+/// This optimization is **very** important for the performance.
 #[derive(Debug)]
 pub struct NullBufferBuilder {
     bitmap_builder: Option<BooleanBufferBuilder>,
     len: usize,
+    capacity: usize,
 }
 
 impl NullBufferBuilder {
-    pub fn new() -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self { 
             bitmap_builder: None, 
-            len: 0 
+            len: 0,
+            capacity
         }
     }
 
@@ -65,7 +69,7 @@ impl NullBufferBuilder {
 
     fn materialize(&mut self) {
         if self.bitmap_builder.is_none() {
-            let mut b = BooleanBufferBuilder::new(self.len);
+            let mut b = BooleanBufferBuilder::new(self.len.max(self.capacity));
             b.append_n(self.len, true);
             self.bitmap_builder = Some(b);
         }

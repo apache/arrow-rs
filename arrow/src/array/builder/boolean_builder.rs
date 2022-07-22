@@ -63,8 +63,6 @@ use super::NullBufferBuilder;
 #[derive(Debug)]
 pub struct BooleanBuilder {
     values_builder: BooleanBufferBuilder,
-    /// We only materialize the builder when we add `false`.
-    /// This optimization is **very** important for the performance.
     null_buffer_builder: NullBufferBuilder,
 }
 
@@ -73,7 +71,7 @@ impl BooleanBuilder {
     pub fn new(capacity: usize) -> Self {
         Self {
             values_builder: BooleanBufferBuilder::new(capacity),
-            null_buffer_builder: NullBufferBuilder::new(),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
         }
     }
 

@@ -29,8 +29,6 @@ use super::{ArrayBuilder, BufferBuilder, NullBufferBuilder};
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
     values_builder: BufferBuilder<T::Native>,
-    /// We only materialize the builder when we add `false`.
-    /// This optimization is **very** important for performance of `StringBuilder`.
     null_buffer_builder: NullBufferBuilder,
 }
 
@@ -71,7 +69,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     pub fn new(capacity: usize) -> Self {
         Self {
             values_builder: BufferBuilder::<T::Native>::new(capacity),
-            null_buffer_builder: NullBufferBuilder::new(),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
         }
     }
 
