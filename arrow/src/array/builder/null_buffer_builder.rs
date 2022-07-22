@@ -19,7 +19,10 @@ use crate::buffer::Buffer;
 
 use super::BooleanBufferBuilder;
 
-/// We only materialize the builder when we add `false`.
+/// Builder for creating the null bit buffer.
+/// This builder only materializes the buffer when we append `false`.
+/// If you only append `true`s to the builder, what you get will be
+/// `None` when calling [`finish`](#method.finish).
 /// This optimization is **very** important for the performance.
 #[derive(Debug)]
 pub(super) struct NullBufferBuilder {
@@ -29,6 +32,8 @@ pub(super) struct NullBufferBuilder {
 }
 
 impl NullBufferBuilder {
+    /// Creates a new empty builder.
+    /// `capacity` is the number of bits in the null buffer.
     pub fn new(capacity: usize) -> Self {
         Self {
             bitmap_builder: None,
@@ -37,6 +42,7 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Appends `n` `true`s into the builder.
     pub fn append_n_true(&mut self, n: usize) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_n(n, true)
@@ -44,22 +50,26 @@ impl NullBufferBuilder {
         self.len += n;
     }
 
+    /// Appends a `true` into the builder.
     #[inline]
     pub fn append_true(&mut self) {
         self.append_n_true(1);
     }
 
+    /// Appends `n` `false`s into the builder.
     pub fn append_n_false(&mut self, n: usize) {
         self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append_n(n, false);
         self.len += n;
     }
 
+    /// Appends a `false` into the builder.
     #[inline]
     pub fn append_false(&mut self) {
         self.append_n_false(1);
     }
 
+    /// Appends a boolean value into the builder.
     pub fn append(&mut self, v: bool) {
         if v {
             self.append_true()
@@ -68,6 +78,7 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Appends a boolean slice into the builder.
     pub fn append_slice(&mut self, slice: &[bool]) {
         if slice.iter().any(|v| !v) {
             self.materialize_if_needed()
@@ -78,6 +89,8 @@ impl NullBufferBuilder {
         self.len += slice.len();
     }
 
+    /// Builds the null buffer and resets the builder.
+    /// Returns `None` if the builder only contains `true`s.
     pub fn finish(&mut self) -> Option<Buffer> {
         let buf = self.bitmap_builder.as_mut().map(|b| b.finish());
         self.bitmap_builder = None;

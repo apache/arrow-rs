@@ -93,6 +93,7 @@ impl BooleanBuilder {
         self.append_nulls(1)
     }
 
+    /// Appends `n` `null`s into the builder.
     #[inline]
     pub fn append_nulls(&mut self, n: usize) {
         self.null_buffer_builder.append_n_false(n);
