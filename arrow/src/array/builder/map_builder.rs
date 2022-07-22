@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
+use super::{ArrayBuilder, NullBufferBuilder, BufferBuilder};
 use crate::array::array::Array;
 use crate::array::ArrayData;
 use crate::array::ArrayRef;
@@ -32,7 +32,7 @@ use crate::error::Result;
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
     offsets_builder: BufferBuilder<i32>,
-    bitmap_builder: BooleanBufferBuilder,
+    bitmap_builder: NullBufferBuilder,
     field_names: MapFieldNames,
     key_builder: K,
     value_builder: V,
@@ -78,7 +78,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         offsets_builder.append(len);
         Self {
             offsets_builder,
-            bitmap_builder: BooleanBufferBuilder::new(capacity),
+            bitmap_builder: NullBufferBuilder::new(capacity),
             field_names: field_names.unwrap_or_default(),
             key_builder,
             value_builder,
@@ -156,7 +156,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(struct_array.into_data())
-            .null_bit_buffer(Some(null_bit_buffer));
+            .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { array_data.build_unchecked() };
 
