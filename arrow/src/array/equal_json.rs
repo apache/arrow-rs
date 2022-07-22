@@ -37,6 +37,16 @@ pub trait JsonEqual {
     }
 }
 
+impl<'a, T: JsonEqual> JsonEqual for &'a T {
+    fn equals_json(&self, json: &[&Value]) -> bool {
+        T::equals_json(self, json)
+    }
+
+    fn equals_json_values(&self, json: &[Value]) -> bool {
+        T::equals_json_values(self, json)
+    }
+}
+
 /// Implement array equals for numeric type
 impl<T: ArrowPrimitiveType> JsonEqual for PrimitiveArray<T> {
     fn equals_json(&self, json: &[&Value]) -> bool {

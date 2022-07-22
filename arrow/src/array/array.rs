@@ -297,6 +297,79 @@ impl Array for ArrayRef {
     }
 }
 
+impl<'a, T: Array> Array for &'a T {
+    fn as_any(&self) -> &dyn Any {
+        T::as_any(self)
+    }
+
+    fn data(&self) -> &ArrayData {
+        T::data(self)
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.data().clone()
+    }
+
+    fn data_ref(&self) -> &ArrayData {
+        T::data_ref(self)
+    }
+
+    fn data_type(&self) -> &DataType {
+        T::data_type(self)
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        T::slice(self, offset, length)
+    }
+
+    fn len(&self) -> usize {
+        T::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        T::is_empty(self)
+    }
+
+    fn offset(&self) -> usize {
+        T::offset(self)
+    }
+
+    fn is_null(&self, index: usize) -> bool {
+        T::is_null(self, index)
+    }
+
+    fn is_valid(&self, index: usize) -> bool {
+        T::is_valid(self, index)
+    }
+
+    fn null_count(&self) -> usize {
+        T::null_count(self)
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        T::get_buffer_memory_size(self)
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        T::get_array_memory_size(self)
+    }
+
+    fn to_raw(
+        &self,
+    ) -> Result<(*const ffi::FFI_ArrowArray, *const ffi::FFI_ArrowSchema)> {
+        T::to_raw(self)
+    }
+}
+
+/// A generic trait for accessing the values of an [`Array`]
+pub trait ArrayAccessor: Array {
+    type Item: Send + Sync;
+
+    fn value(&self, index: usize) -> Self::Item;
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
+}
+
 /// Constructs an array using the input `data`.
 /// Returns a reference-counted `Array` instance.
 pub fn make_array(data: ArrayData) -> ArrayRef {

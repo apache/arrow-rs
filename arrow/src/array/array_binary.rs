@@ -23,6 +23,7 @@ use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
 };
+use crate::array::array::ArrayAccessor;
 pub use crate::array::DecimalIter;
 use crate::buffer::Buffer;
 use crate::error::{ArrowError, Result};
@@ -242,6 +243,20 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericBinaryArray<OffsetSize> {
 
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+}
+
+impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor
+    for &'a GenericBinaryArray<OffsetSize>
+{
+    type Item = &'a [u8];
+
+    fn value(&self, index: usize) -> Self::Item {
+        GenericBinaryArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        GenericBinaryArray::value_unchecked(self, index)
     }
 }
 
