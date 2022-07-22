@@ -50,7 +50,7 @@ impl NullBufferBuilder {
     }
 
     pub fn append_n_false(&mut self, n: usize) {
-        self.materialize();
+        self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append_n(n, false);
         self.len += n;
     }
@@ -70,7 +70,7 @@ impl NullBufferBuilder {
 
     pub fn append_slice(&mut self, slice: &[bool]) {
         if slice.iter().any(|v| !v) {
-            self.materialize()
+            self.materialize_if_needed()
         }
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_slice(slice)
@@ -85,6 +85,14 @@ impl NullBufferBuilder {
         buf
     }
 
+    #[inline]
+    fn materialize_if_needed(&mut self) {
+        if self.bitmap_builder.is_none() {
+            self.materialize()
+        }
+    }
+
+    #[cold]
     fn materialize(&mut self) {
         if self.bitmap_builder.is_none() {
             let mut b = BooleanBufferBuilder::new(self.len.max(self.capacity));
