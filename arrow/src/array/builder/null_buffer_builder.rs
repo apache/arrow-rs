@@ -30,17 +30,17 @@ pub struct NullBufferBuilder {
 
 impl NullBufferBuilder {
     pub fn new(capacity: usize) -> Self {
-        Self { 
-            bitmap_builder: None, 
+        Self {
+            bitmap_builder: None,
             len: 0,
-            capacity
+            capacity,
         }
     }
 
     pub fn append_n_true(&mut self, n: usize) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_n(n, true)
-        }        
+        }
         self.len += n;
     }
 
@@ -101,5 +101,64 @@ impl NullBufferBuilder {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_null_buffer_builder() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_false();
+        builder.append_true();
+        builder.append_n_false(2);
+        builder.append_n_true(2);
+        assert_eq!(6, builder.len());
+
+        let buf = builder.finish().unwrap();
+        assert_eq!(Buffer::from(&[0b110010_u8]), buf);
+    }
+
+    #[test]
+    fn test_null_buffer_builder_all_nulls() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_false();
+        builder.append_n_false(2);
+        builder.append_slice(&[false, false, false]);
+        assert_eq!(6, builder.len());
+
+        let buf = builder.finish().unwrap();
+        assert_eq!(Buffer::from(&[0b0_u8]), buf);
+    }
+
+    #[test]
+    fn test_null_buffer_builder_no_null() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_true();
+        builder.append_n_true(2);
+        builder.append_slice(&[true, true, true]);
+        assert_eq!(6, builder.len());
+
+        let buf = builder.finish();
+        assert!(buf.is_none());
+    }
+
+    #[test]
+    fn test_null_buffer_builder_reset() {
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_slice(&[true, false, true]);
+        builder.finish();
+        assert!(builder.is_empty());
+
+        builder.append_slice(&[true, true, true]);
+        assert!(builder.finish().is_none());
+        assert!(builder.is_empty());
+
+        builder.append_slice(&[true, true, false, true]);
+
+        let buf = builder.finish().unwrap();
+        assert_eq!(Buffer::from(&[0b1011_u8]), buf);
     }
 }

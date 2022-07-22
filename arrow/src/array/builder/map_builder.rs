@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{ArrayBuilder, NullBufferBuilder, BufferBuilder};
+use super::{ArrayBuilder, BufferBuilder, NullBufferBuilder};
 use crate::array::array::Array;
 use crate::array::ArrayData;
 use crate::array::ArrayRef;

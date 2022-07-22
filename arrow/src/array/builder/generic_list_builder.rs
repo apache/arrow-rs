@@ -25,7 +25,7 @@ use crate::array::OffsetSizeTrait;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
 
-use super::{ArrayBuilder, NullBufferBuilder, BufferBuilder};
+use super::{ArrayBuilder, BufferBuilder, NullBufferBuilder};
 
 ///  Array builder for [`GenericListArray`]
 #[derive(Debug)]

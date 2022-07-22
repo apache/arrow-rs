@@ -29,7 +29,7 @@ use crate::datatypes::Field;
 use crate::datatypes::{ArrowNativeType, ArrowPrimitiveType};
 use crate::error::{ArrowError, Result};
 
-use super::{NullBufferBuilder, BufferBuilder};
+use super::{BufferBuilder, NullBufferBuilder};
 
 use crate::array::make_array;
 
