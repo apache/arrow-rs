@@ -22,7 +22,7 @@ use super::BooleanBufferBuilder;
 /// We only materialize the builder when we add `false`.
 /// This optimization is **very** important for the performance.
 #[derive(Debug)]
-pub struct NullBufferBuilder {
+pub(super) struct NullBufferBuilder {
     bitmap_builder: Option<BooleanBufferBuilder>,
     len: usize,
     capacity: usize,
