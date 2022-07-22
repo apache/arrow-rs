@@ -23,12 +23,12 @@ use crate::error::{ArrowError, Result};
 use std::any::Any;
 use std::sync::Arc;
 
-use super::BooleanBufferBuilder;
+use super::{NullBufferBuilder};
 
 #[derive(Debug)]
 pub struct FixedSizeBinaryBuilder {
     values_builder: UInt8BufferBuilder,
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
     value_length: i32,
 }
 
@@ -43,7 +43,7 @@ impl FixedSizeBinaryBuilder {
         );
         Self {
             values_builder: UInt8BufferBuilder::new(capacity),
-            bitmap_builder: BooleanBufferBuilder::new(if byte_width > 0 {
+            null_buffer_builder: NullBufferBuilder::new(if byte_width > 0 {
                 capacity / byte_width as usize
             } else {
                 0
@@ -64,7 +64,7 @@ impl FixedSizeBinaryBuilder {
             ))
         } else {
             self.values_builder.append_slice(value.as_ref());
-            self.bitmap_builder.append(true);
+            self.null_buffer_builder.append_true();
             Ok(())
         }
     }
@@ -74,7 +74,7 @@ impl FixedSizeBinaryBuilder {
     pub fn append_null(&mut self) {
         self.values_builder
             .append_slice(&vec![0u8; self.value_length as usize][..]);
-        self.bitmap_builder.append(false);
+        self.null_buffer_builder.append_false();
     }
 
     /// Builds the [`FixedSizeBinaryArray`] and reset this builder.
@@ -83,7 +83,7 @@ impl FixedSizeBinaryBuilder {
         let array_data_builder =
             ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
                 .add_buffer(self.values_builder.finish())
-                .null_bit_buffer(Some(self.bitmap_builder.finish()))
+                .null_bit_buffer(self.null_buffer_builder.finish())
                 .len(array_length);
         let array_data = unsafe { array_data_builder.build_unchecked() };
         FixedSizeBinaryArray::from(array_data)
@@ -108,12 +108,12 @@ impl ArrayBuilder for FixedSizeBinaryBuilder {
 
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
-        self.bitmap_builder.len()
+        self.null_buffer_builder.len()
     }
 
     /// Returns whether the number of array slots is zero
     fn is_empty(&self) -> bool {
-        self.bitmap_builder.is_empty()
+        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.

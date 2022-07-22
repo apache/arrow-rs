@@ -44,10 +44,20 @@ impl NullBufferBuilder {
         self.len += n;
     }
 
+    #[inline]
+    pub fn append_true(&mut self) {
+        self.append_n_true(1);
+    }
+
     pub fn append_n_false(&mut self, n: usize) {
         self.materialize();
         self.bitmap_builder.as_mut().unwrap().append_n(n, false);
         self.len += n;
+    }
+
+    #[inline]
+    pub fn append_false(&mut self) {
+        self.append_n_false(1);
     }
 
     pub fn append_slice(&mut self, slice: &[bool]) {
@@ -73,5 +83,15 @@ impl NullBufferBuilder {
             b.append_n(self.len, true);
             self.bitmap_builder = Some(b);
         }
+    }
+}
+
+impl NullBufferBuilder {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 }
