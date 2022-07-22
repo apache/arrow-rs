@@ -113,32 +113,6 @@ where
     }
 }
 
-// implements comparison using IEEE 754 total ordering for f32
-// Original implementation from https://doc.rust-lang.org/std/primitive.f64.html#method.total_cmp
-// TODO to change to use std when it becomes stable
-fn total_cmp_32(l: f32, r: f32) -> std::cmp::Ordering {
-    let mut left = l.to_bits() as i32;
-    let mut right = r.to_bits() as i32;
-
-    left ^= (((left >> 31) as u32) >> 1) as i32;
-    right ^= (((right >> 31) as u32) >> 1) as i32;
-
-    left.cmp(&right)
-}
-
-// implements comparison using IEEE 754 total ordering for f64
-// Original implementation from https://doc.rust-lang.org/std/primitive.f64.html#method.total_cmp
-// TODO to change to use std when it becomes stable
-fn total_cmp_64(l: f64, r: f64) -> std::cmp::Ordering {
-    let mut left = l.to_bits() as i64;
-    let mut right = r.to_bits() as i64;
-
-    left ^= (((left >> 63) as u64) >> 1) as i64;
-    right ^= (((right >> 63) as u64) >> 1) as i64;
-
-    left.cmp(&right)
-}
-
 fn cmp<T>(l: T, r: T) -> std::cmp::Ordering
 where
     T: Ord,
@@ -197,12 +171,22 @@ pub fn sort_to_indices(
         DataType::UInt64 => {
             sort_primitive::<UInt64Type, _>(values, v, n, cmp, &options, limit)
         }
-        DataType::Float32 => {
-            sort_primitive::<Float32Type, _>(values, v, n, total_cmp_32, &options, limit)
-        }
-        DataType::Float64 => {
-            sort_primitive::<Float64Type, _>(values, v, n, total_cmp_64, &options, limit)
-        }
+        DataType::Float32 => sort_primitive::<Float32Type, _>(
+            values,
+            v,
+            n,
+            |x, y| x.total_cmp(&y),
+            &options,
+            limit,
+        ),
+        DataType::Float64 => sort_primitive::<Float64Type, _>(
+            values,
+            v,
+            n,
+            |x, y| x.total_cmp(&y),
+            &options,
+            limit,
+        ),
         DataType::Date32 => {
             sort_primitive::<Date32Type, _>(values, v, n, cmp, &options, limit)
         }
