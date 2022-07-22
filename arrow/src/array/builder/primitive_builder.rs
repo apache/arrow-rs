@@ -90,8 +90,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
-        self.null_buffer_builder.append_n_false(1);
-        self.values_builder.advance(1);
+        self.append_nulls(1)
     }
 
     #[inline]
