@@ -15,63 +15,72 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{
-    ArrayBuilder, ArrayRef, GenericBinaryArray, GenericListBuilder, OffsetSizeTrait,
-    UInt8Builder,
+use crate::{
+    array::{
+        ArrayBuilder, ArrayDataBuilder, ArrayRef, GenericBinaryArray, OffsetSizeTrait,
+        UInt8BufferBuilder,
+    },
+    datatypes::DataType,
 };
 use std::any::Any;
 use std::sync::Arc;
 
-///  Array builder for `BinaryArray`
+use super::{BooleanBufferBuilder, BufferBuilder};
+
+///  Array builder for [`GenericBinaryArray`]
 #[derive(Debug)]
 pub struct GenericBinaryBuilder<OffsetSize: OffsetSizeTrait> {
-    builder: GenericListBuilder<OffsetSize, UInt8Builder>,
+    value_builder: UInt8BufferBuilder,
+    offsets_builder: BufferBuilder<OffsetSize>,
+    null_buffer_builder: BooleanBufferBuilder,
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
-    /// Creates a new `GenericBinaryBuilder`, `capacity` is the number of bytes in the values
-    /// array
+    /// Creates a new [`GenericBinaryBuilder`].
+    /// `capacity` is the number of bytes in the values array.
     pub fn new(capacity: usize) -> Self {
-        let values_builder = UInt8Builder::new(capacity);
+        let mut offsets_builder = BufferBuilder::<OffsetSize>::new(1024);
+        offsets_builder.append(OffsetSize::zero());
         Self {
-            builder: GenericListBuilder::new(values_builder),
+            value_builder: UInt8BufferBuilder::new(capacity),
+            offsets_builder,
+            null_buffer_builder: BooleanBufferBuilder::new(1024),
         }
     }
 
-    /// Appends a single byte value into the builder's values array.
-    ///
-    /// Note, when appending individual byte values you must call `append` to delimit each
-    /// distinct list value.
-    #[inline]
-    pub fn append_byte(&mut self, value: u8) {
-        self.builder.values().append_value(value);
-    }
-
     /// Appends a byte slice into the builder.
-    ///
-    /// Automatically calls the `append` method to delimit the slice appended in as a
-    /// distinct array element.
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<[u8]>) {
-        self.builder.values().append_slice(value.as_ref());
-        self.builder.append(true);
-    }
-
-    /// Finish the current variable-length list array slot.
-    #[inline]
-    pub fn append(&mut self, is_valid: bool) {
-        self.builder.append(is_valid)
+        self.value_builder.append_slice(value.as_ref());
+        self.null_buffer_builder.append(true);
+        self.offsets_builder
+            .append(OffsetSize::from_usize(self.value_builder.len()).unwrap());
     }
 
     /// Append a null value to the array.
     #[inline]
     pub fn append_null(&mut self) {
-        self.append(false)
+        self.null_buffer_builder.append(false);
+        self.offsets_builder
+            .append(OffsetSize::from_usize(self.value_builder.len()).unwrap());
     }
 
-    /// Builds the `BinaryArray` and reset this builder.
+    /// Builds the [`GenericBinaryArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericBinaryArray<OffsetSize> {
-        GenericBinaryArray::<OffsetSize>::from(self.builder.finish())
+        let array_type = if OffsetSize::IS_LARGE {
+            DataType::LargeBinary
+        } else {
+            DataType::Binary
+        };
+        let array_builder = ArrayDataBuilder::new(array_type)
+            .len(self.len())
+            .add_buffer(self.offsets_builder.finish())
+            .add_buffer(self.value_builder.finish())
+            .null_bit_buffer(Some(self.null_buffer_builder.finish()));
+
+        self.offsets_builder.append(OffsetSize::zero());
+        let array_data = unsafe { array_builder.build_unchecked() };
+        GenericBinaryArray::<OffsetSize>::from(array_data)
     }
 }
 
@@ -91,14 +100,14 @@ impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSi
         self
     }
 
-    /// Returns the number of array slots in the builder
+    /// Returns the number of binary slots in the builder
     fn len(&self) -> usize {
-        self.builder.len()
+        self.null_buffer_builder.len()
     }
 
-    /// Returns whether the number of array slots is zero
+    /// Returns whether the number of binary slots is zero
     fn is_empty(&self) -> bool {
-        self.builder.is_empty()
+        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -109,64 +118,100 @@ impl<OffsetSize: OffsetSizeTrait> ArrayBuilder for GenericBinaryBuilder<OffsetSi
 
 #[cfg(test)]
 mod tests {
-    use crate::array::builder::{BinaryBuilder, LargeBinaryBuilder};
-    use crate::array::Array;
+    use super::*;
+    use crate::array::{Array, OffsetSizeTrait};
 
-    #[test]
-    fn test_binary_array_builder() {
-        let mut builder = BinaryBuilder::new(20);
+    fn _test_generic_binary_builder<O: OffsetSizeTrait>() {
+        let mut builder = GenericBinaryBuilder::<O>::new(20);
 
-        builder.append_byte(b'h');
-        builder.append_byte(b'e');
-        builder.append_byte(b'l');
-        builder.append_byte(b'l');
-        builder.append_byte(b'o');
-        builder.append(true);
-        builder.append(true);
-        builder.append_byte(b'w');
-        builder.append_byte(b'o');
-        builder.append_byte(b'r');
-        builder.append_byte(b'l');
-        builder.append_byte(b'd');
-        builder.append(true);
+        builder.append_value(b"hello");
+        builder.append_value(b"");
+        builder.append_null();
+        builder.append_value(b"rust");
 
-        let binary_array = builder.finish();
+        let array = builder.finish();
 
-        assert_eq!(3, binary_array.len());
-        assert_eq!(0, binary_array.null_count());
-        assert_eq!([b'h', b'e', b'l', b'l', b'o'], binary_array.value(0));
-        assert_eq!([] as [u8; 0], binary_array.value(1));
-        assert_eq!([b'w', b'o', b'r', b'l', b'd'], binary_array.value(2));
-        assert_eq!(5, binary_array.value_offsets()[2]);
-        assert_eq!(5, binary_array.value_length(2));
+        assert_eq!(4, array.len());
+        assert_eq!(1, array.null_count());
+        assert_eq!(b"hello", array.value(0));
+        assert_eq!([] as [u8; 0], array.value(1));
+        assert!(array.is_null(2));
+        assert_eq!(b"rust", array.value(3));
+        assert_eq!(O::from_usize(5).unwrap(), array.value_offsets()[2]);
+        assert_eq!(O::from_usize(4).unwrap(), array.value_length(3));
     }
 
     #[test]
-    fn test_large_binary_array_builder() {
-        let mut builder = LargeBinaryBuilder::new(20);
+    fn test_binary_builder() {
+        _test_generic_binary_builder::<i32>()
+    }
 
-        builder.append_byte(b'h');
-        builder.append_byte(b'e');
-        builder.append_byte(b'l');
-        builder.append_byte(b'l');
-        builder.append_byte(b'o');
-        builder.append(true);
-        builder.append(true);
-        builder.append_byte(b'w');
-        builder.append_byte(b'o');
-        builder.append_byte(b'r');
-        builder.append_byte(b'l');
-        builder.append_byte(b'd');
-        builder.append(true);
+    #[test]
+    fn test_large_binary_builder() {
+        _test_generic_binary_builder::<i64>()
+    }
 
-        let binary_array = builder.finish();
+    fn _test_generic_binary_builder_all_nulls<O: OffsetSizeTrait>() {
+        let mut builder = GenericBinaryBuilder::<O>::new(10);
+        builder.append_null();
+        builder.append_null();
+        builder.append_null();
+        assert_eq!(3, builder.len());
+        assert!(!builder.is_empty());
 
-        assert_eq!(3, binary_array.len());
-        assert_eq!(0, binary_array.null_count());
-        assert_eq!([b'h', b'e', b'l', b'l', b'o'], binary_array.value(0));
-        assert_eq!([] as [u8; 0], binary_array.value(1));
-        assert_eq!([b'w', b'o', b'r', b'l', b'd'], binary_array.value(2));
-        assert_eq!(5, binary_array.value_offsets()[2]);
-        assert_eq!(5, binary_array.value_length(2));
+        let array = builder.finish();
+        assert_eq!(3, array.null_count());
+        assert_eq!(3, array.len());
+        assert!(array.is_null(0));
+        assert!(array.is_null(1));
+        assert!(array.is_null(2));
+    }
+
+    #[test]
+    fn test_binary_builder_all_nulls() {
+        _test_generic_binary_builder_all_nulls::<i32>()
+    }
+
+    #[test]
+    fn test_large_binary_builder_all_nulls() {
+        _test_generic_binary_builder_all_nulls::<i64>()
+    }
+
+    fn _test_generic_binary_builder_reset<O: OffsetSizeTrait>() {
+        let mut builder = GenericBinaryBuilder::<O>::new(20);
+
+        builder.append_value(b"hello");
+        builder.append_value(b"");
+        builder.append_null();
+        builder.append_value(b"rust");
+        builder.finish();
+
+        assert!(builder.is_empty());
+
+        builder.append_value(b"parquet");
+        builder.append_null();
+        builder.append_value(b"arrow");
+        builder.append_value(b"");
+        let array = builder.finish();
+
+        assert_eq!(4, array.len());
+        assert_eq!(1, array.null_count());
+        assert_eq!(b"parquet", array.value(0));
+        assert!(array.is_null(1));
+        assert_eq!(b"arrow", array.value(2));
+        assert_eq!(b"", array.value(1));
+        assert_eq!(O::zero(), array.value_offsets()[0]);
+        assert_eq!(O::from_usize(7).unwrap(), array.value_offsets()[2]);
+        assert_eq!(O::from_usize(5).unwrap(), array.value_length(2));
+    }
+
+    #[test]
+    fn test_binary_builder_reset() {
+        _test_generic_binary_builder_reset::<i32>()
+    }
+
+    #[test]
+    fn test_large_binary_builder_reset() {
+        _test_generic_binary_builder_reset::<i64>()
     }
 }

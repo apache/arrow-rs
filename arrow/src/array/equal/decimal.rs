@@ -30,6 +30,7 @@ pub(super) fn decimal_equal(
 ) -> bool {
     let size = match lhs.data_type() {
         DataType::Decimal(_, _) => 16,
+        DataType::Decimal256(_, _) => 32,
         _ => unreachable!(),
     };
 

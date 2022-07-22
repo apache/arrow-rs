@@ -146,50 +146,49 @@ impl LevelsBufferSlice for DefinitionLevelBuffer {
     }
 }
 
+enum MaybePacked {
+    Packed(PackedDecoder),
+    Fallback(ColumnLevelDecoderImpl),
+}
+
 pub struct DefinitionLevelBufferDecoder {
     max_level: i16,
-    encoding: Encoding,
-    data: Option<ByteBufferPtr>,
-    column_decoder: Option<ColumnLevelDecoderImpl>,
-    packed_decoder: Option<PackedDecoder>,
+    decoder: MaybePacked,
+}
+
+impl DefinitionLevelBufferDecoder {
+    pub fn new(max_level: i16, packed: bool) -> Self {
+        let decoder = match packed {
+            true => MaybePacked::Packed(PackedDecoder::new()),
+            false => MaybePacked::Fallback(ColumnLevelDecoderImpl::new(max_level)),
+        };
+
+        Self { max_level, decoder }
+    }
 }
 
 impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
     type Slice = DefinitionLevelBuffer;
 
-    fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self {
-        Self {
-            max_level,
-            encoding,
-            data: Some(data),
-            column_decoder: None,
-            packed_decoder: None,
+    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
+        match &mut self.decoder {
+            MaybePacked::Packed(d) => d.set_data(encoding, data),
+            MaybePacked::Fallback(d) => d.set_data(encoding, data),
         }
     }
 
-    fn read(
-        &mut self,
-        writer: &mut Self::Slice,
-        range: Range<usize>,
-    ) -> crate::errors::Result<usize> {
-        match &mut writer.inner {
-            BufferInner::Full {
-                levels,
-                nulls,
-                max_level,
-            } => {
+    fn read(&mut self, writer: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
+        match (&mut writer.inner, &mut self.decoder) {
+            (
+                BufferInner::Full {
+                    levels,
+                    nulls,
+                    max_level,
+                },
+                MaybePacked::Fallback(decoder),
+            ) => {
                 assert_eq!(self.max_level, *max_level);
                 assert_eq!(range.start + writer.len, nulls.len());
-
-                let decoder = match self.data.take() {
-                    Some(data) => self.column_decoder.insert(
-                        ColumnLevelDecoderImpl::new(self.max_level, self.encoding, data),
-                    ),
-                    None => self
-                        .column_decoder
-                        .as_mut()
-                        .expect("consistent null_mask_only"),
-                };
 
                 levels.resize(range.end + writer.len);
 
@@ -203,22 +202,13 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
 
                 Ok(levels_read)
             }
-            BufferInner::Mask { nulls } => {
+            (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
                 assert_eq!(self.max_level, 1);
                 assert_eq!(range.start + writer.len, nulls.len());
 
-                let decoder = match self.data.take() {
-                    Some(data) => self
-                        .packed_decoder
-                        .insert(PackedDecoder::new(self.encoding, data)),
-                    None => self
-                        .packed_decoder
-                        .as_mut()
-                        .expect("consistent null_mask_only"),
-                };
-
                 decoder.read(nulls, range.end - range.start)
             }
+            _ => unreachable!("inconsistent null mask"),
         }
     }
 }
@@ -306,26 +296,28 @@ impl PackedDecoder {
 }
 
 impl PackedDecoder {
-    fn new(encoding: Encoding, data: ByteBufferPtr) -> Self {
-        match encoding {
-            Encoding::RLE => Self {
-                data,
-                data_offset: 0,
-                rle_left: 0,
-                rle_value: false,
-                packed_count: 0,
-                packed_offset: 0,
-            },
-            Encoding::BIT_PACKED => Self {
-                data_offset: 0,
-                rle_left: 0,
-                rle_value: false,
-                packed_count: data.len() * 8,
-                packed_offset: 0,
-                data,
-            },
-            _ => unreachable!("invalid level encoding: {}", encoding),
+    fn new() -> Self {
+        Self {
+            data: ByteBufferPtr::new(vec![]),
+            data_offset: 0,
+            rle_left: 0,
+            rle_value: false,
+            packed_count: 0,
+            packed_offset: 0,
         }
+    }
+
+    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
+        self.rle_left = 0;
+        self.rle_value = false;
+        self.packed_offset = 0;
+        self.packed_count = match encoding {
+            Encoding::RLE => 0,
+            Encoding::BIT_PACKED => data.len() * 8,
+            _ => unreachable!("invalid level encoding: {}", encoding),
+        };
+        self.data = data;
+        self.data_offset = 0;
     }
 
     fn read(&mut self, buffer: &mut BooleanBufferBuilder, len: usize) -> Result<usize> {
@@ -381,7 +373,8 @@ mod tests {
         assert_eq!(expected.len(), len);
 
         let encoded = encoder.consume().unwrap();
-        let mut decoder = PackedDecoder::new(Encoding::RLE, ByteBufferPtr::new(encoded));
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, ByteBufferPtr::new(encoded));
 
         // Decode data in random length intervals
         let mut decoded = BooleanBufferBuilder::new(len);

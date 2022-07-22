@@ -44,3 +44,4 @@ serde_json = { version = "1.0", default-features = false, features = ["std"] }
 tokio = { version = "1.0", default-features = false }
 tonic = { version = "0.7", default-features = false }
 tracing-subscriber = { version = "0.3.1", default-features = false, features = ["fmt"], optional = true }
+num = { version = "0.4", default-features = false, features = ["std"] }

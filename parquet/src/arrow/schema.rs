@@ -380,7 +380,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_length(*length)
                 .build()
         }
-        DataType::Decimal(precision, scale) => {
+        DataType::Decimal(precision, scale) | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // TODO(ARROW-12018): Enable the below after ARROW-10818 Decimal support
             //

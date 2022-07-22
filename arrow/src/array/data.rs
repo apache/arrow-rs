@@ -189,7 +189,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         DataType::FixedSizeList(_, _) | DataType::Struct(_) => {
             [empty_buffer, MutableBuffer::new(0)]
         }
-        DataType::Decimal(_, _) => [
+        DataType::Decimal(_, _) | DataType::Decimal256(_, _) => [
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
         ],
@@ -578,7 +578,8 @@ impl ArrayData {
             | DataType::LargeBinary
             | DataType::Interval(_)
             | DataType::FixedSizeBinary(_)
-            | DataType::Decimal(_, _) => vec![],
+            | DataType::Decimal(_, _)
+            | DataType::Decimal256(_, _) => vec![],
             DataType::List(field) => {
                 vec![Self::new_empty(field.data_type())]
             }
@@ -1312,6 +1313,10 @@ pub(crate) fn layout(data_type: &DataType) -> DataTypeLayout {
             // Decimals are always some fixed width; The rust implementation
             // always uses 16 bytes / size of i128
             DataTypeLayout::new_fixed_width(size_of::<i128>())
+        }
+        DataType::Decimal256(_, _) => {
+            // Decimals are always some fixed width.
+            DataTypeLayout::new_fixed_width(32)
         }
         DataType::Map(_, _) => {
             // same as ListType

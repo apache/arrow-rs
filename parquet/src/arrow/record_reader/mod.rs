@@ -62,6 +62,7 @@ pub struct GenericRecordReader<V, CV> {
 
     /// Number of records accumulated in records
     num_records: usize,
+
     /// Number of values `num_records` contains.
     num_values: usize,
 
@@ -76,33 +77,8 @@ where
 {
     /// Create a new [`GenericRecordReader`]
     pub fn new(desc: ColumnDescPtr) -> Self {
-        Self::new_with_options(desc, false)
-    }
-
-    /// Create a new [`GenericRecordReader`] with the ability to only generate the bitmask
-    ///
-    /// If `null_mask_only` is true only the null bitmask will be generated and
-    /// [`Self::consume_def_levels`] and [`Self::consume_rep_levels`] will always return `None`
-    ///
-    /// It is insufficient to solely check that that the max definition level is 1 as we
-    /// need there to be no nullable parent array that will required decoded definition levels
-    ///
-    /// In particular consider the case of:
-    ///
-    /// ```ignore
-    /// message nested {
-    ///   OPTIONAL Group group {
-    ///     REQUIRED INT32 leaf;
-    ///   }
-    /// }
-    /// ```
-    ///
-    /// The maximum definition level of leaf is 1, however, we still need to decode the
-    /// definition levels so that the parent group can be constructed correctly
-    ///
-    pub(crate) fn new_with_options(desc: ColumnDescPtr, null_mask_only: bool) -> Self {
         let def_levels = (desc.max_def_level() > 0)
-            .then(|| DefinitionLevelBuffer::new(&desc, null_mask_only));
+            .then(|| DefinitionLevelBuffer::new(&desc, packed_null_mask(&desc)));
 
         let rep_levels = (desc.max_rep_level() > 0).then(ScalarBuffer::new);
 
@@ -120,9 +96,25 @@ where
 
     /// Set the current page reader.
     pub fn set_page_reader(&mut self, page_reader: Box<dyn PageReader>) -> Result<()> {
-        self.column_reader = Some(GenericColumnReader::new(
+        let descr = &self.column_desc;
+        let values_decoder = CV::new(descr);
+
+        let def_level_decoder = (descr.max_def_level() != 0).then(|| {
+            DefinitionLevelBufferDecoder::new(
+                descr.max_def_level(),
+                packed_null_mask(descr),
+            )
+        });
+
+        let rep_level_decoder = (descr.max_rep_level() != 0)
+            .then(|| ColumnLevelDecoderImpl::new(descr.max_rep_level()));
+
+        self.column_reader = Some(GenericColumnReader::new_with_decoders(
             self.column_desc.clone(),
             page_reader,
+            values_decoder,
+            def_level_decoder,
+            rep_level_decoder,
         ));
         Ok(())
     }
@@ -390,6 +382,15 @@ where
             buf.set_len(self.values_written)
         };
     }
+}
+
+/// Returns true if we do not need to unpack the nullability for this column, this is
+/// only possible if the max defiition level is 1, and corresponds to nulls at the
+/// leaf level, as opposed to a nullable parent nested type
+fn packed_null_mask(descr: &ColumnDescPtr) -> bool {
+    descr.max_def_level() == 1
+        && descr.max_rep_level() == 0
+        && descr.self_type().is_optional()
 }
 
 #[cfg(test)]
