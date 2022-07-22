@@ -29,7 +29,7 @@ use crate::datatypes::Field;
 use crate::datatypes::{ArrowNativeType, ArrowPrimitiveType};
 use crate::error::{ArrowError, Result};
 
-use super::{BooleanBufferBuilder, BufferBuilder};
+use super::{NullBufferBuilder, BufferBuilder};
 
 use crate::array::make_array;
 
@@ -45,7 +45,7 @@ struct FieldData {
     ///  The number of array slots represented by the buffer
     slots: usize,
     /// A builder for the null bitmap
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
 }
 
 /// A type-erased [`BufferBuilder`] used by [`FieldData`]
@@ -79,7 +79,7 @@ impl FieldData {
             data_type,
             slots: 0,
             values_buffer: Box::new(BufferBuilder::<T::Native>::new(1)),
-            bitmap_builder: BooleanBufferBuilder::new(1),
+            null_buffer_builder: NullBufferBuilder::new(1),
         }
     }
 
@@ -91,14 +91,14 @@ impl FieldData {
             .expect("Tried to append unexpected type")
             .append(v);
 
-        self.bitmap_builder.append(true);
+        self.null_buffer_builder.append(true);
         self.slots += 1;
     }
 
     /// Appends a null to this `FieldData`.
     fn append_null(&mut self) {
         self.values_buffer.append_null();
-        self.bitmap_builder.append(false);
+        self.null_buffer_builder.append(false);
         self.slots += 1;
     }
 }
@@ -264,7 +264,7 @@ impl UnionBuilder {
                 data_type,
                 mut values_buffer,
                 slots,
-                mut bitmap_builder,
+                null_buffer_builder: mut bitmap_builder,
             },
         ) in self.fields.into_iter()
         {
@@ -272,7 +272,7 @@ impl UnionBuilder {
             let arr_data_builder = ArrayDataBuilder::new(data_type.clone())
                 .add_buffer(buffer)
                 .len(slots)
-                .null_bit_buffer(Some(bitmap_builder.finish()));
+                .null_bit_buffer(bitmap_builder.finish());
 
             let arr_data_ref = unsafe { arr_data_builder.build_unchecked() };
             let array_ref = make_array(arr_data_ref);
