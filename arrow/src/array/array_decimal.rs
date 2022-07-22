@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::{ArrayAccessor, Decimal128Iter, Decimal256Iter};
 use std::borrow::Borrow;
 use std::convert::From;
 use std::fmt;
@@ -24,13 +25,11 @@ use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, FixedSizeListArray,
 };
 use super::{BooleanBufferBuilder, FixedSizeBinaryArray};
+#[allow(deprecated)]
 pub use crate::array::DecimalIter;
 use crate::buffer::Buffer;
-use crate::datatypes::DataType;
-use crate::datatypes::{
-    validate_decimal_precision, DECIMAL_DEFAULT_SCALE, DECIMAL_MAX_PRECISION,
-    DECIMAL_MAX_SCALE,
-};
+use crate::datatypes::{validate_decimal_precision, DECIMAL_DEFAULT_SCALE};
+use crate::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE};
 use crate::error::{ArrowError, Result};
 use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
 
@@ -103,11 +102,18 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
 
     /// Returns the element at index `i`.
     fn value(&self, i: usize) -> T {
-        let data = self.data();
-        assert!(i < data.len(), "Out of bounds access");
+        assert!(i < self.data().len(), "Out of bounds access");
 
+        unsafe { self.value_unchecked(i) }
+    }
+
+    /// Returns the element at index `i`.
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    unsafe fn value_unchecked(&self, i: usize) -> T {
+        let data = self.data();
         let offset = i + data.offset();
-        let raw_val = unsafe {
+        let raw_val = {
             let pos = self.value_offset_at(offset);
             std::slice::from_raw_parts(
                 self.raw_value_data_ptr().offset(pos as isize),
@@ -270,24 +276,24 @@ impl Decimal128Array {
     /// specified precision.
     ///
     /// Returns an Error if:
-    /// 1. `precision` is larger than [`DECIMAL_MAX_PRECISION`]
-    /// 2. `scale` is larger than [`DECIMAL_MAX_SCALE`];
+    /// 1. `precision` is larger than [`DECIMAL128_MAX_PRECISION`]
+    /// 2. `scale` is larger than [`DECIMAL128_MAX_SCALE`];
     /// 3. `scale` is > `precision`
     pub fn with_precision_and_scale(
         mut self,
         precision: usize,
         scale: usize,
     ) -> Result<Self> {
-        if precision > DECIMAL_MAX_PRECISION {
+        if precision > DECIMAL128_MAX_PRECISION {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "precision {} is greater than max {}",
-                precision, DECIMAL_MAX_PRECISION
+                precision, DECIMAL128_MAX_PRECISION
             )));
         }
-        if scale > DECIMAL_MAX_SCALE {
+        if scale > DECIMAL128_MAX_SCALE {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "scale {} is greater than max {}",
-                scale, DECIMAL_MAX_SCALE
+                scale, DECIMAL128_MAX_SCALE
             )));
         }
         if scale > precision {
@@ -302,7 +308,7 @@ impl Decimal128Array {
         // decreased
         if precision < self.precision {
             for v in self.iter().flatten() {
-                validate_decimal_precision(v, precision)?;
+                validate_decimal_precision(v.as_i128(), precision)?;
             }
         }
 
@@ -322,7 +328,7 @@ impl Decimal128Array {
     /// The default precision and scale used when not specified.
     pub fn default_type() -> DataType {
         // Keep maximum precision
-        DataType::Decimal(DECIMAL_MAX_PRECISION, DECIMAL_DEFAULT_SCALE)
+        DataType::Decimal(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE)
     }
 }
 
@@ -368,19 +374,13 @@ impl From<ArrayData> for Decimal256Array {
     }
 }
 
-impl<'a> IntoIterator for &'a Decimal128Array {
-    type Item = Option<i128>;
-    type IntoIter = DecimalIter<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        DecimalIter::<'a>::new(self)
-    }
-}
-
 impl<'a> Decimal128Array {
-    /// constructs a new iterator
-    pub fn iter(&'a self) -> DecimalIter<'a> {
-        DecimalIter::new(self)
+    /// Constructs a new iterator that iterates `Decimal128` values as i128 values.
+    /// This is kept mostly for back-compatibility purpose.
+    /// Suggests to use `iter()` that returns `Decimal128Iter`.
+    #[allow(deprecated)]
+    pub fn i128_iter(&'a self) -> DecimalIter<'a> {
+        DecimalIter::<'a>::new(self)
     }
 }
 
@@ -421,7 +421,7 @@ impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for Decimal128Array {
 }
 
 macro_rules! def_decimal_array {
-    ($ty:ident, $array_name:expr) => {
+    ($ty:ident, $array_name:expr, $decimal_ty:ident, $iter_ty:ident) => {
         impl private_decimal::DecimalArrayPrivate for $ty {
             fn raw_value_data_ptr(&self) -> *const u8 {
                 self.value_data.as_ptr()
@@ -463,15 +463,55 @@ macro_rules! def_decimal_array {
                 write!(f, "]")
             }
         }
+
+        impl<'a> ArrayAccessor for &'a $ty {
+            type Item = $decimal_ty;
+
+            fn value(&self, index: usize) -> Self::Item {
+                $ty::value(self, index)
+            }
+
+            unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+                $ty::value_unchecked(self, index)
+            }
+        }
+
+        impl<'a> IntoIterator for &'a $ty {
+            type Item = Option<$decimal_ty>;
+            type IntoIter = $iter_ty<'a>;
+
+            fn into_iter(self) -> Self::IntoIter {
+                $iter_ty::<'a>::new(self)
+            }
+        }
+
+        impl<'a> $ty {
+            /// constructs a new iterator
+            pub fn iter(&'a self) -> $iter_ty<'a> {
+                $iter_ty::<'a>::new(self)
+            }
+        }
     };
 }
 
-def_decimal_array!(Decimal128Array, "Decimal128Array");
-def_decimal_array!(Decimal256Array, "Decimal256Array");
+def_decimal_array!(
+    Decimal128Array,
+    "Decimal128Array",
+    Decimal128,
+    Decimal128Iter
+);
+def_decimal_array!(
+    Decimal256Array,
+    "Decimal256Array",
+    Decimal256,
+    Decimal256Iter
+);
 
 #[cfg(test)]
 mod tests {
+    use crate::array::Decimal256Builder;
     use crate::{array::Decimal128Builder, datatypes::Field};
+    use num::{BigInt, Num};
 
     use super::*;
 
@@ -567,7 +607,7 @@ mod tests {
         let data = vec![Some(-100), None, Some(101)];
         let array: Decimal128Array = data.clone().into_iter().collect();
 
-        let collected: Vec<_> = array.iter().collect();
+        let collected: Vec<_> = array.iter().map(|d| d.map(|v| v.as_i128())).collect();
         assert_eq!(data, collected);
     }
 
@@ -576,7 +616,8 @@ mod tests {
         let data = vec![Some(-100), None, Some(101)];
         let array: Decimal128Array = data.clone().into_iter().collect();
 
-        let collected: Vec<_> = array.into_iter().collect();
+        let collected: Vec<_> =
+            array.into_iter().map(|d| d.map(|v| v.as_i128())).collect();
         assert_eq!(data, collected);
     }
 
@@ -749,5 +790,25 @@ mod tests {
         assert_eq!(decimal.len(), 2);
         assert!(decimal.is_null(0));
         assert_eq!(decimal.value_as_string(1), "56".to_string());
+    }
+
+    #[test]
+    fn test_decimal256_iter() {
+        // TODO: Impl FromIterator for Decimal256Array
+        let mut builder = Decimal256Builder::new(30, 76, 6);
+        let value = BigInt::from_str_radix("12345", 10).unwrap();
+        let decimal1 = Decimal256::from_big_int(&value, 76, 6).unwrap();
+        builder.append_value(&decimal1).unwrap();
+
+        builder.append_null();
+
+        let value = BigInt::from_str_radix("56789", 10).unwrap();
+        let decimal2 = Decimal256::from_big_int(&value, 76, 6).unwrap();
+        builder.append_value(&decimal2).unwrap();
+
+        let array: Decimal256Array = builder.finish();
+
+        let collected: Vec<_> = array.iter().collect();
+        assert_eq!(vec![Some(decimal1), None, Some(decimal2)], collected);
     }
 }

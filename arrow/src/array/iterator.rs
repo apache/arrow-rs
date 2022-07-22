@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::array::ArrayAccessor;
-use crate::array::BasicDecimalArray;
+use crate::array::{BasicDecimalArray, Decimal256Array};
 
 use super::{
     Array, BooleanArray, Decimal128Array, GenericBinaryArray, GenericListArray,
@@ -104,15 +104,25 @@ pub type GenericStringIter<'a, T> = ArrayIter<&'a GenericStringArray<T>>;
 pub type GenericBinaryIter<'a, T> = ArrayIter<&'a GenericBinaryArray<T>>;
 pub type GenericListArrayIter<'a, O> = ArrayIter<&'a GenericListArray<O>>;
 
+/// an iterator that returns `Some(Decimal128)` or `None`, that can be used on a
+/// [`Decimal128Array`]
+pub type Decimal128Iter<'a> = ArrayIter<&'a Decimal128Array>;
+
+/// an iterator that returns `Some(Decimal256)` or `None`, that can be used on a
+/// [`Decimal256Array`]
+pub type Decimal256Iter<'a> = ArrayIter<&'a Decimal256Array>;
+
 /// an iterator that returns `Some(i128)` or `None`, that can be used on a
 /// [`Decimal128Array`]
 #[derive(Debug)]
+#[deprecated(note = "Please use `Decimal128Iter` instead")]
 pub struct DecimalIter<'a> {
     array: &'a Decimal128Array,
     current: usize,
     current_end: usize,
 }
 
+#[allow(deprecated)]
 impl<'a> DecimalIter<'a> {
     pub fn new(array: &'a Decimal128Array) -> Self {
         Self {
@@ -123,6 +133,7 @@ impl<'a> DecimalIter<'a> {
     }
 }
 
+#[allow(deprecated)]
 impl<'a> std::iter::Iterator for DecimalIter<'a> {
     type Item = Option<i128>;
 
@@ -150,6 +161,7 @@ impl<'a> std::iter::Iterator for DecimalIter<'a> {
 }
 
 /// iterator has known size.
+#[allow(deprecated)]
 impl<'a> std::iter::ExactSizeIterator for DecimalIter<'a> {}
 
 #[cfg(test)]
