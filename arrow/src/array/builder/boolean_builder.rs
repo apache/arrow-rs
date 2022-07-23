@@ -84,13 +84,14 @@ impl BooleanBuilder {
     #[inline]
     pub fn append_value(&mut self, v: bool) {
         self.values_builder.append(v);
-        self.null_buffer_builder.append_n_true(1);
+        self.null_buffer_builder.append_true();
     }
 
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
-        self.append_nulls(1)
+        self.null_buffer_builder.append_false();
+        self.values_builder.advance(1);
     }
 
     /// Appends `n` `null`s into the builder.

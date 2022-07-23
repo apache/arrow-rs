@@ -81,14 +81,15 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Appends a value of type `T` into the builder
     #[inline]
     pub fn append_value(&mut self, v: T::Native) {
-        self.null_buffer_builder.append_n_true(1);
+        self.null_buffer_builder.append_true();
         self.values_builder.append(v);
     }
 
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
-        self.append_nulls(1)
+        self.null_buffer_builder.append_false();
+        self.values_builder.advance(1);
     }
 
     #[inline]

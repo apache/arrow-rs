@@ -27,6 +27,7 @@ use super::BooleanBufferBuilder;
 #[derive(Debug)]
 pub(super) struct NullBufferBuilder {
     bitmap_builder: Option<BooleanBufferBuilder>,
+    /// Store the length of the buffer before materilaizing.
     len: usize,
     capacity: usize,
 }
@@ -46,30 +47,36 @@ impl NullBufferBuilder {
     pub fn append_n_true(&mut self, n: usize) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_n(n, true)
+        } else {
+            self.len += n;
         }
-        self.len += n;
     }
 
     /// Appends a `true` into the builder.
     #[inline]
     pub fn append_true(&mut self) {
-        self.append_n_true(1);
+        if let Some(buf) = self.bitmap_builder.as_mut() {
+            buf.append(true)
+        } else {
+            self.len += 1;
+        }
     }
 
     /// Appends `n` `false`s into the builder.
     pub fn append_n_false(&mut self, n: usize) {
         self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append_n(n, false);
-        self.len += n;
     }
 
     /// Appends a `false` into the builder.
     #[inline]
     pub fn append_false(&mut self) {
-        self.append_n_false(1);
+        self.materialize_if_needed();
+        self.bitmap_builder.as_mut().unwrap().append(false);
     }
 
     /// Appends a boolean value into the builder.
+    #[inline]
     pub fn append(&mut self, v: bool) {
         if v {
             self.append_true()
@@ -85,8 +92,9 @@ impl NullBufferBuilder {
         }
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_slice(slice)
+        } else {
+            self.len += slice.len();
         }
-        self.len += slice.len();
     }
 
     /// Builds the null buffer and resets the builder.
@@ -117,11 +125,15 @@ impl NullBufferBuilder {
 
 impl NullBufferBuilder {
     pub fn len(&self) -> usize {
-        self.len
+        if let Some(b) = &self.bitmap_builder {
+            b.len()
+        } else {
+            self.len
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
     }
 }
 
