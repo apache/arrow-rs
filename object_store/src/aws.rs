@@ -58,9 +58,6 @@ use std::ops::Range;
 use std::{
     convert::TryFrom, fmt, num::NonZeroUsize, ops::Deref, sync::Arc, time::Duration,
 };
-use std::{
-    convert::TryFrom, fmt, num::NonZeroUsize, ops::Deref, sync::Arc, time::Duration,
-};
 use tokio::io::AsyncWrite;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, warn};
