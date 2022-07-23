@@ -24,6 +24,7 @@ use super::{
     array::print_long_array, make_array, raw_pointer::RawPtrBox, Array, ArrayData,
     ArrayRef, BooleanBufferBuilder, GenericListArrayIter, PrimitiveArray,
 };
+use crate::array::array::ArrayAccessor;
 use crate::{
     buffer::MutableBuffer,
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType, Field},
@@ -245,7 +246,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 }
 
-impl<OffsetSize: 'static + OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -256,6 +257,18 @@ impl<OffsetSize: 'static + OffsetSizeTrait> Array for GenericListArray<OffsetSiz
 
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+}
+
+impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor for &'a GenericListArray<OffsetSize> {
+    type Item = ArrayRef;
+
+    fn value(&self, index: usize) -> Self::Item {
+        GenericListArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        GenericListArray::value(self, index)
     }
 }
 
@@ -463,6 +476,18 @@ impl Array for FixedSizeListArray {
 
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+}
+
+impl ArrayAccessor for FixedSizeListArray {
+    type Item = ArrayRef;
+
+    fn value(&self, index: usize) -> Self::Item {
+        FixedSizeListArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        FixedSizeListArray::value(self, index)
     }
 }
 

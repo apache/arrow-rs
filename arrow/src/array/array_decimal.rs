@@ -352,7 +352,7 @@ impl From<ArrayData> for Decimal256Array {
         assert_eq!(
             data.buffers().len(),
             1,
-            "Decimal128Array data should contain 1 buffer only (values)"
+            "Decimal256Array data should contain 1 buffer only (values)"
         );
         let values = data.buffers()[0].as_ptr();
         let (precision, scale) = match data.data_type() {

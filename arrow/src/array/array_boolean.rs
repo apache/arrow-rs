@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::array::ArrayAccessor;
 use std::borrow::Borrow;
 use std::convert::From;
 use std::iter::{FromIterator, IntoIterator};
@@ -154,6 +155,18 @@ impl Array for BooleanArray {
 
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+}
+
+impl<'a> ArrayAccessor for &'a BooleanArray {
+    type Item = bool;
+
+    fn value(&self, index: usize) -> Self::Item {
+        BooleanArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        BooleanArray::value_unchecked(self, index)
     }
 }
 

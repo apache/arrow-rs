@@ -307,21 +307,19 @@ fn create_primitive_array_reader(
     use parquet::arrow::array_reader::PrimitiveArrayReader;
     match column_desc.physical_type() {
         Type::INT32 => {
-            let reader = PrimitiveArrayReader::<Int32Type>::new_with_options(
+            let reader = PrimitiveArrayReader::<Int32Type>::new(
                 Box::new(page_iterator),
                 column_desc,
                 None,
-                true,
             )
             .unwrap();
             Box::new(reader)
         }
         Type::INT64 => {
-            let reader = PrimitiveArrayReader::<Int64Type>::new_with_options(
+            let reader = PrimitiveArrayReader::<Int64Type>::new(
                 Box::new(page_iterator),
                 column_desc,
                 None,
-                true,
             )
             .unwrap();
             Box::new(reader)
@@ -335,7 +333,7 @@ fn create_string_byte_array_reader(
     column_desc: ColumnDescPtr,
 ) -> Box<dyn ArrayReader> {
     use parquet::arrow::array_reader::make_byte_array_reader;
-    make_byte_array_reader(Box::new(page_iterator), column_desc, None, true).unwrap()
+    make_byte_array_reader(Box::new(page_iterator), column_desc, None).unwrap()
 }
 
 fn create_string_byte_array_dictionary_reader(
@@ -350,7 +348,6 @@ fn create_string_byte_array_dictionary_reader(
         Box::new(page_iterator),
         column_desc,
         Some(arrow_type),
-        true,
     )
     .unwrap()
 }

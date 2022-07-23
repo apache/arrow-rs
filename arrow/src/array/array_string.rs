@@ -23,6 +23,7 @@ use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, GenericListArray,
     GenericStringIter, OffsetSizeTrait,
 };
+use crate::array::array::ArrayAccessor;
 use crate::buffer::Buffer;
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
@@ -295,6 +296,20 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericStringArray<OffsetSize> {
 
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+}
+
+impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor
+    for &'a GenericStringArray<OffsetSize>
+{
+    type Item = &'a str;
+
+    fn value(&self, index: usize) -> Self::Item {
+        GenericStringArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        GenericStringArray::value_unchecked(self, index)
     }
 }
 

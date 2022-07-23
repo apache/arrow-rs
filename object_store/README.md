@@ -17,19 +17,10 @@
   under the License.
 -->
 
-# Apache Arrow Flight
+# Rust Object Store
 
-[![Crates.io](https://img.shields.io/crates/v/arrow-flight.svg)](https://crates.io/crates/arrow-flight)
+A crate providing a generic interface to object stores, such as S3, Azure Blob Storage and Google Cloud Storage.
 
-## Usage
+Originally developed for [InfluxDB IOx](https://github.com/influxdata/influxdb_iox/) and later split out and donated to Apache Arrow.
 
-Add this to your Cargo.toml:
-
-```toml
-[dependencies]
-arrow-flight = "19.0.0"
-```
-
-Apache Arrow Flight is a gRPC based protocol for exchanging Arrow data between processes. See the blog post [Introducing Apache Arrow Flight: A Framework for Fast Data Transport](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for more information.
-
-This crate provides a Rust implementation of the [Flight.proto](../../format/Flight.proto) gRPC protocol and provides an example that demonstrates how to build a Flight server implemented with Tonic.
+See [docs.rs](https://docs.rs/object_store) for usage instructions
