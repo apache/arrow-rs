@@ -58,7 +58,9 @@ use std::ops::Range;
 use std::{
     convert::TryFrom, fmt, num::NonZeroUsize, ops::Deref, sync::Arc, time::Duration,
 };
-use std::{convert::TryFrom, fmt, num::NonZeroUsize, ops::Deref, sync::Arc, time::Duration};
+use std::{
+    convert::TryFrom, fmt, num::NonZeroUsize, ops::Deref, sync::Arc, time::Duration,
+};
 use tokio::io::AsyncWrite;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, warn};
@@ -356,7 +358,11 @@ impl ObjectStore for AmazonS3 {
         Ok((upload_id, Box::new(CloudMultiPartUpload::new(inner, 8))))
     }
 
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
+    async fn abort_multipart(
+        &self,
+        location: &Path,
+        multipart_id: &MultipartId,
+    ) -> Result<()> {
         let request_factory = move || rusoto_s3::AbortMultipartUploadRequest {
             bucket: self.bucket_name.clone(),
             key: location.to_string(),
@@ -988,23 +994,24 @@ impl CloudMultiPartUploadImpl for S3MultiPartUpload {
         &self,
         completed_parts: Vec<Option<UploadPart>>,
     ) -> BoxFuture<'static, Result<(), io::Error>> {
-        let parts = completed_parts
-            .into_iter()
-            .enumerate()
-            .map(|(part_number, maybe_part)| match maybe_part {
-                Some(part) => Ok(rusoto_s3::CompletedPart {
-                    e_tag: Some(part.content_id),
-                    part_number: Some(
-                        (part_number + 1)
-                            .try_into()
-                            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?,
-                    ),
-                }),
-                None => Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Missing information for upload part {:?}", part_number),
-                )),
-            });
+        let parts =
+            completed_parts
+                .into_iter()
+                .enumerate()
+                .map(|(part_number, maybe_part)| match maybe_part {
+                    Some(part) => {
+                        Ok(rusoto_s3::CompletedPart {
+                            e_tag: Some(part.content_id),
+                            part_number: Some((part_number + 1).try_into().map_err(
+                                |err| io::Error::new(io::ErrorKind::Other, err),
+                            )?),
+                        })
+                    }
+                    None => Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Missing information for upload part {:?}", part_number),
+                    )),
+                });
 
         // Get values to move into future; we don't want a reference to Self
         let bucket = self.bucket.clone();

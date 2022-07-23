@@ -327,7 +327,11 @@ impl GoogleCloudStorageClient {
     }
 
     /// Cleanup unused parts <https://cloud.google.com/storage/docs/xml-api/delete-multipart>
-    async fn multipart_cleanup(&self, path: &str, multipart_id: &MultipartId) -> Result<()> {
+    async fn multipart_cleanup(
+        &self,
+        path: &str,
+        multipart_id: &MultipartId,
+    ) -> Result<()> {
         let token = self.get_token().await?;
         let url = format!("{}/{}/{}", self.base_url, self.bucket_name_encoded, path);
 
@@ -510,7 +514,9 @@ fn reqwest_error_as_io(err: reqwest::Error) -> io::Error {
     } else if err.is_status() {
         match err.status() {
             Some(StatusCode::NOT_FOUND) => io::Error::new(io::ErrorKind::NotFound, err),
-            Some(StatusCode::BAD_REQUEST) => io::Error::new(io::ErrorKind::InvalidInput, err),
+            Some(StatusCode::BAD_REQUEST) => {
+                io::Error::new(io::ErrorKind::InvalidInput, err)
+            }
             Some(_) => io::Error::new(io::ErrorKind::Other, err),
             None => io::Error::new(io::ErrorKind::Other, err),
         }
@@ -570,7 +576,10 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
                 .headers()
                 .get("ETag")
                 .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "response headers missing ETag")
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "response headers missing ETag",
+                    )
                 })?
                 .to_str()
                 .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?
@@ -663,7 +672,11 @@ impl ObjectStore for GoogleCloudStorage {
         Ok((upload_id, Box::new(CloudMultiPartUpload::new(inner, 8))))
     }
 
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
+    async fn abort_multipart(
+        &self,
+        location: &Path,
+        multipart_id: &MultipartId,
+    ) -> Result<()> {
         self.client
             .multipart_cleanup(location.as_ref(), multipart_id)
             .await?;

@@ -263,7 +263,9 @@ impl ObjectStore for LocalFileSystem {
 
             match std::fs::metadata(&staging_path) {
                 Err(err) if err.kind() == io::ErrorKind::NotFound => break staging_path,
-                Err(err) => return Err(Error::UnableToCopyDataToFile { source: err }.into()),
+                Err(err) => {
+                    return Err(Error::UnableToCopyDataToFile { source: err }.into())
+                }
                 Ok(_) => multipart_id += 1,
             }
         };
@@ -277,7 +279,11 @@ impl ObjectStore for LocalFileSystem {
         ))
     }
 
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()> {
+    async fn abort_multipart(
+        &self,
+        location: &Path,
+        multipart_id: &MultipartId,
+    ) -> Result<()> {
         let dest = self.config.path_to_filesystem(location)?;
         let staging_path: PathBuf = get_upload_stage_path(&dest, multipart_id);
 
@@ -547,7 +553,11 @@ struct LocalUpload {
 }
 
 impl LocalUpload {
-    pub fn new(dest: PathBuf, multipart_id: MultipartId, file: Arc<std::fs::File>) -> Self {
+    pub fn new(
+        dest: PathBuf,
+        multipart_id: MultipartId,
+        file: Arc<std::fs::File>,
+    ) -> Self {
         Self {
             inner_state: LocalUploadState::Idle(file),
             dest,
@@ -562,12 +572,13 @@ impl AsyncWrite for LocalUpload {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, io::Error>> {
-        let invalid_state = |condition: &str| -> std::task::Poll<Result<usize, io::Error>> {
-            Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("Tried to write to file {}.", condition),
-            )))
-        };
+        let invalid_state =
+            |condition: &str| -> std::task::Poll<Result<usize, io::Error>> {
+                Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Tried to write to file {}.", condition),
+                )))
+            };
 
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let mut data: Vec<u8> = buf.to_vec();
@@ -585,7 +596,9 @@ impl AsyncWrite for LocalUpload {
                                 runtime
                                     .spawn_blocking(move || (&*file2).write_all(&data))
                                     .map(move |res| match res {
-                                        Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
+                                        Err(err) => {
+                                            Err(io::Error::new(io::ErrorKind::Other, err))
+                                        }
                                         Ok(res) => res.map(move |_| data_len),
                                     }),
                             ),
@@ -594,7 +607,8 @@ impl AsyncWrite for LocalUpload {
                     LocalUploadState::Writing(file, inner_write) => {
                         match inner_write.poll_unpin(cx) {
                             Poll::Ready(res) => {
-                                self.inner_state = LocalUploadState::Idle(Arc::clone(file));
+                                self.inner_state =
+                                    LocalUploadState::Idle(Arc::clone(file));
                                 return Poll::Ready(res);
                             }
                             Poll::Pending => {
@@ -641,12 +655,14 @@ impl AsyncWrite for LocalUpload {
                         // We are moving file into the future, and it will be dropped on it's completion, closing the file.
                         let file = Arc::clone(file);
                         self.inner_state = LocalUploadState::ShuttingDown(Box::pin(
-                            runtime
-                                .spawn_blocking(move || (*file).sync_all())
-                                .map(move |res| match res {
-                                    Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
+                            runtime.spawn_blocking(move || (*file).sync_all()).map(
+                                move |res| match res {
+                                    Err(err) => {
+                                        Err(io::Error::new(io::ErrorKind::Other, err))
+                                    }
                                     Ok(res) => res,
-                                }),
+                                },
+                            ),
                         ));
                     }
                     LocalUploadState::ShuttingDown(fut) => match fut.poll_unpin(cx) {
@@ -657,9 +673,13 @@ impl AsyncWrite for LocalUpload {
                             let dest = self.dest.clone();
                             self.inner_state = LocalUploadState::Committing(Box::pin(
                                 runtime
-                                    .spawn_blocking(move || std::fs::rename(&staging_path, &dest))
+                                    .spawn_blocking(move || {
+                                        std::fs::rename(&staging_path, &dest)
+                                    })
                                     .map(move |res| match res {
-                                        Err(err) => Err(io::Error::new(io::ErrorKind::Other, err)),
+                                        Err(err) => {
+                                            Err(io::Error::new(io::ErrorKind::Other, err))
+                                        }
                                         Ok(res) => res,
                                     }),
                             ));
@@ -736,7 +756,8 @@ fn open_writable_file(path: &std::path::PathBuf) -> Result<File> {
             let parent = path
                 .parent()
                 .context(UnableToCreateFileSnafu { path: &path, err })?;
-            std::fs::create_dir_all(&parent).context(UnableToCreateDirSnafu { path: parent })?;
+            std::fs::create_dir_all(&parent)
+                .context(UnableToCreateDirSnafu { path: parent })?;
 
             match File::create(&path) {
                 Ok(f) => Ok(f),
@@ -1044,10 +1065,12 @@ mod tests {
         let location = Path::from("some_file");
 
         let data = Bytes::from("arbitrary data");
-        let (multipart_id, mut writer) = integration.put_multipart(&location).await.unwrap();
+        let (multipart_id, mut writer) =
+            integration.put_multipart(&location).await.unwrap();
         writer.write_all(&data).await.unwrap();
 
-        let (multipart_id_2, mut writer_2) = integration.put_multipart(&location).await.unwrap();
+        let (multipart_id_2, mut writer_2) =
+            integration.put_multipart(&location).await.unwrap();
         assert_ne!(multipart_id, multipart_id_2);
         writer_2.write_all(&data).await.unwrap();
 

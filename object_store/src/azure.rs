@@ -244,7 +244,11 @@ impl ObjectStore for MicrosoftAzure {
         Ok((String::new(), Box::new(CloudMultiPartUpload::new(inner, 8))))
     }
 
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
+    async fn abort_multipart(
+        &self,
+        _location: &Path,
+        _multipart_id: &MultipartId,
+    ) -> Result<()> {
         // There is no way to drop blocks that have been uploaded. Instead, they simply
         // expire in 7 days.
         Ok(())
@@ -639,18 +643,21 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
         &self,
         completed_parts: Vec<Option<UploadPart>>,
     ) -> BoxFuture<'static, Result<(), io::Error>> {
-        let parts = completed_parts
-            .into_iter()
-            .enumerate()
-            .map(|(part_number, maybe_part)| match maybe_part {
-                Some(part) => Ok(azure_storage_blobs::blob::BlobBlockType::Uncommitted(
-                    azure_storage_blobs::BlockId::new(part.content_id),
-                )),
-                None => Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Missing information for upload part {:?}", part_number),
-                )),
-            });
+        let parts =
+            completed_parts
+                .into_iter()
+                .enumerate()
+                .map(|(part_number, maybe_part)| match maybe_part {
+                    Some(part) => {
+                        Ok(azure_storage_blobs::blob::BlobBlockType::Uncommitted(
+                            azure_storage_blobs::BlockId::new(part.content_id),
+                        ))
+                    }
+                    None => Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Missing information for upload part {:?}", part_number),
+                    )),
+                });
 
         let client = Arc::clone(&self.container_client);
         let location = self.location.clone();

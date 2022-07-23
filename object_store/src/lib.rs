@@ -103,7 +103,11 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// See documentation for individual stores for exact behavior, as capabilities
     /// vary by object store.
-    async fn abort_multipart(&self, location: &Path, multipart_id: &MultipartId) -> Result<()>;
+    async fn abort_multipart(
+        &self,
+        location: &Path,
+        multipart_id: &MultipartId,
+    ) -> Result<()>;
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult>;
@@ -596,7 +600,9 @@ mod tests {
         Ok(())
     }
 
-    pub(crate) async fn list_uses_directories_correctly(storage: &DynObjectStore) -> Result<()> {
+    pub(crate) async fn list_uses_directories_correctly(
+        storage: &DynObjectStore,
+    ) -> Result<()> {
         delete_fixtures(storage).await;
 
         let content_list = flatten_list_stream(storage, None).await?;

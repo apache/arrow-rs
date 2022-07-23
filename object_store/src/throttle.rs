@@ -158,7 +158,11 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         Err(super::Error::NotImplemented)
     }
 
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
+    async fn abort_multipart(
+        &self,
+        _location: &Path,
+        _multipart_id: &MultipartId,
+    ) -> Result<()> {
         Err(super::Error::NotImplemented)
     }
 

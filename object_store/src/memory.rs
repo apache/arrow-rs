@@ -103,7 +103,11 @@ impl ObjectStore for InMemory {
         ))
     }
 
-    async fn abort_multipart(&self, _location: &Path, _multipart_id: &MultipartId) -> Result<()> {
+    async fn abort_multipart(
+        &self,
+        _location: &Path,
+        _multipart_id: &MultipartId,
+    ) -> Result<()> {
         // Nothing to clean up
         Ok(())
     }
