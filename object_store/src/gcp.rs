@@ -73,9 +73,6 @@ enum Error {
 
     #[snafu(display("Error decoding object size: {}", source))]
     InvalidSize { source: std::num::ParseIntError },
-
-    #[snafu(display("Error creating http client: {}", source))]
-    CreatingHttpClient { source: reqwest::Error },
 }
 
 impl From<Error> for super::Error {
