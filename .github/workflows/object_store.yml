@@ -16,7 +16,7 @@
 # under the License.
 
 ---
-name: "object_store tests"
+name: "Object Store"
 
 on:
   pull_request:
