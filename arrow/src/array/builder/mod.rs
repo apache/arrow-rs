@@ -54,7 +54,7 @@ pub use generic_binary_builder::GenericBinaryBuilder;
 pub use generic_list_builder::GenericListBuilder;
 pub use generic_string_builder::GenericStringBuilder;
 pub use map_builder::MapBuilder;
-pub(self) use null_buffer_builder::NullBufferBuilder;
+use null_buffer_builder::NullBufferBuilder;
 pub use primitive_builder::PrimitiveBuilder;
 pub use primitive_dictionary_builder::PrimitiveDictionaryBuilder;
 pub use string_dictionary_builder::StringDictionaryBuilder;
