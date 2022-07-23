@@ -275,7 +275,7 @@ mod tests {
 
     macro_rules! assert_bounds {
         ($d:expr, $lower:expr) => {
-            assert_bounds!($d, $lower, $lower + 1);
+            assert_bounds!($d, $lower, $lower + 2);
         };
         ($d:expr, $lower:expr, $upper:expr) => {
             let d = $d;
