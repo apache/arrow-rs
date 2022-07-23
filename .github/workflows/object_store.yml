@@ -62,15 +62,12 @@ jobs:
         AZURITE_BLOB_STORAGE_URL: "http://azurite:10000"
         AZURITE_QUEUE_STORAGE_URL: "http://azurite:10001"
         GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
-        GCP_ACCEPT_INVALID_CERTIFICATES: "true"
         OBJECT_STORE_BUCKET: test-bucket
 
     steps:
       - uses: actions/checkout@v2
 
       - name: Configure Fake GCS Server (GCP emulation)
-          # the magical connection string is from
-          # https://docs.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#http-connection-strings
         run: |
           curl --insecure -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "https://fake-gcs:4443/storage/v1/b"
           echo '{"gcs_base_url": "https://fake-gcs:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > "$GOOGLE_SERVICE_ACCOUNT"

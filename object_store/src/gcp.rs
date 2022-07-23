@@ -501,24 +501,21 @@ fn reader_credentials_file(
     Ok(serde_json::from_reader(reader).context(DecodeCredentialsSnafu)?)
 }
 
-fn get_client() -> Result<Client> {
-    let mut builder = Client::builder();
-
-    if std::env::var("GCP_ACCEPT_INVALID_CERTIFICATES").is_ok() {
-        println!("WARNING: accepting invalid certifcates");
-        builder = builder.danger_accept_invalid_certs(true);
-    }
-    let client = builder.build().context(CreatingHttpClientSnafu)?;
-    Ok(client)
-}
-
 /// Configure a connection to Google Cloud Storage.
 pub fn new_gcs(
     service_account_path: impl AsRef<std::path::Path>,
     bucket_name: impl Into<String>,
 ) -> Result<GoogleCloudStorage> {
+    new_gcs_with_client(service_account_path, bucket_name, Client::new())
+}
+
+/// Configure a connection to Google Cloud Storage with the specified HTTP client.
+pub fn new_gcs_with_client(
+    service_account_path: impl AsRef<std::path::Path>,
+    bucket_name: impl Into<String>,
+    client: Client,
+) -> Result<GoogleCloudStorage> {
     let credentials = reader_credentials_file(service_account_path)?;
-    let client = get_client()?;
 
     // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
     let scope = "https://www.googleapis.com/auth/devstorage.full_control";
@@ -589,6 +586,18 @@ mod test {
         service_account: String,
     }
 
+    impl GoogleCloudConfig {
+        fn build(self) -> Result<GoogleCloudStorage> {
+            // ignore HTTPS errors in tests so we can use fake-gcs server
+            let client = Client::builder()
+                .danger_accept_invalid_certs(true)
+                .build()
+                .expect("Error creating http client for testing");
+
+            new_gcs_with_client(self.service_account, self.bucket, client)
+        }
+    }
+
     // Helper macro to skip tests if TEST_INTEGRATION and the GCP environment variables are not set.
     macro_rules! maybe_skip_integration {
         () => {{
@@ -636,7 +645,7 @@ mod test {
     #[tokio::test]
     async fn gcs_test() {
         let config = maybe_skip_integration!();
-        let integration = new_gcs(config.service_account, config.bucket).unwrap();
+        let integration = config.build().unwrap();
 
         put_get_delete_list(&integration).await.unwrap();
         list_uses_directories_correctly(&integration).await.unwrap();
@@ -647,7 +656,7 @@ mod test {
     #[tokio::test]
     async fn gcs_test_get_nonexistent_location() {
         let config = maybe_skip_integration!();
-        let integration = new_gcs(config.service_account, &config.bucket).unwrap();
+        let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -664,7 +673,7 @@ mod test {
     async fn gcs_test_get_nonexistent_bucket() {
         let mut config = maybe_skip_integration!();
         config.bucket = NON_EXISTENT_NAME.into();
-        let integration = new_gcs(config.service_account, &config.bucket).unwrap();
+        let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -682,7 +691,7 @@ mod test {
     #[tokio::test]
     async fn gcs_test_delete_nonexistent_location() {
         let config = maybe_skip_integration!();
-        let integration = new_gcs(config.service_account, &config.bucket).unwrap();
+        let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -698,7 +707,7 @@ mod test {
     async fn gcs_test_delete_nonexistent_bucket() {
         let mut config = maybe_skip_integration!();
         config.bucket = NON_EXISTENT_NAME.into();
-        let integration = new_gcs(config.service_account, &config.bucket).unwrap();
+        let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -714,7 +723,7 @@ mod test {
     async fn gcs_test_put_nonexistent_bucket() {
         let mut config = maybe_skip_integration!();
         config.bucket = NON_EXISTENT_NAME.into();
-        let integration = new_gcs(config.service_account, &config.bucket).unwrap();
+        let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
         let data = Bytes::from("arbitrary data");
