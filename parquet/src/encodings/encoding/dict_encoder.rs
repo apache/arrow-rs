@@ -174,6 +174,7 @@ impl<T: DataType> DictEncoder<T> {
 
 impl<T: DataType> Encoder<T> for DictEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
+        self.indices.reserve(values.len());
         for i in values {
             self.put_one(i)
         }
