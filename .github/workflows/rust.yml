@@ -327,34 +327,3 @@ jobs:
           cd arrow
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
           cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
-
-  # test doc links still work
-  docs:
-    name: Docs are clean on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ nightly ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        RUSTDOCFLAGS: "-Dwarnings"
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Install python dev
-        run: |
-          apt update
-          apt install -y libpython3.9-dev
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Run cargo doc
-        run: |
-          cargo doc --document-private-items --no-deps --workspace --all-features
