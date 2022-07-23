@@ -525,10 +525,12 @@ fn check_if_emulator_works() -> Result<()> {
 /// if present, otherwise falls back to default_url
 fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
     let url = match std::env::var(env_name) {
-        Ok(env_value) => Url::parse(&env_value).context(UnableToParseEmulatorUrlSnafu {
-            env_name,
-            env_value,
-        })?,
+        Ok(env_value) => {
+            Url::parse(&env_value).context(UnableToParseEmulatorUrlSnafu {
+                env_name,
+                env_value,
+            })?
+        }
         Err(_) => Url::parse(default_url).expect("Failed to parse default URL"),
     };
     Ok(url)
@@ -554,12 +556,14 @@ pub fn new_azure(
         // Allow overriding defaults. Values taken from
         // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
         let http_client = azure_core::new_http_client();
-        let blob_storage_url = url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
+        let blob_storage_url =
+            url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
         let queue_storage_url =
             url_from_env("AZURITE_QUEUE_STORAGE_URL", "http://127.0.0.1:10001")?;
         let table_storage_url =
             url_from_env("AZURITE_TABLE_STORAGE_URL", "http://127.0.0.1:10002")?;
-        let filesystem_url = url_from_env("AZURITE_TABLE_STORAGE_URL", "http://127.0.0.1:10004")?;
+        let filesystem_url =
+            url_from_env("AZURITE_TABLE_STORAGE_URL", "http://127.0.0.1:10004")?;
 
         let storage_client = StorageAccountClient::new_emulator(
             http_client,
@@ -588,8 +592,6 @@ pub fn new_azure(
         // make url ending consistent between the emulator and remote storage account
         .trim_end_matches('/')
         .to_string();
-
-    println!("AAL using remote blob base URL: {}", blob_base_url);
 
     let container_name = container_name.into();
 
