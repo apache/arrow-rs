@@ -15,24 +15,31 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[package]
-name = "parquet_derive"
-version = "19.0.0"
-license = "Apache-2.0"
-description = "Derive macros for the Rust implementation of Apache Parquet"
-homepage = "https://github.com/apache/arrow-rs"
-repository = "https://github.com/apache/arrow-rs"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-keywords = [ "parquet" ]
-readme = "README.md"
-edition = "2021"
-rust-version = "1.57"
+# Configuration documentation:
+#   https://embarkstudios.github.io/cargo-deny/index.html
 
-[lib]
-proc-macro = true
+[advisories]
+vulnerability = "deny"
+yanked = "deny"
+unmaintained = "warn"
+notice = "warn"
+ignore = [
+]
+git-fetch-with-cli = true
 
-[dependencies]
-proc-macro2 = { version = "1.0", default-features = false }
-quote = { version = "1.0", default-features = false }
-syn = { version = "1.0", default-features = false }
-parquet = { path = "../parquet", version = "19.0.0" }
+[licenses]
+default = "allow"
+unlicensed = "allow"
+copyleft = "allow"
+
+[bans]
+multiple-versions = "warn"
+deny = [
+    # We are using rustls as the TLS implementation, so we shouldn't be linking
+    # in OpenSSL too.
+    #
+    # If you're hitting this, you might want to take a look at what new
+    # dependencies you have introduced and check if there's a way to depend on
+    # rustls instead of OpenSSL (tip: check the crate's feature flags).
+    { name = "openssl-sys" }
+]

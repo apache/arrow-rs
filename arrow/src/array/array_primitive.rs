@@ -33,6 +33,7 @@ use crate::{
     util::trusted_len_unzip,
 };
 
+use crate::array::array::ArrayAccessor;
 use half::f16;
 
 /// Array whose elements are of primitive types.
@@ -185,6 +186,18 @@ impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
 
     fn into_data(self) -> ArrayData {
         self.into()
+    }
+}
+
+impl<'a, T: ArrowPrimitiveType> ArrayAccessor for &'a PrimitiveArray<T> {
+    type Item = T::Native;
+
+    fn value(&self, index: usize) -> Self::Item {
+        PrimitiveArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        PrimitiveArray::value_unchecked(self, index)
     }
 }
 

@@ -66,8 +66,8 @@ impl<T> ValuesBufferSlice for [T] {
 pub trait ColumnLevelDecoder {
     type Slice: LevelsBufferSlice + ?Sized;
 
-    /// Create a new [`ColumnLevelDecoder`]
-    fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self;
+    /// Set data for this [`ColumnLevelDecoder`]
+    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr);
 
     /// Read level data into `out[range]` returning the number of levels read
     ///
@@ -266,7 +266,18 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 
 /// An implementation of [`ColumnLevelDecoder`] for `[i16]`
 pub struct ColumnLevelDecoderImpl {
-    inner: LevelDecoderInner,
+    decoder: Option<LevelDecoderInner>,
+    bit_width: u8,
+}
+
+impl ColumnLevelDecoderImpl {
+    pub fn new(max_level: i16) -> Self {
+        let bit_width = num_required_bits(max_level as u64);
+        Self {
+            decoder: None,
+            bit_width,
+        }
+    }
 }
 
 enum LevelDecoderInner {
@@ -277,25 +288,25 @@ enum LevelDecoderInner {
 impl ColumnLevelDecoder for ColumnLevelDecoderImpl {
     type Slice = [i16];
 
-    fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self {
-        let bit_width = num_required_bits(max_level as u64);
+    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
         match encoding {
             Encoding::RLE => {
-                let mut decoder = RleDecoder::new(bit_width);
+                let mut decoder = RleDecoder::new(self.bit_width);
                 decoder.set_data(data);
-                Self {
-                    inner: LevelDecoderInner::Rle(decoder),
-                }
+                self.decoder = Some(LevelDecoderInner::Rle(decoder));
             }
-            Encoding::BIT_PACKED => Self {
-                inner: LevelDecoderInner::Packed(BitReader::new(data), bit_width),
-            },
+            Encoding::BIT_PACKED => {
+                self.decoder = Some(LevelDecoderInner::Packed(
+                    BitReader::new(data),
+                    self.bit_width,
+                ));
+            }
             _ => unreachable!("invalid level encoding: {}", encoding),
         }
     }
 
     fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
-        match &mut self.inner {
+        match self.decoder.as_mut().unwrap() {
             LevelDecoderInner::Packed(reader, bit_width) => {
                 Ok(reader.get_batch::<i16>(&mut out[range], *bit_width as usize))
             }

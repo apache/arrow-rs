@@ -42,7 +42,6 @@ pub fn make_byte_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
-    null_mask_only: bool,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -54,15 +53,13 @@ pub fn make_byte_array_reader(
 
     match data_type {
         ArrowType::Binary | ArrowType::Utf8 => {
-            let reader =
-                GenericRecordReader::new_with_options(column_desc, null_mask_only);
+            let reader = GenericRecordReader::new(column_desc);
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
             )))
         }
         ArrowType::LargeUtf8 | ArrowType::LargeBinary => {
-            let reader =
-                GenericRecordReader::new_with_options(column_desc, null_mask_only);
+            let reader = GenericRecordReader::new(column_desc);
             Ok(Box::new(ByteArrayReader::<i64>::new(
                 pages, data_type, reader,
             )))
@@ -127,15 +124,11 @@ impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_levels_buffer
-            .as_ref()
-            .map(|buf| buf.typed_data())
+        self.def_levels_buffer.as_ref().map(|buf| buf.typed_data())
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_levels_buffer
-            .as_ref()
-            .map(|buf| buf.typed_data())
+        self.rep_levels_buffer.as_ref().map(|buf| buf.typed_data())
     }
 }
 
@@ -388,11 +381,8 @@ impl ByteArrayDecoderPlain {
         Ok(to_read)
     }
 
-    pub fn skip(
-        &mut self,
-        to_skip: usize,
-    ) -> Result<usize> {
-        let to_skip = to_skip.min( self.max_remaining_values);
+    pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
+        let to_skip = to_skip.min(self.max_remaining_values);
         let mut skip = 0;
         let buf = self.buf.as_ref();
 
@@ -478,10 +468,7 @@ impl ByteArrayDecoderDeltaLength {
         Ok(to_read)
     }
 
-    fn skip(
-        &mut self,
-        to_skip: usize,
-    ) -> Result<usize> {
+    fn skip(&mut self, to_skip: usize) -> Result<usize> {
         let remain_values = self.lengths.len() - self.length_offset;
         let to_skip = remain_values.min(to_skip);
 
@@ -583,10 +570,7 @@ impl ByteArrayDecoderDelta {
         Ok(to_read)
     }
 
-    fn skip(
-        &mut self,
-        to_skip: usize,
-    ) -> Result<usize> {
+    fn skip(&mut self, to_skip: usize) -> Result<usize> {
         let to_skip = to_skip.min(self.prefix_lengths.len() - self.length_offset);
 
         let length_range = self.length_offset..self.length_offset + to_skip;
@@ -704,8 +688,8 @@ impl ByteArrayDecoderDictionary {
                 self.index_offset = 0;
             }
 
-            let skip = (to_skip - values_skip)
-                .min(self.index_buf_len - self.index_offset);
+            let skip =
+                (to_skip - values_skip).min(self.index_buf_len - self.index_offset);
 
             self.index_offset += skip;
             self.max_remaining_values -= skip;
@@ -816,14 +800,7 @@ mod tests {
 
             assert_eq!(
                 strings.iter().collect::<Vec<_>>(),
-                vec![
-                    None,
-                    None,
-                    Some("hello"),
-                    Some("b"),
-                    None,
-                    None,
-                ]
+                vec![None, None, Some("hello"), Some("b"), None, None,]
             );
         }
     }
