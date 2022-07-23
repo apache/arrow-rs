@@ -275,7 +275,7 @@ mod tests {
 
     macro_rules! assert_bounds {
         ($d:expr, $lower:expr) => {
-            assert_bounds!($d, $lower, $lower + 1);
+            assert_bounds!($d, $lower, $lower + 2);
         };
         ($d:expr, $lower:expr, $upper:expr) => {
             let d = $d;
@@ -430,6 +430,7 @@ mod tests {
         path
     }
 
+    #[allow(dead_code)]
     async fn place_test_objects(
         store: &ThrottledStore<InMemory>,
         n_entries: usize,
@@ -472,6 +473,7 @@ mod tests {
         t0.elapsed()
     }
 
+    #[allow(dead_code)]
     async fn measure_get(
         store: &ThrottledStore<InMemory>,
         n_bytes: Option<usize>,
@@ -498,6 +500,7 @@ mod tests {
         t0.elapsed()
     }
 
+    #[allow(dead_code)]
     async fn measure_list(
         store: &ThrottledStore<InMemory>,
         n_entries: usize,
@@ -516,6 +519,7 @@ mod tests {
         t0.elapsed()
     }
 
+    #[allow(dead_code)]
     async fn measure_list_with_delimiter(
         store: &ThrottledStore<InMemory>,
         n_entries: usize,
