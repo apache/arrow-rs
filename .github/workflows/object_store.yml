@@ -26,22 +26,6 @@ on:
       - .github/**
 
 jobs:
-  # This job functions as "proof of life" that things are working --no need to port
-  lint:
-    name: Lint (cargo fmt)
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v2
-      - name: Setup toolchain
-        run: |
-          rustup toolchain install stable
-          rustup default stable
-          rustup component add rustfmt
-      - name: Run
-        run: cargo fmt --all -- --check
-
   # test the crate
   linux-test:
     name: Emulator Tests
