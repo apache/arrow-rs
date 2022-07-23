@@ -38,7 +38,6 @@ use futures::{
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::{convert::TryInto, sync::Arc};
-use tokio::io::AsyncWrite;
 use url::Url;
 
 /// A specialized `Error` for Azure object store-related errors

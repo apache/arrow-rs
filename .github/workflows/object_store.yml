@@ -26,6 +26,22 @@ on:
       - .github/**
 
 jobs:
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup Rust toolchain with clippy
+        run: |
+          rustup toolchain install stable
+          rustup default stable
+          rustup component add clippy
+      - name: Run clippy
+        run: |
+          cargo clippy -p object_store --all-features
+
   # test the crate
   linux-test:
     name: Emulator Tests
