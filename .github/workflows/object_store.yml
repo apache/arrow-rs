@@ -23,7 +23,7 @@ on:
     paths:
       # Only run when object store files or github workflows change
       - object_store/**
-      -.github/**
+      - .github/**
 
 jobs:
   # This job functions as "proof of life" that things are working --no need to port
