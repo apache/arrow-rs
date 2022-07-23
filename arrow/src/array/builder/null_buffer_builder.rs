@@ -44,6 +44,7 @@ impl NullBufferBuilder {
     }
 
     /// Appends `n` `true`s into the builder.
+    #[inline]
     pub fn append_n_true(&mut self, n: usize) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_n(n, true)
@@ -63,6 +64,7 @@ impl NullBufferBuilder {
     }
 
     /// Appends `n` `false`s into the builder.
+    #[inline]
     pub fn append_n_false(&mut self, n: usize) {
         self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append_n(n, false);
