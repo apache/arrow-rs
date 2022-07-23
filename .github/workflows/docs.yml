@@ -34,6 +34,7 @@ jobs:
         rust: [ nightly ]
     container:
       image: ${{ matrix.arch }}/rust
+      env:
         RUSTDOCFLAGS: "-Dwarnings"
     steps:
       - uses: actions/checkout@v2
