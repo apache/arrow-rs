@@ -38,6 +38,7 @@ use futures::{
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::{convert::TryInto, sync::Arc};
+use url::Url;
 
 /// A specialized `Error` for Azure object store-related errors
 #[derive(Debug, Snafu)]
@@ -158,6 +159,18 @@ enum Error {
         "Azurite (azure emulator) support not compiled in, please add `azure_test` feature"
     ))]
     NoEmulatorFeature,
+
+    #[snafu(display(
+        "Unable parse emulator url {}={}, Error: {}",
+        env_name,
+        env_value,
+        source
+    ))]
+    UnableToParseEmulatorUrl {
+        env_name: String,
+        env_value: String,
+        source: url::ParseError,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -507,6 +520,21 @@ fn check_if_emulator_works() -> Result<()> {
     Err(Error::NoEmulatorFeature.into())
 }
 
+/// Parses the contents of the environment variable `env_name` as a URL
+/// if present, otherwise falls back to default_url
+fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
+    let url = match std::env::var(env_name) {
+        Ok(env_value) => {
+            Url::parse(&env_value).context(UnableToParseEmulatorUrlSnafu {
+                env_name,
+                env_value,
+            })?
+        }
+        Err(_) => Url::parse(default_url).expect("Failed to parse default URL"),
+    };
+    Ok(url)
+}
+
 /// Configure a connection to container with given name on Microsoft Azure
 /// Blob store.
 ///
@@ -524,7 +552,27 @@ pub fn new_azure(
 
     let (is_emulator, storage_account_client) = if use_emulator {
         check_if_emulator_works()?;
-        (true, StorageAccountClient::new_emulator_default())
+        // Allow overriding defaults. Values taken from
+        // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
+        let http_client = azure_core::new_http_client();
+        let blob_storage_url =
+            url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
+        let queue_storage_url =
+            url_from_env("AZURITE_QUEUE_STORAGE_URL", "http://127.0.0.1:10001")?;
+        let table_storage_url =
+            url_from_env("AZURITE_TABLE_STORAGE_URL", "http://127.0.0.1:10002")?;
+        let filesystem_url =
+            url_from_env("AZURITE_TABLE_STORAGE_URL", "http://127.0.0.1:10004")?;
+
+        let storage_client = StorageAccountClient::new_emulator(
+            http_client,
+            &blob_storage_url,
+            &table_storage_url,
+            &queue_storage_url,
+            &filesystem_url,
+        );
+
+        (true, storage_client)
     } else {
         (
             false,
