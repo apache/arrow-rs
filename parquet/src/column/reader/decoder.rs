@@ -321,25 +321,38 @@ impl DefinitionLevelDecoder for ColumnLevelDecoderImpl {
         num_levels: usize,
         max_def_level: i16,
     ) -> Result<(usize, usize)> {
-        // For now only support max_def_level == 1
-        if max_def_level == 1 {
-            let mut skip = num_levels;
-            match &mut self.inner {
-                LevelDecoderInner::Packed(reader, _bit_width) => {
-                    while !reader.skip_value(skip) {
-                        skip /= 2;
+        let mut level_skip = 0;
+        let mut value_skip = 0;
+        match self.decoder.as_mut().unwrap() {
+            LevelDecoderInner::Packed(reader, bit_width) => {
+                for _ in 0..num_levels {
+                    // Values are delimited by max_def_level
+                    if max_def_level
+                        == reader
+                            .get_value::<i16>(*bit_width as usize)
+                            .expect("Not enough values in Packed ColumnLevelDecoderImpl.")
+                    {
+                        value_skip += 1;
                     }
-                }
-                LevelDecoderInner::Rle(reader) => {
-                    skip = reader.skip(skip).unwrap();
+                    level_skip += 1;
                 }
             }
-            Ok((skip, skip))
-        } else {
-            Err(nyi_err!(
-                "For now only support skip when max_def_level == 1 && max_rep_level == 0"
-            ))
+            LevelDecoderInner::Rle(reader) => {
+                for _ in 0..num_levels {
+                    if let Some(level) = reader
+                        .get::<i16>()
+                        .expect("Not enough values in Rle ColumnLevelDecoderImpl.")
+                    {
+                        // Values are delimited by max_def_level
+                        if level == max_def_level {
+                            value_skip += 1;
+                        }
+                    }
+                    level_skip += 1;
+                }
+            }
         }
+        Ok((value_skip, level_skip))
     }
 }
 
