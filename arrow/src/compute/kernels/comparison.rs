@@ -24,8 +24,7 @@
 //!
 
 use crate::array::*;
-use crate::buffer::{bitwise_bin_op_helper, buffer_unary_not, Buffer, MutableBuffer};
-use crate::compute::binary_boolean_kernel;
+use crate::buffer::{buffer_unary_not, Buffer, MutableBuffer};
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
     ArrowNativeType, ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type,
@@ -40,168 +39,72 @@ use regex::{escape, Regex};
 use std::any::type_name;
 use std::collections::HashMap;
 
-/// Helper function to perform boolean lambda function on values from two arrays, this
+/// Helper function to perform boolean lambda function on values from two array accessors, this
 /// version does not attempt to use SIMD.
-macro_rules! compare_op {
-    ($left: expr, $right:expr, $op:expr) => {{
-        if $left.len() != $right.len() {
-            return Err(ArrowError::ComputeError(
-                "Cannot perform comparison operation on arrays of different length"
-                    .to_string(),
-            ));
-        }
+fn compare_op<T: ArrayAccessor, F>(left: T, right: T, op: F) -> Result<BooleanArray>
+where
+    F: Fn(T::Item, T::Item) -> bool,
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(
+            "Cannot perform comparison operation on arrays of different length"
+                .to_string(),
+        ));
+    }
 
-        let null_bit_buffer =
-            combine_option_bitmap(&[$left.data_ref(), $right.data_ref()], $left.len())?;
+    let null_bit_buffer =
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
 
-        // Safety:
-        // `i < $left.len()` and $left.len() == $right.len()
-        let comparison = (0..$left.len())
-            .map(|i| unsafe { $op($left.value_unchecked(i), $right.value_unchecked(i)) });
-        // same size as $left.len() and $right.len()
-        let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
+    // Safety:
+    // `i < $left.len()` and $left.len() == $right.len()
+    let comparison = (0..left.len())
+        .map(|i| unsafe { op(left.value_unchecked(i), right.value_unchecked(i)) });
+    // same size as $left.len() and $right.len()
+    let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
 
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                $left.len(),
-                None,
-                null_bit_buffer,
-                0,
-                vec![Buffer::from(buffer)],
-                vec![],
-            )
-        };
-        Ok(BooleanArray::from(data))
-    }};
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![Buffer::from(buffer)],
+            vec![],
+        )
+    };
+    Ok(BooleanArray::from(data))
 }
 
-macro_rules! compare_op_primitive {
-    ($left: expr, $right:expr, $op:expr) => {{
-        if $left.len() != $right.len() {
-            return Err(ArrowError::ComputeError(
-                "Cannot perform comparison operation on arrays of different length"
-                    .to_string(),
-            ));
-        }
+/// Helper function to perform boolean lambda function on values from array accessor, this
+/// version does not attempt to use SIMD.
+fn compare_op_scalar<T: ArrayAccessor, F>(left: T, op: F) -> Result<BooleanArray>
+where
+    F: Fn(T::Item) -> bool,
+{
+    let null_bit_buffer = left
+        .data()
+        .null_buffer()
+        .map(|b| b.bit_slice(left.offset(), left.len()));
 
-        let null_bit_buffer =
-            combine_option_bitmap(&[$left.data_ref(), $right.data_ref()], $left.len())?;
+    // Safety:
+    // `i < $left.len()`
+    let comparison = (0..left.len()).map(|i| unsafe { op(left.value_unchecked(i)) });
+    // same as $left.len()
+    let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
 
-        let mut values = MutableBuffer::from_len_zeroed(($left.len() + 7) / 8);
-        let lhs_chunks_iter = $left.values().chunks_exact(8);
-        let lhs_remainder = lhs_chunks_iter.remainder();
-        let rhs_chunks_iter = $right.values().chunks_exact(8);
-        let rhs_remainder = rhs_chunks_iter.remainder();
-        let chunks = $left.len() / 8;
-
-        values[..chunks]
-            .iter_mut()
-            .zip(lhs_chunks_iter)
-            .zip(rhs_chunks_iter)
-            .for_each(|((byte, lhs), rhs)| {
-                lhs.iter()
-                    .zip(rhs.iter())
-                    .enumerate()
-                    .for_each(|(i, (&lhs, &rhs))| {
-                        *byte |= if $op(lhs, rhs) { 1 << i } else { 0 };
-                    });
-            });
-
-        if !lhs_remainder.is_empty() {
-            let last = &mut values[chunks];
-            lhs_remainder
-                .iter()
-                .zip(rhs_remainder.iter())
-                .enumerate()
-                .for_each(|(i, (&lhs, &rhs))| {
-                    *last |= if $op(lhs, rhs) { 1 << i } else { 0 };
-                });
-        };
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                $left.len(),
-                None,
-                null_bit_buffer,
-                0,
-                vec![Buffer::from(values)],
-                vec![],
-            )
-        };
-        Ok(BooleanArray::from(data))
-    }};
-}
-
-macro_rules! compare_op_scalar {
-    ($left:expr, $op:expr) => {{
-        let null_bit_buffer = $left
-            .data()
-            .null_buffer()
-            .map(|b| b.bit_slice($left.offset(), $left.len()));
-
-        // Safety:
-        // `i < $left.len()`
-        let comparison =
-            (0..$left.len()).map(|i| unsafe { $op($left.value_unchecked(i)) });
-        // same as $left.len()
-        let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                $left.len(),
-                None,
-                null_bit_buffer,
-                0,
-                vec![Buffer::from(buffer)],
-                vec![],
-            )
-        };
-        Ok(BooleanArray::from(data))
-    }};
-}
-
-macro_rules! compare_op_scalar_primitive {
-    ($left: expr, $right:expr, $op:expr) => {{
-        let null_bit_buffer = $left
-            .data()
-            .null_buffer()
-            .map(|b| b.bit_slice($left.offset(), $left.len()));
-
-        let mut values = MutableBuffer::from_len_zeroed(($left.len() + 7) / 8);
-        let lhs_chunks_iter = $left.values().chunks_exact(8);
-        let lhs_remainder = lhs_chunks_iter.remainder();
-        let chunks = $left.len() / 8;
-
-        values[..chunks]
-            .iter_mut()
-            .zip(lhs_chunks_iter)
-            .for_each(|(byte, chunk)| {
-                chunk.iter().enumerate().for_each(|(i, &c_i)| {
-                    *byte |= if $op(c_i, $right) { 1 << i } else { 0 };
-                });
-            });
-        if !lhs_remainder.is_empty() {
-            let last = &mut values[chunks];
-            lhs_remainder.iter().enumerate().for_each(|(i, &lhs)| {
-                *last |= if $op(lhs, $right) { 1 << i } else { 0 };
-            });
-        };
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                $left.len(),
-                None,
-                null_bit_buffer,
-                0,
-                vec![Buffer::from(values)],
-                vec![],
-            )
-        };
-        Ok(BooleanArray::from(data))
-    }};
+    let data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::Boolean,
+            left.len(),
+            None,
+            null_bit_buffer,
+            0,
+            vec![Buffer::from(buffer)],
+            vec![],
+        )
+    };
+    Ok(BooleanArray::from(data))
 }
 
 /// Evaluate `op(left, right)` for [`PrimitiveArray`]s using a specified
@@ -215,7 +118,7 @@ where
     T: ArrowNumericType,
     F: Fn(T::Native, T::Native) -> bool,
 {
-    compare_op_primitive!(left, right, op)
+    compare_op(left, right, op)
 }
 
 /// Evaluate `op(left, right)` for [`PrimitiveArray`] and scalar using
@@ -229,7 +132,7 @@ where
     T: ArrowNumericType,
     F: Fn(T::Native, T::Native) -> bool,
 {
-    compare_op_scalar_primitive!(left, right, op)
+    compare_op_scalar(left, |l| op(l, right))
 }
 
 fn is_like_pattern(c: char) -> bool {
@@ -769,7 +672,7 @@ pub fn eq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a == b)
+    compare_op(left, right, |a, b| a == b)
 }
 
 /// Perform `left == right` operation on [`StringArray`] / [`LargeStringArray`] and a scalar.
@@ -777,66 +680,37 @@ pub fn eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a == right)
-}
-
-#[inline]
-fn binary_boolean_op<F>(
-    left: &BooleanArray,
-    right: &BooleanArray,
-    op: F,
-) -> Result<BooleanArray>
-where
-    F: Copy + Fn(u64, u64) -> u64,
-{
-    binary_boolean_kernel(
-        left,
-        right,
-        |left: &Buffer,
-         left_offset_in_bits: usize,
-         right: &Buffer,
-         right_offset_in_bits: usize,
-         len_in_bits: usize| {
-            bitwise_bin_op_helper(
-                left,
-                left_offset_in_bits,
-                right,
-                right_offset_in_bits,
-                len_in_bits,
-                op,
-            )
-        },
-    )
+    compare_op_scalar(left, |a| a == right)
 }
 
 /// Perform `left == right` operation on [`BooleanArray`]
 pub fn eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
-    binary_boolean_op(left, right, |a, b| !(a ^ b))
+    compare_op(left, right, |a, b| !(a ^ b))
 }
 
 /// Perform `left != right` operation on [`BooleanArray`]
 pub fn neq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
-    binary_boolean_op(left, right, |a, b| (a ^ b))
+    compare_op(left, right, |a, b| (a ^ b))
 }
 
 /// Perform `left < right` operation on [`BooleanArray`]
 pub fn lt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
-    binary_boolean_op(left, right, |a, b| ((!a) & b))
+    compare_op(left, right, |a, b| ((!a) & b))
 }
 
 /// Perform `left <= right` operation on [`BooleanArray`]
 pub fn lt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
-    binary_boolean_op(left, right, |a, b| !(a & (!b)))
+    compare_op(left, right, |a, b| !(a & (!b)))
 }
 
 /// Perform `left > right` operation on [`BooleanArray`]
 pub fn gt_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
-    binary_boolean_op(left, right, |a, b| (a & (!b)))
+    compare_op(left, right, |a, b| (a & (!b)))
 }
 
 /// Perform `left >= right` operation on [`BooleanArray`]
 pub fn gt_eq_bool(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray> {
-    binary_boolean_op(left, right, |a, b| !((!a) & b))
+    compare_op(left, right, |a, b| !((!a) & b))
 }
 
 /// Perform `left == right` operation on [`BooleanArray`] and a scalar
@@ -870,22 +744,22 @@ pub fn eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> 
 
 /// Perform `left < right` operation on [`BooleanArray`] and a scalar
 pub fn lt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a: bool| !a & right)
+    compare_op_scalar(left, |a: bool| !a & right)
 }
 
 /// Perform `left <= right` operation on [`BooleanArray`] and a scalar
 pub fn lt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a <= right)
+    compare_op_scalar(left, |a| a <= right)
 }
 
 /// Perform `left > right` operation on [`BooleanArray`] and a scalar
 pub fn gt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a: bool| a & !right)
+    compare_op_scalar(left, |a: bool| a & !right)
 }
 
 /// Perform `left >= right` operation on [`BooleanArray`] and a scalar
 pub fn gt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a >= right)
+    compare_op_scalar(left, |a| a >= right)
 }
 
 /// Perform `left != right` operation on [`BooleanArray`] and a scalar
@@ -898,7 +772,7 @@ pub fn eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a == b)
+    compare_op(left, right, |a, b| a == b)
 }
 
 /// Perform `left == right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar
@@ -906,7 +780,7 @@ pub fn eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a == right)
+    compare_op_scalar(left, |a| a == right)
 }
 
 /// Perform `left != right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
@@ -914,7 +788,7 @@ pub fn neq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a != b)
+    compare_op(left, right, |a, b| a != b)
 }
 
 /// Perform `left != right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
@@ -922,7 +796,7 @@ pub fn neq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a != right)
+    compare_op_scalar(left, |a| a != right)
 }
 
 /// Perform `left < right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
@@ -930,7 +804,7 @@ pub fn lt_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a < b)
+    compare_op(left, right, |a, b| a < b)
 }
 
 /// Perform `left < right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
@@ -938,7 +812,7 @@ pub fn lt_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a < right)
+    compare_op_scalar(left, |a| a < right)
 }
 
 /// Perform `left <= right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
@@ -946,7 +820,7 @@ pub fn lt_eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a <= b)
+    compare_op(left, right, |a, b| a <= b)
 }
 
 /// Perform `left <= right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
@@ -954,7 +828,7 @@ pub fn lt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a <= right)
+    compare_op_scalar(left, |a| a <= right)
 }
 
 /// Perform `left > right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
@@ -962,7 +836,7 @@ pub fn gt_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a > b)
+    compare_op(left, right, |a, b| a > b)
 }
 
 /// Perform `left > right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
@@ -970,7 +844,7 @@ pub fn gt_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a > right)
+    compare_op_scalar(left, |a| a > right)
 }
 
 /// Perform `left >= right` operation on [`BinaryArray`] / [`LargeBinaryArray`].
@@ -978,7 +852,7 @@ pub fn gt_eq_binary<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &GenericBinaryArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a >= b)
+    compare_op(left, right, |a, b| a >= b)
 }
 
 /// Perform `left >= right` operation on [`BinaryArray`] / [`LargeBinaryArray`] and a scalar.
@@ -986,7 +860,7 @@ pub fn gt_eq_binary_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericBinaryArray<OffsetSize>,
     right: &[u8],
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a >= right)
+    compare_op_scalar(left, |a| a >= right)
 }
 
 /// Perform `left != right` operation on [`StringArray`] / [`LargeStringArray`].
@@ -994,7 +868,7 @@ pub fn neq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a != b)
+    compare_op(left, right, |a, b| a != b)
 }
 
 /// Perform `left != right` operation on [`StringArray`] / [`LargeStringArray`] and a scalar.
@@ -1002,7 +876,7 @@ pub fn neq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a != right)
+    compare_op_scalar(left, |a| a != right)
 }
 
 /// Perform `left < right` operation on [`StringArray`] / [`LargeStringArray`].
@@ -1010,7 +884,7 @@ pub fn lt_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a < b)
+    compare_op(left, right, |a, b| a < b)
 }
 
 /// Perform `left < right` operation on [`StringArray`] / [`LargeStringArray`] and a scalar.
@@ -1018,7 +892,7 @@ pub fn lt_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a < right)
+    compare_op_scalar(left, |a| a < right)
 }
 
 /// Perform `left <= right` operation on [`StringArray`] / [`LargeStringArray`].
@@ -1026,7 +900,7 @@ pub fn lt_eq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a <= b)
+    compare_op(left, right, |a, b| a <= b)
 }
 
 /// Perform `left <= right` operation on [`StringArray`] / [`LargeStringArray`] and a scalar.
@@ -1034,7 +908,7 @@ pub fn lt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a <= right)
+    compare_op_scalar(left, |a| a <= right)
 }
 
 /// Perform `left > right` operation on [`StringArray`] / [`LargeStringArray`].
@@ -1042,7 +916,7 @@ pub fn gt_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a > b)
+    compare_op(left, right, |a, b| a > b)
 }
 
 /// Perform `left > right` operation on [`StringArray`] / [`LargeStringArray`] and a scalar.
@@ -1050,7 +924,7 @@ pub fn gt_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a > right)
+    compare_op_scalar(left, |a| a > right)
 }
 
 /// Perform `left >= right` operation on [`StringArray`] / [`LargeStringArray`].
@@ -1058,7 +932,7 @@ pub fn gt_eq_utf8<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
-    compare_op!(left, right, |a, b| a >= b)
+    compare_op(left, right, |a, b| a >= b)
 }
 
 /// Perform `left >= right` operation on [`StringArray`] / [`LargeStringArray`] and a scalar.
@@ -1066,7 +940,7 @@ pub fn gt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     left: &GenericStringArray<OffsetSize>,
     right: &str,
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(left, |a| a >= right)
+    compare_op_scalar(left, |a| a >= right)
 }
 
 /// Calls $RIGHT.$TY() (e.g. `right.to_i128()`) with a nice error message.
@@ -1964,6 +1838,195 @@ macro_rules! typed_cmp {
     }};
 }
 
+fn eq_typed_compares(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
+    match (left.data_type(), left.data_type()) {
+        (DataType::Boolean, DataType::Boolean) => compare_op(
+            left.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            right.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            |a, b| !(a ^ b),
+        ),
+        (DataType::Int8, DataType::Int8) => compare_op(
+            left.as_any().downcast_ref::<Int8Array>().unwrap(),
+            right.as_any().downcast_ref::<Int8Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::Int16, DataType::Int16) => compare_op(
+            left.as_any().downcast_ref::<Int16Array>().unwrap(),
+            right.as_any().downcast_ref::<Int16Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::Int32, DataType::Int32) => compare_op(
+            left.as_any().downcast_ref::<Int32Array>().unwrap(),
+            right.as_any().downcast_ref::<Int32Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::Int64, DataType::Int64) => compare_op(
+            left.as_any().downcast_ref::<Int64Array>().unwrap(),
+            right.as_any().downcast_ref::<Int64Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::UInt8, DataType::UInt8) => compare_op(
+            left.as_any().downcast_ref::<UInt8Array>().unwrap(),
+            right.as_any().downcast_ref::<UInt8Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::UInt16, DataType::UInt16) => compare_op(
+            left.as_any().downcast_ref::<UInt16Array>().unwrap(),
+            right.as_any().downcast_ref::<UInt16Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::UInt32, DataType::UInt32) => compare_op(
+            left.as_any().downcast_ref::<UInt32Array>().unwrap(),
+            right.as_any().downcast_ref::<UInt32Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::UInt64, DataType::UInt64) => compare_op(
+            left.as_any().downcast_ref::<UInt64Array>().unwrap(),
+            right.as_any().downcast_ref::<UInt64Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::Float32, DataType::Float32) => compare_op(
+            left.as_any().downcast_ref::<Float32Array>().unwrap(),
+            right.as_any().downcast_ref::<Float32Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::Float64, DataType::Float64) => compare_op(
+            left.as_any().downcast_ref::<Float64Array>().unwrap(),
+            right.as_any().downcast_ref::<Float64Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::Utf8, DataType::Utf8) => compare_op(
+            left.as_any().downcast_ref::<StringArray>().unwrap(),
+            right.as_any().downcast_ref::<StringArray>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::LargeUtf8, DataType::LargeUtf8) => compare_op(
+            left.as_any().downcast_ref::<LargeStringArray>().unwrap(),
+            right.as_any().downcast_ref::<LargeStringArray>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::Binary, DataType::Binary) => compare_op(
+            left.as_any().downcast_ref::<BinaryArray>().unwrap(),
+            right.as_any().downcast_ref::<BinaryArray>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::LargeBinary, DataType::LargeBinary) => compare_op(
+            left.as_any().downcast_ref::<LargeBinaryArray>().unwrap(),
+            right.as_any().downcast_ref::<LargeBinaryArray>().unwrap(),
+            |a, b| a == b,
+        ),
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, _),
+            DataType::Timestamp(TimeUnit::Nanosecond, _),
+        ) => compare_op(
+            left.as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .unwrap(),
+            right
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .unwrap(),
+            |a, b| a == b,
+        ),
+        (
+            DataType::Timestamp(TimeUnit::Microsecond, _),
+            DataType::Timestamp(TimeUnit::Microsecond, _),
+        ) => compare_op(
+            left.as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap(),
+            right
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap(),
+            |a, b| a == b,
+        ),
+        (
+            DataType::Timestamp(TimeUnit::Millisecond, _),
+            DataType::Timestamp(TimeUnit::Millisecond, _),
+        ) => compare_op(
+            left.as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .unwrap(),
+            right
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .unwrap(),
+            |a, b| a == b,
+        ),
+        (
+            DataType::Timestamp(TimeUnit::Second, _),
+            DataType::Timestamp(TimeUnit::Second, _),
+        ) => compare_op(
+            left.as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .unwrap(),
+            right
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::Date32, DataType::Date32) => compare_op(
+            left.as_any().downcast_ref::<Date32Array>().unwrap(),
+            right.as_any().downcast_ref::<Date32Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (DataType::Date64, DataType::Date64) => compare_op(
+            left.as_any().downcast_ref::<Date64Array>().unwrap(),
+            right.as_any().downcast_ref::<Date64Array>().unwrap(),
+            |a, b| a == b,
+        ),
+        (
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Interval(IntervalUnit::YearMonth),
+        ) => compare_op(
+            left.as_any()
+                .downcast_ref::<IntervalYearMonthArray>()
+                .unwrap(),
+            right
+                .as_any()
+                .downcast_ref::<IntervalYearMonthArray>()
+                .unwrap(),
+            |a, b| a == b,
+        ),
+        (
+            DataType::Interval(IntervalUnit::DayTime),
+            DataType::Interval(IntervalUnit::DayTime),
+        ) => compare_op(
+            left.as_any()
+                .downcast_ref::<IntervalDayTimeArray>()
+                .unwrap(),
+            right
+                .as_any()
+                .downcast_ref::<IntervalDayTimeArray>()
+                .unwrap(),
+            |a, b| a == b,
+        ),
+        (
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            DataType::Interval(IntervalUnit::MonthDayNano),
+        ) => compare_op(
+            left.as_any()
+                .downcast_ref::<IntervalMonthDayNanoArray>()
+                .unwrap(),
+            right
+                .as_any()
+                .downcast_ref::<IntervalMonthDayNanoArray>()
+                .unwrap(),
+            |a, b| a == b,
+        ),
+        (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
+            "Comparing arrays of type {} is not yet implemented",
+            t1
+        ))),
+        (t1, t2) => Err(ArrowError::CastError(format!(
+            "Cannot compare two arrays of different types ({} and {})",
+            t1, t2
+        ))),
+    }
+}
+
 macro_rules! typed_compares {
     ($LEFT: expr, $RIGHT: expr, $OP_BOOL: ident, $OP_PRIM: ident, $OP_STR: ident, $OP_BINARY: ident) => {{
         match ($LEFT.data_type(), $RIGHT.data_type()) {
@@ -2410,7 +2473,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a == b, |a, b| a == b)
         }
-        _ => typed_compares!(left, right, eq_bool, eq, eq_utf8, eq_binary),
+        _ => eq_typed_compares(left, right),
     }
 }
 
@@ -2543,7 +2606,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::eq, |a, b| a == b);
     #[cfg(not(feature = "simd"))]
-    return compare_op!(left, right, |a, b| a == b);
+    return compare_op(left, right, |a, b| a == b);
 }
 
 /// Perform `left == right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -2554,7 +2617,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::eq, |a, b| a == b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar!(left, |a| a == right);
+    return compare_op_scalar(left, |a| a == right);
 }
 
 /// Applies an unary and infallible comparison function to a primitive array.
@@ -2563,7 +2626,7 @@ where
     T: ArrowNumericType,
     F: Fn(T::Native) -> bool,
 {
-    return compare_op_scalar!(left, op);
+    return compare_op_scalar(left, op);
 }
 
 /// Perform `left != right` operation on two [`PrimitiveArray`]s.
@@ -2574,7 +2637,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::ne, |a, b| a != b);
     #[cfg(not(feature = "simd"))]
-    return compare_op!(left, right, |a, b| a != b);
+    return compare_op(left, right, |a, b| a != b);
 }
 
 /// Perform `left != right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -2585,7 +2648,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::ne, |a, b| a != b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar!(left, |a| a != right);
+    return compare_op_scalar(left, |a| a != right);
 }
 
 /// Perform `left < right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
@@ -2597,7 +2660,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::lt, |a, b| a < b);
     #[cfg(not(feature = "simd"))]
-    return compare_op!(left, right, |a, b| a < b);
+    return compare_op(left, right, |a, b| a < b);
 }
 
 /// Perform `left < right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -2609,7 +2672,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::lt, |a, b| a < b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar!(left, |a| a < right);
+    return compare_op_scalar(left, |a| a < right);
 }
 
 /// Perform `left <= right` operation on two [`PrimitiveArray`]s. Null values are less than non-null
@@ -2624,7 +2687,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::le, |a, b| a <= b);
     #[cfg(not(feature = "simd"))]
-    return compare_op!(left, right, |a, b| a <= b);
+    return compare_op(left, right, |a, b| a <= b);
 }
 
 /// Perform `left <= right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -2636,7 +2699,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::le, |a, b| a <= b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar!(left, |a| a <= right);
+    return compare_op_scalar(left, |a| a <= right);
 }
 
 /// Perform `left > right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
@@ -2648,7 +2711,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::gt, |a, b| a > b);
     #[cfg(not(feature = "simd"))]
-    return compare_op!(left, right, |a, b| a > b);
+    return compare_op(left, right, |a, b| a > b);
 }
 
 /// Perform `left > right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -2660,7 +2723,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::gt, |a, b| a > b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar!(left, |a| a > right);
+    return compare_op_scalar(left, |a| a > right);
 }
 
 /// Perform `left >= right` operation on two [`PrimitiveArray`]s. Non-null values are greater than null
@@ -2675,7 +2738,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op(left, right, T::ge, |a, b| a >= b);
     #[cfg(not(feature = "simd"))]
-    return compare_op!(left, right, |a, b| a >= b);
+    return compare_op(left, right, |a, b| a >= b);
 }
 
 /// Perform `left >= right` operation on a [`PrimitiveArray`] and a scalar value.
@@ -2687,7 +2750,7 @@ where
     #[cfg(feature = "simd")]
     return simd_compare_op_scalar(left, right, T::ge, |a, b| a >= b);
     #[cfg(not(feature = "simd"))]
-    return compare_op_scalar!(left, |a| a >= right);
+    return compare_op_scalar(left, |a| a >= right);
 }
 
 /// Checks if a [`GenericListArray`] contains a value in the [`PrimitiveArray`]
