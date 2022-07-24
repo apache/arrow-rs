@@ -314,8 +314,6 @@ mod tests {
     }
 
     #[tokio::test]
-    // macos github runner is so slow it can't complete within WAIT_TIME*2
-    #[cfg(target_os = "linux")]
     async fn get_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
@@ -343,8 +341,6 @@ mod tests {
     }
 
     #[tokio::test]
-    // macos github runner is so slow it can't complete within WAIT_TIME*2
-    #[cfg(target_os = "linux")]
     async fn list_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
@@ -370,8 +366,6 @@ mod tests {
     }
 
     #[tokio::test]
-    // macos github runner is so slow it can't complete within WAIT_TIME*2
-    #[cfg(target_os = "linux")]
     async fn list_with_delimiter_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
