@@ -254,9 +254,7 @@ struct PackedDecoder {
 
 impl PackedDecoder {
     fn next_rle_block(&mut self) -> Result<()> {
-        let indicator_value = self
-            .decode_header()
-            .expect("decode_header fail in PackedDecoder");
+        let indicator_value = self.decode_header()?;
         if indicator_value & 1 == 1 {
             let len = (indicator_value >> 1) as usize;
             self.packed_count = len * 8;
