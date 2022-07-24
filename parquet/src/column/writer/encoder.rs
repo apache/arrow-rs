@@ -39,7 +39,11 @@ pub trait ColumnValues {
     /// Returns the min and max values in this collection, skipping any NaN values
     ///
     /// Returns `None` if no values found
-    fn min_max(&self, descr: &ColumnDescriptor) -> Option<(&Self::T, &Self::T)>;
+    fn min_max<'a>(
+        &'a self,
+        descr: &ColumnDescriptor,
+        value_indices: Option<&[usize]>,
+    ) -> Option<(&'a Self::T, &'a Self::T)>;
 }
 
 /// The encoded data for a dictionary page
@@ -76,6 +80,9 @@ pub trait ColumnValueEncoder {
 
     /// Write the corresponding values to this [`ColumnValueEncoder`]
     fn write(&mut self, values: &Self::Values, offset: usize, len: usize) -> Result<()>;
+
+    /// Write the corresponding values to this [`ColumnValueEncoder`]
+    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
 
     /// Returns the number of buffered values
     fn num_values(&self) -> usize;
@@ -148,7 +155,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             )
         })?;
 
-        if let Some((min, max)) = slice.min_max(&self.descr) {
+        if let Some((min, max)) = slice.min_max(&self.descr, None) {
             update_min(&self.descr, min, &mut self.min_value);
             update_max(&self.descr, max, &mut self.max_value);
         }
@@ -156,6 +163,20 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
         match &mut self.dict_encoder {
             Some(encoder) => encoder.put(slice),
             _ => self.encoder.put(slice),
+        }
+    }
+
+    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
+        self.num_values += indices.len();
+
+        if let Some((min, max)) = values.min_max(&self.descr, Some(indices)) {
+            update_min(&self.descr, min, &mut self.min_value);
+            update_max(&self.descr, max, &mut self.max_value);
+        }
+
+        match &mut self.dict_encoder {
+            Some(encoder) => encoder.put_gather(values, indices),
+            _ => self.encoder.put_gather(values, indices),
         }
     }
 
@@ -222,29 +243,42 @@ impl<T: ParquetValueType> ColumnValues for [T] {
         self.len()
     }
 
-    fn min_max(&self, descr: &ColumnDescriptor) -> Option<(&T, &T)> {
-        let mut iter = self.iter();
-
-        let first = loop {
-            let next = iter.next()?;
-            if !is_nan(next) {
-                break next;
-            }
-        };
-
-        let mut min = first;
-        let mut max = first;
-        for val in iter {
-            if is_nan(val) {
-                continue;
-            }
-            if compare_greater(descr, min, val) {
-                min = val;
-            }
-            if compare_greater(descr, val, max) {
-                max = val;
-            }
+    fn min_max<'a>(
+        &'a self,
+        descr: &ColumnDescriptor,
+        value_indices: Option<&[usize]>,
+    ) -> Option<(&'a T, &'a T)> {
+        match value_indices {
+            Some(indices) => get_min_max(descr, indices.iter().map(|x| &self[*x])),
+            None => get_min_max(descr, self.iter()),
         }
-        Some((min, max))
     }
+}
+
+fn get_min_max<'a, T, I>(descr: &ColumnDescriptor, mut iter: I) -> Option<(&'a T, &'a T)>
+where
+    T: ParquetValueType,
+    I: Iterator<Item = &'a T>,
+{
+    let first = loop {
+        let next = iter.next()?;
+        if !is_nan(next) {
+            break next;
+        }
+    };
+
+    let mut min = first;
+    let mut max = first;
+    for val in iter {
+        if is_nan(val) {
+            continue;
+        }
+        if compare_greater(descr, min, val) {
+            min = val;
+        }
+        if compare_greater(descr, val, max) {
+            max = val;
+        }
+    }
+    Some((min, max))
 }

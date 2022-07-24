@@ -249,9 +249,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
     }
 
-    fn write_batch_internal(
+    pub(crate) fn write_batch_internal(
         &mut self,
         values: &E::Values,
+        value_indices: Option<&[usize]>,
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
         min: Option<&E::T>,
@@ -290,7 +291,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     panic!("min/max should be both set or both None")
                 }
                 (None, None) => {
-                    if let Some((min, max)) = values.min_max(&self.descr) {
+                    if let Some((min, max)) = values.min_max(&self.descr, value_indices) {
                         update_min(&self.descr, min, &mut self.min_column_value);
                         update_max(&self.descr, max, &mut self.max_column_value);
                     }
@@ -311,6 +312,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             values_offset += self.write_mini_batch(
                 values,
                 values_offset,
+                value_indices,
                 write_batch_size,
                 def_levels.map(|lv| &lv[levels_offset..levels_offset + write_batch_size]),
                 rep_levels.map(|lv| &lv[levels_offset..levels_offset + write_batch_size]),
@@ -321,6 +323,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         values_offset += self.write_mini_batch(
             values,
             values_offset,
+            value_indices,
             num_levels - levels_offset,
             def_levels.map(|lv| &lv[levels_offset..]),
             rep_levels.map(|lv| &lv[levels_offset..]),
@@ -348,7 +351,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) -> Result<usize> {
-        self.write_batch_internal(values, def_levels, rep_levels, None, None, None)
+        self.write_batch_internal(values, None, def_levels, rep_levels, None, None, None)
     }
 
     /// Writer may optionally provide pre-calculated statistics for use when computing
@@ -369,6 +372,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     ) -> Result<usize> {
         self.write_batch_internal(
             values,
+            None,
             def_levels,
             rep_levels,
             min,
@@ -427,6 +431,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         &mut self,
         values: &E::Values,
         values_offset: usize,
+        value_indices: Option<&[usize]>,
         num_levels: usize,
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
@@ -489,7 +494,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             self.num_buffered_rows += num_levels as u32;
         }
 
-        self.encoder.write(values, values_offset, values_to_write)?;
+        match value_indices {
+            Some(indices) => {
+                let indices = &indices[values_offset..values_offset + values_to_write];
+                self.encoder.write_gather(values, indices)?;
+            }
+            None => self.encoder.write(values, values_offset, values_to_write)?,
+        }
+
         self.num_buffered_values += num_levels as u32;
 
         if self.should_add_data_page() {
