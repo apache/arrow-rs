@@ -30,7 +30,7 @@
 //!
 //! This crate provides APIs for interacting with object storage services.
 //!
-//! It currently supports PUT, GET, DELETE, HEAD and list for:
+//! It currently supports PUT (single or chunked/concurrent), GET, DELETE, HEAD and list for:
 //!
 //! * [Google Cloud Storage](https://cloud.google.com/storage/)
 //! * [Amazon S3](https://aws.amazon.com/s3/)
@@ -56,6 +56,8 @@ mod oauth;
 #[cfg(feature = "gcp")]
 mod token;
 
+#[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
+mod multipart;
 mod util;
 
 use crate::path::Path;
@@ -68,15 +70,44 @@ use snafu::Snafu;
 use std::fmt::{Debug, Formatter};
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
+use tokio::io::AsyncWrite;
 
 /// An alias for a dynamically dispatched object store implementation.
 pub type DynObjectStore = dyn ObjectStore;
+
+/// Id type for multi-part uploads.
+pub type MultipartId = String;
 
 /// Universal API to multiple object store services.
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided bytes to the specified location.
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()>;
+
+    /// Get a multi-part upload that allows writing data in chunks
+    ///
+    /// Most cloud-based uploads will buffer and upload parts in parallel.
+    ///
+    /// To complete the upload, [AsyncWrite::poll_shutdown] must be called
+    /// to completion.
+    ///
+    /// For some object stores (S3, GCS, and local in particular), if the
+    /// writer fails or panics, you must call [ObjectStore::abort_multipart]
+    /// to clean up partially written data.
+    async fn put_multipart(
+        &self,
+        location: &Path,
+    ) -> Result<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)>;
+
+    /// Cleanup an aborted upload.
+    ///
+    /// See documentation for individual stores for exact behavior, as capabilities
+    /// vary by object store.
+    async fn abort_multipart(
+        &self,
+        location: &Path,
+        multipart_id: &MultipartId,
+    ) -> Result<()>;
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> Result<GetResult>;
@@ -330,6 +361,7 @@ mod test_util {
 mod tests {
     use super::*;
     use crate::test_util::flatten_list_stream;
+    use tokio::io::AsyncWriteExt;
 
     type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
     type Result<T, E = Error> = std::result::Result<T, E>;
@@ -493,6 +525,77 @@ mod tests {
             .await
             .unwrap();
         assert!(files.is_empty());
+
+        Ok(())
+    }
+
+    fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
+        std::iter::repeat(Bytes::from_iter(std::iter::repeat(b'x').take(chunk_length)))
+            .take(num_chunks)
+            .collect()
+    }
+
+    pub(crate) async fn stream_get(storage: &DynObjectStore) -> Result<()> {
+        let location = Path::from("test_dir/test_upload_file.txt");
+
+        // Can write to storage
+        let data = get_vec_of_bytes(5_000_000, 10);
+        let bytes_expected = data.concat();
+        let (_, mut writer) = storage.put_multipart(&location).await?;
+        for chunk in &data {
+            writer.write_all(chunk).await?;
+        }
+
+        // Object should not yet exist in store
+        let meta_res = storage.head(&location).await;
+        assert!(meta_res.is_err());
+        assert!(matches!(
+            meta_res.unwrap_err(),
+            crate::Error::NotFound { .. }
+        ));
+
+        writer.shutdown().await?;
+        let bytes_written = storage.get(&location).await?.bytes().await?;
+        assert_eq!(bytes_expected, bytes_written);
+
+        // Can overwrite some storage
+        let data = get_vec_of_bytes(5_000, 5);
+        let bytes_expected = data.concat();
+        let (_, mut writer) = storage.put_multipart(&location).await?;
+        for chunk in &data {
+            writer.write_all(chunk).await?;
+        }
+        writer.shutdown().await?;
+        let bytes_written = storage.get(&location).await?.bytes().await?;
+        assert_eq!(bytes_expected, bytes_written);
+
+        // We can abort an empty write
+        let location = Path::from("test_dir/test_abort_upload.txt");
+        let (upload_id, writer) = storage.put_multipart(&location).await?;
+        drop(writer);
+        storage.abort_multipart(&location, &upload_id).await?;
+        let get_res = storage.get(&location).await;
+        assert!(get_res.is_err());
+        assert!(matches!(
+            get_res.unwrap_err(),
+            crate::Error::NotFound { .. }
+        ));
+
+        // We can abort an in-progress write
+        let (upload_id, mut writer) = storage.put_multipart(&location).await?;
+        if let Some(chunk) = data.get(0) {
+            writer.write_all(chunk).await?;
+            let _ = writer.write(chunk).await?;
+        }
+        drop(writer);
+
+        storage.abort_multipart(&location, &upload_id).await?;
+        let get_res = storage.get(&location).await;
+        assert!(get_res.is_err());
+        assert!(matches!(
+            get_res.unwrap_err(),
+            crate::Error::NotFound { .. }
+        ));
 
         Ok(())
     }
