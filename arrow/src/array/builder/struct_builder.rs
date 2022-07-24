@@ -24,6 +24,8 @@ use crate::array::*;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
 
+use super::NullBufferBuilder;
+
 /// Array builder for Struct types.
 ///
 /// Note that callers should make sure that methods of all the child field builders are
@@ -31,7 +33,7 @@ use crate::datatypes::Field;
 pub struct StructBuilder {
     fields: Vec<Field>,
     field_builders: Vec<Box<dyn ArrayBuilder>>,
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
     len: usize,
 }
 
@@ -39,7 +41,7 @@ impl fmt::Debug for StructBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StructBuilder")
             .field("fields", &self.fields)
-            .field("bitmap_builder", &self.bitmap_builder)
+            .field("bitmap_builder", &self.null_buffer_builder)
             .field("len", &self.len)
             .finish()
     }
@@ -173,7 +175,7 @@ impl StructBuilder {
         Self {
             fields,
             field_builders,
-            bitmap_builder: BooleanBufferBuilder::new(0),
+            null_buffer_builder: NullBufferBuilder::new(0),
             len: 0,
         }
     }
@@ -202,7 +204,7 @@ impl StructBuilder {
     /// should be appended for each child sub-array in a consistent way.
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
-        self.bitmap_builder.append(is_valid);
+        self.null_buffer_builder.append(is_valid);
         self.len += 1;
     }
 
@@ -220,14 +222,11 @@ impl StructBuilder {
             child_data.push(arr.into_data());
         }
 
-        let null_bit_buffer = self.bitmap_builder.finish();
-        let null_count = self.len - null_bit_buffer.count_set_bits();
-        let mut builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
+        let null_bit_buffer = self.null_buffer_builder.finish();
+        let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
             .len(self.len)
-            .child_data(child_data);
-        if null_count > 0 {
-            builder = builder.null_bit_buffer(Some(null_bit_buffer));
-        }
+            .child_data(child_data)
+            .null_bit_buffer(null_bit_buffer);
 
         self.len = 0;
 

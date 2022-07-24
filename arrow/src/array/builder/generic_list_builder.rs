@@ -25,13 +25,13 @@ use crate::array::OffsetSizeTrait;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
 
-use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
+use super::{ArrayBuilder, BufferBuilder, NullBufferBuilder};
 
 ///  Array builder for [`GenericListArray`]
 #[derive(Debug)]
 pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
     offsets_builder: BufferBuilder<OffsetSize>,
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
     values_builder: T,
 }
 
@@ -49,7 +49,7 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize
         offsets_builder.append(OffsetSize::zero());
         Self {
             offsets_builder,
-            bitmap_builder: BooleanBufferBuilder::new(capacity),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
             values_builder,
         }
     }
@@ -77,12 +77,12 @@ where
 
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
-        self.bitmap_builder.len()
+        self.null_buffer_builder.len()
     }
 
     /// Returns whether the number of array slots is zero
     fn is_empty(&self) -> bool {
-        self.bitmap_builder.is_empty()
+        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -113,7 +113,7 @@ where
     pub fn append(&mut self, is_valid: bool) {
         self.offsets_builder
             .append(OffsetSize::from_usize(self.values_builder.len()).unwrap());
-        self.bitmap_builder.append(is_valid);
+        self.null_buffer_builder.append(is_valid);
     }
 
     /// Builds the [`GenericListArray`] and reset this builder.
@@ -128,7 +128,7 @@ where
         let values_data = values_arr.data();
 
         let offset_buffer = self.offsets_builder.finish();
-        let null_bit_buffer = self.bitmap_builder.finish();
+        let null_bit_buffer = self.null_buffer_builder.finish();
         self.offsets_builder.append(OffsetSize::zero());
         let field = Box::new(Field::new(
             "item",
@@ -144,7 +144,7 @@ where
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(values_data.clone())
-            .null_bit_buffer(Some(null_bit_buffer));
+            .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { array_data_builder.build_unchecked() };
 

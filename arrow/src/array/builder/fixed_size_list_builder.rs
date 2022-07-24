@@ -25,12 +25,12 @@ use crate::datatypes::DataType;
 use crate::datatypes::Field;
 
 use super::ArrayBuilder;
-use super::BooleanBufferBuilder;
+use super::NullBufferBuilder;
 
 ///  Array builder for [`FixedSizeListArray`]
 #[derive(Debug)]
 pub struct FixedSizeListBuilder<T: ArrayBuilder> {
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
     values_builder: T,
     list_len: i32,
 }
@@ -48,7 +48,7 @@ impl<T: ArrayBuilder> FixedSizeListBuilder<T> {
     /// `capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(values_builder: T, value_length: i32, capacity: usize) -> Self {
         Self {
-            bitmap_builder: BooleanBufferBuilder::new(capacity),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
             values_builder,
             list_len: value_length,
         }
@@ -76,12 +76,12 @@ where
 
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
-        self.bitmap_builder.len()
+        self.null_buffer_builder.len()
     }
 
     /// Returns whether the number of array slots is zero
     fn is_empty(&self) -> bool {
-        self.bitmap_builder.is_empty()
+        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -109,7 +109,7 @@ where
     /// Finish the current fixed-length list array slot
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
-        self.bitmap_builder.append(is_valid);
+        self.null_buffer_builder.append(is_valid);
     }
 
     /// Builds the [`FixedSizeListBuilder`] and reset this builder.
@@ -131,14 +131,14 @@ where
             len,
         );
 
-        let null_bit_buffer = self.bitmap_builder.finish();
+        let null_bit_buffer = self.null_buffer_builder.finish();
         let array_data = ArrayData::builder(DataType::FixedSizeList(
             Box::new(Field::new("item", values_data.data_type().clone(), true)),
             self.list_len,
         ))
         .len(len)
         .add_child_data(values_data.clone())
-        .null_bit_buffer(Some(null_bit_buffer));
+        .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { array_data.build_unchecked() };
 
