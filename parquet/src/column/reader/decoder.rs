@@ -360,7 +360,7 @@ impl RepetitionLevelDecoder for ColumnLevelDecoderImpl {
     fn skip_rep_levels(&mut self, num_records: usize) -> Result<(usize, usize)> {
         let mut levels_skipped = 0;
         let mut records_skipped = 0;
-        match &mut self.inner {
+        match &mut self.decoder.as_mut().unwrap() {
             LevelDecoderInner::Packed(bit_reader, bit_width) => {
                 // Records are delimited by 0 so take values until we hit `num_records` 0s or
                 // we run out of values
