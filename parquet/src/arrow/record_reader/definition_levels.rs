@@ -481,7 +481,7 @@ mod tests {
                     decoder.read(&mut decoded, to_read_or_skip_level).unwrap();
                 read_level += read_level_num;
                 for i in 0..read_level_num {
-                    assert!(decoded.len() > 0);
+                    assert!(!decoded.is_empty());
                     //check each read bit
                     let read_bit = decoded.get_bit(i);
                     if read_bit {
