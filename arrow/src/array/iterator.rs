@@ -115,7 +115,10 @@ pub type Decimal256Iter<'a> = ArrayIter<&'a Decimal256Array>;
 /// an iterator that returns `Some(i128)` or `None`, that can be used on a
 /// [`Decimal128Array`]
 #[derive(Debug)]
-#[deprecated(note = "Please use `Decimal128Iter` instead")]
+#[deprecated(note = "Please use `Decimal128Iter` instead. \
+    `DecimalIter` iterates `Decimal128` values as i128 values. \
+    This is kept mostly for back-compatibility purpose. Suggests to use `Decimal128Array.iter()` \
+    that returns `Decimal128Iter`.")]
 pub struct DecimalIter<'a> {
     array: &'a Decimal128Array,
     current: usize,
