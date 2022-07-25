@@ -36,7 +36,6 @@ use crate::datatypes::{
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
 use regex::{escape, Regex};
-use std::any::type_name;
 use std::collections::HashMap;
 
 /// Helper function to perform boolean lambda function on values from two array accessors, this
@@ -1805,366 +1804,107 @@ where
     Ok(BooleanArray::from(data))
 }
 
-macro_rules! typed_cmp {
-    ($LEFT: expr, $RIGHT: expr, $T: ident, $OP: ident) => {{
-        let left = $LEFT.as_any().downcast_ref::<$T>().ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Left array cannot be cast to {}",
-                type_name::<$T>()
-            ))
-        })?;
-        let right = $RIGHT.as_any().downcast_ref::<$T>().ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Right array cannot be cast to {}",
-                type_name::<$T>(),
-            ))
-        })?;
-        $OP(left, right)
-    }};
-    ($LEFT: expr, $RIGHT: expr, $T: ident, $OP: ident, $TT: tt) => {{
-        let left = $LEFT.as_any().downcast_ref::<$T>().ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Left array cannot be cast to {}",
-                type_name::<$T>()
-            ))
-        })?;
-        let right = $RIGHT.as_any().downcast_ref::<$T>().ok_or_else(|| {
-            ArrowError::CastError(format!(
-                "Right array cannot be cast to {}",
-                type_name::<$T>(),
-            ))
-        })?;
-        $OP::<$TT>(left, right)
-    }};
-}
-
-fn eq_typed_compares(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
-    match (left.data_type(), left.data_type()) {
-        (DataType::Boolean, DataType::Boolean) => compare_op(
-            left.as_any().downcast_ref::<BooleanArray>().unwrap(),
-            right.as_any().downcast_ref::<BooleanArray>().unwrap(),
-            |a, b| !(a ^ b),
-        ),
-        (DataType::Int8, DataType::Int8) => compare_op(
-            left.as_any().downcast_ref::<Int8Array>().unwrap(),
-            right.as_any().downcast_ref::<Int8Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::Int16, DataType::Int16) => compare_op(
-            left.as_any().downcast_ref::<Int16Array>().unwrap(),
-            right.as_any().downcast_ref::<Int16Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::Int32, DataType::Int32) => compare_op(
-            left.as_any().downcast_ref::<Int32Array>().unwrap(),
-            right.as_any().downcast_ref::<Int32Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::Int64, DataType::Int64) => compare_op(
-            left.as_any().downcast_ref::<Int64Array>().unwrap(),
-            right.as_any().downcast_ref::<Int64Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::UInt8, DataType::UInt8) => compare_op(
-            left.as_any().downcast_ref::<UInt8Array>().unwrap(),
-            right.as_any().downcast_ref::<UInt8Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::UInt16, DataType::UInt16) => compare_op(
-            left.as_any().downcast_ref::<UInt16Array>().unwrap(),
-            right.as_any().downcast_ref::<UInt16Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::UInt32, DataType::UInt32) => compare_op(
-            left.as_any().downcast_ref::<UInt32Array>().unwrap(),
-            right.as_any().downcast_ref::<UInt32Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::UInt64, DataType::UInt64) => compare_op(
-            left.as_any().downcast_ref::<UInt64Array>().unwrap(),
-            right.as_any().downcast_ref::<UInt64Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::Float32, DataType::Float32) => compare_op(
-            left.as_any().downcast_ref::<Float32Array>().unwrap(),
-            right.as_any().downcast_ref::<Float32Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::Float64, DataType::Float64) => compare_op(
-            left.as_any().downcast_ref::<Float64Array>().unwrap(),
-            right.as_any().downcast_ref::<Float64Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::Utf8, DataType::Utf8) => compare_op(
-            left.as_any().downcast_ref::<StringArray>().unwrap(),
-            right.as_any().downcast_ref::<StringArray>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::LargeUtf8, DataType::LargeUtf8) => compare_op(
-            left.as_any().downcast_ref::<LargeStringArray>().unwrap(),
-            right.as_any().downcast_ref::<LargeStringArray>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::Binary, DataType::Binary) => compare_op(
-            left.as_any().downcast_ref::<BinaryArray>().unwrap(),
-            right.as_any().downcast_ref::<BinaryArray>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::LargeBinary, DataType::LargeBinary) => compare_op(
-            left.as_any().downcast_ref::<LargeBinaryArray>().unwrap(),
-            right.as_any().downcast_ref::<LargeBinaryArray>().unwrap(),
-            |a, b| a == b,
-        ),
-        (
-            DataType::Timestamp(TimeUnit::Nanosecond, _),
-            DataType::Timestamp(TimeUnit::Nanosecond, _),
-        ) => compare_op(
-            left.as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap(),
-            right
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap(),
-            |a, b| a == b,
-        ),
-        (
-            DataType::Timestamp(TimeUnit::Microsecond, _),
-            DataType::Timestamp(TimeUnit::Microsecond, _),
-        ) => compare_op(
-            left.as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap(),
-            right
-                .as_any()
-                .downcast_ref::<TimestampMicrosecondArray>()
-                .unwrap(),
-            |a, b| a == b,
-        ),
-        (
-            DataType::Timestamp(TimeUnit::Millisecond, _),
-            DataType::Timestamp(TimeUnit::Millisecond, _),
-        ) => compare_op(
-            left.as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap(),
-            right
-                .as_any()
-                .downcast_ref::<TimestampMillisecondArray>()
-                .unwrap(),
-            |a, b| a == b,
-        ),
-        (
-            DataType::Timestamp(TimeUnit::Second, _),
-            DataType::Timestamp(TimeUnit::Second, _),
-        ) => compare_op(
-            left.as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .unwrap(),
-            right
-                .as_any()
-                .downcast_ref::<TimestampSecondArray>()
-                .unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::Date32, DataType::Date32) => compare_op(
-            left.as_any().downcast_ref::<Date32Array>().unwrap(),
-            right.as_any().downcast_ref::<Date32Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (DataType::Date64, DataType::Date64) => compare_op(
-            left.as_any().downcast_ref::<Date64Array>().unwrap(),
-            right.as_any().downcast_ref::<Date64Array>().unwrap(),
-            |a, b| a == b,
-        ),
-        (
-            DataType::Interval(IntervalUnit::YearMonth),
-            DataType::Interval(IntervalUnit::YearMonth),
-        ) => compare_op(
-            left.as_any()
-                .downcast_ref::<IntervalYearMonthArray>()
-                .unwrap(),
-            right
-                .as_any()
-                .downcast_ref::<IntervalYearMonthArray>()
-                .unwrap(),
-            |a, b| a == b,
-        ),
-        (
-            DataType::Interval(IntervalUnit::DayTime),
-            DataType::Interval(IntervalUnit::DayTime),
-        ) => compare_op(
-            left.as_any()
-                .downcast_ref::<IntervalDayTimeArray>()
-                .unwrap(),
-            right
-                .as_any()
-                .downcast_ref::<IntervalDayTimeArray>()
-                .unwrap(),
-            |a, b| a == b,
-        ),
-        (
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            DataType::Interval(IntervalUnit::MonthDayNano),
-        ) => compare_op(
-            left.as_any()
-                .downcast_ref::<IntervalMonthDayNanoArray>()
-                .unwrap(),
-            right
-                .as_any()
-                .downcast_ref::<IntervalMonthDayNanoArray>()
-                .unwrap(),
-            |a, b| a == b,
-        ),
-        (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
-            "Comparing arrays of type {} is not yet implemented",
-            t1
-        ))),
-        (t1, t2) => Err(ArrowError::CastError(format!(
-            "Cannot compare two arrays of different types ({} and {})",
-            t1, t2
-        ))),
-    }
+fn cmp_primitive_array<T: ArrowNumericType, F>(
+    left: &dyn Array,
+    right: &dyn Array,
+    op: F,
+) -> Result<BooleanArray>
+where
+    F: Fn(T::Native, T::Native) -> bool,
+{
+    let left_array = as_primitive_array::<T>(left);
+    let right_array = as_primitive_array::<T>(right);
+    compare_op(left_array, right_array, op)
 }
 
 macro_rules! typed_compares {
-    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: ident, $OP_PRIM: ident, $OP_STR: ident, $OP_BINARY: ident) => {{
+    ($LEFT: expr, $RIGHT: expr, $OP_BOOL: expr, $OP: expr) => {{
         match ($LEFT.data_type(), $RIGHT.data_type()) {
             (DataType::Boolean, DataType::Boolean) => {
-                typed_cmp!($LEFT, $RIGHT, BooleanArray, $OP_BOOL)
+                compare_op(as_boolean_array($LEFT), as_boolean_array($RIGHT), $OP_BOOL)
             }
             (DataType::Int8, DataType::Int8) => {
-                typed_cmp!($LEFT, $RIGHT, Int8Array, $OP_PRIM, Int8Type)
+                cmp_primitive_array::<Int8Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Int16, DataType::Int16) => {
-                typed_cmp!($LEFT, $RIGHT, Int16Array, $OP_PRIM, Int16Type)
+                cmp_primitive_array::<Int16Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Int32, DataType::Int32) => {
-                typed_cmp!($LEFT, $RIGHT, Int32Array, $OP_PRIM, Int32Type)
+                cmp_primitive_array::<Int32Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Int64, DataType::Int64) => {
-                typed_cmp!($LEFT, $RIGHT, Int64Array, $OP_PRIM, Int64Type)
+                cmp_primitive_array::<Int64Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt8, DataType::UInt8) => {
-                typed_cmp!($LEFT, $RIGHT, UInt8Array, $OP_PRIM, UInt8Type)
+                cmp_primitive_array::<UInt8Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt16, DataType::UInt16) => {
-                typed_cmp!($LEFT, $RIGHT, UInt16Array, $OP_PRIM, UInt16Type)
+                cmp_primitive_array::<UInt16Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt32, DataType::UInt32) => {
-                typed_cmp!($LEFT, $RIGHT, UInt32Array, $OP_PRIM, UInt32Type)
+                cmp_primitive_array::<UInt32Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::UInt64, DataType::UInt64) => {
-                typed_cmp!($LEFT, $RIGHT, UInt64Array, $OP_PRIM, UInt64Type)
+                cmp_primitive_array::<UInt64Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Float32, DataType::Float32) => {
-                typed_cmp!($LEFT, $RIGHT, Float32Array, $OP_PRIM, Float32Type)
+                cmp_primitive_array::<Float32Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Float64, DataType::Float64) => {
-                typed_cmp!($LEFT, $RIGHT, Float64Array, $OP_PRIM, Float64Type)
+                cmp_primitive_array::<Float64Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Utf8, DataType::Utf8) => {
-                typed_cmp!($LEFT, $RIGHT, StringArray, $OP_STR, i32)
+                compare_op(as_string_array($LEFT), as_string_array($RIGHT), $OP)
             }
-            (DataType::LargeUtf8, DataType::LargeUtf8) => {
-                typed_cmp!($LEFT, $RIGHT, LargeStringArray, $OP_STR, i64)
-            }
-            (DataType::Binary, DataType::Binary) => {
-                typed_cmp!($LEFT, $RIGHT, BinaryArray, $OP_BINARY, i32)
-            }
-            (DataType::LargeBinary, DataType::LargeBinary) => {
-                typed_cmp!($LEFT, $RIGHT, LargeBinaryArray, $OP_BINARY, i64)
-            }
+            (DataType::LargeUtf8, DataType::LargeUtf8) => compare_op(
+                as_largestring_array($LEFT),
+                as_largestring_array($RIGHT),
+                $OP,
+            ),
+            (DataType::Binary, DataType::Binary) => compare_op(
+                as_generic_binary_array::<i32>($LEFT),
+                as_generic_binary_array::<i32>($RIGHT),
+                $OP,
+            ),
+            (DataType::LargeBinary, DataType::LargeBinary) => compare_op(
+                as_generic_binary_array::<i64>($LEFT),
+                as_generic_binary_array::<i64>($RIGHT),
+                $OP,
+            ),
             (
                 DataType::Timestamp(TimeUnit::Nanosecond, _),
                 DataType::Timestamp(TimeUnit::Nanosecond, _),
-            ) => {
-                typed_cmp!(
-                    $LEFT,
-                    $RIGHT,
-                    TimestampNanosecondArray,
-                    $OP_PRIM,
-                    TimestampNanosecondType
-                )
-            }
+            ) => cmp_primitive_array::<TimestampNanosecondType, _>($LEFT, $RIGHT, $OP),
             (
                 DataType::Timestamp(TimeUnit::Microsecond, _),
                 DataType::Timestamp(TimeUnit::Microsecond, _),
-            ) => {
-                typed_cmp!(
-                    $LEFT,
-                    $RIGHT,
-                    TimestampMicrosecondArray,
-                    $OP_PRIM,
-                    TimestampMicrosecondType
-                )
-            }
+            ) => cmp_primitive_array::<TimestampMicrosecondType, _>($LEFT, $RIGHT, $OP),
             (
                 DataType::Timestamp(TimeUnit::Millisecond, _),
                 DataType::Timestamp(TimeUnit::Millisecond, _),
-            ) => {
-                typed_cmp!(
-                    $LEFT,
-                    $RIGHT,
-                    TimestampMillisecondArray,
-                    $OP_PRIM,
-                    TimestampMillisecondType
-                )
-            }
+            ) => cmp_primitive_array::<TimestampMillisecondType, _>($LEFT, $RIGHT, $OP),
             (
                 DataType::Timestamp(TimeUnit::Second, _),
                 DataType::Timestamp(TimeUnit::Second, _),
-            ) => {
-                typed_cmp!(
-                    $LEFT,
-                    $RIGHT,
-                    TimestampSecondArray,
-                    $OP_PRIM,
-                    TimestampSecondType
-                )
-            }
+            ) => cmp_primitive_array::<TimestampSecondType, _>($LEFT, $RIGHT, $OP),
             (DataType::Date32, DataType::Date32) => {
-                typed_cmp!($LEFT, $RIGHT, Date32Array, $OP_PRIM, Date32Type)
+                cmp_primitive_array::<Date32Type, _>($LEFT, $RIGHT, $OP)
             }
             (DataType::Date64, DataType::Date64) => {
-                typed_cmp!($LEFT, $RIGHT, Date64Array, $OP_PRIM, Date64Type)
+                cmp_primitive_array::<Date64Type, _>($LEFT, $RIGHT, $OP)
             }
             (
                 DataType::Interval(IntervalUnit::YearMonth),
                 DataType::Interval(IntervalUnit::YearMonth),
-            ) => {
-                typed_cmp!(
-                    $LEFT,
-                    $RIGHT,
-                    IntervalYearMonthArray,
-                    $OP_PRIM,
-                    IntervalYearMonthType
-                )
-            }
+            ) => cmp_primitive_array::<IntervalYearMonthType, _>($LEFT, $RIGHT, $OP),
             (
                 DataType::Interval(IntervalUnit::DayTime),
                 DataType::Interval(IntervalUnit::DayTime),
-            ) => {
-                typed_cmp!(
-                    $LEFT,
-                    $RIGHT,
-                    IntervalDayTimeArray,
-                    $OP_PRIM,
-                    IntervalDayTimeType
-                )
-            }
+            ) => cmp_primitive_array::<IntervalDayTimeType, _>($LEFT, $RIGHT, $OP),
             (
                 DataType::Interval(IntervalUnit::MonthDayNano),
                 DataType::Interval(IntervalUnit::MonthDayNano),
-            ) => {
-                typed_cmp!(
-                    $LEFT,
-                    $RIGHT,
-                    IntervalMonthDayNanoArray,
-                    $OP_PRIM,
-                    IntervalMonthDayNanoType
-                )
-            }
+            ) => cmp_primitive_array::<IntervalMonthDayNanoType, _>($LEFT, $RIGHT, $OP),
             (t1, t2) if t1 == t2 => Err(ArrowError::NotYetImplemented(format!(
                 "Comparing arrays of type {} is not yet implemented",
                 t1
@@ -2473,7 +2213,7 @@ pub fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a == b, |a, b| a == b)
         }
-        _ => eq_typed_compares(left, right),
+        _ => typed_compares!(left, right, |a, b| !(a ^ b), |a, b| a == b),
     }
 }
 
@@ -2498,7 +2238,7 @@ pub fn neq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a != b, |a, b| a != b)
         }
-        _ => typed_compares!(left, right, neq_bool, neq, neq_utf8, neq_binary),
+        _ => typed_compares!(left, right, |a, b| (a ^ b), |a, b| a != b),
     }
 }
 
@@ -2523,7 +2263,7 @@ pub fn lt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a < b, |a, b| a < b)
         }
-        _ => typed_compares!(left, right, lt_bool, lt, lt_utf8, lt_binary),
+        _ => typed_compares!(left, right, |a, b| ((!a) & b), |a, b| a < b),
     }
 }
 
@@ -2547,7 +2287,7 @@ pub fn lt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a <= b, |a, b| a <= b)
         }
-        _ => typed_compares!(left, right, lt_eq_bool, lt_eq, lt_eq_utf8, lt_eq_binary),
+        _ => typed_compares!(left, right, |a, b| !(a & (!b)), |a, b| a <= b),
     }
 }
 
@@ -2571,7 +2311,7 @@ pub fn gt_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a > b, |a, b| a > b)
         }
-        _ => typed_compares!(left, right, gt_bool, gt, gt_utf8, gt_binary),
+        _ => typed_compares!(left, right, |a, b| (a & (!b)), |a, b| a > b),
     }
 }
 
@@ -2594,7 +2334,7 @@ pub fn gt_eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<BooleanArray> {
         DataType::Dictionary(_, _) => {
             typed_dict_compares!(left, right, |a, b| a >= b, |a, b| a >= b)
         }
-        _ => typed_compares!(left, right, gt_eq_bool, gt_eq, gt_eq_utf8, gt_eq_binary),
+        _ => typed_compares!(left, right, |a, b| !((!a) & b), |a, b| a >= b),
     }
 }
 
