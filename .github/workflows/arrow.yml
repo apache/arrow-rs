@@ -89,7 +89,7 @@ jobs:
     name: Test SIMD on AMD64 Rust ${{ matrix.rust }}
     runs-on: ubuntu-latest
     container:
-      image: amd64/nightly
+      image: amd64/rust
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -116,7 +116,7 @@ jobs:
     name: Build wasm32
     runs-on: ubuntu-latest
     container:
-      image: amd64/nightly
+      image: amd64/rust
       env:
         # Disable full debug symbol generation to speed up CI build and keep memory down
         # "1" means line tables only, which is useful for panic tracebacks.
@@ -156,4 +156,4 @@ jobs:
           rustup component add clippy
       - name: Run clippy
         run: |
-          cargo clippy -p --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
+          cargo clippy -p arrow --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
