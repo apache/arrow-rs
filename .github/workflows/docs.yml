@@ -15,41 +15,39 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Dev
+name: Docs
 
 on:
   # always trigger
   push:
   pull_request:
 
-env:
-  ARCHERY_DOCKER_USER: ${{ secrets.DOCKERHUB_USER }}
-  ARCHERY_DOCKER_PASSWORD: ${{ secrets.DOCKERHUB_TOKEN }}
-
 jobs:
 
-  rat:
-    name: Release Audit Tool (RAT)
+  # test doc links still work
+  docs:
+    name: Rustdocs are clean
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [ amd64 ]
+        rust: [ nightly ]
+    container:
+      image: ${{ matrix.arch }}/rust
+      env:
+        RUSTDOCFLAGS: "-Dwarnings"
     steps:
       - uses: actions/checkout@v2
-      - name: Setup Python
-        uses: actions/setup-python@v1
         with:
-          python-version: 3.8
-      - name: Audit licenses
-        run: ./dev/release/run-rat.sh .
-
-  prettier:
-    name: Use prettier to check formatting of markdown documents
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
-        with:
-          node-version: "14"
-      - name: Prettier check
+          submodules: true
+      - name: Install python dev
         run: |
-          # if you encounter error, try rerun the command below with --write instead of --check
-          # and commit the changes
-          npx prettier@2.3.0 --check {arrow,arrow-flight,dev,integration-testing,parquet}/**/*.md README.md CODE_OF_CONDUCT.md CONTRIBUTING.md
+          apt update
+          apt install -y libpython3.9-dev
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: ${{ matrix.rust }}
+      - name: Run cargo doc
+        run: |
+          cargo doc --document-private-items --no-deps --workspace --all-features

@@ -17,13 +17,22 @@
 
 //! Decimal related utils
 
+use crate::datatypes::{
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_SCALE,
+};
 use crate::error::{ArrowError, Result};
 use num::bigint::BigInt;
+use num::Signed;
 use std::cmp::{min, Ordering};
 
 pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
     /// The bit-width of the internal representation.
     const BIT_WIDTH: usize;
+    /// The maximum precision.
+    const MAX_PRECISION: usize;
+    /// The maximum scale.
+    const MAX_SCALE: usize;
 
     /// Tries to create a decimal value from precision, scale and bytes.
     /// If the length of bytes isn't same as the bit width of this decimal,
@@ -36,6 +45,21 @@ pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
     where
         Self: Sized,
     {
+        if precision > Self::MAX_PRECISION {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "precision {} is greater than max {}",
+                precision,
+                Self::MAX_PRECISION
+            )));
+        }
+        if scale > Self::MAX_SCALE {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "scale {} is greater than max {}",
+                scale,
+                Self::MAX_SCALE
+            )));
+        }
+
         if precision < scale {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Precision {} is less than scale {}",
@@ -138,10 +162,30 @@ pub struct Decimal256 {
     value: [u8; 32],
 }
 
+impl Decimal256 {
+    /// Constructs a `Decimal256` value from a `BigInt`.
+    pub fn from_big_int(
+        num: &BigInt,
+        precision: usize,
+        scale: usize,
+    ) -> Result<Decimal256> {
+        let mut bytes = if num.is_negative() {
+            vec![255; 32]
+        } else {
+            vec![0; 32]
+        };
+        let num_bytes = &num.to_signed_bytes_le();
+        bytes[0..num_bytes.len()].clone_from_slice(num_bytes);
+        Decimal256::try_new_from_bytes(precision, scale, &bytes)
+    }
+}
+
 macro_rules! def_decimal {
-    ($ty:ident, $bit:expr) => {
+    ($ty:ident, $bit:expr, $max_p:expr, $max_s:expr) => {
         impl BasicDecimal for $ty {
             const BIT_WIDTH: usize = $bit;
+            const MAX_PRECISION: usize = $max_p;
+            const MAX_SCALE: usize = $max_s;
 
             fn new(precision: usize, scale: usize, bytes: &[u8]) -> Self {
                 $ty {
@@ -201,12 +245,23 @@ macro_rules! def_decimal {
     };
 }
 
-def_decimal!(Decimal128, 128);
-def_decimal!(Decimal256, 256);
+def_decimal!(
+    Decimal128,
+    128,
+    DECIMAL128_MAX_PRECISION,
+    DECIMAL128_MAX_SCALE
+);
+def_decimal!(
+    Decimal256,
+    256,
+    DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_SCALE
+);
 
 #[cfg(test)]
 mod tests {
     use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
+    use num::{BigInt, Num};
 
     #[test]
     fn decimal_128_to_string() {
@@ -281,10 +336,10 @@ mod tests {
         // smaller than i128 minimum
         bytes = vec![255; 32];
         bytes[31] = 128;
-        let value = Decimal256::try_new_from_bytes(79, 4, &bytes).unwrap();
+        let value = Decimal256::try_new_from_bytes(76, 4, &bytes).unwrap();
         assert_eq!(
             value.to_string(),
-            "-5744373177007483132341216834415376678658315645522012356644966081642565415.7313"
+            "-574437317700748313234121683441537667865831564552201235664496608164256541.5731"
         );
 
         bytes = vec![255; 32];
@@ -301,5 +356,16 @@ mod tests {
         let value = Decimal128::new_from_i128(5, 2, 100);
         let integer = i128_func(value);
         assert_eq!(integer, 100);
+    }
+
+    #[test]
+    fn bigint_to_decimal256() {
+        let num = BigInt::from_str_radix("123456789", 10).unwrap();
+        let value = Decimal256::from_big_int(&num, 30, 2).unwrap();
+        assert_eq!(value.to_string(), "1234567.89");
+
+        let num = BigInt::from_str_radix("-5744373177007483132341216834415376678658315645522012356644966081642565415731", 10).unwrap();
+        let value = Decimal256::from_big_int(&num, 76, 4).unwrap();
+        assert_eq!(value.to_string(), "-574437317700748313234121683441537667865831564552201235664496608164256541.5731");
     }
 }

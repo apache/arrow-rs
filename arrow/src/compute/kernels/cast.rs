@@ -1205,7 +1205,7 @@ fn cast_decimal_to_decimal(
         let div = 10_i128.pow((input_scale - output_scale) as u32);
         array
             .iter()
-            .map(|v| v.map(|v| v / div))
+            .map(|v| v.map(|v| v.as_i128() / div))
             .collect::<Decimal128Array>()
     } else {
         // For example, input_scale is 3 and output_scale is 4;
@@ -1213,7 +1213,7 @@ fn cast_decimal_to_decimal(
         let mul = 10_i128.pow((output_scale - input_scale) as u32);
         array
             .iter()
-            .map(|v| v.map(|v| v * mul))
+            .map(|v| v.map(|v| v.as_i128() * mul))
             .collect::<Decimal128Array>()
     }
     .with_precision_and_scale(*output_precision, *output_scale)?;

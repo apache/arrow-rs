@@ -17,14 +17,21 @@
 
 name: Integration
 
+# Only run when arrow or github changes
 on:
   push:
+    paths:
+      - arrow/**
+      - .github/**
   pull_request:
+    paths:
+      - arrow/**
+      - .github/**
 
 jobs:
 
   integration:
-    name: Integration Test
+    name: Archery test With other arrows
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Arrow
@@ -49,7 +56,7 @@ jobs:
 
   # test FFI against the C-Data interface exposed by pyarrow
   pyarrow-integration-test:
-    name: Test Pyarrow C Data Interface
+    name: Pyarrow C Data Interface
     runs-on: ubuntu-latest
     strategy:
       matrix:

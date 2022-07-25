@@ -798,8 +798,8 @@ mod tests {
     #[tokio::test]
     async fn test_list_lifetimes() {
         let store = memory::InMemory::new();
-        let stream = list_store(&store, "path").await.unwrap();
-        assert_eq!(stream.count().await, 0);
+        let mut stream = list_store(&store, "path").await.unwrap();
+        assert!(stream.next().await.is_none());
     }
 
     // Tests TODO:
