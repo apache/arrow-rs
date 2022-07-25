@@ -519,6 +519,33 @@ impl BitReader {
         Some(from_ne_slice(v.as_bytes()))
     }
 
+    pub fn peek_value<T : FromBytes>(&self, num_bits: usize) -> Option<T> {
+        assert!(num_bits <= 64);
+        assert!(num_bits <= size_of::<T>() * 8);
+
+        if self.byte_offset * 8 + self.bit_offset + num_bits > self.total_bytes * 8 {
+            return None;
+        }
+
+        let mut v = trailing_bits(self.buffered_values, self.bit_offset + num_bits)
+            >> self.bit_offset;
+
+        if self.bit_offset + num_bits >= 64 {
+            let next_byte_offset = self.byte_offset + 8;
+            let next_bit_offset = self.bit_offset + num_bits - 64;
+
+            let bytes_to_read = cmp::min(self.total_bytes - next_byte_offset, 8);
+            let next_buffered_values: u64 =
+                read_num_bytes!(u64, bytes_to_read, self.buffer.data()[next_byte_offset..]);
+
+            v |= trailing_bits(next_buffered_values, next_bit_offset)
+                .wrapping_shl((num_bits - next_bit_offset) as u32);
+        }
+
+        // TODO: better to avoid copying here
+        Some(from_ne_slice(v.as_bytes()))
+    }
+
     /// Skip one value of size `num_bits`.
     ///
     /// Returns `false` if there are no more values to skip, `true` otherwise.
@@ -823,6 +850,20 @@ mod tests {
     }
 
     #[test]
+    fn test_bit_reader_peek_value() {
+        let buffer = vec![255, 0];
+        let mut bit_reader = BitReader::from(buffer);
+        assert_eq!(bit_reader.peek_value::<i32>(1), Some(1));
+        assert_eq!(bit_reader.get_value::<i32>(1), Some(1));
+        assert_eq!(bit_reader.peek_value::<i32>(2), Some(3));
+        assert_eq!(bit_reader.get_value::<i32>(2), Some(3));
+        assert_eq!(bit_reader.peek_value::<i32>(3), Some(7));
+        assert_eq!(bit_reader.get_value::<i32>(3), Some(7));
+        assert_eq!(bit_reader.peek_value::<i32>(4), Some(3));
+        assert_eq!(bit_reader.get_value::<i32>(4), Some(3));
+    }
+
+    #[test]
     fn test_bit_reader_skip_value() {
         let buffer = vec![255, 0];
         let mut bit_reader = BitReader::from(buffer);
@@ -866,6 +907,20 @@ mod tests {
         assert_eq!(bit_reader.get_value::<i64>(32), Some(10));
         assert_eq!(bit_reader.get_value::<i64>(16), Some(20));
         assert_eq!(bit_reader.get_value::<i64>(32), Some(30));
+        assert_eq!(bit_reader.get_value::<i64>(16), Some(40));
+    }
+
+    #[test]
+    fn test_bit_reader_skip_value_boundary() {
+        let buffer = vec![10, 0, 0, 0, 20, 0, 30, 0, 0, 0, 40, 0];
+        let mut bit_reader = BitReader::from(buffer);
+        assert_eq!(bit_reader.peek_value::<i64>(32), Some(10));
+        assert_eq!(bit_reader.get_value::<i64>(32), Some(10));
+        assert_eq!(bit_reader.peek_value::<i64>(16), Some(20));
+        assert_eq!(bit_reader.get_value::<i64>(16), Some(20));
+        assert_eq!(bit_reader.peek_value::<i64>(32), Some(30));
+        assert_eq!(bit_reader.get_value::<i64>(32), Some(30));
+        assert_eq!(bit_reader.peek_value::<i64>(16), Some(40));
         assert_eq!(bit_reader.get_value::<i64>(16), Some(40));
     }
 
