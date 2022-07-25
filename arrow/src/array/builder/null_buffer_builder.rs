@@ -27,7 +27,7 @@ use super::BooleanBufferBuilder;
 #[derive(Debug)]
 pub(super) struct NullBufferBuilder {
     bitmap_builder: Option<BooleanBufferBuilder>,
-    /// Store the length of the buffer before materilaizing.
+    /// Store the length of the buffer before materializing.
     len: usize,
     capacity: usize,
 }
