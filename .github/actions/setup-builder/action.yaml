@@ -42,14 +42,6 @@ runs:
     - name: Generate lockfile
       shell: bash
       run: cargo fetch
-    - name: Cache Rust dependencies
-      uses: actions/cache@v3
-      with:
-        # these represent compiled steps of both dependencies and arrow
-        # and thus are specific for a particular OS, arch and rust version.
-        path: /github/home/target
-        key: ${{ runner.os }}-${{ runner.arch }}-target-cache3-${{ inputs.rust-version }}-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: ${{ runner.os }}-${{ runner.arch }}-target-cache3-${{ inputs.rust-version }}-
     - name: Install Build Dependencies
       shell: bash
       run: |
