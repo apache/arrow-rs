@@ -532,6 +532,32 @@ mod tests {
     }
 
     #[test]
+    fn test_decimal_fields() {
+        let message_type = "
+        message test_schema {
+                    REQUIRED INT32 decimal1 (DECIMAL(4,2));
+                    REQUIRED INT64 decimal2 (DECIMAL(12,2));
+                    REQUIRED FIXED_LEN_BYTE_ARRAY (16) decimal3 (DECIMAL(30,2));
+                    REQUIRED BYTE_ARRAY decimal4 (DECIMAL(33,2));
+        }
+        ";
+
+        let parquet_group_type = parse_message_type(message_type).unwrap();
+
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+        let converted_arrow_schema =
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
+
+        let arrow_fields = vec![
+            Field::new("decimal1", DataType::Decimal(4,2), false),
+            Field::new("decimal2", DataType::Decimal(12,2), false),
+            Field::new("decimal3", DataType::Decimal(30,2), false),
+            Field::new("decimal4", DataType::Decimal(33,2), false),
+        ];
+        assert_eq!(&arrow_fields, converted_arrow_schema.fields());
+    }
+
+    #[test]
     fn test_byte_array_fields() {
         let message_type = "
         message test_schema {
