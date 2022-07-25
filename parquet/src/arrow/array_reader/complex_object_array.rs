@@ -166,7 +166,13 @@ where
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
         match self.column_reader.as_mut() {
             Some(reader) => reader.skip_records(num_records),
-            None => Ok(0),
+            None => {
+                if self.next_column_reader()? {
+                    self.column_reader.as_mut().unwrap().skip_records(num_records)
+                }else {
+                    Ok(0)
+                }
+            }
         }
     }
 

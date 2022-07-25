@@ -181,7 +181,7 @@ where
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
-        self.record_reader.skip_records(num_records)
+        self.record_reader.skip_records(num_records, self.pages.as_mut())
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {

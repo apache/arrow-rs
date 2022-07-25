@@ -24,6 +24,7 @@ use crate::arrow::record_reader::{
     buffer::{BufferQueue, ScalarBuffer, ValuesBuffer},
     definition_levels::{DefinitionLevelBuffer, DefinitionLevelBufferDecoder},
 };
+use crate::column::page::PageIterator;
 use crate::column::{
     page::PageReader,
     reader::{
@@ -184,11 +185,24 @@ where
     /// # Returns
     ///
     /// Number of records skipped
-    pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+    pub fn skip_records(
+        &mut self,
+        num_records: usize,
+        pages: &mut dyn PageIterator,
+    ) -> Result<usize> {
         // First need to clear the buffer
         let end_of_column = match self.column_reader.as_mut() {
             Some(reader) => !reader.has_next()?,
-            None => return Ok(0),
+            None => {
+                // If we skip records before all read operation
+                // we need set `column_reader` by `set_page_reader`
+                if let Some(page_reader) = pages.next() {
+                    self.set_page_reader(page_reader?)?;
+                    false
+                } else {
+                    return Ok(0);
+                }
+            }
         };
 
         let (buffered_records, buffered_values) =
