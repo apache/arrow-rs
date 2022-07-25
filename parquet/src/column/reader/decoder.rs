@@ -318,10 +318,41 @@ impl ColumnLevelDecoder for ColumnLevelDecoderImpl {
 impl DefinitionLevelDecoder for ColumnLevelDecoderImpl {
     fn skip_def_levels(
         &mut self,
-        _num_levels: usize,
-        _max_def_level: i16,
+        num_levels: usize,
+        max_def_level: i16,
     ) -> Result<(usize, usize)> {
-        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
+        let mut level_skip = 0;
+        let mut value_skip = 0;
+        match self.decoder.as_mut().unwrap() {
+            LevelDecoderInner::Packed(reader, bit_width) => {
+                for _ in 0..num_levels {
+                    // Values are delimited by max_def_level
+                    if max_def_level
+                        == reader
+                            .get_value::<i16>(*bit_width as usize)
+                            .expect("Not enough values in Packed ColumnLevelDecoderImpl.")
+                    {
+                        value_skip += 1;
+                    }
+                    level_skip += 1;
+                }
+            }
+            LevelDecoderInner::Rle(reader) => {
+                for _ in 0..num_levels {
+                    if let Some(level) = reader
+                        .get::<i16>()
+                        .expect("Not enough values in Rle ColumnLevelDecoderImpl.")
+                    {
+                        // Values are delimited by max_def_level
+                        if level == max_def_level {
+                            value_skip += 1;
+                        }
+                    }
+                    level_skip += 1;
+                }
+            }
+        }
+        Ok((value_skip, level_skip))
     }
 }
 
