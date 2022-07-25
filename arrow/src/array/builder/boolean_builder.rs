@@ -113,8 +113,8 @@ impl BooleanBuilder {
     /// Appends a slice of type `T` into the builder
     #[inline]
     pub fn append_slice(&mut self, v: &[bool]) {
-        self.null_buffer_builder.append_n_true(v.len());
         self.values_builder.append_slice(v);
+        self.null_buffer_builder.append_n_true(v.len());
     }
 
     /// Appends values from a slice of type `T` and a validity boolean slice.
