@@ -15,41 +15,34 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Docs
+---
+name: "Arrow Flight"
 
 on:
-  # always trigger
-  push:
-    branches:
-      - master
   pull_request:
 
 jobs:
-
-  # test doc links still work
-  docs:
-    name: Rustdocs are clean
+  # test the crate
+  linux-test:
+    name: Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ nightly ]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: amd64/rust
       env:
-        RUSTDOCFLAGS: "-Dwarnings"
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - name: Install python dev
-        run: |
-          apt update
-          apt install -y libpython3.9-dev
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
-          rust-version: ${{ matrix.rust }}
-      - name: Run cargo doc
+          rust-version: stable
+      - name: Tests with default features
         run: |
-          cargo doc --document-private-items --no-deps --workspace --all-features
+          cargo test -p arrow-flight
+      - name: Tests with all features
+        run: |
+          cargo test -p arrow-flight --all-features

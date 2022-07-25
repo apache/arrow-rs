@@ -90,5 +90,24 @@ $ cargo test --features azure
 
 ### GCP
 
-We don't have a good story yet for testing the GCP integration locally. You will need to create a GCS bucket, a
-service account that has access to it, and use this to run the tests.
+To test the GCS integration, we use [Fake GCS Server](https://github.com/fsouza/fake-gcs-server)
+
+Startup the fake server:
+
+```shell
+docker run -p 4443:4443 fsouza/fake-gcs-server
+```
+
+Configure the account:
+```shell
+curl --insecure -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "https://localhost:4443/storage/v1/b"
+echo '{"gcs_base_url": "https://localhost:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > /tmp/gcs.json
+```
+
+Now run the tests:
+```shell
+TEST_INTEGRATION=1 \
+OBJECT_STORE_BUCKET=test-bucket \
+GOOGLE_SERVICE_ACCOUNT=/tmp/gcs.json \
+cargo test -p object_store --features=gcp
+```

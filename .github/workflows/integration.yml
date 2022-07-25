@@ -20,9 +20,8 @@ name: Integration
 # Only run when arrow or github changes
 on:
   push:
-    paths:
-      - arrow/**
-      - .github/**
+    branches:
+      - master
   pull_request:
     paths:
       - arrow/**
