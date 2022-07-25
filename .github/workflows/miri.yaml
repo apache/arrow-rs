@@ -20,6 +20,8 @@ name: MIRI
 on:
   # always trigger
   push:
+    branches:
+      - master
   pull_request:
 
 jobs:
