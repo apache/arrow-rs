@@ -584,7 +584,7 @@ mod test {
     }
 
     impl GoogleCloudConfig {
-        fn build(self) -> Result<GoogleCloudStorage> {
+        fn build_test(self) -> Result<GoogleCloudStorage> {
             // ignore HTTPS errors in tests so we can use fake-gcs server
             let client = Client::builder()
                 .danger_accept_invalid_certs(true)
