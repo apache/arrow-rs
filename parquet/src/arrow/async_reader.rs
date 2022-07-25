@@ -601,63 +601,23 @@ impl PageReader for InMemoryColumnChunkReader {
     fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
         while self.seen_num_values < self.chunk.num_values {
             return if let Some(buffered_header) = self.next_page_header.as_ref() {
-                match buffered_header.type_ {
-                    PageType::DataPage => Ok(Some(PageMetadata {
-                        num_rows: buffered_header
-                            .data_page_header
-                            .as_ref()
-                            .unwrap()
-                            .num_values as usize,
-                        is_dict: false,
-                    })),
-                    PageType::DictionaryPage => Ok(Some(PageMetadata {
-                        num_rows: usize::MIN,
-                        is_dict: true,
-                    })),
-                    PageType::DataPageV2 => Ok(Some(PageMetadata {
-                        num_rows: buffered_header
-                            .data_page_header_v2
-                            .as_ref()
-                            .unwrap()
-                            .num_rows as usize,
-                        is_dict: false,
-                    })),
-                    PageType::IndexPage => {
-                        // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-                        self.next_page_header = None;
-                        continue;
-                    }
+                if let Ok(page_metadata) = buffered_header.try_into() {
+                    Ok(Some(page_metadata))
+                } else {
+                    // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                    self.next_page_header = None;
+                    continue;
                 }
             } else {
                 let mut cursor = Cursor::new(&self.chunk.data.as_ref()[self.offset..]);
                 let page_header = read_page_header(&mut cursor)?;
                 self.offset += cursor.position() as usize;
 
-                let page_metadata = match &page_header.type_ {
-                    PageType::DataPage => Ok(Some(PageMetadata {
-                        num_rows: page_header
-                            .data_page_header
-                            .as_ref()
-                            .unwrap()
-                            .num_values as usize,
-                        is_dict: false,
-                    })),
-                    PageType::DictionaryPage => Ok(Some(PageMetadata {
-                        num_rows: usize::MIN,
-                        is_dict: true,
-                    })),
-                    PageType::DataPageV2 => Ok(Some(PageMetadata {
-                        num_rows: page_header
-                            .data_page_header_v2
-                            .as_ref()
-                            .unwrap()
-                            .num_rows as usize,
-                        is_dict: false,
-                    })),
-                    PageType::IndexPage => {
-                        // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-                        continue;
-                    }
+                let page_metadata = if let Ok(page_metadata) = (&page_header).try_into() {
+                    Ok(Some(page_metadata))
+                } else {
+                    // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                    continue;
                 };
 
                 self.next_page_header = Some(page_header);
