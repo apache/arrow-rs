@@ -24,7 +24,6 @@ use super::{
     FixedSizeListArray, GenericBinaryIter, GenericListArray, OffsetSizeTrait,
 };
 use crate::array::array::ArrayAccessor;
-pub use crate::array::DecimalIter;
 use crate::buffer::Buffer;
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
