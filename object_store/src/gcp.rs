@@ -642,7 +642,7 @@ mod test {
     #[tokio::test]
     async fn gcs_test() {
         let config = maybe_skip_integration!();
-        let integration = config.build().unwrap();
+        let integration = config.build_test().unwrap();
 
         put_get_delete_list(&integration).await.unwrap();
         list_uses_directories_correctly(&integration).await.unwrap();
@@ -653,7 +653,7 @@ mod test {
     #[tokio::test]
     async fn gcs_test_get_nonexistent_location() {
         let config = maybe_skip_integration!();
-        let integration = config.build().unwrap();
+        let integration = config.build_test().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -670,7 +670,7 @@ mod test {
     async fn gcs_test_get_nonexistent_bucket() {
         let mut config = maybe_skip_integration!();
         config.bucket = NON_EXISTENT_NAME.into();
-        let integration = config.build().unwrap();
+        let integration = config.build_test().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -688,7 +688,7 @@ mod test {
     #[tokio::test]
     async fn gcs_test_delete_nonexistent_location() {
         let config = maybe_skip_integration!();
-        let integration = config.build().unwrap();
+        let integration = config.build_test().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -704,7 +704,7 @@ mod test {
     async fn gcs_test_delete_nonexistent_bucket() {
         let mut config = maybe_skip_integration!();
         config.bucket = NON_EXISTENT_NAME.into();
-        let integration = config.build().unwrap();
+        let integration = config.build_test().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -720,7 +720,7 @@ mod test {
     async fn gcs_test_put_nonexistent_bucket() {
         let mut config = maybe_skip_integration!();
         config.bucket = NON_EXISTENT_NAME.into();
-        let integration = config.build().unwrap();
+        let integration = config.build_test().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
         let data = Bytes::from("arbitrary data");
