@@ -132,8 +132,8 @@ jobs:
           key: cargo-wasm32-cache3-
       - name: Setup Rust toolchain for WASM
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup override set ${{ matrix.rust }}
+          rustup toolchain install nightly
+          rustup override set nightly
           rustup target add wasm32-unknown-unknown
           rustup target add wasm32-wasi
       - name: Build
@@ -149,10 +149,12 @@ jobs:
       image: amd64/rust
     steps:
       - uses: actions/checkout@v2
-      - name: Setup Rust toolchain with clippy
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Setup Clippy
         run: |
-          rustup toolchain install stable
-          rustup default stable
           rustup component add clippy
       - name: Run clippy
         run: |
