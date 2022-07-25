@@ -302,7 +302,7 @@ impl Iterator for ParquetRecordBatchReader {
                             front.row_count,
                             skipped
                         )
-                            .into()));
+                        .into()));
                     }
                     continue;
                 }
@@ -402,7 +402,10 @@ mod tests {
     use arrow::error::Result as ArrowResult;
     use arrow::record_batch::{RecordBatch, RecordBatchReader};
 
-    use crate::arrow::arrow_reader::{ArrowReader, ArrowReaderOptions, ParquetFileArrowReader, ParquetRecordBatchReader, RowSelection};
+    use crate::arrow::arrow_reader::{
+        ArrowReader, ArrowReaderOptions, ParquetFileArrowReader,
+        ParquetRecordBatchReader, RowSelection,
+    };
     use crate::arrow::buffer::converter::{
         BinaryArrayConverter, Converter, FixedSizeArrayConverter, FromConverter,
         IntervalDayTimeArrayConverter, LargeUtf8ArrayConverter, Utf8ArrayConverter,
@@ -499,7 +502,7 @@ mod tests {
             Some(Field::new("int32", ArrowDataType::Null, true)),
             &Default::default(),
         )
-            .unwrap();
+        .unwrap();
 
         file.rewind().unwrap();
 
@@ -944,8 +947,8 @@ mod tests {
                         std::iter::from_fn(|| {
                             Some((rng.next_u32() as usize % 100 >= *null_percent) as i16)
                         })
-                            .take(opts.num_rows)
-                            .collect()
+                        .take(opts.num_rows)
+                        .collect()
                     })
                     .collect();
                 (Repetition::OPTIONAL, Some(def_levels))
@@ -999,7 +1002,7 @@ mod tests {
             arrow_field,
             &opts,
         )
-            .unwrap();
+        .unwrap();
 
         file.rewind().unwrap();
 
@@ -1231,7 +1234,7 @@ mod tests {
                 schema,
                 writer_props,
             )
-                .unwrap();
+            .unwrap();
 
             {
                 let mut row_group_writer = writer.next_row_group().unwrap();
@@ -1358,7 +1361,7 @@ mod tests {
             Some(arrow_field),
             &opts,
         )
-            .unwrap();
+        .unwrap();
 
         file.rewind().unwrap();
 
@@ -1474,7 +1477,7 @@ mod tests {
                 batch.schema(),
                 Some(props),
             )
-                .unwrap();
+            .unwrap();
             writer.write(&batch).unwrap();
             writer.close().unwrap();
             file
@@ -1559,7 +1562,7 @@ mod tests {
                     .build(),
             ),
         )
-            .unwrap();
+        .unwrap();
         for _ in 0..2 {
             let mut list_builder = ListBuilder::new(Int32Builder::new(batch_size));
             for _ in 0..(batch_size) {
@@ -1569,7 +1572,7 @@ mod tests {
                 schema.clone(),
                 vec![Arc::new(list_builder.finish())],
             )
-                .unwrap();
+            .unwrap();
             writer.write(&batch).unwrap();
         }
         writer.close().unwrap();
@@ -1686,10 +1689,22 @@ mod tests {
             let num = batch.num_rows();
             assert!(num == batch_size || num == selection_len);
             if num == batch_size {
-                assert_eq!(batch, expected_data_batch.get(total_row_count / batch_size).unwrap().clone());
+                assert_eq!(
+                    batch,
+                    expected_data_batch
+                        .get(total_row_count / batch_size)
+                        .unwrap()
+                        .clone()
+                );
                 total_row_count += batch_size;
             } else if num == selection_len {
-                assert_eq!(batch, expected_data_selection.get(total_row_count / selection_len).unwrap().clone());
+                assert_eq!(
+                    batch,
+                    expected_data_selection
+                        .get(total_row_count / selection_len)
+                        .unwrap()
+                        .clone()
+                );
                 total_row_count += selection_len;
             }
             // add skip offset
@@ -1714,17 +1729,33 @@ mod tests {
             let num = batch.num_rows();
             assert!(num == batch_size || num == another_batch_size);
             if num == batch_size {
-                assert_eq!(batch, expected_data_batch.get(total_row_count / batch_size).unwrap().clone());
+                assert_eq!(
+                    batch,
+                    expected_data_batch
+                        .get(total_row_count / batch_size)
+                        .unwrap()
+                        .clone()
+                );
                 total_row_count += batch_size;
             } else if num == another_batch_size {
-                assert_eq!(batch, expected_data_batch2.get(total_row_count / another_batch_size).unwrap().clone());
+                assert_eq!(
+                    batch,
+                    expected_data_batch2
+                        .get(total_row_count / another_batch_size)
+                        .unwrap()
+                        .clone()
+                );
                 total_row_count += 10;
                 // add skip offset
                 total_row_count += selection_len;
             }
         }
 
-        fn create_skip_reader(test_file: &File, batch_size: usize, selections: Vec<RowSelection>) -> ParquetRecordBatchReader {
+        fn create_skip_reader(
+            test_file: &File,
+            batch_size: usize,
+            selections: Vec<RowSelection>,
+        ) -> ParquetRecordBatchReader {
             let arrow_reader_options =
                 ArrowReaderOptions::new().with_row_selection(selections);
 
@@ -1732,13 +1763,17 @@ mod tests {
                 test_file.try_clone().unwrap(),
                 arrow_reader_options,
             )
-                .unwrap();
+            .unwrap();
 
             let skip_reader = skip_arrow_reader.get_record_reader(batch_size).unwrap();
             skip_reader
         }
 
-        fn create_test_selection(step_len: usize, total_len: usize, skip_first: bool) -> Vec<RowSelection> {
+        fn create_test_selection(
+            step_len: usize,
+            total_len: usize,
+            skip_first: bool,
+        ) -> Vec<RowSelection> {
             let mut remaining = total_len;
             let mut skip = skip_first;
             let mut vec = vec![];
@@ -1761,7 +1796,8 @@ mod tests {
         fn create_expect_batch(test_file: &File, batch_size: usize) -> Vec<RecordBatch> {
             let mut serial_arrow_reader =
                 ParquetFileArrowReader::try_new(test_file.try_clone().unwrap()).unwrap();
-            let serial_reader = serial_arrow_reader.get_record_reader(batch_size).unwrap();
+            let serial_reader =
+                serial_arrow_reader.get_record_reader(batch_size).unwrap();
             let mut expected_data = vec![];
             for batch in serial_reader {
                 expected_data.push(batch.unwrap());
