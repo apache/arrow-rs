@@ -20,6 +20,8 @@ name: Docs
 on:
   # always trigger
   push:
+    branches:
+      - master
   pull_request:
 
 jobs:

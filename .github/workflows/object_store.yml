@@ -19,6 +19,9 @@
 name: "Object Store"
 
 on:
+  push:
+    branches:
+      - master
   pull_request:
     paths:
       # Only run when object store files or github workflows change
