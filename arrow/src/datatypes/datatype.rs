@@ -431,10 +431,10 @@ pub const MIN_DECIMAL_FOR_LARGER_PRECISION: [&str; 38] = [
 ];
 
 /// The maximum precision for [DataType::Decimal] values
-pub const DECIMAL_MAX_PRECISION: usize = 38;
+pub const DECIMAL128_MAX_PRECISION: usize = 38;
 
 /// The maximum scale for [DataType::Decimal] values
-pub const DECIMAL_MAX_SCALE: usize = 38;
+pub const DECIMAL128_MAX_SCALE: usize = 38;
 
 /// The maximum precision for [DataType::Decimal256] values
 pub const DECIMAL256_MAX_PRECISION: usize = 76;
