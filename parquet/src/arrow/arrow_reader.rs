@@ -1764,9 +1764,7 @@ mod tests {
                 arrow_reader_options,
             )
             .unwrap();
-
-            let skip_reader = skip_arrow_reader.get_record_reader(batch_size).unwrap();
-            skip_reader
+            skip_arrow_reader.get_record_reader(batch_size).unwrap()
         }
 
         fn create_test_selection(
