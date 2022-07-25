@@ -1,0 +1,159 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# tests for arrow crate
+name: Arrow
+
+on:
+  # always trigger
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+
+  # test the crate
+  linux-test:
+    name: Test
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Test default features
+        run: |
+          cargo test -p arrow
+      - name: Test all supported features
+        run: |
+          cargo test -p arrow --features=force_validate,prettyprint
+      - name: Run examples
+        run: |
+          # Test arrow examples
+          cargo run --example builders
+          cargo run --example dynamic_types
+          cargo run --example read_csv
+          cargo run --example read_csv_infer_schema
+
+  # test compilaton features
+  linux-features:
+    name: Feature Compatibility
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Test compilation with different features
+        run: |
+          cargo check -p arrow --no-default-features
+          cargo check -p arrow --all-targets
+          cargo check -p arrow --no-default-features --all-targets
+          cargo check -p arrow --no-default-features --all-targets --features test_utils
+
+  # test the --features "simd" of the arrow crate. This requires nightly.
+  linux-test-simd:
+    name: Test SIMD on AMD64 Rust ${{ matrix.rust }}
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/nightly
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: nightly
+      - name: Run tests
+        run: |
+          cargo test -p arrow --features "simd"
+      - name: Check compilation with simd features
+        run: |
+          cargo check -p arrow --features simd
+          cargo check -p arrow --features simd --all-targets
+
+
+  # test the arrow crate builds against wasm32 in stable rust
+  wasm32-build:
+    name: Build wasm32
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/nightly
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Cache Cargo
+        uses: actions/cache@v3
+        with:
+          path: /github/home/.cargo
+          key: cargo-wasm32-cache3-
+      - name: Setup Rust toolchain for WASM
+        run: |
+          rustup toolchain install ${{ matrix.rust }}
+          rustup override set ${{ matrix.rust }}
+          rustup target add wasm32-unknown-unknown
+          rustup target add wasm32-wasi
+      - name: Build
+        run: |
+          cd arrow
+          cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
+          cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup Rust toolchain with clippy
+        run: |
+          rustup toolchain install stable
+          rustup default stable
+          rustup component add clippy
+      - name: Run clippy
+        run: |
+          cargo clippy -p --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
