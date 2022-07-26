@@ -84,20 +84,20 @@ impl BooleanBuilder {
     #[inline]
     pub fn append_value(&mut self, v: bool) {
         self.values_builder.append(v);
-        self.null_buffer_builder.append_true();
+        self.null_buffer_builder.append_non_null();
     }
 
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
-        self.null_buffer_builder.append_false();
+        self.null_buffer_builder.append_null();
         self.values_builder.advance(1);
     }
 
     /// Appends `n` `null`s into the builder.
     #[inline]
     pub fn append_nulls(&mut self, n: usize) {
-        self.null_buffer_builder.append_n_false(n);
+        self.null_buffer_builder.append_n_nulls(n);
         self.values_builder.advance(n);
     }
 
@@ -114,7 +114,7 @@ impl BooleanBuilder {
     #[inline]
     pub fn append_slice(&mut self, v: &[bool]) {
         self.values_builder.append_slice(v);
-        self.null_buffer_builder.append_n_true(v.len());
+        self.null_buffer_builder.append_n_non_nulls(v.len());
     }
 
     /// Appends values from a slice of type `T` and a validity boolean slice.

@@ -43,9 +43,10 @@ impl NullBufferBuilder {
         }
     }
 
-    /// Appends `n` `true`s into the builder.
+    /// Appends `n` `true`s into the builder
+    /// to indicate that these `n` items are not nulls.
     #[inline]
-    pub fn append_n_true(&mut self, n: usize) {
+    pub fn append_n_non_nulls(&mut self, n: usize) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append_n(n, true)
         } else {
@@ -53,9 +54,10 @@ impl NullBufferBuilder {
         }
     }
 
-    /// Appends a `true` into the builder.
+    /// Appends a `true` into the builder
+    /// to indicate that this item is not null.
     #[inline]
-    pub fn append_true(&mut self) {
+    pub fn append_non_null(&mut self) {
         if let Some(buf) = self.bitmap_builder.as_mut() {
             buf.append(true)
         } else {
@@ -63,31 +65,34 @@ impl NullBufferBuilder {
         }
     }
 
-    /// Appends `n` `false`s into the builder.
+    /// Appends `n` `false`s into the builder
+    /// to indicate that these `n` items are nulls.
     #[inline]
-    pub fn append_n_false(&mut self, n: usize) {
+    pub fn append_n_nulls(&mut self, n: usize) {
         self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append_n(n, false);
     }
 
-    /// Appends a `false` into the builder.
+    /// Appends a `false` into the builder
+    /// to indicate that this item is null.
     #[inline]
-    pub fn append_false(&mut self) {
+    pub fn append_null(&mut self) {
         self.materialize_if_needed();
         self.bitmap_builder.as_mut().unwrap().append(false);
     }
 
     /// Appends a boolean value into the builder.
     #[inline]
-    pub fn append(&mut self, v: bool) {
-        if v {
-            self.append_true()
+    pub fn append(&mut self, not_null: bool) {
+        if not_null {
+            self.append_non_null()
         } else {
-            self.append_false()
+            self.append_null()
         }
     }
 
-    /// Appends a boolean slice into the builder.
+    /// Appends a boolean slice into the builder
+    /// to indicate the validations of these items.
     pub fn append_slice(&mut self, slice: &[bool]) {
         if slice.iter().any(|v| !v) {
             self.materialize_if_needed()
@@ -146,10 +151,10 @@ mod tests {
     #[test]
     fn test_null_buffer_builder() {
         let mut builder = NullBufferBuilder::new(0);
-        builder.append_false();
-        builder.append_true();
-        builder.append_n_false(2);
-        builder.append_n_true(2);
+        builder.append_null();
+        builder.append_non_null();
+        builder.append_n_nulls(2);
+        builder.append_n_non_nulls(2);
         assert_eq!(6, builder.len());
 
         let buf = builder.finish().unwrap();
@@ -159,8 +164,8 @@ mod tests {
     #[test]
     fn test_null_buffer_builder_all_nulls() {
         let mut builder = NullBufferBuilder::new(0);
-        builder.append_false();
-        builder.append_n_false(2);
+        builder.append_null();
+        builder.append_n_nulls(2);
         builder.append_slice(&[false, false, false]);
         assert_eq!(6, builder.len());
 
@@ -171,8 +176,8 @@ mod tests {
     #[test]
     fn test_null_buffer_builder_no_null() {
         let mut builder = NullBufferBuilder::new(0);
-        builder.append_true();
-        builder.append_n_true(2);
+        builder.append_non_null();
+        builder.append_n_non_nulls(2);
         builder.append_slice(&[true, true, true]);
         assert_eq!(6, builder.len());
 

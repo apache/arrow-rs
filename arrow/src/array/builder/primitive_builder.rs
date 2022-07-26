@@ -81,20 +81,20 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Appends a value of type `T` into the builder
     #[inline]
     pub fn append_value(&mut self, v: T::Native) {
-        self.null_buffer_builder.append_true();
+        self.null_buffer_builder.append_non_null();
         self.values_builder.append(v);
     }
 
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
-        self.null_buffer_builder.append_false();
+        self.null_buffer_builder.append_null();
         self.values_builder.advance(1);
     }
 
     #[inline]
     pub fn append_nulls(&mut self, n: usize) {
-        self.null_buffer_builder.append_n_false(n);
+        self.null_buffer_builder.append_n_nulls(n);
         self.values_builder.advance(n);
     }
 
@@ -110,7 +110,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Appends a slice of type `T` into the builder
     #[inline]
     pub fn append_slice(&mut self, v: &[T::Native]) {
-        self.null_buffer_builder.append_n_true(v.len());
+        self.null_buffer_builder.append_n_non_nulls(v.len());
         self.values_builder.append_slice(v);
     }
 
@@ -142,7 +142,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .1
             .expect("append_trusted_len_iter requires an upper bound");
 
-        self.null_buffer_builder.append_n_true(len);
+        self.null_buffer_builder.append_n_non_nulls(len);
         self.values_builder.append_trusted_len_iter(iter);
     }
 

@@ -64,7 +64,7 @@ impl FixedSizeBinaryBuilder {
             ))
         } else {
             self.values_builder.append_slice(value.as_ref());
-            self.null_buffer_builder.append_true();
+            self.null_buffer_builder.append_non_null();
             Ok(())
         }
     }
@@ -74,7 +74,7 @@ impl FixedSizeBinaryBuilder {
     pub fn append_null(&mut self) {
         self.values_builder
             .append_slice(&vec![0u8; self.value_length as usize][..]);
-        self.null_buffer_builder.append_false();
+        self.null_buffer_builder.append_null();
     }
 
     /// Builds the [`FixedSizeBinaryArray`] and reset this builder.
