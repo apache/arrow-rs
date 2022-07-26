@@ -1141,16 +1141,37 @@ impl ArrayData {
         T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
     {
         let values_buffer = &self.buffers[1].as_slice();
-
-        self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
-            std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
-                ArrowError::InvalidArgumentError(format!(
-                    "Invalid UTF8 sequence at string index {} ({:?}): {}",
-                    string_index, range, e
-                ))
-            })?;
-            Ok(())
-        })
+        if let Ok(values_str) = std::str::from_utf8(values_buffer) {
+            // Validate Offsets are correct
+            self.validate_each_offset::<T, _>(
+                values_buffer.len(),
+                |string_index, range| {
+                    if !values_str.is_char_boundary(range.start)
+                        || !values_str.is_char_boundary(range.end)
+                    {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "incomplete utf-8 byte sequence from index {}",
+                            string_index
+                        )));
+                    }
+                    Ok(())
+                },
+            )
+        } else {
+            // find specific offset that failed utf8 validation
+            self.validate_each_offset::<T, _>(
+                values_buffer.len(),
+                |string_index, range| {
+                    std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
+                        ArrowError::InvalidArgumentError(format!(
+                            "Invalid UTF8 sequence at string index {} ({:?}): {}",
+                            string_index, range, e
+                        ))
+                    })?;
+                    Ok(())
+                },
+            )
+        }
     }
 
     /// Ensures that all offsets in `buffers[0]` into `buffers[1]` are
