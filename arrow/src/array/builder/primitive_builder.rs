@@ -23,15 +23,13 @@ use crate::array::ArrayRef;
 use crate::array::PrimitiveArray;
 use crate::datatypes::ArrowPrimitiveType;
 
-use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
+use super::{ArrayBuilder, BufferBuilder, NullBufferBuilder};
 
 ///  Array builder for fixed-width primitive types
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
     values_builder: BufferBuilder<T::Native>,
-    /// We only materialize the builder when we add `false`.
-    /// This optimization is **very** important for performance of `StringBuilder`.
-    bitmap_builder: Option<BooleanBufferBuilder>,
+    null_buffer_builder: NullBufferBuilder,
 }
 
 impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
@@ -71,7 +69,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     pub fn new(capacity: usize) -> Self {
         Self {
             values_builder: BufferBuilder::<T::Native>::new(capacity),
-            bitmap_builder: None,
+            null_buffer_builder: NullBufferBuilder::new(capacity),
         }
     }
 
@@ -83,24 +81,20 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Appends a value of type `T` into the builder
     #[inline]
     pub fn append_value(&mut self, v: T::Native) {
-        if let Some(b) = self.bitmap_builder.as_mut() {
-            b.append(true);
-        }
+        self.null_buffer_builder.append_non_null();
         self.values_builder.append(v);
     }
 
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
-        self.materialize_bitmap_builder_if_needed();
-        self.bitmap_builder.as_mut().unwrap().append(false);
+        self.null_buffer_builder.append_null();
         self.values_builder.advance(1);
     }
 
     #[inline]
     pub fn append_nulls(&mut self, n: usize) {
-        self.materialize_bitmap_builder_if_needed();
-        self.bitmap_builder.as_mut().unwrap().append_n(n, false);
+        self.null_buffer_builder.append_n_nulls(n);
         self.values_builder.advance(n);
     }
 
@@ -116,9 +110,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Appends a slice of type `T` into the builder
     #[inline]
     pub fn append_slice(&mut self, v: &[T::Native]) {
-        if let Some(b) = self.bitmap_builder.as_mut() {
-            b.append_n(v.len(), true);
-        }
+        self.null_buffer_builder.append_n_non_nulls(v.len());
         self.values_builder.append_slice(v);
     }
 
@@ -130,12 +122,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             is_valid.len(),
             "Value and validity lengths must be equal"
         );
-        if is_valid.iter().any(|v| !*v) {
-            self.materialize_bitmap_builder_if_needed();
-        }
-        if let Some(b) = self.bitmap_builder.as_mut() {
-            b.append_slice(is_valid);
-        }
+        self.null_buffer_builder.append_slice(is_valid);
         self.values_builder.append_slice(values);
     }
 
@@ -155,48 +142,21 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .1
             .expect("append_trusted_len_iter requires an upper bound");
 
-        if let Some(b) = self.bitmap_builder.as_mut() {
-            b.append_n(len, true);
-        }
+        self.null_buffer_builder.append_n_non_nulls(len);
         self.values_builder.append_trusted_len_iter(iter);
     }
 
-    /// Builds the `PrimitiveArray` and reset this builder.
+    /// Builds the [`PrimitiveArray`] and reset this builder.
     pub fn finish(&mut self) -> PrimitiveArray<T> {
         let len = self.len();
-        let null_bit_buffer = self.bitmap_builder.as_mut().map(|b| b.finish());
-        let null_count = len
-            - null_bit_buffer
-                .as_ref()
-                .map(|b| b.count_set_bits())
-                .unwrap_or(len);
+        let null_bit_buffer = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(T::DATA_TYPE)
             .len(len)
             .add_buffer(self.values_builder.finish())
-            .null_bit_buffer(if null_count > 0 {
-                null_bit_buffer
-            } else {
-                None
-            });
+            .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
-    }
-
-    #[inline]
-    fn materialize_bitmap_builder_if_needed(&mut self) {
-        if self.bitmap_builder.is_some() {
-            return;
-        }
-        self.materialize_bitmap_builder()
-    }
-
-    #[cold]
-    fn materialize_bitmap_builder(&mut self) {
-        let mut b = BooleanBufferBuilder::new(0);
-        b.reserve(self.values_builder.capacity());
-        b.append_n(self.values_builder.len(), true);
-        self.bitmap_builder = Some(b);
     }
 
     /// Returns the current values buffer as a slice

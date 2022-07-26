@@ -25,14 +25,14 @@ use crate::{
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{BooleanBufferBuilder, BufferBuilder};
+use super::{BufferBuilder, NullBufferBuilder};
 
 ///  Array builder for [`GenericBinaryArray`]
 #[derive(Debug)]
 pub struct GenericBinaryBuilder<OffsetSize: OffsetSizeTrait> {
     value_builder: UInt8BufferBuilder,
     offsets_builder: BufferBuilder<OffsetSize>,
-    null_buffer_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
@@ -44,7 +44,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
         Self {
             value_builder: UInt8BufferBuilder::new(capacity),
             offsets_builder,
-            null_buffer_builder: BooleanBufferBuilder::new(1024),
+            null_buffer_builder: NullBufferBuilder::new(1024),
         }
     }
 
@@ -76,7 +76,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
             .len(self.len())
             .add_buffer(self.offsets_builder.finish())
             .add_buffer(self.value_builder.finish())
-            .null_bit_buffer(Some(self.null_buffer_builder.finish()));
+            .null_bit_buffer(self.null_buffer_builder.finish());
 
         self.offsets_builder.append(OffsetSize::zero());
         let array_data = unsafe { array_builder.build_unchecked() };

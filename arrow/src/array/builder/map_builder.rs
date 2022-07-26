@@ -18,7 +18,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
+use super::{ArrayBuilder, BufferBuilder, NullBufferBuilder};
 use crate::array::array::Array;
 use crate::array::ArrayData;
 use crate::array::ArrayRef;
@@ -32,7 +32,7 @@ use crate::error::Result;
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
     offsets_builder: BufferBuilder<i32>,
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
     field_names: MapFieldNames,
     key_builder: K,
     value_builder: V,
@@ -78,7 +78,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         offsets_builder.append(len);
         Self {
             offsets_builder,
-            bitmap_builder: BooleanBufferBuilder::new(capacity),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
             field_names: field_names.unwrap_or_default(),
             key_builder,
             value_builder,
@@ -107,7 +107,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             )));
         }
         self.offsets_builder.append(self.key_builder.len() as i32);
-        self.bitmap_builder.append(is_valid);
+        self.null_buffer_builder.append(is_valid);
         self.len += 1;
         Ok(())
     }
@@ -145,7 +145,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             StructArray::from(vec![(keys_field, keys_arr), (values_field, values_arr)]);
 
         let offset_buffer = self.offsets_builder.finish();
-        let null_bit_buffer = self.bitmap_builder.finish();
+        let null_bit_buffer = self.null_buffer_builder.finish();
         self.offsets_builder.append(self.len);
         let map_field = Box::new(Field::new(
             self.field_names.entry.as_str(),
@@ -156,7 +156,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             .len(len)
             .add_buffer(offset_buffer)
             .add_child_data(struct_array.into_data())
-            .null_bit_buffer(Some(null_bit_buffer));
+            .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { array_data.build_unchecked() };
 

@@ -28,6 +28,7 @@ use crate::error::ArrowError;
 use crate::error::Result;
 
 use super::BooleanBufferBuilder;
+use super::NullBufferBuilder;
 
 ///  Array builder for fixed-width primitive types
 ///
@@ -62,9 +63,7 @@ use super::BooleanBufferBuilder;
 #[derive(Debug)]
 pub struct BooleanBuilder {
     values_builder: BooleanBufferBuilder,
-    /// We only materialize the builder when we add `false`.
-    /// This optimization is **very** important for the performance.
-    bitmap_builder: Option<BooleanBufferBuilder>,
+    null_buffer_builder: NullBufferBuilder,
 }
 
 impl BooleanBuilder {
@@ -72,7 +71,7 @@ impl BooleanBuilder {
     pub fn new(capacity: usize) -> Self {
         Self {
             values_builder: BooleanBufferBuilder::new(capacity),
-            bitmap_builder: None,
+            null_buffer_builder: NullBufferBuilder::new(capacity),
         }
     }
 
@@ -85,17 +84,21 @@ impl BooleanBuilder {
     #[inline]
     pub fn append_value(&mut self, v: bool) {
         self.values_builder.append(v);
-        if let Some(b) = self.bitmap_builder.as_mut() {
-            b.append(true)
-        }
+        self.null_buffer_builder.append_non_null();
     }
 
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
-        self.materialize_bitmap_builder();
-        self.bitmap_builder.as_mut().unwrap().append(false);
+        self.null_buffer_builder.append_null();
         self.values_builder.advance(1);
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_nulls(n);
+        self.values_builder.advance(n);
     }
 
     /// Appends an `Option<T>` into the builder
@@ -110,10 +113,8 @@ impl BooleanBuilder {
     /// Appends a slice of type `T` into the builder
     #[inline]
     pub fn append_slice(&mut self, v: &[bool]) {
-        if let Some(b) = self.bitmap_builder.as_mut() {
-            b.append_n(v.len(), true)
-        }
         self.values_builder.append_slice(v);
+        self.null_buffer_builder.append_n_non_nulls(v.len());
     }
 
     /// Appends values from a slice of type `T` and a validity boolean slice.
@@ -126,13 +127,7 @@ impl BooleanBuilder {
                 "Value and validity lengths must be equal".to_string(),
             ))
         } else {
-            is_valid
-                .iter()
-                .any(|v| !*v)
-                .then(|| self.materialize_bitmap_builder());
-            if let Some(b) = self.bitmap_builder.as_mut() {
-                b.append_slice(is_valid)
-            }
+            self.null_buffer_builder.append_slice(is_valid);
             self.values_builder.append_slice(values);
             Ok(())
         }
@@ -141,7 +136,7 @@ impl BooleanBuilder {
     /// Builds the [BooleanArray] and reset this builder.
     pub fn finish(&mut self) -> BooleanArray {
         let len = self.len();
-        let null_bit_buffer = self.bitmap_builder.as_mut().map(|b| b.finish());
+        let null_bit_buffer = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
             .add_buffer(self.values_builder.finish())
@@ -149,15 +144,6 @@ impl BooleanBuilder {
 
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
-    }
-
-    fn materialize_bitmap_builder(&mut self) {
-        if self.bitmap_builder.is_none() {
-            let mut b = BooleanBufferBuilder::new(0);
-            b.reserve(self.values_builder.capacity());
-            b.append_n(self.values_builder.len(), true);
-            self.bitmap_builder = Some(b);
-        }
     }
 }
 
