@@ -309,14 +309,13 @@ impl Iterator for ParquetRecordBatchReader {
 
                 // try to read record
                 let to_read = match front.row_count.checked_sub(self.batch_size) {
-                    Some(remaining) => {
+                    Some(remaining) if remaining != 0 => {
                         // if page row count less than batch_size we must set batch size to page row count.
                         // add check avoid dead loop
-                        if remaining != 0 {
-                            selection.push_front(RowSelection::select(remaining));
-                        }
+                        selection.push_front(RowSelection::select(remaining));
                         self.batch_size
                     }
+                    Some(_) => self.batch_size,
                     None => front.row_count,
                 };
 

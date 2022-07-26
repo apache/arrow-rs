@@ -24,7 +24,6 @@ use crate::arrow::record_reader::{
     buffer::{BufferQueue, ScalarBuffer, ValuesBuffer},
     definition_levels::{DefinitionLevelBuffer, DefinitionLevelBufferDecoder},
 };
-use crate::column::page::PageIterator;
 use crate::column::{
     page::PageReader,
     reader::{
@@ -46,6 +45,9 @@ pub(crate) const MIN_BATCH_SIZE: usize = 1024;
 pub type RecordReader<T> =
     GenericRecordReader<ScalarBuffer<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
 
+pub(crate) type ColumnReader<CV> =
+    GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelBufferDecoder, CV>;
+
 /// A generic stateful column reader that delimits semantic records
 ///
 /// This type is hidden from the docs, and relies on private traits with no
@@ -57,9 +59,7 @@ pub struct GenericRecordReader<V, CV> {
     records: V,
     def_levels: Option<DefinitionLevelBuffer>,
     rep_levels: Option<ScalarBuffer<i16>>,
-    column_reader: Option<
-        GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelBufferDecoder, CV>,
-    >,
+    column_reader: Option<ColumnReader<CV>>,
 
     /// Number of records accumulated in records
     num_records: usize,
@@ -185,24 +185,11 @@ where
     /// # Returns
     ///
     /// Number of records skipped
-    pub fn skip_records(
-        &mut self,
-        num_records: usize,
-        pages: &mut dyn PageIterator,
-    ) -> Result<usize> {
+    pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
         // First need to clear the buffer
         let end_of_column = match self.column_reader.as_mut() {
             Some(reader) => !reader.has_next()?,
-            None => {
-                // If we skip records before all read operation
-                // we need set `column_reader` by `set_page_reader`
-                if let Some(page_reader) = pages.next() {
-                    self.set_page_reader(page_reader?)?;
-                    false
-                } else {
-                    return Ok(0);
-                }
-            }
+            None => return Ok(0),
         };
 
         let (buffered_records, buffered_values) =
@@ -290,6 +277,11 @@ where
         self.def_levels
             .as_mut()
             .map(|levels| levels.split_bitmask(self.num_values))
+    }
+
+    /// Returns column reader.
+    pub(crate) fn column_reader(&self) -> Option<&ColumnReader<CV>> {
+        self.column_reader.as_ref()
     }
 
     /// Try to read one batch of data.
