@@ -169,7 +169,7 @@ where
         let re = if let Some(ref regex) = map.get(pat) {
             regex
         } else {
-            let re_pattern = escape(pat).replace('%', ".*").replace('_', ".");
+            let re_pattern = replace_like_wildcards(pat)?;
             let re = op(&re_pattern)?;
             map.insert(pat, re);
             map.get(pat).unwrap()
@@ -248,7 +248,9 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
                 bit_util::set_bit(bool_slice, i);
             }
         }
-    } else if right.ends_with('%') && !right[..right.len() - 1].contains(is_like_pattern)
+    } else if right.ends_with('%')
+        && !right.ends_with("\\%")
+        && !right[..right.len() - 1].contains(is_like_pattern)
     {
         // fast path, can use starts_with
         let starts_with = &right[..right.len() - 1];
@@ -266,7 +268,7 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
             }
         }
     } else {
-        let re_pattern = escape(right).replace('%', ".*").replace('_', ".");
+        let re_pattern = replace_like_wildcards(right)?;
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -294,6 +296,41 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         )
     };
     Ok(BooleanArray::from(data))
+}
+
+fn replace_like_wildcards(text: &str) -> Result<String> {
+    let text = escape(text);
+    let mut result = String::new();
+    let mut preceding_backslash_chars = String::new();
+    for c in text.chars() {
+        if c == '\\' {
+            preceding_backslash_chars.push(c);
+        } else if is_like_pattern(c) {
+            if preceding_backslash_chars.is_empty() {
+                // An unescaped like wildcard. Replaced by regex pattern
+                if c == '%' {
+                    result.push_str(".*");
+                } else {
+                    result.push('.');
+                }
+            } else {
+                // Escaped like wildcard. Remove the last two backslash
+                if preceding_backslash_chars.len() > 2 {
+                    result.push_str(&preceding_backslash_chars[0..preceding_backslash_chars.len() - 2]);
+                }
+                result.push(c);
+            }
+            preceding_backslash_chars = String::new();
+        } else {
+            // No like wildcard found. Append unchanged
+            if !preceding_backslash_chars.is_empty() {
+                result.push_str(&preceding_backslash_chars);
+                preceding_backslash_chars = String::new();
+            }
+            result.push(c);
+        }
+    }
+    Ok(result)
 }
 
 /// Perform SQL `left NOT LIKE right` operation on [`StringArray`] /
@@ -342,7 +379,7 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
             result.append(!left.value(i).ends_with(&right[1..]));
         }
     } else {
-        let re_pattern = escape(right).replace('%', ".*").replace('_', ".");
+        let re_pattern = replace_like_wildcards(right)?;
         let re = Regex::new(&format!("^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from LIKE pattern: {}",
@@ -423,7 +460,7 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
             );
         }
     } else {
-        let re_pattern = escape(right).replace('%', ".*").replace('_', ".");
+        let re_pattern = replace_like_wildcards(right)?;
         let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from ILIKE pattern: {}",
@@ -506,7 +543,7 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
             );
         }
     } else {
-        let re_pattern = escape(right).replace('%', ".*").replace('_', ".");
+        let re_pattern = replace_like_wildcards(right)?;
         let re = Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
             ArrowError::ComputeError(format!(
                 "Unable to build regex from ILIKE pattern: {}",
@@ -3739,6 +3776,32 @@ mod tests {
         like_utf8_scalar,
         vec![false, true, false, false]
     );
+
+    test_utf8_scalar!(
+        test_utf8_scalar_like_escape,
+        vec!["a%", "a\\x"],
+        "a\\%",
+        like_utf8_scalar,
+        vec![true, false]
+    );
+
+    test_utf8!(
+        test_utf8_scalar_ilike_regex,
+        vec!["%%%"],
+        vec![r#"\%_\%"#],
+        ilike_utf8,
+        vec![true]
+    );
+
+    #[test]
+    fn test_replace_like_wildcards() {
+        let a_eq = "\\%_%\\_\\\\%.\\.";
+        let expected = String::from("%..*_\\\\%\\.\\\\\\.");
+        assert_eq!(
+            replace_like_wildcards(a_eq).unwrap(),
+            expected
+        );
+    }
 
     test_utf8!(
         test_utf8_array_eq,
