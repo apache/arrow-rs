@@ -719,7 +719,12 @@ mod tests {
     fn test_read_decimal_file() {
         use arrow::array::Decimal128Array;
         let testdata = arrow::util::test_util::parquet_test_data();
-        let file_variants = vec![("fixed_length", 25), ("int32", 4), ("int64", 10)];
+        let file_variants = vec![
+            ("byte_array", 4),
+            ("fixed_length", 25),
+            ("int32", 4),
+            ("int64", 10),
+        ];
         for (prefix, target_precision) in file_variants {
             let path = format!("{}/{}_decimal.parquet", testdata, prefix);
             let file = File::open(&path).unwrap();
