@@ -297,12 +297,7 @@ fn cast_integer_to_decimal<T: ArrowNumericType>(
 
     // with_precision_and_scale validates the
     // value is within range for the output precision
-    cast_primitive_to_decimal(
-        array,
-        |v| v.to_isize().unwrap() as i128 * mul,
-        precision,
-        scale,
-    )
+    cast_primitive_to_decimal(array, |v| v.to_i128().unwrap() * mul, precision, scale)
 }
 
 fn cast_floating_point_to_decimal<T: ArrowNumericType>(
@@ -320,7 +315,7 @@ where
         |v| {
             // with_precision_and_scale validates the
             // value is within range for the output precision
-            ((num::ToPrimitive::to_f64(&v).unwrap()) * mul) as i128
+            (ArrowNativeType::to_f64(&v).unwrap() * mul) as i128
         },
         precision,
         scale,
