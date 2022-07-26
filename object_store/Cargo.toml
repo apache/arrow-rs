@@ -44,6 +44,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 futures = "0.3"
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, optional = true }
+quick-xml = { version = "0.23.0", features = ["serialize"], optional = true }
 rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 ring = { version = "0.16", default-features = false, features = ["std"] }
 base64 = { version = "0.13", default-features = false, optional = true }
@@ -59,7 +60,7 @@ rusoto_credential = { version = "0.48.0", optional = true, default-features = fa
 rusoto_s3 = { version = "0.48.0", optional = true, default-features = false, features = ["rustls"] }
 rusoto_sts = { version = "0.48.0", optional = true, default-features = false, features = ["rustls"]  }
 snafu = "0.7"
-tokio = { version = "1.18", features = ["sync", "macros", "parking_lot", "rt-multi-thread", "time"] }
+tokio = { version = "1.18", features = ["sync", "macros", "parking_lot", "rt-multi-thread", "time", "io-util"] }
 tracing = { version = "0.1" }
 reqwest = { version = "0.11", optional = true, default-features = false, features = ["rustls-tls"] }
 parking_lot = { version = "0.12" }
@@ -70,7 +71,7 @@ walkdir = "2"
 [features]
 azure = ["azure_core", "azure_storage_blobs", "azure_storage", "reqwest"]
 azure_test = ["azure", "azure_core/azurite_workaround", "azure_storage/azurite_workaround", "azure_storage_blobs/azurite_workaround"]
-gcp = ["serde", "serde_json", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "rustls-pemfile", "base64"]
+gcp = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "rustls-pemfile", "base64"]
 aws = ["rusoto_core", "rusoto_credential", "rusoto_s3", "rusoto_sts", "hyper", "hyper-rustls"]
 
 [dev-dependencies] # In alphabetical order
