@@ -39,34 +39,27 @@
     clippy::too_many_arguments
 )]
 
-/// Defines a module with an experimental public API
+/// Defines a an item with an experimental public API
 ///
 /// The module will not be documented, and will only be public if the
 /// experimental feature flag is enabled
 ///
-/// Experimental modules have no stability guarantees
-macro_rules! experimental_mod {
-    ($module:ident $(, #[$meta:meta])*) => {
-        #[cfg(feature = "experimental")]
+/// Experimental components have no stability guarantees
+#[cfg(feature = "experimental")]
+macro_rules! experimental {
+    ($(#[$meta:meta])* $vis:vis mod $module:ident) => {
         #[doc(hidden)]
         $(#[$meta])*
         pub mod $module;
-        #[cfg(not(feature = "experimental"))]
-        $(#[$meta])*
-        mod $module;
-    };
+    }
 }
 
-macro_rules! experimental_mod_crate {
-    ($module:ident $(, #[$meta:meta])*) => {
-        #[cfg(feature = "experimental")]
-        #[doc(hidden)]
+#[cfg(not(feature = "experimental"))]
+macro_rules! experimental {
+    ($(#[$meta:meta])* $vis:vis mod $module:ident) => {
         $(#[$meta])*
-        pub mod $module;
-        #[cfg(not(feature = "experimental"))]
-        $(#[$meta])*
-        pub(crate) mod $module;
-    };
+        $vis mod $module;
+    }
 }
 
 #[macro_use]
@@ -85,12 +78,12 @@ pub use self::encodings::{decoding, encoding};
 #[doc(hidden)]
 pub use self::util::memory;
 
-experimental_mod!(util, #[macro_use]);
+experimental!(#[macro_use] mod util);
 #[cfg(any(feature = "arrow", test))]
 pub mod arrow;
 pub mod column;
-experimental_mod!(compression);
-experimental_mod!(encodings);
+experimental!(mod compression);
+experimental!(mod encodings);
 pub mod file;
 pub mod record;
 pub mod schema;
