@@ -299,7 +299,7 @@ where
         let mut remaining = num_records;
         while remaining != 0 {
             if self.num_buffered_values == self.num_decoded_values {
-                let mut metadata = match self.page_reader.peek_next_page()? {
+                let metadata = match self.page_reader.peek_next_page()? {
                     None => return Ok(num_records - remaining),
                     Some(metadata) => metadata,
                 };
@@ -312,17 +312,16 @@ where
 
                 // If page has less rows than the remaining records to
                 // be skipped, skip entire page
-                while metadata.num_rows < remaining {
+                if metadata.num_rows < remaining {
                     self.page_reader.skip_next_page()?;
                     remaining -= metadata.num_rows;
-                    metadata = match self.page_reader.peek_next_page()? {
-                        None => return Ok(num_records - remaining),
-                        Some(metadata) => metadata,
-                    };
-                }
+                    continue;
+                };
                 // because self.num_buffered_values == self.num_decoded_values means
                 // we need reads a new page and set up the decoders for levels
-                self.read_new_page()?;
+                if !self.read_new_page()? {
+                    return Ok(num_records - remaining);
+                }
             }
 
             // start skip values in page level

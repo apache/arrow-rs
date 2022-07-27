@@ -144,3 +144,30 @@ where
     }
     Ok(records_read)
 }
+
+/// Uses `pages` to set up to `record_reader` 's `column_reader`
+///
+/// If we skip records before all read operation,
+/// need set `column_reader` by `set_page_reader`
+/// for constructing `def_level_decoder` and `rep_level_decoder`.
+fn set_column_reader<V, CV>(
+    record_reader: &mut GenericRecordReader<V, CV>,
+    pages: &mut dyn PageIterator,
+) -> Result<bool>
+where
+    V: ValuesBuffer + Default,
+    CV: ColumnValueDecoder<Slice = V::Slice>,
+{
+    return if record_reader.column_reader().is_none() {
+        // If we skip records before all read operation
+        // we need set `column_reader` by `set_page_reader`
+        if let Some(page_reader) = pages.next() {
+            record_reader.set_page_reader(page_reader?)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    } else {
+        Ok(true)
+    };
+}

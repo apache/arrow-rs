@@ -315,8 +315,7 @@ impl Iterator for ParquetRecordBatchReader {
                         selection.push_front(RowSelection::select(remaining));
                         self.batch_size
                     }
-                    Some(_) => self.batch_size,
-                    None => front.row_count,
+                    _ => front.row_count,
                 };
 
                 break to_read;

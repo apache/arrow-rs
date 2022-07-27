@@ -25,7 +25,7 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
 
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
-use crate::arrow::array_reader::{read_records, ArrayReader};
+use crate::arrow::array_reader::{read_records, ArrayReader, set_column_reader};
 use crate::arrow::buffer::{
     dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer,
 };
@@ -181,15 +181,7 @@ where
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
-        if self.record_reader.column_reader().is_none() {
-            // If we skip records before all read operation
-            // we need set `column_reader` by `set_page_reader`
-            if let Some(page_reader) = self.pages.next() {
-                self.record_reader.set_page_reader(page_reader?)?;
-            } else {
-                return Ok(0);
-            }
-        }
+        set_column_reader(&mut self.record_reader, self.pages.as_mut())?;
         self.record_reader.skip_records(num_records)
     }
 

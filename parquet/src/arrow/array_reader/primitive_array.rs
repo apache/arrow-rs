@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, ArrayReader};
+use crate::arrow::array_reader::{read_records, set_column_reader, ArrayReader};
 use crate::arrow::record_reader::buffer::ScalarValue;
 use crate::arrow::record_reader::RecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
@@ -222,15 +222,7 @@ where
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
-        if self.record_reader.column_reader().is_none() {
-            // If we skip records before all read operation
-            // we need set `column_reader` by `set_page_reader`
-            if let Some(page_reader) = self.pages.next() {
-                self.record_reader.set_page_reader(page_reader?)?;
-            } else {
-                return Ok(0);
-            }
-        }
+        set_column_reader(&mut self.record_reader, self.pages.as_mut())?;
         self.record_reader.skip_records(num_records)
     }
 
