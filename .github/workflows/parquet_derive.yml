@@ -16,7 +16,8 @@
 # under the License.
 
 ---
-name: "Parquet Derive"
+# tests for parquet_derive crate
+name: parquet_derive
 
 on:
   pull_request:
