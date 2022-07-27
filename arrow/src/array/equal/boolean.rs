@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{data::count_nulls, ArrayData};
+use crate::array::{data::contains_nulls, ArrayData};
 use crate::util::bit_util::get_bit;
 
 use super::utils::{equal_bits, equal_len};
 
+/// Returns true if the value data for the arrays is equal, assuming the null masks have
+/// already been checked for equality
 pub(super) fn boolean_equal(
     lhs: &ArrayData,
     rhs: &ArrayData,
@@ -30,10 +32,9 @@ pub(super) fn boolean_equal(
     let lhs_values = lhs.buffers()[0].as_slice();
     let rhs_values = rhs.buffers()[0].as_slice();
 
-    let lhs_null_count = count_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
-    let rhs_null_count = count_nulls(rhs.null_buffer(), rhs_start + rhs.offset(), len);
+    let contains_nulls = contains_nulls(lhs.null_buffer(), lhs_start + lhs.offset(), len);
 
-    if lhs_null_count == 0 && rhs_null_count == 0 {
+    if !contains_nulls {
         // Optimize performance for starting offset at u8 boundary.
         if lhs_start % 8 == 0
             && rhs_start % 8 == 0
@@ -75,7 +76,6 @@ pub(super) fn boolean_equal(
     } else {
         // get a ref of the null buffer bytes, to use in testing for nullness
         let lhs_null_bytes = lhs.null_buffer().as_ref().unwrap().as_slice();
-        let rhs_null_bytes = rhs.null_buffer().as_ref().unwrap().as_slice();
 
         let lhs_start = lhs.offset() + lhs_start;
         let rhs_start = rhs.offset() + rhs_start;
@@ -84,11 +84,8 @@ pub(super) fn boolean_equal(
             let lhs_pos = lhs_start + i;
             let rhs_pos = rhs_start + i;
             let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos);
-            let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos);
-            let lhs_is_true = get_bit(lhs_values, lhs_pos);
-            let rhs_is_true = get_bit(rhs_values, rhs_pos);
 
-            lhs_is_null == rhs_is_null && (lhs_is_null || (lhs_is_true == rhs_is_true))
+            lhs_is_null || get_bit(lhs_values, lhs_pos) == get_bit(rhs_values, rhs_pos)
         })
     }
 }
@@ -108,5 +105,14 @@ mod tests {
 
         let slice = array.slice(8, 24);
         assert_eq!(slice.data(), slice.data());
+    }
+
+    #[test]
+    fn test_sliced_nullable_boolean_array() {
+        let a = BooleanArray::from(vec![None; 32]);
+        let b = BooleanArray::from(vec![true; 32]);
+        let slice_a = a.slice(1, 12);
+        let slice_b = b.slice(1, 12);
+        assert_ne!(slice_a.data(), slice_b.data());
     }
 }

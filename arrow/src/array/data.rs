@@ -23,6 +23,7 @@ use crate::datatypes::{
     UnionMode,
 };
 use crate::error::{ArrowError, Result};
+use crate::util::bit_iterator::BitSliceIterator;
 use crate::{bitmap::Bitmap, datatypes::ArrowNativeType};
 use crate::{
     buffer::{Buffer, MutableBuffer},
@@ -36,6 +37,21 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::equal::equal;
+
+#[inline]
+pub(crate) fn contains_nulls(
+    null_bit_buffer: Option<&Buffer>,
+    offset: usize,
+    len: usize,
+) -> bool {
+    match null_bit_buffer {
+        Some(buffer) => match BitSliceIterator::new(buffer, offset, len).next() {
+            Some((start, end)) => start != 0 || end != len,
+            None => false,
+        },
+        None => false, // No null buffer
+    }
+}
 
 #[inline]
 pub(crate) fn count_nulls(
