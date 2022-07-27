@@ -40,9 +40,9 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Tests with default features
+      - name: Test
         run: |
           cargo test -p arrow-flight
-      - name: Tests with all features
+      - name: Test --all-features
         run: |
           cargo test -p arrow-flight --all-features

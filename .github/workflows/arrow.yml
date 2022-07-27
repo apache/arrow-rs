@@ -45,10 +45,10 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Test default features
+      - name: Test
         run: |
           cargo test -p arrow
-      - name: Test all supported features
+      - name: Test --features=force_validate,prettyprint
         run: |
           cargo test -p arrow --features=force_validate,prettyprint
       - name: Run examples
@@ -61,7 +61,7 @@ jobs:
 
   # test compilaton features
   linux-features:
-    name: Feature Compatibility
+    name: Check Compilation
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
@@ -77,14 +77,23 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Test compilation with different features
+      - name: Check compilation
+        run: |
+          cargo check -p arrow
+      - name: Check compilation --no-default-features
         run: |
           cargo check -p arrow --no-default-features
+      - name: Check compilation --all-targets
+        run: |
           cargo check -p arrow --all-targets
+      - name: Check compilation --no-default-features --all-targets
+        run: |
           cargo check -p arrow --no-default-features --all-targets
+      - name: Check compilation --no-default-features --all-targets --features test_utils
+        run: |
           cargo check -p arrow --no-default-features --all-targets --features test_utils
 
-  # test the --features "simd" of the arrow crate. This requires nightly.
+  # test the --features "simd" of the arrow crate. This requires nightly Rust.
   linux-test-simd:
     name: Test SIMD on AMD64 Rust ${{ matrix.rust }}
     runs-on: ubuntu-latest
@@ -102,12 +111,14 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: nightly
-      - name: Run tests
+      - name: Run tests --features "simd"
         run: |
           cargo test -p arrow --features "simd"
-      - name: Check compilation with simd features
+      - name: Check compilation --features "simd"
         run: |
           cargo check -p arrow --features simd
+      - name: Check compilation --features simd --all-targets
+        run: |
           cargo check -p arrow --features simd --all-targets
 
 

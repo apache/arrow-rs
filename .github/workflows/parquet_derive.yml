@@ -40,6 +40,6 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Test crate
+      - name: Test
         run: |
           cargo test -p parquet_derive

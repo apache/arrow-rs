@@ -55,19 +55,6 @@ jobs:
           # run tests on all workspace members with default feature list
           cargo test
       - name: Re-run tests on parquet crate with all features
-        run: |
-          cargo test -p parquet --all-features
-      - name: Test compilation of parquet library crate with different feature combinations
-        run: |
-          cargo check -p parquet
-          cargo check -p parquet --no-default-features
-          cargo check -p parquet --no-default-features --features arrow
-          cargo check -p parquet --all-features
-      - name: Test compilation of parquet targets with different feature combinations
-        run: |
-          cargo check -p parquet --all-targets
-          cargo check -p parquet --no-default-features --all-targets
-          cargo check -p parquet --no-default-features --features arrow --all-targets
 
 
   windows-and-macos:
