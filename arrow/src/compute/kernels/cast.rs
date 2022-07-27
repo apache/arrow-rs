@@ -47,6 +47,7 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::{array::*, compute::take};
 use crate::{buffer::Buffer, util::serialization::lexical_to_string};
+use num::cast::AsPrimitive;
 use num::{NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
@@ -292,12 +293,15 @@ fn cast_integer_to_decimal<T: ArrowNumericType>(
     array: &PrimitiveArray<T>,
     precision: usize,
     scale: usize,
-) -> Result<Arc<dyn Array>> {
+) -> Result<Arc<dyn Array>>
+where
+    <T as ArrowPrimitiveType>::Native: AsPrimitive<i128>,
+{
     let mul: i128 = 10_i128.pow(scale as u32);
 
     // with_precision_and_scale validates the
     // value is within range for the output precision
-    cast_primitive_to_decimal(array, |v| v.to_i128().unwrap() * mul, precision, scale)
+    cast_primitive_to_decimal(array, |v| v.as_() * mul, precision, scale)
 }
 
 fn cast_floating_point_to_decimal<T: ArrowNumericType>(
@@ -306,7 +310,7 @@ fn cast_floating_point_to_decimal<T: ArrowNumericType>(
     scale: usize,
 ) -> Result<Arc<dyn Array>>
 where
-    <T as ArrowPrimitiveType>::Native: ToPrimitive,
+    <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
 {
     let mul = 10_f64.powi(scale as i32);
 
@@ -315,7 +319,7 @@ where
         |v| {
             // with_precision_and_scale validates the
             // value is within range for the output precision
-            (ArrowNativeType::to_f64(&v).unwrap() * mul) as i128
+            (v.as_() * mul) as i128
         },
         precision,
         scale,
