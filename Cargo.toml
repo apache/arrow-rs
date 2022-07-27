@@ -39,3 +39,9 @@ resolver = "2"
 # how it is compiled within the workspace, causing the whole workspace to be compiled from scratch
 # this way, this is a stand-alone package that compiles independently of the others.
 exclude = ["arrow-pyarrow-integration-testing"]
+
+# TEMP: pin to upstream azure crate until 0.3 is released
+[patch.crates-io]
+azure_core = {  git = "https://github.com/Azure/azure-sdk-for-rust.git", branch="main" }
+azure_storage = {  git = "https://github.com/Azure/azure-sdk-for-rust.git", branch="main" }
+azure_storage_blobs= {  git = "https://github.com/Azure/azure-sdk-for-rust.git", branch="main" }
