@@ -456,7 +456,8 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             for &level in levels {
                 if level == self.descr.max_def_level() {
                     values_to_write += 1;
-                } else if self.statistics_enabled == EnabledStatistics::Page {
+                } else {
+                    // We must always compute this as it is used to populate v2 pages
                     self.num_page_nulls += 1
                 }
             }
@@ -746,15 +747,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             None => data_page_offset + total_compressed_size,
         };
 
-        let statistics = Statistics::new(
-            self.min_column_value.clone(),
-            self.max_column_value.clone(),
-            self.column_distinct_count,
-            self.num_column_nulls,
-            false,
-        );
-
-        let metadata = ColumnChunkMetaData::builder(self.descr.clone())
+        let mut builder = ColumnChunkMetaData::builder(self.descr.clone())
             .set_compression(self.codec)
             .set_encodings(self.encodings.iter().cloned().collect())
             .set_file_offset(file_offset)
@@ -762,10 +755,20 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             .set_total_uncompressed_size(total_uncompressed_size)
             .set_num_values(num_values)
             .set_data_page_offset(data_page_offset)
-            .set_dictionary_page_offset(dict_page_offset)
-            .set_statistics(statistics)
-            .build()?;
+            .set_dictionary_page_offset(dict_page_offset);
 
+        if self.statistics_enabled != EnabledStatistics::None {
+            let statistics = Statistics::new(
+                self.min_column_value.clone(),
+                self.max_column_value.clone(),
+                self.column_distinct_count,
+                self.num_column_nulls,
+                false,
+            );
+            builder = builder.set_statistics(statistics);
+        }
+
+        let metadata = builder.build()?;
         self.page_writer.write_metadata(&metadata)?;
 
         Ok(metadata)
@@ -1637,6 +1640,56 @@ mod tests {
         assert_eq!(page_statistics.max_bytes(), 7_i32.to_le_bytes());
         assert_eq!(page_statistics.null_count(), 0);
         assert!(page_statistics.distinct_count().is_none());
+    }
+
+    #[test]
+    fn test_disabled_statistics() {
+        let mut buf = Vec::with_capacity(100);
+        let mut write = TrackedWrite::new(&mut buf);
+        let page_writer = Box::new(SerializedPageWriter::new(&mut write));
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::None)
+            .set_writer_version(WriterVersion::PARQUET_2_0)
+            .build();
+        let props = Arc::new(props);
+
+        let mut writer = get_test_column_writer::<Int32Type>(page_writer, 1, 0, props);
+        writer
+            .write_batch(&[1, 2, 3, 4], Some(&[1, 0, 0, 1, 1, 1]), None)
+            .unwrap();
+
+        let (_, _, metadata, _, _) = writer.close().unwrap();
+        assert!(metadata.statistics().is_none());
+
+        let reader = SerializedPageReader::new(
+            std::io::Cursor::new(buf),
+            6,
+            Compression::UNCOMPRESSED,
+            Type::INT32,
+        )
+        .unwrap();
+
+        let pages = reader.collect::<Result<Vec<_>>>().unwrap();
+        assert_eq!(pages.len(), 2);
+
+        assert_eq!(pages[0].page_type(), PageType::DICTIONARY_PAGE);
+        assert_eq!(pages[1].page_type(), PageType::DATA_PAGE_V2);
+
+        match &pages[1] {
+            Page::DataPageV2 {
+                num_values,
+                num_nulls,
+                num_rows,
+                statistics,
+                ..
+            } => {
+                assert_eq!(*num_values, 6);
+                assert_eq!(*num_nulls, 2);
+                assert_eq!(*num_rows, 6);
+                assert!(statistics.is_none());
+            }
+            _ => unreachable!(),
+        }
     }
 
     #[test]
