@@ -98,6 +98,12 @@ enum Error {
 
     #[snafu(display("Error decoding object size: {}", source))]
     InvalidSize { source: std::num::ParseIntError },
+
+    #[snafu(display("Missing bucket name"))]
+    MissingBucketName {},
+
+    #[snafu(display("Missing service account path"))]
+    MissingServiceAccountPath,
 }
 
 impl From<Error> for super::Error {
@@ -779,55 +785,116 @@ fn reader_credentials_file(
     Ok(serde_json::from_reader(reader).context(DecodeCredentialsSnafu)?)
 }
 
-/// Configure a connection to Google Cloud Storage.
-pub fn new_gcs(
-    service_account_path: impl AsRef<std::path::Path>,
-    bucket_name: impl Into<String>,
-) -> Result<GoogleCloudStorage> {
-    new_gcs_with_client(service_account_path, bucket_name, Client::new())
+/// Configure a connection to Google Cloud Storage using the specified
+/// credentials.
+///
+/// # Example
+/// ```
+/// # let BUCKET_NAME = "foo";
+/// # let SERVICE_ACCOUNT_PATH = "/tmp/foo.json";
+/// let gcs = object_store::gcp::GoogleCloudStorageBuilder::new()
+///  .with_service_account_path(SERVICE_ACCOUNT_PATH)
+///  .with_bucket_name(BUCKET_NAME)
+///  .build();
+/// ```
+#[derive(Debug, Default)]
+pub struct GoogleCloudStorageBuilder {
+    bucket_name: Option<String>,
+    service_account_path: Option<String>,
+    client: Option<Client>,
 }
 
-/// Configure a connection to Google Cloud Storage with the specified HTTP client.
-pub fn new_gcs_with_client(
-    service_account_path: impl AsRef<std::path::Path>,
-    bucket_name: impl Into<String>,
-    client: Client,
-) -> Result<GoogleCloudStorage> {
-    let credentials = reader_credentials_file(service_account_path)?;
+impl GoogleCloudStorageBuilder {
+    /// Create a new [`GoogleCloudStorageBuilder`] with default values.
+    pub fn new() -> Self {
+        Default::default()
+    }
 
-    // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
-    let scope = "https://www.googleapis.com/auth/devstorage.full_control";
-    let audience = "https://www.googleapis.com/oauth2/v4/token".to_string();
+    /// Set the bucket name (required)
+    pub fn with_bucket_name(mut self, bucket_name: impl Into<String>) -> Self {
+        self.bucket_name = Some(bucket_name.into());
+        self
+    }
 
-    let oauth_provider = (!credentials.disable_oauth)
-        .then(|| {
-            OAuthProvider::new(
-                credentials.client_email,
-                credentials.private_key,
-                scope.to_string(),
-                audience,
-            )
-        })
-        .transpose()?;
+    /// Set the path to the service account file (required). Example
+    /// `"/tmp/gcs.json"`
+    ///
+    /// Example contents of `gcs.json`:
+    ///
+    /// ```json
+    /// {
+    ///    "gcs_base_url": "https://localhost:4443",
+    ///    "disable_oauth": true,
+    ///    "client_email": "",
+    ///    "private_key": ""
+    /// }
+    /// ```
+    pub fn with_service_account_path(
+        mut self,
+        service_account_path: impl Into<String>,
+    ) -> Self {
+        self.service_account_path = Some(service_account_path.into());
+        self
+    }
 
-    let bucket_name = bucket_name.into();
-    let encoded_bucket_name =
-        percent_encode(bucket_name.as_bytes(), NON_ALPHANUMERIC).to_string();
+    /// Use the specified http [`Client`] (defaults to [`Client::new`])
+    ///
+    /// This allows you to set custom client options such as allowing
+    /// non secure connections or custom headers.
+    pub fn with_client(mut self, client: Client) -> Self {
+        self.client = Some(client);
+        self
+    }
 
-    // The cloud storage crate currently only supports authentication via
-    // environment variables. Set the environment variable explicitly so
-    // that we can optionally accept command line arguments instead.
-    Ok(GoogleCloudStorage {
-        client: Arc::new(GoogleCloudStorageClient {
-            client,
-            base_url: credentials.gcs_base_url,
-            oauth_provider,
-            token_cache: Default::default(),
+    /// Configure a connection to Google Cloud Storage, returning a
+    /// new [`GoogleCloudStorage`] and consuming `self`
+    pub fn build(self) -> Result<GoogleCloudStorage> {
+        let Self {
             bucket_name,
-            bucket_name_encoded: encoded_bucket_name,
-            max_list_results: None,
-        }),
-    })
+            service_account_path,
+            client,
+        } = self;
+
+        let bucket_name = bucket_name.ok_or(Error::MissingBucketName {})?;
+        let service_account_path =
+            service_account_path.ok_or(Error::MissingServiceAccountPath)?;
+        let client = client.unwrap_or_else(Client::new);
+
+        let credentials = reader_credentials_file(service_account_path)?;
+
+        // TODO: https://cloud.google.com/storage/docs/authentication#oauth-scopes
+        let scope = "https://www.googleapis.com/auth/devstorage.full_control";
+        let audience = "https://www.googleapis.com/oauth2/v4/token".to_string();
+
+        let oauth_provider = (!credentials.disable_oauth)
+            .then(|| {
+                OAuthProvider::new(
+                    credentials.client_email,
+                    credentials.private_key,
+                    scope.to_string(),
+                    audience,
+                )
+            })
+            .transpose()?;
+
+        let encoded_bucket_name =
+            percent_encode(bucket_name.as_bytes(), NON_ALPHANUMERIC).to_string();
+
+        // The cloud storage crate currently only supports authentication via
+        // environment variables. Set the environment variable explicitly so
+        // that we can optionally accept command line arguments instead.
+        Ok(GoogleCloudStorage {
+            client: Arc::new(GoogleCloudStorageClient {
+                client,
+                base_url: credentials.gcs_base_url,
+                oauth_provider,
+                token_cache: Default::default(),
+                bucket_name,
+                bucket_name_encoded: encoded_bucket_name,
+                max_list_results: None,
+            }),
+        })
+    }
 }
 
 fn convert_object_meta(object: &Object) -> Result<ObjectMeta> {
@@ -859,24 +926,6 @@ mod test {
     use super::*;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
-
-    #[derive(Debug)]
-    struct GoogleCloudConfig {
-        bucket: String,
-        service_account: String,
-    }
-
-    impl GoogleCloudConfig {
-        fn build_test(self) -> Result<GoogleCloudStorage> {
-            // ignore HTTPS errors in tests so we can use fake-gcs server
-            let client = Client::builder()
-                .danger_accept_invalid_certs(true)
-                .build()
-                .expect("Error creating http client for testing");
-
-            new_gcs_with_client(self.service_account, self.bucket, client)
-        }
-    }
 
     // Helper macro to skip tests if TEST_INTEGRATION and the GCP environment variables are not set.
     macro_rules! maybe_skip_integration {
@@ -912,20 +961,29 @@ mod test {
                 );
                 return;
             } else {
-                GoogleCloudConfig {
-                    bucket: env::var("OBJECT_STORE_BUCKET")
-                        .expect("already checked OBJECT_STORE_BUCKET"),
-                    service_account: env::var("GOOGLE_SERVICE_ACCOUNT")
-                        .expect("already checked GOOGLE_SERVICE_ACCOUNT"),
-                }
+                GoogleCloudStorageBuilder::new()
+                    .with_bucket_name(
+                        env::var("OBJECT_STORE_BUCKET")
+                            .expect("already checked OBJECT_STORE_BUCKET")
+                    )
+                    .with_service_account_path(
+                        env::var("GOOGLE_SERVICE_ACCOUNT")
+                            .expect("already checked GOOGLE_SERVICE_ACCOUNT")
+                    )
+                    .with_client(
+                        // ignore HTTPS errors in tests so we can use fake-gcs server
+                        Client::builder()
+                            .danger_accept_invalid_certs(true)
+                            .build()
+                            .expect("Error creating http client for testing")
+                    )
             }
         }};
     }
 
     #[tokio::test]
     async fn gcs_test() {
-        let config = maybe_skip_integration!();
-        let integration = config.build_test().unwrap();
+        let integration = maybe_skip_integration!().build().unwrap();
 
         put_get_delete_list(&integration).await.unwrap();
         list_uses_directories_correctly(&integration).await.unwrap();
@@ -940,8 +998,7 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_get_nonexistent_location() {
-        let config = maybe_skip_integration!();
-        let integration = config.build_test().unwrap();
+        let integration = maybe_skip_integration!().build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -956,9 +1013,10 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_get_nonexistent_bucket() {
-        let mut config = maybe_skip_integration!();
-        config.bucket = NON_EXISTENT_NAME.into();
-        let integration = config.build_test().unwrap();
+        let integration = maybe_skip_integration!()
+            .with_bucket_name(NON_EXISTENT_NAME)
+            .build()
+            .unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -975,8 +1033,7 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_delete_nonexistent_location() {
-        let config = maybe_skip_integration!();
-        let integration = config.build_test().unwrap();
+        let integration = maybe_skip_integration!().build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -990,9 +1047,10 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_delete_nonexistent_bucket() {
-        let mut config = maybe_skip_integration!();
-        config.bucket = NON_EXISTENT_NAME.into();
-        let integration = config.build_test().unwrap();
+        let integration = maybe_skip_integration!()
+            .with_bucket_name(NON_EXISTENT_NAME)
+            .build()
+            .unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1006,9 +1064,10 @@ mod test {
 
     #[tokio::test]
     async fn gcs_test_put_nonexistent_bucket() {
-        let mut config = maybe_skip_integration!();
-        config.bucket = NON_EXISTENT_NAME.into();
-        let integration = config.build_test().unwrap();
+        let integration = maybe_skip_integration!()
+            .with_bucket_name(NON_EXISTENT_NAME)
+            .build()
+            .unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
         let data = Bytes::from("arbitrary data");
