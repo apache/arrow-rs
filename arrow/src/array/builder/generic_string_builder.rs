@@ -16,59 +16,48 @@
 // under the License.
 
 use crate::array::{
-    ArrayBuilder, ArrayRef, GenericListBuilder, GenericStringArray, OffsetSizeTrait,
-    UInt8Builder,
+    ArrayBuilder, ArrayRef,  GenericStringArray, OffsetSizeTrait
 };
 use std::any::Any;
 use std::sync::Arc;
 
+use super::GenericBinaryBuilder;
+
+///  Array builder for [`GenericStringArray`]
 #[derive(Debug)]
 pub struct GenericStringBuilder<OffsetSize: OffsetSizeTrait> {
-    builder: GenericListBuilder<OffsetSize, UInt8Builder>,
+    builder: GenericBinaryBuilder<OffsetSize>
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
-    /// Creates a new `StringBuilder`,
+    /// Creates a new [`GenericStringBuilder`],
     /// `capacity` is the number of bytes of string data to pre-allocate space for in this builder
     pub fn new(capacity: usize) -> Self {
-        let values_builder = UInt8Builder::new(capacity);
         Self {
-            builder: GenericListBuilder::new(values_builder),
+            builder: GenericBinaryBuilder::new(capacity),
         }
     }
 
-    /// Creates a new `StringBuilder`,
+    /// Creates a new [`GenericStringBuilder`],
     /// `data_capacity` is the number of bytes of string data to pre-allocate space for in this builder
     /// `item_capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
-        let values_builder = UInt8Builder::new(data_capacity);
         Self {
-            builder: GenericListBuilder::with_capacity(values_builder, item_capacity),
+            builder: GenericBinaryBuilder::with_capacity(item_capacity, data_capacity),
         }
     }
 
     /// Appends a string into the builder.
-    ///
-    /// Automatically calls the `append` method to delimit the string appended in as a
-    /// distinct array element.
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<str>) {
         self.builder
-            .values()
-            .append_slice(value.as_ref().as_bytes());
-        self.builder.append(true);
-    }
-
-    /// Finish the current variable-length list array slot.
-    #[inline]
-    pub fn append(&mut self, is_valid: bool) {
-        self.builder.append(is_valid)
+            .append_value(value.as_ref().as_bytes());
     }
 
     /// Append a null value to the array.
     #[inline]
     pub fn append_null(&mut self) {
-        self.append(false)
+        self.builder.append_null()
     }
 
     /// Append an `Option` value to the array.
@@ -80,14 +69,14 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringBuilder<OffsetSize> {
         };
     }
 
-    /// Builds the `StringArray` and reset this builder.
+    /// Builds the [`GenericStringArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericStringArray<OffsetSize> {
         GenericStringArray::<OffsetSize>::from(self.builder.finish())
     }
 
     /// Returns the current values buffer as a slice
     pub fn values_slice(&self) -> &[u8] {
-        self.builder.values_ref().values_slice()
+        self.builder.values_slice()
     }
 
     /// Returns the current offsets buffer as a slice
@@ -139,7 +128,7 @@ mod tests {
         let mut builder = StringBuilder::new(20);
 
         builder.append_value("hello");
-        builder.append(true);
+        builder.append_value("");
         builder.append_value("world");
 
         let string_array = builder.finish();
@@ -176,7 +165,7 @@ mod tests {
 
         let var = "hello".to_owned();
         builder.append_value(&var);
-        builder.append(true);
+        builder.append_value("");
         builder.append_value("world");
 
         let string_array = builder.finish();
