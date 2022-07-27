@@ -43,3 +43,21 @@ jobs:
       - name: Test
         run: |
           cargo test -p parquet_derive
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Setup Clippy
+        run: |
+          rustup component add clippy
+      - name: Run clippy
+        run: |
+          cargo clippy -p parquet_derive --all-features -- -D warnings

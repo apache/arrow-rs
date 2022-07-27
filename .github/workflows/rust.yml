@@ -81,34 +81,6 @@ jobs:
           export RUSTFLAGS="-C debuginfo=0"
           cargo test
 
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Setup Clippy
-        run: |
-          rustup component add clippy
-      - name: Run clippy
-        run: |
-          cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
-
   check_benches:
     name: Check Benchmarks (but don't run them)
     runs-on: ubuntu-latest

@@ -169,4 +169,4 @@ jobs:
           rustup component add clippy
       - name: Run clippy
         run: |
-          cargo clippy -p arrow --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
+          cargo clippy -p arrow --features test_common --features prettyprint  --features=async --all-targets -- -D warnings
