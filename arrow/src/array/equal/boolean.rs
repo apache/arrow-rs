@@ -35,14 +35,18 @@ pub(super) fn boolean_equal(
 
     if lhs_null_count == 0 && rhs_null_count == 0 {
         // Optimize performance for starting offset at u8 boundary.
-        if lhs_start % 8 == 0 && rhs_start % 8 == 0 {
+        if lhs_start % 8 == 0
+            && rhs_start % 8 == 0
+            && lhs.offset() % 8 == 0
+            && rhs.offset() % 8 == 0
+        {
             let quot = len / 8;
             if quot > 0
                 && !equal_len(
                     lhs_values,
                     rhs_values,
-                    lhs_start / 8 + lhs.offset(),
-                    rhs_start / 8 + rhs.offset(),
+                    lhs_start / 8 + lhs.offset() / 8,
+                    rhs_start / 8 + rhs.offset() / 8,
                     quot,
                 )
             {
@@ -86,5 +90,23 @@ pub(super) fn boolean_equal(
                 || (lhs_is_null == rhs_is_null)
                     && equal_bits(lhs_values, rhs_values, lhs_pos, rhs_pos, 1)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::array::{Array, BooleanArray};
+
+    #[test]
+    fn test_boolean_slice() {
+        let array = BooleanArray::from(vec![true; 32]);
+        let slice = array.slice(4, 12);
+        assert_eq!(slice.data(), slice.data());
+
+        let slice = array.slice(8, 12);
+        assert_eq!(slice.data(), slice.data());
+
+        let slice = array.slice(8, 24);
+        assert_eq!(slice.data(), slice.data());
     }
 }
