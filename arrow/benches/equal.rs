@@ -51,6 +51,9 @@ fn add_benchmark(c: &mut Criterion) {
 
     let arr_a = create_boolean_array(513, 0.0, 0.5);
     c.bench_function("equal_bool_513", |b| b.iter(|| bench_equal(&arr_a)));
+
+    let arr_a = create_boolean_array(1024, 0.0, 0.5);
+    c.bench_function("equal_bool_1024", |b| b.iter(|| bench_equal(&arr_a)));
 }
 
 criterion_group!(benches, add_benchmark);

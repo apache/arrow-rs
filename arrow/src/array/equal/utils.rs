@@ -17,7 +17,7 @@
 
 use crate::array::{data::count_nulls, ArrayData};
 use crate::datatypes::DataType;
-use crate::util::bit_util;
+use crate::util::bit_chunk_iterator::BitChunks;
 
 // whether bits along the positions are equal
 // `lhs_start`, `rhs_start` and `len` are _measured in bits_.
@@ -29,10 +29,16 @@ pub(super) fn equal_bits(
     rhs_start: usize,
     len: usize,
 ) -> bool {
-    (0..len).all(|i| {
-        bit_util::get_bit(lhs_values, lhs_start + i)
-            == bit_util::get_bit(rhs_values, rhs_start + i)
-    })
+    let lhs = BitChunks::new(lhs_values, lhs_start, len);
+    let rhs = BitChunks::new(rhs_values, rhs_start, len);
+
+    for (a, b) in lhs.iter().zip(rhs.iter()) {
+        if a != b {
+            return false;
+        }
+    }
+
+    lhs.remainder_bits() == rhs.remainder_bits()
 }
 
 #[inline]

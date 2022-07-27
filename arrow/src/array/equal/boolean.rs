@@ -85,10 +85,10 @@ pub(super) fn boolean_equal(
             let rhs_pos = rhs_start + i;
             let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos);
             let rhs_is_null = !get_bit(rhs_null_bytes, rhs_pos);
+            let lhs_is_true = get_bit(lhs_values, lhs_pos);
+            let rhs_is_true = get_bit(rhs_values, rhs_pos);
 
-            lhs_is_null
-                || (lhs_is_null == rhs_is_null)
-                    && equal_bits(lhs_values, rhs_values, lhs_pos, rhs_pos, 1)
+            lhs_is_null == rhs_is_null && (lhs_is_null || (lhs_is_true == rhs_is_true))
         })
     }
 }
