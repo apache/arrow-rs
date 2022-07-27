@@ -20,8 +20,8 @@ use std::fmt;
 use std::{any::Any, iter::FromIterator};
 
 use super::{
-    array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, GenericBinaryArray, GenericListArray,
-    GenericStringIter, OffsetSizeTrait,
+    array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
+    GenericBinaryArray, GenericListArray, GenericStringIter, OffsetSizeTrait,
 };
 use crate::array::array::ArrayAccessor;
 use crate::buffer::Buffer;
@@ -313,19 +313,23 @@ impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>> for GenericStringArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>>
+    for GenericStringArray<OffsetSize>
+{
     fn from(v: GenericListArray<OffsetSize>) -> Self {
         GenericStringArray::<OffsetSize>::from_list(v)
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>> for GenericStringArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>>
+    for GenericStringArray<OffsetSize>
+{
     fn from(v: GenericBinaryArray<OffsetSize>) -> Self {
         let builder = v
             .into_data()
             .into_builder()
             .data_type(Self::get_data_type());
-        let data = unsafe {builder.build_unchecked()};
+        let data = unsafe { builder.build_unchecked() };
         Self::from(data)
     }
 }
