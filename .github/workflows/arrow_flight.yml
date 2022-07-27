@@ -17,7 +17,7 @@
 
 ---
 # tests for arrow_flight crate
-name: "arrow_flight"
+name: arrow_flight
 
 on:
   pull_request:
