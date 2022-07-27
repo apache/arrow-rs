@@ -16,7 +16,7 @@
 # under the License.
 
 # tests for arrow crate
-name: Arrow
+name: arrow
 
 on:
   # always trigger
