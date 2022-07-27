@@ -16,7 +16,8 @@
 # under the License.
 
 ---
-name: "Object Store"
+# tests for object_store crate
+name: object_store
 
 on:
   push:
