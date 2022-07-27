@@ -75,7 +75,7 @@ pub trait ArrowReader {
 /// [`RowSelection`] allows selecting or skipping a provided number of rows
 /// when scanning the parquet file
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RowSelection {
+pub struct RowSelection {
     /// The number of rows
     pub row_count: usize,
 
@@ -127,12 +127,7 @@ impl ArrowReaderOptions {
     }
 
     /// Scan rows from the parquet file according to the provided `selection`
-    ///
-    /// TODO: Make public once row selection fully implemented (#1792)
-    pub(crate) fn with_row_selection(
-        self,
-        selection: impl Into<Vec<RowSelection>>,
-    ) -> Self {
+    pub fn with_row_selection(self, selection: impl Into<Vec<RowSelection>>) -> Self {
         Self {
             selection: Some(selection.into()),
             ..self
@@ -359,9 +354,7 @@ impl ParquetRecordBatchReader {
     /// Create a new [`ParquetRecordBatchReader`] that will read at most `batch_size` rows at
     /// a time from [`ArrayReader`] based on the configured `selection`. If `selection` is `None`
     /// all rows will be returned
-    ///
-    /// TODO: Make public once row selection fully implemented (#1792)
-    pub(crate) fn new(
+    pub fn new(
         batch_size: usize,
         array_reader: Box<dyn ArrayReader>,
         selection: Option<VecDeque<RowSelection>>,
