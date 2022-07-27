@@ -26,37 +26,6 @@ on:
 
 jobs:
 
-  # test the crate
-  linux-test:
-    name: Test Workspace on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-        PARQUET_TEST_DATA: /__w/arrow-rs/arrow-rs/parquet-testing/data
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Run tests
-        run: |
-          # run tests on all workspace members with default feature list
-          cargo test
-      - name: Re-run tests on parquet crate with all features
-
-
   windows-and-macos:
     name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
