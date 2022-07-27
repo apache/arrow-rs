@@ -47,7 +47,7 @@ pub(crate) fn contains_nulls(
     match null_bit_buffer {
         Some(buffer) => match BitSliceIterator::new(buffer, offset, len).next() {
             Some((start, end)) => start != 0 || end != len,
-            None => false,
+            None => len != 0, // No non-null values
         },
         None => false, // No null buffer
     }
@@ -2880,5 +2880,15 @@ mod tests {
 
         let err = data.validate_values().unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
+    }
+
+    #[test]
+    fn test_contains_nulls() {
+        let buffer: Buffer = MutableBuffer::from_iter([false, false, false, true, true, false]).into();
+
+        assert!(contains_nulls(Some(&buffer), 0, 6));
+        assert!(contains_nulls(Some(&buffer), 0, 3));
+        assert!(!contains_nulls(Some(&buffer), 3, 2));
+        assert!(!contains_nulls(Some(&buffer), 0, 0));
     }
 }
