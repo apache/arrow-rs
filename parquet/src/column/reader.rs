@@ -316,9 +316,15 @@ where
                     self.page_reader.skip_next_page()?;
                     remaining -= metadata.num_rows;
                     continue;
+                };
+                // because self.num_buffered_values == self.num_decoded_values means
+                // we need reads a new page and set up the decoders for levels
+                if !self.read_new_page()? {
+                    return Ok(num_records - remaining);
                 }
             }
 
+            // start skip values in page level
             let to_read = remaining
                 .min((self.num_buffered_values - self.num_decoded_values) as usize);
 

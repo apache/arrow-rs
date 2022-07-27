@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, ArrayReader};
+use crate::arrow::array_reader::{read_records, ArrayReader, set_column_reader};
 use crate::arrow::record_reader::buffer::ScalarValue;
 use crate::arrow::record_reader::RecordReader;
 use crate::column::page::PageIterator;
@@ -97,6 +97,7 @@ where
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        set_column_reader(&mut self.record_reader, self.pages.as_mut())?;
         self.record_reader.skip_records(num_records)
     }
 

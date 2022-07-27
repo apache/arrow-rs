@@ -45,6 +45,9 @@ pub(crate) const MIN_BATCH_SIZE: usize = 1024;
 pub type RecordReader<T> =
     GenericRecordReader<ScalarBuffer<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
 
+pub(crate) type ColumnReader<CV> =
+    GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelBufferDecoder, CV>;
+
 /// A generic stateful column reader that delimits semantic records
 ///
 /// This type is hidden from the docs, and relies on private traits with no
@@ -56,9 +59,7 @@ pub struct GenericRecordReader<V, CV> {
     records: V,
     def_levels: Option<DefinitionLevelBuffer>,
     rep_levels: Option<ScalarBuffer<i16>>,
-    column_reader: Option<
-        GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelBufferDecoder, CV>,
-    >,
+    column_reader: Option<ColumnReader<CV>>,
 
     /// Number of records accumulated in records
     num_records: usize,
@@ -276,6 +277,11 @@ where
         self.def_levels
             .as_mut()
             .map(|levels| levels.split_bitmask(self.num_values))
+    }
+
+    /// Returns column reader.
+    pub(crate) fn column_reader(&self) -> Option<&ColumnReader<CV>> {
+        self.column_reader.as_ref()
     }
 
     /// Try to read one batch of data.
