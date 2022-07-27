@@ -2884,7 +2884,8 @@ mod tests {
 
     #[test]
     fn test_contains_nulls() {
-        let buffer: Buffer = MutableBuffer::from_iter([false, false, false, true, true, false]).into();
+        let buffer: Buffer =
+            MutableBuffer::from_iter([false, false, false, true, true, false]).into();
 
         assert!(contains_nulls(Some(&buffer), 0, 6));
         assert!(contains_nulls(Some(&buffer), 0, 3));
