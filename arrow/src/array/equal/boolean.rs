@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::array::{data::contains_nulls, ArrayData};
+use crate::util::bit_iterator::BitIndexIterator;
 use crate::util::bit_util::get_bit;
 
 use super::utils::{equal_bits, equal_len};
@@ -80,12 +81,10 @@ pub(super) fn boolean_equal(
         let lhs_start = lhs.offset() + lhs_start;
         let rhs_start = rhs.offset() + rhs_start;
 
-        (0..len).all(|i| {
+        BitIndexIterator::new(lhs_null_bytes, lhs_start, len).all(|i| {
             let lhs_pos = lhs_start + i;
             let rhs_pos = rhs_start + i;
-            let lhs_is_null = !get_bit(lhs_null_bytes, lhs_pos);
-
-            lhs_is_null || get_bit(lhs_values, lhs_pos) == get_bit(rhs_values, rhs_pos)
+            get_bit(lhs_values, lhs_pos) == get_bit(rhs_values, rhs_pos)
         })
     }
 }
