@@ -990,8 +990,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(target_os = "linux")]
-    // macos has some magic in its root '/.VolumeIcon.icns"' which causes this test to fail
     async fn test_list_root() {
         let integration = LocalFileSystem::new();
         let result = integration.list_with_delimiter(None).await;
