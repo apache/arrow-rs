@@ -27,7 +27,7 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::{stream::BoxStream, StreamExt};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
-use std::fs::File;
+use std::fs::{metadata, symlink_metadata, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::pin::Pin;
@@ -804,11 +804,36 @@ fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<Objec
 }
 
 /// Convert walkdir results and converts not-found errors into `None`.
+/// Convert broken symlinks to `None`.
 fn convert_walkdir_result(
     res: std::result::Result<walkdir::DirEntry, walkdir::Error>,
 ) -> Result<Option<walkdir::DirEntry>> {
     match res {
-        Ok(entry) => Ok(Some(entry)),
+        Ok(entry) => {
+            // To check for broken symlink: call symlink_metadata() - it does not traverse symlinks);
+            // if ok: check if entry is symlink; and try to read it by calling metadata().
+            match symlink_metadata(entry.path()) {
+                Ok(attr) => {
+                    if attr.is_symlink() {
+                        let target_metadata = metadata(entry.path());
+                        match target_metadata {
+                            Ok(_) => {
+                                // symlink is valid
+                                Ok(Some(entry))
+                            }
+                            Err(_) => {
+                                // this is a broken symlink, return None
+                                Ok(None)
+                            }
+                        }
+                    } else {
+                        Ok(Some(entry))
+                    }
+                }
+                Err(_) => Ok(None),
+            }
+        }
+
         Err(walkdir_err) => match walkdir_err.io_error() {
             Some(io_err) => match io_err.kind() {
                 io::ErrorKind::NotFound => Ok(None),
