@@ -25,7 +25,7 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
 
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
-use crate::arrow::array_reader::{read_records, ArrayReader, set_column_reader};
+use crate::arrow::array_reader::{read_records, ArrayReader, skip_records};
 use crate::arrow::buffer::{
     dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer,
 };
@@ -181,8 +181,7 @@ where
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
-        set_column_reader(&mut self.record_reader, self.pages.as_mut())?;
-        self.record_reader.skip_records(num_records)
+        skip_records(&mut self.record_reader, self.pages.as_mut(), num_records)
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
