@@ -416,7 +416,7 @@ mod tests {
         FixedLenByteArrayType, Int32Type, Int64Type,
     };
     use crate::errors::Result;
-    use crate::file::properties::{WriterProperties, WriterVersion};
+    use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
@@ -787,6 +787,8 @@ mod tests {
         max_dict_page_size: usize,
         /// Writer version
         writer_version: WriterVersion,
+        /// Enabled statistics
+        enabled_statistics: EnabledStatistics,
         /// Encoding
         encoding: Encoding,
     }
@@ -802,6 +804,7 @@ mod tests {
                 max_data_page_size: 1024 * 1024,
                 max_dict_page_size: 1024 * 1024,
                 writer_version: WriterVersion::PARQUET_1_0,
+                enabled_statistics: EnabledStatistics::Page,
                 encoding: Encoding::PLAIN,
             }
         }
@@ -838,11 +841,19 @@ mod tests {
             }
         }
 
+        fn with_enabled_statistics(self, enabled_statistics: EnabledStatistics) -> Self {
+            Self {
+                enabled_statistics,
+                ..self
+            }
+        }
+
         fn writer_props(&self) -> WriterProperties {
             let builder = WriterProperties::builder()
                 .set_data_pagesize_limit(self.max_data_page_size)
                 .set_write_batch_size(self.write_batch_size)
-                .set_writer_version(self.writer_version);
+                .set_writer_version(self.writer_version)
+                .set_statistics_enabled(self.enabled_statistics);
 
             let builder = match self.encoding {
                 Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => builder
@@ -896,6 +907,14 @@ mod tests {
             TestOptions::new(2, 256, 127).with_null_percent(0),
             // Test optional with nulls
             TestOptions::new(2, 256, 93).with_null_percent(25),
+            // Test with no page-level statistics
+            TestOptions::new(2, 256, 91)
+                .with_null_percent(25)
+                .with_enabled_statistics(EnabledStatistics::Chunk),
+            // Test with no statistics
+            TestOptions::new(2, 256, 91)
+                .with_null_percent(25)
+                .with_enabled_statistics(EnabledStatistics::None),
         ];
 
         all_options.into_iter().for_each(|opts| {
