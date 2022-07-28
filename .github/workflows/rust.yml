@@ -44,36 +44,9 @@ jobs:
       - name: Run tests
         shell: bash
         run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
           cargo test
-
-  check_benches:
-    name: Check Benchmarks (but don't run them)
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Check benchmarks
-        run: |
-          cargo check --benches --workspace --features test_common,prettyprint,async,experimental
 
   lint:
     name: Lint (cargo fmt)
@@ -109,16 +82,9 @@ jobs:
         uses: actions/cache@v3
         with:
           path: /home/runner/.cargo
-          # this key is not equal because the user is different than on a container (runner vs github)
           key: cargo-coverage-cache3-
       - name: Run coverage
         run: |
-          export CARGO_HOME="/home/runner/.cargo"
-          export CARGO_TARGET_DIR="/home/runner/target"
-
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-
           rustup toolchain install stable
           rustup default stable
           cargo install --version 0.18.2 cargo-tarpaulin

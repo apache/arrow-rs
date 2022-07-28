@@ -73,25 +73,16 @@ jobs:
           rust-version: stable
       - name: Check compilation
         run: |
-          cargo check -p parquet
-      - name: Check compilation --no-default-features
-        run: |
-          cargo check -p parquet --no-default-features
-      - name: Check compilation --no-default-features --features arrow
-        run: |
-          cargo check -p parquet --no-default-features --features arrow
-      - name: Check compilation --no-default-features --all-features
-        run: |
-          cargo check -p parquet --all-features
-      - name: Check compilation --all-targets
-        run: |
           cargo check -p parquet --all-targets
       - name: Check compilation --no-default-features --all-targets
         run: |
           cargo check -p parquet --no-default-features --all-targets
-      - name: Check compilation --no-default-features --features-arrow --all-targets
+      - name: Check compilation --no-default-features --features arrow --all-targets
         run: |
           cargo check -p parquet --no-default-features --features arrow --all-targets
+      - name: Check compilation --all-features --all-targets
+        run: |
+          cargo check -p parquet --all-features --all-targets
 
   clippy:
     name: Clippy
