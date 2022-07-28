@@ -105,7 +105,7 @@ jobs:
       - name: Check compilation --all-targets --no-default-features
         run: |
           cargo check -p parquet --all-targets --no-default-features
-      - name: Check compilation  --all-targets --no-default-features --features-arrow
+      - name: Check compilation  --all-targets --no-default-features --features arrow
         run: |
           cargo check -p parquet --all-targets --no-default-features --features arrow
       - name: Check compilation  --all-targets --all-features
