@@ -51,11 +51,13 @@ pub trait FlightSqlService:
     /// <https://arrow.apache.org/docs/format/Flight.html#authentication>
     async fn do_handshake(
         &self,
-        request: Request<Streaming<HandshakeRequest>>,
+        _request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<
         Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
         Status,
-    >;
+    > {
+        Err(Status::unimplemented("Handshake has no default implementation"))
+    }
 
     /// Get a FlightInfo for executing a SQL query.
     async fn get_flight_info_statement(
