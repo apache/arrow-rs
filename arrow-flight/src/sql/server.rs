@@ -56,7 +56,9 @@ pub trait FlightSqlService:
         Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
         Status,
     > {
-        Err(Status::unimplemented("Handshake has no default implementation"))
+        Err(Status::unimplemented(
+            "Handshake has no default implementation",
+        ))
     }
 
     /// Get a FlightInfo for executing a SQL query.
