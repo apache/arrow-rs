@@ -76,6 +76,17 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
+
+        # Run different tests for the library on its own as well as
+        # all targets to ensure that it still works in the absence of
+        # features that might be enabled by dev-dependencies of other
+        # targets.
+        #
+        # This for each of (library and all-targets), check
+        # 1. compiles with default features
+        # 1. compiles with no default features
+        # 3. compiles with just arrow feature
+        # 3. compiles with all features
       - name: Check compilation
         run: |
           cargo check -p parquet
@@ -91,12 +102,15 @@ jobs:
       - name: Check compilation --all-targets
         run: |
           cargo check -p parquet --all-targets
-      - name: Check compilation --no-default-features --all-targets
+      - name: Check compilation --all-targets --no-default-features
         run: |
-          cargo check -p parquet --no-default-features --all-targets
-      - name: Check compilation --no-default-features --features-arrow --all-targets
+          cargo check -p parquet --all-targets --no-default-features
+      - name: Check compilation  --all-targets --no-default-features --features arrow
         run: |
-          cargo check -p parquet --no-default-features --features arrow --all-targets
+          cargo check -p parquet --all-targets --no-default-features --features arrow
+      - name: Check compilation  --all-targets --all-features
+        run: |
+          cargo check -p parquet --all-targets --all-features
 
   clippy:
     name: Clippy
