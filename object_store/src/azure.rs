@@ -587,11 +587,10 @@ fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
 /// # let ACCOUNT = "foo";
 /// # let BUCKET_NAME = "foo";
 /// # let ACCESS_KEY = "foo";
-/// # let CONTAINER_NAME = "foo";
 /// let azure = object_store::azure::MicrosoftAzureBuilder::new()
 ///  .with_account(ACCOUNT)
 ///  .with_access_key(ACCESS_KEY)
-///  .with_container_name(CONTAINER_NAME)
+///  .with_container_name(BUCKET_NAME)
 ///  .build();
 /// ```
 #[derive(Debug, Default)]
