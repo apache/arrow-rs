@@ -17,6 +17,7 @@
 
 name: Dev PR
 
+# Trigger whenever a PR is changed (title as well as new / changed commits)
 on:
   pull_request_target:
     types:
