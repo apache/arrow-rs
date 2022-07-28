@@ -52,7 +52,10 @@ pub trait FlightSqlService:
     async fn do_handshake(
         &self,
         request: Request<Streaming<HandshakeRequest>>,
-    ) -> Result<Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>, Status>;
+    ) -> Result<
+        Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
+        Status,
+    >;
 
     /// Get a FlightInfo for executing a SQL query.
     async fn get_flight_info_statement(

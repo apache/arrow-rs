@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::pin::Pin;
-use futures::Stream;
 use arrow_flight::sql::{ActionCreatePreparedStatementResult, SqlInfo};
 use arrow_flight::{FlightData, HandshakeRequest, HandshakeResponse};
+use futures::Stream;
+use std::pin::Pin;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -46,18 +46,23 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_handshake(
         &self,
-        request: Request<Streaming<HandshakeRequest>>
+        request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<
-        Response<Pin<Box<dyn Stream<Item=Result<HandshakeResponse, Status>> + Send>>>,
-        Status
+        Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
+        Status,
     > {
         let basic = "Basic ";
-        let authorization = request.metadata().get("authorization")
+        let authorization = request
+            .metadata()
+            .get("authorization")
             .ok_or(Status::invalid_argument("authorization field not present"))?
             .to_str()
             .map_err(|_| Status::invalid_argument("authorization not parsable"))?;
         if !authorization.starts_with(basic) {
-            Err(Status::invalid_argument(format!("Auth type not implemented: {}", authorization)))?;
+            Err(Status::invalid_argument(format!(
+                "Auth type not implemented: {}",
+                authorization
+            )))?;
         }
         let base64 = &authorization[basic.len()..];
         let bytes = base64::decode(base64)
@@ -66,7 +71,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|_| Status::invalid_argument("authorization not parsable"))?;
         let parts: Vec<_> = str.split(":").collect();
         if parts.len() != 2 {
-            Err(Status::invalid_argument(format!("Invalid authorization header")))?;
+            Err(Status::invalid_argument(format!(
+                "Invalid authorization header"
+            )))?;
         }
         let user = parts[0];
         let pass = parts[1];
@@ -75,12 +82,11 @@ impl FlightSqlService for FlightSqlServiceImpl {
         }
         let result = HandshakeResponse {
             protocol_version: 0,
-            payload: "random_uuid_token".as_bytes().to_vec()
+            payload: "random_uuid_token".as_bytes().to_vec(),
         };
         let result = Ok(result);
         let output = futures::stream::iter(vec![result]);
         return Ok(Response::new(Box::pin(output)));
-
     }
 
     // get_flight_info
