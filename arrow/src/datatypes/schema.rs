@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::default::Default;
 use std::fmt;
+use std::hash::Hash;
 
 use serde_derive::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -353,6 +354,22 @@ impl fmt::Display for Schema {
                 .collect::<Vec<String>>()
                 .join(", "),
         )
+    }
+}
+
+// need to implement `Hash` manually because `HashMap` implement Eq but no `Hash`
+#[allow(clippy::derive_hash_xor_eq)]
+impl Hash for Schema {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.fields.hash(state);
+
+        // ensure deterministic key order
+        let mut keys: Vec<&String> = self.metadata.keys().collect();
+        keys.sort();
+        for k in keys {
+            k.hash(state);
+            self.metadata.get(k).expect("key valid").hash(state);
+        }
     }
 }
 
