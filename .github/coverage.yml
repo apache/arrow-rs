@@ -15,26 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# tests for workspace wide
-name: Rust
+name: Coverage
 
-# trigger for all PRs and changes to master
+# Trigger only on pushes to master, not pull requests
 on:
   push:
     branches:
       - master
-  pull_request:
 
 jobs:
 
-  # Check workspace wide compile and test with default features for
-  # mac and windows
-  windows-and-macos:
-    name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
-    runs-on: ${{ matrix.os }}
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [ windows-latest, macos-latest ]
+        arch: [ amd64 ]
         rust: [ stable ]
     steps:
       - uses: actions/checkout@v2
@@ -42,28 +38,19 @@ jobs:
           submodules: true
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }} --no-self-update
+          rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
-      - name: Run tests
-        shell: bash
-        run: |
-          # do not produce debug symbols to keep memory usage down
-          export RUSTFLAGS="-C debuginfo=0"
-          cargo test
-
-
-  # Run cargo fmt for all crates
-  lint:
-    name: Lint (cargo fmt)
-    runs-on: ubuntu-latest
-    container:
-      image: amd64/rust
-    steps:
-      - uses: actions/checkout@v2
-      - name: Setup toolchain
+      - name: Cache Cargo
+        uses: actions/cache@v3
+        with:
+          path: /home/runner/.cargo
+          key: cargo-coverage-cache3-
+      - name: Run coverage
         run: |
           rustup toolchain install stable
           rustup default stable
-          rustup component add rustfmt
-      - name: Run
-        run: cargo fmt --all -- --check
+          cargo install --version 0.18.2 cargo-tarpaulin
+          cargo tarpaulin --all --out Xml
+      - name: Report coverage
+        continue-on-error: true
+        run: bash <(curl -s https://codecov.io/bash)
