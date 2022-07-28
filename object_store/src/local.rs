@@ -239,7 +239,6 @@ impl Config {
         )?)
     }
 
-
     /// List the contents of a directory, adding any files and directories to
     /// `files` and `dirs` respectively, and then returning them
     ///
@@ -250,7 +249,7 @@ impl Config {
         mut files: Vec<ObjectMeta>,
         mut dirs: Vec<PathBuf>,
     ) -> Result<(Vec<ObjectMeta>, Vec<PathBuf>)> {
-        let config = self.clone();
+        let config = Arc::clone(self);
         maybe_spawn_blocking(move || {
             let read_dir = match std::fs::read_dir(&dir) {
                 Ok(read_dir) => read_dir,
