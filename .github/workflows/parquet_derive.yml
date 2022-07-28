@@ -19,8 +19,18 @@
 # tests for parquet_derive crate
 name: parquet_derive
 
+
+# trigger for all PRs that touch certain files and changes to master
 on:
+  push:
+    branches:
+      - master
   pull_request:
+    paths:
+      - parquet/**
+      - parquet_derive/**
+      - parquet_derive_test/**
+      - .github/**
 
 jobs:
   # test the crate

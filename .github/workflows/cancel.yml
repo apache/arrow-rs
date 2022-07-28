@@ -15,6 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# Attempt to cancel stale workflow runs to save github actions runner time
 name: Cancel stale runs
 
 on:

@@ -19,12 +19,17 @@
 # tests for parquet crate
 name: "parquet"
 
+
+# trigger for all PRs that touch certain files and changes to master
 on:
-  # always trigger
   push:
     branches:
       - master
   pull_request:
+    paths:
+      - arrow/**
+      - parquet/**
+      - .github/**
 
 jobs:
   # test the crate
