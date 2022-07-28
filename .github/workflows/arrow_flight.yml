@@ -19,8 +19,17 @@
 # tests for arrow_flight crate
 name: arrow_flight
 
+
+# trigger for all PRs that touch certain files and changes to master
 on:
+  push:
+    branches:
+      - master
   pull_request:
+    paths:
+      - arrow/**
+      - arrow-flight/**
+      - .github/**
 
 jobs:
   # test the crate
