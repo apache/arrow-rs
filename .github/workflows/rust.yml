@@ -15,10 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# tests for workspace wide
 name: Rust
 
+# trigger for all PRs and changes to master
 on:
-  # always trigger
   push:
     branches:
       - master
@@ -26,6 +27,8 @@ on:
 
 jobs:
 
+  # Check workspace wide compile and test with default features for
+  # mac and windows
   windows-and-macos:
     name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
@@ -75,6 +78,7 @@ jobs:
         run: |
           cargo check --benches --workspace --features test_common,prettyprint,async,experimental
 
+  # Run cargo fmt for all crates
   lint:
     name: Lint (cargo fmt)
     runs-on: ubuntu-latest

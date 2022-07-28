@@ -16,7 +16,7 @@
 # under the License.
 
 ---
-# CI for `object_store` crate
+# tests for `object_store` crate
 name: object_store
 
 # trigger for all PRs that touch certain files and changes to master
