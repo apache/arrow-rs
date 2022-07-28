@@ -27,17 +27,16 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::{stream::BoxStream, StreamExt};
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
-use std::fs::{metadata, symlink_metadata, File};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::Range;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
-use std::{collections::BTreeSet, convert::TryFrom, io};
-use std::{collections::VecDeque, path::PathBuf};
+use std::{convert::TryFrom, io};
 use tokio::io::AsyncWrite;
 use url::Url;
-use walkdir::{DirEntry, WalkDir};
 
 /// A specialized `Error` for filesystem object store-related errors
 #[derive(Debug, Snafu)]
@@ -49,15 +48,22 @@ pub(crate) enum Error {
         path: String,
     },
 
-    #[snafu(display("Unable to walk dir: {}", source))]
-    UnableToWalkDir {
-        source: walkdir::Error,
+    #[snafu(display("Unable to read dir: {}", source))]
+    UnableToReadDir {
+        source: io::Error,
+        path: PathBuf,
     },
 
-    #[snafu(display("Unable to access metadata for {}: {}", path, source))]
+    #[snafu(display("Unable to read dir entry: {}", source))]
+    UnableToReadDirEntry {
+        source: io::Error,
+        path: PathBuf,
+    },
+
+    #[snafu(display("Unable to access metadata for {}: {}", path.display(), source))]
     UnableToAccessMetadata {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-        path: String,
+        source: io::Error,
+        path: PathBuf,
     },
 
     #[snafu(display("Unable to copy data to file: {}", source))]
@@ -68,56 +74,56 @@ pub(crate) enum Error {
     #[snafu(display("Unable to create dir {}: {}", path.display(), source))]
     UnableToCreateDir {
         source: io::Error,
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
 
     #[snafu(display("Unable to create file {}: {}", path.display(), err))]
     UnableToCreateFile {
-        path: std::path::PathBuf,
+        path: PathBuf,
         err: io::Error,
     },
 
     #[snafu(display("Unable to delete file {}: {}", path.display(), source))]
     UnableToDeleteFile {
         source: io::Error,
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
 
     #[snafu(display("Unable to open file {}: {}", path.display(), source))]
     UnableToOpenFile {
         source: io::Error,
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
 
     #[snafu(display("Unable to read data from file {}: {}", path.display(), source))]
     UnableToReadBytes {
         source: io::Error,
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
 
     #[snafu(display("Out of range of file {}, expected: {}, actual: {}", path.display(), expected, actual))]
     OutOfRange {
-        path: std::path::PathBuf,
+        path: PathBuf,
         expected: usize,
         actual: usize,
     },
 
     #[snafu(display("Unable to copy file from {} to {}: {}", from.display(), to.display(), source))]
     UnableToCopyFile {
-        from: std::path::PathBuf,
-        to: std::path::PathBuf,
+        from: PathBuf,
+        to: PathBuf,
         source: io::Error,
     },
 
     NotFound {
-        path: std::path::PathBuf,
+        path: PathBuf,
         source: io::Error,
     },
 
     #[snafu(display("Error seeking file {}: {}", path.display(), source))]
     Seek {
         source: io::Error,
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
 
     #[snafu(display("Unable to convert URL \"{}\" to filesystem path", url))]
@@ -156,7 +162,9 @@ impl From<Error> for super::Error {
 /// # Path Semantics
 ///
 /// This implementation follows the [file URI] scheme outlined in [RFC 3986]. In
-/// particular paths are delimited by `/`
+/// particular paths are delimited by `/`.
+///
+/// Additionally any symlinks are ignored, as they create path ambiguity
 ///
 /// [file URI]: https://en.wikipedia.org/wiki/File_URI_scheme
 /// [RFC 3986]: https://www.rfc-editor.org/rfc/rfc3986
@@ -229,6 +237,62 @@ impl Config {
             location,
             Some(&self.root),
         )?)
+    }
+
+
+    /// List the contents of a directory, adding any files and directories to
+    /// `files` and `dirs` respectively, and then returning them
+    ///
+    /// The slightly unusual signature is necessary to give the future a static lifetime
+    async fn list_dir(
+        self: &Arc<Self>,
+        dir: PathBuf,
+        mut files: Vec<ObjectMeta>,
+        mut dirs: Vec<PathBuf>,
+    ) -> Result<(Vec<ObjectMeta>, Vec<PathBuf>)> {
+        let config = self.clone();
+        maybe_spawn_blocking(move || {
+            let read_dir = match std::fs::read_dir(&dir) {
+                Ok(read_dir) => read_dir,
+                // Ignore not found directory prefixes
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                    return Ok((files, dirs))
+                }
+                Err(source) => {
+                    return Err(Error::UnableToReadDir { source, path: dir }.into())
+                }
+            };
+
+            for result in read_dir {
+                let dir = result.context(UnableToReadDirEntrySnafu { path: &dir })?;
+                let path = dir.path();
+
+                let metadata = std::fs::symlink_metadata(&path)
+                    .context(UnableToAccessMetadataSnafu { path: &path })?;
+
+                // Ignore symlinks
+                if metadata.is_symlink() {
+                    continue;
+                }
+
+                if metadata.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+
+                // Ignore file names with # in them, since they might be in-progress uploads.
+                // They would be rejected anyways by filesystem_to_path below.
+                if path.to_string_lossy().contains('#') {
+                    continue;
+                }
+
+                let location = config.filesystem_to_path(&path)?;
+                files.push(convert_metadata(metadata, location)?);
+            }
+
+            Ok((files, dirs))
+        })
+        .await
     }
 }
 
@@ -338,11 +402,9 @@ impl ObjectStore for LocalFileSystem {
 
         maybe_spawn_blocking(move || {
             let file = open_file(&path)?;
-            let metadata =
-                file.metadata().map_err(|e| Error::UnableToAccessMetadata {
-                    source: e.into(),
-                    path: location.to_string(),
-                })?;
+            let metadata = file
+                .metadata()
+                .context(UnableToAccessMetadataSnafu { path: &path })?;
 
             convert_metadata(metadata, location)
         })
@@ -362,63 +424,30 @@ impl ObjectStore for LocalFileSystem {
         &self,
         prefix: Option<&Path>,
     ) -> Result<BoxStream<'_, Result<ObjectMeta>>> {
-        let config = Arc::clone(&self.config);
+        let config = &self.config;
 
         let root_path = match prefix {
             Some(prefix) => config.path_to_filesystem(prefix)?,
             None => self.config.root.to_file_path().unwrap(),
         };
 
-        let walkdir = WalkDir::new(&root_path)
-            // Don't include the root directory itself
-            .min_depth(1);
+        let mut dirs = Vec::with_capacity(1024);
+        dirs.push(root_path);
+        let files = Vec::with_capacity(1024);
 
-        let s = walkdir.into_iter().flat_map(move |result_dir_entry| {
-            match convert_walkdir_result(result_dir_entry) {
-                Err(e) => Some(Err(e)),
-                Ok(None) => None,
-                Ok(entry @ Some(_)) => entry
-                    .filter(|dir_entry| {
-                        dir_entry.file_type().is_file()
-                            // Ignore file names with # in them, since they might be in-progress uploads.
-                            // They would be rejected anyways by filesystem_to_path below.
-                            && !dir_entry.file_name().to_string_lossy().contains('#')
-                    })
-                    .map(|entry| {
-                        let location = config.filesystem_to_path(entry.path())?;
-                        convert_entry(entry, location)
-                    }),
-            }
-        });
-
-        // If no tokio context, return iterator directly as no
-        // need to perform chunked spawn_blocking reads
-        if tokio::runtime::Handle::try_current().is_err() {
-            return Ok(futures::stream::iter(s).boxed());
-        }
-
-        // Otherwise list in batches of CHUNK_SIZE
-        const CHUNK_SIZE: usize = 1024;
-
-        let buffer = VecDeque::with_capacity(CHUNK_SIZE);
         let stream =
-            futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
-                if buffer.is_empty() {
-                    (s, buffer) = tokio::task::spawn_blocking(move || {
-                        for _ in 0..CHUNK_SIZE {
-                            match s.next() {
-                                Some(r) => buffer.push_back(r),
-                                None => break,
-                            }
-                        }
-                        (s, buffer)
-                    })
-                    .await?;
+            futures::stream::try_unfold((files, dirs), |(mut files, mut dirs)| async {
+                while files.is_empty() {
+                    let dir = match dirs.pop() {
+                        Some(dir) => dir,
+                        None => return Ok(None),
+                    };
+
+                    (files, dirs) = config.list_dir(dir, files, dirs).await?;
                 }
 
-                match buffer.pop_front() {
-                    Some(Err(e)) => Err(e),
-                    Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
+                match files.pop() {
+                    Some(meta) => Ok(Some((meta, (files, dirs)))),
                     None => Ok(None),
                 }
             });
@@ -432,50 +461,30 @@ impl ObjectStore for LocalFileSystem {
         let prefix = prefix.cloned().unwrap_or_default();
         let resolved_prefix = config.path_to_filesystem(&prefix)?;
 
-        maybe_spawn_blocking(move || {
-            let walkdir = WalkDir::new(&resolved_prefix).min_depth(1).max_depth(1);
+        let (objects, dirs) = config.list_dir(resolved_prefix, vec![], vec![]).await?;
 
-            let mut common_prefixes = BTreeSet::new();
-            let mut objects = Vec::new();
+        let mut common_prefixes = Vec::with_capacity(dirs.len());
+        for dir in dirs {
+            let path = config.filesystem_to_path(&dir)?;
+            let mut parts = match path.prefix_match(&prefix) {
+                Some(parts) => parts,
+                None => continue,
+            };
 
-            for entry_res in walkdir.into_iter().map(convert_walkdir_result) {
-                if let Some(entry) = entry_res? {
-                    if entry.file_type().is_file()
-                        // Ignore file names with # in them, since they might be in-progress uploads.
-                        // They would be rejected anyways by filesystem_to_path below.
-                        && entry.file_name().to_string_lossy().contains('#')
-                    {
-                        continue;
-                    }
-                    let is_directory = entry.file_type().is_dir();
-                    let entry_location = config.filesystem_to_path(entry.path())?;
+            let common_prefix = match parts.next() {
+                Some(p) => p,
+                None => continue,
+            };
 
-                    let mut parts = match entry_location.prefix_match(&prefix) {
-                        Some(parts) => parts,
-                        None => continue,
-                    };
+            common_prefixes.push(prefix.child(common_prefix))
+        }
 
-                    let common_prefix = match parts.next() {
-                        Some(p) => p,
-                        None => continue,
-                    };
+        common_prefixes.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
 
-                    drop(parts);
-
-                    if is_directory {
-                        common_prefixes.insert(prefix.child(common_prefix));
-                    } else {
-                        objects.push(convert_entry(entry, entry_location)?);
-                    }
-                }
-            }
-
-            Ok(ListResult {
-                common_prefixes: common_prefixes.into_iter().collect(),
-                objects,
-            })
+        Ok(ListResult {
+            common_prefixes,
+            objects,
         })
-        .await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -530,12 +539,9 @@ fn get_upload_stage_path(dest: &std::path::Path, multipart_id: &MultipartId) -> 
 
 enum LocalUploadState {
     /// Upload is ready to send new data
-    Idle(Arc<std::fs::File>),
+    Idle(Arc<File>),
     /// In the middle of a write
-    Writing(
-        Arc<std::fs::File>,
-        BoxFuture<'static, Result<usize, io::Error>>,
-    ),
+    Writing(Arc<File>, BoxFuture<'static, Result<usize, io::Error>>),
     /// In the middle of syncing data and closing file.
     ///
     /// Future will contain last reference to file, so it will call drop on completion.
@@ -553,11 +559,7 @@ struct LocalUpload {
 }
 
 impl LocalUpload {
-    pub fn new(
-        dest: PathBuf,
-        multipart_id: MultipartId,
-        file: Arc<std::fs::File>,
-    ) -> Self {
+    pub fn new(dest: PathBuf, multipart_id: MultipartId, file: Arc<File>) -> Self {
         Self {
             inner_state: LocalUploadState::Idle(file),
             dest,
@@ -571,14 +573,13 @@ impl AsyncWrite for LocalUpload {
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
-    ) -> std::task::Poll<Result<usize, io::Error>> {
-        let invalid_state =
-            |condition: &str| -> std::task::Poll<Result<usize, io::Error>> {
-                Poll::Ready(Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Tried to write to file {}.", condition),
-                )))
-            };
+    ) -> Poll<Result<usize, io::Error>> {
+        let invalid_state = |condition: &str| -> Poll<Result<usize, io::Error>> {
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Tried to write to file {}.", condition),
+            )))
+        };
 
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let mut data: Vec<u8> = buf.to_vec();
@@ -640,14 +641,14 @@ impl AsyncWrite for LocalUpload {
     fn poll_flush(
         self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), io::Error>> {
         Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), io::Error>> {
+    ) -> Poll<Result<(), io::Error>> {
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             loop {
                 match &mut self.inner_state {
@@ -716,7 +717,7 @@ impl AsyncWrite for LocalUpload {
                     let file = Arc::clone(file);
                     self.inner_state = LocalUploadState::Complete;
                     file.sync_all()?;
-                    std::mem::drop(file);
+                    drop(file);
                     std::fs::rename(&staging_path, &self.dest)?;
                     Poll::Ready(Ok(()))
                 }
@@ -732,9 +733,9 @@ impl AsyncWrite for LocalUpload {
     }
 }
 
-fn open_file(path: &std::path::PathBuf) -> Result<File> {
+fn open_file(path: &PathBuf) -> Result<File> {
     let file = File::open(path).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
+        if e.kind() == io::ErrorKind::NotFound {
             Error::NotFound {
                 path: path.clone(),
                 source: e,
@@ -749,7 +750,7 @@ fn open_file(path: &std::path::PathBuf) -> Result<File> {
     Ok(file)
 }
 
-fn open_writable_file(path: &std::path::PathBuf) -> Result<File> {
+fn open_writable_file(path: &PathBuf) -> Result<File> {
     match File::create(&path) {
         Ok(f) => Ok(f),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -776,16 +777,6 @@ fn open_writable_file(path: &std::path::PathBuf) -> Result<File> {
     }
 }
 
-fn convert_entry(entry: DirEntry, location: Path) -> Result<ObjectMeta> {
-    let metadata = entry
-        .metadata()
-        .map_err(|e| Error::UnableToAccessMetadata {
-            source: e.into(),
-            path: location.to_string(),
-        })?;
-    convert_metadata(metadata, location)
-}
-
 fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<ObjectMeta> {
     let last_modified = metadata
         .modified()
@@ -803,53 +794,6 @@ fn convert_metadata(metadata: std::fs::Metadata, location: Path) -> Result<Objec
     })
 }
 
-/// Convert walkdir results and converts not-found errors into `None`.
-/// Convert broken symlinks to `None`.
-fn convert_walkdir_result(
-    res: std::result::Result<walkdir::DirEntry, walkdir::Error>,
-) -> Result<Option<walkdir::DirEntry>> {
-    match res {
-        Ok(entry) => {
-            // To check for broken symlink: call symlink_metadata() - it does not traverse symlinks);
-            // if ok: check if entry is symlink; and try to read it by calling metadata().
-            match symlink_metadata(entry.path()) {
-                Ok(attr) => {
-                    if attr.is_symlink() {
-                        let target_metadata = metadata(entry.path());
-                        match target_metadata {
-                            Ok(_) => {
-                                // symlink is valid
-                                Ok(Some(entry))
-                            }
-                            Err(_) => {
-                                // this is a broken symlink, return None
-                                Ok(None)
-                            }
-                        }
-                    } else {
-                        Ok(Some(entry))
-                    }
-                }
-                Err(_) => Ok(None),
-            }
-        }
-
-        Err(walkdir_err) => match walkdir_err.io_error() {
-            Some(io_err) => match io_err.kind() {
-                io::ErrorKind::NotFound => Ok(None),
-                _ => Err(Error::UnableToWalkDir {
-                    source: walkdir_err,
-                }
-                .into()),
-            },
-            None => Err(Error::UnableToWalkDir {
-                source: walkdir_err,
-            }
-            .into()),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -861,7 +805,8 @@ mod tests {
         },
         Error as ObjectStoreError, ObjectStore,
     };
-    use tempfile::TempDir;
+    use futures::TryStreamExt;
+    use tempfile::{NamedTempFile, TempDir};
     use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
@@ -1028,6 +973,52 @@ mod tests {
         } else {
             result.unwrap();
         }
+    }
+
+    async fn check_list(integration: &LocalFileSystem, expected: &[&str]) {
+        let result: Vec<_> = integration
+            .list(None)
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let mut strings: Vec<_> = result.iter().map(|x| x.location.as_ref()).collect();
+        strings.sort_unstable();
+        assert_eq!(&strings, expected)
+    }
+
+    #[tokio::test]
+    #[cfg(target_family = "unix")]
+    async fn test_symlink() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let subdir = root.path().join("a");
+        std::fs::create_dir(&subdir).unwrap();
+        let file = subdir.join("file.parquet");
+        std::fs::write(file, "test").unwrap();
+
+        check_list(&integration, &["a/file.parquet"]).await;
+
+        // Ignore out of tree symlink
+        let other = NamedTempFile::new().unwrap();
+        std::os::unix::fs::symlink(other.path(), root.path().join("test.parquet"))
+            .unwrap();
+        check_list(&integration, &["a/file.parquet"]).await;
+
+        // Ignore in tree symlink
+        std::os::unix::fs::symlink(&subdir, root.path().join("b")).unwrap();
+        check_list(&integration, &["a/file.parquet"]).await;
+
+        // Ignore broken symlink
+        std::os::unix::fs::symlink(
+            root.path().join("foo.parquet"),
+            root.path().join("c"),
+        )
+        .unwrap();
+        check_list(&integration, &["a/file.parquet"]).await;
     }
 
     #[tokio::test]
