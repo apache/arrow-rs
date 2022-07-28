@@ -48,7 +48,7 @@ pub trait FlightSqlService:
     type FlightService: FlightService;
 
     /// Accept authentication and return a token
-    /// https://arrow.apache.org/docs/format/Flight.html#authentication
+    /// <https://arrow.apache.org/docs/format/Flight.html#authentication>
     async fn do_handshake(
         &self,
         request: Request<Streaming<HandshakeRequest>>,
