@@ -27,7 +27,7 @@ use crate::data_type::{ByteArray, Decimal, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 
-#[cfg(any(feature = "cli", test))]
+#[cfg(any(feature = "serde_json", test))]
 use serde_json::Value;
 
 /// Macro as a shortcut to generate 'not yet implemented' panic error.
@@ -79,7 +79,7 @@ impl Row {
         }
     }
 
-    #[cfg(any(feature = "cli", test))]
+    #[cfg(any(feature = "serde_json", test))]
     pub fn to_json_value(&self) -> Value {
         Value::Object(
             self.fields
@@ -667,7 +667,7 @@ impl Field {
         }
     }
 
-    #[cfg(any(feature = "cli", test))]
+    #[cfg(any(feature = "serde_json", test))]
     pub fn to_json_value(&self) -> Value {
         match &self {
             Field::Null => Value::Null,
@@ -1685,7 +1685,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "cli", test))]
     fn test_to_json_value() {
         assert_eq!(Field::Null.to_json_value(), Value::Null);
         assert_eq!(Field::Bool(true).to_json_value(), Value::Bool(true));
