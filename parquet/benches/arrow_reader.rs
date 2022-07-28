@@ -692,4 +692,3 @@ fn add_benches(c: &mut Criterion) {
 
 criterion_group!(benches, add_benches);
 criterion_main!(benches);
-
