@@ -48,6 +48,19 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
         }
     }
 
+    /// Creates a new [`GenericBinaryBuilder`],
+    /// `item_capacity` is the number of items to pre-allocate space for in this builder
+    /// `data_capacity` is the number of bytes to pre-allocate space for in this builder
+    pub fn with_capacity(item_capacity: usize, data_capacity: usize) -> Self {
+        let mut offsets_builder = BufferBuilder::<OffsetSize>::new(item_capacity + 1);
+        offsets_builder.append(OffsetSize::zero());
+        Self {
+            value_builder: UInt8BufferBuilder::new(data_capacity),
+            offsets_builder,
+            null_buffer_builder: NullBufferBuilder::new(item_capacity),
+        }
+    }
+
     /// Appends a byte slice into the builder.
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<[u8]>) {
@@ -81,6 +94,16 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
         self.offsets_builder.append(OffsetSize::zero());
         let array_data = unsafe { array_builder.build_unchecked() };
         GenericBinaryArray::<OffsetSize>::from(array_data)
+    }
+
+    /// Returns the current values buffer as a slice
+    pub fn values_slice(&self) -> &[u8] {
+        self.value_builder.as_slice()
+    }
+
+    /// Returns the current offsets buffer as a slice
+    pub fn offsets_slice(&self) -> &[OffsetSize] {
+        self.offsets_builder.as_slice()
     }
 }
 
