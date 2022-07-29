@@ -23,6 +23,7 @@ use crate::datatypes::{
     UnionMode,
 };
 use crate::error::{ArrowError, Result};
+use crate::util::bit_iterator::BitSliceIterator;
 use crate::{bitmap::Bitmap, datatypes::ArrowNativeType};
 use crate::{
     buffer::{Buffer, MutableBuffer},
@@ -36,6 +37,21 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::equal::equal;
+
+#[inline]
+pub(crate) fn contains_nulls(
+    null_bit_buffer: Option<&Buffer>,
+    offset: usize,
+    len: usize,
+) -> bool {
+    match null_bit_buffer {
+        Some(buffer) => match BitSliceIterator::new(buffer, offset, len).next() {
+            Some((start, end)) => start != 0 || end != len,
+            None => len != 0, // No non-null values
+        },
+        None => false, // No null buffer
+    }
+}
 
 #[inline]
 pub(crate) fn count_nulls(
@@ -2864,5 +2880,16 @@ mod tests {
 
         let err = data.validate_values().unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
+    }
+
+    #[test]
+    fn test_contains_nulls() {
+        let buffer: Buffer =
+            MutableBuffer::from_iter([false, false, false, true, true, false]).into();
+
+        assert!(contains_nulls(Some(&buffer), 0, 6));
+        assert!(contains_nulls(Some(&buffer), 0, 3));
+        assert!(!contains_nulls(Some(&buffer), 3, 2));
+        assert!(!contains_nulls(Some(&buffer), 0, 0));
     }
 }

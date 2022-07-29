@@ -19,8 +19,17 @@
 # tests for arrow_flight crate
 name: arrow_flight
 
+
+# trigger for all PRs that touch certain files and changes to master
 on:
+  push:
+    branches:
+      - master
   pull_request:
+    paths:
+      - arrow/**
+      - arrow-flight/**
+      - .github/**
 
 jobs:
   # test the crate
@@ -41,9 +50,27 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Tests with default features
+      - name: Test
         run: |
           cargo test -p arrow-flight
-      - name: Tests with all features
+      - name: Test --all-features
         run: |
           cargo test -p arrow-flight --all-features
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Setup Clippy
+        run: |
+          rustup component add clippy
+      - name: Run clippy
+        run: |
+          cargo clippy -p arrow-flight --all-features -- -D warnings

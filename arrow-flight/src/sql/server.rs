@@ -47,6 +47,20 @@ pub trait FlightSqlService:
     /// When impl FlightSqlService, you can always set FlightService to Self
     type FlightService: FlightService;
 
+    /// Accept authentication and return a token
+    /// <https://arrow.apache.org/docs/format/Flight.html#authentication>
+    async fn do_handshake(
+        &self,
+        _request: Request<Streaming<HandshakeRequest>>,
+    ) -> Result<
+        Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Handshake has no default implementation",
+        ))
+    }
+
     /// Get a FlightInfo for executing a SQL query.
     async fn get_flight_info_statement(
         &self,
@@ -256,9 +270,10 @@ where
 
     async fn handshake(
         &self,
-        _request: Request<Streaming<HandshakeRequest>>,
+        request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<Response<Self::HandshakeStream>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        let res = self.do_handshake(request).await?;
+        Ok(res)
     }
 
     async fn list_flights(

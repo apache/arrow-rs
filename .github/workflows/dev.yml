@@ -17,9 +17,11 @@
 
 name: Dev
 
+# trigger for all PRs and changes to master
 on:
-  # always trigger
   push:
+    branches:
+      - master
   pull_request:
 
 env:

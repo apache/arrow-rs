@@ -15,10 +15,11 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# tests for workspace wide
 name: Rust
 
+# trigger for all PRs and changes to master
 on:
-  # always trigger
   push:
     branches:
       - master
@@ -26,50 +27,8 @@ on:
 
 jobs:
 
-  # test the crate
-  linux-test:
-    name: Test Workspace on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-        PARQUET_TEST_DATA: /__w/arrow-rs/arrow-rs/parquet-testing/data
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Run tests
-        run: |
-          # run tests on all workspace members with default feature list
-          cargo test
-      - name: Re-run tests on parquet crate with all features
-        run: |
-          cargo test -p parquet --all-features
-      - name: Test compilation of parquet library crate with different feature combinations
-        run: |
-          cargo check -p parquet
-          cargo check -p parquet --no-default-features
-          cargo check -p parquet --no-default-features --features arrow
-          cargo check -p parquet --all-features
-      - name: Test compilation of parquet targets with different feature combinations
-        run: |
-          cargo check -p parquet --all-targets
-          cargo check -p parquet --no-default-features --all-targets
-          cargo check -p parquet --no-default-features --features arrow --all-targets
-
-
+  # Check workspace wide compile and test with default features for
+  # mac and windows
   windows-and-macos:
     name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
@@ -88,65 +47,12 @@ jobs:
       - name: Run tests
         shell: bash
         run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
           cargo test
 
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Setup Clippy
-        run: |
-          rustup component add clippy
-      - name: Run clippy
-        run: |
-          cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
 
-  check_benches:
-    name: Check Benchmarks (but don't run them)
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Check benchmarks
-        run: |
-          cargo check --benches --workspace --features test_common,prettyprint,async,experimental
-
+  # Run cargo fmt for all crates
   lint:
     name: Lint (cargo fmt)
     runs-on: ubuntu-latest
@@ -181,16 +87,9 @@ jobs:
         uses: actions/cache@v3
         with:
           path: /home/runner/.cargo
-          # this key is not equal because the user is different than on a container (runner vs github)
           key: cargo-coverage-cache3-
       - name: Run coverage
         run: |
-          export CARGO_HOME="/home/runner/.cargo"
-          export CARGO_TARGET_DIR="/home/runner/target"
-
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-
           rustup toolchain install stable
           rustup default stable
           cargo install --version 0.18.2 cargo-tarpaulin

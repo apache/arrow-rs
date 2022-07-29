@@ -16,6 +16,7 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -25,6 +26,26 @@ use crate::error::{ArrowError, Result};
 
 use super::ArrayBuilder;
 use super::PrimitiveBuilder;
+
+/// Wraps a type implementing `ToByteSlice` implementing `Hash` and `Eq` for it
+///
+/// This is necessary to handle types such as f32, which don't natively implement these
+#[derive(Debug)]
+struct Value<T>(T);
+
+impl<T: ToByteSlice> std::hash::Hash for Value<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_byte_slice().hash(state)
+    }
+}
+
+impl<T: ToByteSlice> PartialEq for Value<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_byte_slice().eq(other.0.to_byte_slice())
+    }
+}
+
+impl<T: ToByteSlice> Eq for Value<T> {}
 
 /// Array builder for `DictionaryArray`. For example to map a set of byte indices
 /// to f32 values. Note that the use of a `HashMap` here will not scale to very large
@@ -71,7 +92,7 @@ where
 {
     keys_builder: PrimitiveBuilder<K>,
     values_builder: PrimitiveBuilder<V>,
-    map: HashMap<Box<[u8]>, K::Native>,
+    map: HashMap<Value<V::Native>, K::Native>,
 }
 
 impl<K, V> PrimitiveDictionaryBuilder<K, V>
@@ -138,19 +159,20 @@ where
     /// value is appended to the values array.
     #[inline]
     pub fn append(&mut self, value: V::Native) -> Result<K::Native> {
-        if let Some(&key) = self.map.get(value.to_byte_slice()) {
-            // Append existing value.
-            self.keys_builder.append_value(key);
-            Ok(key)
-        } else {
-            // Append new value.
-            let key = K::Native::from_usize(self.values_builder.len())
-                .ok_or(ArrowError::DictionaryKeyOverflowError)?;
-            self.values_builder.append_value(value);
-            self.keys_builder.append_value(key as K::Native);
-            self.map.insert(value.to_byte_slice().into(), key);
-            Ok(key)
-        }
+        let key = match self.map.entry(Value(value)) {
+            Entry::Vacant(vacant) => {
+                // Append new value.
+                let key = K::Native::from_usize(self.values_builder.len())
+                    .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+                self.values_builder.append_value(value);
+                vacant.insert(key);
+                key
+            }
+            Entry::Occupied(o) => *o.get(),
+        };
+
+        self.keys_builder.append_value(key);
+        Ok(key)
     }
 
     #[inline]

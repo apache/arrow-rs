@@ -17,8 +17,8 @@
 
 name: Docs
 
+# trigger for all PRs and changes to master
 on:
-  # always trigger
   push:
     branches:
       - master
