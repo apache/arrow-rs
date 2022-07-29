@@ -52,10 +52,10 @@ The `dev@arrow.apache.org` mailing list serves as the core communication channel
 
 The Rust Arrow community also uses the official [ASF Slack](https://s.apache.org/slack-invite) for informal discussions and coordination. This is
 a great place to meet other contributors and get guidance on where to contribute. Join us in the `#arrow-rust` channel and feel free to ask for an invite via:
+
 1. the `dev@arrow.apache.org` mailing list
 2. the [GitHub Discussions][discussions]
 3. the [Discord channel](https://discord.com/channels/885562378132000778/885562378132000781)
-
 
 Unlike other parts of the Arrow ecosystem, the Rust implementation uses [GitHub issues][issues] as the system of record for new features
 and bug fixes and this plays a critical role in the release process.
