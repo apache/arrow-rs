@@ -23,6 +23,7 @@ pub mod reader;
 pub mod writer;
 
 mod compression;
+
 #[allow(clippy::redundant_closure)]
 #[allow(clippy::needless_lifetimes)]
 #[allow(clippy::extra_unused_lifetimes)]

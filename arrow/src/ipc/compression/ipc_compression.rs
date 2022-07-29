@@ -44,7 +44,7 @@ impl From<CompressionCodecType> for Option<CompressionType> {
     }
 }
 
-#[cfg(any(feature = "zstd,lz4", test))]
+#[cfg(any(feature = "ipc_compression", test))]
 mod compression_function {
     use crate::error::Result;
     use crate::ipc::compression::ipc_compression::CompressionCodecType;

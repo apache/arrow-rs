@@ -38,9 +38,8 @@ path = "src/lib.rs"
 bench = false
 
 [dependencies]
-byteorder = { version = "1", default-features = false }
 lz4 = { version = "1.23", default-features = false, optional = true }
-zstd = { version = "0.11.1", optional = true, default-features = false }
+zstd = { version = "0.11.1", default-features = false, optional = true }
 serde = { version = "1.0", default-features = false }
 serde_derive = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["preserve_order"] }
@@ -63,7 +62,8 @@ multiversion = { version = "0.6.1", default-features = false }
 bitflags = { version = "1.2.1", default-features = false }
 
 [features]
-default = ["csv", "ipc", "test_utils", "zstd", "lz4"]
+default = ["csv", "ipc", "test_utils"]
+ipc_compression = ["zstd", "lz4"]
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
 simd = ["packed_simd"]
@@ -84,6 +84,8 @@ rand = { version = "0.8", default-features = false, features =  ["std", "std_rng
 criterion = { version = "0.3", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 tempfile = { version = "3", default-features = false }
+lz4 = { version = "1.23", default-features = false }
+zstd = { version = "0.11", default-features = false }
 
 [build-dependencies]
 

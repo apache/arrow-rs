@@ -20,7 +20,6 @@
 //! The `FileWriter` and `StreamWriter` have similar interfaces,
 //! however the `FileWriter` expects a reader that supports `Seek`ing
 
-use byteorder::{ByteOrder, LittleEndian};
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 
@@ -65,6 +64,7 @@ pub struct IpcWriteOptions {
 }
 
 impl IpcWriteOptions {
+    #[cfg(any(feature = "ipc_compression", test))]
     pub fn try_new_with_compression(
         alignment: usize,
         write_legacy_ipc_format: bool,
@@ -1047,8 +1047,8 @@ fn write_buffer(
         CompressionCodecType::Lz4Frame | CompressionCodecType::Zstd => {
             if (origin_buffer_len as i64) == LENGTH_EMPTY_COMPRESSED_DATA {
                 (buffer.as_slice(), 0)
-            } else {
-                #[cfg(any(feature = "zstd,lz4", test))]
+            } else if cfg!(feature = "ipc_compression") || cfg!(test) {
+                #[cfg(any(feature = "ipc_compression", test))]
                 compression_codec
                     .compress(buffer.as_slice(), &mut _compression_buffer)
                     .unwrap();
@@ -1062,6 +1062,8 @@ fn write_buffer(
                     // use the compressed data with uncompressed length
                     (_compression_buffer.as_slice(), origin_buffer_len as i64)
                 }
+            } else {
+                panic!("IPC compression not supported. Compile with feature 'ipc_compression' to enable");
             }
         }
     };
@@ -1072,8 +1074,7 @@ fn write_buffer(
     } else {
         buffers.push(ipc::Buffer::new(offset, LENGTH_OF_PREFIX_DATA + len));
         // write the prefix of the uncompressed length
-        let mut uncompression_len_buf = [0; 8];
-        LittleEndian::write_i64(&mut uncompression_len_buf, uncompression_buffer_len);
+        let uncompression_len_buf: [u8; 8] = uncompression_buffer_len.to_le_bytes();
         arrow_data.extend_from_slice(&uncompression_len_buf);
         LENGTH_OF_PREFIX_DATA + len
     };

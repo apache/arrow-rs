@@ -20,7 +20,6 @@
 //! The `FileReader` and `StreamReader` have similar interfaces,
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
-use byteorder::{ByteOrder, LittleEndian};
 use std::collections::HashMap;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -63,8 +62,9 @@ fn read_buffer(
         return Buffer::from(buf_data);
     }
     match compression_codec {
-        CompressionCodecType::NoCompression => Buffer::from(buf_data),
-        CompressionCodecType::Lz4Frame | CompressionCodecType::Zstd => {
+        CompressionCodecType::Lz4Frame | CompressionCodecType::Zstd
+            if cfg!(feature = "ipc_compression") || cfg!(test) =>
+        {
             // 8byte + data
             // read the first 8 bytes
             // if the data is compressed, decompress the data, otherwise return as is
@@ -81,13 +81,16 @@ fn read_buffer(
                 // decompress data using the codec
                 let mut _uncompressed_buffer = Vec::new();
                 let _input_data = &buf_data[(LENGTH_OF_PREFIX_DATA as usize)..];
-                // TODO consider the error result
-                #[cfg(any(feature = "zstd,lz4", test))]
+                #[cfg(any(feature = "ipc_compression", test))]
                 compression_codec
                     .decompress(_input_data, &mut _uncompressed_buffer)
                     .unwrap();
                 Buffer::from(_uncompressed_buffer)
             }
+        }
+        CompressionCodecType::NoCompression => Buffer::from(buf_data),
+        _ => {
+            panic!("IPC compression not supported. Compile with feature 'ipc_compression' to enable");
         }
     }
 }
@@ -100,7 +103,7 @@ fn read_buffer(
 fn read_uncompressed_size(buffer: &[u8]) -> i64 {
     let len_buffer = &buffer[0..8];
     // 64-bit little-endian signed integer
-    LittleEndian::read_i64(len_buffer)
+    i64::from_le_bytes(len_buffer.try_into().unwrap())
 }
 
 /// Coordinates reading arrays based on data types.
