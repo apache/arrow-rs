@@ -182,6 +182,10 @@ impl RleEncoder {
         self.bit_writer.bytes_written()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.bit_writer.bytes_written() == 0
+    }
+
     #[inline]
     pub fn consume(mut self) -> Result<Vec<u8>> {
         self.flush()?;

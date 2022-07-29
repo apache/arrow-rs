@@ -19,8 +19,18 @@
 # tests for parquet_derive crate
 name: parquet_derive
 
+
+# trigger for all PRs that touch certain files and changes to master
 on:
+  push:
+    branches:
+      - master
   pull_request:
+    paths:
+      - parquet/**
+      - parquet_derive/**
+      - parquet_derive_test/**
+      - .github/**
 
 jobs:
   # test the crate
@@ -41,6 +51,24 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: stable
-      - name: Test crate
+      - name: Test
         run: |
           cargo test -p parquet_derive
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+        with:
+          rust-version: stable
+      - name: Setup Clippy
+        run: |
+          rustup component add clippy
+      - name: Run clippy
+        run: |
+          cargo clippy -p parquet_derive --all-features -- -D warnings

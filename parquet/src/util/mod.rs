@@ -21,10 +21,10 @@ pub mod memory;
 pub mod bit_util;
 mod bit_packing;
 pub mod cursor;
-pub mod hash_util;
+pub(crate) mod interner;
+pub(crate) mod page_util;
 #[cfg(any(test, feature = "test_common"))]
 pub(crate) mod test_common;
-pub(crate)mod page_util;
 
 #[cfg(any(test, feature = "test_common"))]
 pub use self::test_common::page_util::{

@@ -17,6 +17,7 @@
 
 name: Dev PR
 
+# Trigger whenever a PR is changed (title as well as new / changed commits)
 on:
   pull_request_target:
     types:
@@ -41,9 +42,3 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           configuration-path: .github/workflows/dev_pr/labeler.yml
           sync-labels: true
-
-      #- name: Checks if PR needs rebase
-      #  uses: eps1lon/actions-label-merge-conflict@releases/2.x
-      #  with:
-      #    dirtyLabel: "needs-rebase"
-      #    repoToken: "${{ secrets.GITHUB_TOKEN }}"
