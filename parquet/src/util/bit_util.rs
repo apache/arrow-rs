@@ -18,7 +18,6 @@
 use std::{cmp, mem::size_of};
 
 use crate::data_type::AsBytes;
-use crate::errors::{ParquetError, Result};
 use crate::util::{bit_packing::unpack32, memory::ByteBufferPtr};
 
 #[inline]
@@ -138,7 +137,7 @@ where
 /// This function should be removed after
 /// [`int_roundings`](https://github.com/rust-lang/rust/issues/88581) is stable.
 #[inline]
-pub fn ceil(value: i64, divisor: i64) -> i64 {
+pub fn ceil<T: num::Integer>(value: T, divisor: T) -> T {
     num::Integer::div_ceil(&value, &divisor)
 }
 
@@ -148,7 +147,7 @@ pub fn trailing_bits(v: u64, num_bits: usize) -> u64 {
     if num_bits >= 64 {
         v
     } else {
-        v & ((1<<num_bits) - 1)
+        v & ((1 << num_bits) - 1)
     }
 }
 
@@ -180,59 +179,32 @@ pub fn get_bit(data: &[u8], i: usize) -> bool {
 /// bit packed or byte aligned fashion.
 pub struct BitWriter {
     buffer: Vec<u8>,
-    max_bytes: usize,
     buffered_values: u64,
-    byte_offset: usize,
-    bit_offset: usize,
-    start: usize,
+    bit_offset: u8,
 }
 
 impl BitWriter {
     pub fn new(max_bytes: usize) -> Self {
         Self {
-            buffer: vec![0; max_bytes],
-            max_bytes,
+            buffer: Vec::with_capacity(max_bytes),
             buffered_values: 0,
-            byte_offset: 0,
             bit_offset: 0,
-            start: 0,
         }
     }
 
-    /// Initializes the writer from the existing buffer `buffer` and starting
-    /// offset `start`.
-    pub fn new_from_buf(buffer: Vec<u8>, start: usize) -> Self {
-        assert!(start < buffer.len());
-        let len = buffer.len();
+    /// Initializes the writer appending to the existing buffer `buffer`
+    pub fn new_from_buf(buffer: Vec<u8>) -> Self {
         Self {
             buffer,
-            max_bytes: len,
             buffered_values: 0,
-            byte_offset: start,
             bit_offset: 0,
-            start,
         }
-    }
-
-    /// Extend buffer size by `increment` bytes
-    #[inline]
-    pub fn extend(&mut self, increment: usize) {
-        self.max_bytes += increment;
-        let extra = vec![0; increment];
-        self.buffer.extend(extra);
-    }
-
-    /// Report buffer size, in bytes
-    #[inline]
-    pub fn capacity(&mut self) -> usize {
-        self.max_bytes
     }
 
     /// Consumes and returns the current buffer.
     #[inline]
     pub fn consume(mut self) -> Vec<u8> {
         self.flush();
-        self.buffer.truncate(self.byte_offset);
         self.buffer
     }
 
@@ -241,53 +213,37 @@ impl BitWriter {
     #[inline]
     pub fn flush_buffer(&mut self) -> &[u8] {
         self.flush();
-        &self.buffer()[0..self.byte_offset]
+        self.buffer()
     }
 
     /// Clears the internal state so the buffer can be reused.
     #[inline]
     pub fn clear(&mut self) {
+        self.buffer.clear();
         self.buffered_values = 0;
-        self.byte_offset = self.start;
         self.bit_offset = 0;
     }
 
     /// Flushes the internal buffered bits and the align the buffer to the next byte.
     #[inline]
     pub fn flush(&mut self) {
-        let num_bytes = ceil(self.bit_offset as i64, 8) as usize;
-        assert!(self.byte_offset + num_bytes <= self.max_bytes);
-        memcpy_value(
-            &self.buffered_values,
-            num_bytes,
-            &mut self.buffer[self.byte_offset..],
-        );
+        let num_bytes = ceil(self.bit_offset, 8);
+        let slice = &self.buffered_values.to_ne_bytes()[..num_bytes as usize];
+        self.buffer.extend_from_slice(slice);
         self.buffered_values = 0;
         self.bit_offset = 0;
-        self.byte_offset += num_bytes;
     }
 
     /// Advances the current offset by skipping `num_bytes`, flushing the internal bit
     /// buffer first.
     /// This is useful when you want to jump over `num_bytes` bytes and come back later
     /// to fill these bytes.
-    ///
-    /// Returns error if `num_bytes` is beyond the boundary of the internal buffer.
-    /// Otherwise, returns the old offset.
     #[inline]
-    pub fn skip(&mut self, num_bytes: usize) -> Result<usize> {
+    pub fn skip(&mut self, num_bytes: usize) -> usize {
         self.flush();
-        assert!(self.byte_offset <= self.max_bytes);
-        if self.byte_offset + num_bytes > self.max_bytes {
-            return Err(general_err!(
-                "Not enough bytes left in BitWriter. Need {} but only have {}",
-                self.byte_offset + num_bytes,
-                self.max_bytes
-            ));
-        }
-        let result = self.byte_offset;
-        self.byte_offset += num_bytes;
-        Ok(result)
+        let result = self.buffer.len();
+        self.buffer.extend(std::iter::repeat(0).take(num_bytes));
+        result
     }
 
     /// Returns a slice containing the next `num_bytes` bytes starting from the current
@@ -295,32 +251,24 @@ impl BitWriter {
     /// This is useful when you want to jump over `num_bytes` bytes and come back later
     /// to fill these bytes.
     #[inline]
-    pub fn get_next_byte_ptr(&mut self, num_bytes: usize) -> Result<&mut [u8]> {
-        let offset = self.skip(num_bytes)?;
-        Ok(&mut self.buffer[offset..offset + num_bytes])
+    pub fn get_next_byte_ptr(&mut self, num_bytes: usize) -> &mut [u8] {
+        let offset = self.skip(num_bytes);
+        &mut self.buffer[offset..offset + num_bytes]
     }
 
     #[inline]
     pub fn bytes_written(&self) -> usize {
-        self.byte_offset - self.start + ceil(self.bit_offset as i64, 8) as usize
+        self.buffer.len() + ceil(self.bit_offset, 8) as usize
     }
 
     #[inline]
     pub fn buffer(&self) -> &[u8] {
-        &self.buffer[self.start..]
+        &self.buffer
     }
 
     #[inline]
     pub fn byte_offset(&self) -> usize {
-        self.byte_offset
-    }
-
-    /// Returns the internal buffer length. This is the maximum number of bytes that this
-    /// writer can write. User needs to call `consume` to consume the current buffer
-    /// before more data can be written.
-    #[inline]
-    pub fn buffer_len(&self) -> usize {
-        self.max_bytes
+        self.buffer.len()
     }
 
     /// Writes the entire byte `value` at the byte `offset`
@@ -330,53 +278,36 @@ impl BitWriter {
 
     /// Writes the `num_bits` LSB of value `v` to the internal buffer of this writer.
     /// The `num_bits` must not be greater than 64. This is bit packed.
-    ///
-    /// Returns false if there's not enough room left. True otherwise.
     #[inline]
-    pub fn put_value(&mut self, v: u64, num_bits: usize) -> bool {
+    pub fn put_value(&mut self, v: u64, num_bits: usize) {
         assert!(num_bits <= 64);
+        let num_bits = num_bits as u8;
         assert_eq!(v.checked_shr(num_bits as u32).unwrap_or(0), 0); // covers case v >> 64
 
-        if self.byte_offset * 8 + self.bit_offset + num_bits > self.max_bytes as usize * 8
-        {
-            return false;
-        }
-
+        // Add value to buffered_values
         self.buffered_values |= v << self.bit_offset;
         self.bit_offset += num_bits;
-        if self.bit_offset >= 64 {
-            memcpy_value(
-                &self.buffered_values,
-                8,
-                &mut self.buffer[self.byte_offset..],
-            );
-            self.byte_offset += 8;
-            self.bit_offset -= 64;
-            self.buffered_values = 0;
+        if let Some(remaining) = self.bit_offset.checked_sub(64) {
+            self.buffer
+                .extend_from_slice(&self.buffered_values.to_le_bytes());
+            self.bit_offset = remaining;
+
             // Perform checked right shift: v >> offset, where offset < 64, otherwise we
             // shift all bits
             self.buffered_values = v
                 .checked_shr((num_bits - self.bit_offset) as u32)
                 .unwrap_or(0);
         }
-        assert!(self.bit_offset < 64);
-        true
     }
 
     /// Writes `val` of `num_bytes` bytes to the next aligned byte. If size of `T` is
     /// larger than `num_bytes`, extra higher ordered bytes will be ignored.
-    ///
-    /// Returns false if there's not enough room left. True otherwise.
     #[inline]
-    pub fn put_aligned<T: AsBytes>(&mut self, val: T, num_bytes: usize) -> bool {
-        let result = self.get_next_byte_ptr(num_bytes);
-        if result.is_err() {
-            // TODO: should we return `Result` for this func?
-            return false;
-        }
-        let ptr = result.unwrap();
-        memcpy_value(&val, num_bytes, ptr);
-        true
+    pub fn put_aligned<T: AsBytes>(&mut self, val: T, num_bytes: usize) {
+        self.flush();
+        let slice = val.as_bytes();
+        let len = num_bytes.min(slice.len());
+        self.buffer.extend_from_slice(&slice[..len]);
     }
 
     /// Writes `val` of `num_bytes` bytes at the designated `offset`. The `offset` is the
@@ -384,49 +315,34 @@ impl BitWriter {
     /// maintains. Note that this will overwrite any existing data between `offset` and
     /// `offset + num_bytes`. Also that if size of `T` is larger than `num_bytes`, extra
     /// higher ordered bytes will be ignored.
-    ///
-    /// Returns false if there's not enough room left, or the `pos` is not valid.
-    /// True otherwise.
     #[inline]
     pub fn put_aligned_offset<T: AsBytes>(
         &mut self,
         val: T,
         num_bytes: usize,
         offset: usize,
-    ) -> bool {
-        if num_bytes + offset > self.max_bytes {
-            return false;
-        }
-        memcpy_value(
-            &val,
-            num_bytes,
-            &mut self.buffer[offset..offset + num_bytes],
-        );
-        true
+    ) {
+        let slice = val.as_bytes();
+        let len = num_bytes.min(slice.len());
+        self.buffer[offset..offset + len].copy_from_slice(&slice[..len])
     }
 
     /// Writes a VLQ encoded integer `v` to this buffer. The value is byte aligned.
-    ///
-    /// Returns false if there's not enough room left. True otherwise.
     #[inline]
-    pub fn put_vlq_int(&mut self, mut v: u64) -> bool {
-        let mut result = true;
+    pub fn put_vlq_int(&mut self, mut v: u64) {
         while v & 0xFFFFFFFFFFFFFF80 != 0 {
-            result &= self.put_aligned::<u8>(((v & 0x7F) | 0x80) as u8, 1);
+            self.put_aligned::<u8>(((v & 0x7F) | 0x80) as u8, 1);
             v >>= 7;
         }
-        result &= self.put_aligned::<u8>((v & 0x7F) as u8, 1);
-        result
+        self.put_aligned::<u8>((v & 0x7F) as u8, 1);
     }
 
     /// Writes a zigzag-VLQ encoded (in little endian order) int `v` to this buffer.
     /// Zigzag-VLQ is a variant of VLQ encoding where negative and positive
     /// numbers are encoded in a zigzag fashion.
     /// See: https://developers.google.com/protocol-buffers/docs/encoding
-    ///
-    /// Returns false if there's not enough room left. True otherwise.
     #[inline]
-    pub fn put_zigzag_vlq_int(&mut self, v: i64) -> bool {
+    pub fn put_zigzag_vlq_int(&mut self, v: i64) {
         let u: u64 = ((v << 1) ^ (v >> 63)) as u64;
         self.put_vlq_int(u)
     }
@@ -488,7 +404,7 @@ impl BitReader {
     /// Gets the current byte offset
     #[inline]
     pub fn get_byte_offset(&self) -> usize {
-        self.byte_offset + ceil(self.bit_offset as i64, 8) as usize
+        self.byte_offset + ceil(self.bit_offset, 8)
     }
 
     /// Reads a value of type `T` and of size `num_bits`.
@@ -568,7 +484,7 @@ impl BitReader {
                     .expect("expected to have more data");
                 i += 1;
             }
-            return values_to_read
+            return values_to_read;
         }
 
         // First align bit offset to byte offset
@@ -645,8 +561,7 @@ impl BitReader {
         // First align bit offset to byte offset
         if self.bit_offset != 0 {
             while values_skipped < num_values && self.bit_offset != 0 {
-                self
-                    .skip_value(num_bits);
+                self.skip_value(num_bits);
                 values_skipped += 1;
             }
         }
@@ -655,7 +570,6 @@ impl BitReader {
             self.byte_offset += 4 * num_bits;
             values_skipped += 32;
         }
-
 
         assert!(num_values - values_skipped < 32);
 
@@ -696,7 +610,7 @@ impl BitReader {
     /// Returns `Some` if there's enough bytes left to form a value of `T`.
     /// Otherwise `None`.
     pub fn get_aligned<T: FromBytes>(&mut self, num_bytes: usize) -> Option<T> {
-        let bytes_read = ceil(self.bit_offset as i64, 8) as usize;
+        let bytes_read = ceil(self.bit_offset, 8);
         if self.byte_offset + bytes_read + num_bytes > self.total_bytes {
             return None;
         }
@@ -792,9 +706,9 @@ mod tests {
         assert_eq!(ceil(8, 8), 1);
         assert_eq!(ceil(9, 8), 2);
         assert_eq!(ceil(9, 9), 1);
-        assert_eq!(ceil(10000000000, 10), 1000000000);
-        assert_eq!(ceil(10, 10000000000), 1);
-        assert_eq!(ceil(10000000000, 1000000000), 10);
+        assert_eq!(ceil(10000000000_u64, 10), 1000000000);
+        assert_eq!(ceil(10_u64, 10000000000), 1);
+        assert_eq!(ceil(10000000000_u64, 1000000000), 10);
     }
 
     #[test]
@@ -846,16 +760,16 @@ mod tests {
     fn test_bit_reader_skip() {
         let buffer = vec![255, 0];
         let mut bit_reader = BitReader::from(buffer);
-        let skipped = bit_reader.skip(1,1);
+        let skipped = bit_reader.skip(1, 1);
         assert_eq!(skipped, 1);
         assert_eq!(bit_reader.get_value::<i32>(1), Some(1));
-        let skipped = bit_reader.skip(2,2);
+        let skipped = bit_reader.skip(2, 2);
         assert_eq!(skipped, 2);
         assert_eq!(bit_reader.get_value::<i32>(2), Some(3));
-        let skipped = bit_reader.skip(4,1);
+        let skipped = bit_reader.skip(4, 1);
         assert_eq!(skipped, 4);
         assert_eq!(bit_reader.get_value::<i32>(4), Some(0));
-        let skipped = bit_reader.skip(1,1);
+        let skipped = bit_reader.skip(1, 1);
         assert_eq!(skipped, 0);
     }
 
@@ -973,7 +887,7 @@ mod tests {
     #[test]
     fn test_skip() {
         let mut writer = BitWriter::new(5);
-        let old_offset = writer.skip(1).expect("skip() should return OK");
+        let old_offset = writer.skip(1);
         writer.put_aligned(42, 4);
         writer.put_aligned_offset(0x10, 1, old_offset);
         let result = writer.consume();
@@ -981,16 +895,15 @@ mod tests {
 
         writer = BitWriter::new(4);
         let result = writer.skip(5);
-        assert!(result.is_err());
+        assert_eq!(result, 0);
+        assert_eq!(writer.buffer(), &[0; 5])
     }
 
     #[test]
     fn test_get_next_byte_ptr() {
         let mut writer = BitWriter::new(5);
         {
-            let first_byte = writer
-                .get_next_byte_ptr(1)
-                .expect("get_next_byte_ptr() should return OK");
+            let first_byte = writer.get_next_byte_ptr(1);
             first_byte[0] = 0x10;
         }
         writer.put_aligned(42, 4);
@@ -1017,8 +930,7 @@ mod tests {
         let mut writer = BitWriter::new(len);
 
         for i in 0..8 {
-            let result = writer.put_value(i % 2, 1);
-            assert!(result);
+            writer.put_value(i % 2, 1);
         }
 
         writer.flush();
@@ -1029,11 +941,10 @@ mod tests {
 
         // Write 00110011
         for i in 0..8 {
-            let result = match i {
+            match i {
                 0 | 1 | 4 | 5 => writer.put_value(false as u64, 1),
                 _ => writer.put_value(true as u64, 1),
-            };
-            assert!(result);
+            }
         }
         writer.flush();
         {
@@ -1078,19 +989,13 @@ mod tests {
 
     fn test_put_value_rand_numbers(total: usize, num_bits: usize) {
         assert!(num_bits < 64);
-        let num_bytes = ceil(num_bits as i64, 8);
+        let num_bytes = ceil(num_bits, 8);
         let mut writer = BitWriter::new(num_bytes as usize * total);
         let values: Vec<u64> = random_numbers::<u64>(total)
             .iter()
             .map(|v| v & ((1 << num_bits) - 1))
             .collect();
-        (0..total).for_each(|i| {
-            assert!(
-                writer.put_value(values[i] as u64, num_bits),
-                "[{}]: put_value() failed",
-                i
-            );
-        });
+        (0..total).for_each(|i| writer.put_value(values[i] as u64, num_bits));
 
         let mut reader = BitReader::from(writer.consume());
         (0..total).for_each(|i| {
@@ -1124,7 +1029,7 @@ mod tests {
         T: FromBytes + Default + Clone + Debug + Eq,
     {
         assert!(num_bits <= 32);
-        let num_bytes = ceil(num_bits as i64, 8);
+        let num_bytes = ceil(num_bits, 8);
         let mut writer = BitWriter::new(num_bytes as usize * total);
 
         let values: Vec<u32> = random_numbers::<u32>(total)
@@ -1136,9 +1041,7 @@ mod tests {
         let expected_values: Vec<T> =
             values.iter().map(|v| from_ne_slice(v.as_bytes())).collect();
 
-        (0..total).for_each(|i| {
-            assert!(writer.put_value(values[i] as u64, num_bits));
-        });
+        (0..total).for_each(|i| writer.put_value(values[i] as u64, num_bits));
 
         let buf = writer.consume();
         let mut reader = BitReader::from(buf);
@@ -1175,7 +1078,7 @@ mod tests {
         assert!(total % 2 == 0);
 
         let aligned_value_byte_width = std::mem::size_of::<T>();
-        let value_byte_width = ceil(num_bits as i64, 8) as usize;
+        let value_byte_width = ceil(num_bits, 8);
         let mut writer =
             BitWriter::new((total / 2) * (aligned_value_byte_width + value_byte_width));
         let values: Vec<u32> = random_numbers::<u32>(total / 2)
@@ -1187,17 +1090,9 @@ mod tests {
         for i in 0..total {
             let j = i / 2;
             if i % 2 == 0 {
-                assert!(
-                    writer.put_value(values[j] as u64, num_bits),
-                    "[{}]: put_value() failed",
-                    i
-                );
+                writer.put_value(values[j] as u64, num_bits);
             } else {
-                assert!(
-                    writer.put_aligned::<T>(aligned_values[j], aligned_value_byte_width),
-                    "[{}]: put_aligned() failed",
-                    i
-                );
+                writer.put_aligned::<T>(aligned_values[j], aligned_value_byte_width)
             }
         }
 
@@ -1231,13 +1126,7 @@ mod tests {
         let total = 64;
         let mut writer = BitWriter::new(total * 32);
         let values = random_numbers::<u32>(total);
-        (0..total).for_each(|i| {
-            assert!(
-                writer.put_vlq_int(values[i] as u64),
-                "[{}]; put_vlq_int() failed",
-                i
-            );
-        });
+        (0..total).for_each(|i| writer.put_vlq_int(values[i] as u64));
 
         let mut reader = BitReader::from(writer.consume());
         (0..total).for_each(|i| {
@@ -1257,13 +1146,7 @@ mod tests {
         let total = 64;
         let mut writer = BitWriter::new(total * 32);
         let values = random_numbers::<i32>(total);
-        (0..total).for_each(|i| {
-            assert!(
-                writer.put_zigzag_vlq_int(values[i] as i64),
-                "[{}]; put_zigzag_vlq_int() failed",
-                i
-            );
-        });
+        (0..total).for_each(|i| writer.put_zigzag_vlq_int(values[i] as i64));
 
         let mut reader = BitReader::from(writer.consume());
         (0..total).for_each(|i| {

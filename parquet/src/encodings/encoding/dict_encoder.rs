@@ -20,7 +20,7 @@
 
 use crate::basic::{Encoding, Type};
 use crate::data_type::private::ParquetValueType;
-use crate::data_type::{AsBytes, DataType};
+use crate::data_type::DataType;
 use crate::encodings::encoding::{Encoder, PlainEncoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
@@ -28,7 +28,6 @@ use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
 use crate::util::memory::ByteBufferPtr;
-use std::io::Write;
 
 #[derive(Debug)]
 struct KeyStorage<T: DataType> {
@@ -127,12 +126,11 @@ impl<T: DataType> DictEncoder<T> {
     /// the result.
     pub fn write_indices(&mut self) -> Result<ByteBufferPtr> {
         let buffer_len = self.estimated_data_encoded_size();
-        let mut buffer = vec![0; buffer_len];
-        buffer[0] = self.bit_width() as u8;
+        let mut buffer = Vec::with_capacity(buffer_len);
+        buffer.push(self.bit_width() as u8);
 
         // Write bit width in the first byte
-        buffer.write_all((self.bit_width() as u8).as_bytes())?;
-        let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer, 1);
+        let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
         for index in &self.indices {
             if !encoder.put(*index as u64)? {
                 return Err(general_err!("Encoder doesn't have enough space"));
