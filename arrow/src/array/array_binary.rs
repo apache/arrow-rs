@@ -145,9 +145,15 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
             &DataType::UInt8,
             "BinaryArray can only be created from List<u8> arrays, mismatched data types."
         );
+        assert_eq!(
+            v.data_ref().child_data()[0].null_count(),
+            0,
+            "The child array of the list array cannot have nulls."
+        );
 
         let builder = ArrayData::builder(Self::get_data_type())
             .len(v.len())
+            .offset(v.offset())
             .add_buffer(v.data_ref().buffers()[0].clone())
             .add_buffer(v.data_ref().child_data()[0].buffers()[0].clone())
             .null_bit_buffer(v.data_ref().null_buffer().cloned());
