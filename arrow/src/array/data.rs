@@ -380,7 +380,7 @@ impl ArrayData {
     /// panic's if the new DataType is not compatible with the
     /// existing type.
     ///
-    /// Note: currently only changing a [DataType::Decimal]s precision
+    /// Note: currently only changing a [DataType::Decimal128]s precision
     /// and scale are supported
     #[inline]
     pub(crate) fn with_data_type(mut self, new_data_type: DataType) -> Self {
