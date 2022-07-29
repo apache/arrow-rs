@@ -133,38 +133,23 @@ where
     memcpy(&source.as_bytes()[..num_bytes], target)
 }
 
-/// Returns the ceil of value/divisor
+/// Returns the ceil of value/divisor.
+///
+/// This function should be removed after
+/// [`int_roundings`](https://github.com/rust-lang/rust/issues/88581) is stable.
 #[inline]
 pub fn ceil(value: i64, divisor: i64) -> i64 {
-    value / divisor + ((value % divisor != 0) as i64)
-}
-
-/// Returns ceil(log2(x))
-#[inline]
-pub fn log2(mut x: u64) -> i32 {
-    if x == 1 {
-        return 0;
-    }
-    x -= 1;
-    let mut result = 0;
-    while x > 0 {
-        x >>= 1;
-        result += 1;
-    }
-    result
+    num::Integer::div_ceil(&value, &divisor)
 }
 
 /// Returns the `num_bits` least-significant bits of `v`
 #[inline]
 pub fn trailing_bits(v: u64, num_bits: usize) -> u64 {
-    if num_bits == 0 {
-        return 0;
-    }
     if num_bits >= 64 {
-        return v;
+        v
+    } else {
+        v & ((1<<num_bits) - 1)
     }
-    let n = 64 - num_bits;
-    (v << n) >> n
 }
 
 #[inline]
@@ -179,13 +164,8 @@ pub fn unset_array_bit(bits: &mut [u8], i: usize) {
 
 /// Returns the minimum number of bits needed to represent the value 'x'
 #[inline]
-pub fn num_required_bits(x: u64) -> usize {
-    for i in (0..64).rev() {
-        if x & (1u64 << i) != 0 {
-            return i + 1;
-        }
-    }
-    0
+pub fn num_required_bits(x: u64) -> u8 {
+    64 - x.leading_zeros() as u8
 }
 
 static BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
@@ -539,6 +519,28 @@ impl BitReader {
         Some(from_ne_slice(v.as_bytes()))
     }
 
+    /// Skip one value of size `num_bits`.
+    ///
+    /// Returns `false` if there are no more values to skip, `true` otherwise.
+    pub fn skip_value(&mut self, num_bits: usize) -> bool {
+        assert!(num_bits <= 64);
+
+        if self.byte_offset * 8 + self.bit_offset + num_bits > self.total_bytes * 8 {
+            return false;
+        }
+
+        self.bit_offset += num_bits;
+
+        if self.bit_offset >= 64 {
+            self.byte_offset += 8;
+            self.bit_offset -= 64;
+
+            self.reload_buffer_values();
+        }
+
+        true
+    }
+
     /// Read multiple values from their packed representation
     ///
     /// # Panics
@@ -623,6 +625,47 @@ impl BitReader {
         }
 
         values_to_read
+    }
+
+    /// Skip num_value values with num_bits bit width
+    ///
+    /// Return the number of values skipped (up to num_values)
+    pub fn skip(&mut self, num_values: usize, num_bits: usize) -> usize {
+        assert!(num_bits <= 64);
+
+        let mut num_values = num_values;
+        let needed_bits = num_bits * num_values;
+        let remaining_bits = (self.total_bytes - self.byte_offset) * 8 - self.bit_offset;
+        if remaining_bits < needed_bits {
+            num_values = remaining_bits / num_bits;
+        }
+
+        let mut values_skipped = 0;
+
+        // First align bit offset to byte offset
+        if self.bit_offset != 0 {
+            while values_skipped < num_values && self.bit_offset != 0 {
+                self
+                    .skip_value(num_bits);
+                values_skipped += 1;
+            }
+        }
+
+        while num_values - values_skipped >= 32 {
+            self.byte_offset += 4 * num_bits;
+            values_skipped += 32;
+        }
+
+
+        assert!(num_values - values_skipped < 32);
+
+        self.reload_buffer_values();
+        while values_skipped < num_values {
+            self.skip_value(num_bits);
+            values_skipped += 1;
+        }
+
+        num_values
     }
 
     /// Reads up to `num_bytes` to `buf` returning the number of bytes read
@@ -780,11 +823,59 @@ mod tests {
     }
 
     #[test]
+    fn test_bit_reader_skip_value() {
+        let buffer = vec![255, 0];
+        let mut bit_reader = BitReader::from(buffer);
+        let skipped = bit_reader.skip_value(1);
+        assert!(skipped);
+        assert_eq!(bit_reader.get_value::<i32>(1), Some(1));
+        let skipped = bit_reader.skip_value(2);
+        assert!(skipped);
+        assert_eq!(bit_reader.get_value::<i32>(2), Some(3));
+        let skipped = bit_reader.skip_value(1);
+        assert!(skipped);
+        assert_eq!(bit_reader.get_value::<i32>(4), Some(1));
+        let skipped = bit_reader.skip_value(1);
+        assert!(skipped);
+        assert_eq!(bit_reader.get_value::<i32>(4), Some(0));
+        let skipped = bit_reader.skip_value(1);
+        assert!(!skipped);
+    }
+
+    #[test]
+    fn test_bit_reader_skip() {
+        let buffer = vec![255, 0];
+        let mut bit_reader = BitReader::from(buffer);
+        let skipped = bit_reader.skip(1,1);
+        assert_eq!(skipped, 1);
+        assert_eq!(bit_reader.get_value::<i32>(1), Some(1));
+        let skipped = bit_reader.skip(2,2);
+        assert_eq!(skipped, 2);
+        assert_eq!(bit_reader.get_value::<i32>(2), Some(3));
+        let skipped = bit_reader.skip(4,1);
+        assert_eq!(skipped, 4);
+        assert_eq!(bit_reader.get_value::<i32>(4), Some(0));
+        let skipped = bit_reader.skip(1,1);
+        assert_eq!(skipped, 0);
+    }
+
+    #[test]
     fn test_bit_reader_get_value_boundary() {
         let buffer = vec![10, 0, 0, 0, 20, 0, 30, 0, 0, 0, 40, 0];
         let mut bit_reader = BitReader::from(buffer);
         assert_eq!(bit_reader.get_value::<i64>(32), Some(10));
         assert_eq!(bit_reader.get_value::<i64>(16), Some(20));
+        assert_eq!(bit_reader.get_value::<i64>(32), Some(30));
+        assert_eq!(bit_reader.get_value::<i64>(16), Some(40));
+    }
+
+    #[test]
+    fn test_bit_reader_skip_boundary() {
+        let buffer = vec![10, 0, 0, 0, 20, 0, 30, 0, 0, 0, 40, 0];
+        let mut bit_reader = BitReader::from(buffer);
+        assert_eq!(bit_reader.get_value::<i64>(32), Some(10));
+        let skipped = bit_reader.skip_value(16);
+        assert!(skipped);
         assert_eq!(bit_reader.get_value::<i64>(32), Some(30));
         assert_eq!(bit_reader.get_value::<i64>(16), Some(40));
     }
@@ -849,6 +940,7 @@ mod tests {
         assert_eq!(num_required_bits(10), 4);
         assert_eq!(num_required_bits(12), 4);
         assert_eq!(num_required_bits(16), 5);
+        assert_eq!(num_required_bits(u64::MAX), 64);
     }
 
     #[test]
@@ -876,20 +968,6 @@ mod tests {
         assert!(!get_bit(&[0b01001001, 0b01010010], 13));
         assert!(get_bit(&[0b01001001, 0b01010010], 14));
         assert!(!get_bit(&[0b01001001, 0b01010010], 15));
-    }
-
-    #[test]
-    fn test_log2() {
-        assert_eq!(log2(1), 0);
-        assert_eq!(log2(2), 1);
-        assert_eq!(log2(3), 2);
-        assert_eq!(log2(4), 2);
-        assert_eq!(log2(5), 3);
-        assert_eq!(log2(5), 3);
-        assert_eq!(log2(6), 3);
-        assert_eq!(log2(7), 3);
-        assert_eq!(log2(8), 3);
-        assert_eq!(log2(9), 4);
     }
 
     #[test]

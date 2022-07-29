@@ -15,35 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::datatypes::ArrowPrimitiveType;
+use crate::array::array::ArrayAccessor;
+use crate::array::{BasicDecimalArray, Decimal256Array};
 
 use super::{
-    Array, ArrayRef, BooleanArray, DecimalArray, GenericBinaryArray, GenericListArray,
-    GenericStringArray, OffsetSizeTrait, PrimitiveArray,
+    Array, BooleanArray, Decimal128Array, GenericBinaryArray, GenericListArray,
+    GenericStringArray, PrimitiveArray,
 };
 
-/// an iterator that returns Some(T) or None, that can be used on any PrimitiveArray
+/// an iterator that returns Some(T) or None, that can be used on any [`ArrayAccessor`]
 // Note: This implementation is based on std's [Vec]s' [IntoIter].
 #[derive(Debug)]
-pub struct PrimitiveIter<'a, T: ArrowPrimitiveType> {
-    array: &'a PrimitiveArray<T>,
+pub struct ArrayIter<T: ArrayAccessor> {
+    array: T,
     current: usize,
     current_end: usize,
 }
 
-impl<'a, T: ArrowPrimitiveType> PrimitiveIter<'a, T> {
+impl<T: ArrayAccessor> ArrayIter<T> {
     /// create a new iterator
-    pub fn new(array: &'a PrimitiveArray<T>) -> Self {
-        PrimitiveIter::<T> {
+    pub fn new(array: T) -> Self {
+        let len = array.len();
+        ArrayIter {
             array,
             current: 0,
-            current_end: array.len(),
+            current_end: len,
         }
     }
 }
 
-impl<'a, T: ArrowPrimitiveType> std::iter::Iterator for PrimitiveIter<'a, T> {
-    type Item = Option<T::Native>;
+impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
+    type Item = Option<T::Item>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -72,7 +74,7 @@ impl<'a, T: ArrowPrimitiveType> std::iter::Iterator for PrimitiveIter<'a, T> {
     }
 }
 
-impl<'a, T: ArrowPrimitiveType> std::iter::DoubleEndedIterator for PrimitiveIter<'a, T> {
+impl<T: ArrayAccessor> DoubleEndedIterator for ArrayIter<T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.current_end == self.current {
             None
@@ -93,316 +95,39 @@ impl<'a, T: ArrowPrimitiveType> std::iter::DoubleEndedIterator for PrimitiveIter
 }
 
 /// all arrays have known size.
-impl<'a, T: ArrowPrimitiveType> std::iter::ExactSizeIterator for PrimitiveIter<'a, T> {}
+impl<T: ArrayAccessor> ExactSizeIterator for ArrayIter<T> {}
 
-/// an iterator that returns Some(bool) or None.
-// Note: This implementation is based on std's [Vec]s' [IntoIter].
-#[derive(Debug)]
-pub struct BooleanIter<'a> {
-    array: &'a BooleanArray,
-    current: usize,
-    current_end: usize,
-}
+/// an iterator that returns Some(T) or None, that can be used on any PrimitiveArray
+pub type PrimitiveIter<'a, T> = ArrayIter<&'a PrimitiveArray<T>>;
+pub type BooleanIter<'a> = ArrayIter<&'a BooleanArray>;
+pub type GenericStringIter<'a, T> = ArrayIter<&'a GenericStringArray<T>>;
+pub type GenericBinaryIter<'a, T> = ArrayIter<&'a GenericBinaryArray<T>>;
+pub type GenericListArrayIter<'a, O> = ArrayIter<&'a GenericListArray<O>>;
 
-impl<'a> BooleanIter<'a> {
-    /// create a new iterator
-    pub fn new(array: &'a BooleanArray) -> Self {
-        BooleanIter {
-            array,
-            current: 0,
-            current_end: array.len(),
-        }
-    }
-}
+/// an iterator that returns `Some(Decimal128)` or `None`, that can be used on a
+/// [`Decimal128Array`]
+pub type Decimal128Iter<'a> = ArrayIter<&'a Decimal128Array>;
 
-impl<'a> std::iter::Iterator for BooleanIter<'a> {
-    type Item = Option<bool>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.current == self.current_end {
-            None
-        } else if self.array.is_null(self.current) {
-            self.current += 1;
-            Some(None)
-        } else {
-            let old = self.current;
-            self.current += 1;
-            // Safety:
-            // we just checked bounds in `self.current_end == self.current`
-            // this is safe on the premise that this struct is initialized with
-            // current = array.len()
-            // and that current_end is ever only decremented
-            unsafe { Some(Some(self.array.value_unchecked(old))) }
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (
-            self.array.len() - self.current,
-            Some(self.array.len() - self.current),
-        )
-    }
-}
-
-impl<'a> std::iter::DoubleEndedIterator for BooleanIter<'a> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.current_end == self.current {
-            None
-        } else {
-            self.current_end -= 1;
-            Some(if self.array.is_null(self.current_end) {
-                None
-            } else {
-                // Safety:
-                // we just checked bounds in `self.current_end == self.current`
-                // this is safe on the premise that this struct is initialized with
-                // current = array.len()
-                // and that current_end is ever only decremented
-                unsafe { Some(self.array.value_unchecked(self.current_end)) }
-            })
-        }
-    }
-}
-
-/// all arrays have known size.
-impl<'a> std::iter::ExactSizeIterator for BooleanIter<'a> {}
-
-/// an iterator that returns `Some(&str)` or `None`, for string arrays
-#[derive(Debug)]
-pub struct GenericStringIter<'a, T>
-where
-    T: OffsetSizeTrait,
-{
-    array: &'a GenericStringArray<T>,
-    current: usize,
-    current_end: usize,
-}
-
-impl<'a, T: OffsetSizeTrait> GenericStringIter<'a, T> {
-    /// create a new iterator
-    pub fn new(array: &'a GenericStringArray<T>) -> Self {
-        GenericStringIter::<T> {
-            array,
-            current: 0,
-            current_end: array.len(),
-        }
-    }
-}
-
-impl<'a, T: OffsetSizeTrait> std::iter::Iterator for GenericStringIter<'a, T> {
-    type Item = Option<&'a str>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let i = self.current;
-        if i >= self.current_end {
-            None
-        } else if self.array.is_null(i) {
-            self.current += 1;
-            Some(None)
-        } else {
-            self.current += 1;
-            // Safety:
-            // we just checked bounds in `self.current_end == self.current`
-            // this is safe on the premise that this struct is initialized with
-            // current = array.len()
-            // and that current_end is ever only decremented
-            unsafe { Some(Some(self.array.value_unchecked(i))) }
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (
-            self.current_end - self.current,
-            Some(self.current_end - self.current),
-        )
-    }
-}
-
-impl<'a, T: OffsetSizeTrait> std::iter::DoubleEndedIterator for GenericStringIter<'a, T> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.current_end == self.current {
-            None
-        } else {
-            self.current_end -= 1;
-            Some(if self.array.is_null(self.current_end) {
-                None
-            } else {
-                // Safety:
-                // we just checked bounds in `self.current_end == self.current`
-                // this is safe on the premise that this struct is initialized with
-                // current = array.len()
-                // and that current_end is ever only decremented
-                unsafe { Some(self.array.value_unchecked(self.current_end)) }
-            })
-        }
-    }
-}
-
-/// all arrays have known size.
-impl<'a, T: OffsetSizeTrait> std::iter::ExactSizeIterator for GenericStringIter<'a, T> {}
-
-/// an iterator that returns `Some(&[u8])` or `None`, for binary arrays
-#[derive(Debug)]
-pub struct GenericBinaryIter<'a, T>
-where
-    T: OffsetSizeTrait,
-{
-    array: &'a GenericBinaryArray<T>,
-    current: usize,
-    current_end: usize,
-}
-
-impl<'a, T: OffsetSizeTrait> GenericBinaryIter<'a, T> {
-    /// create a new iterator
-    pub fn new(array: &'a GenericBinaryArray<T>) -> Self {
-        GenericBinaryIter::<T> {
-            array,
-            current: 0,
-            current_end: array.len(),
-        }
-    }
-}
-
-impl<'a, T: OffsetSizeTrait> std::iter::Iterator for GenericBinaryIter<'a, T> {
-    type Item = Option<&'a [u8]>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let i = self.current;
-        if i >= self.current_end {
-            None
-        } else if self.array.is_null(i) {
-            self.current += 1;
-            Some(None)
-        } else {
-            self.current += 1;
-            // Safety:
-            // we just checked bounds in `self.current_end == self.current`
-            // this is safe on the premise that this struct is initialized with
-            // current = array.len()
-            // and that current_end is ever only decremented
-            unsafe { Some(Some(self.array.value_unchecked(i))) }
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (
-            self.current_end - self.current,
-            Some(self.current_end - self.current),
-        )
-    }
-}
-
-impl<'a, T: OffsetSizeTrait> std::iter::DoubleEndedIterator for GenericBinaryIter<'a, T> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.current_end == self.current {
-            None
-        } else {
-            self.current_end -= 1;
-            Some(if self.array.is_null(self.current_end) {
-                None
-            } else {
-                // Safety:
-                // we just checked bounds in `self.current_end == self.current`
-                // this is safe on the premise that this struct is initialized with
-                // current = array.len()
-                // and that current_end is ever only decremented
-                unsafe { Some(self.array.value_unchecked(self.current_end)) }
-            })
-        }
-    }
-}
-
-/// all arrays have known size.
-impl<'a, T: OffsetSizeTrait> std::iter::ExactSizeIterator for GenericBinaryIter<'a, T> {}
-
-#[derive(Debug)]
-pub struct GenericListArrayIter<'a, S>
-where
-    S: OffsetSizeTrait,
-{
-    array: &'a GenericListArray<S>,
-    current: usize,
-    current_end: usize,
-}
-
-impl<'a, S: OffsetSizeTrait> GenericListArrayIter<'a, S> {
-    pub fn new(array: &'a GenericListArray<S>) -> Self {
-        GenericListArrayIter::<S> {
-            array,
-            current: 0,
-            current_end: array.len(),
-        }
-    }
-}
-
-impl<'a, S: OffsetSizeTrait> std::iter::Iterator for GenericListArrayIter<'a, S> {
-    type Item = Option<ArrayRef>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let i = self.current;
-        if i >= self.current_end {
-            None
-        } else if self.array.is_null(i) {
-            self.current += 1;
-            Some(None)
-        } else {
-            self.current += 1;
-            // Safety:
-            // we just checked bounds in `self.current_end == self.current`
-            // this is safe on the premise that this struct is initialized with
-            // current = array.len()
-            // and that current_end is ever only decremented
-            unsafe { Some(Some(self.array.value_unchecked(i))) }
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (
-            self.current_end - self.current,
-            Some(self.current_end - self.current),
-        )
-    }
-}
-
-impl<'a, S: OffsetSizeTrait> std::iter::DoubleEndedIterator
-    for GenericListArrayIter<'a, S>
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.current_end == self.current {
-            None
-        } else {
-            self.current_end -= 1;
-            Some(if self.array.is_null(self.current_end) {
-                None
-            } else {
-                // Safety:
-                // we just checked bounds in `self.current_end == self.current`
-                // this is safe on the premise that this struct is initialized with
-                // current = array.len()
-                // and that current_end is ever only decremented
-                unsafe { Some(self.array.value_unchecked(self.current_end)) }
-            })
-        }
-    }
-}
-
-/// all arrays have known size.
-impl<'a, S: OffsetSizeTrait> std::iter::ExactSizeIterator
-    for GenericListArrayIter<'a, S>
-{
-}
+/// an iterator that returns `Some(Decimal256)` or `None`, that can be used on a
+/// [`Decimal256Array`]
+pub type Decimal256Iter<'a> = ArrayIter<&'a Decimal256Array>;
 
 /// an iterator that returns `Some(i128)` or `None`, that can be used on a
-/// [`DecimalArray`]
+/// [`Decimal128Array`]
 #[derive(Debug)]
+#[deprecated(note = "Please use `Decimal128Iter` instead. \
+    `DecimalIter` iterates `Decimal128` values as i128 values. \
+    This is kept mostly for back-compatibility purpose. Suggests to use `Decimal128Array.iter()` \
+    that returns `Decimal128Iter`.")]
 pub struct DecimalIter<'a> {
-    array: &'a DecimalArray,
+    array: &'a Decimal128Array,
     current: usize,
     current_end: usize,
 }
 
+#[allow(deprecated)]
 impl<'a> DecimalIter<'a> {
-    pub fn new(array: &'a DecimalArray) -> Self {
+    pub fn new(array: &'a Decimal128Array) -> Self {
         Self {
             array,
             current: 0,
@@ -411,6 +136,7 @@ impl<'a> DecimalIter<'a> {
     }
 }
 
+#[allow(deprecated)]
 impl<'a> std::iter::Iterator for DecimalIter<'a> {
     type Item = Option<i128>;
 
@@ -438,6 +164,7 @@ impl<'a> std::iter::Iterator for DecimalIter<'a> {
 }
 
 /// iterator has known size.
+#[allow(deprecated)]
 impl<'a> std::iter::ExactSizeIterator for DecimalIter<'a> {}
 
 #[cfg(test)]

@@ -53,7 +53,7 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         (DataType::Date32, DataType::Date64) => hint,
 
         // Determine timezone
-        (DataType::Timestamp(p, None), DataType::Timestamp(h, Some(_))) if p == h => hint,
+        (DataType::Timestamp(p, _), DataType::Timestamp(h, Some(_))) if p == h => hint,
 
         // Determine offset size
         (DataType::Utf8, DataType::LargeUtf8) => hint,
@@ -94,7 +94,7 @@ fn from_parquet(parquet_type: &Type) -> Result<DataType> {
             PhysicalType::INT96 => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
             PhysicalType::FLOAT => Ok(DataType::Float32),
             PhysicalType::DOUBLE => Ok(DataType::Float64),
-            PhysicalType::BYTE_ARRAY => from_byte_array(basic_info),
+            PhysicalType::BYTE_ARRAY => from_byte_array(basic_info, *precision, *scale),
             PhysicalType::FIXED_LEN_BYTE_ARRAY => {
                 from_fixed_len_byte_array(basic_info, *scale, *precision, *type_length)
             }
@@ -224,7 +224,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
     }
 }
 
-fn from_byte_array(info: &BasicTypeInfo) -> Result<DataType> {
+fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32 ) -> Result<DataType> {
     match (info.logical_type(), info.converted_type()) {
         (Some(LogicalType::String), _) => Ok(DataType::Utf8),
         (Some(LogicalType::Json), _) => Ok(DataType::Binary),
@@ -235,6 +235,8 @@ fn from_byte_array(info: &BasicTypeInfo) -> Result<DataType> {
         (None, ConvertedType::BSON) => Ok(DataType::Binary),
         (None, ConvertedType::ENUM) => Ok(DataType::Binary),
         (None, ConvertedType::UTF8) => Ok(DataType::Utf8),
+        (Some(LogicalType::Decimal {precision, scale}), _) => Ok(DataType::Decimal(precision as usize, scale as usize)),
+        (None, ConvertedType::DECIMAL) => Ok(DataType::Decimal(precision as usize, scale as usize)),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet BYTE_ARRAY logical type {:?} or converted type {}",
             logical,

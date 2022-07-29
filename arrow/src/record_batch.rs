@@ -138,6 +138,15 @@ impl RecordBatch {
                 )
             })?;
 
+        for (c, f) in columns.iter().zip(&schema.fields) {
+            if !f.is_nullable() && c.null_count() > 0 {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Column '{}' is declared as non-nullable but contains null values",
+                    f.name()
+                )));
+            }
+        }
+
         if columns.iter().any(|c| c.len() != row_count) {
             let err = match options.row_count {
                 Some(_) => {
@@ -636,7 +645,7 @@ mod tests {
             DataType::Int8,
             false,
         ))))
-        .add_child_data(a2_child.data().clone())
+        .add_child_data(a2_child.into_data())
         .len(2)
         .add_buffer(Buffer::from(vec![0i32, 3, 4].to_byte_slice()))
         .build()
@@ -646,8 +655,8 @@ mod tests {
             Field::new("aa1", DataType::Int32, false),
             Field::new("a2", a2.data_type().clone(), false),
         ]))
-        .add_child_data(a1.data().clone())
-        .add_child_data(a2.data().clone())
+        .add_child_data(a1.into_data())
+        .add_child_data(a2.into_data())
         .len(2)
         .build()
         .unwrap();
@@ -978,5 +987,15 @@ mod tests {
 
         assert_ne!(a, b);
         assert_eq!(b, RecordBatch::new_empty(schema))
+    }
+
+    #[test]
+    fn test_nulls_in_non_nullable_field() {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let maybe_batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![Some(1), None]))],
+        );
+        assert_eq!("Invalid argument error: Column 'a' is declared as non-nullable but contains null values", format!("{}", maybe_batch.err().unwrap()));
     }
 }

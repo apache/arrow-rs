@@ -506,7 +506,7 @@ mod tests {
         let inner_list = ArrayDataBuilder::new(inner_type)
             .len(4)
             .add_buffer(offsets)
-            .add_child_data(primitives.data().clone())
+            .add_child_data(primitives.into_data())
             .build()
             .unwrap();
 
@@ -590,7 +590,7 @@ mod tests {
         let list = ArrayDataBuilder::new(list_type.clone())
             .len(5)
             .add_buffer(offsets)
-            .add_child_data(leaf_array.data().clone())
+            .add_child_data(leaf_array.into_data())
             .build()
             .unwrap();
         let list = make_array(list);
@@ -621,7 +621,7 @@ mod tests {
         let list = ArrayDataBuilder::new(list_type.clone())
             .len(5)
             .add_buffer(offsets)
-            .add_child_data(leaf_array.data().clone())
+            .add_child_data(leaf_array.into_data())
             .null_bit_buffer(Some(Buffer::from([0b00011101])))
             .build()
             .unwrap();
@@ -662,7 +662,7 @@ mod tests {
         let list_type = DataType::List(Box::new(leaf_field));
         let list = ArrayData::builder(list_type.clone())
             .len(5)
-            .add_child_data(leaf.data().clone())
+            .add_child_data(leaf.into_data())
             .add_buffer(Buffer::from_iter([0_i32, 2, 2, 4, 8, 11]))
             .build()
             .unwrap();
@@ -704,7 +704,7 @@ mod tests {
         let offsets = Buffer::from_iter([0_i32, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]);
         let l1 = ArrayData::builder(l1_type.clone())
             .len(11)
-            .add_child_data(leaf.data().clone())
+            .add_child_data(leaf.into_data())
             .add_buffer(offsets)
             .build()
             .unwrap();
@@ -755,7 +755,7 @@ mod tests {
         let list = ArrayData::builder(list_type.clone())
             .len(4)
             .add_buffer(Buffer::from_iter(0_i32..5))
-            .add_child_data(leaf.data().clone())
+            .add_child_data(leaf.into_data())
             .build()
             .unwrap();
         let list = make_array(list);
@@ -782,7 +782,7 @@ mod tests {
             .len(4)
             .add_buffer(Buffer::from_iter([0_i32, 0, 3, 5, 7]))
             .null_bit_buffer(Some(Buffer::from([0b00001110])))
-            .add_child_data(leaf.data().clone())
+            .add_child_data(leaf.into_data())
             .build()
             .unwrap();
         let list = make_array(list);
@@ -817,7 +817,7 @@ mod tests {
         let list_1 = ArrayData::builder(list_1_type.clone())
             .len(7)
             .add_buffer(Buffer::from_iter([0_i32, 1, 3, 3, 6, 10, 10, 15]))
-            .add_child_data(leaf.data().clone())
+            .add_child_data(leaf.into_data())
             .build()
             .unwrap();
 
@@ -904,7 +904,7 @@ mod tests {
             .len(5)
             .add_buffer(a_value_offsets)
             .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
-            .add_child_data(a_values.data().clone())
+            .add_child_data(a_values.into_data())
             .build()
             .unwrap();
 
@@ -977,7 +977,7 @@ mod tests {
         let g_list_data = ArrayData::builder(struct_field_g.data_type().clone())
             .len(5)
             .add_buffer(g_value_offsets)
-            .add_child_data(g_value.data().clone())
+            .add_child_data(g_value.into_data())
             .build()
             .unwrap();
         let g = ListArray::from(g_list_data);
@@ -1200,52 +1200,47 @@ mod tests {
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_value(1)
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_value(1);
+        values.append(true);
+        list_builder.append(true);
 
         // []
-        list_builder.append(true).unwrap();
+        list_builder.append(true);
 
         // null
-        list_builder.append(false).unwrap();
+        list_builder.append(false);
 
         // [null, null]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(false).unwrap();
+            .append_null();
+        values.append(false);
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(false).unwrap();
-        list_builder.append(true).unwrap();
+            .append_null();
+        values.append(false);
+        list_builder.append(true);
 
         // [{a: null}]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_null();
+        values.append(true);
+        list_builder.append(true);
 
         // [{a: 2}]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_value(2)
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_value(2);
+        values.append(true);
+        list_builder.append(true);
 
         let array = Arc::new(list_builder.finish());
 
@@ -1352,7 +1347,7 @@ mod tests {
             .len(6)
             .null_bit_buffer(Some(nulls))
             .add_buffer(offsets)
-            .add_child_data(struct_a.data().clone())
+            .add_child_data(struct_a.into_data())
             .build()
             .unwrap();
 

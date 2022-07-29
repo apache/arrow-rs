@@ -17,14 +17,22 @@
 
 name: Integration
 
+# trigger for all PRs that touch certain files and changes to master
 on:
   push:
+    branches:
+      - master
   pull_request:
+    paths:
+      - arrow/**
+      - arrow-pyarrow-integration-testing/**
+      - integration-testing/**
+      - .github/**
 
 jobs:
 
   integration:
-    name: Integration Test
+    name: Archery test With other arrows
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Arrow
@@ -49,7 +57,7 @@ jobs:
 
   # test FFI against the C-Data interface exposed by pyarrow
   pyarrow-integration-test:
-    name: Test Pyarrow C Data Interface
+    name: Pyarrow C Data Interface
     runs-on: ubuntu-latest
     strategy:
       matrix:

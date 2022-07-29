@@ -18,7 +18,7 @@
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::ParquetError::ArrowError;
 use crate::errors::{ParquetError, Result};
-use arrow::array::{ArrayDataBuilder, ArrayRef, MapArray};
+use arrow::array::{Array, ArrayDataBuilder, ArrayRef, MapArray};
 use arrow::buffer::{Buffer, MutableBuffer};
 use arrow::datatypes::DataType as ArrowType;
 use arrow::datatypes::ToByteSlice;
@@ -97,8 +97,8 @@ impl ArrayReader for MapArrayReader {
 
         let entry_data = ArrayDataBuilder::new(entry_data_type)
             .len(key_length)
-            .add_child_data(key_array.data().clone())
-            .add_child_data(value_array.data().clone());
+            .add_child_data(key_array.into_data())
+            .add_child_data(value_array.into_data());
         let entry_data = unsafe { entry_data.build_unchecked() };
 
         let entry_len = rep_levels.iter().filter(|level| **level == 0).count();
@@ -147,6 +147,19 @@ impl ArrayReader for MapArrayReader {
         let array_data = unsafe { array_data.build_unchecked() };
 
         Ok(Arc::new(MapArray::from(array_data)))
+    }
+
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        let key_skipped = self.key_reader.skip_records(num_records)?;
+        let value_skipped = self.value_reader.skip_records(num_records)?;
+        if key_skipped != value_skipped {
+            return Err(general_err!(
+                "MapArrayReader out of sync, skipped {} keys and {} values",
+                key_skipped,
+                value_skipped
+            ));
+        }
+        Ok(key_skipped)
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {

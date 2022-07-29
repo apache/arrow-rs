@@ -15,20 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::any::Any;
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use crate::array::array::Array;
-use crate::array::ArrayBuilder;
-use crate::array::ArrayRef;
-use crate::array::ArrowDictionaryKeyType;
-use crate::array::DictionaryArray;
-use crate::array::PrimitiveBuilder;
-use crate::array::StringArray;
-use crate::array::StringBuilder;
-use crate::datatypes::ArrowNativeType;
+use super::PrimitiveBuilder;
+use crate::array::{
+    Array, ArrayBuilder, ArrayRef, DictionaryArray, StringArray, StringBuilder,
+};
+use crate::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType};
 use crate::error::{ArrowError, Result};
+use hashbrown::hash_map::RawEntryMut;
+use hashbrown::HashMap;
+use std::any::Any;
+use std::sync::Arc;
 
 /// Array builder for `DictionaryArray` that stores Strings. For example to map a set of byte indices
 /// to String values. Note that the use of a `HashMap` here will not scale to very large
@@ -52,7 +48,7 @@ use crate::error::{ArrowError, Result};
 ///
 /// // The builder builds the dictionary value by value
 /// builder.append("abc").unwrap();
-/// builder.append_null().unwrap();
+/// builder.append_null();
 /// builder.append("def").unwrap();
 /// builder.append("def").unwrap();
 /// builder.append("abc").unwrap();
@@ -76,9 +72,16 @@ pub struct StringDictionaryBuilder<K>
 where
     K: ArrowDictionaryKeyType,
 {
+    state: ahash::RandomState,
+    /// Used to provide a lookup from string value to key type
+    ///
+    /// Note: K's hash implementation is not used, instead the raw entry
+    /// API is used to store keys w.r.t the hash of the strings themselves
+    ///
+    dedup: HashMap<K::Native, (), ()>,
+
     keys_builder: PrimitiveBuilder<K>,
     values_builder: StringBuilder,
-    map: HashMap<Box<[u8]>, K::Native>,
 }
 
 impl<K> StringDictionaryBuilder<K>
@@ -88,9 +91,10 @@ where
     /// Creates a new `StringDictionaryBuilder` from a keys builder and a value builder.
     pub fn new(keys_builder: PrimitiveBuilder<K>, values_builder: StringBuilder) -> Self {
         Self {
+            state: Default::default(),
+            dedup: HashMap::with_capacity_and_hasher(keys_builder.capacity(), ()),
             keys_builder,
             values_builder,
-            map: HashMap::new(),
         }
     }
 
@@ -109,7 +113,7 @@ where
     ///
     /// let mut builder = StringDictionaryBuilder::new_with_dictionary(PrimitiveBuilder::<Int16Type>::new(3), &dictionary_values).unwrap();
     /// builder.append("def").unwrap();
-    /// builder.append_null().unwrap();
+    /// builder.append_null();
     /// builder.append("abc").unwrap();
     ///
     /// let dictionary_array = builder.finish();
@@ -122,27 +126,44 @@ where
         keys_builder: PrimitiveBuilder<K>,
         dictionary_values: &StringArray,
     ) -> Result<Self> {
+        let state = ahash::RandomState::default();
         let dict_len = dictionary_values.len();
-        let mut values_builder =
-            StringBuilder::with_capacity(dict_len, dictionary_values.value_data().len());
-        let mut map: HashMap<Box<[u8]>, K::Native> = HashMap::with_capacity(dict_len);
-        for i in 0..dict_len {
-            if dictionary_values.is_valid(i) {
-                let value = dictionary_values.value(i);
-                map.insert(
-                    value.as_bytes().into(),
-                    K::Native::from_usize(i)
-                        .ok_or(ArrowError::DictionaryKeyOverflowError)?,
-                );
-                values_builder.append_value(value)?;
-            } else {
-                values_builder.append_null()?;
+
+        let mut dedup = HashMap::with_capacity_and_hasher(dict_len, ());
+
+        let values_len = dictionary_values.value_data().len();
+        let mut values_builder = StringBuilder::with_capacity(dict_len, values_len);
+
+        for (idx, maybe_value) in dictionary_values.iter().enumerate() {
+            match maybe_value {
+                Some(value) => {
+                    let hash = compute_hash(&state, value.as_bytes());
+
+                    let key = K::Native::from_usize(idx)
+                        .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+
+                    let entry =
+                        dedup.raw_entry_mut().from_hash(hash, |key: &K::Native| {
+                            value.as_bytes() == get_bytes(&values_builder, key)
+                        });
+
+                    if let RawEntryMut::Vacant(v) = entry {
+                        v.insert_with_hasher(hash, key, (), |key| {
+                            compute_hash(&state, get_bytes(&values_builder, key))
+                        });
+                    }
+
+                    values_builder.append_value(value);
+                }
+                None => values_builder.append_null(),
             }
         }
+
         Ok(Self {
+            state,
+            dedup,
             keys_builder,
             values_builder,
-            map,
         })
     }
 }
@@ -189,33 +210,80 @@ where
     /// Append a primitive value to the array. Return an existing index
     /// if already present in the values array or a new index if the
     /// value is appended to the values array.
+    ///
+    /// Returns an error if the new index would overflow the key type.
     pub fn append(&mut self, value: impl AsRef<str>) -> Result<K::Native> {
-        if let Some(&key) = self.map.get(value.as_ref().as_bytes()) {
-            // Append existing value.
-            self.keys_builder.append_value(key)?;
-            Ok(key)
-        } else {
-            // Append new value.
-            let key = K::Native::from_usize(self.values_builder.len())
-                .ok_or(ArrowError::DictionaryKeyOverflowError)?;
-            self.values_builder.append_value(value.as_ref())?;
-            self.keys_builder.append_value(key as K::Native)?;
-            self.map.insert(value.as_ref().as_bytes().into(), key);
-            Ok(key)
-        }
+        let value = value.as_ref();
+
+        let state = &self.state;
+        let storage = &mut self.values_builder;
+        let hash = compute_hash(state, value.as_bytes());
+
+        let entry = self
+            .dedup
+            .raw_entry_mut()
+            .from_hash(hash, |key| value.as_bytes() == get_bytes(storage, key));
+
+        let key = match entry {
+            RawEntryMut::Occupied(entry) => *entry.into_key(),
+            RawEntryMut::Vacant(entry) => {
+                let index = storage.len();
+                storage.append_value(value);
+                let key = K::Native::from_usize(index)
+                    .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+
+                *entry
+                    .insert_with_hasher(hash, key, (), |key| {
+                        compute_hash(state, get_bytes(storage, key))
+                    })
+                    .0
+            }
+        };
+        self.keys_builder.append_value(key);
+
+        Ok(key)
     }
 
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.keys_builder.append_null()
     }
 
     /// Builds the `DictionaryArray` and reset this builder.
     pub fn finish(&mut self) -> DictionaryArray<K> {
-        self.map.clear();
-        let value_ref: ArrayRef = Arc::new(self.values_builder.finish());
-        self.keys_builder.finish_dict(value_ref)
+        self.dedup.clear();
+        let values = self.values_builder.finish();
+        let keys = self.keys_builder.finish();
+
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(DataType::Utf8));
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
+}
+
+fn compute_hash(hasher: &ahash::RandomState, value: &[u8]) -> u64 {
+    use std::hash::{BuildHasher, Hash, Hasher};
+    let mut state = hasher.build_hasher();
+    value.hash(&mut state);
+    state.finish()
+}
+
+fn get_bytes<'a, K: ArrowNativeType>(values: &'a StringBuilder, key: &K) -> &'a [u8] {
+    let offsets = values.offsets_slice();
+    let values = values.values_slice();
+
+    let idx = key.to_usize().unwrap();
+    let end_offset = offsets[idx + 1].to_usize().unwrap();
+    let start_offset = offsets[idx].to_usize().unwrap();
+
+    &values[start_offset..end_offset]
 }
 
 #[cfg(test)]
@@ -233,7 +301,7 @@ mod tests {
         let value_builder = StringBuilder::new(2);
         let mut builder = StringDictionaryBuilder::new(key_builder, value_builder);
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
@@ -261,7 +329,7 @@ mod tests {
             StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
                 .unwrap();
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
@@ -293,7 +361,7 @@ mod tests {
             StringDictionaryBuilder::new_with_dictionary(key_builder, &dictionary)
                 .unwrap();
         builder.append("abc").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("def").unwrap();
         builder.append("abc").unwrap();
         let array = builder.finish();

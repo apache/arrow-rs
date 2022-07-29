@@ -61,7 +61,7 @@ CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
 git commit -a -m 'Create changelog'
 
 # update versions
-sed -i '' -e 's/14.0.0/16.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+sed -i '' -e 's/14.0.0/19.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
 git commit -a -m 'Update version'
 ```
 

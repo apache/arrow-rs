@@ -50,7 +50,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use crate::array::{
-    ArrayRef, BooleanArray, DecimalBuilder, DictionaryArray, PrimitiveArray, StringArray,
+    ArrayRef, BooleanArray, Decimal128Builder, DictionaryArray, PrimitiveArray,
+    StringArray,
 };
 use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
@@ -698,18 +699,18 @@ fn build_decimal_array(
     precision: usize,
     scale: usize,
 ) -> Result<ArrayRef> {
-    let mut decimal_builder = DecimalBuilder::new(rows.len(), precision, scale);
+    let mut decimal_builder = Decimal128Builder::new(rows.len(), precision, scale);
     for row in rows {
         let col_s = row.get(col_idx);
         match col_s {
             None => {
                 // No data for this row
-                decimal_builder.append_null()?;
+                decimal_builder.append_null();
             }
             Some(s) => {
                 if s.is_empty() {
                     // append null
-                    decimal_builder.append_null()?;
+                    decimal_builder.append_null();
                 } else {
                     let decimal_value: Result<i128> =
                         parse_decimal_with_parameter(s, precision, scale);
@@ -1115,6 +1116,7 @@ mod tests {
     use std::io::{Cursor, Write};
     use tempfile::NamedTempFile;
 
+    use crate::array::BasicDecimalArray;
     use crate::array::*;
     use crate::compute::cast;
     use crate::datatypes::Field;
@@ -1217,7 +1219,7 @@ mod tests {
         let lat = batch
             .column(1)
             .as_any()
-            .downcast_ref::<DecimalArray>()
+            .downcast_ref::<Decimal128Array>()
             .unwrap();
 
         assert_eq!("57.653484", lat.value_as_string(0));
@@ -1439,7 +1441,7 @@ mod tests {
     fn test_nulls() {
         let schema = Schema::new(vec![
             Field::new("c_int", DataType::UInt64, false),
-            Field::new("c_float", DataType::Float32, false),
+            Field::new("c_float", DataType::Float32, true),
             Field::new("c_string", DataType::Utf8, false),
         ]);
 

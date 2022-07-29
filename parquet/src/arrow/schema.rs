@@ -152,7 +152,10 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(
         value: Some(encoded),
     };
 
-    let mut meta = props.key_value_metadata.clone().unwrap_or_default();
+    let meta = props
+        .key_value_metadata
+        .get_or_insert_with(Default::default);
+
     // check if ARROW:schema exists, and overwrite it
     let schema_meta = meta
         .iter()
@@ -167,7 +170,6 @@ pub(crate) fn add_encoded_arrow_schema_to_metadata(
             meta.push(schema_kv);
         }
     }
-    props.key_value_metadata = Some(meta);
 }
 
 /// Convert arrow schema to parquet schema
@@ -300,10 +302,11 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_repetition(repetition)
                 .build()
         }
-        DataType::Timestamp(time_unit, _) => {
+        DataType::Timestamp(time_unit, tz) => {
             Type::primitive_type_builder(name, PhysicalType::INT64)
                 .with_logical_type(Some(LogicalType::Timestamp {
-                    is_adjusted_to_u_t_c: false,
+                    // If timezone set, values are normalized to UTC timezone
+                    is_adjusted_to_u_t_c: matches!(tz, Some(z) if !z.as_str().is_empty()),
                     unit: match time_unit {
                         TimeUnit::Second => unreachable!(),
                         TimeUnit::Millisecond => {
@@ -377,7 +380,7 @@ fn arrow_to_parquet_type(field: &Field) -> Result<Type> {
                 .with_length(*length)
                 .build()
         }
-        DataType::Decimal(precision, scale) => {
+        DataType::Decimal(precision, scale) | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // TODO(ARROW-12018): Enable the below after ARROW-10818 Decimal support
             //
@@ -525,6 +528,32 @@ mod tests {
             Field::new("string_2", DataType::Utf8, true),
         ];
 
+        assert_eq!(&arrow_fields, converted_arrow_schema.fields());
+    }
+
+    #[test]
+    fn test_decimal_fields() {
+        let message_type = "
+        message test_schema {
+                    REQUIRED INT32 decimal1 (DECIMAL(4,2));
+                    REQUIRED INT64 decimal2 (DECIMAL(12,2));
+                    REQUIRED FIXED_LEN_BYTE_ARRAY (16) decimal3 (DECIMAL(30,2));
+                    REQUIRED BYTE_ARRAY decimal4 (DECIMAL(33,2));
+        }
+        ";
+
+        let parquet_group_type = parse_message_type(message_type).unwrap();
+
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_group_type));
+        let converted_arrow_schema =
+            parquet_to_arrow_schema(&parquet_schema, None).unwrap();
+
+        let arrow_fields = vec![
+            Field::new("decimal1", DataType::Decimal(4,2), false),
+            Field::new("decimal2", DataType::Decimal(12,2), false),
+            Field::new("decimal3", DataType::Decimal(30,2), false),
+            Field::new("decimal4", DataType::Decimal(33,2), false),
+        ];
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
     }
 
@@ -1281,6 +1310,11 @@ mod tests {
             OPTIONAL INT64   time_micro (TIME_MICROS);
             OPTIONAL INT64   ts_milli (TIMESTAMP_MILLIS);
             REQUIRED INT64   ts_micro (TIMESTAMP(MICROS,false));
+            REQUIRED INT64   ts_seconds;
+            REQUIRED INT64   ts_micro_utc (TIMESTAMP(MICROS, true));
+            REQUIRED INT64   ts_millis_zero_offset (TIMESTAMP(MILLIS, true));
+            REQUIRED INT64   ts_millis_zero_negative_offset (TIMESTAMP(MILLIS, true));
+            REQUIRED INT64   ts_micro_non_utc (TIMESTAMP(MICROS, true));
             REQUIRED GROUP struct {
                 REQUIRED BOOLEAN bools;
                 REQUIRED INT32 uint32 (INTEGER(32,false));
@@ -1327,6 +1361,31 @@ mod tests {
             Field::new(
                 "ts_micro",
                 DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            ),
+            Field::new(
+                "ts_seconds",
+                DataType::Timestamp(TimeUnit::Second, Some("UTC".to_string())),
+                false,
+            ),
+            Field::new(
+                "ts_micro_utc",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string())),
+                false,
+            ),
+            Field::new(
+                "ts_millis_zero_offset",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".to_string())),
+                false,
+            ),
+            Field::new(
+                "ts_millis_zero_negative_offset",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("-00:00".to_string())),
+                false,
+            ),
+            Field::new(
+                "ts_micro_non_utc",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("+01:00".to_string())),
                 false,
             ),
             Field::new(

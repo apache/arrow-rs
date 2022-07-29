@@ -124,7 +124,7 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
 
         // The output offsets for the computed ListArray
         let mut list_offsets: Vec<OffsetSize> =
-            Vec::with_capacity(next_batch_array.len());
+            Vec::with_capacity(next_batch_array.len() + 1);
 
         // The validity mask of the computed ListArray if nullable
         let mut validity = self
@@ -231,6 +231,10 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         Ok(Arc::new(result_array))
     }
 
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        self.item_reader.skip_records(num_records)
+    }
+
     fn get_def_levels(&self) -> Option<&[i16]> {
         self.item_reader.get_def_levels()
     }
@@ -326,7 +330,7 @@ mod tests {
         let l3 = ArrayDataBuilder::new(l3_type.clone())
             .len(10)
             .add_buffer(offsets)
-            .add_child_data(leaf.data().clone())
+            .add_child_data(leaf.into_data())
             .null_bit_buffer(Some(Buffer::from([0b11111101, 0b00000010])))
             .build()
             .unwrap();

@@ -20,21 +20,16 @@ use std::sync::Arc;
 
 use crate::array::ArrayData;
 use crate::array::ArrayRef;
-use crate::array::DictionaryArray;
 use crate::array::PrimitiveArray;
 use crate::datatypes::ArrowPrimitiveType;
-use crate::datatypes::DataType;
-use crate::error::{ArrowError, Result};
 
-use super::{ArrayBuilder, BooleanBufferBuilder, BufferBuilder};
+use super::{ArrayBuilder, BufferBuilder, NullBufferBuilder};
 
 ///  Array builder for fixed-width primitive types
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
     values_builder: BufferBuilder<T::Native>,
-    /// We only materialize the builder when we add `false`.
-    /// This optimization is **very** important for performance of `StringBuilder`.
-    bitmap_builder: Option<BooleanBufferBuilder>,
+    null_buffer_builder: NullBufferBuilder,
 }
 
 impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
@@ -74,7 +69,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     pub fn new(capacity: usize) -> Self {
         Self {
             values_builder: BufferBuilder::<T::Native>::new(capacity),
-            bitmap_builder: None,
+            null_buffer_builder: NullBufferBuilder::new(capacity),
         }
     }
 
@@ -85,71 +80,50 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 
     /// Appends a value of type `T` into the builder
     #[inline]
-    pub fn append_value(&mut self, v: T::Native) -> Result<()> {
-        if let Some(b) = self.bitmap_builder.as_mut() {
-            b.append(true);
-        }
+    pub fn append_value(&mut self, v: T::Native) {
+        self.null_buffer_builder.append_non_null();
         self.values_builder.append(v);
-        Ok(())
     }
 
     /// Appends a null slot into the builder
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
-        self.materialize_bitmap_builder();
-        self.bitmap_builder.as_mut().unwrap().append(false);
+    pub fn append_null(&mut self) {
+        self.null_buffer_builder.append_null();
         self.values_builder.advance(1);
-        Ok(())
     }
 
     #[inline]
-    pub fn append_nulls(&mut self, n: usize) -> Result<()> {
-        self.materialize_bitmap_builder();
-        self.bitmap_builder.as_mut().unwrap().append_n(n, false);
+    pub fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_nulls(n);
         self.values_builder.advance(n);
-        Ok(())
     }
 
     /// Appends an `Option<T>` into the builder
     #[inline]
-    pub fn append_option(&mut self, v: Option<T::Native>) -> Result<()> {
+    pub fn append_option(&mut self, v: Option<T::Native>) {
         match v {
-            None => self.append_null()?,
-            Some(v) => self.append_value(v)?,
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
         };
-        Ok(())
     }
 
     /// Appends a slice of type `T` into the builder
     #[inline]
-    pub fn append_slice(&mut self, v: &[T::Native]) -> Result<()> {
-        if let Some(b) = self.bitmap_builder.as_mut() {
-            b.append_n(v.len(), true);
-        }
+    pub fn append_slice(&mut self, v: &[T::Native]) {
+        self.null_buffer_builder.append_n_non_nulls(v.len());
         self.values_builder.append_slice(v);
-        Ok(())
     }
 
     /// Appends values from a slice of type `T` and a validity boolean slice
     #[inline]
-    pub fn append_values(
-        &mut self,
-        values: &[T::Native],
-        is_valid: &[bool],
-    ) -> Result<()> {
-        if values.len() != is_valid.len() {
-            return Err(ArrowError::InvalidArgumentError(
-                "Value and validity lengths must be equal".to_string(),
-            ));
-        }
-        if is_valid.iter().any(|v| !*v) {
-            self.materialize_bitmap_builder();
-        }
-        if let Some(b) = self.bitmap_builder.as_mut() {
-            b.append_slice(is_valid);
-        }
+    pub fn append_values(&mut self, values: &[T::Native], is_valid: &[bool]) {
+        assert_eq!(
+            values.len(),
+            is_valid.len(),
+            "Value and validity lengths must be equal"
+        );
+        self.null_buffer_builder.append_slice(is_valid);
         self.values_builder.append_slice(values);
-        Ok(())
     }
 
     /// Appends values from a trusted length iterator.
@@ -161,74 +135,33 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     pub unsafe fn append_trusted_len_iter(
         &mut self,
         iter: impl IntoIterator<Item = T::Native>,
-    ) -> Result<()> {
+    ) {
         let iter = iter.into_iter();
         let len = iter
             .size_hint()
             .1
             .expect("append_trusted_len_iter requires an upper bound");
 
-        if let Some(b) = self.bitmap_builder.as_mut() {
-            b.append_n(len, true);
-        }
+        self.null_buffer_builder.append_n_non_nulls(len);
         self.values_builder.append_trusted_len_iter(iter);
-        Ok(())
     }
 
-    /// Builds the `PrimitiveArray` and reset this builder.
+    /// Builds the [`PrimitiveArray`] and reset this builder.
     pub fn finish(&mut self) -> PrimitiveArray<T> {
         let len = self.len();
-        let null_bit_buffer = self.bitmap_builder.as_mut().map(|b| b.finish());
-        let null_count = len
-            - null_bit_buffer
-                .as_ref()
-                .map(|b| b.count_set_bits())
-                .unwrap_or(len);
+        let null_bit_buffer = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(T::DATA_TYPE)
             .len(len)
             .add_buffer(self.values_builder.finish())
-            .null_bit_buffer(if null_count > 0 {
-                null_bit_buffer
-            } else {
-                None
-            });
+            .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { builder.build_unchecked() };
         PrimitiveArray::<T>::from(array_data)
     }
 
-    /// Builds the `DictionaryArray` and reset this builder.
-    pub fn finish_dict(&mut self, values: ArrayRef) -> DictionaryArray<T> {
-        let len = self.len();
-        let null_bit_buffer = self.bitmap_builder.as_mut().map(|b| b.finish());
-        let null_count = len
-            - null_bit_buffer
-                .as_ref()
-                .map(|b| b.count_set_bits())
-                .unwrap_or(len);
-        let data_type = DataType::Dictionary(
-            Box::new(T::DATA_TYPE),
-            Box::new(values.data_type().clone()),
-        );
-        let mut builder = ArrayData::builder(data_type)
-            .len(len)
-            .add_buffer(self.values_builder.finish());
-        if null_count > 0 {
-            builder = builder.null_bit_buffer(null_bit_buffer);
-        }
-        builder = builder.add_child_data(values.data().clone());
-        let array_data = unsafe { builder.build_unchecked() };
-        DictionaryArray::<T>::from(array_data)
-    }
-
-    fn materialize_bitmap_builder(&mut self) {
-        if self.bitmap_builder.is_some() {
-            return;
-        }
-        let mut b = BooleanBufferBuilder::new(0);
-        b.reserve(self.values_builder.capacity());
-        b.append_n(self.values_builder.len(), true);
-        self.bitmap_builder = Some(b);
+    /// Returns the current values buffer as a slice
+    pub fn values_slice(&self) -> &[T::Native] {
+        self.values_builder.as_slice()
     }
 }
 
@@ -248,7 +181,7 @@ mod tests {
     fn test_primitive_array_builder_i32() {
         let mut builder = Int32Array::builder(5);
         for i in 0..5 {
-            builder.append_value(i).unwrap();
+            builder.append_value(i);
         }
         let arr = builder.finish();
         assert_eq!(5, arr.len());
@@ -264,7 +197,7 @@ mod tests {
     #[test]
     fn test_primitive_array_builder_i32_append_iter() {
         let mut builder = Int32Array::builder(5);
-        unsafe { builder.append_trusted_len_iter(0..5) }.unwrap();
+        unsafe { builder.append_trusted_len_iter(0..5) };
         let arr = builder.finish();
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.offset());
@@ -279,7 +212,7 @@ mod tests {
     #[test]
     fn test_primitive_array_builder_i32_append_nulls() {
         let mut builder = Int32Array::builder(5);
-        builder.append_nulls(5).unwrap();
+        builder.append_nulls(5);
         let arr = builder.finish();
         assert_eq!(5, arr.len());
         assert_eq!(0, arr.offset());
@@ -294,7 +227,7 @@ mod tests {
     fn test_primitive_array_builder_date32() {
         let mut builder = Date32Array::builder(5);
         for i in 0..5 {
-            builder.append_value(i).unwrap();
+            builder.append_value(i);
         }
         let arr = builder.finish();
         assert_eq!(5, arr.len());
@@ -311,7 +244,7 @@ mod tests {
     fn test_primitive_array_builder_timestamp_second() {
         let mut builder = TimestampSecondArray::builder(5);
         for i in 0..5 {
-            builder.append_value(i).unwrap();
+            builder.append_value(i);
         }
         let arr = builder.finish();
         assert_eq!(5, arr.len());
@@ -331,9 +264,9 @@ mod tests {
         let mut builder = BooleanArray::builder(10);
         for i in 0..10 {
             if i == 3 || i == 6 || i == 9 {
-                builder.append_value(true).unwrap();
+                builder.append_value(true);
             } else {
-                builder.append_value(false).unwrap();
+                builder.append_value(false);
             }
         }
 
@@ -354,11 +287,11 @@ mod tests {
         let arr1 = Int32Array::from(vec![Some(0), None, Some(2), None, Some(4)]);
 
         let mut builder = Int32Array::builder(5);
-        builder.append_option(Some(0)).unwrap();
-        builder.append_option(None).unwrap();
-        builder.append_option(Some(2)).unwrap();
-        builder.append_option(None).unwrap();
-        builder.append_option(Some(4)).unwrap();
+        builder.append_option(Some(0));
+        builder.append_option(None);
+        builder.append_option(Some(2));
+        builder.append_option(None);
+        builder.append_option(Some(4));
         let arr2 = builder.finish();
 
         assert_eq!(arr1.len(), arr2.len());
@@ -378,11 +311,11 @@ mod tests {
         let arr1 = Int32Array::from(vec![Some(0), Some(2), None, None, Some(4)]);
 
         let mut builder = Int32Array::builder(5);
-        builder.append_value(0).unwrap();
-        builder.append_value(2).unwrap();
-        builder.append_null().unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(4).unwrap();
+        builder.append_value(0);
+        builder.append_value(2);
+        builder.append_null();
+        builder.append_null();
+        builder.append_value(4);
         let arr2 = builder.finish();
 
         assert_eq!(arr1.len(), arr2.len());
@@ -402,10 +335,10 @@ mod tests {
         let arr1 = Int32Array::from(vec![Some(0), Some(2), None, None, Some(4)]);
 
         let mut builder = Int32Array::builder(5);
-        builder.append_slice(&[0, 2]).unwrap();
-        builder.append_null().unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(4).unwrap();
+        builder.append_slice(&[0, 2]);
+        builder.append_null();
+        builder.append_null();
+        builder.append_value(4);
         let arr2 = builder.finish();
 
         assert_eq!(arr1.len(), arr2.len());
@@ -423,12 +356,12 @@ mod tests {
     #[test]
     fn test_primitive_array_builder_finish() {
         let mut builder = Int32Builder::new(5);
-        builder.append_slice(&[2, 4, 6, 8]).unwrap();
+        builder.append_slice(&[2, 4, 6, 8]);
         let mut arr = builder.finish();
         assert_eq!(4, arr.len());
         assert_eq!(0, builder.len());
 
-        builder.append_slice(&[1, 3, 5, 7, 9]).unwrap();
+        builder.append_slice(&[1, 3, 5, 7, 9]);
         arr = builder.finish();
         assert_eq!(5, arr.len());
         assert_eq!(0, builder.len());

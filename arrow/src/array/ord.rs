@@ -19,6 +19,7 @@
 
 use std::cmp::Ordering;
 
+use crate::array::BasicDecimalArray;
 use crate::array::*;
 use crate::datatypes::TimeUnit;
 use crate::datatypes::*;
@@ -226,8 +227,8 @@ pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparato
             }
         }
         (Decimal(_, _), Decimal(_, _)) => {
-            let left: DecimalArray = DecimalArray::from(left.data().clone());
-            let right: DecimalArray = DecimalArray::from(right.data().clone());
+            let left: Decimal128Array = Decimal128Array::from(left.data().clone());
+            let right: Decimal128Array = Decimal128Array::from(right.data().clone());
             Box::new(move |i, j| left.value(i).cmp(&right.value(j)))
         }
         (lhs, _) => {
@@ -302,7 +303,7 @@ pub mod tests {
     fn test_decimal() -> Result<()> {
         let array = vec![Some(5), Some(2), Some(3)]
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap();
 

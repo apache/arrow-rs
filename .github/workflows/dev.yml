@@ -17,9 +17,11 @@
 
 name: Dev
 
+# trigger for all PRs and changes to master
 on:
-  # always trigger
   push:
+    branches:
+      - master
   pull_request:
 
 env:
@@ -41,7 +43,7 @@ jobs:
         run: ./dev/release/run-rat.sh .
 
   prettier:
-    name: Use prettier to check formatting of documents
+    name: Use prettier to check formatting of markdown documents
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2

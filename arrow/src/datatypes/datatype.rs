@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use num::{BigInt, Num, ToPrimitive};
 use std::fmt;
 
 use serde_derive::{Deserialize, Serialize};
@@ -78,6 +79,63 @@ pub enum DataType {
     /// * As used in the Olson time zone database (the "tz database" or
     ///   "tzdata"), such as "America/New_York"
     /// * An absolute time zone offset of the form +XX:XX or -XX:XX, such as +07:30
+    ///
+    /// Timestamps with a non-empty timezone
+    /// ------------------------------------
+    ///
+    /// If a Timestamp column has a non-empty timezone value, its epoch is
+    /// 1970-01-01 00:00:00 (January 1st 1970, midnight) in the *UTC* timezone
+    /// (the Unix epoch), regardless of the Timestamp's own timezone.
+    ///
+    /// Therefore, timestamp values with a non-empty timezone correspond to
+    /// physical points in time together with some additional information about
+    /// how the data was obtained and/or how to display it (the timezone).
+    ///
+    ///   For example, the timestamp value 0 with the timezone string "Europe/Paris"
+    ///   corresponds to "January 1st 1970, 00h00" in the UTC timezone, but the
+    ///   application may prefer to display it as "January 1st 1970, 01h00" in
+    ///   the Europe/Paris timezone (which is the same physical point in time).
+    ///
+    /// One consequence is that timestamp values with a non-empty timezone
+    /// can be compared and ordered directly, since they all share the same
+    /// well-known point of reference (the Unix epoch).
+    ///
+    /// Timestamps with an unset / empty timezone
+    /// -----------------------------------------
+    ///
+    /// If a Timestamp column has no timezone value, its epoch is
+    /// 1970-01-01 00:00:00 (January 1st 1970, midnight) in an *unknown* timezone.
+    ///
+    /// Therefore, timestamp values without a timezone cannot be meaningfully
+    /// interpreted as physical points in time, but only as calendar / clock
+    /// indications ("wall clock time") in an unspecified timezone.
+    ///
+    ///   For example, the timestamp value 0 with an empty timezone string
+    ///   corresponds to "January 1st 1970, 00h00" in an unknown timezone: there
+    ///   is not enough information to interpret it as a well-defined physical
+    ///   point in time.
+    ///
+    /// One consequence is that timestamp values without a timezone cannot
+    /// be reliably compared or ordered, since they may have different points of
+    /// reference.  In particular, it is *not* possible to interpret an unset
+    /// or empty timezone as the same as "UTC".
+    ///
+    /// Conversion between timezones
+    /// ----------------------------
+    ///
+    /// If a Timestamp column has a non-empty timezone, changing the timezone
+    /// to a different non-empty value is a metadata-only operation:
+    /// the timestamp values need not change as their point of reference remains
+    /// the same (the Unix epoch).
+    ///
+    /// However, if a Timestamp column has no timezone value, changing it to a
+    /// non-empty value requires to think about the desired semantics.
+    /// One possibility is to assume that the original timestamp values are
+    /// relative to the epoch of the timezone being set; timestamp values should
+    /// then adjusted to the Unix epoch (for example, changing the timezone from
+    /// empty to "Europe/Paris" would require converting the timestamp values
+    /// from "Europe/Paris" to "UTC", which seems counter-intuitive but is
+    /// nevertheless correct).
     Timestamp(TimeUnit, Option<String>),
     /// A 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days (32 bits).
@@ -138,6 +196,8 @@ pub enum DataType {
     ///
     /// For example the number 123.45 has precision 5 and scale 2.
     Decimal(usize, usize),
+    /// Exact decimal value with 256 bits width
+    Decimal256(usize, usize),
     /// A Map is a logical nested type that is represented as
     ///
     /// `List<entries: Struct<key: K, value: V>>`
@@ -238,7 +298,50 @@ pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     99999999999999999999999999999999999,
     999999999999999999999999999999999999,
     9999999999999999999999999999999999999,
-    170141183460469231731687303715884105727,
+    99999999999999999999999999999999999999,
+];
+
+/// `MAX_DECIMAL_FOR_LARGER_PRECISION[p]` holds the maximum integer value
+/// that can be stored in [DataType::Decimal256] value of precision `p` > 38
+pub const MAX_DECIMAL_FOR_LARGER_PRECISION: [&str; 38] = [
+    "99999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999999999999999999999999999999999",
+    "99999999999999999999999999999999999999999999999999999999999999999999999999",
+    "999999999999999999999999999999999999999999999999999999999999999999999999999",
 ];
 
 /// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value
@@ -281,22 +384,76 @@ pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     -99999999999999999999999999999999999,
     -999999999999999999999999999999999999,
     -9999999999999999999999999999999999999,
-    -170141183460469231731687303715884105728,
+    -99999999999999999999999999999999999999,
+];
+
+/// `MIN_DECIMAL_FOR_LARGER_PRECISION[p]` holds the minimum integer value
+/// that can be stored in a [DataType::Decimal256] value of precision `p` > 38
+pub const MIN_DECIMAL_FOR_LARGER_PRECISION: [&str; 38] = [
+    "-99999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999999999999999999999999999999999",
+    "-99999999999999999999999999999999999999999999999999999999999999999999999999",
+    "-999999999999999999999999999999999999999999999999999999999999999999999999999",
 ];
 
 /// The maximum precision for [DataType::Decimal] values
-pub const DECIMAL_MAX_PRECISION: usize = 38;
+pub const DECIMAL128_MAX_PRECISION: usize = 38;
 
 /// The maximum scale for [DataType::Decimal] values
-pub const DECIMAL_MAX_SCALE: usize = 38;
+pub const DECIMAL128_MAX_SCALE: usize = 38;
 
-/// The default scale for [DataType::Decimal] values
+/// The maximum precision for [DataType::Decimal256] values
+pub const DECIMAL256_MAX_PRECISION: usize = 76;
+
+/// The maximum scale for [DataType::Decimal256] values
+pub const DECIMAL256_MAX_SCALE: usize = 76;
+
+/// The default scale for [DataType::Decimal] and [DataType::Decimal256] values
 pub const DECIMAL_DEFAULT_SCALE: usize = 10;
 
 /// Validates that the specified `i128` value can be properly
 /// interpreted as a Decimal number with precision `precision`
 #[inline]
 pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Result<i128> {
+    // TODO: add validation logic for precision > 38
+    if precision > 38 {
+        return Ok(value);
+    }
+
     let max = MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1];
     let min = MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1];
 
@@ -312,6 +469,55 @@ pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Resul
         )))
     } else {
         Ok(value)
+    }
+}
+
+/// Validates that the specified string value can be properly
+/// interpreted as a Decimal256 number with precision `precision`
+#[inline]
+pub(crate) fn validate_decimal256_precision(
+    value: &str,
+    precision: usize,
+) -> Result<BigInt> {
+    if precision > 38 {
+        let max_str = MAX_DECIMAL_FOR_LARGER_PRECISION[precision - 38 - 1];
+        let min_str = MIN_DECIMAL_FOR_LARGER_PRECISION[precision - 38 - 1];
+
+        let max = BigInt::from_str_radix(max_str, 10).unwrap();
+        let min = BigInt::from_str_radix(min_str, 10).unwrap();
+
+        let value = BigInt::from_str_radix(value, 10).unwrap();
+        if value > max {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "{} is too large to store in a Decimal256 of precision {}. Max is {}",
+                value, precision, max
+            )))
+        } else if value < min {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "{} is too small to store in a Decimal256 of precision {}. Min is {}",
+                value, precision, min
+            )))
+        } else {
+            Ok(value)
+        }
+    } else {
+        let max = MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1];
+        let min = MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1];
+        let value = BigInt::from_str_radix(value, 10).unwrap();
+
+        if value.to_i128().unwrap() > max {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "{} is too large to store in a Decimal256 of precision {}. Max is {}",
+                value, precision, max
+            )))
+        } else if value.to_i128().unwrap() < min {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "{} is too small to store in a Decimal256 of precision {}. Min is {}",
+                value, precision, min
+            )))
+        } else {
+            Ok(value)
+        }
     }
 }
 
@@ -344,15 +550,27 @@ impl DataType {
                         None => Err(ArrowError::ParseError(
                             "Expecting a precision for decimal".to_string(),
                         )),
-                    };
+                    }?;
                     let scale = match map.get("scale") {
                         Some(s) => Ok(s.as_u64().unwrap() as usize),
                         _ => Err(ArrowError::ParseError(
                             "Expecting a scale for decimal".to_string(),
                         )),
+                    }?;
+                    let bit_width: usize = match map.get("bitWidth") {
+                        Some(b) => b.as_u64().unwrap() as usize,
+                        _ => 128, // Default bit width
                     };
 
-                    Ok(DataType::Decimal(precision?, scale?))
+                    if bit_width == 128 {
+                        Ok(DataType::Decimal(precision, scale))
+                    } else if bit_width == 256 {
+                        Ok(DataType::Decimal256(precision, scale))
+                    } else {
+                        Err(ArrowError::ParseError(
+                            "Decimal bit_width invalid".to_string(),
+                        ))
+                    }
                 }
                 Some(s) if s == "floatingpoint" => match map.get("precision") {
                     Some(p) if p == "HALF" => Ok(DataType::Float16),
@@ -633,7 +851,10 @@ impl DataType {
             }}),
             DataType::Dictionary(_, _) => json!({ "name": "dictionary"}),
             DataType::Decimal(precision, scale) => {
-                json!({"name": "decimal", "precision": precision, "scale": scale})
+                json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 128})
+            }
+            DataType::Decimal256(precision, scale) => {
+                json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 256})
             }
             DataType::Map(_, keys_sorted) => {
                 json!({"name": "map", "keysSorted": keys_sorted})
@@ -656,6 +877,21 @@ impl DataType {
                 | Int64
                 | Float32
                 | Float64
+        )
+    }
+
+    /// Returns true if this type is temporal: (Date*, Time*, Duration, or Interval).
+    pub fn is_temporal(t: &DataType) -> bool {
+        use DataType::*;
+        matches!(
+            t,
+            Date32
+                | Date64
+                | Timestamp(_, _)
+                | Time32(_)
+                | Time64(_)
+                | Duration(_)
+                | Interval(_)
         )
     }
 

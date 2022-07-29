@@ -19,10 +19,12 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
+use crate::array::builder::decimal_builder::Decimal128Builder;
 use crate::array::*;
 use crate::datatypes::DataType;
 use crate::datatypes::Field;
-use crate::error::Result;
+
+use super::NullBufferBuilder;
 
 /// Array builder for Struct types.
 ///
@@ -31,7 +33,7 @@ use crate::error::Result;
 pub struct StructBuilder {
     fields: Vec<Field>,
     field_builders: Vec<Box<dyn ArrayBuilder>>,
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
     len: usize,
 }
 
@@ -39,7 +41,7 @@ impl fmt::Debug for StructBuilder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StructBuilder")
             .field("fields", &self.fields)
-            .field("bitmap_builder", &self.bitmap_builder)
+            .field("bitmap_builder", &self.null_buffer_builder)
             .field("len", &self.len)
             .finish()
     }
@@ -111,7 +113,7 @@ pub fn make_builder(datatype: &DataType, capacity: usize) -> Box<dyn ArrayBuilde
             Box::new(FixedSizeBinaryBuilder::new(capacity, *len))
         }
         DataType::Decimal(precision, scale) => {
-            Box::new(DecimalBuilder::new(capacity, *precision, *scale))
+            Box::new(Decimal128Builder::new(capacity, *precision, *scale))
         }
         DataType::Utf8 => Box::new(StringBuilder::new(capacity)),
         DataType::Date32 => Box::new(Date32Builder::new(capacity)),
@@ -173,7 +175,7 @@ impl StructBuilder {
         Self {
             fields,
             field_builders,
-            bitmap_builder: BooleanBufferBuilder::new(0),
+            null_buffer_builder: NullBufferBuilder::new(0),
             len: 0,
         }
     }
@@ -201,15 +203,14 @@ impl StructBuilder {
     /// Appends an element (either null or non-null) to the struct. The actual elements
     /// should be appended for each child sub-array in a consistent way.
     #[inline]
-    pub fn append(&mut self, is_valid: bool) -> Result<()> {
-        self.bitmap_builder.append(is_valid);
+    pub fn append(&mut self, is_valid: bool) {
+        self.null_buffer_builder.append(is_valid);
         self.len += 1;
-        Ok(())
     }
 
     /// Appends a null element to the struct.
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.append(false)
     }
 
@@ -218,17 +219,14 @@ impl StructBuilder {
         let mut child_data = Vec::with_capacity(self.field_builders.len());
         for f in &mut self.field_builders {
             let arr = f.finish();
-            child_data.push(arr.data().clone());
+            child_data.push(arr.into_data());
         }
 
-        let null_bit_buffer = self.bitmap_builder.finish();
-        let null_count = self.len - null_bit_buffer.count_set_bits();
-        let mut builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
+        let null_bit_buffer = self.null_buffer_builder.finish();
+        let builder = ArrayData::builder(DataType::Struct(self.fields.clone()))
             .len(self.len)
-            .child_data(child_data);
-        if null_count > 0 {
-            builder = builder.null_bit_buffer(Some(null_bit_buffer));
-        }
+            .child_data(child_data)
+            .null_bit_buffer(null_bit_buffer);
 
         self.len = 0;
 
@@ -263,23 +261,23 @@ mod tests {
         let string_builder = builder
             .field_builder::<StringBuilder>(0)
             .expect("builder at field 0 should be string builder");
-        string_builder.append_value("joe").unwrap();
-        string_builder.append_null().unwrap();
-        string_builder.append_null().unwrap();
-        string_builder.append_value("mark").unwrap();
+        string_builder.append_value("joe");
+        string_builder.append_null();
+        string_builder.append_null();
+        string_builder.append_value("mark");
 
         let int_builder = builder
             .field_builder::<Int32Builder>(1)
             .expect("builder at field 1 should be int builder");
-        int_builder.append_value(1).unwrap();
-        int_builder.append_value(2).unwrap();
-        int_builder.append_null().unwrap();
-        int_builder.append_value(4).unwrap();
+        int_builder.append_value(1);
+        int_builder.append_value(2);
+        int_builder.append_null();
+        int_builder.append_value(4);
 
-        builder.append(true).unwrap();
-        builder.append(true).unwrap();
-        builder.append_null().unwrap();
-        builder.append(true).unwrap();
+        builder.append(true);
+        builder.append(true);
+        builder.append_null();
+        builder.append(true);
 
         let arr = builder.finish();
 
@@ -326,19 +324,17 @@ mod tests {
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_slice(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
-            .unwrap();
+            .append_slice(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
             .append_slice(&[
                 false, true, false, true, false, true, false, true, false, true,
-            ])
-            .unwrap();
+            ]);
 
         // Append slot values - all are valid.
         for _ in 0..10 {
-            assert!(builder.append(true).is_ok())
+            builder.append(true);
         }
 
         assert_eq!(10, builder.len());
@@ -351,17 +347,15 @@ mod tests {
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_slice(&[1, 3, 5, 7, 9])
-            .unwrap();
+            .append_slice(&[1, 3, 5, 7, 9]);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_slice(&[false, true, false, true, false])
-            .unwrap();
+            .append_slice(&[false, true, false, true, false]);
 
         // Append slot values - all are valid.
         for _ in 0..5 {
-            assert!(builder.append(true).is_ok())
+            builder.append(true);
         }
 
         assert_eq!(5, builder.len());

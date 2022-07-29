@@ -745,6 +745,21 @@ mod tests {
 
     use super::*;
 
+    /// Asserts that the NDJSON `input` is semantically identical to `expected`
+    fn assert_json_eq(input: &[u8], expected: &str) {
+        let expected: Vec<Option<Value>> = expected
+            .split('\n')
+            .map(|s| (!s.is_empty()).then(|| serde_json::from_str(s).unwrap()))
+            .collect();
+
+        let actual: Vec<Option<Value>> = input
+            .split(|b| *b == b'\n')
+            .map(|s| (!s.is_empty()).then(|| serde_json::from_slice(s).unwrap()))
+            .collect();
+
+        assert_eq!(expected, actual);
+    }
+
     #[test]
     fn write_simple_rows() {
         let schema = Schema::new(vec![
@@ -765,14 +780,14 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":1,"c2":"a"}
 {"c1":2,"c2":"b"}
 {"c1":3,"c2":"c"}
 {"c2":"d"}
 {"c1":5}
-"#
+"#,
         );
     }
 
@@ -796,14 +811,14 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":"a","c2":"a"}
 {"c2":"b"}
 {"c1":"c"}
 {"c1":"d","c2":"d"}
 {}
-"#
+"#,
         );
     }
 
@@ -846,14 +861,14 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":"cupcakes","c2":"sdsd"}
 {"c1":"foo","c2":"sdsd"}
 {"c1":"foo"}
 {"c2":"sd"}
 {"c1":"cupcakes","c2":"sdsd"}
-"#
+"#,
         );
     }
 
@@ -879,11 +894,11 @@ mod tests {
         let arr_names = StringArray::from(vec![Some("a"), Some("b")]);
 
         let schema = Schema::new(vec![
-            Field::new("nanos", arr_nanos.data_type().clone(), false),
-            Field::new("micros", arr_micros.data_type().clone(), false),
-            Field::new("millis", arr_millis.data_type().clone(), false),
-            Field::new("secs", arr_secs.data_type().clone(), false),
-            Field::new("name", arr_names.data_type().clone(), false),
+            Field::new("nanos", arr_nanos.data_type().clone(), true),
+            Field::new("micros", arr_micros.data_type().clone(), true),
+            Field::new("millis", arr_millis.data_type().clone(), true),
+            Field::new("secs", arr_secs.data_type().clone(), true),
+            Field::new("name", arr_names.data_type().clone(), true),
         ]);
         let schema = Arc::new(schema);
 
@@ -905,11 +920,11 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"nanos":"2018-11-13 17:11:10.011375885","micros":"2018-11-13 17:11:10.011375","millis":"2018-11-13 17:11:10.011","secs":"2018-11-13 17:11:10","name":"a"}
 {"name":"b"}
-"#
+"#,
         );
     }
 
@@ -929,8 +944,8 @@ mod tests {
         let arr_names = StringArray::from(vec![Some("a"), Some("b")]);
 
         let schema = Schema::new(vec![
-            Field::new("date32", arr_date32.data_type().clone(), false),
-            Field::new("date64", arr_date64.data_type().clone(), false),
+            Field::new("date32", arr_date32.data_type().clone(), true),
+            Field::new("date64", arr_date64.data_type().clone(), true),
             Field::new("name", arr_names.data_type().clone(), false),
         ]);
         let schema = Arc::new(schema);
@@ -951,11 +966,11 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"date32":"2018-11-13","date64":"2018-11-13","name":"a"}
 {"name":"b"}
-"#
+"#,
         );
     }
 
@@ -968,11 +983,11 @@ mod tests {
         let arr_names = StringArray::from(vec![Some("a"), Some("b")]);
 
         let schema = Schema::new(vec![
-            Field::new("time32sec", arr_time32sec.data_type().clone(), false),
-            Field::new("time32msec", arr_time32msec.data_type().clone(), false),
-            Field::new("time64usec", arr_time64usec.data_type().clone(), false),
-            Field::new("time64nsec", arr_time64nsec.data_type().clone(), false),
-            Field::new("name", arr_names.data_type().clone(), false),
+            Field::new("time32sec", arr_time32sec.data_type().clone(), true),
+            Field::new("time32msec", arr_time32msec.data_type().clone(), true),
+            Field::new("time64usec", arr_time64usec.data_type().clone(), true),
+            Field::new("time64nsec", arr_time64nsec.data_type().clone(), true),
+            Field::new("name", arr_names.data_type().clone(), true),
         ]);
         let schema = Arc::new(schema);
 
@@ -994,11 +1009,11 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"time32sec":"00:02:00","time32msec":"00:00:00.120","time64usec":"00:00:00.000120","time64nsec":"00:00:00.000000120","name":"a"}
 {"name":"b"}
-"#
+"#,
         );
     }
 
@@ -1011,11 +1026,11 @@ mod tests {
         let arr_names = StringArray::from(vec![Some("a"), Some("b")]);
 
         let schema = Schema::new(vec![
-            Field::new("duration_sec", arr_durationsec.data_type().clone(), false),
-            Field::new("duration_msec", arr_durationmsec.data_type().clone(), false),
-            Field::new("duration_usec", arr_durationusec.data_type().clone(), false),
-            Field::new("duration_nsec", arr_durationnsec.data_type().clone(), false),
-            Field::new("name", arr_names.data_type().clone(), false),
+            Field::new("duration_sec", arr_durationsec.data_type().clone(), true),
+            Field::new("duration_msec", arr_durationmsec.data_type().clone(), true),
+            Field::new("duration_usec", arr_durationusec.data_type().clone(), true),
+            Field::new("duration_nsec", arr_durationnsec.data_type().clone(), true),
+            Field::new("name", arr_names.data_type().clone(), true),
         ]);
         let schema = Arc::new(schema);
 
@@ -1037,11 +1052,11 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"duration_sec":"PT120S","duration_msec":"PT0.120S","duration_usec":"PT0.000120S","duration_nsec":"PT0.000000120S","name":"a"}
 {"name":"b"}
-"#
+"#,
         );
     }
 
@@ -1093,12 +1108,12 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":{"c11":1,"c12":{"c121":"e"}},"c2":"a"}
 {"c1":{"c12":{"c121":"f"}},"c2":"b"}
 {"c1":{"c11":5,"c12":{"c121":"g"}},"c2":"c"}
-"#
+"#,
         );
     }
 
@@ -1118,7 +1133,7 @@ mod tests {
         let a_list_data = ArrayData::builder(field_c1.data_type().clone())
             .len(5)
             .add_buffer(a_value_offsets)
-            .add_child_data(a_values.data().clone())
+            .add_child_data(a_values.into_data())
             .null_bit_buffer(Some(Buffer::from(vec![0b00011111])))
             .build()
             .unwrap();
@@ -1136,14 +1151,14 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":["a","a1"],"c2":1}
 {"c1":["b"],"c2":2}
 {"c1":["c"],"c2":3}
 {"c1":["d"],"c2":4}
 {"c1":["e"],"c2":5}
-"#
+"#,
         );
     }
 
@@ -1159,7 +1174,7 @@ mod tests {
             DataType::List(Box::new(list_inner_type.clone())),
             false,
         );
-        let field_c2 = Field::new("c2", DataType::Utf8, false);
+        let field_c2 = Field::new("c2", DataType::Utf8, true);
         let schema = Schema::new(vec![field_c1.clone(), field_c2]);
 
         // list column rows: [[1, 2], [3]], [], [[4, 5, 6]]
@@ -1171,7 +1186,7 @@ mod tests {
             .len(3)
             .add_buffer(a_value_offsets)
             .null_bit_buffer(Some(Buffer::from(vec![0b00000111])))
-            .add_child_data(a_values.data().clone())
+            .add_child_data(a_values.into_data())
             .build()
             .unwrap();
 
@@ -1196,12 +1211,12 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":[[1,2],[3]],"c2":"foo"}
 {"c1":[],"c2":"bar"}
 {"c1":[[4,5,6]]}
-"#
+"#,
         );
     }
 
@@ -1253,7 +1268,7 @@ mod tests {
         let c1_list_data = ArrayData::builder(field_c1.data_type().clone())
             .len(3)
             .add_buffer(c1_value_offsets)
-            .add_child_data(struct_values.data().clone())
+            .add_child_data(struct_values.into_data())
             .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
             .build()
             .unwrap();
@@ -1271,12 +1286,12 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"c1":[{"c11":1,"c12":{"c121":"e"}},{"c12":{"c121":"f"}}],"c2":1}
 {"c2":2}
 {"c1":[{"c11":5,"c12":{"c121":"g"}}],"c2":3}
-"#
+"#,
         );
     }
 
@@ -1396,15 +1411,15 @@ mod tests {
         // that implementations differ on the treatment of a null struct.
         // It would be more accurate to return a null struct, so this can be done
         // as a follow up.
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"list":[{"ints":1}]}
 {"list":[{}]}
 {"list":[]}
 {}
 {"list":[{}]}
 {"list":[{}]}
-"#
+"#,
         );
     }
 
@@ -1438,13 +1453,13 @@ mod tests {
             .len(6)
             .null_bit_buffer(Some(valid_buffer))
             .add_buffer(entry_offsets)
-            .add_child_data(entry_struct.data().clone())
+            .add_child_data(entry_struct.into_data())
             .build()
             .unwrap();
 
         let map = MapArray::from(map_data);
 
-        let map_field = Field::new("map", map_data_type, false);
+        let map_field = Field::new("map", map_data_type, true);
         let schema = Arc::new(Schema::new(vec![map_field]));
 
         let batch = RecordBatch::try_new(schema, vec![Arc::new(map)]).unwrap();
@@ -1455,15 +1470,15 @@ mod tests {
             writer.write_batches(&[batch]).unwrap();
         }
 
-        assert_eq!(
-            String::from_utf8(buf).unwrap(),
+        assert_json_eq(
+            &buf,
             r#"{"map":{"foo":10}}
 {"map":null}
 {"map":{}}
 {"map":{"bar":20,"baz":30,"qux":40}}
 {"map":{"quux":50}}
 {"map":{}}
-"#
+"#,
         );
     }
 

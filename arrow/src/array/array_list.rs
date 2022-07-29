@@ -24,6 +24,7 @@ use super::{
     array::print_long_array, make_array, raw_pointer::RawPtrBox, Array, ArrayData,
     ArrayRef, BooleanBufferBuilder, GenericListArrayIter, PrimitiveArray,
 };
+use crate::array::array::ArrayAccessor;
 use crate::{
     buffer::MutableBuffer,
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType, Field},
@@ -177,7 +178,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         let array_data = ArrayData::builder(data_type)
             .len(null_buf.len())
             .add_buffer(offsets.into())
-            .add_child_data(values.data().clone())
+            .add_child_data(values.into_data())
             .null_bit_buffer(Some(null_buf.into()));
         let array_data = unsafe { array_data.build_unchecked() };
 
@@ -190,6 +191,14 @@ impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericListArray<OffsetSiz
         Self::try_new_from_array_data(data).expect(
             "Expected infallable creation of GenericListArray from ArrayDataRef failed",
         )
+    }
+}
+
+impl<OffsetSize: 'static + OffsetSizeTrait> From<GenericListArray<OffsetSize>>
+    for ArrayData
+{
+    fn from(array: GenericListArray<OffsetSize>) -> Self {
+        array.data
     }
 }
 
@@ -237,13 +246,29 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 }
 
-impl<OffsetSize: 'static + OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
+}
+
+impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor for &'a GenericListArray<OffsetSize> {
+    type Item = ArrayRef;
+
+    fn value(&self, index: usize) -> Self::Item {
+        GenericListArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        GenericListArray::value(self, index)
     }
 }
 
@@ -381,9 +406,9 @@ impl FixedSizeListArray {
         self.value_offset_at(self.data.offset() + i)
     }
 
-    /// Returns the length for value at index `i`.
+    /// Returns the length for an element.
     ///
-    /// Note this doesn't do any bound checking, for performance reason.
+    /// All elements have the same length as the array is a fixed size.
     #[inline]
     pub const fn value_length(&self) -> i32 {
         self.length
@@ -434,6 +459,12 @@ impl From<ArrayData> for FixedSizeListArray {
     }
 }
 
+impl From<FixedSizeListArray> for ArrayData {
+    fn from(array: FixedSizeListArray) -> Self {
+        array.data
+    }
+}
+
 impl Array for FixedSizeListArray {
     fn as_any(&self) -> &dyn Any {
         self
@@ -441,6 +472,22 @@ impl Array for FixedSizeListArray {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
+}
+
+impl ArrayAccessor for FixedSizeListArray {
+    type Item = ArrayRef;
+
+    fn value(&self, index: usize) -> Self::Item {
+        FixedSizeListArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        FixedSizeListArray::value(self, index)
     }
 }
 

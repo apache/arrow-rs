@@ -35,7 +35,10 @@
 
 use std::sync::Arc;
 
-use parquet_format::{ColumnChunk, ColumnMetaData, PageLocation, RowGroup};
+use parquet_format::{
+    BoundaryOrder, ColumnChunk, ColumnIndex, ColumnMetaData, OffsetIndex, PageLocation,
+    RowGroup,
+};
 
 use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 use crate::errors::{ParquetError, Result};
@@ -47,13 +50,18 @@ use crate::schema::types::{
     Type as SchemaType,
 };
 
+pub type ParquetColumnIndex = Vec<Vec<Index>>;
+pub type ParquetOffsetIndex = Vec<Vec<Vec<PageLocation>>>;
+
 /// Global Parquet metadata.
 #[derive(Debug, Clone)]
 pub struct ParquetMetaData {
     file_metadata: FileMetaData,
     row_groups: Vec<RowGroupMetaData>,
-    page_indexes: Option<Vec<Index>>,
-    offset_indexes: Option<Vec<Vec<PageLocation>>>,
+    /// Page index for all pages in each column chunk
+    page_indexes: Option<ParquetColumnIndex>,
+    /// Offset index for all pages in each column chunk
+    offset_indexes: Option<ParquetOffsetIndex>,
 }
 
 impl ParquetMetaData {
@@ -71,8 +79,8 @@ impl ParquetMetaData {
     pub fn new_with_page_index(
         file_metadata: FileMetaData,
         row_groups: Vec<RowGroupMetaData>,
-        page_indexes: Option<Vec<Index>>,
-        offset_indexes: Option<Vec<Vec<PageLocation>>>,
+        page_indexes: Option<ParquetColumnIndex>,
+        offset_indexes: Option<ParquetOffsetIndex>,
     ) -> Self {
         ParquetMetaData {
             file_metadata,
@@ -104,12 +112,12 @@ impl ParquetMetaData {
     }
 
     /// Returns page indexes in this file.
-    pub fn page_indexes(&self) -> Option<&Vec<Index>> {
+    pub fn page_indexes(&self) -> Option<&ParquetColumnIndex> {
         self.page_indexes.as_ref()
     }
 
     /// Returns offset indexes in this file.
-    pub fn offset_indexes(&self) -> Option<&Vec<Vec<PageLocation>>> {
+    pub fn offset_indexes(&self) -> Option<&ParquetOffsetIndex> {
         self.offset_indexes.as_ref()
     }
 }
@@ -223,7 +231,7 @@ pub struct RowGroupMetaData {
     num_rows: i64,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
-    // Todo add filter result -> row range
+    page_offset_index: Option<Vec<Vec<PageLocation>>>,
 }
 
 impl RowGroupMetaData {
@@ -262,6 +270,11 @@ impl RowGroupMetaData {
         self.columns.iter().map(|c| c.total_compressed_size).sum()
     }
 
+    /// Returns reference of page offset index of all column in this row group.
+    pub fn page_offset_index(&self) -> &Option<Vec<Vec<PageLocation>>> {
+        &self.page_offset_index
+    }
+
     /// Returns reference to a schema descriptor.
     pub fn schema_descr(&self) -> &SchemaDescriptor {
         self.schema_descr.as_ref()
@@ -270,6 +283,11 @@ impl RowGroupMetaData {
     /// Returns reference counted clone of schema descriptor.
     pub fn schema_descr_ptr(&self) -> SchemaDescPtr {
         self.schema_descr.clone()
+    }
+
+    /// Sets page offset index for this row group.
+    pub fn set_page_offset(&mut self, page_offset: Vec<Vec<PageLocation>>) {
+        self.page_offset_index = Some(page_offset);
     }
 
     /// Method to convert from Thrift.
@@ -290,6 +308,7 @@ impl RowGroupMetaData {
             num_rows,
             total_byte_size,
             schema_descr,
+            page_offset_index: None,
         })
     }
 
@@ -313,6 +332,7 @@ pub struct RowGroupMetaDataBuilder {
     schema_descr: SchemaDescPtr,
     num_rows: i64,
     total_byte_size: i64,
+    page_offset_index: Option<Vec<Vec<PageLocation>>>,
 }
 
 impl RowGroupMetaDataBuilder {
@@ -323,6 +343,7 @@ impl RowGroupMetaDataBuilder {
             schema_descr,
             num_rows: 0,
             total_byte_size: 0,
+            page_offset_index: None,
         }
     }
 
@@ -344,6 +365,12 @@ impl RowGroupMetaDataBuilder {
         self
     }
 
+    /// Sets page offset index for this row group.
+    pub fn set_page_offset(mut self, page_offset: Vec<Vec<PageLocation>>) -> Self {
+        self.page_offset_index = Some(page_offset);
+        self
+    }
+
     /// Builds row group metadata.
     pub fn build(self) -> Result<RowGroupMetaData> {
         if self.schema_descr.num_columns() != self.columns.len() {
@@ -359,6 +386,7 @@ impl RowGroupMetaDataBuilder {
             num_rows: self.num_rows,
             total_byte_size: self.total_byte_size,
             schema_descr: self.schema_descr,
+            page_offset_index: self.page_offset_index,
         })
     }
 }
@@ -579,7 +607,24 @@ impl ColumnChunkMetaData {
 
     /// Method to convert to Thrift.
     pub fn to_thrift(&self) -> ColumnChunk {
-        let column_metadata = ColumnMetaData {
+        let column_metadata = self.to_column_metadata_thrift();
+
+        ColumnChunk {
+            file_path: self.file_path().map(|s| s.to_owned()),
+            file_offset: self.file_offset,
+            meta_data: Some(column_metadata),
+            offset_index_offset: self.offset_index_offset,
+            offset_index_length: self.offset_index_length,
+            column_index_offset: self.column_index_offset,
+            column_index_length: self.column_index_length,
+            crypto_metadata: None,
+            encrypted_column_metadata: None,
+        }
+    }
+
+    /// Method to convert to Thrift `ColumnMetaData`
+    pub fn to_column_metadata_thrift(&self) -> ColumnMetaData {
+        ColumnMetaData {
             type_: self.column_type.into(),
             encodings: self.encodings().iter().map(|&v| v.into()).collect(),
             path_in_schema: Vec::from(self.column_path.as_ref()),
@@ -597,18 +642,6 @@ impl ColumnChunkMetaData {
                 .as_ref()
                 .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
             bloom_filter_offset: self.bloom_filter_offset,
-        };
-
-        ColumnChunk {
-            file_path: self.file_path().map(|s| s.to_owned()),
-            file_offset: self.file_offset,
-            meta_data: Some(column_metadata),
-            offset_index_offset: self.offset_index_offset,
-            offset_index_length: self.offset_index_length,
-            column_index_offset: self.column_index_offset,
-            column_index_length: self.column_index_length,
-            crypto_metadata: None,
-            encrypted_column_metadata: None,
         }
     }
 }
@@ -786,6 +819,107 @@ impl ColumnChunkMetaDataBuilder {
             column_index_offset: self.column_index_offset,
             column_index_length: self.column_index_length,
         })
+    }
+}
+
+/// Builder for column index
+pub struct ColumnIndexBuilder {
+    null_pages: Vec<bool>,
+    min_values: Vec<Vec<u8>>,
+    max_values: Vec<Vec<u8>>,
+    // TODO: calc the order for all pages in this column
+    boundary_order: BoundaryOrder,
+    null_counts: Vec<i64>,
+    // If one page can't get build index, need to ignore all index in this column
+    valid: bool,
+}
+
+impl ColumnIndexBuilder {
+    pub fn new() -> Self {
+        ColumnIndexBuilder {
+            null_pages: Vec::new(),
+            min_values: Vec::new(),
+            max_values: Vec::new(),
+            boundary_order: BoundaryOrder::Unordered,
+            null_counts: Vec::new(),
+            valid: true,
+        }
+    }
+
+    pub fn append(
+        &mut self,
+        null_page: bool,
+        min_value: &[u8],
+        max_value: &[u8],
+        null_count: i64,
+    ) {
+        self.null_pages.push(null_page);
+        self.min_values.push(min_value.to_vec());
+        self.max_values.push(max_value.to_vec());
+        self.null_counts.push(null_count);
+    }
+
+    pub fn to_invalid(&mut self) {
+        self.valid = false;
+    }
+
+    pub fn valid(&self) -> bool {
+        self.valid
+    }
+
+    /// Build and get the thrift metadata of column index
+    pub fn build_to_thrift(self) -> ColumnIndex {
+        ColumnIndex::new(
+            self.null_pages,
+            self.min_values,
+            self.max_values,
+            self.boundary_order,
+            self.null_counts,
+        )
+    }
+}
+
+/// Builder for offset index
+pub struct OffsetIndexBuilder {
+    offset_array: Vec<i64>,
+    compressed_page_size_array: Vec<i32>,
+    first_row_index_array: Vec<i64>,
+    current_first_row_index: i64,
+}
+
+impl OffsetIndexBuilder {
+    pub fn new() -> Self {
+        OffsetIndexBuilder {
+            offset_array: Vec::new(),
+            compressed_page_size_array: Vec::new(),
+            first_row_index_array: Vec::new(),
+            current_first_row_index: 0,
+        }
+    }
+
+    pub fn append_row_count(&mut self, row_count: i64) {
+        let current_page_row_index = self.current_first_row_index;
+        self.first_row_index_array.push(current_page_row_index);
+        self.current_first_row_index += row_count;
+    }
+
+    pub fn append_offset_and_size(&mut self, offset: i64, compressed_page_size: i32) {
+        self.offset_array.push(offset);
+        self.compressed_page_size_array.push(compressed_page_size);
+    }
+
+    /// Build and get the thrift metadata of offset index
+    pub fn build_to_thrift(self) -> OffsetIndex {
+        let locations = self
+            .offset_array
+            .iter()
+            .zip(self.compressed_page_size_array.iter())
+            .zip(self.first_row_index_array.iter())
+            .map(|((offset, size), row_index)| {
+                PageLocation::new(*offset, *size, *row_index)
+            })
+            .collect::<Vec<_>>();
+        OffsetIndex::new(locations)
     }
 }
 

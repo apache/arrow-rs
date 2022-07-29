@@ -18,14 +18,19 @@
 //! Contains `ArrayData`, a generic representation of Arrow array data which encapsulates
 //! common attributes and operations for Arrow array.
 
-use crate::datatypes::{validate_decimal_precision, DataType, IntervalUnit, UnionMode};
+use crate::datatypes::{
+    validate_decimal256_precision, validate_decimal_precision, DataType, IntervalUnit,
+    UnionMode,
+};
 use crate::error::{ArrowError, Result};
+use crate::util::bit_iterator::BitSliceIterator;
 use crate::{bitmap::Bitmap, datatypes::ArrowNativeType};
 use crate::{
     buffer::{Buffer, MutableBuffer},
     util::bit_util,
 };
 use half::f16;
+use num::BigInt;
 use std::convert::TryInto;
 use std::mem;
 use std::ops::Range;
@@ -34,14 +39,28 @@ use std::sync::Arc;
 use super::equal::equal;
 
 #[inline]
+pub(crate) fn contains_nulls(
+    null_bit_buffer: Option<&Buffer>,
+    offset: usize,
+    len: usize,
+) -> bool {
+    match null_bit_buffer {
+        Some(buffer) => match BitSliceIterator::new(buffer, offset, len).next() {
+            Some((start, end)) => start != 0 || end != len,
+            None => len != 0, // No non-null values
+        },
+        None => false, // No null buffer
+    }
+}
+
+#[inline]
 pub(crate) fn count_nulls(
     null_bit_buffer: Option<&Buffer>,
     offset: usize,
     len: usize,
 ) -> usize {
     if let Some(buf) = null_bit_buffer {
-        len.checked_sub(buf.count_set_bits_offset(offset, len))
-            .unwrap()
+        len - buf.count_set_bits_offset(offset, len)
     } else {
         0
     }
@@ -190,7 +209,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         DataType::FixedSizeList(_, _) | DataType::Struct(_) => {
             [empty_buffer, MutableBuffer::new(0)]
         }
-        DataType::Decimal(_, _) => [
+        DataType::Decimal(_, _) | DataType::Decimal256(_, _) => [
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
         ],
@@ -268,7 +287,10 @@ impl ArrayData {
     /// Create a new ArrayData instance;
     ///
     /// If `null_count` is not specified, the number of nulls in
-    /// null_bit_buffer is calculated
+    /// null_bit_buffer is calculated.
+    ///
+    /// If the number of nulls is 0 then the null_bit_buffer
+    /// is set to `None`.
     ///
     /// # Safety
     ///
@@ -292,7 +314,7 @@ impl ArrayData {
             None => count_nulls(null_bit_buffer.as_ref(), offset, len),
             Some(null_count) => null_count,
         };
-        let null_bitmap = null_bit_buffer.map(Bitmap::from);
+        let null_bitmap = null_bit_buffer.filter(|_| null_count > 0).map(Bitmap::from);
         let new_self = Self {
             data_type,
             len,
@@ -311,6 +333,9 @@ impl ArrayData {
 
     /// Create a new ArrayData, validating that the provided buffers
     /// form a valid Arrow array of the specified data type.
+    ///
+    /// If the number of nulls in `null_bit_buffer` is 0 then the null_bit_buffer
+    /// is set to `None`.
     ///
     /// Note: This is a low level API and most users of the arrow
     /// crate should create arrays using the methods in the `array`
@@ -573,7 +598,8 @@ impl ArrayData {
             | DataType::LargeBinary
             | DataType::Interval(_)
             | DataType::FixedSizeBinary(_)
-            | DataType::Decimal(_, _) => vec![],
+            | DataType::Decimal(_, _)
+            | DataType::Decimal256(_, _) => vec![],
             DataType::List(field) => {
                 vec![Self::new_empty(field.data_type())]
             }
@@ -1012,6 +1038,17 @@ impl ArrayData {
                 }
                 Ok(())
             }
+            DataType::Decimal256(p, _) => {
+                let values = self.buffers()[0].as_slice();
+                for pos in 0..self.len() {
+                    let offset = pos * 32;
+                    let raw_bytes = &values[offset..offset + 32];
+                    let integer = BigInt::from_signed_bytes_le(raw_bytes);
+                    let value_str = integer.to_string();
+                    validate_decimal256_precision(&value_str, *p)?;
+                }
+                Ok(())
+            }
             DataType::Utf8 => self.validate_utf8::<i32>(),
             DataType::LargeUtf8 => self.validate_utf8::<i64>(),
             DataType::Binary => self.validate_offsets_full::<i32>(self.buffers[1].len()),
@@ -1120,16 +1157,37 @@ impl ArrayData {
         T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
     {
         let values_buffer = &self.buffers[1].as_slice();
-
-        self.validate_each_offset::<T, _>(values_buffer.len(), |string_index, range| {
-            std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
-                ArrowError::InvalidArgumentError(format!(
-                    "Invalid UTF8 sequence at string index {} ({:?}): {}",
-                    string_index, range, e
-                ))
-            })?;
-            Ok(())
-        })
+        if let Ok(values_str) = std::str::from_utf8(values_buffer) {
+            // Validate Offsets are correct
+            self.validate_each_offset::<T, _>(
+                values_buffer.len(),
+                |string_index, range| {
+                    if !values_str.is_char_boundary(range.start)
+                        || !values_str.is_char_boundary(range.end)
+                    {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "incomplete utf-8 byte sequence from index {}",
+                            string_index
+                        )));
+                    }
+                    Ok(())
+                },
+            )
+        } else {
+            // find specific offset that failed utf8 validation
+            self.validate_each_offset::<T, _>(
+                values_buffer.len(),
+                |string_index, range| {
+                    std::str::from_utf8(&values_buffer[range.clone()]).map_err(|e| {
+                        ArrowError::InvalidArgumentError(format!(
+                            "Invalid UTF8 sequence at string index {} ({:?}): {}",
+                            string_index, range, e
+                        ))
+                    })?;
+                    Ok(())
+                },
+            )
+        }
     }
 
     /// Ensures that all offsets in `buffers[0]` into `buffers[1]` are
@@ -1218,11 +1276,16 @@ impl ArrayData {
             .zip(other.child_data.iter())
             .all(|(a, b)| a.ptr_eq(b))
     }
+
+    /// Converts this [`ArrayData`] into an [`ArrayDataBuilder`]
+    pub fn into_builder(self) -> ArrayDataBuilder {
+        self.into()
+    }
 }
 
 /// Return the expected [`DataTypeLayout`] Arrays of this data
 /// type are expected to have
-fn layout(data_type: &DataType) -> DataTypeLayout {
+pub(crate) fn layout(data_type: &DataType) -> DataTypeLayout {
     // based on C/C++ implementation in
     // https://github.com/apache/arrow/blob/661c7d749150905a63dd3b52e0a04dac39030d95/cpp/src/arrow/type.h (and .cc)
     use std::mem::size_of;
@@ -1303,6 +1366,10 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
             // always uses 16 bytes / size of i128
             DataTypeLayout::new_fixed_width(size_of::<i128>())
         }
+        DataType::Decimal256(_, _) => {
+            // Decimals are always some fixed width.
+            DataTypeLayout::new_fixed_width(32)
+        }
         DataType::Map(_, _) => {
             // same as ListType
             DataTypeLayout::new_fixed_width(size_of::<i32>())
@@ -1313,7 +1380,7 @@ fn layout(data_type: &DataType) -> DataTypeLayout {
 /// Layout specification for a data type
 #[derive(Debug, PartialEq)]
 // Note: Follows structure from C++: https://github.com/apache/arrow/blob/master/cpp/src/arrow/type.h#L91
-struct DataTypeLayout {
+pub(crate) struct DataTypeLayout {
     /// A vector of buffer layout specifications, one for each expected buffer
     pub buffers: Vec<BufferSpec>,
 
@@ -1360,7 +1427,7 @@ impl DataTypeLayout {
 
 /// Layout specification for a single data type buffer
 #[derive(Debug, PartialEq)]
-enum BufferSpec {
+pub(crate) enum BufferSpec {
     /// each element has a fixed width
     FixedWidth { byte_width: usize },
     /// Variable width, such as string data for utf8 data
@@ -1407,6 +1474,10 @@ impl ArrayDataBuilder {
             buffers: vec![],
             child_data: vec![],
         }
+    }
+
+    pub fn data_type(self, data_type: DataType) -> Self {
+        Self { data_type, ..self }
     }
 
     #[inline]
@@ -1483,13 +1554,29 @@ impl ArrayDataBuilder {
     }
 }
 
+impl From<ArrayData> for ArrayDataBuilder {
+    fn from(d: ArrayData) -> Self {
+        // TODO: Store Bitmap on ArrayData (#1799)
+        let null_bit_buffer = d.null_buffer().cloned();
+        Self {
+            null_bit_buffer,
+            data_type: d.data_type,
+            len: d.len,
+            null_count: Some(d.null_count),
+            offset: d.offset,
+            buffers: d.buffers,
+            child_data: d.child_data,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ptr::NonNull;
 
     use crate::array::{
-        make_array, Array, BooleanBuilder, DecimalBuilder, FixedSizeListBuilder,
+        make_array, Array, BooleanBuilder, Decimal128Builder, FixedSizeListBuilder,
         Int32Array, Int32Builder, Int64Array, StringArray, StructBuilder, UInt64Array,
         UInt8Builder,
     };
@@ -1773,7 +1860,7 @@ mod tests {
             Box::new(DataType::Int32),
             Box::new(DataType::LargeUtf8),
         );
-        let child_data = string_array.data().clone();
+        let child_data = string_array.into_data();
         ArrayData::try_new(data_type, 1, None, 0, vec![i32_buffer], vec![child_data])
             .unwrap();
     }
@@ -2031,7 +2118,7 @@ mod tests {
             None,
             0,
             vec![],
-            vec![child_array.data().clone()],
+            vec![child_array.into_data()],
         )
         .unwrap();
     }
@@ -2050,7 +2137,7 @@ mod tests {
             None,
             0,
             vec![],
-            vec![field1.data().clone()],
+            vec![field1.into_data()],
         )
         .unwrap();
     }
@@ -2071,7 +2158,7 @@ mod tests {
             None,
             0,
             vec![],
-            vec![field1.data().clone()],
+            vec![field1.into_data()],
         )
         .unwrap();
     }
@@ -2107,6 +2194,38 @@ mod tests {
     #[should_panic(expected = "Invalid UTF8 sequence at string index 1 (2..3)")]
     fn test_validate_large_utf8_content() {
         check_utf8_validation::<i64>(DataType::LargeUtf8);
+    }
+
+    /// Tests that offsets are at valid codepoint boundaries
+    fn check_utf8_char_boundary<T: ArrowNativeType>(data_type: DataType) {
+        let data_buffer = Buffer::from("🙀".as_bytes());
+        let offsets: Vec<T> = [0, 1, data_buffer.len()]
+            .iter()
+            .map(|&v| T::from_usize(v).unwrap())
+            .collect();
+
+        let offsets_buffer = Buffer::from_slice_ref(&offsets);
+        ArrayData::try_new(
+            data_type,
+            2,
+            None,
+            0,
+            vec![offsets_buffer, data_buffer],
+            vec![],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "incomplete utf-8 byte sequence from index 0")]
+    fn test_validate_utf8_char_boundary() {
+        check_utf8_char_boundary::<i32>(DataType::Utf8);
+    }
+
+    #[test]
+    #[should_panic(expected = "incomplete utf-8 byte sequence from index 0")]
+    fn test_validate_large_utf8_char_boundary() {
+        check_utf8_char_boundary::<i64>(DataType::LargeUtf8);
     }
 
     /// Test that the array of type `data_type` that has invalid indexes (out of bounds)
@@ -2236,7 +2355,7 @@ mod tests {
             None,
             0,
             vec![keys.data().buffers[0].clone()],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2262,7 +2381,7 @@ mod tests {
             None,
             0,
             vec![keys.data().buffers[0].clone()],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2287,7 +2406,7 @@ mod tests {
             None,
             0,
             vec![keys.data().buffers[0].clone()],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2313,7 +2432,7 @@ mod tests {
             None,
             0,
             vec![keys.data().buffers[0].clone()],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2336,7 +2455,7 @@ mod tests {
             None,
             0,
             vec![offsets_buffer],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2380,7 +2499,7 @@ mod tests {
             None,
             0,
             vec![offsets_buffer],
-            vec![values.data().clone()],
+            vec![values.into_data()],
         )
         .unwrap();
     }
@@ -2410,7 +2529,7 @@ mod tests {
                 None,
                 0,
                 vec![keys.data().buffers[0].clone()],
-                vec![values.data().clone()],
+                vec![values.into_data()],
             )
         };
 
@@ -2453,7 +2572,7 @@ mod tests {
             None,
             0,
             vec![type_ids],
-            vec![field1.data().clone(), field2.data().clone()],
+            vec![field1.into_data(), field2.into_data()],
         )
         .unwrap();
     }
@@ -2484,7 +2603,7 @@ mod tests {
             None,
             0,
             vec![type_ids],
-            vec![field1.data().clone(), field2.data().clone()],
+            vec![field1.into_data(), field2.into_data()],
         )
         .unwrap();
     }
@@ -2511,7 +2630,7 @@ mod tests {
             None,
             0,
             vec![type_ids], // need offsets buffer here too
-            vec![field1.data().clone(), field2.data().clone()],
+            vec![field1.into_data(), field2.into_data()],
         )
         .unwrap();
     }
@@ -2541,7 +2660,7 @@ mod tests {
             None,
             0,
             vec![type_ids, offsets],
-            vec![field1.data().clone(), field2.data().clone()],
+            vec![field1.into_data(), field2.into_data()],
         )
         .unwrap();
     }
@@ -2563,66 +2682,56 @@ mod tests {
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(10))
-            .unwrap();
+            .append_option(Some(10));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(true))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(true));
+        builder.append(true);
 
         // struct[1] = null
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(None)
-            .unwrap();
+            .append_option(None);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(None)
-            .unwrap();
-        builder.append(false).unwrap();
+            .append_option(None);
+        builder.append(false);
 
         // struct[2] = { a: null, b: false }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(None)
-            .unwrap();
+            .append_option(None);
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(false))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(false));
+        builder.append(true);
 
         // struct[3] = { a: 21, b: null }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(21))
-            .unwrap();
+            .append_option(Some(21));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(None)
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(None);
+        builder.append(true);
 
         // struct[4] = { a: 18, b: false }
         builder
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_option(Some(18))
-            .unwrap();
+            .append_option(Some(18));
         builder
             .field_builder::<BooleanBuilder>(1)
             .unwrap()
-            .append_option(Some(false))
-            .unwrap();
-        builder.append(true).unwrap();
+            .append_option(Some(false));
+        builder.append(true);
 
         let struct_array = builder.finish();
         let struct_array_slice = struct_array.slice(1, 3);
@@ -2713,16 +2822,15 @@ mod tests {
         let byte_width = 16;
         let mut fixed_size_builder =
             FixedSizeListBuilder::new(values_builder, byte_width);
-        let value_as_bytes = DecimalBuilder::from_i128_to_fixed_size_bytes(
+        let value_as_bytes = Decimal128Builder::from_i128_to_fixed_size_bytes(
             123456,
             fixed_size_builder.value_length() as usize,
         )
         .unwrap();
         fixed_size_builder
             .values()
-            .append_slice(value_as_bytes.as_slice())
-            .unwrap();
-        fixed_size_builder.append(true).unwrap();
+            .append_slice(value_as_bytes.as_slice());
+        fixed_size_builder.append(true);
         let fixed_size_array = fixed_size_builder.finish();
 
         // Build ArrayData for Decimal
@@ -2740,7 +2848,7 @@ mod tests {
 
     #[test]
     fn test_decimal_validation() {
-        let mut builder = DecimalBuilder::new(4, 10, 4);
+        let mut builder = Decimal128Builder::new(4, 10, 4);
         builder.append_value(10000).unwrap();
         builder.append_value(20000).unwrap();
         let array = builder.finish();
@@ -2766,11 +2874,22 @@ mod tests {
                 None,
                 0,
                 vec![offsets],
-                vec![values_sliced.data().clone()],
+                vec![values_sliced.into_data()],
             )
         };
 
         let err = data.validate_values().unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
+    }
+
+    #[test]
+    fn test_contains_nulls() {
+        let buffer: Buffer =
+            MutableBuffer::from_iter([false, false, false, true, true, false]).into();
+
+        assert!(contains_nulls(Some(&buffer), 0, 6));
+        assert!(contains_nulls(Some(&buffer), 0, 3));
+        assert!(!contains_nulls(Some(&buffer), 3, 2));
+        assert!(!contains_nulls(Some(&buffer), 0, 0));
     }
 }

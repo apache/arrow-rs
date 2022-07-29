@@ -182,6 +182,10 @@ impl RleEncoder {
         self.bit_writer.bytes_written()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.bit_writer.bytes_written() == 0
+    }
+
     #[inline]
     pub fn consume(mut self) -> Result<Vec<u8>> {
         self.flush()?;
@@ -435,6 +439,39 @@ impl RleDecoder {
     }
 
     #[inline(never)]
+    pub fn skip(&mut self, num_values: usize) -> Result<usize> {
+        let mut values_skipped = 0;
+        while values_skipped < num_values {
+            if self.rle_left > 0 {
+                let num_values = cmp::min(num_values - values_skipped, self.rle_left as usize);
+                self.rle_left -= num_values as u32;
+                values_skipped += num_values;
+            } else if self.bit_packed_left > 0 {
+                let mut num_values =
+                    cmp::min(num_values - values_skipped, self.bit_packed_left as usize);
+                let bit_reader =
+                    self.bit_reader.as_mut().expect("bit_reader should be set");
+
+                num_values = bit_reader.skip(
+                    num_values,
+                    self.bit_width as usize,
+                );
+                if num_values == 0 {
+                    // Handle writers which truncate the final block
+                    self.bit_packed_left = 0;
+                    continue;
+                }
+                self.bit_packed_left -= num_values as u32;
+                values_skipped += num_values;
+            } else if !self.reload() {
+                break;
+            }
+        }
+
+        Ok(values_skipped)
+    }
+
+    #[inline(never)]
     pub fn get_batch_with_dict<T>(
         &mut self,
         dict: &[T],
@@ -539,6 +576,23 @@ mod tests {
     }
 
     #[test]
+    fn test_rle_skip_int32() {
+        // Test data: 0-7 with bit width 3
+        // 00000011 10001000 11000110 11111010
+        let data = ByteBufferPtr::new(vec![0x03, 0x88, 0xC6, 0xFA]);
+        let mut decoder: RleDecoder = RleDecoder::new(3);
+        decoder.set_data(data);
+        let expected = vec![2, 3, 4, 5, 6, 7];
+        let skipped = decoder.skip(2).expect("skipping values");
+        assert_eq!(skipped, 2);
+
+        let mut buffer = vec![0; 6];
+        let remaining = decoder.get_batch::<i32>(&mut buffer).expect("getting remaining");
+        assert_eq!(remaining, 6);
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
     fn test_rle_consume_flush_buffer() {
         let data = vec![1, 1, 1, 2, 2, 3, 3, 3];
         let mut encoder1 = RleEncoder::new(3, 256);
@@ -597,6 +651,48 @@ mod tests {
     }
 
     #[test]
+    fn test_rle_skip_bool() {
+        // RLE test data: 50 1s followed by 50 0s
+        // 01100100 00000001 01100100 00000000
+        let data1 = ByteBufferPtr::new(vec![0x64, 0x01, 0x64, 0x00]);
+
+        // Bit-packing test data: alternating 1s and 0s, 100 total
+        // 100 / 8 = 13 groups
+        // 00011011 10101010 ... 00001010
+        let data2 = ByteBufferPtr::new(vec![
+            0x1B, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
+            0x0A,
+        ]);
+
+        let mut decoder: RleDecoder = RleDecoder::new(1);
+        decoder.set_data(data1);
+        let mut buffer = vec![true; 50];
+        let expected = vec![false; 50];
+
+        let skipped = decoder.skip(50).expect("skipping first 50");
+        assert_eq!(skipped, 50);
+        let remainder = decoder.get_batch::<bool>(&mut buffer).expect("getting remaining 50");
+        assert_eq!(remainder, 50);
+        assert_eq!(buffer, expected);
+
+        decoder.set_data(data2);
+        let mut buffer = vec![false; 50];
+        let mut expected = vec![];
+        for i in 0..50 {
+            if i % 2 == 0 {
+                expected.push(false);
+            } else {
+                expected.push(true);
+            }
+        }
+        let skipped = decoder.skip(50).expect("skipping first 50");
+        assert_eq!(skipped, 50);
+        let remainder = decoder.get_batch::<bool>(&mut buffer).expect("getting remaining 50");
+        assert_eq!(remainder, 50);
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
     fn test_rle_decode_with_dict_int32() {
         // Test RLE encoding: 3 0s followed by 4 1s followed by 5 2s
         // 00000110 00000000 00001000 00000001 00001010 00000010
@@ -628,6 +724,45 @@ mod tests {
             12,
         );
         assert!(result.is_ok());
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_rle_skip_dict() {
+        // Test RLE encoding: 3 0s followed by 4 1s followed by 5 2s
+        // 00000110 00000000 00001000 00000001 00001010 00000010
+        let dict = vec![10, 20, 30];
+        let data = ByteBufferPtr::new(vec![0x06, 0x00, 0x08, 0x01, 0x0A, 0x02]);
+        let mut decoder: RleDecoder = RleDecoder::new(3);
+        decoder.set_data(data);
+        let mut buffer = vec![0; 10];
+        let expected = vec![10, 20, 20, 20, 20, 30, 30, 30, 30, 30];
+        let skipped = decoder.skip(2).expect("skipping two values");
+        assert_eq!(skipped, 2);
+        let remainder = decoder.get_batch_with_dict::<i32>(&dict, &mut buffer, 10).expect("getting remainder");
+        assert_eq!(remainder, 10);
+        assert_eq!(buffer, expected);
+
+        // Test bit-pack encoding: 345345345455 (2 groups: 8 and 4)
+        // 011 100 101 011 100 101 011 100 101 100 101 101
+        // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
+        let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
+        let data = ByteBufferPtr::new(vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B]);
+        let mut decoder: RleDecoder = RleDecoder::new(3);
+        decoder.set_data(data);
+        let mut buffer = vec![""; 8];
+        let expected = vec![
+            "eee", "fff", "ddd", "eee", "fff", "eee", "fff",
+            "fff",
+        ];
+        let skipped = decoder.skip(4).expect("skipping four values");
+        assert_eq!(skipped, 4);
+        let remainder = decoder.get_batch_with_dict::<&str>(
+            dict.as_slice(),
+            buffer.as_mut_slice(),
+            8,
+        ).expect("getting remainder");
+        assert_eq!(remainder, 8);
         assert_eq!(buffer, expected);
     }
 
@@ -870,7 +1005,7 @@ mod tests {
             }
             let bit_width = bit_util::num_required_bits(values.len() as u64);
             assert!(bit_width < 64);
-            test_round_trip(&values[..], bit_width as u8);
+            test_round_trip(&values[..], bit_width);
         }
     }
 }

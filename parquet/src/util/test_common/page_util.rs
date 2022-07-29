@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::basic::Encoding;
-use crate::column::page::PageReader;
+use crate::column::page::{PageMetadata, PageReader};
 use crate::column::page::{Page, PageIterator};
 use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
@@ -100,11 +100,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
     }
 
     fn add_def_levels(&mut self, max_levels: i16, def_levels: &[i16]) {
-        assert!(
-            self.num_values == def_levels.len() as u32,
-            "Must call `add_rep_levels() first!`"
-        );
-
+        self.num_values = def_levels.len() as u32;
         self.def_levels_byte_len = self.add_levels(max_levels, def_levels);
     }
 
@@ -175,6 +171,14 @@ impl<P: Iterator<Item = Page>> InMemoryPageReader<P> {
 impl<P: Iterator<Item = Page> + Send> PageReader for InMemoryPageReader<P> {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         Ok(self.page_iter.next())
+    }
+
+    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
+        unimplemented!()
+    }
+
+    fn skip_next_page(&mut self) -> Result<()> {
+        unimplemented!()
     }
 }
 

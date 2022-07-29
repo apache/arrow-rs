@@ -17,7 +17,7 @@
 
 use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, BinaryBuilder, DecimalArray, FixedSizeBinaryArray,
+    Array, ArrayRef, BinaryArray, BinaryBuilder, Decimal128Array, FixedSizeBinaryArray,
     FixedSizeBinaryBuilder, IntervalDayTimeArray, IntervalDayTimeBuilder,
     IntervalYearMonthArray, IntervalYearMonthBuilder, LargeBinaryArray,
     LargeBinaryBuilder, LargeStringArray, LargeStringBuilder, StringArray, StringBuilder,
@@ -58,9 +58,9 @@ impl Converter<Vec<Option<FixedLenByteArray>>, FixedSizeBinaryArray>
         let mut builder = FixedSizeBinaryBuilder::new(source.len(), self.byte_width);
         for v in source {
             match v {
-                Some(array) => builder.append_value(array.data()),
+                Some(array) => builder.append_value(array.data())?,
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -76,29 +76,49 @@ impl DecimalArrayConverter {
     pub fn new(precision: i32, scale: i32) -> Self {
         Self { precision, scale }
     }
-
-    fn from_bytes_to_i128(b: &[u8]) -> i128 {
-        assert!(b.len() <= 16, "DecimalArray supports only up to size 16");
-        let first_bit = b[0] & 128u8 == 128u8;
-        let mut result = if first_bit { [255u8; 16] } else { [0u8; 16] };
-        for (i, v) in b.iter().enumerate() {
-            result[i + (16 - b.len())] = *v;
-        }
-        i128::from_be_bytes(result)
-    }
 }
 
-impl Converter<Vec<Option<FixedLenByteArray>>, DecimalArray> for DecimalArrayConverter {
-    fn convert(&self, source: Vec<Option<FixedLenByteArray>>) -> Result<DecimalArray> {
+impl Converter<Vec<Option<FixedLenByteArray>>, Decimal128Array>
+    for DecimalArrayConverter
+{
+    fn convert(&self, source: Vec<Option<FixedLenByteArray>>) -> Result<Decimal128Array> {
         let array = source
             .into_iter()
-            .map(|array| array.map(|array| Self::from_bytes_to_i128(array.data())))
-            .collect::<DecimalArray>()
+            .map(|array| array.map(|array| from_bytes_to_i128(array.data())))
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(self.precision as usize, self.scale as usize)?;
 
         Ok(array)
     }
 }
+
+impl Converter<Vec<Option<ByteArray>>, Decimal128Array> for DecimalArrayConverter {
+    fn convert(&self, source: Vec<Option<ByteArray>>) -> Result<Decimal128Array> {
+        let array = source
+            .into_iter()
+            .map(|array| array.map(|array| from_bytes_to_i128(array.data())))
+            .collect::<Decimal128Array>()
+            .with_precision_and_scale(self.precision as usize, self.scale as usize)?;
+
+        Ok(array)
+    }
+}
+
+// Convert the bytes array to i128.
+// The endian of the input bytes array must be big-endian.
+fn from_bytes_to_i128(b: &[u8]) -> i128 {
+    assert!(b.len() <= 16, "Decimal128Array supports only up to size 16");
+    let first_bit = b[0] & 128u8 == 128u8;
+    let mut result = if first_bit { [255u8; 16] } else { [0u8; 16] };
+    for (i, v) in b.iter().enumerate() {
+        result[i + (16 - b.len())] = *v;
+    }
+    // The bytes array are from parquet file and must be the big-endian.
+    // The endian is defined by parquet format, and the reference document
+    // https://github.com/apache/parquet-format/blob/54e53e5d7794d383529dd30746378f19a12afd58/src/main/thrift/parquet.thrift#L66
+    i128::from_be_bytes(result)
+}
+
 /// An Arrow Interval converter, which reads the first 4 bytes of a Parquet interval,
 /// and interprets it as an i32 value representing the Arrow YearMonth value
 pub struct IntervalYearMonthArrayConverter {}
@@ -117,7 +137,7 @@ impl Converter<Vec<Option<FixedLenByteArray>>, IntervalYearMonthArray>
                     array.data()[0..4].try_into().unwrap(),
                 )),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -142,7 +162,7 @@ impl Converter<Vec<Option<FixedLenByteArray>>, IntervalDayTimeArray>
                     array.data()[4..12].try_into().unwrap(),
                 )),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -179,7 +199,7 @@ impl Converter<Vec<Option<ByteArray>>, StringArray> for Utf8ArrayConverter {
             match v {
                 Some(array) => builder.append_value(array.as_utf8()?),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -200,7 +220,7 @@ impl Converter<Vec<Option<ByteArray>>, LargeStringArray> for LargeUtf8ArrayConve
             match v {
                 Some(array) => builder.append_value(array.as_utf8()?),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -216,7 +236,7 @@ impl Converter<Vec<Option<ByteArray>>, BinaryArray> for BinaryArrayConverter {
             match v {
                 Some(array) => builder.append_value(array.data()),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -232,7 +252,7 @@ impl Converter<Vec<Option<ByteArray>>, LargeBinaryArray> for LargeBinaryArrayCon
             match v {
                 Some(array) => builder.append_value(array.data()),
                 None => builder.append_null(),
-            }?
+            }
         }
 
         Ok(builder.finish())
@@ -270,11 +290,14 @@ pub type IntervalDayTimeConverter = ArrayRefConverter<
     IntervalDayTimeArrayConverter,
 >;
 
-pub type DecimalConverter = ArrayRefConverter<
+pub type DecimalFixedLengthByteArrayConverter = ArrayRefConverter<
     Vec<Option<FixedLenByteArray>>,
-    DecimalArray,
+    Decimal128Array,
     DecimalArrayConverter,
 >;
+
+pub type DecimalByteArrayConvert =
+    ArrayRefConverter<Vec<Option<ByteArray>>, Decimal128Array, DecimalArrayConverter>;
 
 pub struct FromConverter<S, T> {
     _source: PhantomData<S>,

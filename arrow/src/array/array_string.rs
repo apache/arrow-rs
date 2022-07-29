@@ -20,9 +20,10 @@ use std::fmt;
 use std::{any::Any, iter::FromIterator};
 
 use super::{
-    array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, GenericListArray,
-    GenericStringIter, OffsetSizeTrait,
+    array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData,
+    GenericBinaryArray, GenericListArray, GenericStringIter, OffsetSizeTrait,
 };
+use crate::array::array::ArrayAccessor;
 use crate::buffer::Buffer;
 use crate::util::bit_util;
 use crate::{buffer::MutableBuffer, datatypes::DataType};
@@ -211,7 +212,7 @@ where
     }
 }
 
-impl<'a, Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
+impl<Ptr, OffsetSize: OffsetSizeTrait> FromIterator<Option<Ptr>>
     for GenericStringArray<OffsetSize>
 where
     Ptr: AsRef<str>,
@@ -292,6 +293,45 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericStringArray<OffsetSize> {
     fn data(&self) -> &ArrayData {
         &self.data
     }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
+}
+
+impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor
+    for &'a GenericStringArray<OffsetSize>
+{
+    type Item = &'a str;
+
+    fn value(&self, index: usize) -> Self::Item {
+        GenericStringArray::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        GenericStringArray::value_unchecked(self, index)
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>>
+    for GenericStringArray<OffsetSize>
+{
+    fn from(v: GenericListArray<OffsetSize>) -> Self {
+        GenericStringArray::<OffsetSize>::from_list(v)
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>>
+    for GenericStringArray<OffsetSize>
+{
+    fn from(v: GenericBinaryArray<OffsetSize>) -> Self {
+        let builder = v
+            .into_data()
+            .into_builder()
+            .data_type(Self::get_data_type());
+        let data = unsafe { builder.build_unchecked() };
+        Self::from(data)
+    }
 }
 
 impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericStringArray<OffsetSize> {
@@ -336,6 +376,12 @@ impl<OffsetSize: OffsetSizeTrait> From<Vec<String>> for GenericStringArray<Offse
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> From<GenericStringArray<OffsetSize>> for ArrayData {
+    fn from(array: GenericStringArray<OffsetSize>) -> Self {
+        array.data
+    }
+}
+
 /// An array where each element is a variable-sized sequence of bytes representing a string
 /// whose maximum length (in bytes) is represented by a i32.
 ///
@@ -359,12 +405,6 @@ pub type StringArray = GenericStringArray<i32>;
 /// assert_eq!(array.value(2), "bar");
 /// ```
 pub type LargeStringArray = GenericStringArray<i64>;
-
-impl<T: OffsetSizeTrait> From<GenericListArray<T>> for GenericStringArray<T> {
-    fn from(v: GenericListArray<T>) -> Self {
-        GenericStringArray::<T>::from_list(v)
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -402,7 +442,7 @@ mod tests {
     #[should_panic(expected = "[Large]StringArray expects Datatype::[Large]Utf8")]
     fn test_string_array_from_int() {
         let array = LargeStringArray::from(vec!["a", "b"]);
-        drop(StringArray::from(array.data().clone()));
+        drop(StringArray::from(array.into_data()));
     }
 
     #[test]
@@ -436,15 +476,12 @@ mod tests {
         let string_builder = StringBuilder::new(3);
         let mut list_of_string_builder = ListBuilder::new(string_builder);
 
-        list_of_string_builder.values().append_value("foo").unwrap();
-        list_of_string_builder.values().append_value("bar").unwrap();
-        list_of_string_builder.append(true).unwrap();
+        list_of_string_builder.values().append_value("foo");
+        list_of_string_builder.values().append_value("bar");
+        list_of_string_builder.append(true);
 
-        list_of_string_builder
-            .values()
-            .append_value("foobar")
-            .unwrap();
-        list_of_string_builder.append(true).unwrap();
+        list_of_string_builder.values().append_value("foobar");
+        list_of_string_builder.append(true);
         let list_of_strings = list_of_string_builder.finish();
 
         assert_eq!(list_of_strings.len(), 2);

@@ -19,9 +19,11 @@
 //! purposes. See the `pretty` crate for additional functions for
 //! record batch pretty printing.
 
+use std::fmt::Write;
 use std::sync::Arc;
 
 use crate::array::Array;
+use crate::array::BasicDecimalArray;
 use crate::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, DataType, Field, Int16Type, Int32Type,
     Int64Type, Int8Type, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
@@ -208,7 +210,7 @@ macro_rules! make_string_hex {
             let mut tmp = "".to_string();
 
             for character in array.value($row) {
-                tmp += &format!("{:02x}", character);
+                let _ = write!(tmp, "{:02x}", character);
             }
 
             tmp
@@ -254,7 +256,7 @@ macro_rules! make_string_from_fixed_size_list {
 pub fn make_string_from_decimal(column: &Arc<dyn Array>, row: usize) -> Result<String> {
     let array = column
         .as_any()
-        .downcast_ref::<array::DecimalArray>()
+        .downcast_ref::<array::Decimal128Array>()
         .unwrap();
 
     let formatted_decimal = array.value_as_string(row);
@@ -432,7 +434,7 @@ fn union_to_string(
     let name = fields.get(field_idx).unwrap().name();
 
     let value = array_value_to_string(
-        &list.child(type_id),
+        list.child(type_id),
         match mode {
             UnionMode::Dense => list.value_offset(row) as usize,
             UnionMode::Sparse => row,

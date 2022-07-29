@@ -15,138 +15,20 @@
 # specific language governing permissions and limitations
 # under the License.
 
+# tests for workspace wide
 name: Rust
 
+# trigger for all PRs and changes to master
 on:
-  # always trigger
   push:
+    branches:
+      - master
   pull_request:
 
 jobs:
 
-  # build the library, a compilation step used by multiple steps below
-  linux-build-lib:
-    name: Build Libraries on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-    steps:
-      - uses: actions/checkout@v2
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Build Workspace
-        run: |
-          cargo build
-
-  # test the crate
-  linux-test:
-    name: Test Workspace on AMD64 Rust ${{ matrix.rust }}
-    needs: [ linux-build-lib ]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-        PARQUET_TEST_DATA: /__w/arrow-rs/arrow-rs/parquet-testing/data
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Run tests
-        run: |
-          # run tests on all workspace members with default feature list
-          cargo test
-      - name: Re-run tests with all supported features
-        run: |
-          cargo test -p arrow --features=force_validate,prettyprint
-      - name: Run examples
-        run: |
-          # Test arrow examples
-          cargo run --example builders
-          cargo run --example dynamic_types
-          cargo run --example read_csv
-          cargo run --example read_csv_infer_schema
-      - name: Test compilation of arrow library crate with different feature combinations
-        run: |
-          cargo check -p arrow
-          cargo check -p arrow --no-default-features
-      - name: Test compilation of arrow targets with different feature combinations
-        run: |
-          cargo check -p arrow --all-targets
-          cargo check -p arrow --no-default-features --all-targets
-          cargo check -p arrow --no-default-features --all-targets --features test_utils
-      - name: Re-run tests on arrow-flight with all features
-        run: |
-          cargo test -p arrow-flight --all-features
-      - name: Re-run tests on parquet crate with all features
-        run: |
-          cargo test -p parquet --all-features
-      - name: Test compilation of parquet library crate with different feature combinations
-        run: |
-          cargo check -p parquet
-          cargo check -p parquet --no-default-features
-          cargo check -p parquet --no-default-features --features arrow
-      - name: Test compilation of parquet targets with different feature combinations
-        run: |
-          cargo check -p parquet --all-targets
-          cargo check -p parquet --no-default-features --all-targets
-          cargo check -p parquet --no-default-features --features arrow --all-targets
-      - name: Test compilation of parquet_derive macro with different feature combinations
-        run: |
-          cargo check -p parquet_derive
-
-  # test the --features "simd" of the arrow crate. This requires nightly.
-  linux-test-simd:
-    name: Test SIMD on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ nightly ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Run tests
-        run: |
-          cargo test -p arrow --features "simd"
-      - name: Check compilation with simd features
-        run: |
-          cargo check -p arrow --features simd
-          cargo check -p arrow --features simd --all-targets
-
+  # Check workspace wide compile and test with default features for
+  # mac and windows
   windows-and-macos:
     name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
@@ -158,75 +40,19 @@ jobs:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      # TODO: this won't cache anything, which is expensive. Setup this action
-      # with a OS-dependent path.
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
+          rustup toolchain install ${{ matrix.rust }} --no-self-update
           rustup default ${{ matrix.rust }}
       - name: Run tests
         shell: bash
         run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
           cargo test
 
-  clippy:
-    name: Clippy
-    needs: [ linux-build-lib ]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Setup Clippy
-        run: |
-          rustup component add clippy
-      - name: Run clippy
-        run: |
-          cargo clippy --features test_common --features prettyprint  --features=async --all-targets --workspace -- -D warnings
 
-  check_benches:
-    name: Check Benchmarks (but don't run them)
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Check benchmarks
-        run: |
-          cargo check --benches --workspace --features test_common,prettyprint,async,experimental
-
+  # Run cargo fmt for all crates
   lint:
     name: Lint (cargo fmt)
     runs-on: ubuntu-latest
@@ -261,22 +87,9 @@ jobs:
         uses: actions/cache@v3
         with:
           path: /home/runner/.cargo
-          # this key is not equal because the user is different than on a container (runner vs github)
           key: cargo-coverage-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /home/runner/target
-          # this key is not equal because coverage uses different compilation flags.
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-coverage-cache3-${{ matrix.rust }}-
       - name: Run coverage
         run: |
-          export CARGO_HOME="/home/runner/.cargo"
-          export CARGO_TARGET_DIR="/home/runner/target"
-
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-
           rustup toolchain install stable
           rustup default stable
           cargo install --version 0.18.2 cargo-tarpaulin
@@ -284,76 +97,3 @@ jobs:
       - name: Report coverage
         continue-on-error: true
         run: bash <(curl -s https://codecov.io/bash)
-
-  # test the arrow crate builds against wasm32 in stable rust
-  wasm32-build:
-    name: Build wasm32 on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ nightly ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        ARROW_TEST_DATA: /__w/arrow-rs/arrow-rs/testing/data
-        PARQUET_TEST_DATA: /__w/arrow/arrow/parquet-testing/data
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /github/home/.cargo
-          key: cargo-wasm32-cache3-
-      - name: Cache Rust dependencies
-        uses: actions/cache@v3
-        with:
-          path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-wasm32-cache3-${{ matrix.rust }}
-      - name: Setup Rust toolchain for WASM
-        run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup override set ${{ matrix.rust }}
-          rustup target add wasm32-unknown-unknown
-          rustup target add wasm32-wasi
-      - name: Build arrow crate
-        run: |
-          cd arrow
-          cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
-          cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
-
-  # test doc links still work
-  docs:
-    name: Docs are clean on AMD64 Rust ${{ matrix.rust }}
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ nightly ]
-    container:
-      image: ${{ matrix.arch }}/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        RUSTDOCFLAGS: "-Dwarnings"
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Install python dev
-        run: |
-          apt update
-          apt install -y libpython3.9-dev
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
-      - name: Run cargo doc
-        run: |
-          cargo doc --document-private-items --no-deps --workspace --all-features

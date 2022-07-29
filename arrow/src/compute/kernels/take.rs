@@ -19,6 +19,8 @@
 
 use std::{ops::AddAssign, sync::Arc};
 
+use crate::array::BasicDecimalArray;
+
 use crate::buffer::{Buffer, MutableBuffer};
 use crate::compute::util::{
     take_value_indices_from_fixed_size_list, take_value_indices_from_list,
@@ -147,7 +149,8 @@ where
             Ok(Arc::new(take_boolean(values, indices)?))
         }
         DataType::Decimal(_, _) => {
-            let decimal_values = values.as_any().downcast_ref::<DecimalArray>().unwrap();
+            let decimal_values =
+                values.as_any().downcast_ref::<Decimal128Array>().unwrap();
             Ok(Arc::new(take_decimal128(decimal_values, indices)?))
         }
         DataType::Int8 => downcast_take!(Int8Type, values, indices),
@@ -504,9 +507,9 @@ where
 
 /// `take` implementation for decimal arrays
 fn take_decimal128<IndexType>(
-    decimal_values: &DecimalArray,
+    decimal_values: &Decimal128Array,
     indices: &PrimitiveArray<IndexType>,
-) -> Result<DecimalArray>
+) -> Result<Decimal128Array>
 where
     IndexType: ArrowNumericType,
     IndexType::Native: ToPrimitive,
@@ -531,9 +534,9 @@ where
             let t: Result<Option<_>> = t.map(|t| t.flatten());
             t
         })
-        .collect::<Result<DecimalArray>>()?
+        .collect::<Result<Decimal128Array>>()?
         // PERF: we could avoid re-validating that the data in
-        // DecimalArray was in range as we know it came from a valid DecimalArray
+        // Decimal128Array was in range as we know it came from a valid Decimal128Array
         .with_precision_and_scale(decimal_values.precision(), decimal_values.scale())
 }
 
@@ -597,6 +600,40 @@ where
     Ok(PrimitiveArray::<T>::from(data))
 }
 
+fn take_bits<IndexType>(
+    values: &Buffer,
+    values_offset: usize,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<Buffer>
+where
+    IndexType: ArrowNumericType,
+    IndexType::Native: ToPrimitive,
+{
+    let len = indices.len();
+    let values_slice = values.as_slice();
+    let mut output_buffer = MutableBuffer::new_null(len);
+    let output_slice = output_buffer.as_slice_mut();
+
+    indices
+        .iter()
+        .enumerate()
+        .try_for_each::<_, Result<()>>(|(i, index)| {
+            if let Some(index) = index {
+                let index = ToPrimitive::to_usize(&index).ok_or_else(|| {
+                    ArrowError::ComputeError("Cast to usize failed".to_string())
+                })?;
+
+                if bit_util::get_bit(values_slice, values_offset + index) {
+                    bit_util::set_bit(output_slice, i);
+                }
+            }
+
+            Ok(())
+        })?;
+
+    Ok(output_buffer.into())
+}
+
 /// `take` implementation for boolean arrays
 fn take_boolean<IndexType>(
     values: &BooleanArray,
@@ -606,57 +643,15 @@ where
     IndexType: ArrowNumericType,
     IndexType::Native: ToPrimitive,
 {
-    let data_len = indices.len();
-
-    let num_byte = bit_util::ceil(data_len, 8);
-    let mut val_buf = MutableBuffer::from_len_zeroed(num_byte);
-
-    let val_slice = val_buf.as_slice_mut();
-
-    let null_count = values.null_count();
-
-    let nulls = if null_count == 0 {
-        (0..data_len).try_for_each::<_, Result<()>>(|i| {
-            let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
-                ArrowError::ComputeError("Cast to usize failed".to_string())
-            })?;
-
-            if values.value(index) {
-                bit_util::set_bit(val_slice, i);
-            }
-
-            Ok(())
-        })?;
-
-        indices.data_ref().null_buffer().cloned()
-    } else {
-        let mut null_buf = MutableBuffer::new(num_byte).with_bitset(num_byte, true);
-        let null_slice = null_buf.as_slice_mut();
-
-        (0..data_len).try_for_each::<_, Result<()>>(|i| {
-            let index = ToPrimitive::to_usize(&indices.value(i)).ok_or_else(|| {
-                ArrowError::ComputeError("Cast to usize failed".to_string())
-            })?;
-
-            if values.is_null(index) {
-                bit_util::unset_bit(null_slice, i);
-            } else if values.value(index) {
-                bit_util::set_bit(val_slice, i);
-            }
-
-            Ok(())
-        })?;
-
-        match indices.data_ref().null_buffer() {
-            Some(buffer) => Some(buffer_bin_and(
-                buffer,
-                indices.offset(),
-                &null_buf.into(),
-                0,
-                indices.len(),
-            )),
-            None => Some(null_buf.into()),
+    let val_buf = take_bits(values.values(), values.offset(), indices)?;
+    let null_buf = match values.data().null_buffer() {
+        Some(buf) if values.null_count() > 0 => {
+            Some(take_bits(buf, values.offset(), indices)?)
         }
+        _ => indices
+            .data()
+            .null_buffer()
+            .map(|b| b.bit_slice(indices.offset(), indices.len())),
     };
 
     let data = unsafe {
@@ -664,9 +659,9 @@ where
             DataType::Boolean,
             indices.len(),
             None,
-            nulls,
+            null_buf,
             0,
-            vec![val_buf.into()],
+            vec![val_buf],
             vec![],
         )
     };
@@ -832,7 +827,7 @@ where
         .len(indices.len())
         .null_bit_buffer(Some(null_buf.into()))
         .offset(0)
-        .add_child_data(taken.data().clone())
+        .add_child_data(taken.into_data())
         .add_buffer(value_offsets);
 
     let list_data = unsafe { list_data.build_unchecked() };
@@ -875,7 +870,7 @@ where
         .len(indices.len())
         .null_bit_buffer(Some(null_buf.into()))
         .offset(0)
-        .add_child_data(taken.data().clone());
+        .add_child_data(taken.into_data());
 
     let list_data = unsafe { list_data.build_unchecked() };
 
@@ -982,13 +977,13 @@ mod tests {
     ) -> Result<()> {
         let output = data
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(*precision, *scale)
             .unwrap();
 
         let expected = expected_data
             .into_iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(*precision, *scale)
             .unwrap();
 
@@ -1082,14 +1077,12 @@ mod tests {
             struct_builder
                 .field_builder::<BooleanBuilder>(0)
                 .unwrap()
-                .append_option(value.and_then(|v| v.0))
-                .unwrap();
+                .append_option(value.and_then(|v| v.0));
             struct_builder
                 .field_builder::<Int32Builder>(1)
                 .unwrap()
-                .append_option(value.and_then(|v| v.1))
-                .unwrap();
-            struct_builder.append(value.is_some()).unwrap();
+                .append_option(value.and_then(|v| v.1));
+            struct_builder.append(value.is_some());
         }
         struct_builder.finish()
     }
@@ -1462,6 +1455,52 @@ mod tests {
             &index,
             None,
             vec![Some(false), None, None, Some(false), Some(true)],
+        );
+    }
+
+    #[test]
+    fn test_take_bool_nullable_index() {
+        // indices where the masked invalid elements would be out of bounds
+        let index_data = ArrayData::try_new(
+            DataType::Int32,
+            6,
+            Some(Buffer::from_iter(vec![
+                false, true, false, true, false, true,
+            ])),
+            0,
+            vec![Buffer::from_iter(vec![99, 0, 999, 1, 9999, 2])],
+            vec![],
+        )
+        .unwrap();
+        let index = UInt32Array::from(index_data);
+        test_take_boolean_arrays(
+            vec![Some(true), None, Some(false)],
+            &index,
+            None,
+            vec![None, Some(true), None, None, None, Some(false)],
+        );
+    }
+
+    #[test]
+    fn test_take_bool_nullable_index_nonnull_values() {
+        // indices where the masked invalid elements would be out of bounds
+        let index_data = ArrayData::try_new(
+            DataType::Int32,
+            6,
+            Some(Buffer::from_iter(vec![
+                false, true, false, true, false, true,
+            ])),
+            0,
+            vec![Buffer::from_iter(vec![99, 0, 999, 1, 9999, 2])],
+            vec![],
+        )
+        .unwrap();
+        let index = UInt32Array::from(index_data);
+        test_take_boolean_arrays(
+            vec![Some(true), Some(true), Some(false)],
+            &index,
+            None,
+            vec![None, Some(true), None, Some(true), None, Some(false)],
         );
     }
 
@@ -1993,7 +2032,7 @@ mod tests {
         dict_builder.append("foo").unwrap();
         dict_builder.append("bar").unwrap();
         dict_builder.append("").unwrap();
-        dict_builder.append_null().unwrap();
+        dict_builder.append_null();
         dict_builder.append("foo").unwrap();
         dict_builder.append("bar").unwrap();
         dict_builder.append("bar").unwrap();

@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use arrow::array as arrow_array;
 use arrow::array::ArrayRef;
+use arrow::array::BasicDecimalArray;
 use arrow::datatypes::{DataType as ArrowDataType, IntervalUnit, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use arrow_array::Array;
@@ -32,7 +33,7 @@ use super::schema::{
     decimal_length_from_precision,
 };
 
-use crate::column::writer::ColumnWriter;
+use crate::column::writer::{get_column_writer, ColumnWriter};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::RowGroupMetaDataPtr;
 use crate::file::properties::WriterProperties;
@@ -42,12 +43,71 @@ use levels::{calculate_array_levels, LevelInfo};
 
 mod levels;
 
+/// An object-safe API for writing an [`ArrayRef`]
+trait ArrayWriter {
+    fn write(&mut self, array: &ArrayRef, levels: LevelInfo) -> Result<()>;
+
+    fn close(&mut self) -> Result<()>;
+}
+
+/// Fallback implementation for writing an [`ArrayRef`] that uses [`SerializedColumnWriter`]
+struct ColumnArrayWriter<'a>(Option<SerializedColumnWriter<'a>>);
+
+impl<'a> ArrayWriter for ColumnArrayWriter<'a> {
+    fn write(&mut self, array: &ArrayRef, levels: LevelInfo) -> Result<()> {
+        write_leaf(self.0.as_mut().unwrap().untyped(), array, levels)?;
+        Ok(())
+    }
+
+    fn close(&mut self) -> Result<()> {
+        self.0.take().unwrap().close()
+    }
+}
+
+fn get_writer<'a, W: Write>(
+    row_group_writer: &'a mut SerializedRowGroupWriter<'_, W>,
+) -> Result<Box<dyn ArrayWriter + 'a>> {
+    let array_writer = row_group_writer
+        .next_column_with_factory(|descr, props, page_writer, on_close| {
+            // TODO: Special case array readers (#1764)
+
+            let column_writer = get_column_writer(descr, props.clone(), page_writer);
+            let serialized_writer =
+                SerializedColumnWriter::new(column_writer, Some(on_close));
+
+            Ok(Box::new(ColumnArrayWriter(Some(serialized_writer))))
+        })?
+        .expect("Unable to get column writer");
+    Ok(array_writer)
+}
+
 /// Arrow writer
 ///
 /// Writes Arrow `RecordBatch`es to a Parquet writer, buffering up `RecordBatch` in order
 /// to produce row groups with `max_row_group_size` rows. Any remaining rows will be
 /// flushed on close, leading the final row group in the output file to potentially
 /// contain fewer than `max_row_group_size` rows
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use bytes::Bytes;
+/// # use arrow::array::{ArrayRef, Int64Array};
+/// # use arrow::record_batch::RecordBatch;
+/// # use parquet::arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader};
+/// let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
+/// let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
+///
+/// let mut buffer = Vec::new();
+/// let mut writer = ArrowWriter::try_new(&mut buffer, to_write.schema(), None).unwrap();
+/// writer.write(&to_write).unwrap();
+/// writer.close().unwrap();
+///
+/// let mut reader = ParquetFileArrowReader::try_new(Bytes::from(buffer)).unwrap();
+/// let mut reader = reader.get_record_reader(1024).unwrap();
+/// let read = reader.next().unwrap().unwrap();
+///
+/// assert_eq!(to_write, read);
+/// ```
 pub struct ArrowWriter<W: Write> {
     /// Underlying Parquet writer
     writer: SerializedFileWriter<W>,
@@ -207,17 +267,6 @@ impl<W: Write> ArrowWriter<W> {
     }
 }
 
-/// Convenience method to get the next ColumnWriter from the RowGroupWriter
-#[inline]
-fn get_col_writer<'a, W: Write>(
-    row_group_writer: &'a mut SerializedRowGroupWriter<'_, W>,
-) -> Result<SerializedColumnWriter<'a>> {
-    let col_writer = row_group_writer
-        .next_column()?
-        .expect("Unable to get column writer");
-    Ok(col_writer)
-}
-
 fn write_leaves<W: Write>(
     row_group_writer: &mut SerializedRowGroupWriter<'_, W>,
     arrays: &[ArrayRef],
@@ -254,16 +303,16 @@ fn write_leaves<W: Write>(
         | ArrowDataType::Utf8
         | ArrowDataType::LargeUtf8
         | ArrowDataType::Decimal(_, _)
+        | ArrowDataType::Decimal256(_, _)
         | ArrowDataType::FixedSizeBinary(_) => {
-            let mut col_writer = get_col_writer(row_group_writer)?;
+            let mut writer = get_writer(row_group_writer)?;
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
-                write_leaf(
-                    col_writer.untyped(),
+                writer.write(
                     array,
                     levels.pop().expect("Levels exhausted"),
                 )?;
             }
-            col_writer.close()?;
+            writer.close()?;
             Ok(())
         }
         ArrowDataType::List(_) | ArrowDataType::LargeList(_) => {
@@ -316,17 +365,16 @@ fn write_leaves<W: Write>(
             Ok(())
         }
         ArrowDataType::Dictionary(_, value_type) => {
-            let mut col_writer = get_col_writer(row_group_writer)?;
+            let mut writer = get_writer(row_group_writer)?;
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
                 // cast dictionary to a primitive
                 let array = arrow::compute::cast(array, value_type)?;
-                write_leaf(
-                    col_writer.untyped(),
+                writer.write(
                     &array,
                     levels.pop().expect("Levels exhausted"),
                 )?;
             }
-            col_writer.close()?;
+            writer.close()?;
             Ok(())
         }
         ArrowDataType::Float16 => Err(ParquetError::ArrowError(
@@ -550,7 +598,7 @@ fn write_leaf(
                 ArrowDataType::Decimal(_, _) => {
                     let array = column
                         .as_any()
-                        .downcast_ref::<arrow_array::DecimalArray>()
+                        .downcast_ref::<arrow_array::Decimal128Array>()
                         .unwrap();
                     get_decimal_array_slice(array, indices)
                 }
@@ -667,7 +715,7 @@ fn get_interval_dt_array_slice(
 }
 
 fn get_decimal_array_slice(
-    array: &arrow_array::DecimalArray,
+    array: &arrow_array::Decimal128Array,
     indices: &[usize],
 ) -> Vec<FixedLenByteArray> {
     let mut values = Vec::with_capacity(indices.len());
@@ -817,7 +865,7 @@ mod tests {
         ))))
         .len(5)
         .add_buffer(a_value_offsets)
-        .add_child_data(a_values.data().clone())
+        .add_child_data(a_values.into_data())
         .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
         .build()
         .unwrap();
@@ -858,7 +906,7 @@ mod tests {
         ))))
         .len(5)
         .add_buffer(a_value_offsets)
-        .add_child_data(a_values.data().clone())
+        .add_child_data(a_values.into_data())
         .build()
         .unwrap();
         let a = ListArray::from(a_list_data);
@@ -910,7 +958,7 @@ mod tests {
         let decimal_values = vec![10_000, 50_000, 0, -100]
             .into_iter()
             .map(Some)
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(5, 2)
             .unwrap();
 
@@ -1089,14 +1137,14 @@ mod tests {
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
             .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
-            .add_child_data(c.data().clone())
+            .add_child_data(c.into_data())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
             .null_bit_buffer(Some(Buffer::from(vec![0b00101111])))
-            .add_child_data(b.data().clone())
+            .add_child_data(b.into_data())
             .build()
             .unwrap();
         let a = StructArray::from(a_data);
@@ -1122,13 +1170,13 @@ mod tests {
         let c = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
-            .add_child_data(c.data().clone())
+            .add_child_data(c.into_data())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
-            .add_child_data(b.data().clone())
+            .add_child_data(b.into_data())
             .build()
             .unwrap();
         let a = StructArray::from(a_data);
@@ -1155,14 +1203,14 @@ mod tests {
         let b_data = ArrayDataBuilder::new(field_b.data_type().clone())
             .len(6)
             .null_bit_buffer(Some(Buffer::from(vec![0b00100111])))
-            .add_child_data(c.data().clone())
+            .add_child_data(c.into_data())
             .build()
             .unwrap();
         let b = StructArray::from(b_data);
         // a intentionally has no null buffer, to test that this is handled correctly
         let a_data = ArrayDataBuilder::new(field_a.data_type().clone())
             .len(6)
-            .add_child_data(b.data().clone())
+            .add_child_data(b.into_data())
             .build()
             .unwrap();
         let a = StructArray::from(a_data);
@@ -1495,7 +1543,7 @@ mod tests {
     fn fixed_size_binary_single_column() {
         let mut builder = FixedSizeBinaryBuilder::new(16, 4);
         builder.append_value(b"0123").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(b"8910").unwrap();
         builder.append_value(b"1112").unwrap();
         let array = Arc::new(builder.finish());
@@ -1538,7 +1586,7 @@ mod tests {
         .len(3)
         .add_buffer(a_value_offsets)
         .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
-        .add_child_data(a_values.data().clone())
+        .add_child_data(a_values.into_data())
         .build()
         .unwrap();
 
@@ -1569,7 +1617,7 @@ mod tests {
         .len(5)
         .add_buffer(a_value_offsets)
         .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
-        .add_child_data(a_values.data().clone())
+        .add_child_data(a_values.into_data())
         .build()
         .unwrap();
 
@@ -1593,7 +1641,7 @@ mod tests {
         ))))
         .len(5)
         .add_buffer(a_value_offsets)
-        .add_child_data(a_values.data().clone())
+        .add_child_data(a_values.into_data())
         .null_bit_buffer(Some(Buffer::from(vec![0b00011011])))
         .build()
         .unwrap();
@@ -1675,7 +1723,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(22345678).unwrap();
         builder.append(12345678).unwrap();
         let d = builder.finish();
@@ -1811,77 +1859,67 @@ mod tests {
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_value(1)
-            .unwrap();
+            .append_value(1);
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_value(2)
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_value(2);
+        values.append(true);
+        list_builder.append(true);
 
         // []
-        list_builder.append(true).unwrap();
+        list_builder.append(true);
 
         // null
-        list_builder.append(false).unwrap();
+        list_builder.append(false);
 
         // [null, null]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
+            .append_null();
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(false).unwrap();
+            .append_null();
+        values.append(false);
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
+            .append_null();
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(false).unwrap();
-        list_builder.append(true).unwrap();
+            .append_null();
+        values.append(false);
+        list_builder.append(true);
 
         // [{a: null, b: 3}]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_null()
-            .unwrap();
+            .append_null();
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_value(3)
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_value(3);
+        values.append(true);
+        list_builder.append(true);
 
         // [{a: 2, b: null}]
         let values = list_builder.values();
         values
             .field_builder::<Int32Builder>(0)
             .unwrap()
-            .append_value(2)
-            .unwrap();
+            .append_value(2);
         values
             .field_builder::<Int32Builder>(1)
             .unwrap()
-            .append_null()
-            .unwrap();
-        values.append(true).unwrap();
-        list_builder.append(true).unwrap();
+            .append_null();
+        values.append(true);
+        list_builder.append(true);
 
         let array = Arc::new(list_builder.finish());
 
@@ -1993,7 +2031,7 @@ mod tests {
             .null_bit_buffer(Some(Buffer::from_iter(vec![
                 true, false, true, false, true,
             ])))
-            .child_data(vec![struct_a_array.data().clone()])
+            .child_data(vec![struct_a_array.into_data()])
             .build()
             .unwrap();
 
@@ -2017,7 +2055,7 @@ mod tests {
         let list_data = ArrayDataBuilder::new(list_a.data_type().clone())
             .len(2)
             .add_buffer(Buffer::from_iter(vec![0_i32, 4_i32, 5_i32]))
-            .child_data(vec![struct_a_array.data().clone()])
+            .child_data(vec![struct_a_array.into_data()])
             .build()
             .unwrap();
 

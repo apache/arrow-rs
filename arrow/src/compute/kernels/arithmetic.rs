@@ -26,20 +26,30 @@ use std::ops::{Add, Div, Mul, Neg, Rem, Sub};
 
 use num::{One, Zero};
 
+use crate::array::*;
 use crate::buffer::Buffer;
 #[cfg(feature = "simd")]
 use crate::buffer::MutableBuffer;
 use crate::compute::kernels::arity::unary;
+use crate::compute::unary_dyn;
 use crate::compute::util::combine_option_bitmap;
 use crate::datatypes;
-use crate::datatypes::ArrowNumericType;
+use crate::datatypes::{
+    ArrowNumericType, DataType, Date32Type, Date64Type, IntervalDayTimeType,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType,
+};
+use crate::datatypes::{
+    Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type,
+    UInt32Type, UInt64Type, UInt8Type,
+};
 use crate::error::{ArrowError, Result};
-use crate::{array::*, util::bit_util};
 use num::traits::Pow;
+use std::any::type_name;
 #[cfg(feature = "simd")]
 use std::borrow::BorrowMut;
 #[cfg(feature = "simd")]
 use std::slice::{ChunksExact, ChunksExactMut};
+use std::sync::Arc;
 
 /// Helper function to perform math lambda function on values from two arrays. If either
 /// left or right value is null then the output value is also null, so `1 + null` is
@@ -48,14 +58,15 @@ use std::slice::{ChunksExact, ChunksExactMut};
 /// # Errors
 ///
 /// This function errors if the arrays have different lengths
-pub fn math_op<T, F>(
-    left: &PrimitiveArray<T>,
-    right: &PrimitiveArray<T>,
+pub fn math_op<LT, RT, F>(
+    left: &PrimitiveArray<LT>,
+    right: &PrimitiveArray<RT>,
     op: F,
-) -> Result<PrimitiveArray<T>>
+) -> Result<PrimitiveArray<LT>>
 where
-    T: ArrowNumericType,
-    F: Fn(T::Native, T::Native) -> T::Native,
+    LT: ArrowNumericType,
+    RT: ArrowNumericType,
+    F: Fn(LT::Native, RT::Native) -> LT::Native,
 {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
@@ -80,7 +91,7 @@ where
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            T::DATA_TYPE,
+            LT::DATA_TYPE,
             left.len(),
             None,
             null_bit_buffer,
@@ -89,7 +100,7 @@ where
             vec![],
         )
     };
-    Ok(PrimitiveArray::<T>::from(data))
+    Ok(PrimitiveArray::<LT>::from(data))
 }
 
 /// Helper function for operations where a valid `0` on the right array should
@@ -119,36 +130,60 @@ where
     let null_bit_buffer =
         combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
 
-    let buffer = if let Some(b) = &null_bit_buffer {
-        let values = left.values().iter().zip(right.values()).enumerate().map(
-            |(i, (left, right))| {
-                let is_valid = unsafe { bit_util::get_bit_raw(b.as_ptr(), i) };
-                if is_valid {
-                    if right.is_zero() {
-                        Err(ArrowError::DivideByZero)
-                    } else {
-                        Ok(op(*left, *right))
-                    }
+    math_checked_divide_op_on_iters(
+        left.into_iter(),
+        right.into_iter(),
+        op,
+        left.len(),
+        null_bit_buffer,
+    )
+}
+
+/// Helper function for operations where a valid `0` on the right array should
+/// result in an [ArrowError::DivideByZero], namely the division and modulo operations
+///
+/// # Errors
+///
+/// This function errors if:
+/// * the arrays have different lengths
+/// * there is an element where both left and right values are valid and the right value is `0`
+fn math_checked_divide_op_on_iters<T, F>(
+    left: impl Iterator<Item = Option<T::Native>>,
+    right: impl Iterator<Item = Option<T::Native>>,
+    op: F,
+    len: usize,
+    null_bit_buffer: Option<Buffer>,
+) -> Result<PrimitiveArray<T>>
+where
+    T: ArrowNumericType,
+    T::Native: One + Zero,
+    F: Fn(T::Native, T::Native) -> T::Native,
+{
+    let buffer = if null_bit_buffer.is_some() {
+        let values = left.zip(right).map(|(left, right)| {
+            if let (Some(l), Some(r)) = (left, right) {
+                if r.is_zero() {
+                    Err(ArrowError::DivideByZero)
                 } else {
-                    Ok(T::default_value())
+                    Ok(op(l, r))
                 }
-            },
-        );
+            } else {
+                Ok(T::default_value())
+            }
+        });
         // Safety: Iterator comes from a PrimitiveArray which reports its size correctly
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     } else {
         // no value is null
-        let values = left
-            .values()
-            .iter()
-            .zip(right.values())
-            .map(|(left, right)| {
+        let values = left.map(|l| l.unwrap()).zip(right.map(|r| r.unwrap())).map(
+            |(left, right)| {
                 if right.is_zero() {
                     Err(ArrowError::DivideByZero)
                 } else {
-                    Ok(op(*left, *right))
+                    Ok(op(left, right))
                 }
-            });
+            },
+        );
         // Safety: Iterator comes from a PrimitiveArray which reports its size correctly
         unsafe { Buffer::try_from_trusted_len_iter(values) }
     }?;
@@ -156,7 +191,7 @@ where
     let data = unsafe {
         ArrayData::new_unchecked(
             T::DATA_TYPE,
-            left.len(),
+            len,
             None,
             null_bit_buffer,
             0,
@@ -423,6 +458,306 @@ where
     Ok(PrimitiveArray::<T>::from(data))
 }
 
+/// Applies $OP to $LEFT and $RIGHT which are two dictionaries which have (the same) key type $KT
+macro_rules! typed_dict_op {
+    ($LEFT: expr, $RIGHT: expr, $OP: expr, $KT: tt, $MATH_OP: ident) => {{
+        match ($LEFT.value_type(), $RIGHT.value_type()) {
+            (DataType::Int8, DataType::Int8) => {
+                let array = $MATH_OP::<$KT, Int8Type, _>($LEFT, $RIGHT, $OP)?;
+                Ok(Arc::new(array))
+            }
+            (DataType::Int16, DataType::Int16) => {
+                let array = $MATH_OP::<$KT, Int16Type, _>($LEFT, $RIGHT, $OP)?;
+                Ok(Arc::new(array))
+            }
+            (DataType::Int32, DataType::Int32) => {
+                let array = $MATH_OP::<$KT, Int32Type, _>($LEFT, $RIGHT, $OP)?;
+                Ok(Arc::new(array))
+            }
+            (DataType::Int64, DataType::Int64) => {
+                let array = $MATH_OP::<$KT, Int64Type, _>($LEFT, $RIGHT, $OP)?;
+                Ok(Arc::new(array))
+            }
+            (DataType::UInt8, DataType::UInt8) => {
+                let array = $MATH_OP::<$KT, UInt8Type, _>($LEFT, $RIGHT, $OP)?;
+                Ok(Arc::new(array))
+            }
+            (DataType::UInt16, DataType::UInt16) => {
+                let array = $MATH_OP::<$KT, UInt16Type, _>($LEFT, $RIGHT, $OP)?;
+                Ok(Arc::new(array))
+            }
+            (DataType::UInt32, DataType::UInt32) => {
+                let array = $MATH_OP::<$KT, UInt32Type, _>($LEFT, $RIGHT, $OP)?;
+                Ok(Arc::new(array))
+            }
+            (DataType::UInt64, DataType::UInt64) => {
+                let array = $MATH_OP::<$KT, UInt64Type, _>($LEFT, $RIGHT, $OP)?;
+                Ok(Arc::new(array))
+            }
+            (DataType::Float32, DataType::Float32) => {
+                let array = $MATH_OP::<$KT, Float32Type, _>($LEFT, $RIGHT, $OP)?;
+                Ok(Arc::new(array))
+            }
+            (DataType::Float64, DataType::Float64) => {
+                let array = $MATH_OP::<$KT, Float64Type, _>($LEFT, $RIGHT, $OP)?;
+                Ok(Arc::new(array))
+            }
+            (t1, t2) => Err(ArrowError::CastError(format!(
+                "Cannot perform arithmetic operation on two dictionary arrays of different value types ({} and {})",
+                t1, t2
+            ))),
+        }
+    }};
+}
+
+macro_rules! typed_dict_math_op {
+   // Applies `LEFT OP RIGHT` when `LEFT` and `RIGHT` both are `DictionaryArray`
+    ($LEFT: expr, $RIGHT: expr, $OP: expr, $MATH_OP: ident) => {{
+        match ($LEFT.data_type(), $RIGHT.data_type()) {
+            (DataType::Dictionary(left_key_type, _), DataType::Dictionary(right_key_type, _))=> {
+                match (left_key_type.as_ref(), right_key_type.as_ref()) {
+                    (DataType::Int8, DataType::Int8) => {
+                        let left = as_dictionary_array::<Int8Type>($LEFT);
+                        let right = as_dictionary_array::<Int8Type>($RIGHT);
+                        typed_dict_op!(left, right, $OP, Int8Type, $MATH_OP)
+                    }
+                    (DataType::Int16, DataType::Int16) => {
+                        let left = as_dictionary_array::<Int16Type>($LEFT);
+                        let right = as_dictionary_array::<Int16Type>($RIGHT);
+                        typed_dict_op!(left, right, $OP, Int16Type, $MATH_OP)
+                    }
+                    (DataType::Int32, DataType::Int32) => {
+                        let left = as_dictionary_array::<Int32Type>($LEFT);
+                        let right = as_dictionary_array::<Int32Type>($RIGHT);
+                        typed_dict_op!(left, right, $OP, Int32Type, $MATH_OP)
+                    }
+                    (DataType::Int64, DataType::Int64) => {
+                        let left = as_dictionary_array::<Int64Type>($LEFT);
+                        let right = as_dictionary_array::<Int64Type>($RIGHT);
+                        typed_dict_op!(left, right, $OP, Int64Type, $MATH_OP)
+                    }
+                    (DataType::UInt8, DataType::UInt8) => {
+                        let left = as_dictionary_array::<UInt8Type>($LEFT);
+                        let right = as_dictionary_array::<UInt8Type>($RIGHT);
+                        typed_dict_op!(left, right, $OP, UInt8Type, $MATH_OP)
+                    }
+                    (DataType::UInt16, DataType::UInt16) => {
+                        let left = as_dictionary_array::<UInt16Type>($LEFT);
+                        let right = as_dictionary_array::<UInt16Type>($RIGHT);
+                        typed_dict_op!(left, right, $OP, UInt16Type, $MATH_OP)
+                    }
+                    (DataType::UInt32, DataType::UInt32) => {
+                        let left = as_dictionary_array::<UInt32Type>($LEFT);
+                        let right = as_dictionary_array::<UInt32Type>($RIGHT);
+                        typed_dict_op!(left, right, $OP, UInt32Type, $MATH_OP)
+                    }
+                    (DataType::UInt64, DataType::UInt64) => {
+                        let left = as_dictionary_array::<UInt64Type>($LEFT);
+                        let right = as_dictionary_array::<UInt64Type>($RIGHT);
+                        typed_dict_op!(left, right, $OP, UInt64Type, $MATH_OP)
+                    }
+                    (t1, t2) => Err(ArrowError::CastError(format!(
+                        "Cannot perform arithmetic operation on two dictionary arrays of different key types ({} and {})",
+                        t1, t2
+                    ))),
+                }
+            }
+            (t1, t2) => Err(ArrowError::CastError(format!(
+                "Cannot perform arithmetic operation on dictionary array with non-dictionary array ({} and {})",
+                t1, t2
+            ))),
+        }
+    }};
+}
+
+macro_rules! typed_op {
+    ($LEFT: expr, $RIGHT: expr, $T: ident, $OP: expr, $MATH_OP: ident) => {{
+        let left = $LEFT
+            .as_any()
+            .downcast_ref::<PrimitiveArray<$T>>()
+            .ok_or_else(|| {
+                ArrowError::CastError(format!(
+                    "Left array cannot be cast to {}",
+                    type_name::<$T>()
+                ))
+            })?;
+        let right = $RIGHT
+            .as_any()
+            .downcast_ref::<PrimitiveArray<$T>>()
+            .ok_or_else(|| {
+                ArrowError::CastError(format!(
+                    "Right array cannot be cast to {}",
+                    type_name::<$T>(),
+                ))
+            })?;
+        let array = $MATH_OP(left, right, $OP)?;
+        Ok(Arc::new(array))
+    }};
+}
+
+macro_rules! typed_math_op {
+    ($LEFT: expr, $RIGHT: expr, $OP: expr, $MATH_OP: ident) => {{
+        match $LEFT.data_type() {
+            DataType::Int8 => {
+                typed_op!($LEFT, $RIGHT, Int8Type, $OP, $MATH_OP)
+            }
+            DataType::Int16 => {
+                typed_op!($LEFT, $RIGHT, Int16Type, $OP, $MATH_OP)
+            }
+            DataType::Int32 => {
+                typed_op!($LEFT, $RIGHT, Int32Type, $OP, $MATH_OP)
+            }
+            DataType::Int64 => {
+                typed_op!($LEFT, $RIGHT, Int64Type, $OP, $MATH_OP)
+            }
+            DataType::UInt8 => {
+                typed_op!($LEFT, $RIGHT, UInt8Type, $OP, $MATH_OP)
+            }
+            DataType::UInt16 => {
+                typed_op!($LEFT, $RIGHT, UInt16Type, $OP, $MATH_OP)
+            }
+            DataType::UInt32 => {
+                typed_op!($LEFT, $RIGHT, UInt32Type, $OP, $MATH_OP)
+            }
+            DataType::UInt64 => {
+                typed_op!($LEFT, $RIGHT, UInt64Type, $OP, $MATH_OP)
+            }
+            DataType::Float32 => {
+                typed_op!($LEFT, $RIGHT, Float32Type, $OP, $MATH_OP)
+            }
+            DataType::Float64 => {
+                typed_op!($LEFT, $RIGHT, Float64Type, $OP, $MATH_OP)
+            }
+            t => Err(ArrowError::CastError(format!(
+                "Cannot perform arithmetic operation on arrays of type {}",
+                t
+            ))),
+        }
+    }};
+}
+
+/// Helper function to perform math lambda function on values from two dictionary arrays, this
+/// version does not attempt to use SIMD explicitly (though the compiler may auto vectorize)
+macro_rules! math_dict_op {
+    ($left: expr, $right:expr, $op:expr, $value_ty:ty) => {{
+        if $left.len() != $right.len() {
+            return Err(ArrowError::ComputeError(format!(
+                "Cannot perform operation on arrays of different length ({}, {})",
+                $left.len(),
+                $right.len()
+            )));
+        }
+
+        // Safety justification: Since the inputs are valid Arrow arrays, all values are
+        // valid indexes into the dictionary (which is verified during construction)
+
+        let left_iter = unsafe {
+            $left
+                .values()
+                .as_any()
+                .downcast_ref::<$value_ty>()
+                .unwrap()
+                .take_iter_unchecked($left.keys_iter())
+        };
+
+        let right_iter = unsafe {
+            $right
+                .values()
+                .as_any()
+                .downcast_ref::<$value_ty>()
+                .unwrap()
+                .take_iter_unchecked($right.keys_iter())
+        };
+
+        let result = left_iter
+            .zip(right_iter)
+            .map(|(left_value, right_value)| {
+                if let (Some(left), Some(right)) = (left_value, right_value) {
+                    Some($op(left, right))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        Ok(result)
+    }};
+}
+
+/// Perform given operation on two `DictionaryArray`s.
+/// Returns an error if the two arrays have different value type
+fn math_op_dict<K, T, F>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+    op: F,
+) -> Result<PrimitiveArray<T>>
+where
+    K: ArrowNumericType,
+    T: ArrowNumericType,
+    F: Fn(T::Native, T::Native) -> T::Native,
+{
+    math_dict_op!(left, right, op, PrimitiveArray<T>)
+}
+
+/// Helper function for operations where a valid `0` on the right array should
+/// result in an [ArrowError::DivideByZero], namely the division and modulo operations
+///
+/// # Errors
+///
+/// This function errors if:
+/// * the arrays have different lengths
+/// * there is an element where both left and right values are valid and the right value is `0`
+fn math_divide_checked_op_dict<K, T, F>(
+    left: &DictionaryArray<K>,
+    right: &DictionaryArray<K>,
+    op: F,
+) -> Result<PrimitiveArray<T>>
+where
+    K: ArrowNumericType,
+    T: ArrowNumericType,
+    T::Native: One + Zero,
+    F: Fn(T::Native, T::Native) -> T::Native,
+{
+    if left.len() != right.len() {
+        return Err(ArrowError::ComputeError(format!(
+            "Cannot perform operation on arrays of different length ({}, {})",
+            left.len(),
+            right.len()
+        )));
+    }
+
+    let null_bit_buffer =
+        combine_option_bitmap(&[left.data_ref(), right.data_ref()], left.len())?;
+
+    // Safety justification: Since the inputs are valid Arrow arrays, all values are
+    // valid indexes into the dictionary (which is verified during construction)
+
+    let left_iter = unsafe {
+        left.values()
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap()
+            .take_iter_unchecked(left.keys_iter())
+    };
+
+    let right_iter = unsafe {
+        right
+            .values()
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap()
+            .take_iter_unchecked(right.keys_iter())
+    };
+
+    math_checked_divide_op_on_iters(
+        left_iter,
+        right_iter,
+        op,
+        left.len(),
+        null_bit_buffer,
+    )
+}
+
 /// Perform `left + right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
 pub fn add<T>(
@@ -434,6 +769,65 @@ where
     T::Native: Add<Output = T::Native>,
 {
     math_op(left, right, |a, b| a + b)
+}
+
+/// Perform `left + right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+pub fn add_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_math_op!(left, right, |a, b| a + b, math_op_dict)
+        }
+        DataType::Date32 => {
+            let l = as_primitive_array::<Date32Type>(left);
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = as_primitive_array::<IntervalYearMonthType>(right);
+                    let res = math_op(l, r, Date32Type::add_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = as_primitive_array::<IntervalDayTimeType>(right);
+                    let res = math_op(l, r, Date32Type::add_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = as_primitive_array::<IntervalMonthDayNanoType>(right);
+                    let res = math_op(l, r, Date32Type::add_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        DataType::Date64 => {
+            let l = as_primitive_array::<Date64Type>(left);
+            match right.data_type() {
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    let r = as_primitive_array::<IntervalYearMonthType>(right);
+                    let res = math_op(l, r, Date64Type::add_year_months)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    let r = as_primitive_array::<IntervalDayTimeType>(right);
+                    let res = math_op(l, r, Date64Type::add_day_time)?;
+                    Ok(Arc::new(res))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => {
+                    let r = as_primitive_array::<IntervalMonthDayNanoType>(right);
+                    let res = math_op(l, r, Date64Type::add_month_day_nano)?;
+                    Ok(Arc::new(res))
+                }
+                _ => Err(ArrowError::CastError(format!(
+                    "Cannot perform arithmetic operation between array of type {} and array of type {}",
+                    left.data_type(), right.data_type()
+                ))),
+            }
+        }
+        _ => typed_math_op!(left, right, |a, b| a + b, math_op),
+    }
 }
 
 /// Add every value in an array by a scalar. If any value in the array is null then the
@@ -449,6 +843,17 @@ where
     Ok(unary(array, |value| value + scalar))
 }
 
+/// Add every value in an array by a scalar. If any value in the array is null then the
+/// result is also null. The given array must be a `PrimitiveArray` of the type same as
+/// the scalar, or a `DictionaryArray` of the value type same as the scalar.
+pub fn add_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: Add<Output = T::Native>,
+{
+    unary_dyn::<_, T>(array, |value| value + scalar)
+}
+
 /// Perform `left - right` operation on two arrays. If either left or right value is null
 /// then the result is also null.
 pub fn subtract<T>(
@@ -460,6 +865,17 @@ where
     T::Native: Sub<Output = T::Native>,
 {
     math_op(left, right, |a, b| a - b)
+}
+
+/// Perform `left - right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+pub fn subtract_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_math_op!(left, right, |a, b| a - b, math_op_dict)
+        }
+        _ => typed_math_op!(left, right, |a, b| a - b, math_op),
+    }
 }
 
 /// Subtract every value in an array by a scalar. If any value in the array is null then the
@@ -477,6 +893,21 @@ where
         + Zero,
 {
     Ok(unary(array, |value| value - scalar))
+}
+
+/// Subtract every value in an array by a scalar. If any value in the array is null then the
+/// result is also null. The given array must be a `PrimitiveArray` of the type same as
+/// the scalar, or a `DictionaryArray` of the value type same as the scalar.
+pub fn subtract_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: Add<Output = T::Native>
+        + Sub<Output = T::Native>
+        + Mul<Output = T::Native>
+        + Div<Output = T::Native>
+        + Zero,
+{
+    unary_dyn::<_, T>(array, |value| value - scalar)
 }
 
 /// Perform `-` operation on an array. If value is null then the result is also null.
@@ -513,6 +944,17 @@ where
     math_op(left, right, |a, b| a * b)
 }
 
+/// Perform `left * right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+pub fn multiply_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_math_op!(left, right, |a, b| a * b, math_op_dict)
+        }
+        _ => typed_math_op!(left, right, |a, b| a * b, math_op),
+    }
+}
+
 /// Multiply every value in an array by a scalar. If any value in the array is null then the
 /// result is also null.
 pub fn multiply_scalar<T>(
@@ -530,6 +972,23 @@ where
         + One,
 {
     Ok(unary(array, |value| value * scalar))
+}
+
+/// Multiply every value in an array by a scalar. If any value in the array is null then the
+/// result is also null. The given array must be a `PrimitiveArray` of the type same as
+/// the scalar, or a `DictionaryArray` of the value type same as the scalar.
+pub fn multiply_scalar_dyn<T>(array: &dyn Array, scalar: T::Native) -> Result<ArrayRef>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: Add<Output = T::Native>
+        + Sub<Output = T::Native>
+        + Mul<Output = T::Native>
+        + Div<Output = T::Native>
+        + Rem<Output = T::Native>
+        + Zero
+        + One,
+{
+    unary_dyn::<_, T>(array, |value| value * scalar)
 }
 
 /// Perform `left % right` operation on two arrays. If either left or right value is null
@@ -566,6 +1025,18 @@ where
     return simd_checked_divide_op(&left, &right, simd_checked_divide::<T>, |a, b| a / b);
     #[cfg(not(feature = "simd"))]
     return math_checked_divide_op(left, right, |a, b| a / b);
+}
+
+/// Perform `left / right` operation on two arrays. If either left or right value is null
+/// then the result is also null. If any right hand value is zero then the result of this
+/// operation will be `Err(ArrowError::DivideByZero)`.
+pub fn divide_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+    match left.data_type() {
+        DataType::Dictionary(_, _) => {
+            typed_dict_math_op!(left, right, |a, b| a / b, math_divide_checked_op_dict)
+        }
+        _ => typed_math_op!(left, right, |a, b| a / b, math_checked_divide_op),
+    }
 }
 
 /// Perform `left / right` operation on two arrays without checking for division by zero.
@@ -617,10 +1088,27 @@ where
     Ok(unary(array, |a| a / divisor))
 }
 
+/// Divide every value in an array by a scalar. If any value in the array is null then the
+/// result is also null. If the scalar is zero then the result of this operation will be
+/// `Err(ArrowError::DivideByZero)`. The given array must be a `PrimitiveArray` of the type
+/// same as the scalar, or a `DictionaryArray` of the value type same as the scalar.
+pub fn divide_scalar_dyn<T>(array: &dyn Array, divisor: T::Native) -> Result<ArrayRef>
+where
+    T: datatypes::ArrowNumericType,
+    T::Native: Div<Output = T::Native> + Zero,
+{
+    if divisor.is_zero() {
+        return Err(ArrowError::DivideByZero);
+    }
+    unary_dyn::<_, T>(array, |value| value / divisor)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::array::Int32Array;
+    use crate::datatypes::Date64Type;
+    use chrono::NaiveDate;
 
     #[test]
     fn test_primitive_array_add() {
@@ -632,6 +1120,394 @@ mod tests {
         assert_eq!(15, c.value(2));
         assert_eq!(17, c.value(3));
         assert_eq!(17, c.value(4));
+    }
+
+    #[test]
+    fn test_date32_month_add() {
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 1, 1),
+        )]);
+        let b =
+            IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(1, 2)]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd(2001, 3, 1))
+        );
+    }
+
+    #[test]
+    fn test_date32_day_time_add() {
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 1, 1),
+        )]);
+        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 1, 2))
+        );
+    }
+
+    #[test]
+    fn test_date32_month_day_nano_add() {
+        let a = Date32Array::from(vec![Date32Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 1, 1),
+        )]);
+        let b =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
+                1, 2, 3,
+            )]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date32Type::from_naive_date(NaiveDate::from_ymd(2000, 2, 3))
+        );
+    }
+
+    #[test]
+    fn test_date64_month_add() {
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 1, 1),
+        )]);
+        let b =
+            IntervalYearMonthArray::from(vec![IntervalYearMonthType::make_value(1, 2)]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd(2001, 3, 1))
+        );
+    }
+
+    #[test]
+    fn test_date64_day_time_add() {
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 1, 1),
+        )]);
+        let b = IntervalDayTimeArray::from(vec![IntervalDayTimeType::make_value(1, 2)]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 1, 2))
+        );
+    }
+
+    #[test]
+    fn test_date64_month_day_nano_add() {
+        let a = Date64Array::from(vec![Date64Type::from_naive_date(
+            NaiveDate::from_ymd(2000, 1, 1),
+        )]);
+        let b =
+            IntervalMonthDayNanoArray::from(vec![IntervalMonthDayNanoType::make_value(
+                1, 2, 3,
+            )]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Date64Array>().unwrap();
+        assert_eq!(
+            c.value(0),
+            Date64Type::from_naive_date(NaiveDate::from_ymd(2000, 2, 3))
+        );
+    }
+
+    #[test]
+    fn test_primitive_array_add_dyn() {
+        let a = Int32Array::from(vec![Some(5), Some(6), Some(7), Some(8), Some(9)]);
+        let b = Int32Array::from(vec![Some(6), Some(7), Some(8), None, Some(8)]);
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(11, c.value(0));
+        assert_eq!(13, c.value(1));
+        assert_eq!(15, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(17, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_add_dyn_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(5).unwrap();
+        builder.append(6).unwrap();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append(9).unwrap();
+        let a = builder.finish();
+
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(6).unwrap();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append_null();
+        builder.append(10).unwrap();
+        let b = builder.finish();
+
+        let c = add_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(11, c.value(0));
+        assert_eq!(13, c.value(1));
+        assert_eq!(15, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(19, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_add_scalar_dyn() {
+        let a = Int32Array::from(vec![Some(5), Some(6), Some(7), None, Some(9)]);
+        let b = 1_i32;
+        let c = add_scalar_dyn::<Int32Type>(&a, b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(6, c.value(0));
+        assert_eq!(7, c.value(1));
+        assert_eq!(8, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(10, c.value(4));
+
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(5).unwrap();
+        builder.append_null();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append(9).unwrap();
+        let a = builder.finish();
+        let b = -1_i32;
+
+        let c = add_scalar_dyn::<Int32Type>(&a, b).unwrap();
+        let c = c
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .unwrap();
+        let values = c
+            .values()
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(4, values.value(c.key(0).unwrap()));
+        assert!(c.is_null(1));
+        assert_eq!(6, values.value(c.key(2).unwrap()));
+        assert_eq!(7, values.value(c.key(3).unwrap()));
+        assert_eq!(8, values.value(c.key(4).unwrap()));
+    }
+
+    #[test]
+    fn test_primitive_array_subtract_dyn() {
+        let a = Int32Array::from(vec![Some(51), Some(6), Some(15), Some(8), Some(9)]);
+        let b = Int32Array::from(vec![Some(6), Some(7), Some(8), None, Some(8)]);
+        let c = subtract_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(45, c.value(0));
+        assert_eq!(-1, c.value(1));
+        assert_eq!(7, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(1, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_subtract_dyn_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(15).unwrap();
+        builder.append(8).unwrap();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append(20).unwrap();
+        let a = builder.finish();
+
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(6).unwrap();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append_null();
+        builder.append(10).unwrap();
+        let b = builder.finish();
+
+        let c = subtract_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(9, c.value(0));
+        assert_eq!(1, c.value(1));
+        assert_eq!(-1, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(10, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_subtract_scalar_dyn() {
+        let a = Int32Array::from(vec![Some(5), Some(6), Some(7), None, Some(9)]);
+        let b = 1_i32;
+        let c = subtract_scalar_dyn::<Int32Type>(&a, b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(4, c.value(0));
+        assert_eq!(5, c.value(1));
+        assert_eq!(6, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(8, c.value(4));
+
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(5).unwrap();
+        builder.append_null();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append(9).unwrap();
+        let a = builder.finish();
+        let b = -1_i32;
+
+        let c = subtract_scalar_dyn::<Int32Type>(&a, b).unwrap();
+        let c = c
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .unwrap();
+        let values = c
+            .values()
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(6, values.value(c.key(0).unwrap()));
+        assert!(c.is_null(1));
+        assert_eq!(8, values.value(c.key(2).unwrap()));
+        assert_eq!(9, values.value(c.key(3).unwrap()));
+        assert_eq!(10, values.value(c.key(4).unwrap()));
+    }
+
+    #[test]
+    fn test_primitive_array_multiply_dyn() {
+        let a = Int32Array::from(vec![Some(5), Some(6), Some(7), Some(8), Some(9)]);
+        let b = Int32Array::from(vec![Some(6), Some(7), Some(8), None, Some(8)]);
+        let c = multiply_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(30, c.value(0));
+        assert_eq!(42, c.value(1));
+        assert_eq!(56, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(72, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_multiply_dyn_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(5).unwrap();
+        builder.append(6).unwrap();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append(9).unwrap();
+        let a = builder.finish();
+
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(6).unwrap();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append_null();
+        builder.append(10).unwrap();
+        let b = builder.finish();
+
+        let c = multiply_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(30, c.value(0));
+        assert_eq!(42, c.value(1));
+        assert_eq!(56, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(90, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_divide_dyn() {
+        let a = Int32Array::from(vec![Some(15), Some(6), Some(1), Some(8), Some(9)]);
+        let b = Int32Array::from(vec![Some(5), Some(3), Some(1), None, Some(3)]);
+        let c = divide_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(3, c.value(0));
+        assert_eq!(2, c.value(1));
+        assert_eq!(1, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(3, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_divide_dyn_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(15).unwrap();
+        builder.append(6).unwrap();
+        builder.append(1).unwrap();
+        builder.append(8).unwrap();
+        builder.append(9).unwrap();
+        let a = builder.finish();
+
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(5).unwrap();
+        builder.append(3).unwrap();
+        builder.append(1).unwrap();
+        builder.append_null();
+        builder.append(3).unwrap();
+        let b = builder.finish();
+
+        let c = divide_dyn(&a, &b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(3, c.value(0));
+        assert_eq!(2, c.value(1));
+        assert_eq!(1, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(3, c.value(4));
+    }
+
+    #[test]
+    fn test_primitive_array_multiply_scalar_dyn() {
+        let a = Int32Array::from(vec![Some(5), Some(6), Some(7), None, Some(9)]);
+        let b = 2_i32;
+        let c = multiply_scalar_dyn::<Int32Type>(&a, b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(10, c.value(0));
+        assert_eq!(12, c.value(1));
+        assert_eq!(14, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(18, c.value(4));
+
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(5).unwrap();
+        builder.append_null();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append(9).unwrap();
+        let a = builder.finish();
+        let b = -1_i32;
+
+        let c = multiply_scalar_dyn::<Int32Type>(&a, b).unwrap();
+        let c = c
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .unwrap();
+        let values = c
+            .values()
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(-5, values.value(c.key(0).unwrap()));
+        assert!(c.is_null(1));
+        assert_eq!(-7, values.value(c.key(2).unwrap()));
+        assert_eq!(-8, values.value(c.key(3).unwrap()));
+        assert_eq!(-9, values.value(c.key(4).unwrap()));
     }
 
     #[test]
@@ -659,9 +1535,7 @@ mod tests {
     fn test_primitive_array_add_mismatched_length() {
         let a = Int32Array::from(vec![5, 6, 7, 8, 9]);
         let b = Int32Array::from(vec![6, 7, 8]);
-        let e = add(&a, &b)
-            .err()
-            .expect("should have failed due to different lengths");
+        let e = add(&a, &b).expect_err("should have failed due to different lengths");
         assert_eq!(
             "ComputeError(\"Cannot perform math operation on arrays of different length\")",
             format!("{:?}", e)
@@ -780,6 +1654,50 @@ mod tests {
         let c = divide_scalar(&a, b).unwrap();
         let expected = Int32Array::from(vec![5, 4, 3, 2, 0]);
         assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_primitive_array_divide_scalar_dyn() {
+        let a = Int32Array::from(vec![Some(5), Some(6), Some(7), None, Some(9)]);
+        let b = 2_i32;
+        let c = divide_scalar_dyn::<Int32Type>(&a, b).unwrap();
+        let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(2, c.value(0));
+        assert_eq!(3, c.value(1));
+        assert_eq!(3, c.value(2));
+        assert!(c.is_null(3));
+        assert_eq!(4, c.value(4));
+
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(3);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(2);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(5).unwrap();
+        builder.append_null();
+        builder.append(7).unwrap();
+        builder.append(8).unwrap();
+        builder.append(9).unwrap();
+        let a = builder.finish();
+        let b = -2_i32;
+
+        let c = divide_scalar_dyn::<Int32Type>(&a, b).unwrap();
+        let c = c
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int8Type>>()
+            .unwrap();
+        let values = c
+            .values()
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(-2, values.value(c.key(0).unwrap()));
+        assert!(c.is_null(1));
+        assert_eq!(-3, values.value(c.key(2).unwrap()));
+        assert_eq!(-4, values.value(c.key(3).unwrap()));
+        assert_eq!(-4, values.value(c.key(4).unwrap()));
+
+        let e = divide_scalar_dyn::<Int32Type>(&a, 0_i32)
+            .expect_err("should have failed due to divide by zero");
+        assert_eq!("DivideByZero", format!("{:?}", e));
     }
 
     #[test]
@@ -1005,6 +1923,32 @@ mod tests {
         let a = Int32Array::from(vec![15]);
         let b = Int32Array::from(vec![0]);
         divide(&a, &b).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "DivideByZero")]
+    fn test_primitive_array_divide_dyn_by_zero() {
+        let a = Int32Array::from(vec![15]);
+        let b = Int32Array::from(vec![0]);
+        divide_dyn(&a, &b).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "DivideByZero")]
+    fn test_primitive_array_divide_dyn_by_zero_dict() {
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(1);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(1);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(15).unwrap();
+        let a = builder.finish();
+
+        let key_builder = PrimitiveBuilder::<Int8Type>::new(1);
+        let value_builder = PrimitiveBuilder::<Int32Type>::new(1);
+        let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
+        builder.append(0).unwrap();
+        let b = builder.finish();
+
+        divide_dyn(&a, &b).unwrap();
     }
 
     #[test]

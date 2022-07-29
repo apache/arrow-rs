@@ -158,7 +158,7 @@ impl UnionArray {
             mode,
         ))
         .add_buffer(type_ids)
-        .child_data(field_values.into_iter().map(|a| a.data().clone()).collect())
+        .child_data(field_values.into_iter().map(|a| a.into_data()).collect())
         .len(len);
 
         let data = match value_offsets {
@@ -231,10 +231,10 @@ impl UnionArray {
     ///
     /// Panics if the `type_id` provided is less than zero or greater than the number of types
     /// in the `Union`.
-    pub fn child(&self, type_id: i8) -> ArrayRef {
+    pub fn child(&self, type_id: i8) -> &ArrayRef {
         assert!(0 <= type_id);
         assert!((type_id as usize) < self.boxed_fields.len());
-        self.boxed_fields[type_id as usize].clone()
+        &self.boxed_fields[type_id as usize]
     }
 
     /// Returns the `type_id` for the array slot at `index`.
@@ -243,8 +243,8 @@ impl UnionArray {
     ///
     /// Panics if `index` is greater than the length of the array.
     pub fn type_id(&self, index: usize) -> i8 {
-        assert!(index - self.offset() < self.len());
-        self.data().buffers()[0].as_slice()[index] as i8
+        assert!(index < self.len());
+        self.data().buffers()[0].as_slice()[self.offset() + index] as i8
     }
 
     /// Returns the offset into the underlying values array for the array slot at `index`.
@@ -253,11 +253,11 @@ impl UnionArray {
     ///
     /// Panics if `index` is greater than the length of the array.
     pub fn value_offset(&self, index: usize) -> i32 {
-        assert!(index - self.offset() < self.len());
+        assert!(index < self.len());
         if self.is_dense() {
-            self.data().buffers()[1].typed_data::<i32>()[index]
+            self.data().buffers()[1].typed_data::<i32>()[self.offset() + index]
         } else {
-            index as i32
+            (self.offset() + index) as i32
         }
     }
 
@@ -267,8 +267,8 @@ impl UnionArray {
     ///
     /// Panics if `index` is greater than the length of the array.
     pub fn value(&self, index: usize) -> ArrayRef {
-        let type_id = self.type_id(self.offset() + index);
-        let value_offset = self.value_offset(self.offset() + index) as usize;
+        let type_id = self.type_id(index);
+        let value_offset = self.value_offset(index) as usize;
         let child_data = self.boxed_fields[type_id as usize].clone();
         child_data.slice(value_offset, 1)
     }
@@ -303,6 +303,12 @@ impl From<ArrayData> for UnionArray {
     }
 }
 
+impl From<UnionArray> for ArrayData {
+    fn from(array: UnionArray) -> Self {
+        array.data
+    }
+}
+
 impl Array for UnionArray {
     fn as_any(&self) -> &dyn Any {
         self
@@ -310,6 +316,10 @@ impl Array for UnionArray {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 
     /// Union types always return non null as there is no validity buffer.
@@ -373,6 +383,7 @@ mod tests {
     use crate::array::*;
     use crate::buffer::Buffer;
     use crate::datatypes::{DataType, Field};
+    use crate::record_batch::RecordBatch;
 
     #[test]
     fn test_dense_i32() {
@@ -945,5 +956,70 @@ mod tests {
         builder.append::<Float32Type>("a", 1.0).unwrap();
         let err = builder.append::<Int32Type>("a", 1).unwrap_err().to_string();
         assert!(err.contains("Attempt to write col \"a\" with type Int32 doesn't match existing type Float32"), "{}", err);
+    }
+
+    #[test]
+    fn slice_union_array() {
+        // [1, null, 3.0, null, 4]
+        fn create_union(mut builder: UnionBuilder) -> UnionArray {
+            builder.append::<Int32Type>("a", 1).unwrap();
+            builder.append_null::<Int32Type>("a").unwrap();
+            builder.append::<Float64Type>("c", 3.0).unwrap();
+            builder.append_null::<Float64Type>("c").unwrap();
+            builder.append::<Int32Type>("a", 4).unwrap();
+            builder.build().unwrap()
+        }
+
+        fn create_batch(union: UnionArray) -> RecordBatch {
+            let schema = Schema::new(vec![Field::new(
+                "struct_array",
+                union.data_type().clone(),
+                true,
+            )]);
+
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(union)]).unwrap()
+        }
+
+        fn test_slice_union(record_batch_slice: RecordBatch) {
+            let union_slice = record_batch_slice
+                .column(0)
+                .as_any()
+                .downcast_ref::<UnionArray>()
+                .unwrap();
+
+            assert_eq!(union_slice.type_id(0), 0);
+            assert_eq!(union_slice.type_id(1), 1);
+            assert_eq!(union_slice.type_id(2), 1);
+
+            let slot = union_slice.value(0);
+            let array = slot.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert_eq!(array.len(), 1);
+            assert!(array.is_null(0));
+
+            let slot = union_slice.value(1);
+            let array = slot.as_any().downcast_ref::<Float64Array>().unwrap();
+            assert_eq!(array.len(), 1);
+            assert!(array.is_valid(0));
+            assert_eq!(array.value(0), 3.0);
+
+            let slot = union_slice.value(2);
+            let array = slot.as_any().downcast_ref::<Float64Array>().unwrap();
+            assert_eq!(array.len(), 1);
+            assert!(array.is_null(0));
+        }
+
+        // Sparse Union
+        let builder = UnionBuilder::new_sparse(5);
+        let record_batch = create_batch(create_union(builder));
+        // [null, 3.0, null]
+        let record_batch_slice = record_batch.slice(1, 3);
+        test_slice_union(record_batch_slice);
+
+        // Dense Union
+        let builder = UnionBuilder::new_dense(5);
+        let record_batch = create_batch(create_union(builder));
+        // [null, 3.0, null]
+        let record_batch_slice = record_batch.slice(1, 3);
+        test_slice_union(record_batch_slice);
     }
 }

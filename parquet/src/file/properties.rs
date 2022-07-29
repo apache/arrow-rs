@@ -60,7 +60,7 @@ const DEFAULT_WRITER_VERSION: WriterVersion = WriterVersion::PARQUET_1_0;
 const DEFAULT_COMPRESSION: Compression = Compression::UNCOMPRESSED;
 const DEFAULT_DICTIONARY_ENABLED: bool = true;
 const DEFAULT_DICTIONARY_PAGE_SIZE_LIMIT: usize = DEFAULT_PAGE_SIZE;
-const DEFAULT_STATISTICS_ENABLED: bool = true;
+const DEFAULT_STATISTICS_ENABLED: EnabledStatistics = EnabledStatistics::Page;
 const DEFAULT_MAX_STATISTICS_SIZE: usize = 4096;
 const DEFAULT_MAX_ROW_GROUP_SIZE: usize = 1024 * 1024;
 const DEFAULT_CREATED_BY: &str = env!("PARQUET_CREATED_BY");
@@ -198,7 +198,7 @@ impl WriterProperties {
     }
 
     /// Returns `true` if statistics are enabled for a column.
-    pub fn statistics_enabled(&self, col: &ColumnPath) -> bool {
+    pub fn statistics_enabled(&self, col: &ColumnPath) -> EnabledStatistics {
         self.column_properties
             .get(col)
             .and_then(|c| c.statistics_enabled())
@@ -339,7 +339,7 @@ impl WriterPropertiesBuilder {
     }
 
     /// Sets flag to enable/disable statistics for any column.
-    pub fn set_statistics_enabled(mut self, value: bool) -> Self {
+    pub fn set_statistics_enabled(mut self, value: EnabledStatistics) -> Self {
         self.default_column_properties.set_statistics_enabled(value);
         self
     }
@@ -394,7 +394,11 @@ impl WriterPropertiesBuilder {
 
     /// Sets flag to enable/disable statistics for a column.
     /// Takes precedence over globally defined settings.
-    pub fn set_column_statistics_enabled(mut self, col: ColumnPath, value: bool) -> Self {
+    pub fn set_column_statistics_enabled(
+        mut self,
+        col: ColumnPath,
+        value: EnabledStatistics,
+    ) -> Self {
         self.get_mut_props(col).set_statistics_enabled(value);
         self
     }
@@ -411,6 +415,23 @@ impl WriterPropertiesBuilder {
     }
 }
 
+/// Controls the level of statistics to be computed by the writer
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum EnabledStatistics {
+    /// Compute no statistics
+    None,
+    /// Compute chunk-level statistics but not page-level
+    Chunk,
+    /// Compute page-level and chunk-level statistics
+    Page,
+}
+
+impl Default for EnabledStatistics {
+    fn default() -> Self {
+        DEFAULT_STATISTICS_ENABLED
+    }
+}
+
 /// Container for column properties that can be changed as part of writer.
 ///
 /// If a field is `None`, it means that no specific value has been set for this column,
@@ -420,7 +441,7 @@ struct ColumnProperties {
     encoding: Option<Encoding>,
     codec: Option<Compression>,
     dictionary_enabled: Option<bool>,
-    statistics_enabled: Option<bool>,
+    statistics_enabled: Option<EnabledStatistics>,
     max_statistics_size: Option<usize>,
 }
 
@@ -463,7 +484,7 @@ impl ColumnProperties {
     }
 
     /// Sets whether or not statistics are enabled for this column.
-    fn set_statistics_enabled(&mut self, enabled: bool) {
+    fn set_statistics_enabled(&mut self, enabled: EnabledStatistics) {
         self.statistics_enabled = Some(enabled);
     }
 
@@ -491,7 +512,7 @@ impl ColumnProperties {
 
     /// Returns `Some(true)` if statistics are enabled for this column, if disabled then
     /// returns `Some(false)`. If result is `None`, then no setting has been provided.
-    fn statistics_enabled(&self) -> Option<bool> {
+    fn statistics_enabled(&self) -> Option<EnabledStatistics> {
         self.statistics_enabled
     }
 
@@ -613,13 +634,16 @@ mod tests {
             .set_encoding(Encoding::DELTA_BINARY_PACKED)
             .set_compression(Compression::GZIP)
             .set_dictionary_enabled(false)
-            .set_statistics_enabled(false)
+            .set_statistics_enabled(EnabledStatistics::None)
             .set_max_statistics_size(50)
             // specific column settings
             .set_column_encoding(ColumnPath::from("col"), Encoding::RLE)
             .set_column_compression(ColumnPath::from("col"), Compression::SNAPPY)
             .set_column_dictionary_enabled(ColumnPath::from("col"), true)
-            .set_column_statistics_enabled(ColumnPath::from("col"), true)
+            .set_column_statistics_enabled(
+                ColumnPath::from("col"),
+                EnabledStatistics::Chunk,
+            )
             .set_column_max_statistics_size(ColumnPath::from("col"), 123)
             .build();
 
@@ -642,7 +666,10 @@ mod tests {
         );
         assert_eq!(props.compression(&ColumnPath::from("a")), Compression::GZIP);
         assert!(!props.dictionary_enabled(&ColumnPath::from("a")));
-        assert!(!props.statistics_enabled(&ColumnPath::from("a")));
+        assert_eq!(
+            props.statistics_enabled(&ColumnPath::from("a")),
+            EnabledStatistics::None
+        );
         assert_eq!(props.max_statistics_size(&ColumnPath::from("a")), 50);
 
         assert_eq!(
@@ -654,7 +681,10 @@ mod tests {
             Compression::SNAPPY
         );
         assert!(props.dictionary_enabled(&ColumnPath::from("col")));
-        assert!(props.statistics_enabled(&ColumnPath::from("col")));
+        assert_eq!(
+            props.statistics_enabled(&ColumnPath::from("col")),
+            EnabledStatistics::Chunk
+        );
         assert_eq!(props.max_statistics_size(&ColumnPath::from("col")), 123);
     }
 

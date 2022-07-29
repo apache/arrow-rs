@@ -18,10 +18,11 @@
 //! Contains Parquet Page definitions and page reader interface.
 
 use crate::basic::{Encoding, PageType};
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 use crate::file::{metadata::ColumnChunkMetaData, statistics::Statistics};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 use crate::util::memory::ByteBufferPtr;
+use parquet_format::PageHeader;
 
 /// Parquet Page definition.
 ///
@@ -187,12 +188,54 @@ impl PageWriteSpec {
     }
 }
 
+/// Contains metadata for a page
+pub struct PageMetadata {
+    /// The number of rows in this page
+    pub num_rows: usize,
+
+    /// Returns true if the page is a dictionary page
+    pub is_dict: bool,
+}
+
+impl TryFrom<&PageHeader> for PageMetadata {
+    type Error = ParquetError;
+
+    fn try_from(value: &PageHeader) -> std::result::Result<Self, Self::Error> {
+        match value.type_ {
+            parquet_format::PageType::DataPage => Ok(PageMetadata {
+                num_rows: value.data_page_header.as_ref().unwrap().num_values as usize,
+                is_dict: false,
+            }),
+            parquet_format::PageType::DictionaryPage => Ok(PageMetadata {
+                num_rows: usize::MIN,
+                is_dict: true,
+            }),
+            parquet_format::PageType::DataPageV2 => Ok(PageMetadata {
+                num_rows: value.data_page_header_v2.as_ref().unwrap().num_rows as usize,
+                is_dict: false,
+            }),
+            other => Err(ParquetError::General(format!(
+                "page type {:?} cannot be converted to PageMetadata",
+                other
+            ))),
+        }
+    }
+}
+
 /// API for reading pages from a column chunk.
 /// This offers a iterator like API to get the next page.
 pub trait PageReader: Iterator<Item = Result<Page>> + Send {
     /// Gets the next page in the column chunk associated with this reader.
     /// Returns `None` if there are no pages left.
     fn get_next_page(&mut self) -> Result<Option<Page>>;
+
+    /// Gets metadata about the next page, returns an error if no
+    /// column index information
+    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>>;
+
+    /// Skips reading the next page, returns an error if no
+    /// column index information
+    fn skip_next_page(&mut self) -> Result<()>;
 }
 
 /// API for writing pages in a column chunk.

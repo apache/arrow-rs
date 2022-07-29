@@ -20,9 +20,10 @@
 //! depend on dynamic casting of `Array`.
 
 use super::{
-    Array, ArrayData, BooleanArray, DecimalArray, DictionaryArray, FixedSizeBinaryArray,
-    FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-    MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, StructArray,
+    Array, ArrayData, BooleanArray, Decimal128Array, DictionaryArray,
+    FixedSizeBinaryArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
+    GenericStringArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray,
+    StructArray,
 };
 use crate::datatypes::{ArrowPrimitiveType, DataType, IntervalUnit};
 use half::f16;
@@ -109,7 +110,7 @@ impl PartialEq for FixedSizeBinaryArray {
     }
 }
 
-impl PartialEq for DecimalArray {
+impl PartialEq for Decimal128Array {
     fn eq(&self, other: &Self) -> bool {
         equal(self.data(), other.data())
     }
@@ -186,7 +187,9 @@ fn equal_values(
         DataType::FixedSizeBinary(_) => {
             fixed_binary_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
-        DataType::Decimal(_, _) => decimal_equal(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Decimal(_, _) | DataType::Decimal256(_, _) => {
+            decimal_equal(lhs, rhs, lhs_start, rhs_start, len)
+        }
         DataType::List(_) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::LargeList(_) => list_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::FixedSizeList(_, _) => {
@@ -610,13 +613,13 @@ mod tests {
         let mut builder = ListBuilder::new(Int32Builder::new(10));
         for d in data.as_ref() {
             if let Some(v) = d {
-                builder.values().append_slice(v.as_ref()).unwrap();
-                builder.append(true).unwrap()
+                builder.values().append_slice(v.as_ref());
+                builder.append(true);
             } else {
-                builder.append(false).unwrap()
+                builder.append(false);
             }
         }
-        builder.finish().data().clone()
+        builder.finish().into_data()
     }
 
     #[test]
@@ -712,7 +715,7 @@ mod tests {
         ))))
         .len(6)
         .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
-        .add_child_data(c_values.data().clone())
+        .add_child_data(c_values.into_data())
         .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
         .build()
         .unwrap();
@@ -734,7 +737,7 @@ mod tests {
         ))))
         .len(6)
         .add_buffer(Buffer::from(vec![0i32, 2, 3, 4, 6, 7, 8].to_byte_slice()))
-        .add_child_data(d_values.data().clone())
+        .add_child_data(d_values.into_data())
         .null_bit_buffer(Some(Buffer::from(vec![0b00001001])))
         .build()
         .unwrap();
@@ -771,10 +774,10 @@ mod tests {
             if let Some(v) = d {
                 builder.append_value(v.as_ref()).unwrap();
             } else {
-                builder.append_null().unwrap();
+                builder.append_null();
             }
         }
-        builder.finish().data().clone()
+        builder.finish().into_data()
     }
 
     #[test]
@@ -840,7 +843,7 @@ mod tests {
 
     fn create_decimal_array(data: &[Option<i128>]) -> ArrayData {
         data.iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap()
             .into()
@@ -932,16 +935,16 @@ mod tests {
 
         for d in data.as_ref() {
             if let Some(v) = d {
-                builder.values().append_slice(v.as_ref()).unwrap();
-                builder.append(true).unwrap()
+                builder.values().append_slice(v.as_ref());
+                builder.append(true);
             } else {
                 for _ in 0..builder.value_length() {
-                    builder.values().append_null().unwrap();
+                    builder.values().append_null();
                 }
-                builder.append(false).unwrap()
+                builder.append(false);
             }
         }
-        builder.finish().data().clone()
+        builder.finish().into_data()
     }
 
     #[test]
@@ -1247,10 +1250,10 @@ mod tests {
             if let Some(v) = key {
                 builder.append(v).unwrap();
             } else {
-                builder.append_null().unwrap()
+                builder.append_null()
             }
         }
-        builder.finish().data().clone()
+        builder.finish().into_data()
     }
 
     #[test]

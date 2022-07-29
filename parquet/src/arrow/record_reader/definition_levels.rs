@@ -20,12 +20,13 @@ use std::ops::Range;
 use arrow::array::BooleanBufferBuilder;
 use arrow::bitmap::Bitmap;
 use arrow::buffer::Buffer;
+use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
 
 use crate::arrow::buffer::bit_util::count_set_bits;
 use crate::arrow::record_reader::buffer::BufferQueue;
 use crate::basic::Encoding;
 use crate::column::reader::decoder::{
-    ColumnLevelDecoder, ColumnLevelDecoderImpl, LevelsBufferSlice,
+    ColumnLevelDecoder, ColumnLevelDecoderImpl, DefinitionLevelDecoder, LevelsBufferSlice,
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
@@ -146,50 +147,49 @@ impl LevelsBufferSlice for DefinitionLevelBuffer {
     }
 }
 
-pub struct DefinitionLevelDecoder {
-    max_level: i16,
-    encoding: Encoding,
-    data: Option<ByteBufferPtr>,
-    column_decoder: Option<ColumnLevelDecoderImpl>,
-    packed_decoder: Option<PackedDecoder>,
+enum MaybePacked {
+    Packed(PackedDecoder),
+    Fallback(ColumnLevelDecoderImpl),
 }
 
-impl ColumnLevelDecoder for DefinitionLevelDecoder {
+pub struct DefinitionLevelBufferDecoder {
+    max_level: i16,
+    decoder: MaybePacked,
+}
+
+impl DefinitionLevelBufferDecoder {
+    pub fn new(max_level: i16, packed: bool) -> Self {
+        let decoder = match packed {
+            true => MaybePacked::Packed(PackedDecoder::new()),
+            false => MaybePacked::Fallback(ColumnLevelDecoderImpl::new(max_level)),
+        };
+
+        Self { max_level, decoder }
+    }
+}
+
+impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
     type Slice = DefinitionLevelBuffer;
 
-    fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self {
-        Self {
-            max_level,
-            encoding,
-            data: Some(data),
-            column_decoder: None,
-            packed_decoder: None,
+    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
+        match &mut self.decoder {
+            MaybePacked::Packed(d) => d.set_data(encoding, data),
+            MaybePacked::Fallback(d) => d.set_data(encoding, data),
         }
     }
 
-    fn read(
-        &mut self,
-        writer: &mut Self::Slice,
-        range: Range<usize>,
-    ) -> crate::errors::Result<usize> {
-        match &mut writer.inner {
-            BufferInner::Full {
-                levels,
-                nulls,
-                max_level,
-            } => {
+    fn read(&mut self, writer: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
+        match (&mut writer.inner, &mut self.decoder) {
+            (
+                BufferInner::Full {
+                    levels,
+                    nulls,
+                    max_level,
+                },
+                MaybePacked::Fallback(decoder),
+            ) => {
                 assert_eq!(self.max_level, *max_level);
                 assert_eq!(range.start + writer.len, nulls.len());
-
-                let decoder = match self.data.take() {
-                    Some(data) => self.column_decoder.insert(
-                        ColumnLevelDecoderImpl::new(self.max_level, self.encoding, data),
-                    ),
-                    None => self
-                        .column_decoder
-                        .as_mut()
-                        .expect("consistent null_mask_only"),
-                };
 
                 levels.resize(range.end + writer.len);
 
@@ -203,22 +203,28 @@ impl ColumnLevelDecoder for DefinitionLevelDecoder {
 
                 Ok(levels_read)
             }
-            BufferInner::Mask { nulls } => {
+            (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
                 assert_eq!(self.max_level, 1);
                 assert_eq!(range.start + writer.len, nulls.len());
 
-                let decoder = match self.data.take() {
-                    Some(data) => self
-                        .packed_decoder
-                        .insert(PackedDecoder::new(self.encoding, data)),
-                    None => self
-                        .packed_decoder
-                        .as_mut()
-                        .expect("consistent null_mask_only"),
-                };
-
                 decoder.read(nulls, range.end - range.start)
             }
+            _ => unreachable!("inconsistent null mask"),
+        }
+    }
+}
+
+impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
+    fn skip_def_levels(
+        &mut self,
+        num_levels: usize,
+        max_def_level: i16,
+    ) -> Result<(usize, usize)> {
+        match &mut self.decoder {
+            MaybePacked::Fallback(decoder) => {
+                decoder.skip_def_levels(num_levels, max_def_level)
+            }
+            MaybePacked::Packed(decoder) => decoder.skip(num_levels),
         }
     }
 }
@@ -296,26 +302,28 @@ impl PackedDecoder {
 }
 
 impl PackedDecoder {
-    fn new(encoding: Encoding, data: ByteBufferPtr) -> Self {
-        match encoding {
-            Encoding::RLE => Self {
-                data,
-                data_offset: 0,
-                rle_left: 0,
-                rle_value: false,
-                packed_count: 0,
-                packed_offset: 0,
-            },
-            Encoding::BIT_PACKED => Self {
-                data_offset: 0,
-                rle_left: 0,
-                rle_value: false,
-                packed_count: data.len() * 8,
-                packed_offset: 0,
-                data,
-            },
-            _ => unreachable!("invalid level encoding: {}", encoding),
+    fn new() -> Self {
+        Self {
+            data: ByteBufferPtr::new(vec![]),
+            data_offset: 0,
+            rle_left: 0,
+            rle_value: false,
+            packed_count: 0,
+            packed_offset: 0,
         }
+    }
+
+    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
+        self.rle_left = 0;
+        self.rle_value = false;
+        self.packed_offset = 0;
+        self.packed_count = match encoding {
+            Encoding::RLE => 0,
+            Encoding::BIT_PACKED => data.len() * 8,
+            _ => unreachable!("invalid level encoding: {}", encoding),
+        };
+        self.data = data;
+        self.data_offset = 0;
     }
 
     fn read(&mut self, buffer: &mut BooleanBufferBuilder, len: usize) -> Result<usize> {
@@ -344,6 +352,41 @@ impl PackedDecoder {
         }
         Ok(read)
     }
+
+    /// Skips `level_num` definition levels
+    ///
+    /// Returns the number of values skipped and the number of levels skipped
+    fn skip(&mut self, level_num: usize) -> Result<(usize, usize)> {
+        let mut skipped_value = 0;
+        let mut skipped_level = 0;
+        while skipped_level != level_num {
+            if self.rle_left != 0 {
+                let to_skip = self.rle_left.min(level_num - skipped_level);
+                self.rle_left -= to_skip;
+                skipped_level += to_skip;
+                if self.rle_value {
+                    skipped_value += to_skip;
+                }
+            } else if self.packed_count != self.packed_offset {
+                let to_skip = (self.packed_count - self.packed_offset)
+                    .min(level_num - skipped_level);
+                let offset = self.data_offset * 8 + self.packed_offset;
+                let bit_chunk =
+                    UnalignedBitChunk::new(self.data.as_ref(), offset, to_skip);
+                skipped_value += bit_chunk.count_ones();
+                self.packed_offset += to_skip;
+                skipped_level += to_skip;
+                if self.packed_offset == self.packed_count {
+                    self.data_offset += self.packed_count / 8;
+                }
+            } else if self.data_offset == self.data.len() {
+                break;
+            } else {
+                self.next_rle_block()?
+            }
+        }
+        Ok((skipped_value, skipped_level))
+    }
 }
 
 #[cfg(test)]
@@ -371,7 +414,8 @@ mod tests {
         assert_eq!(expected.len(), len);
 
         let encoded = encoder.consume().unwrap();
-        let mut decoder = PackedDecoder::new(Encoding::RLE, ByteBufferPtr::new(encoded));
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, ByteBufferPtr::new(encoded));
 
         // Decode data in random length intervals
         let mut decoded = BooleanBufferBuilder::new(len);
@@ -387,6 +431,67 @@ mod tests {
 
         assert_eq!(decoded.len(), len);
         assert_eq!(decoded.as_slice(), expected.as_slice());
+    }
+
+    #[test]
+    fn test_packed_decoder_skip() {
+        let mut rng = thread_rng();
+        let len: usize = rng.gen_range(512..1024);
+
+        let mut expected = BooleanBufferBuilder::new(len);
+        let mut encoder = RleEncoder::new(1, 1024);
+
+        let mut total_value = 0;
+        for _ in 0..len {
+            let bool = rng.gen_bool(0.8);
+            assert!(encoder.put(bool as u64).unwrap());
+            expected.append(bool);
+            if bool {
+                total_value += 1;
+            }
+        }
+        assert_eq!(expected.len(), len);
+
+        let encoded = encoder.consume().unwrap();
+        let mut decoder = PackedDecoder::new();
+        decoder.set_data(Encoding::RLE, ByteBufferPtr::new(encoded));
+
+        let mut skip_value = 0;
+        let mut read_value = 0;
+        let mut skip_level = 0;
+        let mut read_level = 0;
+
+        loop {
+            let offset = skip_level + read_level;
+            let remaining_levels = len - offset;
+            if remaining_levels == 0 {
+                break;
+            }
+            let to_read_or_skip_level = rng.gen_range(1..=remaining_levels);
+            if rng.gen_bool(0.5) {
+                let (skip_val_num, skip_level_num) =
+                    decoder.skip(to_read_or_skip_level).unwrap();
+                skip_value += skip_val_num;
+                skip_level += skip_level_num
+            } else {
+                let mut decoded = BooleanBufferBuilder::new(to_read_or_skip_level);
+                let read_level_num =
+                    decoder.read(&mut decoded, to_read_or_skip_level).unwrap();
+                read_level += read_level_num;
+                for i in 0..read_level_num {
+                    assert!(!decoded.is_empty());
+                    //check each read bit
+                    let read_bit = decoded.get_bit(i);
+                    if read_bit {
+                        read_value += 1;
+                    }
+                    let expect_bit = expected.get_bit(i + offset);
+                    assert_eq!(read_bit, expect_bit);
+                }
+            }
+        }
+        assert_eq!(read_level + skip_level, len);
+        assert_eq!(read_value + skip_value, total_value);
     }
 
     #[test]

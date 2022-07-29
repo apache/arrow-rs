@@ -22,7 +22,7 @@ use arrow::buffer::Buffer;
 
 use crate::arrow::record_reader::{
     buffer::{BufferQueue, ScalarBuffer, ValuesBuffer},
-    definition_levels::{DefinitionLevelBuffer, DefinitionLevelDecoder},
+    definition_levels::{DefinitionLevelBuffer, DefinitionLevelBufferDecoder},
 };
 use crate::column::{
     page::PageReader,
@@ -38,13 +38,16 @@ use crate::schema::types::ColumnDescPtr;
 pub(crate) mod buffer;
 mod definition_levels;
 
-const MIN_BATCH_SIZE: usize = 1024;
+/// The minimum number of levels read when reading a repeated field
+pub(crate) const MIN_BATCH_SIZE: usize = 1024;
 
 /// A `RecordReader` is a stateful column reader that delimits semantic records.
 pub type RecordReader<T> =
     GenericRecordReader<ScalarBuffer<<T as DataType>::T>, ColumnValueDecoderImpl<T>>;
 
-#[doc(hidden)]
+pub(crate) type ColumnReader<CV> =
+    GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelBufferDecoder, CV>;
+
 /// A generic stateful column reader that delimits semantic records
 ///
 /// This type is hidden from the docs, and relies on private traits with no
@@ -56,11 +59,11 @@ pub struct GenericRecordReader<V, CV> {
     records: V,
     def_levels: Option<DefinitionLevelBuffer>,
     rep_levels: Option<ScalarBuffer<i16>>,
-    column_reader:
-        Option<GenericColumnReader<ColumnLevelDecoderImpl, DefinitionLevelDecoder, CV>>,
+    column_reader: Option<ColumnReader<CV>>,
 
     /// Number of records accumulated in records
     num_records: usize,
+
     /// Number of values `num_records` contains.
     num_values: usize,
 
@@ -75,33 +78,8 @@ where
 {
     /// Create a new [`GenericRecordReader`]
     pub fn new(desc: ColumnDescPtr) -> Self {
-        Self::new_with_options(desc, false)
-    }
-
-    /// Create a new [`GenericRecordReader`] with the ability to only generate the bitmask
-    ///
-    /// If `null_mask_only` is true only the null bitmask will be generated and
-    /// [`Self::consume_def_levels`] and [`Self::consume_rep_levels`] will always return `None`
-    ///
-    /// It is insufficient to solely check that that the max definition level is 1 as we
-    /// need there to be no nullable parent array that will required decoded definition levels
-    ///
-    /// In particular consider the case of:
-    ///
-    /// ```ignore
-    /// message nested {
-    ///   OPTIONAL Group group {
-    ///     REQUIRED INT32 leaf;
-    ///   }
-    /// }
-    /// ```
-    ///
-    /// The maximum definition level of leaf is 1, however, we still need to decode the
-    /// definition levels so that the parent group can be constructed correctly
-    ///
-    pub(crate) fn new_with_options(desc: ColumnDescPtr, null_mask_only: bool) -> Self {
         let def_levels = (desc.max_def_level() > 0)
-            .then(|| DefinitionLevelBuffer::new(&desc, null_mask_only));
+            .then(|| DefinitionLevelBuffer::new(&desc, packed_null_mask(&desc)));
 
         let rep_levels = (desc.max_rep_level() > 0).then(ScalarBuffer::new);
 
@@ -119,9 +97,25 @@ where
 
     /// Set the current page reader.
     pub fn set_page_reader(&mut self, page_reader: Box<dyn PageReader>) -> Result<()> {
-        self.column_reader = Some(GenericColumnReader::new(
+        let descr = &self.column_desc;
+        let values_decoder = CV::new(descr);
+
+        let def_level_decoder = (descr.max_def_level() != 0).then(|| {
+            DefinitionLevelBufferDecoder::new(
+                descr.max_def_level(),
+                packed_null_mask(descr),
+            )
+        });
+
+        let rep_level_decoder = (descr.max_rep_level() != 0)
+            .then(|| ColumnLevelDecoderImpl::new(descr.max_rep_level()));
+
+        self.column_reader = Some(GenericColumnReader::new_with_decoders(
             self.column_desc.clone(),
             page_reader,
+            values_decoder,
+            def_level_decoder,
+            rep_level_decoder,
         ));
         Ok(())
     }
@@ -138,32 +132,19 @@ where
 
         let mut records_read = 0;
 
-        // Used to mark whether we have reached the end of current
-        // column chunk
-        let mut end_of_column = false;
-
         loop {
             // Try to find some records from buffers that has been read into memory
             // but not counted as seen records.
+            let end_of_column = !self.column_reader.as_mut().unwrap().has_next()?;
+
             let (record_count, value_count) =
-                self.count_records(num_records - records_read);
+                self.count_records(num_records - records_read, end_of_column);
 
             self.num_records += record_count;
             self.num_values += value_count;
             records_read += record_count;
 
-            if records_read == num_records {
-                break;
-            }
-
-            if end_of_column {
-                // Since page reader contains complete records, if we reached end of a
-                // page reader, we should reach the end of a record
-                if self.rep_levels.is_some() {
-                    self.num_records += 1;
-                    self.num_values = self.values_written;
-                    records_read += 1;
-                }
+            if records_read == num_records || end_of_column {
                 break;
             }
 
@@ -193,13 +174,49 @@ where
             };
 
             // Try to more value from parquet pages
-            let values_read = self.read_one_batch(batch_size)?;
-            if values_read < batch_size {
-                end_of_column = true;
-            }
+            self.read_one_batch(batch_size)?;
         }
 
         Ok(records_read)
+    }
+
+    /// Try to skip the next `num_records` rows
+    ///
+    /// # Returns
+    ///
+    /// Number of records skipped
+    pub fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        // First need to clear the buffer
+        let end_of_column = match self.column_reader.as_mut() {
+            Some(reader) => !reader.has_next()?,
+            None => return Ok(0),
+        };
+
+        let (buffered_records, buffered_values) =
+            self.count_records(num_records, end_of_column);
+
+        self.num_records += buffered_records;
+        self.num_values += buffered_values;
+
+        self.consume_def_levels();
+        self.consume_rep_levels();
+        self.consume_record_data();
+        self.consume_bitmap();
+        self.reset();
+
+        let remaining = num_records - buffered_records;
+
+        if remaining == 0 {
+            return Ok(buffered_records);
+        }
+
+        let skipped = self
+            .column_reader
+            .as_mut()
+            .unwrap()
+            .skip_records(remaining)?;
+
+        Ok(skipped + buffered_records)
     }
 
     /// Returns number of records stored in buffer.
@@ -218,32 +235,32 @@ where
     /// The implementation has side effects. It will create a new buffer to hold those
     /// definition level values that have already been read into memory but not counted
     /// as record values, e.g. those from `self.num_values` to `self.values_written`.
-    pub fn consume_def_levels(&mut self) -> Result<Option<Buffer>> {
-        Ok(match self.def_levels.as_mut() {
+    pub fn consume_def_levels(&mut self) -> Option<Buffer> {
+        match self.def_levels.as_mut() {
             Some(x) => x.split_levels(self.num_values),
             None => None,
-        })
+        }
     }
 
     /// Return repetition level data.
     /// The side effect is similar to `consume_def_levels`.
-    pub fn consume_rep_levels(&mut self) -> Result<Option<Buffer>> {
-        Ok(match self.rep_levels.as_mut() {
+    pub fn consume_rep_levels(&mut self) -> Option<Buffer> {
+        match self.rep_levels.as_mut() {
             Some(x) => Some(x.split_off(self.num_values)),
             None => None,
-        })
+        }
     }
 
     /// Returns currently stored buffer data.
     /// The side effect is similar to `consume_def_levels`.
-    pub fn consume_record_data(&mut self) -> Result<V::Output> {
-        Ok(self.records.split_off(self.num_values))
+    pub fn consume_record_data(&mut self) -> V::Output {
+        self.records.split_off(self.num_values)
     }
 
     /// Returns currently stored null bitmap data.
     /// The side effect is similar to `consume_def_levels`.
-    pub fn consume_bitmap_buffer(&mut self) -> Result<Option<Buffer>> {
-        Ok(self.consume_bitmap()?.map(|b| b.into_buffer()))
+    pub fn consume_bitmap_buffer(&mut self) -> Option<Buffer> {
+        self.consume_bitmap().map(|b| b.into_buffer())
     }
 
     /// Reset state of record reader.
@@ -256,11 +273,15 @@ where
     }
 
     /// Returns bitmap data.
-    pub fn consume_bitmap(&mut self) -> Result<Option<Bitmap>> {
-        Ok(self
-            .def_levels
+    pub fn consume_bitmap(&mut self) -> Option<Bitmap> {
+        self.def_levels
             .as_mut()
-            .map(|levels| levels.split_bitmask(self.num_values)))
+            .map(|levels| levels.split_bitmask(self.num_values))
+    }
+
+    /// Returns column reader.
+    pub(crate) fn column_reader(&self) -> Option<&ColumnReader<CV>> {
+        self.column_reader.as_ref()
     }
 
     /// Try to read one batch of data.
@@ -296,15 +317,22 @@ where
         }
 
         let values_read = max(levels_read, values_read);
-        self.set_values_written(self.values_written + values_read)?;
+        self.set_values_written(self.values_written + values_read);
         Ok(values_read)
     }
 
     /// Inspects the buffered repetition levels in the range `self.num_values..self.values_written`
     /// and returns the number of "complete" records along with the corresponding number of values
     ///
+    /// If `end_of_column` is true it indicates that there are no further values for this
+    /// column chunk beyond what is currently in the buffers
+    ///
     /// A "complete" record is one where the buffer contains a subsequent repetition level of 0
-    fn count_records(&self, records_to_read: usize) -> (usize, usize) {
+    fn count_records(
+        &self,
+        records_to_read: usize,
+        end_of_column: bool,
+    ) -> (usize, usize) {
         match self.rep_levels.as_ref() {
             Some(buf) => {
                 let buf = buf.as_slice();
@@ -328,6 +356,15 @@ where
                     }
                 }
 
+                // If reached end of column chunk => end of a record
+                if records_read != records_to_read
+                    && end_of_column
+                    && self.values_written != self.num_values
+                {
+                    records_read += 1;
+                    end_of_last_record = self.values_written;
+                }
+
                 (records_read, end_of_last_record - self.num_values)
             }
             None => {
@@ -339,8 +376,7 @@ where
         }
     }
 
-    #[allow(clippy::unnecessary_wraps)]
-    fn set_values_written(&mut self, new_values_written: usize) -> Result<()> {
+    fn set_values_written(&mut self, new_values_written: usize) {
         self.values_written = new_values_written;
         self.records.set_len(self.values_written);
 
@@ -351,9 +387,16 @@ where
         if let Some(ref mut buf) = self.def_levels {
             buf.set_len(self.values_written)
         };
-
-        Ok(())
     }
+}
+
+/// Returns true if we do not need to unpack the nullability for this column, this is
+/// only possible if the max defiition level is 1, and corresponds to nulls at the
+/// leaf level, as opposed to a nullable parent nested type
+fn packed_null_mask(descr: &ColumnDescPtr) -> bool {
+    descr.max_def_level() == 1
+        && descr.max_rep_level() == 0
+        && descr.self_type().is_optional()
 }
 
 #[cfg(test)]
@@ -365,41 +408,14 @@ mod tests {
     use arrow::buffer::Buffer;
 
     use crate::basic::Encoding;
-    use crate::column::page::Page;
-    use crate::column::page::PageReader;
     use crate::data_type::Int32Type;
-    use crate::errors::Result;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
-    use crate::util::test_common::page_util::{DataPageBuilder, DataPageBuilderImpl};
+    use crate::util::test_common::page_util::{
+        DataPageBuilder, DataPageBuilderImpl, InMemoryPageReader,
+    };
 
     use super::RecordReader;
-
-    struct TestPageReader {
-        pages: Box<dyn Iterator<Item = Page> + Send>,
-    }
-
-    impl TestPageReader {
-        pub fn new(pages: Vec<Page>) -> Self {
-            Self {
-                pages: Box::new(pages.into_iter()),
-            }
-        }
-    }
-
-    impl PageReader for TestPageReader {
-        fn get_next_page(&mut self) -> Result<Option<Page>> {
-            Ok(self.pages.next())
-        }
-    }
-
-    impl Iterator for TestPageReader {
-        type Item = Result<Page>;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            self.get_next_page().transpose()
-        }
-    }
 
     #[test]
     fn test_read_required_records() {
@@ -436,7 +452,7 @@ mod tests {
             pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
             let page = pb.consume();
 
-            let page_reader = Box::new(TestPageReader::new(vec![page]));
+            let page_reader = Box::new(InMemoryPageReader::new(vec![page]));
             record_reader.set_page_reader(page_reader).unwrap();
             assert_eq!(2, record_reader.read_records(2).unwrap());
             assert_eq!(2, record_reader.num_records());
@@ -459,7 +475,7 @@ mod tests {
             pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
             let page = pb.consume();
 
-            let page_reader = Box::new(TestPageReader::new(vec![page]));
+            let page_reader = Box::new(InMemoryPageReader::new(vec![page]));
             record_reader.set_page_reader(page_reader).unwrap();
             assert_eq!(2, record_reader.read_records(10).unwrap());
             assert_eq!(7, record_reader.num_records());
@@ -469,12 +485,9 @@ mod tests {
         let mut bb = Int32BufferBuilder::new(7);
         bb.append_slice(&[4, 7, 6, 3, 2, 8, 9]);
         let expected_buffer = bb.finish();
-        assert_eq!(
-            expected_buffer,
-            record_reader.consume_record_data().unwrap()
-        );
-        assert_eq!(None, record_reader.consume_def_levels().unwrap());
-        assert_eq!(None, record_reader.consume_bitmap().unwrap());
+        assert_eq!(expected_buffer, record_reader.consume_record_data());
+        assert_eq!(None, record_reader.consume_def_levels());
+        assert_eq!(None, record_reader.consume_bitmap());
     }
 
     #[test]
@@ -520,7 +533,7 @@ mod tests {
             pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
             let page = pb.consume();
 
-            let page_reader = Box::new(TestPageReader::new(vec![page]));
+            let page_reader = Box::new(InMemoryPageReader::new(vec![page]));
             record_reader.set_page_reader(page_reader).unwrap();
             assert_eq!(2, record_reader.read_records(2).unwrap());
             assert_eq!(2, record_reader.num_records());
@@ -546,7 +559,7 @@ mod tests {
             pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
             let page = pb.consume();
 
-            let page_reader = Box::new(TestPageReader::new(vec![page]));
+            let page_reader = Box::new(InMemoryPageReader::new(vec![page]));
             record_reader.set_page_reader(page_reader).unwrap();
             assert_eq!(2, record_reader.read_records(10).unwrap());
             assert_eq!(7, record_reader.num_records());
@@ -559,20 +572,17 @@ mod tests {
         let expected_def_levels = bb.finish();
         assert_eq!(
             Some(expected_def_levels),
-            record_reader.consume_def_levels().unwrap()
+            record_reader.consume_def_levels()
         );
 
         // Verify bitmap
         let expected_valid = &[false, true, false, true, true, false, true];
         let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
         let expected_bitmap = Bitmap::from(expected_buffer);
-        assert_eq!(
-            Some(expected_bitmap),
-            record_reader.consume_bitmap().unwrap()
-        );
+        assert_eq!(Some(expected_bitmap), record_reader.consume_bitmap());
 
         // Verify result record data
-        let actual = record_reader.consume_record_data().unwrap();
+        let actual = record_reader.consume_record_data();
         let actual_values = actual.typed_data::<i32>();
 
         let expected = &[0, 7, 0, 6, 3, 0, 8];
@@ -631,7 +641,7 @@ mod tests {
             pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
             let page = pb.consume();
 
-            let page_reader = Box::new(TestPageReader::new(vec![page]));
+            let page_reader = Box::new(InMemoryPageReader::new(vec![page]));
             record_reader.set_page_reader(page_reader).unwrap();
 
             assert_eq!(1, record_reader.read_records(1).unwrap());
@@ -659,7 +669,7 @@ mod tests {
             pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
             let page = pb.consume();
 
-            let page_reader = Box::new(TestPageReader::new(vec![page]));
+            let page_reader = Box::new(InMemoryPageReader::new(vec![page]));
             record_reader.set_page_reader(page_reader).unwrap();
 
             assert_eq!(1, record_reader.read_records(10).unwrap());
@@ -673,20 +683,17 @@ mod tests {
         let expected_def_levels = bb.finish();
         assert_eq!(
             Some(expected_def_levels),
-            record_reader.consume_def_levels().unwrap()
+            record_reader.consume_def_levels()
         );
 
         // Verify bitmap
         let expected_valid = &[true, false, false, true, true, true, true, true, true];
         let expected_buffer = Buffer::from_iter(expected_valid.iter().cloned());
         let expected_bitmap = Bitmap::from(expected_buffer);
-        assert_eq!(
-            Some(expected_bitmap),
-            record_reader.consume_bitmap().unwrap()
-        );
+        assert_eq!(Some(expected_bitmap), record_reader.consume_bitmap());
 
         // Verify result record data
-        let actual = record_reader.consume_record_data().unwrap();
+        let actual = record_reader.consume_record_data();
         let actual_values = actual.typed_data::<i32>();
         let expected = &[4, 0, 0, 7, 6, 3, 2, 8, 9];
         assert_eq!(actual_values.len(), expected.len());
@@ -731,12 +738,62 @@ mod tests {
             pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
             let page = pb.consume();
 
-            let page_reader = Box::new(TestPageReader::new(vec![page]));
+            let page_reader = Box::new(InMemoryPageReader::new(vec![page]));
             record_reader.set_page_reader(page_reader).unwrap();
 
             assert_eq!(1000, record_reader.read_records(1000).unwrap());
             assert_eq!(1000, record_reader.num_records());
             assert_eq!(5000, record_reader.num_values());
         }
+    }
+
+    #[test]
+    fn test_row_group_boundary() {
+        // Construct column schema
+        let message_type = "
+        message test_schema {
+          REPEATED Group test_struct {
+            REPEATED  INT32 leaf;
+          }
+        }
+        ";
+
+        let desc = parse_message_type(message_type)
+            .map(|t| SchemaDescriptor::new(Arc::new(t)))
+            .map(|s| s.column(0))
+            .unwrap();
+
+        let values = [1, 2, 3];
+        let def_levels = [1i16, 0i16, 1i16, 2i16, 2i16, 1i16, 2i16];
+        let rep_levels = [0i16, 0i16, 0i16, 1i16, 2i16, 0i16, 1i16];
+        let mut pb = DataPageBuilderImpl::new(desc.clone(), 7, true);
+        pb.add_rep_levels(2, &rep_levels);
+        pb.add_def_levels(2, &def_levels);
+        pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
+        let page = pb.consume();
+
+        let mut record_reader = RecordReader::<Int32Type>::new(desc);
+        let page_reader = Box::new(InMemoryPageReader::new(vec![page.clone()]));
+        record_reader.set_page_reader(page_reader).unwrap();
+        assert_eq!(record_reader.read_records(4).unwrap(), 4);
+        assert_eq!(record_reader.num_records(), 4);
+        assert_eq!(record_reader.num_values(), 7);
+
+        assert_eq!(record_reader.read_records(4).unwrap(), 0);
+        assert_eq!(record_reader.num_records(), 4);
+        assert_eq!(record_reader.num_values(), 7);
+
+        record_reader.read_records(4).unwrap();
+
+        let page_reader = Box::new(InMemoryPageReader::new(vec![page]));
+        record_reader.set_page_reader(page_reader).unwrap();
+
+        assert_eq!(record_reader.read_records(4).unwrap(), 4);
+        assert_eq!(record_reader.num_records(), 8);
+        assert_eq!(record_reader.num_values(), 14);
+
+        assert_eq!(record_reader.read_records(4).unwrap(), 0);
+        assert_eq!(record_reader.num_records(), 8);
+        assert_eq!(record_reader.num_values(), 14);
     }
 }

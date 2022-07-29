@@ -26,7 +26,10 @@ use crate::encodings::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::{bit_util::BitReader, memory::ByteBufferPtr};
+use crate::util::{
+    bit_util::{num_required_bits, BitReader},
+    memory::ByteBufferPtr,
+};
 
 /// A slice of levels buffer data that is written to by a [`ColumnLevelDecoder`]
 pub trait LevelsBufferSlice {
@@ -63,8 +66,8 @@ impl<T> ValuesBufferSlice for [T] {
 pub trait ColumnLevelDecoder {
     type Slice: LevelsBufferSlice + ?Sized;
 
-    /// Create a new [`ColumnLevelDecoder`]
-    fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self;
+    /// Set data for this [`ColumnLevelDecoder`]
+    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr);
 
     /// Read level data into `out[range]` returning the number of levels read
     ///
@@ -76,6 +79,25 @@ pub trait ColumnLevelDecoder {
     /// Implementations may panic if `range` overlaps with already written data
     ///
     fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize>;
+}
+
+pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
+    /// Skips over repetition level corresponding to `num_records` records, where a record
+    /// is delimited by a repetition level of 0
+    ///
+    /// Returns the number of records skipped, and the number of levels skipped
+    fn skip_rep_levels(&mut self, num_records: usize) -> Result<(usize, usize)>;
+}
+
+pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
+    /// Skips over `num_levels` definition levels
+    ///
+    /// Returns the number of values skipped, and the number of levels skipped
+    fn skip_def_levels(
+        &mut self,
+        num_levels: usize,
+        max_def_level: i16,
+    ) -> Result<(usize, usize)>;
 }
 
 /// Decodes value data to a [`ValuesBufferSlice`]
@@ -123,6 +145,11 @@ pub trait ColumnValueDecoder {
     /// Implementations may panic if `range` overlaps with already written data
     ///
     fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize>;
+
+    /// Skips over `num_values` values
+    ///
+    /// Returns the number of values skipped
+    fn skip_values(&mut self, num_values: usize) -> Result<usize>;
 }
 
 /// An implementation of [`ColumnValueDecoder`] for `[T::T]`
@@ -222,11 +249,35 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 
         current_decoder.get(&mut out[range])
     }
+
+    fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        let encoding = self
+            .current_encoding
+            .expect("current_encoding should be set");
+
+        let current_decoder = self
+            .decoders
+            .get_mut(&encoding)
+            .unwrap_or_else(|| panic!("decoder for encoding {} should be set", encoding));
+
+        current_decoder.skip(num_values)
+    }
 }
 
 /// An implementation of [`ColumnLevelDecoder`] for `[i16]`
 pub struct ColumnLevelDecoderImpl {
-    inner: LevelDecoderInner,
+    decoder: Option<LevelDecoderInner>,
+    bit_width: u8,
+}
+
+impl ColumnLevelDecoderImpl {
+    pub fn new(max_level: i16) -> Self {
+        let bit_width = num_required_bits(max_level as u64);
+        Self {
+            decoder: None,
+            bit_width,
+        }
+    }
 }
 
 enum LevelDecoderInner {
@@ -237,29 +288,76 @@ enum LevelDecoderInner {
 impl ColumnLevelDecoder for ColumnLevelDecoderImpl {
     type Slice = [i16];
 
-    fn new(max_level: i16, encoding: Encoding, data: ByteBufferPtr) -> Self {
-        let bit_width = crate::util::bit_util::log2(max_level as u64 + 1) as u8;
+    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
         match encoding {
             Encoding::RLE => {
-                let mut decoder = RleDecoder::new(bit_width);
+                let mut decoder = RleDecoder::new(self.bit_width);
                 decoder.set_data(data);
-                Self {
-                    inner: LevelDecoderInner::Rle(decoder),
-                }
+                self.decoder = Some(LevelDecoderInner::Rle(decoder));
             }
-            Encoding::BIT_PACKED => Self {
-                inner: LevelDecoderInner::Packed(BitReader::new(data), bit_width),
-            },
+            Encoding::BIT_PACKED => {
+                self.decoder = Some(LevelDecoderInner::Packed(
+                    BitReader::new(data),
+                    self.bit_width,
+                ));
+            }
             _ => unreachable!("invalid level encoding: {}", encoding),
         }
     }
 
     fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
-        match &mut self.inner {
+        match self.decoder.as_mut().unwrap() {
             LevelDecoderInner::Packed(reader, bit_width) => {
                 Ok(reader.get_batch::<i16>(&mut out[range], *bit_width as usize))
             }
             LevelDecoderInner::Rle(reader) => reader.get_batch(&mut out[range]),
         }
+    }
+}
+
+impl DefinitionLevelDecoder for ColumnLevelDecoderImpl {
+    fn skip_def_levels(
+        &mut self,
+        num_levels: usize,
+        max_def_level: i16,
+    ) -> Result<(usize, usize)> {
+        let mut level_skip = 0;
+        let mut value_skip = 0;
+        match self.decoder.as_mut().unwrap() {
+            LevelDecoderInner::Packed(reader, bit_width) => {
+                for _ in 0..num_levels {
+                    // Values are delimited by max_def_level
+                    if max_def_level
+                        == reader
+                            .get_value::<i16>(*bit_width as usize)
+                            .expect("Not enough values in Packed ColumnLevelDecoderImpl.")
+                    {
+                        value_skip += 1;
+                    }
+                    level_skip += 1;
+                }
+            }
+            LevelDecoderInner::Rle(reader) => {
+                for _ in 0..num_levels {
+                    if let Some(level) = reader
+                        .get::<i16>()
+                        .expect("Not enough values in Rle ColumnLevelDecoderImpl.")
+                    {
+                        // Values are delimited by max_def_level
+                        if level == max_def_level {
+                            value_skip += 1;
+                        }
+                    }
+                    level_skip += 1;
+                }
+            }
+        }
+        Ok((value_skip, level_skip))
+    }
+}
+
+impl RepetitionLevelDecoder for ColumnLevelDecoderImpl {
+    fn skip_rep_levels(&mut self, _num_records: usize) -> Result<(usize, usize)> {
+        Err(nyi_err!("https://github.com/apache/arrow-rs/issues/1792"))
     }
 }

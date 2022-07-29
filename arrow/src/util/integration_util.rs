@@ -361,7 +361,7 @@ impl ArrowJsonBatch {
                         arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
                     }
                     DataType::Decimal(_, _) => {
-                        let arr = arr.as_any().downcast_ref::<DecimalArray>().unwrap();
+                        let arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
                         arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
                     }
                     DataType::Dictionary(ref key_type, _) => match key_type.as_ref() {
@@ -944,7 +944,7 @@ mod tests {
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
-            .add_child_data(value_data.data().clone())
+            .add_child_data(value_data.into_data())
             .build()
             .unwrap();
         let lists = ListArray::from(list_data);

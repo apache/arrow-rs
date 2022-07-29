@@ -16,7 +16,9 @@
 // under the License.
 
 use super::*;
+use crate::array::BasicDecimalArray;
 use crate::datatypes::*;
+use crate::util::decimal::BasicDecimal;
 use array::Array;
 use hex::FromHex;
 use serde_json::value::Value::{Null as JNull, Object, String as JString};
@@ -32,6 +34,16 @@ pub trait JsonEqual {
         let refs = json.iter().collect::<Vec<&Value>>();
 
         self.equals_json(&refs)
+    }
+}
+
+impl<'a, T: JsonEqual> JsonEqual for &'a T {
+    fn equals_json(&self, json: &[&Value]) -> bool {
+        T::equals_json(self, json)
+    }
+
+    fn equals_json_values(&self, json: &[Value]) -> bool {
+        T::equals_json_values(self, json)
     }
 }
 
@@ -359,7 +371,7 @@ impl PartialEq<FixedSizeBinaryArray> for Value {
     }
 }
 
-impl JsonEqual for DecimalArray {
+impl JsonEqual for Decimal128Array {
     fn equals_json(&self, json: &[&Value]) -> bool {
         if self.len() != json.len() {
             return false;
@@ -378,7 +390,21 @@ impl JsonEqual for DecimalArray {
     }
 }
 
-impl PartialEq<Value> for DecimalArray {
+impl JsonEqual for Decimal256Array {
+    fn equals_json(&self, json: &[&Value]) -> bool {
+        if self.len() != json.len() {
+            return false;
+        }
+
+        (0..self.len()).all(|i| match json[i] {
+            JString(s) => self.is_valid(i) && (s == &self.value(i).to_string()),
+            JNull => self.is_null(i),
+            _ => false,
+        })
+    }
+}
+
+impl PartialEq<Value> for Decimal128Array {
     fn eq(&self, json: &Value) -> bool {
         match json {
             Value::Array(json_array) => self.equals_json_values(json_array),
@@ -387,8 +413,8 @@ impl PartialEq<Value> for DecimalArray {
     }
 }
 
-impl PartialEq<DecimalArray> for Value {
-    fn eq(&self, arrow: &DecimalArray) -> bool {
+impl PartialEq<Decimal128Array> for Value {
+    fn eq(&self, arrow: &Decimal128Array) -> bool {
         match self {
             Value::Array(json_array) => arrow.equals_json_values(json_array),
             _ => false,
@@ -452,10 +478,10 @@ mod tests {
     ) -> Result<ListArray> {
         for d in data.as_ref() {
             if let Some(v) = d {
-                builder.values().append_slice(v.as_ref())?;
-                builder.append(true)?
+                builder.values().append_slice(v.as_ref());
+                builder.append(true);
             } else {
-                builder.append(false)?
+                builder.append(false);
             }
         }
         Ok(builder.finish())
@@ -468,13 +494,13 @@ mod tests {
     ) -> Result<FixedSizeListArray> {
         for d in data.as_ref() {
             if let Some(v) = d {
-                builder.values().append_slice(v.as_ref())?;
-                builder.append(true)?
+                builder.values().append_slice(v.as_ref());
+                builder.append(true);
             } else {
                 for _ in 0..builder.value_length() {
-                    builder.values().append_null()?;
+                    builder.values().append_null();
                 }
-                builder.append(false)?
+                builder.append(false);
             }
         }
         Ok(builder.finish())
@@ -750,12 +776,12 @@ mod tests {
     fn test_binary_json_equal() {
         // Test the equal case
         let mut builder = BinaryBuilder::new(6);
-        builder.append_value(b"hello").unwrap();
-        builder.append_null().unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(b"world").unwrap();
-        builder.append_null().unwrap();
-        builder.append_null().unwrap();
+        builder.append_value(b"hello");
+        builder.append_null();
+        builder.append_null();
+        builder.append_value(b"world");
+        builder.append_null();
+        builder.append_null();
         let arrow_array = builder.finish();
         let json_array: Value = serde_json::from_str(
             r#"
@@ -850,7 +876,7 @@ mod tests {
         // Test the equal case
         let mut builder = FixedSizeBinaryBuilder::new(15, 5);
         builder.append_value(b"hello").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(b"world").unwrap();
         let arrow_array: FixedSizeBinaryArray = builder.finish();
         let json_array: Value = serde_json::from_str(
@@ -868,7 +894,7 @@ mod tests {
 
         // Test unequal case
         builder.append_value(b"hello").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append_value(b"world").unwrap();
         let arrow_array: FixedSizeBinaryArray = builder.finish();
         let json_array: Value = serde_json::from_str(
@@ -931,7 +957,7 @@ mod tests {
         // Test the equal case
         let arrow_array = [Some(1_000), None, Some(-250)]
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap();
         let json_array: Value = serde_json::from_str(
@@ -950,7 +976,7 @@ mod tests {
         // Test unequal case
         let arrow_array = [Some(1_000), None, Some(55)]
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap();
         let json_array: Value = serde_json::from_str(

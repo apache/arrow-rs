@@ -39,6 +39,7 @@ use std::str;
 use std::sync::Arc;
 
 use crate::buffer::MutableBuffer;
+use crate::compute::divide_scalar;
 use crate::compute::kernels::arithmetic::{divide, multiply};
 use crate::compute::kernels::arity::unary;
 use crate::compute::kernels::cast_utils::string_to_timestamp_nanos;
@@ -46,6 +47,7 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::{array::*, compute::take};
 use crate::{buffer::Buffer, util::serialization::lexical_to_string};
+use num::cast::AsPrimitive;
 use num::{NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
@@ -72,9 +74,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // cast one decimal type to another decimal type
         (Decimal(_, _), Decimal(_, _)) => true,
         // signed numeric to decimal
-        (Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal(_, _)) |
+        (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal(_, _)) |
         // decimal to signed numeric
-        (Decimal(_, _), Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
+        (Decimal(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
         | (
             Null,
             Boolean
@@ -105,39 +107,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | FixedSizeList(_, _)
             | Struct(_)
             | Map(_, _)
-            | Dictionary(_, _),
-        )
-        | (
-            Boolean
-            | Int8
-            | UInt8
-            | Int16
-            | UInt16
-            | Int32
-            | UInt32
-            | Float32
-            | Date32
-            | Time32(_)
-            | Int64
-            | UInt64
-            | Float64
-            | Date64
-            | Timestamp(_, _)
-            | Time64(_)
-            | Duration(_)
-            | Interval(_)
-            | FixedSizeBinary(_)
-            | Binary
-            | Utf8
-            | LargeBinary
-            | LargeUtf8
-            | List(_)
-            | LargeList(_)
-            | FixedSizeList(_, _)
-            | Struct(_)
-            | Map(_, _)
-            | Dictionary(_, _),
-            Null,
+            | Dictionary(_, _)
         ) => true,
         (Decimal(_, _), _) => false,
         (_, Decimal(_, _)) => false,
@@ -251,21 +221,21 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         (Int64, Duration(_)) => true,
         (Duration(_), Int64) => true,
         (Interval(from_type), Int64) => {
-            match from_type{
+            match from_type {
                 IntervalUnit::YearMonth => true,
                 IntervalUnit::DayTime => true,
                 IntervalUnit::MonthDayNano => false, // Native type is i128
             }
-        },
+        }
         (Int32, Interval(to_type)) => {
-            match to_type{
+            match to_type {
                 IntervalUnit::YearMonth => true,
                 IntervalUnit::DayTime => false,
                 IntervalUnit::MonthDayNano => false,
             }
-        },
+        }
         (Int64, Interval(to_type)) => {
-            match to_type{
+            match to_type {
                 IntervalUnit::YearMonth => false,
                 IntervalUnit::DayTime => true,
                 IntervalUnit::MonthDayNano => false,
@@ -300,65 +270,80 @@ pub fn cast(array: &ArrayRef, to_type: &DataType) -> Result<ArrayRef> {
     cast_with_options(array, to_type, &DEFAULT_CAST_OPTIONS)
 }
 
-// cast the integer array to defined decimal data type array
-macro_rules! cast_integer_to_decimal {
-    ($ARRAY: expr, $ARRAY_TYPE: ident, $PRECISION : ident, $SCALE : ident) => {{
-        let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-        let mul: i128 = 10_i128.pow(*$SCALE as u32);
-        let decimal_array = array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    let v = v as i128;
-                    // with_precision_and_scale validates the
-                    // value is within range for the output precision
-                    mul * v
-                })
-            })
-            .collect::<DecimalArray>()
-            .with_precision_and_scale(*$PRECISION, *$SCALE)?;
-        Ok(Arc::new(decimal_array))
-    }};
+/// Cast the primitive array to defined decimal data type array
+fn cast_primitive_to_decimal<T: ArrayAccessor, F>(
+    array: T,
+    op: F,
+    precision: usize,
+    scale: usize,
+) -> Result<Arc<dyn Array>>
+where
+    F: Fn(T::Item) -> i128,
+{
+    #[allow(clippy::redundant_closure)]
+    let decimal_array = ArrayIter::new(array)
+        .map(|v| v.map(|v| op(v)))
+        .collect::<Decimal128Array>()
+        .with_precision_and_scale(precision, scale)?;
+
+    Ok(Arc::new(decimal_array))
 }
 
-// cast the floating-point array to defined decimal data type array
-macro_rules! cast_floating_point_to_decimal {
-    ($ARRAY: expr, $ARRAY_TYPE: ident, $PRECISION : ident, $SCALE : ident) => {{
-        let array = $ARRAY.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-        let mul = 10_f64.powi(*$SCALE as i32);
-        let decimal_array = array
-            .iter()
-            .map(|v| {
-                v.map(|v| {
-                    // with_precision_and_scale validates the
-                    // value is within range for the output precision
-                    ((v as f64) * mul) as i128
-                })
-            })
-            .collect::<DecimalArray>()
-            .with_precision_and_scale(*$PRECISION, *$SCALE)?;
-        Ok(Arc::new(decimal_array))
-    }};
+fn cast_integer_to_decimal<T: ArrowNumericType>(
+    array: &PrimitiveArray<T>,
+    precision: usize,
+    scale: usize,
+) -> Result<Arc<dyn Array>>
+where
+    <T as ArrowPrimitiveType>::Native: AsPrimitive<i128>,
+{
+    let mul: i128 = 10_i128.pow(scale as u32);
+
+    // with_precision_and_scale validates the
+    // value is within range for the output precision
+    cast_primitive_to_decimal(array, |v| v.as_() * mul, precision, scale)
+}
+
+fn cast_floating_point_to_decimal<T: ArrowNumericType>(
+    array: &PrimitiveArray<T>,
+    precision: usize,
+    scale: usize,
+) -> Result<Arc<dyn Array>>
+where
+    <T as ArrowPrimitiveType>::Native: AsPrimitive<f64>,
+{
+    let mul = 10_f64.powi(scale as i32);
+
+    cast_primitive_to_decimal(
+        array,
+        |v| {
+            // with_precision_and_scale validates the
+            // value is within range for the output precision
+            (v.as_() * mul) as i128
+        },
+        precision,
+        scale,
+    )
 }
 
 // cast the decimal array to integer array
 macro_rules! cast_decimal_to_integer {
     ($ARRAY:expr, $SCALE : ident, $VALUE_BUILDER: ident, $NATIVE_TYPE : ident, $DATA_TYPE : expr) => {{
-        let array = $ARRAY.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array = $ARRAY.as_any().downcast_ref::<Decimal128Array>().unwrap();
         let mut value_builder = $VALUE_BUILDER::new(array.len());
         let div: i128 = 10_i128.pow(*$SCALE as u32);
         let min_bound = ($NATIVE_TYPE::MIN) as i128;
         let max_bound = ($NATIVE_TYPE::MAX) as i128;
         for i in 0..array.len() {
             if array.is_null(i) {
-                value_builder.append_null()?;
+                value_builder.append_null();
             } else {
                 let v = array.value(i).as_i128() / div;
                 // check the overflow
                 // For example: Decimal(128,10,0) as i8
                 // 128 is out of range i8
                 if v <= max_bound && v >= min_bound {
-                    value_builder.append_value(v as $NATIVE_TYPE)?;
+                    value_builder.append_value(v as $NATIVE_TYPE);
                 } else {
                     return Err(ArrowError::CastError(format!(
                         "value of {} is out of range {}",
@@ -374,17 +359,17 @@ macro_rules! cast_decimal_to_integer {
 // cast the decimal array to floating-point array
 macro_rules! cast_decimal_to_float {
     ($ARRAY:expr, $SCALE : ident, $VALUE_BUILDER: ident, $NATIVE_TYPE : ty) => {{
-        let array = $ARRAY.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array = $ARRAY.as_any().downcast_ref::<Decimal128Array>().unwrap();
         let div = 10_f64.powi(*$SCALE as i32);
         let mut value_builder = $VALUE_BUILDER::new(array.len());
         for i in 0..array.len() {
             if array.is_null(i) {
-                value_builder.append_null()?;
+                value_builder.append_null();
             } else {
                 // The range of f32 or f64 is larger than i128, we don't need to check overflow.
                 // cast the i128 to f64 will lose precision, for example the `112345678901234568` will be as `112345678901234560`.
                 let v = (array.value(i).as_i128() as f64 / div) as $NATIVE_TYPE;
-                value_builder.append_value(v)?;
+                value_builder.append_value(v);
             }
         }
         Ok(Arc::new(value_builder.finish()))
@@ -447,6 +432,7 @@ pub fn cast_with_options(
                 Float64 => {
                     cast_decimal_to_float!(array, scale, Float64Builder, f64)
                 }
+                Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {:?} to {:?} not supported",
                     from_type, to_type
@@ -457,24 +443,37 @@ pub fn cast_with_options(
             // cast data to decimal
             match from_type {
                 // TODO now just support signed numeric to decimal, support decimal to numeric later
-                Int8 => {
-                    cast_integer_to_decimal!(array, Int8Array, precision, scale)
-                }
-                Int16 => {
-                    cast_integer_to_decimal!(array, Int16Array, precision, scale)
-                }
-                Int32 => {
-                    cast_integer_to_decimal!(array, Int32Array, precision, scale)
-                }
-                Int64 => {
-                    cast_integer_to_decimal!(array, Int64Array, precision, scale)
-                }
-                Float32 => {
-                    cast_floating_point_to_decimal!(array, Float32Array, precision, scale)
-                }
-                Float64 => {
-                    cast_floating_point_to_decimal!(array, Float64Array, precision, scale)
-                }
+                Int8 => cast_integer_to_decimal(
+                    as_primitive_array::<Int8Type>(array),
+                    *precision,
+                    *scale,
+                ),
+                Int16 => cast_integer_to_decimal(
+                    as_primitive_array::<Int16Type>(array),
+                    *precision,
+                    *scale,
+                ),
+                Int32 => cast_integer_to_decimal(
+                    as_primitive_array::<Int32Type>(array),
+                    *precision,
+                    *scale,
+                ),
+                Int64 => cast_integer_to_decimal(
+                    as_primitive_array::<Int64Type>(array),
+                    *precision,
+                    *scale,
+                ),
+                Float32 => cast_floating_point_to_decimal(
+                    as_primitive_array::<Float32Type>(array),
+                    *precision,
+                    *scale,
+                ),
+                Float64 => cast_floating_point_to_decimal(
+                    as_primitive_array::<Float64Type>(array),
+                    *precision,
+                    *scale,
+                ),
+                Null => Ok(new_null_array(to_type, array.len())),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from {:?} to {:?} not supported",
                     from_type, to_type
@@ -512,38 +511,6 @@ pub fn cast_with_options(
             | Struct(_)
             | Map(_, _)
             | Dictionary(_, _),
-        )
-        | (
-            Boolean
-            | Int8
-            | UInt8
-            | Int16
-            | UInt16
-            | Int32
-            | UInt32
-            | Float32
-            | Date32
-            | Time32(_)
-            | Int64
-            | UInt64
-            | Float64
-            | Date64
-            | Timestamp(_, _)
-            | Time64(_)
-            | Duration(_)
-            | Interval(_)
-            | FixedSizeBinary(_)
-            | Binary
-            | Utf8
-            | LargeBinary
-            | LargeUtf8
-            | List(_)
-            | LargeList(_)
-            | FixedSizeList(_, _)
-            | Struct(_)
-            | Map(_, _)
-            | Dictionary(_, _),
-            Null,
         ) => Ok(new_null_array(to_type, array.len())),
         (Struct(_), _) => Err(ArrowError::CastError(
             "Cannot cast from struct to other types".to_string(),
@@ -1103,10 +1070,7 @@ pub fn cast_with_options(
             // we either divide or multiply, depending on size of each unit
             // units are never the same when the types are the same
             let converted = if from_size >= to_size {
-                divide(
-                    &time_array,
-                    &Int64Array::from(vec![from_size / to_size; array.len()]),
-                )?
+                divide_scalar(&time_array, from_size / to_size)?
             } else {
                 multiply(
                     &time_array,
@@ -1136,12 +1100,15 @@ pub fn cast_with_options(
         (Timestamp(from_unit, _), Date32) => {
             let time_array = Int64Array::from(array.data().clone());
             let from_size = time_unit_multiple(from_unit) * SECONDS_IN_DAY;
+
+            // Int32Array::from_iter(tim.iter)
             let mut b = Date32Builder::new(array.len());
+
             for i in 0..array.len() {
-                if array.is_null(i) {
-                    b.append_null()?;
+                if time_array.is_null(i) {
+                    b.append_null();
                 } else {
-                    b.append_value((time_array.value(i) / from_size) as i32)?;
+                    b.append_value((time_array.value(i) / from_size) as i32);
                 }
             }
 
@@ -1257,7 +1224,7 @@ fn cast_decimal_to_decimal(
     output_precision: &usize,
     output_scale: &usize,
 ) -> Result<ArrayRef> {
-    let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+    let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
 
     let output_array = if input_scale > output_scale {
         // For example, input_scale is 4 and output_scale is 3;
@@ -1265,16 +1232,16 @@ fn cast_decimal_to_decimal(
         let div = 10_i128.pow((input_scale - output_scale) as u32);
         array
             .iter()
-            .map(|v| v.map(|v| v / div))
-            .collect::<DecimalArray>()
+            .map(|v| v.map(|v| v.as_i128() / div))
+            .collect::<Decimal128Array>()
     } else {
         // For example, input_scale is 3 and output_scale is 4;
         // Original value is 1123_i128, and will be cast to 11230_i128.
         let mul = 10_i128.pow((output_scale - input_scale) as u32);
         array
             .iter()
-            .map(|v| v.map(|v| v * mul))
-            .collect::<DecimalArray>()
+            .map(|v| v.map(|v| v.as_i128() * mul))
+            .collect::<Decimal128Array>()
     }
     .with_precision_and_scale(*output_precision, *output_scale)?;
 
@@ -1711,11 +1678,11 @@ where
 
     for i in 0..from.len() {
         if from.is_null(i) {
-            b.append_null()?;
+            b.append_null();
         } else if from.value(i) != T::default_value() {
-            b.append_value(true)?;
+            b.append_value(true);
         } else {
-            b.append_value(false)?;
+            b.append_value(false);
         }
     }
 
@@ -1817,7 +1784,7 @@ fn dictionary_cast<K: ArrowDictionaryKeyType>(
                         .map(|bitmap| bitmap.bits),
                     cast_keys.data().offset(),
                     cast_keys.data().buffers().to_vec(),
-                    vec![cast_values.data().clone()],
+                    vec![cast_values.into_data()],
                 )
             };
 
@@ -1969,7 +1936,7 @@ where
     // copy each element one at a time
     for i in 0..values.len() {
         if values.is_null(i) {
-            b.append_null()?;
+            b.append_null();
         } else {
             b.append(values.value(i))?;
         }
@@ -1996,7 +1963,7 @@ where
     // copy each element one at a time
     for i in 0..values.len() {
         if values.is_null(i) {
-            b.append_null()?;
+            b.append_null();
         } else {
             b.append(values.value(i))?;
         }
@@ -2035,7 +2002,7 @@ fn cast_primitive_to_list<OffsetSize: OffsetSizeTrait + NumCast>(
                 .map(|bitmap| bitmap.bits),
             0,
             vec![offsets.into()],
-            vec![cast_array.data().clone()],
+            vec![cast_array.into_data()],
         )
     };
     let list_array =
@@ -2063,7 +2030,7 @@ fn cast_list_inner<OffsetSize: OffsetSizeTrait>(
             array.offset(),
             // reuse offset buffer
             data.buffers().to_vec(),
-            vec![cast_array.data().clone()],
+            vec![cast_array.into_data()],
         )
     };
     let list = GenericListArray::<OffsetSize>::from(array_data);
@@ -2196,6 +2163,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::array::BasicDecimalArray;
     use crate::util::decimal::Decimal128;
     use crate::{buffer::Buffer, util::display::array_value_to_string};
 
@@ -2228,10 +2196,10 @@ mod tests {
         array: &[Option<i128>],
         precision: usize,
         scale: usize,
-    ) -> Result<DecimalArray> {
+    ) -> Result<Decimal128Array> {
         array
             .iter()
-            .collect::<DecimalArray>()
+            .collect::<Decimal128Array>()
             .with_precision_and_scale(precision, scale)
     }
 
@@ -2245,7 +2213,7 @@ mod tests {
         let array = Arc::new(input_decimal_array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            DecimalArray,
+            Decimal128Array,
             &output_type,
             vec![
                 Some(Decimal128::new_from_i128(20, 4, 11234560_i128)),
@@ -2424,7 +2392,7 @@ mod tests {
         for array in input_datas {
             generate_cast_test_case!(
                 &array,
-                DecimalArray,
+                Decimal128Array,
                 &decimal_type,
                 vec![
                     Some(Decimal128::new_from_i128(38, 6, 1000000_i128)),
@@ -2456,7 +2424,7 @@ mod tests {
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            DecimalArray,
+            Decimal128Array,
             &decimal_type,
             vec![
                 Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),
@@ -2481,7 +2449,7 @@ mod tests {
         let array = Arc::new(array) as ArrayRef;
         generate_cast_test_case!(
             &array,
-            DecimalArray,
+            Decimal128Array,
             &decimal_type,
             vec![
                 Some(Decimal128::new_from_i128(38, 6, 1100000_i128)),
@@ -4132,7 +4100,7 @@ mod tests {
         let values_builder = StringBuilder::new(10);
         let mut builder = StringDictionaryBuilder::new(keys_builder, values_builder);
         builder.append("one").unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append("three").unwrap();
         let array: ArrayRef = Arc::new(builder.finish());
 
@@ -4255,7 +4223,7 @@ mod tests {
         let values_builder = PrimitiveBuilder::<Int32Type>::new(10);
         let mut builder = PrimitiveDictionaryBuilder::new(keys_builder, values_builder);
         builder.append(1).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(3).unwrap();
         let array: ArrayRef = Arc::new(builder.finish());
 
@@ -4276,9 +4244,9 @@ mod tests {
         use DataType::*;
 
         let mut builder = PrimitiveBuilder::<Int32Type>::new(10);
-        builder.append_value(1).unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(3).unwrap();
+        builder.append_value(1);
+        builder.append_null();
+        builder.append_value(3);
         let array: ArrayRef = Arc::new(builder.finish());
 
         let expected = vec!["1", "null", "3"];
@@ -4313,6 +4281,26 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_null_array_to_from_decimal_array() {
+        let data_type = DataType::Decimal(12, 4);
+        let array = new_null_array(&DataType::Null, 4);
+        assert_eq!(array.data_type(), &DataType::Null);
+        let cast_array = cast(&array, &data_type).expect("cast failed");
+        assert_eq!(cast_array.data_type(), &data_type);
+        for i in 0..4 {
+            assert!(cast_array.is_null(i));
+        }
+
+        let array = new_null_array(&data_type, 4);
+        assert_eq!(array.data_type(), &data_type);
+        let cast_array = cast(&array, &DataType::Null).expect("cast failed");
+        assert_eq!(cast_array.data_type(), &DataType::Null);
+        for i in 0..4 {
+            assert!(cast_array.is_null(i));
+        }
+    }
+
+    #[test]
     fn test_cast_null_array_from_and_to_primitive_array() {
         macro_rules! typed_test {
             ($ARR_TYPE:ident, $DATATYPE:ident, $TYPE:tt) => {{
@@ -4323,14 +4311,6 @@ mod tests {
                     let cast_array = cast(&array, &cast_type).expect("cast failed");
                     let cast_array = as_primitive_array::<$TYPE>(&cast_array);
                     assert_eq!(cast_array.data_type(), &cast_type);
-                    assert_eq!(cast_array, &expected);
-                }
-                {
-                    let array = Arc::new($ARR_TYPE::from(vec![None; 4])) as ArrayRef;
-                    let expected = NullArray::new(4);
-                    let cast_array = cast(&array, &DataType::Null).expect("cast failed");
-                    let cast_array = as_null_array(&cast_array);
-                    assert_eq!(cast_array.data_type(), &DataType::Null);
                     assert_eq!(cast_array, &expected);
                 }
             }};
@@ -4351,17 +4331,7 @@ mod tests {
         typed_test!(Date64Array, Date64, Date64Type);
     }
 
-    fn cast_from_and_to_null(data_type: &DataType) {
-        // Cast from data_type to null
-        {
-            let array = new_null_array(data_type, 4);
-            assert_eq!(array.data_type(), data_type);
-            let cast_array = cast(&array, &DataType::Null).expect("cast failed");
-            assert_eq!(cast_array.data_type(), &DataType::Null);
-            for i in 0..4 {
-                assert!(cast_array.is_null(i));
-            }
-        }
+    fn cast_from_null_to_other(data_type: &DataType) {
         // Cast from null to data_type
         {
             let array = new_null_array(&DataType::Null, 4);
@@ -4376,10 +4346,10 @@ mod tests {
 
     #[test]
     fn test_cast_null_from_and_to_variable_sized() {
-        cast_from_and_to_null(&DataType::Utf8);
-        cast_from_and_to_null(&DataType::LargeUtf8);
-        cast_from_and_to_null(&DataType::Binary);
-        cast_from_and_to_null(&DataType::LargeBinary);
+        cast_from_null_to_other(&DataType::Utf8);
+        cast_from_null_to_other(&DataType::LargeUtf8);
+        cast_from_null_to_other(&DataType::Binary);
+        cast_from_null_to_other(&DataType::LargeBinary);
     }
 
     #[test]
@@ -4396,32 +4366,32 @@ mod tests {
             )),
             false,
         );
-        cast_from_and_to_null(&data_type);
+        cast_from_null_to_other(&data_type);
 
         // Cast null from and to list
         let data_type =
             DataType::List(Box::new(Field::new("item", DataType::Int32, true)));
-        cast_from_and_to_null(&data_type);
+        cast_from_null_to_other(&data_type);
         let data_type =
             DataType::LargeList(Box::new(Field::new("item", DataType::Int32, true)));
-        cast_from_and_to_null(&data_type);
+        cast_from_null_to_other(&data_type);
         let data_type = DataType::FixedSizeList(
             Box::new(Field::new("item", DataType::Int32, true)),
             4,
         );
-        cast_from_and_to_null(&data_type);
+        cast_from_null_to_other(&data_type);
 
         // Cast null from and to dictionary
         let values = vec![None, None, None, None] as Vec<Option<&str>>;
         let array: DictionaryArray<Int8Type> = values.into_iter().collect();
         let array = Arc::new(array) as ArrayRef;
         let data_type = array.data_type().to_owned();
-        cast_from_and_to_null(&data_type);
+        cast_from_null_to_other(&data_type);
 
         // Cast null from and to struct
         let data_type =
             DataType::Struct(vec![Field::new("data", DataType::Int64, false)]);
-        cast_from_and_to_null(&data_type);
+        cast_from_null_to_other(&data_type);
     }
 
     /// Print the `DictionaryArray` `array` as a vector of strings

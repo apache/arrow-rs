@@ -25,19 +25,11 @@ use crate::arrow::array_reader::{
     ComplexObjectArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
     PrimitiveArrayReader, RowGroupCollection, StructArrayReader,
 };
-use crate::arrow::buffer::converter::{
-    DecimalArrayConverter, DecimalConverter, FixedLenBinaryConverter,
-    FixedSizeArrayConverter, Int96ArrayConverter, Int96Converter,
-    IntervalDayTimeArrayConverter, IntervalDayTimeConverter,
-    IntervalYearMonthArrayConverter, IntervalYearMonthConverter,
-};
+use crate::arrow::buffer::converter::{DecimalArrayConverter, DecimalByteArrayConvert, DecimalFixedLengthByteArrayConverter, FixedLenBinaryConverter, FixedSizeArrayConverter, Int96ArrayConverter, Int96Converter, IntervalDayTimeArrayConverter, IntervalDayTimeConverter, IntervalYearMonthArrayConverter, IntervalYearMonthConverter};
 use crate::arrow::schema::{convert_schema, ParquetField, ParquetFieldType};
 use crate::arrow::ProjectionMask;
 use crate::basic::Type as PhysicalType;
-use crate::data_type::{
-    BoolType, DoubleType, FixedLenByteArrayType, FloatType, Int32Type, Int64Type,
-    Int96Type,
-};
+use crate::data_type::{BoolType, ByteArrayType, DoubleType, FixedLenByteArrayType, FloatType, Int32Type, Int64Type, Int96Type};
 use crate::errors::Result;
 use crate::schema::types::{ColumnDescriptor, ColumnPath, SchemaDescPtr, Type};
 
@@ -160,16 +152,14 @@ fn build_primitive_reader(
     ));
 
     let page_iterator = row_groups.column_chunks(col_idx)?;
-    let null_mask_only = field.def_level == 1 && field.nullable;
     let arrow_type = Some(field.arrow_type.clone());
 
     match physical_type {
         PhysicalType::BOOLEAN => Ok(Box::new(
-            PrimitiveArrayReader::<BoolType>::new_with_options(
+            PrimitiveArrayReader::<BoolType>::new(
                 page_iterator,
                 column_desc,
                 arrow_type,
-                null_mask_only,
             )?,
         )),
         PhysicalType::INT32 => {
@@ -180,21 +170,19 @@ fn build_primitive_reader(
                 )?))
             } else {
                 Ok(Box::new(
-                    PrimitiveArrayReader::<Int32Type>::new_with_options(
+                    PrimitiveArrayReader::<Int32Type>::new(
                         page_iterator,
                         column_desc,
                         arrow_type,
-                        null_mask_only,
                     )?,
                 ))
             }
         }
         PhysicalType::INT64 => Ok(Box::new(
-            PrimitiveArrayReader::<Int64Type>::new_with_options(
+            PrimitiveArrayReader::<Int64Type>::new(
                 page_iterator,
                 column_desc,
                 arrow_type,
-                null_mask_only,
             )?,
         )),
         PhysicalType::INT96 => {
@@ -218,19 +206,17 @@ fn build_primitive_reader(
             )?))
         }
         PhysicalType::FLOAT => Ok(Box::new(
-            PrimitiveArrayReader::<FloatType>::new_with_options(
+            PrimitiveArrayReader::<FloatType>::new(
                 page_iterator,
                 column_desc,
                 arrow_type,
-                null_mask_only,
             )?,
         )),
         PhysicalType::DOUBLE => Ok(Box::new(
-            PrimitiveArrayReader::<DoubleType>::new_with_options(
+            PrimitiveArrayReader::<DoubleType>::new(
                 page_iterator,
                 column_desc,
                 arrow_type,
-                null_mask_only,
             )?,
         )),
         PhysicalType::BYTE_ARRAY => match arrow_type {
@@ -238,24 +224,34 @@ fn build_primitive_reader(
                 page_iterator,
                 column_desc,
                 arrow_type,
-                null_mask_only,
             ),
+            Some(DataType::Decimal(precision, scale)) => {
+                // read decimal data from parquet binary physical type
+                let convert = DecimalByteArrayConvert::new(DecimalArrayConverter::new(precision as i32, scale as i32));
+                Ok(Box::new(
+                    ComplexObjectArrayReader::<ByteArrayType,DecimalByteArrayConvert>::new(
+                        page_iterator,
+                        column_desc,
+                        convert,
+                        arrow_type
+                    )?
+                ))
+            },
             _ => make_byte_array_reader(
                 page_iterator,
                 column_desc,
                 arrow_type,
-                null_mask_only,
             ),
         },
         PhysicalType::FIXED_LEN_BYTE_ARRAY => match field.arrow_type {
             DataType::Decimal(precision, scale) => {
-                let converter = DecimalConverter::new(DecimalArrayConverter::new(
+                let converter = DecimalFixedLengthByteArrayConverter::new(DecimalArrayConverter::new(
                     precision as i32,
                     scale as i32,
                 ));
                 Ok(Box::new(ComplexObjectArrayReader::<
                     FixedLenByteArrayType,
-                    DecimalConverter,
+                    DecimalFixedLengthByteArrayConverter,
                 >::new(
                     page_iterator,
                     column_desc,

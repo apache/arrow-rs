@@ -26,9 +26,10 @@ use crate::error::{ArrowError, Result};
 
 use super::DataType;
 
-/// Contains the meta-data for a single relative type.
+/// Describes a single column in a [`Schema`](super::Schema).
 ///
-/// The `Schema` object is an ordered collection of `Field` objects.
+/// A [`Schema`](super::Schema) is an ordered collection of
+/// [`Field`] objects.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Field {
     name: String,
@@ -95,7 +96,7 @@ impl Field {
         }
     }
 
-    /// Creates a new field
+    /// Creates a new field that has additional dictionary information
     pub fn new_dict(
         name: &str,
         data_type: DataType,
@@ -144,19 +145,62 @@ impl Field {
         &self.name
     }
 
-    /// Returns an immutable reference to the `Field`'s  data-type.
+    /// Set the name of the [`Field`] and returns self.
+    ///
+    /// ```
+    /// # use arrow::datatypes::*;
+    /// let field = Field::new("c1", DataType::Int64, false)
+    ///    .with_name("c2");
+    ///
+    /// assert_eq!(field.name(), "c2");
+    /// ```
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    /// Returns an immutable reference to the [`Field`]'s  [`DataType`].
     #[inline]
     pub const fn data_type(&self) -> &DataType {
         &self.data_type
     }
 
-    /// Indicates whether this `Field` supports null values.
+    /// Set [`DataType`] of the [`Field`] and returns self.
+    ///
+    /// ```
+    /// # use arrow::datatypes::*;
+    /// let field = Field::new("c1", DataType::Int64, false)
+    ///    .with_data_type(DataType::Utf8);
+    ///
+    /// assert_eq!(field.data_type(), &DataType::Utf8);
+    /// ```
+    pub fn with_data_type(mut self, data_type: DataType) -> Self {
+        self.data_type = data_type;
+        self
+    }
+
+    /// Indicates whether this [`Field`] supports null values.
     #[inline]
     pub const fn is_nullable(&self) -> bool {
         self.nullable
     }
 
-    /// Returns a (flattened) vector containing all fields contained within this field (including it self)
+    /// Set `nullable` of the [`Field`] and returns self.
+    ///
+    /// ```
+    /// # use arrow::datatypes::*;
+    /// let field = Field::new("c1", DataType::Int64, false)
+    ///    .with_nullable(true);
+    ///
+    /// assert_eq!(field.is_nullable(), true);
+    /// ```
+    pub fn with_nullable(mut self, nullable: bool) -> Self {
+        self.nullable = nullable;
+        self
+    }
+
+    /// Returns a (flattened) [`Vec`] containing all child [`Field`]s
+    /// within `self` contained within this field (including `self`)
     pub(crate) fn fields(&self) -> Vec<&Field> {
         let mut collected_fields = vec![self];
         collected_fields.append(&mut self._fields(&self.data_type));
@@ -491,14 +535,16 @@ impl Field {
         }
     }
 
-    /// Merge field into self if it is compatible. Struct will be merged recursively.
-    /// NOTE: `self` may be updated to unexpected state in case of merge failure.
+    /// Merge this field into self if it is compatible.
+    ///
+    /// Struct fields are merged recursively.
+    ///
+    /// NOTE: `self` may be updated to a partial / unexpected state in case of merge failure.
     ///
     /// Example:
     ///
     /// ```
-    /// use arrow::datatypes::*;
-    ///
+    /// # use arrow::datatypes::*;
     /// let mut field = Field::new("c1", DataType::Int64, false);
     /// assert!(field.try_merge(&Field::new("c1", DataType::Int64, true)).is_ok());
     /// assert!(field.is_nullable());
@@ -629,7 +675,8 @@ impl Field {
             | DataType::FixedSizeBinary(_)
             | DataType::Utf8
             | DataType::LargeUtf8
-            | DataType::Decimal(_, _) => {
+            | DataType::Decimal(_, _)
+            | DataType::Decimal256(_, _) => {
                 if self.data_type != from.data_type {
                     return Err(ArrowError::SchemaError(
                         "Fail to merge schema Field due to conflicting datatype"

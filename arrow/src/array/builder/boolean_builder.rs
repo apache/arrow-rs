@@ -23,9 +23,12 @@ use crate::array::ArrayData;
 use crate::array::ArrayRef;
 use crate::array::BooleanArray;
 use crate::datatypes::DataType;
-use crate::error::{ArrowError, Result};
+
+use crate::error::ArrowError;
+use crate::error::Result;
 
 use super::BooleanBufferBuilder;
+use super::NullBufferBuilder;
 
 ///  Array builder for fixed-width primitive types
 ///
@@ -60,7 +63,7 @@ use super::BooleanBufferBuilder;
 #[derive(Debug)]
 pub struct BooleanBuilder {
     values_builder: BooleanBufferBuilder,
-    bitmap_builder: BooleanBufferBuilder,
+    null_buffer_builder: NullBufferBuilder,
 }
 
 impl BooleanBuilder {
@@ -68,7 +71,7 @@ impl BooleanBuilder {
     pub fn new(capacity: usize) -> Self {
         Self {
             values_builder: BooleanBufferBuilder::new(capacity),
-            bitmap_builder: BooleanBufferBuilder::new(capacity),
+            null_buffer_builder: NullBufferBuilder::new(capacity),
         }
     }
 
@@ -79,60 +82,65 @@ impl BooleanBuilder {
 
     /// Appends a value of type `T` into the builder
     #[inline]
-    pub fn append_value(&mut self, v: bool) -> Result<()> {
-        self.bitmap_builder.append(true);
+    pub fn append_value(&mut self, v: bool) {
         self.values_builder.append(v);
-        Ok(())
+        self.null_buffer_builder.append_non_null();
     }
 
     /// Appends a null slot into the builder
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
-        self.bitmap_builder.append(false);
+    pub fn append_null(&mut self) {
+        self.null_buffer_builder.append_null();
         self.values_builder.advance(1);
-        Ok(())
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_n_nulls(n);
+        self.values_builder.advance(n);
     }
 
     /// Appends an `Option<T>` into the builder
     #[inline]
-    pub fn append_option(&mut self, v: Option<bool>) -> Result<()> {
+    pub fn append_option(&mut self, v: Option<bool>) {
         match v {
-            None => self.append_null()?,
-            Some(v) => self.append_value(v)?,
+            None => self.append_null(),
+            Some(v) => self.append_value(v),
         };
-        Ok(())
     }
 
     /// Appends a slice of type `T` into the builder
     #[inline]
-    pub fn append_slice(&mut self, v: &[bool]) -> Result<()> {
-        self.bitmap_builder.append_n(v.len(), true);
+    pub fn append_slice(&mut self, v: &[bool]) {
         self.values_builder.append_slice(v);
-        Ok(())
+        self.null_buffer_builder.append_n_non_nulls(v.len());
     }
 
-    /// Appends values from a slice of type `T` and a validity boolean slice
+    /// Appends values from a slice of type `T` and a validity boolean slice.
+    ///
+    /// Returns an error if the slices are of different lengths
     #[inline]
     pub fn append_values(&mut self, values: &[bool], is_valid: &[bool]) -> Result<()> {
         if values.len() != is_valid.len() {
-            return Err(ArrowError::InvalidArgumentError(
+            Err(ArrowError::InvalidArgumentError(
                 "Value and validity lengths must be equal".to_string(),
-            ));
+            ))
+        } else {
+            self.null_buffer_builder.append_slice(is_valid);
+            self.values_builder.append_slice(values);
+            Ok(())
         }
-        self.bitmap_builder.append_slice(is_valid);
-        self.values_builder.append_slice(values);
-        Ok(())
     }
 
     /// Builds the [BooleanArray] and reset this builder.
     pub fn finish(&mut self) -> BooleanArray {
         let len = self.len();
-        let null_bit_buffer = self.bitmap_builder.finish();
-        let null_count = len - null_bit_buffer.count_set_bits();
+        let null_bit_buffer = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(DataType::Boolean)
             .len(len)
             .add_buffer(self.values_builder.finish())
-            .null_bit_buffer((null_count > 0).then(|| null_bit_buffer));
+            .null_bit_buffer(null_bit_buffer);
 
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
@@ -174,6 +182,32 @@ impl ArrayBuilder for BooleanBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{array::Array, buffer::Buffer};
+
+    #[test]
+    fn test_boolean_array_builder() {
+        // 00000010 01001000
+        let buf = Buffer::from([72_u8, 2_u8]);
+        let mut builder = BooleanArray::builder(10);
+        for i in 0..10 {
+            if i == 3 || i == 6 || i == 9 {
+                builder.append_value(true);
+            } else {
+                builder.append_value(false);
+            }
+        }
+
+        let arr = builder.finish();
+        assert_eq!(&buf, arr.values());
+        assert_eq!(10, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(0, arr.null_count());
+        for i in 0..10 {
+            assert!(!arr.is_null(i));
+            assert!(arr.is_valid(i));
+            assert_eq!(i == 3 || i == 6 || i == 9, arr.value(i), "failed at {}", i)
+        }
+    }
 
     #[test]
     fn test_boolean_array_builder_append_slice() {
@@ -181,10 +215,10 @@ mod tests {
             BooleanArray::from(vec![Some(true), Some(false), None, None, Some(false)]);
 
         let mut builder = BooleanArray::builder(0);
-        builder.append_slice(&[true, false]).unwrap();
-        builder.append_null().unwrap();
-        builder.append_null().unwrap();
-        builder.append_value(false).unwrap();
+        builder.append_slice(&[true, false]);
+        builder.append_null();
+        builder.append_null();
+        builder.append_value(false);
         let arr2 = builder.finish();
 
         assert_eq!(arr1, arr2);
@@ -195,9 +229,24 @@ mod tests {
         let arr1 = BooleanArray::from(vec![true; 513]);
 
         let mut builder = BooleanArray::builder(512);
-        builder.append_slice(&[true; 513]).unwrap();
+        builder.append_slice(&[true; 513]);
         let arr2 = builder.finish();
 
         assert_eq!(arr1, arr2);
+    }
+
+    #[test]
+    fn test_boolean_array_builder_no_null() {
+        let mut builder = BooleanArray::builder(0);
+        builder.append_option(Some(true));
+        builder.append_value(false);
+        builder.append_slice(&[true, false, true]);
+        builder
+            .append_values(&[false, false, true], &[true, true, true])
+            .unwrap();
+
+        let array = builder.finish();
+        assert_eq!(0, array.null_count());
+        assert!(array.data().null_buffer().is_none());
     }
 }

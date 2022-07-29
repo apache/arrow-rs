@@ -17,7 +17,7 @@
 
 [package]
 name = "parquet"
-version = "16.0.0"
+version = "19.0.0"
 license = "Apache-2.0"
 description = "Apache Parquet implementation in Rust"
 homepage = "https://github.com/apache/arrow-rs"
@@ -27,9 +27,10 @@ keywords = ["arrow", "parquet", "hadoop"]
 readme = "README.md"
 build = "build.rs"
 edition = "2021"
-rust-version = "1.57"
+rust-version = "1.62"
 
 [dependencies]
+ahash = "0.7"
 parquet-format = { version = "4.0.0", default-features = false }
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 byteorder = { version = "1", default-features = false }
@@ -42,25 +43,26 @@ zstd = { version = "0.11.1", optional = true, default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
-arrow = { path = "../arrow", version = "16.0.0", optional = true, default-features = false, features = ["ipc"] }
+arrow = { path = "../arrow", version = "19.0.0", optional = true, default-features = false, features = ["ipc"] }
 base64 = { version = "0.13", default-features = false, features = ["std"], optional = true }
-clap = { version = "~3.1", default-features = false, features = ["std", "derive", "env"], optional = true }
-serde_json = { version = "1.0", default-features = false, optional = true }
-rand = { version = "0.8", default-features = false }
-futures = { version = "0.3", default-features = false, features = ["std" ], optional = true }
+clap = { version = "3", default-features = false, features = ["std", "derive", "env"], optional = true }
+serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "fs", "rt", "io-util"] }
+hashbrown = { version = "0.12", default-features = false }
 
 [dev-dependencies]
 base64 = { version = "0.13", default-features = false, features = ["std"] }
 criterion = { version = "0.3", default-features = false }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
-brotli = { version = "3.3", default-features = false, features = [ "std" ] }
-flate2 = { version = "1.0", default-features = false, features = [ "rust_backend" ] }
+brotli = { version = "3.3", default-features = false, features = ["std"] }
+flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 lz4 = { version = "1.23", default-features = false }
 zstd = { version = "0.11", default-features = false }
-serde_json = { version = "1.0", default-features = false, features = ["preserve_order"] }
-arrow = { path = "../arrow", version = "16.0.0", default-features = false, features = ["ipc", "test_utils", "prettyprint"] }
+serde_json = { version = "1.0", features = ["std"], default-features = false }
+arrow = { path = "../arrow", version = "19.0.0", default-features = false, features = ["ipc", "test_utils", "prettyprint"] }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -70,9 +72,9 @@ default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
 # Enable arrow reader/writer APIs
 arrow = ["dep:arrow", "base64"]
 # Enable CLI tools
-cli = ["serde_json", "base64", "clap","arrow/csv"]
+cli = ["serde_json", "base64", "clap", "arrow/csv"]
 # Enable internal testing APIs
-test_common = []
+test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
 experimental = []
 # Enable async APIs

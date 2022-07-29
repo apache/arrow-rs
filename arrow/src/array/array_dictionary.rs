@@ -33,6 +33,34 @@ use crate::error::Result;
 /// This is mostly used to represent strings or a limited set of primitive types as integers,
 /// for example when doing NLP analysis or representing chromosomes by name.
 ///
+/// [`DictionaryArray`] are represented using a `keys` array and a
+/// `values` array, which may be different lengths. The `keys` array
+/// stores indexes in the `values` array which holds
+/// the corresponding logical value, as shown here:
+///
+/// ```text
+/// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///   ┌─────────────────┐  ┌─────────┐ │     ┌─────────────────┐
+/// │ │        A        │  │    0    │       │        A        │     values[keys[0]]
+///   ├─────────────────┤  ├─────────┤ │     ├─────────────────┤
+/// │ │        D        │  │    2    │       │        B        │     values[keys[1]]
+///   ├─────────────────┤  ├─────────┤ │     ├─────────────────┤
+/// │ │        B        │  │    2    │       │        B        │     values[keys[2]]
+///   └─────────────────┘  ├─────────┤ │     ├─────────────────┤
+/// │                      │    1    │       │        D        │     values[keys[3]]
+///                        ├─────────┤ │     ├─────────────────┤
+/// │                      │    1    │       │        D        │     values[keys[4]]
+///                        ├─────────┤ │     ├─────────────────┤
+/// │                      │    0    │       │        A        │     values[keys[5]]
+///                        └─────────┘ │     └─────────────────┘
+/// │       values            keys
+///  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘
+///                                             Logical array
+///                                                Contents
+///           DictionaryArray
+///              length = 6
+/// ```
+///
 /// Example **with nullable** data:
 ///
 /// ```
@@ -86,7 +114,7 @@ pub struct DictionaryArray<K: ArrowPrimitiveType> {
     is_ordered: bool,
 }
 
-impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
+impl<K: ArrowPrimitiveType> DictionaryArray<K> {
     /// Attempt to create a new DictionaryArray with a specified keys
     /// (indexes into the dictionary) and values (dictionary)
     /// array. Returns an error if there are any keys that are outside
@@ -123,12 +151,38 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         Ok(array.into())
     }
 
+    /// Create a new DictionaryArray directly from specified keys
+    /// (indexes into the dictionary) and values (dictionary)
+    /// array, and the corresponding ArrayData. This is used internally
+    /// for the usage like filter kernel.
+    ///
+    /// # Safety
+    ///
+    /// The input keys, values and data must form a valid DictionaryArray,
+    /// or undefined behavior can occur.
+    pub(crate) unsafe fn try_new_unchecked(
+        keys: PrimitiveArray<K>,
+        values: ArrayRef,
+        data: ArrayData,
+    ) -> Self {
+        Self {
+            data,
+            keys,
+            values,
+            is_ordered: false,
+        }
+    }
+
     /// Return an array view of the keys of this dictionary as a PrimitiveArray.
     pub fn keys(&self) -> &PrimitiveArray<K> {
         &self.keys
     }
 
-    /// Returns the lookup key by doing reverse dictionary lookup
+    /// If `value` is present in `values` (aka the dictionary),
+    /// returns the corresponding key (index into the `values`
+    /// array). Otherwise returns `None`.
+    ///
+    /// Panics if `values` is not a [`StringArray`].
     pub fn lookup_key(&self, value: &str) -> Option<K::Native> {
         let rd_buf: &StringArray =
             self.values.as_any().downcast_ref::<StringArray>().unwrap();
@@ -168,6 +222,17 @@ impl<'a, K: ArrowPrimitiveType> DictionaryArray<K> {
         self.keys
             .iter()
             .map(|key| key.map(|k| k.to_usize().expect("Dictionary index not usize")))
+    }
+
+    /// Return the value of `keys` (the dictionary key) at index `i`,
+    /// cast to `usize`, `None` if the value at `i` is `NULL`.
+    pub fn key(&self, i: usize) -> Option<usize> {
+        self.keys.is_valid(i).then(|| {
+            self.keys
+                .value(i)
+                .to_usize()
+                .expect("Dictionary index not usize")
+        })
     }
 }
 
@@ -214,6 +279,12 @@ impl<T: ArrowPrimitiveType> From<ArrayData> for DictionaryArray<T> {
     }
 }
 
+impl<T: ArrowPrimitiveType> From<DictionaryArray<T>> for ArrayData {
+    fn from(array: DictionaryArray<T>) -> Self {
+        array.data
+    }
+}
+
 /// Constructs a `DictionaryArray` from an iterator of optional strings.
 ///
 /// # Example:
@@ -248,9 +319,7 @@ impl<'a, T: ArrowPrimitiveType + ArrowDictionaryKeyType> FromIterator<Option<&'a
                     .append(i)
                     .expect("Unable to append a value to a dictionary array.");
             } else {
-                builder
-                    .append_null()
-                    .expect("Unable to append a null value to a dictionary array.");
+                builder.append_null();
             }
         });
 
@@ -299,6 +368,10 @@ impl<T: ArrowPrimitiveType> Array for DictionaryArray<T> {
 
     fn data(&self) -> &ArrayData {
         &self.data
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.into()
     }
 }
 
@@ -388,7 +461,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(22345678).unwrap();
         let array = builder.finish();
         assert_eq!(
@@ -532,6 +605,17 @@ mod tests {
         assert!(iter.next().unwrap().is_none());
         assert_eq!("a", iter.next().unwrap().unwrap());
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn test_dictionary_key() {
+        let keys = Int8Array::from(vec![Some(2), None, Some(1)]);
+        let values = StringArray::from(vec!["foo", "bar", "baz", "blarg"]);
+
+        let array = DictionaryArray::try_new(&keys, &values).unwrap();
+        assert_eq!(array.key(0), Some(2));
+        assert_eq!(array.key(1), None);
+        assert_eq!(array.key(2), Some(1));
     }
 
     #[test]

@@ -17,6 +17,7 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::array::Array;
@@ -29,9 +30,10 @@ use crate::arrow::array_reader::{build_array_reader, ArrayReader};
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::schema::parquet_to_arrow_schema_by_columns;
 use crate::arrow::ProjectionMask;
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::reader::{ChunkReader, FileReader, SerializedFileReader};
+use crate::file::serialized_reader::ReadOptionsBuilder;
 use crate::schema::types::SchemaDescriptor;
 
 /// Arrow reader api.
@@ -70,9 +72,39 @@ pub trait ArrowReader {
     ) -> Result<Self::RecordReader>;
 }
 
+/// [`RowSelection`] allows selecting or skipping a provided number of rows
+/// when scanning the parquet file
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RowSelection {
+    /// The number of rows
+    pub row_count: usize,
+
+    /// If true, skip `row_count` rows
+    pub skip: bool,
+}
+
+impl RowSelection {
+    /// Select `row_count` rows
+    pub fn select(row_count: usize) -> Self {
+        Self {
+            row_count,
+            skip: false,
+        }
+    }
+
+    /// Skip `row_count` rows
+    pub fn skip(row_count: usize) -> Self {
+        Self {
+            row_count,
+            skip: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ArrowReaderOptions {
     skip_arrow_metadata: bool,
+    selection: Option<Vec<RowSelection>>,
 }
 
 impl ArrowReaderOptions {
@@ -86,11 +118,24 @@ impl ArrowReaderOptions {
     ///
     /// For example:[ARROW-16184](https://issues.apache.org/jira/browse/ARROW-16184)
     ///
-
     /// Set `skip_arrow_metadata` to true, to skip decoding this
     pub fn with_skip_arrow_metadata(self, skip_arrow_metadata: bool) -> Self {
         Self {
             skip_arrow_metadata,
+            ..self
+        }
+    }
+
+    /// Scan rows from the parquet file according to the provided `selection`
+    ///
+    /// TODO: Make public once row selection fully implemented (#1792)
+    pub(crate) fn with_row_selection(
+        self,
+        selection: impl Into<Vec<RowSelection>>,
+    ) -> Self {
+        Self {
+            selection: Some(selection.into()),
+            ..self
         }
     }
 }
@@ -140,7 +185,12 @@ impl ArrowReader for ParquetFileArrowReader {
             Box::new(self.file_reader.clone()),
         )?;
 
-        ParquetRecordBatchReader::try_new(batch_size, array_reader)
+        let selection = self.options.selection.clone().map(Into::into);
+        Ok(ParquetRecordBatchReader::new(
+            batch_size,
+            array_reader,
+            selection,
+        ))
     }
 }
 
@@ -168,7 +218,15 @@ impl ParquetFileArrowReader {
         chunk_reader: R,
         options: ArrowReaderOptions,
     ) -> Result<Self> {
-        let file_reader = Arc::new(SerializedFileReader::new(chunk_reader)?);
+        let file_reader = if options.selection.is_some() {
+            let options = ReadOptionsBuilder::new().with_page_index().build();
+            Arc::new(SerializedFileReader::new_with_options(
+                chunk_reader,
+                options,
+            )?)
+        } else {
+            Arc::new(SerializedFileReader::new(chunk_reader)?)
+        };
         Ok(Self::new_with_options(file_reader, options))
     }
 
@@ -222,13 +280,50 @@ pub struct ParquetRecordBatchReader {
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
+    selection: Option<VecDeque<RowSelection>>,
 }
 
 impl Iterator for ParquetRecordBatchReader {
     type Item = ArrowResult<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.array_reader.next_batch(self.batch_size) {
+        let to_read = match self.selection.as_mut() {
+            Some(selection) => loop {
+                let front = selection.pop_front()?;
+                if front.skip {
+                    let skipped = match self.array_reader.skip_records(front.row_count) {
+                        Ok(skipped) => skipped,
+                        Err(e) => return Some(Err(e.into())),
+                    };
+
+                    if skipped != front.row_count {
+                        return Some(Err(general_err!(
+                            "failed to skip rows, expected {}, got {}",
+                            front.row_count,
+                            skipped
+                        )
+                        .into()));
+                    }
+                    continue;
+                }
+
+                // try to read record
+                let to_read = match front.row_count.checked_sub(self.batch_size) {
+                    Some(remaining) if remaining != 0 => {
+                        // if page row count less than batch_size we must set batch size to page row count.
+                        // add check avoid dead loop
+                        selection.push_front(RowSelection::select(remaining));
+                        self.batch_size
+                    }
+                    _ => front.row_count,
+                };
+
+                break to_read;
+            },
+            None => self.batch_size,
+        };
+
+        match self.array_reader.next_batch(to_read) {
             Err(error) => Some(Err(error.into())),
             Ok(array) => {
                 let struct_array =
@@ -258,16 +353,30 @@ impl ParquetRecordBatchReader {
         batch_size: usize,
         array_reader: Box<dyn ArrayReader>,
     ) -> Result<Self> {
+        Ok(Self::new(batch_size, array_reader, None))
+    }
+
+    /// Create a new [`ParquetRecordBatchReader`] that will read at most `batch_size` rows at
+    /// a time from [`ArrayReader`] based on the configured `selection`. If `selection` is `None`
+    /// all rows will be returned
+    ///
+    /// TODO: Make public once row selection fully implemented (#1792)
+    pub(crate) fn new(
+        batch_size: usize,
+        array_reader: Box<dyn ArrayReader>,
+        selection: Option<VecDeque<RowSelection>>,
+    ) -> Self {
         let schema = match array_reader.get_data_type() {
             ArrowType::Struct(ref fields) => Schema::new(fields.clone()),
             _ => unreachable!("Struct array reader's data type is not struct!"),
         };
 
-        Ok(Self {
+        Self {
             batch_size,
             array_reader,
             schema: Arc::new(schema),
-        })
+            selection,
+        }
     }
 }
 
@@ -275,6 +384,7 @@ impl ParquetRecordBatchReader {
 mod tests {
     use bytes::Bytes;
     use std::cmp::min;
+    use std::collections::VecDeque;
     use std::convert::TryFrom;
     use std::fs::File;
     use std::io::Seek;
@@ -293,6 +403,7 @@ mod tests {
 
     use crate::arrow::arrow_reader::{
         ArrowReader, ArrowReaderOptions, ParquetFileArrowReader,
+        ParquetRecordBatchReader, RowSelection,
     };
     use crate::arrow::buffer::converter::{
         BinaryArrayConverter, Converter, FixedSizeArrayConverter, FromConverter,
@@ -306,7 +417,7 @@ mod tests {
         FixedLenByteArrayType, Int32Type, Int64Type,
     };
     use crate::errors::Result;
-    use crate::file::properties::{WriterProperties, WriterVersion};
+    use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
@@ -620,9 +731,14 @@ mod tests {
 
     #[test]
     fn test_read_decimal_file() {
-        use arrow::array::DecimalArray;
+        use arrow::array::Decimal128Array;
         let testdata = arrow::util::test_util::parquet_test_data();
-        let file_variants = vec![("fixed_length", 25), ("int32", 4), ("int64", 10)];
+        let file_variants = vec![
+            ("byte_array", 4),
+            ("fixed_length", 25),
+            ("int32", 4),
+            ("int64", 10),
+        ];
         for (prefix, target_precision) in file_variants {
             let path = format!("{}/{}_decimal.parquet", testdata, prefix);
             let file = File::open(&path).unwrap();
@@ -635,7 +751,7 @@ mod tests {
             let col = batch
                 .column(0)
                 .as_any()
-                .downcast_ref::<DecimalArray>()
+                .downcast_ref::<Decimal128Array>()
                 .unwrap();
 
             let expected = 1..25;
@@ -672,6 +788,8 @@ mod tests {
         max_dict_page_size: usize,
         /// Writer version
         writer_version: WriterVersion,
+        /// Enabled statistics
+        enabled_statistics: EnabledStatistics,
         /// Encoding
         encoding: Encoding,
     }
@@ -687,6 +805,7 @@ mod tests {
                 max_data_page_size: 1024 * 1024,
                 max_dict_page_size: 1024 * 1024,
                 writer_version: WriterVersion::PARQUET_1_0,
+                enabled_statistics: EnabledStatistics::Page,
                 encoding: Encoding::PLAIN,
             }
         }
@@ -723,11 +842,19 @@ mod tests {
             }
         }
 
+        fn with_enabled_statistics(self, enabled_statistics: EnabledStatistics) -> Self {
+            Self {
+                enabled_statistics,
+                ..self
+            }
+        }
+
         fn writer_props(&self) -> WriterProperties {
             let builder = WriterProperties::builder()
                 .set_data_pagesize_limit(self.max_data_page_size)
                 .set_write_batch_size(self.write_batch_size)
-                .set_writer_version(self.writer_version);
+                .set_writer_version(self.writer_version)
+                .set_statistics_enabled(self.enabled_statistics);
 
             let builder = match self.encoding {
                 Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => builder
@@ -781,6 +908,14 @@ mod tests {
             TestOptions::new(2, 256, 127).with_null_percent(0),
             // Test optional with nulls
             TestOptions::new(2, 256, 93).with_null_percent(25),
+            // Test with no page-level statistics
+            TestOptions::new(2, 256, 91)
+                .with_null_percent(25)
+                .with_enabled_statistics(EnabledStatistics::Chunk),
+            // Test with no statistics
+            TestOptions::new(2, 256, 91)
+                .with_null_percent(25)
+                .with_enabled_statistics(EnabledStatistics::None),
         ];
 
         all_options.into_iter().for_each(|opts| {
@@ -1430,5 +1565,204 @@ mod tests {
         }
 
         assert_eq!(total_rows, expected_rows);
+    }
+
+    fn test_row_group_batch(row_group_size: usize, batch_size: usize) {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "list",
+            ArrowDataType::List(Box::new(Field::new("item", ArrowDataType::Int32, true))),
+            true,
+        )]));
+
+        let mut buf = Vec::with_capacity(1024);
+
+        let mut writer = ArrowWriter::try_new(
+            &mut buf,
+            schema.clone(),
+            Some(
+                WriterProperties::builder()
+                    .set_max_row_group_size(row_group_size)
+                    .build(),
+            ),
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let mut list_builder = ListBuilder::new(Int32Builder::new(batch_size));
+            for _ in 0..(batch_size) {
+                list_builder.append(true);
+            }
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(list_builder.finish())],
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+        }
+        writer.close().unwrap();
+
+        let mut file_reader = ParquetFileArrowReader::try_new(Bytes::from(buf)).unwrap();
+        let mut record_reader = file_reader.get_record_reader(batch_size).unwrap();
+        assert_eq!(
+            batch_size,
+            record_reader.next().unwrap().unwrap().num_rows()
+        );
+        assert_eq!(
+            batch_size,
+            record_reader.next().unwrap().unwrap().num_rows()
+        );
+    }
+
+    #[test]
+    fn test_row_group_exact_multiple() {
+        use crate::arrow::record_reader::MIN_BATCH_SIZE;
+        test_row_group_batch(8, 8);
+        test_row_group_batch(10, 8);
+        test_row_group_batch(8, 10);
+        test_row_group_batch(MIN_BATCH_SIZE, MIN_BATCH_SIZE);
+        test_row_group_batch(MIN_BATCH_SIZE + 1, MIN_BATCH_SIZE);
+        test_row_group_batch(MIN_BATCH_SIZE, MIN_BATCH_SIZE + 1);
+        test_row_group_batch(MIN_BATCH_SIZE, MIN_BATCH_SIZE - 1);
+        test_row_group_batch(MIN_BATCH_SIZE - 1, MIN_BATCH_SIZE);
+    }
+
+    /// Given a RecordBatch containing all the column data, return the expected batches given
+    /// a `batch_size` and `selection`
+    fn get_expected_batches(
+        column: &RecordBatch,
+        selection: &[RowSelection],
+        batch_size: usize,
+    ) -> Vec<RecordBatch> {
+        let mut expected_batches = vec![];
+
+        let mut selection: VecDeque<_> = selection.iter().cloned().collect();
+        let mut row_offset = 0;
+        let mut last_start = None;
+        while row_offset < column.num_rows() && !selection.is_empty() {
+            let mut batch_remaining = batch_size.min(column.num_rows() - row_offset);
+            while batch_remaining > 0 && !selection.is_empty() {
+                let (to_read, skip) = match selection.front_mut() {
+                    Some(selection) if selection.row_count > batch_remaining => {
+                        selection.row_count -= batch_remaining;
+                        (batch_remaining, selection.skip)
+                    }
+                    Some(_) => {
+                        let select = selection.pop_front().unwrap();
+                        (select.row_count, select.skip)
+                    }
+                    None => break,
+                };
+
+                batch_remaining -= to_read;
+
+                match skip {
+                    true => {
+                        if let Some(last_start) = last_start.take() {
+                            expected_batches
+                                .push(column.slice(last_start, row_offset - last_start))
+                        }
+                        row_offset += to_read
+                    }
+                    false => {
+                        last_start.get_or_insert(row_offset);
+                        row_offset += to_read
+                    }
+                }
+            }
+        }
+
+        if let Some(last_start) = last_start.take() {
+            expected_batches.push(column.slice(last_start, row_offset - last_start))
+        }
+
+        // Sanity check, all batches except the final should be the batch size
+        for batch in &expected_batches[..expected_batches.len() - 1] {
+            assert_eq!(batch.num_rows(), batch_size);
+        }
+
+        expected_batches
+    }
+
+    #[test]
+    fn test_scan_row_with_selection() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let test_file = File::open(&path).unwrap();
+
+        let mut serial_arrow_reader =
+            ParquetFileArrowReader::try_new(File::open(path).unwrap()).unwrap();
+        let mut serial_reader = serial_arrow_reader.get_record_reader(7300).unwrap();
+        let data = serial_reader.next().unwrap().unwrap();
+
+        let do_test = |batch_size: usize, selection_len: usize| {
+            for skip_first in [false, true] {
+                let selections =
+                    create_test_selection(batch_size, data.num_rows(), skip_first);
+
+                let expected = get_expected_batches(&data, &selections, batch_size);
+                let skip_reader = create_skip_reader(&test_file, batch_size, selections);
+                assert_eq!(
+                    skip_reader.collect::<ArrowResult<Vec<_>>>().unwrap(),
+                    expected,
+                    "batch_size: {}, selection_len: {}, skip_first: {}",
+                    batch_size,
+                    selection_len,
+                    skip_first
+                );
+            }
+        };
+
+        // total row count 7300
+        // 1. test selection len more than one page row count
+        do_test(1000, 1000);
+
+        // 2. test selection len less than one page row count
+        do_test(20, 20);
+
+        // 3. test selection_len less than batch_size
+        do_test(20, 5);
+
+        // 4. test selection_len more than batch_size
+        // If batch_size < selection_len
+        do_test(20, 5);
+
+        fn create_skip_reader(
+            test_file: &File,
+            batch_size: usize,
+            selections: Vec<RowSelection>,
+        ) -> ParquetRecordBatchReader {
+            let arrow_reader_options =
+                ArrowReaderOptions::new().with_row_selection(selections);
+
+            let mut skip_arrow_reader = ParquetFileArrowReader::try_new_with_options(
+                test_file.try_clone().unwrap(),
+                arrow_reader_options,
+            )
+            .unwrap();
+            skip_arrow_reader.get_record_reader(batch_size).unwrap()
+        }
+
+        fn create_test_selection(
+            step_len: usize,
+            total_len: usize,
+            skip_first: bool,
+        ) -> Vec<RowSelection> {
+            let mut remaining = total_len;
+            let mut skip = skip_first;
+            let mut vec = vec![];
+            while remaining != 0 {
+                let step = if remaining > step_len {
+                    step_len
+                } else {
+                    remaining
+                };
+                vec.push(RowSelection {
+                    row_count: step,
+                    skip,
+                });
+                remaining -= step;
+                skip = !skip;
+            }
+            vec
+        }
     }
 }

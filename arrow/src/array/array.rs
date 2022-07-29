@@ -60,6 +60,9 @@ pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
     /// Returns a reference to the underlying data of this array.
     fn data(&self) -> &ArrayData;
 
+    /// Returns the underlying data of this array.
+    fn into_data(self) -> ArrayData;
+
     /// Returns a reference-counted pointer to the underlying data of this array.
     fn data_ref(&self) -> &ArrayData {
         self.data()
@@ -237,6 +240,10 @@ impl Array for ArrayRef {
         self.as_ref().data()
     }
 
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
+
     fn data_ref(&self) -> &ArrayData {
         self.as_ref().data_ref()
     }
@@ -288,6 +295,85 @@ impl Array for ArrayRef {
         let array = ffi::ArrowArray::try_from(data)?;
         Ok(ffi::ArrowArray::into_raw(array))
     }
+}
+
+impl<'a, T: Array> Array for &'a T {
+    fn as_any(&self) -> &dyn Any {
+        T::as_any(self)
+    }
+
+    fn data(&self) -> &ArrayData {
+        T::data(self)
+    }
+
+    fn into_data(self) -> ArrayData {
+        self.data().clone()
+    }
+
+    fn data_ref(&self) -> &ArrayData {
+        T::data_ref(self)
+    }
+
+    fn data_type(&self) -> &DataType {
+        T::data_type(self)
+    }
+
+    fn slice(&self, offset: usize, length: usize) -> ArrayRef {
+        T::slice(self, offset, length)
+    }
+
+    fn len(&self) -> usize {
+        T::len(self)
+    }
+
+    fn is_empty(&self) -> bool {
+        T::is_empty(self)
+    }
+
+    fn offset(&self) -> usize {
+        T::offset(self)
+    }
+
+    fn is_null(&self, index: usize) -> bool {
+        T::is_null(self, index)
+    }
+
+    fn is_valid(&self, index: usize) -> bool {
+        T::is_valid(self, index)
+    }
+
+    fn null_count(&self) -> usize {
+        T::null_count(self)
+    }
+
+    fn get_buffer_memory_size(&self) -> usize {
+        T::get_buffer_memory_size(self)
+    }
+
+    fn get_array_memory_size(&self) -> usize {
+        T::get_array_memory_size(self)
+    }
+
+    fn to_raw(
+        &self,
+    ) -> Result<(*const ffi::FFI_ArrowArray, *const ffi::FFI_ArrowSchema)> {
+        T::to_raw(self)
+    }
+}
+
+/// A generic trait for accessing the values of an [`Array`]
+pub trait ArrayAccessor: Array {
+    type Item: Send + Sync;
+
+    /// Returns the element at index `i`
+    /// # Panics
+    /// Panics if the value is outside the bounds of the array
+    fn value(&self, index: usize) -> Self::Item;
+
+    /// Returns the element at index `i`
+    /// # Safety
+    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item;
 }
 
 /// Constructs an array using the input `data`.
@@ -396,7 +482,8 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             dt => panic!("Unexpected dictionary key type {:?}", dt),
         },
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
-        DataType::Decimal(_, _) => Arc::new(DecimalArray::from(data)) as ArrayRef,
+        DataType::Decimal(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
+        DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
         dt => panic!("Unexpected data type {:?}", dt),
     }
 }
@@ -404,6 +491,12 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
 impl From<ArrayData> for ArrayRef {
     fn from(data: ArrayData) -> Self {
         make_array(data)
+    }
+}
+
+impl From<ArrayRef> for ArrayData {
+    fn from(array: ArrayRef) -> Self {
+        array.data().clone()
     }
 }
 
@@ -550,11 +643,14 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
                     keys.null_buffer().cloned(),
                     0,
                     keys.buffers().into(),
-                    vec![new_empty_array(value.as_ref()).data().clone()],
+                    vec![new_empty_array(value.as_ref()).into_data()],
                 )
             })
         }
-        DataType::Decimal(_, _) => new_null_sized_decimal(data_type, length),
+        DataType::Decimal(_, _) => {
+            new_null_sized_decimal(data_type, length, std::mem::size_of::<i128>())
+        }
+        DataType::Decimal256(_, _) => new_null_sized_decimal(data_type, length, 32),
     }
 }
 
@@ -619,7 +715,11 @@ fn new_null_sized_array<T: ArrowPrimitiveType>(
 }
 
 #[inline]
-fn new_null_sized_decimal(data_type: &DataType, length: usize) -> ArrayRef {
+fn new_null_sized_decimal(
+    data_type: &DataType,
+    length: usize,
+    byte_width: usize,
+) -> ArrayRef {
     make_array(unsafe {
         ArrayData::new_unchecked(
             data_type.clone(),
@@ -627,10 +727,7 @@ fn new_null_sized_decimal(data_type: &DataType, length: usize) -> ArrayRef {
             Some(length),
             Some(MutableBuffer::new_null(length).into()),
             0,
-            vec![Buffer::from(vec![
-                0u8;
-                length * std::mem::size_of::<i128>()
-            ])],
+            vec![Buffer::from(vec![0u8; length * byte_width])],
             vec![],
         )
     })

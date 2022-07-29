@@ -127,9 +127,9 @@ pub unsafe fn reallocate<T: NativeType>(
 
 /// The owner of an allocation.
 /// The trait implementation is responsible for dropping the allocations once no more references exist.
-pub trait Allocation: RefUnwindSafe {}
+pub trait Allocation: RefUnwindSafe + Send + Sync {}
 
-impl<T: RefUnwindSafe> Allocation for T {}
+impl<T: RefUnwindSafe + Send + Sync> Allocation for T {}
 
 /// Mode of deallocating memory regions
 pub(crate) enum Deallocation {

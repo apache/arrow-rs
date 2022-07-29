@@ -77,16 +77,17 @@
 
 use std::collections::VecDeque;
 use std::fmt::Formatter;
+
 use std::io::{Cursor, SeekFrom};
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::stream::Stream;
-use parquet_format::PageType;
+use parquet_format::{PageHeader, PageType};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use arrow::datatypes::SchemaRef;
@@ -97,12 +98,11 @@ use crate::arrow::arrow_reader::ParquetRecordBatchReader;
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::ProjectionMask;
 use crate::basic::Compression;
-use crate::column::page::{Page, PageIterator, PageReader};
+use crate::column::page::{Page, PageIterator, PageMetadata, PageReader};
 use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::ParquetMetaData;
-use crate::file::reader::SerializedPageReader;
 use crate::file::serialized_reader::{decode_page, read_page_header};
 use crate::file::FOOTER_SIZE;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
@@ -111,6 +111,27 @@ use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
 pub trait AsyncFileReader {
     /// Retrieve the bytes in `range`
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
+
+    /// Retrieve multiple byte ranges. The default implementation will call `get_bytes` sequentially
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+    ) -> BoxFuture<'_, Result<Vec<Bytes>>>
+    where
+        Self: Send,
+    {
+        async move {
+            let mut result = Vec::with_capacity(ranges.len());
+
+            for range in ranges.into_iter() {
+                let data = self.get_bytes(range).await?;
+                result.push(data);
+            }
+
+            Ok(result)
+        }
+        .boxed()
+    }
 
     /// Provides asynchronous access to the [`ParquetMetaData`] of a parquet file,
     /// allowing fine-grained control over how metadata is sourced, in particular allowing
@@ -368,24 +389,38 @@ where
                                 vec![None; row_group_metadata.columns().len()];
 
                             // TODO: Combine consecutive ranges
+                            let fetch_ranges = (0..column_chunks.len())
+                                .into_iter()
+                                .filter_map(|idx| {
+                                    if !projection.leaf_included(idx) {
+                                        None
+                                    } else {
+                                        let column = row_group_metadata.column(idx);
+                                        let (start, length) = column.byte_range();
+
+                                        Some(start as usize..(start + length) as usize)
+                                    }
+                                })
+                                .collect();
+
+                            let mut chunk_data =
+                                input.get_byte_ranges(fetch_ranges).await?.into_iter();
+
                             for (idx, chunk) in column_chunks.iter_mut().enumerate() {
                                 if !projection.leaf_included(idx) {
                                     continue;
                                 }
 
                                 let column = row_group_metadata.column(idx);
-                                let (start, length) = column.byte_range();
 
-                                let data = input
-                                    .get_bytes(start as usize..(start + length) as usize)
-                                    .await?;
-
-                                *chunk = Some(InMemoryColumnChunk {
-                                    num_values: column.num_values(),
-                                    compression: column.compression(),
-                                    physical_type: column.column_type(),
-                                    data,
-                                });
+                                if let Some(data) = chunk_data.next() {
+                                    *chunk = Some(InMemoryColumnChunk {
+                                        num_values: column.num_values(),
+                                        compression: column.compression(),
+                                        physical_type: column.column_type(),
+                                        data,
+                                    });
+                                }
                             }
 
                             Ok((
@@ -474,13 +509,7 @@ struct InMemoryColumnChunk {
 
 impl InMemoryColumnChunk {
     fn pages(&self) -> Result<Box<dyn PageReader>> {
-        let page_reader = SerializedPageReader::new(
-            self.data.clone().reader(),
-            self.num_values,
-            self.compression,
-            self.physical_type,
-        )?;
-
+        let page_reader = InMemoryColumnChunkReader::new(self.clone())?;
         Ok(Box::new(page_reader))
     }
 }
@@ -491,17 +520,20 @@ struct InMemoryColumnChunkReader {
     decompressor: Option<Box<dyn Codec>>,
     offset: usize,
     seen_num_values: i64,
+    // If the next page header has already been "peeked", we will cache it here
+    next_page_header: Option<PageHeader>,
 }
 
 impl InMemoryColumnChunkReader {
     /// Creates a new serialized page reader from file source.
-    pub fn new(chunk: InMemoryColumnChunk) -> Result<Self> {
+    fn new(chunk: InMemoryColumnChunk) -> Result<Self> {
         let decompressor = create_codec(chunk.compression)?;
         let result = Self {
             chunk,
             decompressor,
             offset: 0,
             seen_num_values: 0,
+            next_page_header: None,
         };
         Ok(result)
     }
@@ -519,10 +551,17 @@ impl PageReader for InMemoryColumnChunkReader {
     fn get_next_page(&mut self) -> Result<Option<Page>> {
         while self.seen_num_values < self.chunk.num_values {
             let mut cursor = Cursor::new(&self.chunk.data.as_ref()[self.offset..]);
-            let page_header = read_page_header(&mut cursor)?;
+            let page_header = if let Some(page_header) = self.next_page_header.take() {
+                // The next page header has already been peeked, so use the cached value
+                page_header
+            } else {
+                let page_header = read_page_header(&mut cursor)?;
+                self.offset += cursor.position() as usize;
+                page_header
+            };
+
             let compressed_size = page_header.compressed_page_size as usize;
 
-            self.offset += cursor.position() as usize;
             let start_offset = self.offset;
             let end_offset = self.offset + compressed_size;
             self.offset = end_offset;
@@ -557,6 +596,50 @@ impl PageReader for InMemoryColumnChunkReader {
 
         // We are at the end of this column chunk and no more page left. Return None.
         Ok(None)
+    }
+
+    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
+        while self.seen_num_values < self.chunk.num_values {
+            return if let Some(buffered_header) = self.next_page_header.as_ref() {
+                if let Ok(page_metadata) = buffered_header.try_into() {
+                    Ok(Some(page_metadata))
+                } else {
+                    // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                    self.next_page_header = None;
+                    continue;
+                }
+            } else {
+                let mut cursor = Cursor::new(&self.chunk.data.as_ref()[self.offset..]);
+                let page_header = read_page_header(&mut cursor)?;
+                self.offset += cursor.position() as usize;
+
+                let page_metadata = if let Ok(page_metadata) = (&page_header).try_into() {
+                    Ok(Some(page_metadata))
+                } else {
+                    // For unknown page type (e.g., INDEX_PAGE), skip and read next.
+                    continue;
+                };
+
+                self.next_page_header = Some(page_header);
+                page_metadata
+            };
+        }
+
+        Ok(None)
+    }
+
+    fn skip_next_page(&mut self) -> Result<()> {
+        if let Some(buffered_header) = self.next_page_header.take() {
+            // The next page header has already been peeked, so just advance the offset
+            self.offset += buffered_header.compressed_page_size as usize;
+        } else {
+            let mut cursor = Cursor::new(&self.chunk.data.as_ref()[self.offset..]);
+            let page_header = read_page_header(&mut cursor)?;
+            self.offset += cursor.position() as usize;
+            self.offset += page_header.compressed_page_size as usize;
+        }
+
+        Ok(())
     }
 }
 
@@ -661,5 +744,104 @@ mod tests {
                 offset_2 as usize..(offset_2 + length_2) as usize
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_column_chunk_reader() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/alltypes_plain.parquet", testdata);
+        let data = Bytes::from(std::fs::read(path).unwrap());
+
+        let metadata = crate::file::footer::parse_metadata(&data).unwrap();
+
+        let column_metadata = metadata.row_group(0).column(0);
+
+        let (start, length) = column_metadata.byte_range();
+
+        let column_data = data.slice(start as usize..(start + length) as usize);
+
+        let mut reader = InMemoryColumnChunkReader::new(InMemoryColumnChunk {
+            num_values: column_metadata.num_values(),
+            compression: column_metadata.compression(),
+            physical_type: column_metadata.column_type(),
+            data: column_data,
+        })
+        .expect("building reader");
+
+        let first_page = reader
+            .peek_next_page()
+            .expect("peeking first page")
+            .expect("first page is empty");
+
+        assert!(first_page.is_dict);
+        assert_eq!(first_page.num_rows, 0);
+
+        let first_page = reader
+            .get_next_page()
+            .expect("getting first page")
+            .expect("first page is empty");
+
+        assert_eq!(
+            first_page.page_type(),
+            crate::basic::PageType::DICTIONARY_PAGE
+        );
+        assert_eq!(first_page.num_values(), 8);
+
+        let second_page = reader
+            .peek_next_page()
+            .expect("peeking second page")
+            .expect("second page is empty");
+
+        assert!(!second_page.is_dict);
+        assert_eq!(second_page.num_rows, 8);
+
+        let second_page = reader
+            .get_next_page()
+            .expect("getting second page")
+            .expect("second page is empty");
+
+        assert_eq!(second_page.page_type(), crate::basic::PageType::DATA_PAGE);
+        assert_eq!(second_page.num_values(), 8);
+
+        let third_page = reader.peek_next_page().expect("getting third page");
+
+        assert!(third_page.is_none());
+
+        let third_page = reader.get_next_page().expect("getting third page");
+
+        assert!(third_page.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_in_memory_column_chunk_reader_skip_page() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/alltypes_plain.parquet", testdata);
+        let data = Bytes::from(std::fs::read(path).unwrap());
+
+        let metadata = crate::file::footer::parse_metadata(&data).unwrap();
+
+        let column_metadata = metadata.row_group(0).column(0);
+
+        let (start, length) = column_metadata.byte_range();
+
+        let column_data = data.slice(start as usize..(start + length) as usize);
+
+        let mut reader = InMemoryColumnChunkReader::new(InMemoryColumnChunk {
+            num_values: column_metadata.num_values(),
+            compression: column_metadata.compression(),
+            physical_type: column_metadata.column_type(),
+            data: column_data,
+        })
+        .expect("building reader");
+
+        reader.skip_next_page().expect("skipping first page");
+
+        let second_page = reader
+            .get_next_page()
+            .expect("getting second page")
+            .expect("second page is empty");
+
+        assert_eq!(second_page.page_type(), crate::basic::PageType::DATA_PAGE);
+        assert_eq!(second_page.num_values(), 8);
     }
 }

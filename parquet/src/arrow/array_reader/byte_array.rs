@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, ArrayReader};
+use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::record_reader::buffer::ScalarValue;
 use crate::arrow::record_reader::GenericRecordReader;
@@ -42,7 +42,6 @@ pub fn make_byte_array_reader(
     pages: Box<dyn PageIterator>,
     column_desc: ColumnDescPtr,
     arrow_type: Option<ArrowType>,
-    null_mask_only: bool,
 ) -> Result<Box<dyn ArrayReader>> {
     // Check if Arrow type is specified, else create it from Parquet type
     let data_type = match arrow_type {
@@ -54,15 +53,13 @@ pub fn make_byte_array_reader(
 
     match data_type {
         ArrowType::Binary | ArrowType::Utf8 => {
-            let reader =
-                GenericRecordReader::new_with_options(column_desc, null_mask_only);
+            let reader = GenericRecordReader::new(column_desc);
             Ok(Box::new(ByteArrayReader::<i32>::new(
                 pages, data_type, reader,
             )))
         }
         ArrowType::LargeUtf8 | ArrowType::LargeBinary => {
-            let reader =
-                GenericRecordReader::new_with_options(column_desc, null_mask_only);
+            let reader = GenericRecordReader::new(column_desc);
             Ok(Box::new(ByteArrayReader::<i64>::new(
                 pages, data_type, reader,
             )))
@@ -113,25 +110,25 @@ impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
 
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
         read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
-        let buffer = self.record_reader.consume_record_data()?;
-        let null_buffer = self.record_reader.consume_bitmap_buffer()?;
-        self.def_levels_buffer = self.record_reader.consume_def_levels()?;
-        self.rep_levels_buffer = self.record_reader.consume_rep_levels()?;
+        let buffer = self.record_reader.consume_record_data();
+        let null_buffer = self.record_reader.consume_bitmap_buffer();
+        self.def_levels_buffer = self.record_reader.consume_def_levels();
+        self.rep_levels_buffer = self.record_reader.consume_rep_levels();
         self.record_reader.reset();
 
         Ok(buffer.into_array(null_buffer, self.data_type.clone()))
     }
 
+    fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+        skip_records(&mut self.record_reader, self.pages.as_mut(), num_records)
+    }
+
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_levels_buffer
-            .as_ref()
-            .map(|buf| buf.typed_data())
+        self.def_levels_buffer.as_ref().map(|buf| buf.typed_data())
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_levels_buffer
-            .as_ref()
-            .map(|buf| buf.typed_data())
+        self.rep_levels_buffer.as_ref().map(|buf| buf.typed_data())
     }
 }
 
@@ -210,6 +207,15 @@ impl<I: OffsetSizeTrait + ScalarValue> ColumnValueDecoder
 
         decoder.read(out, range.end - range.start, self.dict.as_ref())
     }
+
+    fn skip_values(&mut self, num_values: usize) -> Result<usize> {
+        let decoder = self
+            .decoder
+            .as_mut()
+            .ok_or_else(|| general_err!("no decoder set"))?;
+
+        decoder.skip(num_values, self.dict.as_ref())
+    }
 }
 
 /// A generic decoder from uncompressed parquet value data to [`OffsetBuffer`]
@@ -274,6 +280,25 @@ impl ByteArrayDecoder {
             }
             ByteArrayDecoder::DeltaLength(d) => d.read(out, len),
             ByteArrayDecoder::DeltaByteArray(d) => d.read(out, len),
+        }
+    }
+
+    /// Skip `len` values
+    pub fn skip<I: OffsetSizeTrait + ScalarValue>(
+        &mut self,
+        len: usize,
+        dict: Option<&OffsetBuffer<I>>,
+    ) -> Result<usize> {
+        match self {
+            ByteArrayDecoder::Plain(d) => d.skip(len),
+            ByteArrayDecoder::Dictionary(d) => {
+                let dict = dict
+                    .ok_or_else(|| general_err!("missing dictionary page for column"))?;
+
+                d.skip(dict, len)
+            }
+            ByteArrayDecoder::DeltaLength(d) => d.skip(len),
+            ByteArrayDecoder::DeltaByteArray(d) => d.skip(len),
         }
     }
 }
@@ -355,6 +380,25 @@ impl ByteArrayDecoderPlain {
         }
         Ok(to_read)
     }
+
+    pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
+        let to_skip = to_skip.min(self.max_remaining_values);
+        let mut skip = 0;
+        let buf = self.buf.as_ref();
+
+        while self.offset < self.buf.len() && skip != to_skip {
+            if self.offset + 4 > buf.len() {
+                return Err(ParquetError::EOF("eof decoding byte array".into()));
+            }
+            let len_bytes: [u8; 4] =
+                buf[self.offset..self.offset + 4].try_into().unwrap();
+            let len = u32::from_le_bytes(len_bytes) as usize;
+            skip += 1;
+            self.offset = self.offset + 4 + len;
+        }
+        self.max_remaining_values -= skip;
+        Ok(skip)
+    }
 }
 
 /// Decoder from [`Encoding::DELTA_LENGTH_BYTE_ARRAY`] data to [`OffsetBuffer`]
@@ -422,6 +466,18 @@ impl ByteArrayDecoderDeltaLength {
             output.check_valid_utf8(initial_values_length)?;
         }
         Ok(to_read)
+    }
+
+    fn skip(&mut self, to_skip: usize) -> Result<usize> {
+        let remain_values = self.lengths.len() - self.length_offset;
+        let to_skip = remain_values.min(to_skip);
+
+        let src_lengths = &self.lengths[self.length_offset..self.length_offset + to_skip];
+        let total_bytes: usize = src_lengths.iter().map(|x| *x as usize).sum();
+
+        self.data_offset += total_bytes;
+        self.length_offset += to_skip;
+        Ok(to_skip)
     }
 }
 
@@ -513,14 +569,48 @@ impl ByteArrayDecoderDelta {
         }
         Ok(to_read)
     }
+
+    fn skip(&mut self, to_skip: usize) -> Result<usize> {
+        let to_skip = to_skip.min(self.prefix_lengths.len() - self.length_offset);
+
+        let length_range = self.length_offset..self.length_offset + to_skip;
+        let iter = self.prefix_lengths[length_range.clone()]
+            .iter()
+            .zip(&self.suffix_lengths[length_range]);
+
+        let data = self.data.as_ref();
+
+        for (prefix_length, suffix_length) in iter {
+            let prefix_length = *prefix_length as usize;
+            let suffix_length = *suffix_length as usize;
+
+            if self.data_offset + suffix_length > self.data.len() {
+                return Err(ParquetError::EOF("eof decoding byte array".into()));
+            }
+
+            self.last_value.truncate(prefix_length);
+            self.last_value.extend_from_slice(
+                &data[self.data_offset..self.data_offset + suffix_length],
+            );
+            self.data_offset += suffix_length;
+        }
+        self.length_offset += to_skip;
+        Ok(to_skip)
+    }
 }
 
 /// Decoder from [`Encoding::RLE_DICTIONARY`] to [`OffsetBuffer`]
 pub struct ByteArrayDecoderDictionary {
+    /// Decoder for the dictionary offsets array
     decoder: RleDecoder,
 
+    /// We want to decode the offsets in chunks so we will maintain an internal buffer of decoded
+    /// offsets
     index_buf: Box<[i32; 1024]>,
+    /// Current length of `index_buf`
     index_buf_len: usize,
+    /// Current offset into `index_buf`. If `index_buf_offset` == `index_buf_len` then we've consumed
+    /// the entire buffer and need to decode another chunk of offsets.
     index_offset: usize,
 
     /// This is a maximum as the null count is not always known, e.g. value data from
@@ -557,6 +647,7 @@ impl ByteArrayDecoderDictionary {
 
         while values_read != len && self.max_remaining_values != 0 {
             if self.index_offset == self.index_buf_len {
+                // We've consumed the entire index buffer so we need to reload it before proceeding
                 let read = self.decoder.get_batch(self.index_buf.as_mut())?;
                 if read == 0 {
                     break;
@@ -580,6 +671,42 @@ impl ByteArrayDecoderDictionary {
             self.max_remaining_values -= to_read;
         }
         Ok(values_read)
+    }
+
+    fn skip<I: OffsetSizeTrait + ScalarValue>(
+        &mut self,
+        dict: &OffsetBuffer<I>,
+        to_skip: usize,
+    ) -> Result<usize> {
+        let to_skip = to_skip.min(self.max_remaining_values);
+        // All data must be NULL
+        if dict.is_empty() {
+            return Ok(0);
+        }
+
+        let mut values_skip = 0;
+        while values_skip < to_skip {
+            if self.index_offset == self.index_buf_len {
+                // Instead of reloading the buffer, just skip in the decoder
+                let skip = self.decoder.skip(to_skip - values_skip)?;
+
+                if skip == 0 {
+                    break;
+                }
+
+                self.max_remaining_values -= skip;
+                values_skip += skip;
+            } else {
+                // We still have indices buffered, so skip within the buffer
+                let skip =
+                    (to_skip - values_skip).min(self.index_buf_len - self.index_offset);
+
+                self.index_offset += skip;
+                self.max_remaining_values -= skip;
+                values_skip += skip;
+            }
+        }
+        Ok(values_skip)
     }
 }
 
@@ -646,8 +773,9 @@ mod tests {
     }
 
     #[test]
-    fn test_byte_array_decoder_nulls() {
-        let (pages, encoded_dictionary) = byte_array_all_encodings(Vec::<&str>::new());
+    fn test_byte_array_decoder_skip() {
+        let (pages, encoded_dictionary) =
+            byte_array_all_encodings(vec!["hello", "world", "a", "b"]);
 
         let column_desc = utf8_column();
         let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
@@ -658,8 +786,58 @@ mod tests {
 
         for (encoding, page) in pages {
             let mut output = OffsetBuffer::<i32>::default();
+            decoder.set_data(encoding, page, 4, Some(4)).unwrap();
+
+            assert_eq!(decoder.read(&mut output, 0..1).unwrap(), 1);
+
+            assert_eq!(output.values.as_slice(), "hello".as_bytes());
+            assert_eq!(output.offsets.as_slice(), &[0, 5]);
+
+            assert_eq!(decoder.skip_values(1).unwrap(), 1);
+            assert_eq!(decoder.skip_values(1).unwrap(), 1);
+
+            assert_eq!(decoder.read(&mut output, 1..2).unwrap(), 1);
+            assert_eq!(output.values.as_slice(), "hellob".as_bytes());
+            assert_eq!(output.offsets.as_slice(), &[0, 5, 6]);
+
+            assert_eq!(decoder.read(&mut output, 4..8).unwrap(), 0);
+
+            let valid = vec![false, false, true, true, false, false];
+            let valid_buffer = Buffer::from_iter(valid.iter().cloned());
+
+            output.pad_nulls(0, 2, valid.len(), valid_buffer.as_slice());
+            let array = output.into_array(Some(valid_buffer), ArrowType::Utf8);
+            let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
+
+            assert_eq!(
+                strings.iter().collect::<Vec<_>>(),
+                vec![None, None, Some("hello"), Some("b"), None, None,]
+            );
+        }
+    }
+
+    #[test]
+    fn test_byte_array_decoder_nulls() {
+        let (pages, encoded_dictionary) = byte_array_all_encodings(Vec::<&str>::new());
+
+        let column_desc = utf8_column();
+        let mut decoder = ByteArrayColumnValueDecoder::new(&column_desc);
+
+        decoder
+            .set_dict(encoded_dictionary, 4, Encoding::RLE_DICTIONARY, false)
+            .unwrap();
+
+        // test nulls read
+        for (encoding, page) in pages.clone() {
+            let mut output = OffsetBuffer::<i32>::default();
             decoder.set_data(encoding, page, 4, None).unwrap();
             assert_eq!(decoder.read(&mut output, 0..1024).unwrap(), 0);
+        }
+
+        // test nulls skip
+        for (encoding, page) in pages {
+            decoder.set_data(encoding, page, 4, None).unwrap();
+            assert_eq!(decoder.skip_values(1024).unwrap(), 0);
         }
     }
 }

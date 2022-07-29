@@ -33,7 +33,7 @@
 //! let schema = Schema::new(vec![
 //!     Field::new("a", DataType::Float64, false),
 //!     Field::new("b", DataType::Float64, false),
-//!     Field::new("c", DataType::Float64, false),
+//!     Field::new("c", DataType::Float64, true),
 //! ]);
 //!
 //! let file = File::open("test/data/basic.json").unwrap();
@@ -803,7 +803,7 @@ impl Decoder {
             }
             DataType::Dictionary(_, _) => {
                 let values_builder =
-                    self.build_string_dictionary_builder::<DT>(rows.len() * 5)?;
+                    self.build_string_dictionary_builder::<DT>(rows.len() * 5);
                 Box::new(ListBuilder::new(values_builder))
             }
             e => {
@@ -855,14 +855,14 @@ impl Decoder {
                             ))?;
                         for val in vals {
                             if let Some(v) = val {
-                                builder.values().append_value(&v)?
+                                builder.values().append_value(&v);
                             } else {
-                                builder.values().append_null()?
+                                builder.values().append_null();
                             };
                         }
 
                         // Append to the list
-                        builder.append(true)?;
+                        builder.append(true);
                     }
                     DataType::Dictionary(_, _) => {
                         let builder = builder.as_any_mut().downcast_mut::<ListBuilder<StringDictionaryBuilder<DT>>>().ok_or_else(||ArrowError::JsonError(
@@ -870,14 +870,14 @@ impl Decoder {
                         ))?;
                         for val in vals {
                             if let Some(v) = val {
-                                let _ = builder.values().append(&v)?;
+                                let _ = builder.values().append(&v);
                             } else {
-                                builder.values().append_null()?
+                                builder.values().append_null();
                             };
                         }
 
                         // Append to the list
-                        builder.append(true)?;
+                        builder.append(true);
                     }
                     e => {
                         return Err(ArrowError::JsonError(format!(
@@ -897,13 +897,13 @@ impl Decoder {
     fn build_string_dictionary_builder<T>(
         &self,
         row_len: usize,
-    ) -> Result<StringDictionaryBuilder<T>>
+    ) -> StringDictionaryBuilder<T>
     where
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
         let key_builder = PrimitiveBuilder::<T>::new(row_len);
         let values_builder = StringBuilder::new(row_len * 5);
-        Ok(StringDictionaryBuilder::new(key_builder, values_builder))
+        StringDictionaryBuilder::new(key_builder, values_builder)
     }
 
     #[inline(always)]
@@ -954,12 +954,12 @@ impl Decoder {
         for row in rows {
             if let Some(value) = row.get(&col_name) {
                 if let Some(boolean) = value.as_bool() {
-                    builder.append_value(boolean)?
+                    builder.append_value(boolean);
                 } else {
-                    builder.append_null()?;
+                    builder.append_null();
                 }
             } else {
-                builder.append_null()?;
+                builder.append_null();
             }
         }
         Ok(Arc::new(builder.finish()))
@@ -1031,7 +1031,7 @@ impl Decoder {
         });
         let valid_len = cur_offset.to_usize().unwrap();
         let array_data = match list_field.data_type() {
-            DataType::Null => NullArray::new(valid_len).data().clone(),
+            DataType::Null => NullArray::new(valid_len).into_data(),
             DataType::Boolean => {
                 let num_bytes = bit_util::ceil(valid_len, 8);
                 let mut bool_values = MutableBuffer::from_len_zeroed(num_bytes);
@@ -1103,12 +1103,12 @@ impl Decoder {
             DataType::List(field) => {
                 let child = self
                     .build_nested_list_array::<i32>(&flatten_json_values(rows), field)?;
-                child.data().clone()
+                child.into_data()
             }
             DataType::LargeList(field) => {
                 let child = self
                     .build_nested_list_array::<i64>(&flatten_json_values(rows), field)?;
-                child.data().clone()
+                child.into_data()
             }
             DataType::Struct(fields) => {
                 // extract list values, with non-lists converted to Value::Null
@@ -1144,9 +1144,7 @@ impl Decoder {
                     ArrayDataBuilder::new(data_type)
                         .len(rows.len())
                         .null_bit_buffer(Some(buf))
-                        .child_data(
-                            arrays.into_iter().map(|a| a.data().clone()).collect(),
-                        )
+                        .child_data(arrays.into_iter().map(|a| a.into_data()).collect())
                         .build_unchecked()
                 }
             }
@@ -1353,7 +1351,7 @@ impl Decoder {
                             .len(len)
                             .null_bit_buffer(Some(null_buffer.into()))
                             .child_data(
-                                arrays.into_iter().map(|a| a.data().clone()).collect(),
+                                arrays.into_iter().map(|a| a.into_data()).collect(),
                             );
                         let data = unsafe { data.build_unchecked() };
                         Ok(make_array(data))
@@ -1463,7 +1461,7 @@ impl Decoder {
                     vec![],
                     struct_children
                         .into_iter()
-                        .map(|array| array.data().clone())
+                        .map(|array| array.into_data())
                         .collect(),
                 )],
             )))
@@ -1481,16 +1479,16 @@ impl Decoder {
         T: ArrowPrimitiveType + ArrowDictionaryKeyType,
     {
         let mut builder: StringDictionaryBuilder<T> =
-            self.build_string_dictionary_builder(rows.len())?;
+            self.build_string_dictionary_builder(rows.len());
         for row in rows {
             if let Some(value) = row.get(&col_name) {
                 if let Some(str_v) = value.as_str() {
                     builder.append(str_v).map(drop)?
                 } else {
-                    builder.append_null()?
+                    builder.append_null();
                 }
             } else {
-                builder.append_null()?
+                builder.append_null();
             }
         }
         Ok(Arc::new(builder.finish()) as ArrayRef)
@@ -1525,7 +1523,7 @@ impl Decoder {
             })
             .collect::<Vec<Option<T::Native>>>();
         let array = values.iter().collect::<PrimitiveArray<T>>();
-        array.data().clone()
+        array.into_data()
     }
 }
 
@@ -1869,7 +1867,7 @@ mod tests {
     #[test]
     fn test_json_basic_schema() {
         let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
+            Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Float32, false),
             Field::new("c", DataType::Boolean, false),
             Field::new("d", DataType::Utf8, false),
@@ -1917,8 +1915,7 @@ mod tests {
 
     #[test]
     fn test_json_format_strings_for_date() {
-        let schema =
-            Arc::new(Schema::new(vec![Field::new("e", DataType::Date32, false)]));
+        let schema = Arc::new(Schema::new(vec![Field::new("e", DataType::Date32, true)]));
         let e = schema.column_with_name("e").unwrap();
         assert_eq!(&DataType::Date32, e.1.data_type());
         let mut fmts = HashMap::new();
@@ -1952,7 +1949,7 @@ mod tests {
         // Implicit: omitting fields from a schema
         // Explicit: supplying a vec of fields to take
         let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
+            Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Float32, false),
             Field::new("c", DataType::Boolean, false),
         ]);
@@ -1964,7 +1961,7 @@ mod tests {
         );
         let reader_schema = reader.schema();
         let expected_schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
+            Field::new("a", DataType::Int32, true),
             Field::new("c", DataType::Boolean, false),
         ]));
         assert_eq!(reader_schema, expected_schema);
@@ -2234,14 +2231,14 @@ mod tests {
         let d = StringArray::from(vec![Some("text"), None, Some("text"), None]);
         let c = ArrayDataBuilder::new(c_field.data_type().clone())
             .len(4)
-            .add_child_data(d.data().clone())
+            .add_child_data(d.into_data())
             .null_bit_buffer(Some(Buffer::from(vec![0b00000101])))
             .build()
             .unwrap();
         let b = BooleanArray::from(vec![Some(true), Some(false), Some(true), None]);
         let a = ArrayDataBuilder::new(a_field.data_type().clone())
             .len(4)
-            .add_child_data(b.data().clone())
+            .add_child_data(b.into_data())
             .add_child_data(c)
             .null_bit_buffer(Some(Buffer::from(vec![0b00000111])))
             .build()

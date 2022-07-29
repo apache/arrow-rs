@@ -212,7 +212,7 @@ pub enum Repetition {
 /// Encodings supported by Parquet.
 /// Not all encodings are valid for all types. These enums are also used to specify the
 /// encoding of definition and repetition levels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum Encoding {
     /// Default byte encoding.
     /// - BOOLEAN - 1 bit per value, 0 is false; 1 is true.
@@ -1059,6 +1059,7 @@ mod tests {
         assert_eq!(ConvertedType::JSON.to_string(), "JSON");
         assert_eq!(ConvertedType::BSON.to_string(), "BSON");
         assert_eq!(ConvertedType::INTERVAL.to_string(), "INTERVAL");
+        assert_eq!(ConvertedType::DECIMAL.to_string(), "DECIMAL")
     }
 
     #[test]
@@ -1153,6 +1154,10 @@ mod tests {
             ConvertedType::from(Some(parquet::ConvertedType::Interval)),
             ConvertedType::INTERVAL
         );
+        assert_eq!(
+            ConvertedType::from(Some(parquet::ConvertedType::Decimal)),
+            ConvertedType::DECIMAL
+        )
     }
 
     #[test]
@@ -1244,6 +1249,10 @@ mod tests {
             Some(parquet::ConvertedType::Interval),
             ConvertedType::INTERVAL.into()
         );
+        assert_eq!(
+            Some(parquet::ConvertedType::Decimal),
+            ConvertedType::DECIMAL.into()
+        )
     }
 
     #[test]
@@ -1409,6 +1418,13 @@ mod tests {
                 .unwrap(),
             ConvertedType::INTERVAL
         );
+        assert_eq!(
+            ConvertedType::DECIMAL
+                .to_string()
+                .parse::<ConvertedType>()
+                .unwrap(),
+            ConvertedType::DECIMAL
+        )
     }
 
     #[test]

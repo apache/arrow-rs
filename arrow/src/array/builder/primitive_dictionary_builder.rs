@@ -16,18 +16,36 @@
 // under the License.
 
 use std::any::Any;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::array::ArrayRef;
-use crate::array::ArrowPrimitiveType;
-use crate::array::DictionaryArray;
-use crate::datatypes::ArrowNativeType;
-use crate::datatypes::ToByteSlice;
+use crate::array::{Array, ArrayRef, ArrowPrimitiveType, DictionaryArray};
+use crate::datatypes::{ArrowNativeType, DataType, ToByteSlice};
 use crate::error::{ArrowError, Result};
 
 use super::ArrayBuilder;
 use super::PrimitiveBuilder;
+
+/// Wraps a type implementing `ToByteSlice` implementing `Hash` and `Eq` for it
+///
+/// This is necessary to handle types such as f32, which don't natively implement these
+#[derive(Debug)]
+struct Value<T>(T);
+
+impl<T: ToByteSlice> std::hash::Hash for Value<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.to_byte_slice().hash(state)
+    }
+}
+
+impl<T: ToByteSlice> PartialEq for Value<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_byte_slice().eq(other.0.to_byte_slice())
+    }
+}
+
+impl<T: ToByteSlice> Eq for Value<T> {}
 
 /// Array builder for `DictionaryArray`. For example to map a set of byte indices
 /// to f32 values. Note that the use of a `HashMap` here will not scale to very large
@@ -46,7 +64,7 @@ use super::PrimitiveBuilder;
 ///  let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
 ///  let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
 ///  builder.append(12345678).unwrap();
-///  builder.append_null().unwrap();
+///  builder.append_null();
 ///  builder.append(22345678).unwrap();
 ///  let array = builder.finish();
 ///
@@ -74,7 +92,7 @@ where
 {
     keys_builder: PrimitiveBuilder<K>,
     values_builder: PrimitiveBuilder<V>,
-    map: HashMap<Box<[u8]>, K::Native>,
+    map: HashMap<Value<V::Native>, K::Native>,
 }
 
 impl<K, V> PrimitiveDictionaryBuilder<K, V>
@@ -141,31 +159,43 @@ where
     /// value is appended to the values array.
     #[inline]
     pub fn append(&mut self, value: V::Native) -> Result<K::Native> {
-        if let Some(&key) = self.map.get(value.to_byte_slice()) {
-            // Append existing value.
-            self.keys_builder.append_value(key)?;
-            Ok(key)
-        } else {
-            // Append new value.
-            let key = K::Native::from_usize(self.values_builder.len())
-                .ok_or(ArrowError::DictionaryKeyOverflowError)?;
-            self.values_builder.append_value(value)?;
-            self.keys_builder.append_value(key as K::Native)?;
-            self.map.insert(value.to_byte_slice().into(), key);
-            Ok(key)
-        }
+        let key = match self.map.entry(Value(value)) {
+            Entry::Vacant(vacant) => {
+                // Append new value.
+                let key = K::Native::from_usize(self.values_builder.len())
+                    .ok_or(ArrowError::DictionaryKeyOverflowError)?;
+                self.values_builder.append_value(value);
+                vacant.insert(key);
+                key
+            }
+            Entry::Occupied(o) => *o.get(),
+        };
+
+        self.keys_builder.append_value(key);
+        Ok(key)
     }
 
     #[inline]
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) {
         self.keys_builder.append_null()
     }
 
     /// Builds the `DictionaryArray` and reset this builder.
     pub fn finish(&mut self) -> DictionaryArray<K> {
         self.map.clear();
-        let value_ref: ArrayRef = Arc::new(self.values_builder.finish());
-        self.keys_builder.finish_dict(value_ref)
+        let values = self.values_builder.finish();
+        let keys = self.keys_builder.finish();
+
+        let data_type =
+            DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(V::DATA_TYPE));
+
+        let builder = keys
+            .into_data()
+            .into_builder()
+            .data_type(data_type)
+            .child_data(vec![values.into_data()]);
+
+        DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
 }
 
@@ -185,7 +215,7 @@ mod tests {
         let value_builder = PrimitiveBuilder::<UInt32Type>::new(2);
         let mut builder = PrimitiveDictionaryBuilder::new(key_builder, value_builder);
         builder.append(12345678).unwrap();
-        builder.append_null().unwrap();
+        builder.append_null();
         builder.append(22345678).unwrap();
         let array = builder.finish();
 
