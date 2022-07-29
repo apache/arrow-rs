@@ -70,7 +70,9 @@ default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64"]
 # Enable arrow reader/writer APIs
 arrow = ["dep:arrow", "base64"]
 # Enable CLI tools
-cli = ["serde_json", "base64", "clap", "arrow/csv"]
+cli = ["json", "base64", "clap", "arrow/csv"]
+# Enable JSON APIs
+json = ["serde_json"]
 # Enable internal testing APIs
 test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
