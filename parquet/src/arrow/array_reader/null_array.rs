@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, ArrayReader, skip_records};
+use crate::arrow::array_reader::{read_records_inner, skip_records, ArrayReader};
 use crate::arrow::record_reader::buffer::ScalarValue;
 use crate::arrow::record_reader::RecordReader;
 use crate::column::page::PageIterator;
@@ -80,8 +80,15 @@ where
 
     /// Reads at most `batch_size` records into array.
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
+        let size = self.read_records(batch_size)?;
+        self.consume_batch(size)
+    }
 
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        read_records_inner(&mut self.record_reader, self.pages.as_mut(), batch_size)
+    }
+
+    fn consume_batch(&mut self, _batch_size: usize) -> Result<ArrayRef> {
         // convert to arrays
         let array = arrow::array::NullArray::new(self.record_reader.num_values());
 

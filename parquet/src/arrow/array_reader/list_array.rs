@@ -79,8 +79,17 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
     }
 
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        let next_batch_array = self.item_reader.next_batch(batch_size)?;
+        let size = self.read_records(batch_size)?;
+        self.consume_batch(size)
+    }
 
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        let size = self.item_reader.read_records(batch_size)?;
+        Ok(size)
+    }
+
+    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        let next_batch_array = self.item_reader.consume_batch(batch_size)?;
         if next_batch_array.len() == 0 {
             return Ok(new_empty_array(&self.data_type));
         }

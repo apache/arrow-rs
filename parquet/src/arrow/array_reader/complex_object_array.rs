@@ -21,7 +21,7 @@ use crate::arrow::schema::parquet_to_arrow_field;
 use crate::column::page::PageIterator;
 use crate::column::reader::ColumnReaderImpl;
 use crate::data_type::DataType;
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType as ArrowType;
@@ -39,6 +39,7 @@ where
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Vec<i16>>,
     rep_levels_buffer: Option<Vec<i16>>,
+    data_buffer: Vec<T::T>,
     column_desc: ColumnDescPtr,
     column_reader: Option<ColumnReaderImpl<T>>,
     converter: C,
@@ -60,6 +61,11 @@ where
     }
 
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        let size = self.read_records(batch_size)?;
+        self.consume_batch(size)
+    }
+
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
         // Try to initialize column reader
         if self.column_reader.is_none() {
             self.next_column_reader()?;
@@ -126,7 +132,6 @@ where
                 break;
             }
         }
-
         data_buffer.truncate(num_read);
         def_levels_buffer
             .iter_mut()
@@ -135,23 +140,54 @@ where
             .iter_mut()
             .for_each(|buf| buf.truncate(num_read));
 
-        self.def_levels_buffer = def_levels_buffer;
-        self.rep_levels_buffer = rep_levels_buffer;
+        if let Some(mut def_levels_buffer) = def_levels_buffer {
+            match &mut self.def_levels_buffer {
+                None => {
+                    self.def_levels_buffer = Some(def_levels_buffer);
+                }
+                Some(buf) => buf.append(&mut def_levels_buffer),
+            }
+        }
+
+        if let Some(mut rep_levels_buffer) =  rep_levels_buffer {
+            match &mut self.rep_levels_buffer {
+                None => {
+                    self.rep_levels_buffer = Some(rep_levels_buffer);
+                }
+                Some(buf) => buf.append(&mut rep_levels_buffer),
+            }
+        }
+
+        self.data_buffer.append(&mut data_buffer);
+
+        Ok(num_read)
+    }
+
+    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        // uncheck null count
+        let len = self.data_buffer.len();
+        if len < batch_size {
+            return Err(general_err!(
+                "Invalid batch_size: {}, current consume: {} records in buffer.",
+                batch_size,
+                len
+            ));
+        }
 
         let data: Vec<Option<T::T>> = if self.def_levels_buffer.is_some() {
-            data_buffer
-                .into_iter()
+            self.data_buffer
+                .iter()
                 .zip(self.def_levels_buffer.as_ref().unwrap().iter())
                 .map(|(t, def_level)| {
                     if *def_level == self.column_desc.max_def_level() {
-                        Some(t)
+                        Some(t.clone())
                     } else {
                         None
                     }
                 })
                 .collect()
         } else {
-            data_buffer.into_iter().map(Some).collect()
+            self.data_buffer.iter().map(|x| Some(x.clone())).collect()
         };
 
         let mut array = self.converter.convert(data)?;
@@ -159,6 +195,10 @@ where
         if let ArrowType::Dictionary(_, _) = self.data_type {
             array = arrow::compute::cast(&array, &self.data_type)?;
         }
+
+        self.data_buffer = vec![];
+        self.def_levels_buffer = None;
+        self.rep_levels_buffer = None;
 
         Ok(array)
     }
@@ -208,6 +248,7 @@ where
             pages,
             def_levels_buffer: None,
             rep_levels_buffer: None,
+            data_buffer: vec![],
             column_desc,
             column_reader: None,
             converter,

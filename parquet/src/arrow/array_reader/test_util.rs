@@ -141,6 +141,11 @@ impl ArrayReader for InMemoryArrayReader {
     }
 
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        let size = self.read_records(batch_size)?;
+        self.consume_batch(size)
+    }
+
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
         assert_ne!(batch_size, 0);
         // This replicates the logical normally performed by
         // RecordReader to delimit semantic records
@@ -164,10 +169,14 @@ impl ArrayReader for InMemoryArrayReader {
             }
             None => batch_size.min(self.array.len() - self.cur_idx),
         };
+        Ok(read)
+    }
 
+    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        assert_ne!(batch_size, 0);
         self.last_idx = self.cur_idx;
-        self.cur_idx += read;
-        Ok(self.array.slice(self.last_idx, read))
+        self.cur_idx += batch_size;
+        Ok(self.array.slice(self.last_idx, batch_size))
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {

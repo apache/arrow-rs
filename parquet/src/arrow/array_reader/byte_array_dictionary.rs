@@ -25,7 +25,7 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
 
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
-use crate::arrow::array_reader::{read_records, ArrayReader, skip_records};
+use crate::arrow::array_reader::{read_records_inner, skip_records, ArrayReader};
 use crate::arrow::buffer::{
     dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer,
 };
@@ -168,7 +168,24 @@ where
     }
 
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
+        let size = self.read_records(batch_size)?;
+        self.consume_batch(size)
+    }
+
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        read_records_inner(&mut self.record_reader, self.pages.as_mut(), batch_size)
+    }
+
+    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        let num_records = self.record_reader.num_records();
+        if num_records < batch_size {
+            return Err(general_err!(
+                "Invalid batch_size: {}, current consume: {} records in buffer.",
+                batch_size,
+                num_records
+            ));
+        }
+
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_bitmap_buffer();
         let array = buffer.into_array(null_buffer, &self.data_type)?;

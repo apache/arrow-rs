@@ -81,6 +81,31 @@ impl ArrayReader for StructArrayReader {
     /// null_bitmap[i] = (def_levels[i] >= self.def_level);
     /// ```
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        let size = self.read_records(batch_size)?;
+        self.consume_batch(size)
+    }
+
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        let mut read = None;
+        for child in self.children.iter_mut() {
+            let child_read = child.read_records(batch_size)?;
+            match read {
+                Some(expected) => {
+                    if expected != child_read {
+                        return Err(general_err!(
+                            "StructArrayReader out of sync in read_records, expected {} skipped, got {}",
+                            expected,
+                            child_read
+                        ));
+                    }
+                }
+                None => read = Some(child_read),
+            }
+        }
+        Ok(read.unwrap_or(0))
+    }
+
+    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
         if self.children.is_empty() {
             return Ok(Arc::new(StructArray::from(Vec::new())));
         }
@@ -88,7 +113,7 @@ impl ArrayReader for StructArrayReader {
         let children_array = self
             .children
             .iter_mut()
-            .map(|reader| reader.next_batch(batch_size))
+            .map(|reader| reader.consume_batch(batch_size))
             .collect::<Result<Vec<_>>>()?;
 
         // check that array child data has same size

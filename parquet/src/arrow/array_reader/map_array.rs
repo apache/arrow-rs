@@ -63,8 +63,25 @@ impl ArrayReader for MapArrayReader {
     }
 
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        let key_array = self.key_reader.next_batch(batch_size)?;
-        let value_array = self.value_reader.next_batch(batch_size)?;
+        let size = self.read_records(batch_size)?;
+        self.consume_batch(size)
+    }
+
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        let key_len = self.key_reader.read_records(batch_size)?;
+        let value_len = self.value_reader.read_records(batch_size)?;
+        // Check that key and value have the same lengths
+        if key_len != value_len {
+            return Err(general_err!(
+                "Map key and value should have the same lengths."
+            ));
+        }
+        Ok(key_len)
+    }
+
+    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        let key_array = self.key_reader.consume_batch(batch_size)?;
+        let value_array = self.value_reader.consume_batch(batch_size)?;
 
         // Check that key and value have the same lengths
         let key_length = key_array.len();

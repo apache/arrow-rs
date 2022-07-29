@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{read_records_inner, skip_records, ArrayReader};
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::record_reader::buffer::ScalarValue;
 use crate::arrow::record_reader::GenericRecordReader;
@@ -109,7 +109,23 @@ impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
     }
 
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
+        let size = self.read_records(batch_size)?;
+        self.consume_batch(size)
+    }
+
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        read_records_inner(&mut self.record_reader, self.pages.as_mut(), batch_size)
+    }
+
+    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        if self.record_reader.num_records() < batch_size {
+            return Err(general_err!(
+                "Invalid batch_size: {}, current consume: {} records in buffer.",
+                batch_size,
+                self.record_reader.num_records()
+            ));
+        }
+
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_bitmap_buffer();
         self.def_levels_buffer = self.record_reader.consume_def_levels();

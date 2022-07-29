@@ -54,14 +54,21 @@ impl ArrayReader for EmptyArrayReader {
     }
 
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        let size = self.read_records(batch_size)?;
+        self.consume_batch(size)
+    }
+
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
         let len = self.remaining_rows.min(batch_size);
         self.remaining_rows -= len;
+        Ok(len)
+    }
 
+    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
         let data = ArrayDataBuilder::new(self.data_type.clone())
-            .len(len)
+            .len(batch_size)
             .build()
             .unwrap();
-
         Ok(Arc::new(StructArray::from(data)))
     }
 

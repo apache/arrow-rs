@@ -64,6 +64,16 @@ pub trait ArrayReader: Send {
     /// Reads at most `batch_size` records into an arrow array and return it.
     fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef>;
 
+    /// Reads at most `batch_size` records' bytes into buffer
+    ///
+    /// Returns the number of records read, which can be less than `batch_size` if
+    /// pages is exhausted.
+    fn read_records(&mut self, batch_size: usize) -> Result<usize>;
+
+    /// Consume at most `batch_size` currently stored buffer data
+    /// into an arrow array and return it.
+    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef>;
+
     /// Skips over `num_records` records, returning the number of rows skipped
     fn skip_records(&mut self, num_records: usize) -> Result<usize>;
 
@@ -115,7 +125,7 @@ impl RowGroupCollection for Arc<dyn FileReader> {
 ///
 /// Returns the number of records read, which can be less than `batch_size` if
 /// pages is exhausted.
-fn read_records<V, CV>(
+fn read_records_inner<V, CV>(
     record_reader: &mut GenericRecordReader<V, CV>,
     pages: &mut dyn PageIterator,
     batch_size: usize,
