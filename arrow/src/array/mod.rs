@@ -163,7 +163,7 @@ mod array_binary;
 mod array_boolean;
 mod array_decimal;
 mod array_dictionary;
-mod array_fixed_binary;
+mod array_fixed_size_binary;
 mod array_list;
 mod array_map;
 mod array_primitive;
@@ -201,7 +201,7 @@ pub use self::array_boolean::BooleanArray;
 pub use self::array_decimal::BasicDecimalArray;
 pub use self::array_decimal::Decimal128Array;
 pub use self::array_decimal::Decimal256Array;
-pub use self::array_fixed_binary::FixedSizeBinaryArray;
+pub use self::array_fixed_size_binary::FixedSizeBinaryArray;
 
 #[deprecated(note = "Please use `Decimal128Array` instead")]
 pub type DecimalArray = Decimal128Array;
