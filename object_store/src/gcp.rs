@@ -841,6 +841,11 @@ impl GoogleCloudStorageBuilder {
     ///
     /// This allows you to set custom client options such as allowing
     /// non secure connections or custom headers.
+    ///
+    /// NOTE: Currently only available in `test`s to facilitate
+    /// testing, to avoid leaking details and preserve our ability to
+    /// make changes to the implementation.
+    #[cfg(test)]
     pub fn with_client(mut self, client: Client) -> Self {
         self.client = Some(client);
         self

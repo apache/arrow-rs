@@ -783,20 +783,6 @@ impl AmazonS3Builder {
     }
 }
 
-// /// Create a new [`AmazonS3`] that always errors
-// pub fn new_failing_s3() -> Result<AmazonS3> {
-//     new_s3(
-//         Some("foo"),
-//         Some("bar"),
-//         "us-east-1",
-//         "bucket",
-//         None as Option<&str>,
-//         None as Option<&str>,
-//         NonZeroUsize::new(16).unwrap(),
-//         true,
-//     )
-// }
-
 /// S3 client bundled w/ a semaphore permit.
 #[derive(Clone)]
 struct SemaphoreClient {
