@@ -124,7 +124,7 @@ impl Decimal128Builder {
             None => {
                 self.append_null();
                 Ok(())
-            },
+            }
             Some(value) => self.append_value(value),
         }
     }
@@ -238,7 +238,7 @@ impl Decimal256Builder {
             None => {
                 self.append_null();
                 Ok(())
-            },
+            }
             Some(value) => self.append_value(value),
         }
     }
