@@ -117,7 +117,7 @@ impl Decimal128Builder {
         self.builder.append_null()
     }
 
-    /// Appends an `Option<T>` into the builder.
+    /// Appends an `Option<impl Into<i128>>` into the builder.
     #[inline]
     pub fn append_option(&mut self, value: Option<impl Into<i128>>) -> Result<()> {
         match value {
@@ -231,7 +231,7 @@ impl Decimal256Builder {
         self.builder.append_null()
     }
 
-    /// Appends an `Option<T>` into the builder.
+    /// Appends an `Option<&Decimal256>` into the builder.
     #[inline]
     pub fn append_option(&mut self, value: Option<&Decimal256>) -> Result<()> {
         match value {
