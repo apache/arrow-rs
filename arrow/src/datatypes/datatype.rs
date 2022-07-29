@@ -189,14 +189,19 @@ pub enum DataType {
     /// This type mostly used to represent low cardinality string
     /// arrays or a limited set of primitive types as integers.
     Dictionary(Box<DataType>, Box<DataType>),
-    /// Exact decimal value with precision and scale
+    /// Exact 128-bit width decimal value with precision and scale
     ///
     /// * precision is the total number of digits
     /// * scale is the number of digits past the decimal
     ///
     /// For example the number 123.45 has precision 5 and scale 2.
-    Decimal(usize, usize),
-    /// Exact decimal value with 256 bits width
+    Decimal128(usize, usize),
+    /// Exact 256-bit width decimal value with precision and scale
+    ///
+    /// * precision is the total number of digits
+    /// * scale is the number of digits past the decimal
+    ///
+    /// For example the number 123.45 has precision 5 and scale 2.
     Decimal256(usize, usize),
     /// A Map is a logical nested type that is represented as
     ///
@@ -563,7 +568,7 @@ impl DataType {
                     };
 
                     if bit_width == 128 {
-                        Ok(DataType::Decimal(precision, scale))
+                        Ok(DataType::Decimal128(precision, scale))
                     } else if bit_width == 256 {
                         Ok(DataType::Decimal256(precision, scale))
                     } else {
@@ -850,7 +855,7 @@ impl DataType {
                 TimeUnit::Nanosecond => "NANOSECOND",
             }}),
             DataType::Dictionary(_, _) => json!({ "name": "dictionary"}),
-            DataType::Decimal(precision, scale) => {
+            DataType::Decimal128(precision, scale) => {
                 json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 128})
             }
             DataType::Decimal256(precision, scale) => {

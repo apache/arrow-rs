@@ -187,7 +187,7 @@ fn equal_values(
         DataType::FixedSizeBinary(_) => {
             fixed_binary_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
-        DataType::Decimal(_, _) | DataType::Decimal256(_, _) => {
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => {
             decimal_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::List(_) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),

@@ -248,7 +248,7 @@ mod tests {
         builder.append_value(-8_887_000_000_i128).unwrap();
         let decimal_array: Decimal128Array = builder.finish();
 
-        assert_eq!(&DataType::Decimal(38, 6), decimal_array.data_type());
+        assert_eq!(&DataType::Decimal128(38, 6), decimal_array.data_type());
         assert_eq!(3, decimal_array.len());
         assert_eq!(1, decimal_array.null_count());
         assert_eq!(32, decimal_array.value_offset(2));
@@ -268,7 +268,7 @@ mod tests {
             .unwrap();
         let decimal_array: Decimal128Array = builder.finish();
 
-        assert_eq!(&DataType::Decimal(38, 6), decimal_array.data_type());
+        assert_eq!(&DataType::Decimal128(38, 6), decimal_array.data_type());
         assert_eq!(3, decimal_array.len());
         assert_eq!(1, decimal_array.null_count());
         assert_eq!(32, decimal_array.value_offset(2));
