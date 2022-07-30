@@ -27,6 +27,11 @@ use reqwest::{Response, Result};
 /// By default they will be retried up to some limit, using exponential
 /// backoff with jitter. See [`BackoffConfig`] for more information
 ///
+/// Note: requests are retried without renewing credentials or regenerating
+/// the message payload, as such `max_retries * backoff.max_backoff` should
+/// be kept below 5 minutes to avoid errors due to expired credentials
+/// and/or request payloads
+///
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
     /// The backoff configuration
