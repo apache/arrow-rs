@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
+use crate::RetryConfig;
 use reqwest::{Client, Method};
 use ring::signature::RsaKeyPair;
 use snafu::{ResultExt, Snafu};
@@ -133,7 +135,11 @@ impl OAuthProvider {
     }
 
     /// Fetch a fresh token
-    pub async fn fetch_token(&self, client: &Client) -> Result<TemporaryToken<String>> {
+    pub async fn fetch_token(
+        &self,
+        client: &Client,
+        retry: &RetryConfig,
+    ) -> Result<TemporaryToken<String>> {
         let now = seconds_since_epoch();
         let exp = now + 3600;
 
@@ -168,7 +174,7 @@ impl OAuthProvider {
         let response: TokenResponse = client
             .request(Method::POST, &self.audience)
             .form(&body)
-            .send()
+            .send_retry(retry)
             .await
             .context(TokenRequestSnafu)?
             .error_for_status()

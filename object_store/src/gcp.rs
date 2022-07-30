@@ -225,7 +225,9 @@ impl GoogleCloudStorageClient {
         if let Some(oauth_provider) = &self.oauth_provider {
             Ok(self
                 .token_cache
-                .get_or_insert_with(|| oauth_provider.fetch_token(&self.client))
+                .get_or_insert_with(|| {
+                    oauth_provider.fetch_token(&self.client, &self.retry_config)
+                })
                 .await?)
         } else {
             Ok("".to_owned())
