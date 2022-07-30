@@ -309,7 +309,6 @@ pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
 /// `MAX_DECIMAL_FOR_LARGER_PRECISION[p]` holds the maximum integer value
 /// that can be stored in [DataType::Decimal256] value of precision `p` > 38
 pub const MAX_DECIMAL_FOR_LARGER_PRECISION: [&str; 38] = [
-    "99999999999999999999999999999999999999",
     "999999999999999999999999999999999999999",
     "9999999999999999999999999999999999999999",
     "99999999999999999999999999999999999999999",
@@ -347,6 +346,7 @@ pub const MAX_DECIMAL_FOR_LARGER_PRECISION: [&str; 38] = [
     "9999999999999999999999999999999999999999999999999999999999999999999999999",
     "99999999999999999999999999999999999999999999999999999999999999999999999999",
     "999999999999999999999999999999999999999999999999999999999999999999999999999",
+    "9999999999999999999999999999999999999999999999999999999999999999999999999999",
 ];
 
 /// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value
@@ -395,7 +395,6 @@ pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
 /// `MIN_DECIMAL_FOR_LARGER_PRECISION[p]` holds the minimum integer value
 /// that can be stored in a [DataType::Decimal256] value of precision `p` > 38
 pub const MIN_DECIMAL_FOR_LARGER_PRECISION: [&str; 38] = [
-    "-99999999999999999999999999999999999999",
     "-999999999999999999999999999999999999999",
     "-9999999999999999999999999999999999999999",
     "-99999999999999999999999999999999999999999",
@@ -433,6 +432,7 @@ pub const MIN_DECIMAL_FOR_LARGER_PRECISION: [&str; 38] = [
     "-9999999999999999999999999999999999999999999999999999999999999999999999999",
     "-99999999999999999999999999999999999999999999999999999999999999999999999999",
     "-999999999999999999999999999999999999999999999999999999999999999999999999999",
+    "-9999999999999999999999999999999999999999999999999999999999999999999999999999",
 ];
 
 /// The maximum precision for [DataType::Decimal128] values
@@ -454,9 +454,11 @@ pub const DECIMAL_DEFAULT_SCALE: usize = 10;
 /// interpreted as a Decimal number with precision `precision`
 #[inline]
 pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Result<i128> {
-    // TODO: add validation logic for precision > 38
-    if precision > 38 {
-        return Ok(value);
+    if precision > DECIMAL128_MAX_PRECISION {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Max precision of a Decimal128 is {}, but got {}",
+            DECIMAL128_MAX_PRECISION, precision,
+        )));
     }
 
     let max = MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1];
@@ -464,12 +466,12 @@ pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Resul
 
     if value > max {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{} is too large to store in a Decimal of precision {}. Max is {}",
+            "{} is too large to store in a Decimal128 of precision {}. Max is {}",
             value, precision, max
         )))
     } else if value < min {
         Err(ArrowError::InvalidArgumentError(format!(
-            "{} is too small to store in a Decimal of precision {}. Min is {}",
+            "{} is too small to store in a Decimal128 of precision {}. Min is {}",
             value, precision, min
         )))
     } else {

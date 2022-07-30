@@ -2841,7 +2841,7 @@ mod tests {
         let validation_result = array_data.validate_full();
         let error = validation_result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: 123456 is too large to store in a Decimal of precision 5. Max is 99999",
+            "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
             error.to_string()
         );
     }

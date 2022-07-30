@@ -261,7 +261,7 @@ mod tests {
     use crate::array::array_decimal::{BasicDecimalArray, Decimal128Array};
     use crate::array::{array_decimal, Array};
     use crate::datatypes::DataType;
-    use crate::util::decimal::Decimal128;
+    use crate::util::decimal::{Decimal128, Decimal256};
 
     #[test]
     fn test_decimal_builder() {
@@ -357,31 +357,29 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 76. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
+        expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 75. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
     )]
     fn test_decimal256_builder_out_of_range_precision_scale() {
-        let mut builder = Decimal256Builder::new(30, 76, 6);
+        let mut builder = Decimal256Builder::new(30, 75, 6);
 
         let big_value = BigInt::from_str_radix("9999999999999999999999999999999999999999999999999999999999999999999999999999", 10).unwrap();
-        let bytes = big_value.to_signed_bytes_le();
-        let value = Decimal256::try_new_from_bytes(76, 6, &bytes).unwrap();
+        let value = Decimal256::from_big_int(&big_value, 75, 6).unwrap();
         builder.append_value(&value).unwrap();
     }
 
     #[test]
     #[should_panic(
-        expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 76. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
+        expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 75. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
     )]
     fn test_decimal256_data_validation() {
-        let mut builder = Decimal256Builder::new(30, 76, 6);
+        let mut builder = Decimal256Builder::new(30, 75, 6);
         // Disable validation at builder
         unsafe {
             builder.disable_value_validation();
         }
 
         let big_value = BigInt::from_str_radix("9999999999999999999999999999999999999999999999999999999999999999999999999999", 10).unwrap();
-        let bytes = big_value.to_signed_bytes_le();
-        let value = Decimal256::try_new_from_bytes(76, 6, &bytes).unwrap();
+        let value = Decimal256::from_big_int(&big_value, 75, 6).unwrap();
         builder
             .append_value(&value)
             .expect("should not validate invalid value at builder");
