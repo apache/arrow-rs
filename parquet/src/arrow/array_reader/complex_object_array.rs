@@ -149,7 +149,7 @@ where
             }
         }
 
-        if let Some(mut rep_levels_buffer) =  rep_levels_buffer {
+        if let Some(mut rep_levels_buffer) = rep_levels_buffer {
             match &mut self.rep_levels_buffer {
                 None => {
                     self.rep_levels_buffer = Some(rep_levels_buffer);
@@ -196,10 +196,15 @@ where
             array = arrow::compute::cast(&array, &self.data_type)?;
         }
 
-        self.data_buffer = vec![];
-        self.def_levels_buffer = None;
-        self.rep_levels_buffer = None;
-
+        self.data_buffer = self.data_buffer.split_off(batch_size);
+        if let Some(buf) = &mut self.def_levels_buffer {
+            let rest = buf.split_off(batch_size);
+            self.def_levels_buffer = Some(rest);
+        }
+        if let Some(buf) = &mut self.rep_levels_buffer {
+            let rest = buf.split_off(batch_size);
+            self.rep_levels_buffer = Some(rest);
+        }
         Ok(array)
     }
 
@@ -208,8 +213,11 @@ where
             Some(reader) => reader.skip_records(num_records),
             None => {
                 if self.next_column_reader()? {
-                    self.column_reader.as_mut().unwrap().skip_records(num_records)
-                }else {
+                    self.column_reader
+                        .as_mut()
+                        .unwrap()
+                        .skip_records(num_records)
+                } else {
                     Ok(0)
                 }
             }
@@ -390,30 +398,32 @@ mod tests {
 
         let mut accu_len: usize = 0;
 
-        let array = array_reader.next_batch(values_per_page / 2).unwrap();
-        assert_eq!(array.len(), values_per_page / 2);
+        let len = array_reader.read_records(values_per_page / 2).unwrap();
+        assert_eq!(len, values_per_page / 2);
         assert_eq!(
-            Some(&def_levels[accu_len..(accu_len + array.len())]),
+            Some(&def_levels[accu_len..(accu_len + len)]),
             array_reader.get_def_levels()
         );
         assert_eq!(
-            Some(&rep_levels[accu_len..(accu_len + array.len())]),
+            Some(&rep_levels[accu_len..(accu_len + len)]),
             array_reader.get_rep_levels()
         );
-        accu_len += array.len();
+        accu_len += len;
+        array_reader.consume_batch(values_per_page / 2).unwrap();
 
         // Read next values_per_page values, the first values_per_page/2 ones are from the first column chunk,
         // and the last values_per_page/2 ones are from the second column chunk
-        let array = array_reader.next_batch(values_per_page).unwrap();
-        assert_eq!(array.len(), values_per_page);
+        let len = array_reader.read_records(values_per_page).unwrap();
+        assert_eq!(len, values_per_page);
         assert_eq!(
-            Some(&def_levels[accu_len..(accu_len + array.len())]),
+            Some(&def_levels[accu_len..(accu_len + len)]),
             array_reader.get_def_levels()
         );
         assert_eq!(
-            Some(&rep_levels[accu_len..(accu_len + array.len())]),
+            Some(&rep_levels[accu_len..(accu_len + len)]),
             array_reader.get_rep_levels()
         );
+        let array = array_reader.consume_batch(values_per_page).unwrap();
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
         for i in 0..array.len() {
             if array.is_valid(i) {
@@ -425,19 +435,20 @@ mod tests {
                 assert_eq!(all_values[i + accu_len], None)
             }
         }
-        accu_len += array.len();
+        accu_len += len;
 
         // Try to read values_per_page values, however there are only values_per_page/2 values
-        let array = array_reader.next_batch(values_per_page).unwrap();
-        assert_eq!(array.len(), values_per_page / 2);
+        let len = array_reader.read_records(values_per_page).unwrap();
+        assert_eq!(len, values_per_page / 2);
         assert_eq!(
-            Some(&def_levels[accu_len..(accu_len + array.len())]),
+            Some(&def_levels[accu_len..(accu_len + len)]),
             array_reader.get_def_levels()
         );
         assert_eq!(
-            Some(&rep_levels[accu_len..(accu_len + array.len())]),
+            Some(&rep_levels[accu_len..(accu_len + len)]),
             array_reader.get_rep_levels()
         );
+        array_reader.consume_batch(len).unwrap();
     }
 
     #[test]
@@ -532,31 +543,34 @@ mod tests {
         let mut accu_len: usize = 0;
 
         // println!("---------- reading a batch of {} values ----------", values_per_page / 2);
-        let array = array_reader.next_batch(values_per_page / 2).unwrap();
-        assert_eq!(array.len(), values_per_page / 2);
+        let len = array_reader.read_records(values_per_page / 2).unwrap();
+        assert_eq!(len, values_per_page / 2);
         assert_eq!(
-            Some(&def_levels[accu_len..(accu_len + array.len())]),
+            Some(&def_levels[accu_len..(accu_len + len)]),
             array_reader.get_def_levels()
         );
         assert_eq!(
-            Some(&rep_levels[accu_len..(accu_len + array.len())]),
+            Some(&rep_levels[accu_len..(accu_len + len)]),
             array_reader.get_rep_levels()
         );
-        accu_len += array.len();
+        accu_len += len;
+        array_reader.consume_batch(len).unwrap();
 
         // Read next values_per_page values, the first values_per_page/2 ones are from the first column chunk,
         // and the last values_per_page/2 ones are from the second column chunk
         // println!("---------- reading a batch of {} values ----------", values_per_page);
-        let array = array_reader.next_batch(values_per_page).unwrap();
-        assert_eq!(array.len(), values_per_page);
+        //let array = array_reader.next_batch(values_per_page).unwrap();
+        let len = array_reader.read_records(values_per_page).unwrap();
+        assert_eq!(len, values_per_page);
         assert_eq!(
-            Some(&def_levels[accu_len..(accu_len + array.len())]),
+            Some(&def_levels[accu_len..(accu_len + len)]),
             array_reader.get_def_levels()
         );
         assert_eq!(
-            Some(&rep_levels[accu_len..(accu_len + array.len())]),
+            Some(&rep_levels[accu_len..(accu_len + len)]),
             array_reader.get_rep_levels()
         );
+        let array = array_reader.consume_batch(len).unwrap();
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
         for i in 0..array.len() {
             if array.is_valid(i) {
@@ -568,19 +582,20 @@ mod tests {
                 assert_eq!(all_values[i + accu_len], None)
             }
         }
-        accu_len += array.len();
+        accu_len += len;
 
         // Try to read values_per_page values, however there are only values_per_page/2 values
         // println!("---------- reading a batch of {} values ----------", values_per_page);
-        let array = array_reader.next_batch(values_per_page).unwrap();
-        assert_eq!(array.len(), values_per_page / 2);
+        let len = array_reader.read_records(values_per_page).unwrap();
+        assert_eq!(len, values_per_page / 2);
         assert_eq!(
-            Some(&def_levels[accu_len..(accu_len + array.len())]),
+            Some(&def_levels[accu_len..(accu_len + len)]),
             array_reader.get_def_levels()
         );
         assert_eq!(
-            Some(&rep_levels[accu_len..(accu_len + array.len())]),
+            Some(&rep_levels[accu_len..(accu_len + len)]),
             array_reader.get_rep_levels()
         );
+        array_reader.consume_batch(len).unwrap();
     }
 }
