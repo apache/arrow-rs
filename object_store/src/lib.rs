@@ -51,10 +51,10 @@ pub mod path;
 pub mod throttle;
 
 #[cfg(feature = "gcp")]
-mod oauth;
+mod client;
 
 #[cfg(feature = "gcp")]
-mod token;
+pub use client::{backoff::BackoffConfig, retry::RetryConfig};
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
 mod multipart;
@@ -336,7 +336,7 @@ pub enum Error {
 
     #[cfg(feature = "gcp")]
     #[snafu(display("OAuth error: {}", source), context(false))]
-    OAuth { source: oauth::Error },
+    OAuth { source: client::oauth::Error },
 }
 
 #[cfg(test)]

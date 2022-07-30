@@ -46,14 +46,13 @@ use reqwest::{header, Client, Method, Response, StatusCode};
 use snafu::{ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 
-use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
-use crate::util::format_http_range;
+use crate::client::retry::RetryExt;
 use crate::{
-    oauth::OAuthProvider,
+    client::{oauth::OAuthProvider, token::TokenCache},
+    multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
-    token::TokenCache,
-    util::format_prefix,
-    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
+    util::{format_http_range, format_prefix},
+    GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result, RetryConfig,
 };
 
 #[derive(Debug, Snafu)]
@@ -215,6 +214,8 @@ struct GoogleCloudStorageClient {
     bucket_name: String,
     bucket_name_encoded: String,
 
+    retry_config: RetryConfig,
+
     // TODO: Hook this up in tests
     max_list_results: Option<String>,
 }
@@ -264,7 +265,7 @@ impl GoogleCloudStorageClient {
         let response = builder
             .bearer_auth(token)
             .query(&[("alt", alt)])
-            .send()
+            .send_retry(&self.retry_config)
             .await
             .context(GetRequestSnafu {
                 path: path.as_ref(),
@@ -292,7 +293,7 @@ impl GoogleCloudStorageClient {
             .header(header::CONTENT_LENGTH, payload.len())
             .query(&[("uploadType", "media"), ("name", path.as_ref())])
             .body(payload)
-            .send()
+            .send_retry(&self.retry_config)
             .await
             .context(PutRequestSnafu)?
             .error_for_status()
@@ -313,7 +314,7 @@ impl GoogleCloudStorageClient {
             .header(header::CONTENT_TYPE, "application/octet-stream")
             .header(header::CONTENT_LENGTH, "0")
             .query(&[("uploads", "")])
-            .send()
+            .send_retry(&self.retry_config)
             .await
             .context(PutRequestSnafu)?
             .error_for_status()
@@ -347,7 +348,7 @@ impl GoogleCloudStorageClient {
             .header(header::CONTENT_TYPE, "application/octet-stream")
             .header(header::CONTENT_LENGTH, "0")
             .query(&[("uploadId", multipart_id)])
-            .send()
+            .send_retry(&self.retry_config)
             .await
             .context(PutRequestSnafu)?
             .error_for_status()
@@ -364,7 +365,7 @@ impl GoogleCloudStorageClient {
         let builder = self.client.request(Method::DELETE, url);
         builder
             .bearer_auth(token)
-            .send()
+            .send_retry(&self.retry_config)
             .await
             .context(DeleteRequestSnafu {
                 path: path.as_ref(),
@@ -407,7 +408,7 @@ impl GoogleCloudStorageClient {
 
         builder
             .bearer_auth(token)
-            .send()
+            .send_retry(&self.retry_config)
             .await
             .context(CopyRequestSnafu {
                 path: from.as_ref(),
@@ -456,7 +457,7 @@ impl GoogleCloudStorageClient {
             .request(Method::GET, url)
             .query(&query)
             .bearer_auth(token)
-            .send()
+            .send_retry(&self.retry_config)
             .await
             .context(ListRequestSnafu)?
             .error_for_status()
@@ -572,7 +573,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
                 .header(header::CONTENT_TYPE, "application/octet-stream")
                 .header(header::CONTENT_LENGTH, format!("{}", buf.len()))
                 .body(buf)
-                .send()
+                .send_retry(&client.retry_config)
                 .await
                 .map_err(reqwest_error_as_io)?
                 .error_for_status()
@@ -643,7 +644,7 @@ impl CloudMultiPartUploadImpl for GCSMultipartUpload {
                 .bearer_auth(token)
                 .query(&[("uploadId", upload_id)])
                 .body(data)
-                .send()
+                .send_retry(&client.retry_config)
                 .await
                 .map_err(reqwest_error_as_io)?
                 .error_for_status()
@@ -802,6 +803,7 @@ pub struct GoogleCloudStorageBuilder {
     bucket_name: Option<String>,
     service_account_path: Option<String>,
     client: Option<Client>,
+    retry_config: RetryConfig,
 }
 
 impl GoogleCloudStorageBuilder {
@@ -837,6 +839,12 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Set the retry configuration
+    pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
+        self.retry_config = retry_config;
+        self
+    }
+
     /// Use the specified http [`Client`] (defaults to [`Client::new`])
     ///
     /// This allows you to set custom client options such as allowing
@@ -858,6 +866,7 @@ impl GoogleCloudStorageBuilder {
             bucket_name,
             service_account_path,
             client,
+            retry_config,
         } = self;
 
         let bucket_name = bucket_name.ok_or(Error::MissingBucketName {})?;
@@ -896,6 +905,7 @@ impl GoogleCloudStorageBuilder {
                 token_cache: Default::default(),
                 bucket_name,
                 bucket_name_encoded: encoded_bucket_name,
+                retry_config,
                 max_list_results: None,
             }),
         })
