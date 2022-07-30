@@ -45,6 +45,7 @@ pub mod aws;
 pub mod azure;
 #[cfg(feature = "gcp")]
 pub mod gcp;
+pub mod limit;
 pub mod local;
 pub mod memory;
 pub mod path;

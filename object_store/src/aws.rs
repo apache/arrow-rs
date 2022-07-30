@@ -684,6 +684,7 @@ impl AmazonS3Builder {
 
     /// Sets the maximum number of concurrent outstanding
     /// connectons. Default is `16`.
+    #[deprecated(note = "use LimitStore instead")]
     pub fn with_max_connections(mut self, max_connections: NonZeroUsize) -> Self {
         self.max_connections = max_connections;
         self
