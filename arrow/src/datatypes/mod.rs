@@ -1481,23 +1481,31 @@ mod tests {
         .is_err());
 
         // incompatible metadata should throw error
-        assert!(Schema::try_merge(vec![
+        let res = Schema::try_merge(vec![
             Schema::new_with_metadata(
                 vec![Field::new("first_name", DataType::Utf8, false)],
-                [("foo".to_string(), "bar".to_string()),]
+                [("foo".to_string(), "bar".to_string())]
                     .iter()
                     .cloned()
-                    .collect::<HashMap<String, String>>()
+                    .collect::<HashMap<String, String>>(),
             ),
             Schema::new_with_metadata(
                 vec![Field::new("last_name", DataType::Utf8, false)],
-                [("foo".to_string(), "baz".to_string()),]
+                [("foo".to_string(), "baz".to_string())]
                     .iter()
                     .cloned()
-                    .collect::<HashMap<String, String>>()
-            )
+                    .collect::<HashMap<String, String>>(),
+            ),
         ])
-        .is_err());
+        .unwrap_err();
+
+        let expected = "Fail to merge schema due to conflicting metadata. Key 'foo' has different values 'bar' and 'baz'";
+        assert!(
+            res.to_string().contains(expected),
+            "Could not find expected string '{}' in '{}'",
+            expected,
+            res
+        );
 
         Ok(())
     }
