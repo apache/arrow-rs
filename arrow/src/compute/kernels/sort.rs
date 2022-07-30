@@ -145,7 +145,7 @@ pub fn sort_to_indices(
     let (v, n) = partition_validity(values);
 
     Ok(match values.data_type() {
-        DataType::Decimal(_, _) => sort_decimal(values, v, n, cmp, &options, limit),
+        DataType::Decimal128(_, _) => sort_decimal(values, v, n, cmp, &options, limit),
         DataType::Boolean => sort_boolean(values, v, n, &options, limit),
         DataType::Int8 => {
             sort_primitive::<Int8Type, _>(values, v, n, cmp, &options, limit)

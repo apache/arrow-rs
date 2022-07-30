@@ -148,7 +148,7 @@ where
             let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
             Ok(Arc::new(take_boolean(values, indices)?))
         }
-        DataType::Decimal(_, _) => {
+        DataType::Decimal128(_, _) => {
             let decimal_values =
                 values.as_any().downcast_ref::<Decimal128Array>().unwrap();
             Ok(Arc::new(take_decimal128(decimal_values, indices)?))

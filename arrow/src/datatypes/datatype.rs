@@ -189,14 +189,19 @@ pub enum DataType {
     /// This type mostly used to represent low cardinality string
     /// arrays or a limited set of primitive types as integers.
     Dictionary(Box<DataType>, Box<DataType>),
-    /// Exact decimal value with precision and scale
+    /// Exact 128-bit width decimal value with precision and scale
     ///
     /// * precision is the total number of digits
     /// * scale is the number of digits past the decimal
     ///
     /// For example the number 123.45 has precision 5 and scale 2.
-    Decimal(usize, usize),
-    /// Exact decimal value with 256 bits width
+    Decimal128(usize, usize),
+    /// Exact 256-bit width decimal value with precision and scale
+    ///
+    /// * precision is the total number of digits
+    /// * scale is the number of digits past the decimal
+    ///
+    /// For example the number 123.45 has precision 5 and scale 2.
     Decimal256(usize, usize),
     /// A Map is a logical nested type that is represented as
     ///
@@ -259,7 +264,7 @@ impl fmt::Display for DataType {
 }
 
 /// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value
-/// that can be stored in [DataType::Decimal] value of precision `p`
+/// that can be stored in [DataType::Decimal128] value of precision `p`
 pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     9,
     99,
@@ -345,7 +350,7 @@ pub const MAX_DECIMAL_FOR_LARGER_PRECISION: [&str; 38] = [
 ];
 
 /// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value
-/// that can be stored in a [DataType::Decimal] value of precision `p`
+/// that can be stored in a [DataType::Decimal128] value of precision `p`
 pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     -9,
     -99,
@@ -430,10 +435,10 @@ pub const MIN_DECIMAL_FOR_LARGER_PRECISION: [&str; 38] = [
     "-999999999999999999999999999999999999999999999999999999999999999999999999999",
 ];
 
-/// The maximum precision for [DataType::Decimal] values
+/// The maximum precision for [DataType::Decimal128] values
 pub const DECIMAL128_MAX_PRECISION: usize = 38;
 
-/// The maximum scale for [DataType::Decimal] values
+/// The maximum scale for [DataType::Decimal128] values
 pub const DECIMAL128_MAX_SCALE: usize = 38;
 
 /// The maximum precision for [DataType::Decimal256] values
@@ -442,7 +447,7 @@ pub const DECIMAL256_MAX_PRECISION: usize = 76;
 /// The maximum scale for [DataType::Decimal256] values
 pub const DECIMAL256_MAX_SCALE: usize = 76;
 
-/// The default scale for [DataType::Decimal] and [DataType::Decimal256] values
+/// The default scale for [DataType::Decimal128] and [DataType::Decimal256] values
 pub const DECIMAL_DEFAULT_SCALE: usize = 10;
 
 /// Validates that the specified `i128` value can be properly
@@ -563,7 +568,7 @@ impl DataType {
                     };
 
                     if bit_width == 128 {
-                        Ok(DataType::Decimal(precision, scale))
+                        Ok(DataType::Decimal128(precision, scale))
                     } else if bit_width == 256 {
                         Ok(DataType::Decimal256(precision, scale))
                     } else {
@@ -850,7 +855,7 @@ impl DataType {
                 TimeUnit::Nanosecond => "NANOSECOND",
             }}),
             DataType::Dictionary(_, _) => json!({ "name": "dictionary"}),
-            DataType::Decimal(precision, scale) => {
+            DataType::Decimal128(precision, scale) => {
                 json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 128})
             }
             DataType::Decimal256(precision, scale) => {

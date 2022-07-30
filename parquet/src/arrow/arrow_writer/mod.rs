@@ -302,7 +302,7 @@ fn write_leaves<W: Write>(
         | ArrowDataType::Binary
         | ArrowDataType::Utf8
         | ArrowDataType::LargeUtf8
-        | ArrowDataType::Decimal(_, _)
+        | ArrowDataType::Decimal128(_, _)
         | ArrowDataType::Decimal256(_, _)
         | ArrowDataType::FixedSizeBinary(_) => {
             let mut writer = get_writer(row_group_writer)?;
@@ -595,7 +595,7 @@ fn write_leaf(
                         .unwrap();
                     get_fsb_array_slice(array, indices)
                 }
-                ArrowDataType::Decimal(_, _) => {
+                ArrowDataType::Decimal128(_, _) => {
                     let array = column
                         .as_any()
                         .downcast_ref::<arrow_array::Decimal128Array>()
@@ -954,7 +954,7 @@ mod tests {
 
     #[test]
     fn arrow_writer_decimal() {
-        let decimal_field = Field::new("a", DataType::Decimal(5, 2), false);
+        let decimal_field = Field::new("a", DataType::Decimal128(5, 2), false);
         let schema = Schema::new(vec![decimal_field]);
 
         let decimal_values = vec![10_000, 50_000, 0, -100]

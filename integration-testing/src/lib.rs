@@ -594,7 +594,7 @@ fn array_from_json(
                 ))),
             }
         }
-        DataType::Decimal(precision, scale) => {
+        DataType::Decimal128(precision, scale) => {
             let mut b = Decimal128Builder::new(json_col.count, *precision, *scale);
             // C++ interop tests involve incompatible decimal values
             unsafe {
