@@ -374,11 +374,15 @@ where
         let mut selection = self.row_selection.take();
         loop {
             match &mut self.state {
-                StreamState::Decoding(batch_reader, selection) => {
-                    let next = if let Some(selection) = selection.take() {
+                StreamState::Decoding(batch_reader, curr_selection) => {
+                    let next = if let Some(selection) = curr_selection.take() {
                         batch_reader.next_filtered(selection)
                     } else {
-                        batch_reader.next()
+                        if let Some(selection) = selection.take() {
+                            batch_reader.next_filtered(selection)
+                        } else {
+                            batch_reader.next()
+                        }
                     };
 
                     match next {
