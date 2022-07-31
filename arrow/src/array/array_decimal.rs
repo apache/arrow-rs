@@ -94,6 +94,7 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     private_decimal::DecimalArrayPrivate
 {
     const VALUE_LENGTH: i32;
+    const DEFAULT_TYPE: DataType;
 
     fn data(&self) -> &ArrayData;
 
@@ -225,17 +226,14 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
 
     /// The default precision and scale used when not specified.
     fn default_type() -> DataType {
-        // Keep maximum precision
-        if Self::VALUE_LENGTH == 16 {
-            DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE)
-        } else {
-            DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE)
-        }
+        Self::DEFAULT_TYPE
     }
 }
 
 impl BasicDecimalArray<Decimal128, Decimal128Array> for Decimal128Array {
     const VALUE_LENGTH: i32 = 16;
+    const DEFAULT_TYPE: DataType =
+        DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
 
     fn data(&self) -> &ArrayData {
         &self.data
@@ -252,6 +250,8 @@ impl BasicDecimalArray<Decimal128, Decimal128Array> for Decimal128Array {
 
 impl BasicDecimalArray<Decimal256, Decimal256Array> for Decimal256Array {
     const VALUE_LENGTH: i32 = 32;
+    const DEFAULT_TYPE: DataType =
+        DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
 
     fn data(&self) -> &ArrayData {
         &self.data
@@ -428,7 +428,7 @@ impl<Ptr: Into<Decimal256>> FromIterator<Option<Ptr>> for Decimal256Array {
 
         let mut null_buf = BooleanBufferBuilder::new(size_hint);
 
-        let mut buffer = MutableBuffer::from_len_zeroed(0);
+        let mut buffer = MutableBuffer::with_capacity(size_hint);
 
         iter.for_each(|item| {
             if let Some(a) = item {
