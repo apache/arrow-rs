@@ -113,7 +113,7 @@ impl RowGroupCollection for Arc<dyn FileReader> {
 
 /// Uses `record_reader` to read up to `batch_size` records from `pages`
 ///
-/// Returns the number of records read, which can be less than batch_size if
+/// Returns the number of records read, which can be less than `batch_size` if
 /// pages is exhausted.
 fn read_records<V, CV>(
     record_reader: &mut GenericRecordReader<V, CV>,
@@ -145,29 +145,36 @@ where
     Ok(records_read)
 }
 
-/// Uses `pages` to set up to `record_reader` 's `column_reader`
+/// Uses `record_reader` to skip up to `batch_size` records from`pages`
 ///
-/// If we skip records before all read operation,
-/// need set `column_reader` by `set_page_reader`
-/// for constructing `def_level_decoder` and `rep_level_decoder`.
-fn set_column_reader<V, CV>(
+/// Returns the number of records skipped, which can be less than `batch_size` if
+/// pages is exhausted
+fn skip_records<V, CV>(
     record_reader: &mut GenericRecordReader<V, CV>,
     pages: &mut dyn PageIterator,
-) -> Result<bool>
-where
-    V: ValuesBuffer + Default,
-    CV: ColumnValueDecoder<Slice = V::Slice>,
+    batch_size: usize,
+) -> Result<usize>
+    where
+        V: ValuesBuffer + Default,
+        CV: ColumnValueDecoder<Slice = V::Slice>,
 {
-    return if record_reader.column_reader().is_none() {
-        // If we skip records before all read operation
-        // we need set `column_reader` by `set_page_reader`
-        if let Some(page_reader) = pages.next() {
-            record_reader.set_page_reader(page_reader?)?;
-            Ok(true)
-        } else {
-            Ok(false)
+    let mut records_skipped = 0usize;
+    while records_skipped < batch_size {
+        let records_to_read = batch_size - records_skipped;
+
+        let records_skipped_once = record_reader.skip_records(records_to_read)?;
+        records_skipped += records_skipped_once;
+
+        // Record reader exhausted
+        if records_skipped_once < records_to_read {
+            if let Some(page_reader) = pages.next() {
+                // Read from new page reader (i.e. column chunk)
+                record_reader.set_page_reader(page_reader?)?;
+            } else {
+                // Page reader also exhausted
+                break;
+            }
         }
-    } else {
-        Ok(true)
-    };
+    }
+    Ok(records_skipped)
 }

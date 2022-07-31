@@ -23,6 +23,7 @@ use crate::datatypes::{
     UnionMode,
 };
 use crate::error::{ArrowError, Result};
+use crate::util::bit_iterator::BitSliceIterator;
 use crate::{bitmap::Bitmap, datatypes::ArrowNativeType};
 use crate::{
     buffer::{Buffer, MutableBuffer},
@@ -36,6 +37,21 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use super::equal::equal;
+
+#[inline]
+pub(crate) fn contains_nulls(
+    null_bit_buffer: Option<&Buffer>,
+    offset: usize,
+    len: usize,
+) -> bool {
+    match null_bit_buffer {
+        Some(buffer) => match BitSliceIterator::new(buffer, offset, len).next() {
+            Some((start, end)) => start != 0 || end != len,
+            None => len != 0, // No non-null values
+        },
+        None => false, // No null buffer
+    }
+}
 
 #[inline]
 pub(crate) fn count_nulls(
@@ -193,7 +209,7 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         DataType::FixedSizeList(_, _) | DataType::Struct(_) => {
             [empty_buffer, MutableBuffer::new(0)]
         }
-        DataType::Decimal(_, _) | DataType::Decimal256(_, _) => [
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => [
             MutableBuffer::new(capacity * mem::size_of::<u8>()),
             empty_buffer,
         ],
@@ -380,16 +396,16 @@ impl ArrayData {
     /// panic's if the new DataType is not compatible with the
     /// existing type.
     ///
-    /// Note: currently only changing a [DataType::Decimal]s precision
+    /// Note: currently only changing a [DataType::Decimal128]s precision
     /// and scale are supported
     #[inline]
     pub(crate) fn with_data_type(mut self, new_data_type: DataType) -> Self {
         assert!(
-            matches!(self.data_type, DataType::Decimal(_, _)),
+            matches!(self.data_type, DataType::Decimal128(_, _)),
             "only DecimalType is supported for existing type"
         );
         assert!(
-            matches!(new_data_type, DataType::Decimal(_, _)),
+            matches!(new_data_type, DataType::Decimal128(_, _)),
             "only DecimalType is supported for new datatype"
         );
         self.data_type = new_data_type;
@@ -582,7 +598,7 @@ impl ArrayData {
             | DataType::LargeBinary
             | DataType::Interval(_)
             | DataType::FixedSizeBinary(_)
-            | DataType::Decimal(_, _)
+            | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => vec![],
             DataType::List(field) => {
                 vec![Self::new_empty(field.data_type())]
@@ -1015,7 +1031,7 @@ impl ArrayData {
 
     pub fn validate_values(&self) -> Result<()> {
         match &self.data_type {
-            DataType::Decimal(p, _) => {
+            DataType::Decimal128(p, _) => {
                 let values_buffer: &[i128] = self.typed_buffer(0, self.len)?;
                 for value in values_buffer {
                     validate_decimal_precision(*value, *p)?;
@@ -1345,7 +1361,7 @@ pub(crate) fn layout(data_type: &DataType) -> DataTypeLayout {
             }
         }
         DataType::Dictionary(key_type, _value_type) => layout(key_type),
-        DataType::Decimal(_, _) => {
+        DataType::Decimal128(_, _) => {
             // Decimals are always some fixed width; The rust implementation
             // always uses 16 bytes / size of i128
             DataTypeLayout::new_fixed_width(size_of::<i128>())
@@ -2818,7 +2834,7 @@ mod tests {
         let fixed_size_array = fixed_size_builder.finish();
 
         // Build ArrayData for Decimal
-        let builder = ArrayData::builder(DataType::Decimal(5, 3))
+        let builder = ArrayData::builder(DataType::Decimal128(5, 3))
             .len(fixed_size_array.len())
             .add_buffer(fixed_size_array.data_ref().child_data()[0].buffers()[0].clone());
         let array_data = unsafe { builder.build_unchecked() };
@@ -2864,5 +2880,16 @@ mod tests {
 
         let err = data.validate_values().unwrap_err();
         assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
+    }
+
+    #[test]
+    fn test_contains_nulls() {
+        let buffer: Buffer =
+            MutableBuffer::from_iter([false, false, false, true, true, false]).into();
+
+        assert!(contains_nulls(Some(&buffer), 0, 6));
+        assert!(contains_nulls(Some(&buffer), 0, 3));
+        assert!(!contains_nulls(Some(&buffer), 3, 2));
+        assert!(!contains_nulls(Some(&buffer), 0, 0));
     }
 }

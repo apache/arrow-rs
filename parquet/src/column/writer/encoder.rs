@@ -24,7 +24,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::WriterProperties;
+use crate::file::properties::{EnabledStatistics, WriterProperties};
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 use crate::util::memory::ByteBufferPtr;
 
@@ -105,6 +105,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     dict_encoder: Option<DictEncoder<T>>,
     descr: ColumnDescPtr,
     num_values: usize,
+    statistics_enabled: EnabledStatistics,
     min_value: Option<T::T>,
     max_value: Option<T::T>,
 }
@@ -127,11 +128,14 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
                 .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), props)),
         )?;
 
+        let statistics_enabled = props.statistics_enabled(descr.path());
+
         Ok(Self {
             encoder,
             dict_encoder,
             descr: descr.clone(),
             num_values: 0,
+            statistics_enabled,
             min_value: None,
             max_value: None,
         })
@@ -148,9 +152,11 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             )
         })?;
 
-        if let Some((min, max)) = slice.min_max(&self.descr) {
-            update_min(&self.descr, min, &mut self.min_value);
-            update_max(&self.descr, max, &mut self.max_value);
+        if self.statistics_enabled == EnabledStatistics::Page {
+            if let Some((min, max)) = slice.min_max(&self.descr) {
+                update_min(&self.descr, min, &mut self.min_value);
+                update_max(&self.descr, max, &mut self.max_value);
+            }
         }
 
         match &mut self.dict_encoder {

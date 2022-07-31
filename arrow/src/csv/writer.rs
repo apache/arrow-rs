@@ -223,7 +223,7 @@ impl<W: Write> Writer<W> {
                 DataType::Timestamp(time_unit, time_zone) => {
                     self.handle_timestamp(time_unit, time_zone.as_ref(), row_index, col)?
                 }
-                DataType::Decimal(..) => make_string_from_decimal(col, row_index)?,
+                DataType::Decimal128(..) => make_string_from_decimal(col, row_index)?,
                 t => {
                     // List and Struct arrays not supported by the writer, any
                     // other type needs to be implemented

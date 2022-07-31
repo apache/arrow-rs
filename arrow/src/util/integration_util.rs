@@ -360,7 +360,7 @@ impl ArrowJsonBatch {
                         let arr = arr.as_any().downcast_ref::<MapArray>().unwrap();
                         arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
                     }
-                    DataType::Decimal(_, _) => {
+                    DataType::Decimal128(_, _) => {
                         let arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
                         arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
                     }

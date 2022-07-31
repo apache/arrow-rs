@@ -16,16 +16,16 @@
 # under the License.
 
 ---
-# tests for object_store crate
+# tests for `object_store` crate
 name: object_store
 
+# trigger for all PRs that touch certain files and changes to master
 on:
   push:
     branches:
       - master
   pull_request:
     paths:
-      # Only run when object store files or github workflows change
       - object_store/**
       - .github/**
 
