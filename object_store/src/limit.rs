@@ -258,6 +258,6 @@ mod tests {
         streams.pop();
 
         // Can now make another request
-        integration.list(None).await.unwrap().unwrap();
+        integration.list(None).await.unwrap();
     }
 }
