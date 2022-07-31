@@ -101,6 +101,7 @@ pub struct InMemoryArrayReader {
     rep_levels: Option<Vec<i16>>,
     last_idx: usize,
     cur_idx: usize,
+    need_consume_records: usize,
 }
 
 impl InMemoryArrayReader {
@@ -127,6 +128,7 @@ impl InMemoryArrayReader {
             rep_levels,
             cur_idx: 0,
             last_idx: 0,
+            need_consume_records: 0,
         }
     }
 }
@@ -138,11 +140,6 @@ impl ArrayReader for InMemoryArrayReader {
 
     fn get_data_type(&self) -> &ArrowType {
         &self.data_type
-    }
-
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        let size = self.read_records(batch_size)?;
-        self.consume_batch(size)
     }
 
     fn read_records(&mut self, batch_size: usize) -> Result<usize> {
@@ -169,13 +166,16 @@ impl ArrayReader for InMemoryArrayReader {
             }
             None => batch_size.min(self.array.len() - self.cur_idx),
         };
+        self.need_consume_records += read;
         Ok(read)
     }
 
-    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
+        let batch_size = self.need_consume_records;
         assert_ne!(batch_size, 0);
         self.last_idx = self.cur_idx;
         self.cur_idx += batch_size;
+        self.need_consume_records = 0;
         Ok(self.array.slice(self.last_idx, batch_size))
     }
 

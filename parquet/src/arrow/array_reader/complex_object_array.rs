@@ -21,7 +21,7 @@ use crate::arrow::schema::parquet_to_arrow_field;
 use crate::column::page::PageIterator;
 use crate::column::reader::ColumnReaderImpl;
 use crate::data_type::DataType;
-use crate::errors::{ParquetError, Result};
+use crate::errors::Result;
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::ArrayRef;
 use arrow::datatypes::DataType as ArrowType;
@@ -58,11 +58,6 @@ where
 
     fn get_data_type(&self) -> &ArrowType {
         &self.data_type
-    }
-
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        let size = self.read_records(batch_size)?;
-        self.consume_batch(size)
     }
 
     fn read_records(&mut self, batch_size: usize) -> Result<usize> {
@@ -163,17 +158,7 @@ where
         Ok(num_read)
     }
 
-    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        // uncheck null count
-        let len = self.data_buffer.len();
-        if len < batch_size {
-            return Err(general_err!(
-                "Invalid batch_size: {}, current consume: {} records in buffer.",
-                batch_size,
-                len
-            ));
-        }
-
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
         let data: Vec<Option<T::T>> = if self.def_levels_buffer.is_some() {
             self.data_buffer
                 .iter()
@@ -196,15 +181,10 @@ where
             array = arrow::compute::cast(&array, &self.data_type)?;
         }
 
-        self.data_buffer = self.data_buffer.split_off(batch_size);
-        if let Some(buf) = &mut self.def_levels_buffer {
-            let rest = buf.split_off(batch_size);
-            self.def_levels_buffer = Some(rest);
-        }
-        if let Some(buf) = &mut self.rep_levels_buffer {
-            let rest = buf.split_off(batch_size);
-            self.rep_levels_buffer = Some(rest);
-        }
+        self.data_buffer = vec![];
+        self.def_levels_buffer = None;
+        self.rep_levels_buffer = None;
+
         Ok(array)
     }
 
@@ -409,7 +389,7 @@ mod tests {
             array_reader.get_rep_levels()
         );
         accu_len += len;
-        array_reader.consume_batch(values_per_page / 2).unwrap();
+        array_reader.consume_batch().unwrap();
 
         // Read next values_per_page values, the first values_per_page/2 ones are from the first column chunk,
         // and the last values_per_page/2 ones are from the second column chunk
@@ -423,7 +403,7 @@ mod tests {
             Some(&rep_levels[accu_len..(accu_len + len)]),
             array_reader.get_rep_levels()
         );
-        let array = array_reader.consume_batch(values_per_page).unwrap();
+        let array = array_reader.consume_batch().unwrap();
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
         for i in 0..array.len() {
             if array.is_valid(i) {
@@ -448,7 +428,7 @@ mod tests {
             Some(&rep_levels[accu_len..(accu_len + len)]),
             array_reader.get_rep_levels()
         );
-        array_reader.consume_batch(len).unwrap();
+        array_reader.consume_batch().unwrap();
     }
 
     #[test]
@@ -554,7 +534,7 @@ mod tests {
             array_reader.get_rep_levels()
         );
         accu_len += len;
-        array_reader.consume_batch(len).unwrap();
+        array_reader.consume_batch().unwrap();
 
         // Read next values_per_page values, the first values_per_page/2 ones are from the first column chunk,
         // and the last values_per_page/2 ones are from the second column chunk
@@ -570,7 +550,7 @@ mod tests {
             Some(&rep_levels[accu_len..(accu_len + len)]),
             array_reader.get_rep_levels()
         );
-        let array = array_reader.consume_batch(len).unwrap();
+        let array = array_reader.consume_batch().unwrap();
         let strings = array.as_any().downcast_ref::<StringArray>().unwrap();
         for i in 0..array.len() {
             if array.is_valid(i) {
@@ -596,6 +576,6 @@ mod tests {
             Some(&rep_levels[accu_len..(accu_len + len)]),
             array_reader.get_rep_levels()
         );
-        array_reader.consume_batch(len).unwrap();
+        array_reader.consume_batch().unwrap();
     }
 }

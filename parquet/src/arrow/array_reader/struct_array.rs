@@ -63,28 +63,6 @@ impl ArrayReader for StructArrayReader {
         &self.data_type
     }
 
-    /// Read `batch_size` struct records.
-    ///
-    /// Definition levels of struct array is calculated as following:
-    /// ```ignore
-    /// def_levels[i] = min(child1_def_levels[i], child2_def_levels[i], ...,
-    /// childn_def_levels[i]);
-    /// ```
-    ///
-    /// Repetition levels of struct array is calculated as following:
-    /// ```ignore
-    /// rep_levels[i] = child1_rep_levels[i];
-    /// ```
-    ///
-    /// The null bitmap of struct array is calculated from def_levels:
-    /// ```ignore
-    /// null_bitmap[i] = (def_levels[i] >= self.def_level);
-    /// ```
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        let size = self.read_records(batch_size)?;
-        self.consume_batch(size)
-    }
-
     fn read_records(&mut self, batch_size: usize) -> Result<usize> {
         let mut read = None;
         for child in self.children.iter_mut() {
@@ -105,7 +83,25 @@ impl ArrayReader for StructArrayReader {
         Ok(read.unwrap_or(0))
     }
 
-    fn consume_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+    /// Consume struct records.
+    ///
+    /// Definition levels of struct array is calculated as following:
+    /// ```ignore
+    /// def_levels[i] = min(child1_def_levels[i], child2_def_levels[i], ...,
+    /// childn_def_levels[i]);
+    /// ```
+    ///
+    /// Repetition levels of struct array is calculated as following:
+    /// ```ignore
+    /// rep_levels[i] = child1_rep_levels[i];
+    /// ```
+    ///
+    /// The null bitmap of struct array is calculated from def_levels:
+    /// ```ignore
+    /// null_bitmap[i] = (def_levels[i] >= self.def_level);
+    /// ```
+    ///
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
         if self.children.is_empty() {
             return Ok(Arc::new(StructArray::from(Vec::new())));
         }
@@ -113,7 +109,7 @@ impl ArrayReader for StructArrayReader {
         let children_array = self
             .children
             .iter_mut()
-            .map(|reader| reader.consume_batch(batch_size))
+            .map(|reader| reader.consume_batch())
             .collect::<Result<Vec<_>>>()?;
 
         // check that array child data has same size
