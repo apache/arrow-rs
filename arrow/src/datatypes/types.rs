@@ -287,7 +287,7 @@ impl IntervalMonthDayNanoType {
         */
         let m = (months as u128 & u32::MAX as u128) << 96;
         let d = (days as u128 & u32::MAX as u128) << 64;
-        let n = nanos as u128;
+        let n = nanos as u128 & u64::MAX as u128;
         (m | d | n) as <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native
     }
 
@@ -449,5 +449,46 @@ impl Date64Type {
         let res = res.add(Duration::days(days as i64));
         let res = res.add(Duration::nanoseconds(nanos));
         Date64Type::from_naive_date(res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn month_day_nano_should_roundtrip() {
+        let value = IntervalMonthDayNanoType::make_value(1, 2, 3);
+        assert_eq!(IntervalMonthDayNanoType::to_parts(value), (1, 2, 3));
+    }
+
+    #[test]
+    fn month_day_nano_should_roundtrip_neg() {
+        let value = IntervalMonthDayNanoType::make_value(-1, -2, -3);
+        assert_eq!(IntervalMonthDayNanoType::to_parts(value), (-1, -2, -3));
+    }
+
+    #[test]
+    fn day_time_should_roundtrip() {
+        let value = IntervalDayTimeType::make_value(1, 2);
+        assert_eq!(IntervalDayTimeType::to_parts(value), (1, 2));
+    }
+
+    #[test]
+    fn day_time_should_roundtrip_neg() {
+        let value = IntervalDayTimeType::make_value(-1, -2);
+        assert_eq!(IntervalDayTimeType::to_parts(value), (-1, -2));
+    }
+
+    #[test]
+    fn year_month_should_roundtrip() {
+        let value = IntervalYearMonthType::make_value(1, 2);
+        assert_eq!(IntervalYearMonthType::to_months(value), 14);
+    }
+
+    #[test]
+    fn year_month_should_roundtrip_neg() {
+        let value = IntervalYearMonthType::make_value(-1, -2);
+        assert_eq!(IntervalYearMonthType::to_months(value), -14);
     }
 }
