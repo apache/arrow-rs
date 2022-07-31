@@ -541,7 +541,7 @@ mod tests {
         let mut result = decimal_builder.append_value(123456);
         let mut error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: 123456 is too large to store in a Decimal of precision 5. Max is 99999",
+            "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
             error.to_string()
         );
 
@@ -558,7 +558,7 @@ mod tests {
         result = decimal_builder.append_value(100);
         error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: 100 is too large to store in a Decimal of precision 2. Max is 99",
+            "Invalid argument error: 100 is too large to store in a Decimal128 of precision 2. Max is 99",
             error.to_string()
         );
 
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "-123223423432432 is too small to store in a Decimal of precision 5. Min is -99999"
+        expected = "-123223423432432 is too small to store in a Decimal128 of precision 5. Min is -99999"
     )]
     fn test_decimal_array_with_precision_and_scale_out_of_range() {
         Decimal128Array::from_iter_values([12345, 456, 7890, -123223423432432])

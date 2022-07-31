@@ -2230,7 +2230,7 @@ mod tests {
         let array = Arc::new(input_decimal_array) as ArrayRef;
         let result = cast(&array, &DataType::Decimal128(2, 2));
         assert!(result.is_err());
-        assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal of precision 2. Max is 99",
+        assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal128 of precision 2. Max is 99",
                    result.unwrap_err().to_string());
     }
 
@@ -2412,7 +2412,7 @@ mod tests {
         let array = Arc::new(array) as ArrayRef;
         let casted_array = cast(&array, &DataType::Decimal128(3, 1));
         assert!(casted_array.is_err());
-        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal of precision 3. Max is 999", casted_array.unwrap_err().to_string());
+        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal128 of precision 3. Max is 999", casted_array.unwrap_err().to_string());
 
         // test f32 to decimal type
         let array = Float32Array::from(vec![
