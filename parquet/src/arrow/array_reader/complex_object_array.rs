@@ -160,12 +160,13 @@ where
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let data: Vec<Option<T::T>> = if self.def_levels_buffer.is_some() {
-            self.data_buffer
-                .iter()
+            let data_buffer = std::mem::take(&mut self.data_buffer);
+            data_buffer
+                .into_iter()
                 .zip(self.def_levels_buffer.as_ref().unwrap().iter())
                 .map(|(t, def_level)| {
                     if *def_level == self.column_desc.max_def_level() {
-                        Some(t.clone())
+                        Some(t)
                     } else {
                         None
                     }
