@@ -35,17 +35,30 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 /// Store wrapper that wraps an inner store and limits the maximum number of concurrent
 /// object store operations. Where each call to an [`ObjectStore`] member function is
 /// considered a single operation, even if it may result in more than one network call
+///
+/// ```
+/// # use object_store::memory::InMemory;
+/// # use object_store::limit::LimitStore;
+///
+/// // Create an in-memory `ObjectStore` limited to 20 concurrent requests
+/// let store = LimitStore::new(InMemory::new(), 20);
+/// ```
+///
 #[derive(Debug)]
 pub struct LimitStore<T: ObjectStore> {
     inner: T,
+    max_requests: usize,
     semaphore: Arc<Semaphore>,
 }
 
 impl<T: ObjectStore> LimitStore<T> {
-    /// Create new limit store
+    /// Create new limit store that will limit the maximum
+    /// number of outstanding concurrent requests to
+    /// `max_requests`
     pub fn new(inner: T, max_requests: usize) -> Self {
         Self {
             inner,
+            max_requests,
             semaphore: Arc::new(Semaphore::new(max_requests)),
         }
     }
@@ -53,7 +66,7 @@ impl<T: ObjectStore> LimitStore<T> {
 
 impl<T: ObjectStore> std::fmt::Display for LimitStore<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "LimitStore({})", self.inner)
+        write!(f, "LimitStore({}, {})", self.max_requests, self.inner)
     }
 }
 
@@ -236,7 +249,7 @@ mod tests {
             streams.push(stream);
         }
 
-        let t = Duration::from_millis(1);
+        let t = Duration::from_millis(20);
 
         // Expect to not be able to make another request
         assert!(timeout(t, integration.list(None)).await.is_err());
@@ -245,6 +258,6 @@ mod tests {
         streams.pop();
 
         // Can now make another request
-        timeout(t, integration.list(None)).await.unwrap().unwrap();
+        integration.list(None).await.unwrap().unwrap();
     }
 }
