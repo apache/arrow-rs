@@ -599,7 +599,8 @@ fn convert_object_meta(object: rusoto_s3::Object, bucket: &str) -> Result<Object
 /// # let BUCKET_NAME = "foo";
 /// # let ACCESS_KEY_ID = "foo";
 /// # let SECRET_KEY = "foo";
-/// let s3 = object_store::aws::AmazonS3Builder::new()
+/// # use object_store::aws::AmazonS3Builder;
+/// let s3 = AmazonS3Builder::new()
 ///  .with_region(REGION)
 ///  .with_bucket_name(BUCKET_NAME)
 ///  .with_access_key_id(ACCESS_KEY_ID)
