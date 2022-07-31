@@ -19,8 +19,21 @@
 
 # Rust Object Store
 
-A crate providing a generic interface to object stores, such as S3, Azure Blob Storage and Google Cloud Storage.
+A focused, easy to use, idiomatic, high performance, `async` object
+store library interacting with object stores.
 
-Originally developed for [InfluxDB IOx](https://github.com/influxdata/influxdb_iox/) and later split out and donated to Apache Arrow.
+Using this crate, the same binary and code can easily run in multiple
+clouds and local test environments, via a simple runtime configuration
+change. Supported object stores include:
+
+* [AWS S3](https://aws.amazon.com/s3/)
+* [Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/)
+* [Google Cloud Storage](https://cloud.google.com/storage)
+* Local files
+* Memory,
+* Custom implementations
+
+
+Originally developed for [InfluxDB IOx](https://github.com/influxdata/influxdb_iox/) and later split out and donated to [Apache Arrow](https://arrow.apache.org/).
 
 See [docs.rs](https://docs.rs/object_store) for usage instructions
