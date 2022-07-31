@@ -618,6 +618,10 @@ fn array_from_json(
         }
         DataType::Decimal256(precision, scale) => {
             let mut b = Decimal256Builder::new(json_col.count, *precision, *scale);
+            // C++ interop tests involve incompatible decimal values
+            unsafe {
+                b.disable_value_validation();
+            }
             for (is_valid, value) in json_col
                 .validity
                 .as_ref()
