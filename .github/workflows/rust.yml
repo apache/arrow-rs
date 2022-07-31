@@ -76,24 +76,22 @@ jobs:
         arch: [ amd64 ]
         rust: [ stable ]
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
+          rustup toolchain install ${{ matrix.rust }} --component llvm-tools-preview
           rustup default ${{ matrix.rust }}
       - name: Cache Cargo
         uses: actions/cache@v3
         with:
           path: /home/runner/.cargo
           key: cargo-coverage-cache3-
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
       - name: Run coverage
-        run: |
-          rustup toolchain install stable
-          rustup default stable
-          cargo install --version 0.18.2 cargo-tarpaulin
-          cargo tarpaulin --all --out Xml
+        run: cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
       - name: Report coverage
         continue-on-error: true
         run: bash <(curl -s https://codecov.io/bash)
