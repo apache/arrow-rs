@@ -20,7 +20,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow::array::Array;
+use arrow::array::{Array, ArrayRef};
+use arrow::compute::concat;
 use arrow::datatypes::{DataType as ArrowType, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
@@ -75,7 +76,7 @@ pub trait ArrowReader {
 /// [`RowSelection`] allows selecting or skipping a provided number of rows
 /// when scanning the parquet file
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct RowSelection {
+pub struct RowSelection {
     /// The number of rows
     pub row_count: usize,
 
@@ -283,42 +284,108 @@ pub struct ParquetRecordBatchReader {
     selection: Option<VecDeque<RowSelection>>,
 }
 
+impl ParquetRecordBatchReader {
+    pub fn take_selection(&mut self) -> Option<VecDeque<RowSelection>> {
+        self.selection.take()
+    }
+
+    pub fn next_filtered(
+        &mut self,
+        selection: VecDeque<RowSelection>,
+    ) -> Option<ArrowResult<RecordBatch>> {
+        let mut buffer: Vec<ArrayRef> = vec![];
+        let mut selection = selection;
+        while let Some(front) = selection.pop_front() {
+            if front.skip {
+                let skipped = match self.array_reader.skip_records(front.row_count) {
+                    Ok(skipped) => skipped,
+                    Err(e) => return Some(Err(e.into())),
+                };
+
+                if skipped != front.row_count {
+                    return Some(Err(general_err!(
+                        "failed to skip rows, expected {}, got {}",
+                        front.row_count,
+                        skipped
+                    )
+                    .into()));
+                }
+                continue;
+            }
+
+            match self.array_reader.next_batch(front.row_count) {
+                Err(error) => return Some(Err(error.into())),
+                Ok(array) => {
+                    if array.len() > 0 {
+                        buffer.push(array);
+                    }
+                }
+            }
+        }
+
+        let array = concat(
+            buffer
+                .iter()
+                .map(|a| a.as_ref())
+                .collect::<Vec<&dyn Array>>()
+                .as_slice(),
+        )
+        .ok()?;
+
+        let struct_array =
+            array.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
+                ArrowError::ParquetError(
+                    "Struct array reader should return struct array".to_string(),
+                )
+            });
+
+        match struct_array {
+            Err(err) => return Some(Err(err)),
+            Ok(e) => (e.len() > 0).then(|| Ok(RecordBatch::from(e))),
+        }
+    }
+}
+
 impl Iterator for ParquetRecordBatchReader {
     type Item = ArrowResult<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let to_read = match self.selection.as_mut() {
             Some(selection) => loop {
-                let front = selection.pop_front()?;
-                if front.skip {
-                    let skipped = match self.array_reader.skip_records(front.row_count) {
-                        Ok(skipped) => skipped,
-                        Err(e) => return Some(Err(e.into())),
+                if let Some(front) = selection.pop_front() {
+                    if front.skip {
+                        let skipped =
+                            match self.array_reader.skip_records(front.row_count) {
+                                Ok(skipped) => skipped,
+                                Err(e) => return Some(Err(e.into())),
+                            };
+
+                        if skipped != front.row_count {
+                            return Some(Err(general_err!(
+                                "failed to skip rows, expected {}, got {}",
+                                front.row_count,
+                                skipped
+                            )
+                            .into()));
+                        }
+                        continue;
+                    }
+
+                    // try to read record
+                    let to_read = match front.row_count.checked_sub(self.batch_size) {
+                        Some(remaining) if remaining != 0 => {
+                            // if page row count less than batch_size we must set batch size to page row count.
+                            // add check avoid dead loop
+                            selection.push_front(RowSelection::select(remaining));
+                            self.batch_size
+                        }
+                        _ => front.row_count,
                     };
 
-                    if skipped != front.row_count {
-                        return Some(Err(general_err!(
-                            "failed to skip rows, expected {}, got {}",
-                            front.row_count,
-                            skipped
-                        )
-                        .into()));
-                    }
-                    continue;
+                    break to_read;
+                } else {
+                    return None;
                 }
-
-                // try to read record
-                let to_read = match front.row_count.checked_sub(self.batch_size) {
-                    Some(remaining) if remaining != 0 => {
-                        // if page row count less than batch_size we must set batch size to page row count.
-                        // add check avoid dead loop
-                        selection.push_front(RowSelection::select(remaining));
-                        self.batch_size
-                    }
-                    _ => front.row_count,
-                };
-
-                break to_read;
             },
             None => self.batch_size,
         };

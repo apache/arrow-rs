@@ -94,7 +94,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 
 use crate::arrow::array_reader::{build_array_reader, RowGroupCollection};
-use crate::arrow::arrow_reader::ParquetRecordBatchReader;
+use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowSelection};
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::ProjectionMask;
 use crate::basic::Compression;
@@ -279,6 +279,7 @@ impl<T: AsyncFileReader> ParquetRecordBatchStreamBuilder<T> {
             schema: self.schema,
             input: Some(self.input),
             state: StreamState::Init,
+            row_selection: None,
         })
     }
 }
@@ -287,9 +288,12 @@ enum StreamState<T> {
     /// At the start of a new row group, or the end of the parquet stream
     Init,
     /// Decoding a batch
-    Decoding(ParquetRecordBatchReader),
+    Decoding(ParquetRecordBatchReader, Option<VecDeque<RowSelection>>),
     /// Reading data from input
-    Reading(BoxFuture<'static, Result<(T, InMemoryRowGroup)>>),
+    Reading(
+        BoxFuture<'static, Result<(T, InMemoryRowGroup)>>,
+        Option<VecDeque<RowSelection>>,
+    ),
     /// Error
     Error,
 }
@@ -298,8 +302,8 @@ impl<T> std::fmt::Debug for StreamState<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             StreamState::Init => write!(f, "StreamState::Init"),
-            StreamState::Decoding(_) => write!(f, "StreamState::Decoding"),
-            StreamState::Reading(_) => write!(f, "StreamState::Reading"),
+            StreamState::Decoding(_, _) => write!(f, "StreamState::Decoding"),
+            StreamState::Reading(_, _) => write!(f, "StreamState::Reading"),
             StreamState::Error => write!(f, "StreamState::Error"),
         }
     }
@@ -321,6 +325,8 @@ pub struct ParquetRecordBatchStream<T> {
     input: Option<T>,
 
     state: StreamState<T>,
+
+    row_selection: Option<VecDeque<RowSelection>>,
 }
 
 impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
@@ -340,6 +346,19 @@ impl<T> ParquetRecordBatchStream<T> {
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
+
+    pub fn push_row_selection(&mut self, row_selection: VecDeque<RowSelection>) {
+        match &mut self.row_selection {
+            Some(s) => s.extend(row_selection),
+            None => {
+                self.row_selection = Some(row_selection);
+            }
+        }
+    }
+
+    pub fn skip_batch(&mut self) {
+        self.state = StreamState::Init;
+    }
 }
 
 impl<T> Stream for ParquetRecordBatchStream<T>
@@ -352,18 +371,27 @@ where
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        let mut selection = self.row_selection.take();
         loop {
             match &mut self.state {
-                StreamState::Decoding(batch_reader) => match batch_reader.next() {
-                    Some(Ok(batch)) => return Poll::Ready(Some(Ok(batch))),
-                    Some(Err(e)) => {
-                        self.state = StreamState::Error;
-                        return Poll::Ready(Some(Err(ParquetError::ArrowError(
-                            e.to_string(),
-                        ))));
+                StreamState::Decoding(batch_reader, selection) => {
+                    let next = if let Some(selection) = selection.take() {
+                        batch_reader.next_filtered(selection)
+                    } else {
+                        batch_reader.next()
+                    };
+
+                    match next {
+                        Some(Ok(batch)) => return Poll::Ready(Some(Ok(batch))),
+                        Some(Err(e)) => {
+                            self.state = StreamState::Error;
+                            return Poll::Ready(Some(Err(ParquetError::ArrowError(
+                                e.to_string(),
+                            ))));
+                        }
+                        None => self.state = StreamState::Init,
                     }
-                    None => self.state = StreamState::Init,
-                },
+                }
                 StreamState::Init => {
                     let row_group_idx = match self.row_groups.pop_front() {
                         Some(idx) => idx,
@@ -382,6 +410,7 @@ where
                     };
 
                     let projection = self.projection.clone();
+                    let selection = selection.take();
                     self.state = StreamState::Reading(
                         async move {
                             let row_group_metadata = metadata.row_group(row_group_idx);
@@ -433,10 +462,12 @@ where
                             ))
                         }
                         .boxed(),
+                        selection,
                     )
                 }
-                StreamState::Reading(f) => {
+                StreamState::Reading(f, selection) => {
                     let result = futures::ready!(f.poll_unpin(cx));
+                    let selection = selection.take();
                     self.state = StreamState::Init;
 
                     let row_group: Box<dyn RowGroupCollection> = match result {
@@ -459,11 +490,18 @@ where
                         row_group,
                     )?;
 
-                    let batch_reader =
-                        ParquetRecordBatchReader::try_new(self.batch_size, array_reader)
-                            .expect("reader");
+                    let batch_reader = match ParquetRecordBatchReader::try_new(
+                        self.batch_size,
+                        array_reader,
+                    ) {
+                        Ok(reader) => reader,
+                        Err(e) => {
+                            self.state = StreamState::Error;
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                    };
 
-                    self.state = StreamState::Decoding(batch_reader)
+                    self.state = StreamState::Decoding(batch_reader, selection)
                 }
                 StreamState::Error => return Poll::Pending,
             }
