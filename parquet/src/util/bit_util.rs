@@ -228,7 +228,7 @@ impl BitWriter {
     #[inline]
     pub fn flush(&mut self) {
         let num_bytes = ceil(self.bit_offset, 8);
-        let slice = &self.buffered_values.to_ne_bytes()[..num_bytes as usize];
+        let slice = &self.buffered_values.to_le_bytes()[..num_bytes as usize];
         self.buffer.extend_from_slice(slice);
         self.buffered_values = 0;
         self.bit_offset = 0;

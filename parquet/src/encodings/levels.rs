@@ -71,7 +71,8 @@ impl LevelEncoder {
         let bit_width = num_required_bits(max_level as u64);
         match encoding {
             Encoding::RLE => {
-                buffer.extend_from_slice(&[0; 8]);
+                // Reserve space for length header
+                buffer.extend_from_slice(&[0; 4]);
                 LevelEncoder::Rle(RleEncoder::new_from_buf(bit_width, buffer))
             }
             Encoding::BIT_PACKED => {
@@ -433,6 +434,15 @@ mod tests {
         let mut levels = Vec::new();
         let max_level = 5;
         random_numbers_range::<i16>(120, 0, max_level, &mut levels);
+        test_internal_roundtrip(Encoding::RLE, &levels, max_level, false);
+        test_internal_roundtrip(Encoding::BIT_PACKED, &levels, max_level, false);
+        test_internal_roundtrip(Encoding::RLE, &levels, max_level, true);
+    }
+
+    #[test]
+    fn test_rountrip_max() {
+        let levels = vec![0, i16::MAX, i16::MAX, i16::MAX, 0];
+        let max_level = i16::MAX;
         test_internal_roundtrip(Encoding::RLE, &levels, max_level, false);
         test_internal_roundtrip(Encoding::BIT_PACKED, &levels, max_level, false);
         test_internal_roundtrip(Encoding::RLE, &levels, max_level, true);
