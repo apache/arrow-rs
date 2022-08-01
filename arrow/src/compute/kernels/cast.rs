@@ -1625,28 +1625,14 @@ fn cast_string_to_date64<Offset: OffsetSizeTrait>(
     Ok(Arc::new(array) as ArrayRef)
 }
 
-fn seconds_since_midnight(time: &chrono::NaiveTime) -> i32 {
-    /// The number of nanoseconds per millisecond.
-    const NANOS_PER_SEC: u32 = 1_000_000_000;
-
-    (time.num_seconds_from_midnight() + time.nanosecond() / NANOS_PER_SEC) as i32
-}
-
-fn milliseconds_since_midnight(time: &chrono::NaiveTime) -> i32 {
-    /// The number of nanoseconds per millisecond.
-    const NANOS_PER_MILLI: u32 = 1_000_000;
-    /// The number of milliseconds per second.
-    const MILLIS_PER_SEC: u32 = 1_000;
-
-    (time.num_seconds_from_midnight() * MILLIS_PER_SEC
-        + time.nanosecond() / NANOS_PER_MILLI) as i32
-}
-
 /// Casts generic string arrays to `Time32SecondArray`
 fn cast_string_to_time32second<Offset: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
+    /// The number of nanoseconds per millisecond.
+    const NANOS_PER_SEC: u32 = 1_000_000_000;
+
     let string_array = array
         .as_any()
         .downcast_ref::<GenericStringArray<Offset>>()
@@ -1660,7 +1646,11 @@ fn cast_string_to_time32second<Offset: OffsetSizeTrait>(
                 string_array
                     .value(i)
                     .parse::<chrono::NaiveTime>()
-                    .map(|time| seconds_since_midnight(&time))
+                    .map(|time| {
+                        (time.num_seconds_from_midnight()
+                            + time.nanosecond() / NANOS_PER_SEC)
+                            as i32
+                    })
                     .ok()
             }
         });
@@ -1681,7 +1671,7 @@ fn cast_string_to_time32second<Offset: OffsetSizeTrait>(
                     chrono::Duration::days(3);
                     let result = string
                         .parse::<chrono::NaiveTime>()
-                        .map(|time| seconds_since_midnight(&time) );
+                        .map(|time| (time.num_seconds_from_midnight() + time.nanosecond() / NANOS_PER_SEC) as i32);
 
                     Some(result.map_err(|_| {
                         ArrowError::CastError(
@@ -1708,6 +1698,11 @@ fn cast_string_to_time32millisecond<Offset: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
+    /// The number of nanoseconds per millisecond.
+    const NANOS_PER_MILLI: u32 = 1_000_000;
+    /// The number of milliseconds per second.
+    const MILLIS_PER_SEC: u32 = 1_000;
+
     let string_array = array
         .as_any()
         .downcast_ref::<GenericStringArray<Offset>>()
@@ -1721,7 +1716,11 @@ fn cast_string_to_time32millisecond<Offset: OffsetSizeTrait>(
                 string_array
                     .value(i)
                     .parse::<chrono::NaiveTime>()
-                    .map(|time| milliseconds_since_midnight(&time))
+                    .map(|time| {
+                        (time.num_seconds_from_midnight() * MILLIS_PER_SEC
+                            + time.nanosecond() / NANOS_PER_MILLI)
+                            as i32
+                    })
                     .ok()
             }
         });
@@ -1742,7 +1741,8 @@ fn cast_string_to_time32millisecond<Offset: OffsetSizeTrait>(
 
                     let result = string
                         .parse::<chrono::NaiveTime>()
-                        .map(|time| milliseconds_since_midnight(&time) );
+                        .map(|time| (time.num_seconds_from_midnight() * MILLIS_PER_SEC
+                            + time.nanosecond() / NANOS_PER_MILLI) as i32);
 
                     Some(result.map_err(|_| {
                         ArrowError::CastError(
@@ -1764,28 +1764,16 @@ fn cast_string_to_time32millisecond<Offset: OffsetSizeTrait>(
     Ok(Arc::new(array) as ArrayRef)
 }
 
-fn microseconds_since_midnight(time: &chrono::NaiveTime) -> i64 {
-    /// The number of nanoseconds per microsecond.
-    const NANOS_PER_MICRO: i64 = 1_000;
-    /// The number of microseconds per second.
-    const MICROS_PER_SEC: i64 = 1_000_000;
-
-    time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
-        + time.nanosecond() as i64 / NANOS_PER_MICRO
-}
-
-fn nanoseconds_since_midnight(time: &chrono::NaiveTime) -> i64 {
-    /// The number of nanoseconds per second.
-    const NANOS_PER_SEC: i64 = 1_000_000_000;
-
-    time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC + time.nanosecond() as i64
-}
-
 /// Casts generic string arrays to `Time64MicrosecondArray`
 fn cast_string_to_time64microsecond<Offset: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
+    /// The number of nanoseconds per microsecond.
+    const NANOS_PER_MICRO: i64 = 1_000;
+    /// The number of microseconds per second.
+    const MICROS_PER_SEC: i64 = 1_000_000;
+
     let string_array = array
         .as_any()
         .downcast_ref::<GenericStringArray<Offset>>()
@@ -1799,7 +1787,10 @@ fn cast_string_to_time64microsecond<Offset: OffsetSizeTrait>(
                 string_array
                     .value(i)
                     .parse::<chrono::NaiveTime>()
-                    .map(|time| microseconds_since_midnight(&time))
+                    .map(|time| {
+                        time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
+                            + time.nanosecond() as i64 / NANOS_PER_MICRO
+                    })
                     .ok()
             }
         });
@@ -1820,7 +1811,8 @@ fn cast_string_to_time64microsecond<Offset: OffsetSizeTrait>(
 
                     let result = string
                         .parse::<chrono::NaiveTime>()
-                        .map(|time| microseconds_since_midnight(&time) );
+                        .map(|time| time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
+                            + time.nanosecond() as i64 / NANOS_PER_MICRO);
 
                     Some(result.map_err(|_| {
                         ArrowError::CastError(
@@ -1847,6 +1839,9 @@ fn cast_string_to_time64nanosecond<Offset: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
+    /// The number of nanoseconds per second.
+    const NANOS_PER_SEC: i64 = 1_000_000_000;
+
     let string_array = array
         .as_any()
         .downcast_ref::<GenericStringArray<Offset>>()
@@ -1860,7 +1855,10 @@ fn cast_string_to_time64nanosecond<Offset: OffsetSizeTrait>(
                 string_array
                     .value(i)
                     .parse::<chrono::NaiveTime>()
-                    .map(|time| nanoseconds_since_midnight(&time))
+                    .map(|time| {
+                        time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC
+                            + time.nanosecond() as i64
+                    })
                     .ok()
             }
         });
@@ -1881,7 +1879,7 @@ fn cast_string_to_time64nanosecond<Offset: OffsetSizeTrait>(
 
                     let result = string
                         .parse::<chrono::NaiveTime>()
-                        .map(|time| nanoseconds_since_midnight(&time) );
+                        .map(|time| time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC + time.nanosecond() as i64);
 
                     Some(result.map_err(|_| {
                         ArrowError::CastError(
