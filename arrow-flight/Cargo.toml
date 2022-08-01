@@ -29,7 +29,7 @@ license = "Apache-2.0"
 [dependencies]
 arrow = { path = "../arrow", version = "19.0.0", default-features = false, features = ["ipc"] }
 base64 = { version = "0.13", default-features = false }
-tonic = { version = "0.7", default-features = false, features = ["transport", "codegen", "prost"] }
+tonic = { version = "0.8", default-features = false, features = ["transport", "codegen", "prost"] }
 bytes = { version = "1", default-features = false }
 prost = { version = "0.10", default-features = false }
 prost-types = { version = "0.10.0", default-features = false, optional = true }
