@@ -282,6 +282,7 @@ impl IntervalMonthDayNanoType {
             int32_t months;
             int32_t days;
             int64_t nanoseconds;
+        }
         128     112     96      80      64      48      32      16      0
         +-------+-------+-------+-------+-------+-------+-------+-------+
         |     months    |      days     |             nanos             |
