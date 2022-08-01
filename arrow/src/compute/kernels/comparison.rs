@@ -35,7 +35,7 @@ use crate::datatypes::{
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
-use regex::{escape, Regex};
+use regex::Regex;
 use std::collections::HashMap;
 
 /// Helper function to perform boolean lambda function on values from two array accessors, this
@@ -299,34 +299,37 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
 }
 
 fn replace_like_wildcards(text: &str) -> Result<String> {
-    let text = escape(text);
     let mut result = String::new();
-    let mut preceding_backslash_chars = String::new();
-    for c in text.chars() {
+    let text = String::from(text);
+    let mut chars_iter = text.chars().peekable();
+    while let Some(c) = chars_iter.next() {
         if c == '\\' {
-            preceding_backslash_chars.push(c);
-        } else if is_like_pattern(c) {
-            if preceding_backslash_chars.is_empty() {
-                // An unescaped like wildcard. Replaced by regex pattern
-                if c == '%' {
-                    result.push_str(".*");
-                } else {
-                    result.push('.');
+            let next = chars_iter.peek().copied();
+            match next {
+                Some(next) => {
+                    if is_like_pattern(next) {
+                        result.push(next);
+                        // Skipping the next char as it is already appended
+                        chars_iter.next();
+                    } else {
+                        result.push('\\');
+                        result.push('\\');
+                    }
                 }
-            } else {
-                // Escaped like wildcard. Remove the last two backslash
-                if preceding_backslash_chars.len() > 2 {
-                    result.push_str(&preceding_backslash_chars[0..preceding_backslash_chars.len() - 2]);
+                None => {
+                    result.push('\\');
+                    result.push('\\');
+                    return Ok(result);
                 }
-                result.push(c);
             }
-            preceding_backslash_chars = String::new();
+        } else if regex_syntax::is_meta_character(c) {
+            result.push('\\');
+            result.push(c);
+        } else if c == '%' {
+            result.push_str(".*");
+        } else if c == '_' {
+            result.push('.');
         } else {
-            // No like wildcard found. Append unchanged
-            if !preceding_backslash_chars.is_empty() {
-                result.push_str(&preceding_backslash_chars);
-                preceding_backslash_chars = String::new();
-            }
             result.push(c);
         }
     }
@@ -3795,12 +3798,30 @@ mod tests {
 
     #[test]
     fn test_replace_like_wildcards() {
-        let a_eq = "\\%_%\\_\\\\%.\\.";
-        let expected = String::from("%..*_\\\\%\\.\\\\\\.");
-        assert_eq!(
-            replace_like_wildcards(a_eq).unwrap(),
-            expected
-        );
+        let a_eq = "_%";
+        let expected = String::from("..*");
+        assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_replace_like_wildcards_leave_like_meta_chars() {
+        let a_eq = "\\%\\_";
+        let expected = String::from("%_");
+        assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_replace_like_wildcards_with_multiple_escape_chars() {
+        let a_eq = "\\\\%";
+        let expected = String::from("\\\\%");
+        assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
+    }
+
+    #[test]
+    fn test_replace_like_wildcards_escape_regex_meta_char() {
+        let a_eq = ".";
+        let expected = String::from("\\.");
+        assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
     }
 
     test_utf8!(
