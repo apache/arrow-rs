@@ -34,6 +34,7 @@ pub trait Storage {
 }
 
 /// A generic value interner supporting various different [`Storage`]
+#[derive(Debug, Default)]
 pub struct Interner<S: Storage> {
     state: ahash::RandomState,
 
@@ -83,6 +84,11 @@ impl<S: Storage> Interner<S> {
     /// Returns the storage for this interner
     pub fn storage(&self) -> &S {
         &self.storage
+    }
+
+    /// Unwraps the inner storage
+    pub fn into_inner(self) -> S {
+        self.storage
     }
 }
 
