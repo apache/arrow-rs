@@ -28,15 +28,128 @@
 
 //! # object_store
 //!
-//! This crate provides APIs for interacting with object storage services.
+//! This crate provides a uniform API for interacting with object storage services and
+//! local files via the the [`ObjectStore`] trait.
 //!
-//! It currently supports PUT (single or chunked/concurrent), GET, DELETE, HEAD and list for:
+//! # Create an [`ObjectStore`] implementation:
 //!
-//! * [Google Cloud Storage](https://cloud.google.com/storage/)
-//! * [Amazon S3](https://aws.amazon.com/s3/)
-//! * [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/#overview)
-//! * In-memory
-//! * Local file storage
+//! * [Google Cloud Storage](https://cloud.google.com/storage/): [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)
+//! * [Amazon S3](https://aws.amazon.com/s3/): [`AmazonS3Builder`](aws::AmazonS3Builder)
+//! * [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/):: [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)
+//! * In Memory: [`InMemory`](memory::InMemory)
+//! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
+//!
+//! # Adapters
+//!
+//! [`ObjectStore`] instances can be composed with various adapters
+//! which add additional functionality:
+//!
+//! * Rate Throttling: [`ThrottleConfig`](throttle::ThrottleConfig)
+//! * Concurrent Request Limit: [`LimitStore`](limit::LimitStore)
+//!
+//!
+//! # Listing objects:
+//!
+//! Use the [`ObjectStore::list`] method to iterate over objects in
+//! remote storage or files in the local filesystem:
+//!
+//! ```
+//! # use object_store::local::LocalFileSystem;
+//! # // use LocalFileSystem for example
+//! # fn get_object_store() -> LocalFileSystem {
+//! #   LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # }
+//!
+//! # async fn example() {
+//! use std::sync::Arc;
+//! use object_store::{path::Path, ObjectStore};
+//! use futures::stream::StreamExt;
+//!
+//! // create an ObjectStore
+//! let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//!
+//! // List all files in the 'data' path.
+//! // 1. On AWS S3 this would be the 'data/' prefix
+//! // 2. On a local filesystem, this would be the 'data' directory
+//! let prefix: Path = "data".try_into().unwrap();
+//!
+//! // Get an `async` stream of Metadata objects:
+//!  let list_stream = object_store
+//!      .list(Some(&prefix))
+//!      .await
+//!      .expect("Error listing files");
+//!
+//!  // Print a line about each object based on its metadata
+//!  // using for_each from `StreamExt` trait.
+//!  list_stream
+//!      .for_each(move |meta|  {
+//!          async {
+//!              let meta = meta.expect("Error listing");
+//!              println!("Name: {}, size: {}", meta.location, meta.size);
+//!          }
+//!      })
+//!      .await;
+//! # }
+//! ```
+//!
+//! Which will print out something like the following:
+//!
+//! ```text
+//! Name: data/file01.parquet, size: 112832
+//! Name: data/file02.parquet, size: 143119
+//! ...
+//! ```
+//!
+//! # Fetching objects
+//!
+//! Use the [`ObjectStore::get`] method to fetch the data bytes
+//! from remote storage or files in the local filesystem as a stream.
+//!
+//! ```
+//! # use object_store::local::LocalFileSystem;
+//! # // use LocalFileSystem for example
+//! # fn get_object_store() -> LocalFileSystem {
+//! #   LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # }
+//!
+//! # async fn example() {
+//! use std::sync::Arc;
+//! use object_store::{path::Path, ObjectStore};
+//! use futures::stream::StreamExt;
+//!
+//! // create an ObjectStore
+//! let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//!
+//! // Retrieve a specific file
+//! let path: Path = "data/file01.parquet".try_into().unwrap();
+//!
+//! // fetch the bytes from object store
+//! let stream = object_store
+//!     .get(&path)
+//!     .await
+//!     .unwrap()
+//!     .into_stream();
+//!
+//! // Count the '0's using `map` from `StreamExt` trait
+//! let num_zeros = stream
+//!     .map(|bytes| {
+//!         let bytes = bytes.unwrap();
+//!        bytes.iter().filter(|b| **b == 0).count()
+//!     })
+//!     .collect::<Vec<usize>>()
+//!     .await
+//!     .into_iter()
+//!     .sum::<usize>();
+//!
+//! println!("Num zeros in {} is {}", path, num_zeros);
+//! # }
+//! ```
+//!
+//! Which will print out something like the following:
+//!
+//! ```text
+//! Num zeros in data/file01.parquet is 657
+//! ```
 //!
 
 #[cfg(feature = "aws")]

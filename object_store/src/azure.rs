@@ -209,7 +209,7 @@ impl From<Error> for super::Error {
     }
 }
 
-/// Configuration for connecting to [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
+/// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
 #[derive(Debug)]
 pub struct MicrosoftAzure {
     container_client: Arc<ContainerClient>,

@@ -192,7 +192,7 @@ struct CompleteMultipartUpload {
     parts: Vec<MultipartPart>,
 }
 
-/// Configuration for connecting to [Google Cloud Storage](https://cloud.google.com/storage/).
+/// Interface for [Google Cloud Storage](https://cloud.google.com/storage/).
 #[derive(Debug)]
 pub struct GoogleCloudStorage {
     client: Arc<GoogleCloudStorageClient>,

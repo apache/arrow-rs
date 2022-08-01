@@ -260,7 +260,7 @@ impl From<Error> for super::Error {
     }
 }
 
-/// Configuration for connecting to [Amazon S3](https://aws.amazon.com/s3/).
+/// Interface for [Amazon S3](https://aws.amazon.com/s3/).
 pub struct AmazonS3 {
     /// S3 client w/o any connection limit.
     ///
