@@ -24,6 +24,9 @@ on:
     branches:
       - master
   pull_request:
+    paths:
+      - arrow/**
+      - .github/**
 
 jobs:
 

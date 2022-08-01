@@ -27,7 +27,7 @@ use crate::column::writer::encoder::{
 use crate::compression::{create_codec, Codec};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
-use crate::encodings::levels::{max_buffer_size, LevelEncoder};
+use crate::encodings::levels::LevelEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ColumnIndexBuilder, OffsetIndexBuilder};
 use crate::file::properties::EnabledStatistics;
@@ -795,8 +795,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         levels: &[i16],
         max_level: i16,
     ) -> Result<Vec<u8>> {
-        let size = max_buffer_size(encoding, max_level, levels.len());
-        let mut encoder = LevelEncoder::v1(encoding, max_level, vec![0; size]);
+        let mut encoder = LevelEncoder::v1(encoding, max_level, levels.len());
         encoder.put(levels)?;
         encoder.consume()
     }
@@ -805,8 +804,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// Encoding is always RLE.
     #[inline]
     fn encode_levels_v2(&self, levels: &[i16], max_level: i16) -> Result<Vec<u8>> {
-        let size = max_buffer_size(Encoding::RLE, max_level, levels.len());
-        let mut encoder = LevelEncoder::v2(max_level, vec![0; size]);
+        let mut encoder = LevelEncoder::v2(max_level, levels.len());
         encoder.put(levels)?;
         encoder.consume()
     }

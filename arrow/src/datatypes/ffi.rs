@@ -108,7 +108,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                         "The decimal type requires an integer scale".to_string(),
                                     )
                                 })?;
-                                DataType::Decimal(parsed_precision, parsed_scale)
+                                DataType::Decimal128(parsed_precision, parsed_scale)
                             },
                             [precision, scale, bits] => {
                                 if *bits != "128" {
@@ -124,7 +124,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                         "The decimal type requires an integer scale".to_string(),
                                     )
                                 })?;
-                                DataType::Decimal(parsed_precision, parsed_scale)
+                                DataType::Decimal128(parsed_precision, parsed_scale)
                             }
                             _ => {
                                 return Err(ArrowError::CDataInterface(format!(
@@ -253,7 +253,9 @@ fn get_format_string(dtype: &DataType) -> Result<String> {
         DataType::LargeUtf8 => Ok("U".to_string()),
         DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{}", num_bytes)),
         DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{}", num_elems)),
-        DataType::Decimal(precision, scale) => Ok(format!("d:{},{}", precision, scale)),
+        DataType::Decimal128(precision, scale) => {
+            Ok(format!("d:{},{}", precision, scale))
+        }
         DataType::Date32 => Ok("tdD".to_string()),
         DataType::Date64 => Ok("tdm".to_string()),
         DataType::Time32(TimeUnit::Second) => Ok("tts".to_string()),

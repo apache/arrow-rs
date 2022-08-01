@@ -319,7 +319,7 @@ pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<Str
         DataType::Float16 => make_string!(array::Float16Array, column, row),
         DataType::Float32 => make_string!(array::Float32Array, column, row),
         DataType::Float64 => make_string!(array::Float64Array, column, row),
-        DataType::Decimal(..) => make_string_from_decimal(column, row),
+        DataType::Decimal128(..) => make_string_from_decimal(column, row),
         DataType::Timestamp(unit, _) if *unit == TimeUnit::Second => {
             make_string_datetime!(array::TimestampSecondArray, column, row)
         }

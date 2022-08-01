@@ -33,11 +33,11 @@ use super::Field;
 /// memory layout.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Schema {
-    pub(crate) fields: Vec<Field>,
+    pub fields: Vec<Field>,
     /// A map of key-value pairs containing additional meta data.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[serde(default)]
-    pub(crate) metadata: HashMap<String, String>,
+    pub metadata: HashMap<String, String>,
 }
 
 impl Schema {
