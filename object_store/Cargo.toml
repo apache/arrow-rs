@@ -48,7 +48,7 @@ quick-xml = { version = "0.23.0", features = ["serialize"], optional = true }
 rustls-pemfile = { version = "1.0", default-features = false, optional = true }
 ring = { version = "0.16", default-features = false, features = ["std"] }
 base64 = { version = "0.13", default-features = false, optional = true }
-rand = { version = "0.8", optional = true, features = ["std", "std_rng"] }
+rand = { version = "0.8", default-features = false, optional = true, features = ["std", "std_rng"] }
 # for rusoto
 hyper = { version = "0.14", optional = true, default-features = false }
 # for rusoto
