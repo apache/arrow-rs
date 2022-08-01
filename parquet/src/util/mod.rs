@@ -19,7 +19,7 @@ pub mod io;
 pub mod memory;
 #[macro_use]
 pub mod bit_util;
-mod bit_packing;
+mod bit_pack;
 pub mod cursor;
 pub(crate) mod interner;
 pub(crate) mod page_util;
