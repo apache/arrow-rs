@@ -237,6 +237,8 @@ impl IntervalDayTimeType {
         struct DayMilliseconds {
             int32_t days = 0;
             int32_t milliseconds = 0;
+            ...
+        }
         64      56      48      40      32      24      16      8       0
         +-------+-------+-------+-------+-------+-------+-------+-------+
         |             days              |         milliseconds          |
