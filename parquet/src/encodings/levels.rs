@@ -21,7 +21,7 @@ use super::rle::{RleDecoder, RleEncoder};
 
 use crate::basic::Encoding;
 use crate::data_type::AsBytes;
-use crate::errors::{ParquetError, Result};
+use crate::errors::Result;
 use crate::util::{
     bit_util::{ceil, num_required_bits, BitReader, BitWriter},
     memory::ByteBufferPtr,
@@ -97,21 +97,16 @@ impl LevelEncoder {
     /// Put/encode levels vector into this level encoder.
     /// Returns number of encoded values that are less than or equal to length of the
     /// input buffer.
-    ///
-    /// RLE and BIT_PACKED level encoders return Err() when internal buffer overflows or
-    /// flush fails.
     #[inline]
-    pub fn put(&mut self, buffer: &[i16]) -> Result<usize> {
+    pub fn put(&mut self, buffer: &[i16]) -> usize {
         let mut num_encoded = 0;
         match *self {
             LevelEncoder::Rle(ref mut encoder) | LevelEncoder::RleV2(ref mut encoder) => {
                 for value in buffer {
-                    if !encoder.put(*value as u64)? {
-                        return Err(general_err!("RLE buffer is full"));
-                    }
+                    encoder.put(*value as u64);
                     num_encoded += 1;
                 }
-                encoder.flush()?;
+                encoder.flush();
             }
             LevelEncoder::BitPacked(bit_width, ref mut encoder) => {
                 for value in buffer {
@@ -121,25 +116,25 @@ impl LevelEncoder {
                 encoder.flush();
             }
         }
-        Ok(num_encoded)
+        num_encoded
     }
 
     /// Finalizes level encoder, flush all intermediate buffers and return resulting
     /// encoded buffer. Returned buffer is already truncated to encoded bytes only.
     #[inline]
-    pub fn consume(self) -> Result<Vec<u8>> {
+    pub fn consume(self) -> Vec<u8> {
         match self {
             LevelEncoder::Rle(encoder) => {
-                let mut encoded_data = encoder.consume()?;
+                let mut encoded_data = encoder.consume();
                 // Account for the buffer offset
                 let encoded_len = encoded_data.len() - mem::size_of::<i32>();
                 let len = (encoded_len as i32).to_le();
                 let len_bytes = len.as_bytes();
                 encoded_data[0..len_bytes.len()].copy_from_slice(len_bytes);
-                Ok(encoded_data)
+                encoded_data
             }
             LevelEncoder::RleV2(encoder) => encoder.consume(),
-            LevelEncoder::BitPacked(_, encoder) => Ok(encoder.consume()),
+            LevelEncoder::BitPacked(_, encoder) => encoder.consume(),
         }
     }
 }
@@ -287,8 +282,8 @@ mod tests {
         } else {
             LevelEncoder::v1(enc, max_level, levels.len())
         };
-        encoder.put(levels).expect("put() should be OK");
-        let encoded_levels = encoder.consume().expect("consume() should be OK");
+        encoder.put(levels);
+        let encoded_levels = encoder.consume();
 
         let byte_buf = ByteBufferPtr::new(encoded_levels);
         let mut decoder;
@@ -318,8 +313,8 @@ mod tests {
         } else {
             LevelEncoder::v1(enc, max_level, levels.len())
         };
-        encoder.put(levels).expect("put() should be OK");
-        let encoded_levels = encoder.consume().expect("consume() should be OK");
+        encoder.put(levels);
+        let encoded_levels = encoder.consume();
 
         let byte_buf = ByteBufferPtr::new(encoded_levels);
         let mut decoder;
@@ -366,8 +361,8 @@ mod tests {
             LevelEncoder::v1(enc, max_level, levels.len())
         };
         // Encode only one value
-        let num_encoded = encoder.put(&levels[0..1]).expect("put() should be OK");
-        let encoded_levels = encoder.consume().expect("consume() should be OK");
+        let num_encoded = encoder.put(&levels[0..1]);
+        let encoded_levels = encoder.consume();
         assert_eq!(num_encoded, 1);
 
         let byte_buf = ByteBufferPtr::new(encoded_levels);

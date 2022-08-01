@@ -408,12 +408,12 @@ mod tests {
         let mut encoder = RleEncoder::new(1, 1024);
         for _ in 0..len {
             let bool = rng.gen_bool(0.8);
-            assert!(encoder.put(bool as u64).unwrap());
+            encoder.put(bool as u64);
             expected.append(bool);
         }
         assert_eq!(expected.len(), len);
 
-        let encoded = encoder.consume().unwrap();
+        let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
         decoder.set_data(Encoding::RLE, ByteBufferPtr::new(encoded));
 
@@ -444,7 +444,7 @@ mod tests {
         let mut total_value = 0;
         for _ in 0..len {
             let bool = rng.gen_bool(0.8);
-            assert!(encoder.put(bool as u64).unwrap());
+            encoder.put(bool as u64);
             expected.append(bool);
             if bool {
                 total_value += 1;
@@ -452,7 +452,7 @@ mod tests {
         }
         assert_eq!(expected.len(), len);
 
-        let encoded = encoder.consume().unwrap();
+        let encoded = encoder.consume();
         let mut decoder = PackedDecoder::new();
         decoder.set_data(Encoding::RLE, ByteBufferPtr::new(encoded));
 
