@@ -22,6 +22,7 @@ use futures::future::BoxFuture;
 use futures::FutureExt;
 use reqwest::{Response, Result};
 use std::time::{Duration, Instant};
+use tracing::info;
 
 /// Contains the configuration for how to respond to server errors
 ///
@@ -91,8 +92,10 @@ impl RetryExt for reqwest::RequestBuilder {
                                 .map(|s| s.is_server_error())
                                 .unwrap_or(false) =>
                     {
+                        let sleep = backoff.next();
                         retries += 1;
-                        tokio::time::sleep(backoff.next()).await;
+                        info!("Encountered server error, backing off for {} seconds, retry {} of {}", sleep.as_secs_f32(), retries, max_retries);
+                        tokio::time::sleep(sleep).await;
                     }
                     r => return r,
                 }
