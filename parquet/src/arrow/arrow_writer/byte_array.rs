@@ -377,12 +377,10 @@ impl DictEncoder {
     ) -> Result<DataPageValues<ByteArray>> {
         let num_values = self.indices.len();
         let buffer_len = self.estimated_data_page_size();
-        let mut buffer = vec![0; buffer_len];
-        buffer[0] = self.bit_width() as u8;
+        let mut buffer = Vec::with_capacity(buffer_len);
+        buffer.push(self.bit_width() as u8);
 
-        // Write bit width in the first byte
-        buffer.extend_from_slice((self.bit_width() as u8).as_bytes());
-        let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer, 1);
+        let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
         for index in &self.indices {
             if !encoder.put(*index as u64)? {
                 return Err(general_err!("Encoder doesn't have enough space"));
