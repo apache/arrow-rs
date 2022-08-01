@@ -285,21 +285,20 @@ pub struct ParquetRecordBatchReader {
 }
 
 impl ParquetRecordBatchReader {
-    pub fn take_selection(&mut self) -> Option<VecDeque<RowSelection>> {
-        self.selection.take()
-    }
-
-    pub fn next_filtered(
+    pub fn next_selection(
         &mut self,
-        selection: VecDeque<RowSelection>,
+        selection: &mut VecDeque<RowSelection>,
     ) -> Option<ArrowResult<RecordBatch>> {
+        println!("Type: {:?}", self.array_reader.get_data_type());
         let mut buffer: Vec<ArrayRef> = vec![];
-        let mut selection = selection;
+        let mut selected = false;
         while let Some(front) = selection.pop_front() {
             if front.skip {
                 let skipped = match self.array_reader.skip_records(front.row_count) {
                     Ok(skipped) => skipped,
-                    Err(e) => return Some(Err(e.into())),
+                    Err(e) => {
+                        return Some(Err(e.into()));
+                    }
                 };
 
                 if skipped != front.row_count {
@@ -313,6 +312,7 @@ impl ParquetRecordBatchReader {
                 continue;
             }
 
+            selected = true;
             match self.array_reader.next_batch(front.row_count) {
                 Err(error) => return Some(Err(error.into())),
                 Ok(array) => {
@@ -321,6 +321,10 @@ impl ParquetRecordBatchReader {
                     }
                 }
             }
+        }
+
+        if !selected {
+            return Some(Ok(RecordBatch::new_empty(self.schema.clone())));
         }
 
         let array = concat(
@@ -340,7 +344,7 @@ impl ParquetRecordBatchReader {
             });
 
         match struct_array {
-            Err(err) => return Some(Err(err)),
+            Err(err) => Some(Err(err)),
             Ok(e) => (e.len() > 0).then(|| Ok(RecordBatch::from(e))),
         }
     }

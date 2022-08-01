@@ -279,7 +279,6 @@ impl<T: AsyncFileReader> ParquetRecordBatchStreamBuilder<T> {
             schema: self.schema,
             input: Some(self.input),
             state: StreamState::Init,
-            row_selection: None,
         })
     }
 }
@@ -288,12 +287,9 @@ enum StreamState<T> {
     /// At the start of a new row group, or the end of the parquet stream
     Init,
     /// Decoding a batch
-    Decoding(ParquetRecordBatchReader, Option<VecDeque<RowSelection>>),
+    Decoding(ParquetRecordBatchReader),
     /// Reading data from input
-    Reading(
-        BoxFuture<'static, Result<(T, InMemoryRowGroup)>>,
-        Option<VecDeque<RowSelection>>,
-    ),
+    Reading(BoxFuture<'static, Result<(T, InMemoryRowGroup)>>),
     /// Error
     Error,
 }
@@ -302,8 +298,8 @@ impl<T> std::fmt::Debug for StreamState<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             StreamState::Init => write!(f, "StreamState::Init"),
-            StreamState::Decoding(_, _) => write!(f, "StreamState::Decoding"),
-            StreamState::Reading(_, _) => write!(f, "StreamState::Reading"),
+            StreamState::Decoding(_) => write!(f, "StreamState::Decoding"),
+            StreamState::Reading(_) => write!(f, "StreamState::Reading"),
             StreamState::Error => write!(f, "StreamState::Error"),
         }
     }
@@ -325,8 +321,6 @@ pub struct ParquetRecordBatchStream<T> {
     input: Option<T>,
 
     state: StreamState<T>,
-
-    row_selection: Option<VecDeque<RowSelection>>,
 }
 
 impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
@@ -341,52 +335,29 @@ impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
     }
 }
 
-impl<T> ParquetRecordBatchStream<T> {
+impl<T> ParquetRecordBatchStream<T>
+where
+    T: AsyncFileReader + Unpin + Send + 'static,
+{
     /// Returns the [`SchemaRef`] for this parquet file
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
 
-    pub fn push_row_selection(&mut self, row_selection: VecDeque<RowSelection>) {
-        match &mut self.row_selection {
-            Some(s) => s.extend(row_selection),
-            None => {
-                self.row_selection = Some(row_selection);
-            }
-        }
-    }
-
-    pub fn skip_batch(&mut self) {
-        self.state = StreamState::Init;
-    }
-}
-
-impl<T> Stream for ParquetRecordBatchStream<T>
-where
-    T: AsyncFileReader + Unpin + Send + 'static,
-{
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
+    pub fn poll_next_selection(
+        &mut self,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let mut selection = self.row_selection.take();
+        mut selection: VecDeque<RowSelection>,
+    ) -> Poll<Option<Result<RecordBatch>>> {
         loop {
             match &mut self.state {
-                StreamState::Decoding(batch_reader, curr_selection) => {
-                    let next = if let Some(selection) = curr_selection.take() {
-                        batch_reader.next_filtered(selection)
-                    } else {
-                        if let Some(selection) = selection.take() {
-                            batch_reader.next_filtered(selection)
-                        } else {
-                            batch_reader.next()
-                        }
-                    };
+                StreamState::Decoding(batch_reader) => {
+                    let next = batch_reader.next_selection(&mut selection);
 
                     match next {
-                        Some(Ok(batch)) => return Poll::Ready(Some(Ok(batch))),
+                        Some(Ok(batch)) => {
+                            return Poll::Ready(Some(Ok(batch)));
+                        }
                         Some(Err(e)) => {
                             self.state = StreamState::Error;
                             return Poll::Ready(Some(Err(ParquetError::ArrowError(
@@ -414,7 +385,6 @@ where
                     };
 
                     let projection = self.projection.clone();
-                    let selection = selection.take();
                     self.state = StreamState::Reading(
                         async move {
                             let row_group_metadata = metadata.row_group(row_group_idx);
@@ -466,12 +436,10 @@ where
                             ))
                         }
                         .boxed(),
-                        selection,
                     )
                 }
-                StreamState::Reading(f, selection) => {
+                StreamState::Reading(f) => {
                     let result = futures::ready!(f.poll_unpin(cx));
-                    let selection = selection.take();
                     self.state = StreamState::Init;
 
                     let row_group: Box<dyn RowGroupCollection> = match result {
@@ -505,7 +473,143 @@ where
                         }
                     };
 
-                    self.state = StreamState::Decoding(batch_reader, selection)
+                    self.state = StreamState::Decoding(batch_reader)
+                }
+                StreamState::Error => return Poll::Pending,
+            }
+        }
+    }
+}
+
+impl<T> Stream for ParquetRecordBatchStream<T>
+where
+    T: AsyncFileReader + Unpin + Send + 'static,
+{
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        loop {
+            match &mut self.state {
+                StreamState::Decoding(batch_reader) => match batch_reader.next() {
+                    Some(Ok(batch)) => return Poll::Ready(Some(Ok(batch))),
+                    Some(Err(e)) => {
+                        self.state = StreamState::Error;
+                        return Poll::Ready(Some(Err(ParquetError::ArrowError(
+                            e.to_string(),
+                        ))));
+                    }
+                    None => self.state = StreamState::Init,
+                },
+                StreamState::Init => {
+                    let row_group_idx = match self.row_groups.pop_front() {
+                        Some(idx) => idx,
+                        None => return Poll::Ready(None),
+                    };
+
+                    let metadata = self.metadata.clone();
+                    let mut input = match self.input.take() {
+                        Some(input) => input,
+                        None => {
+                            self.state = StreamState::Error;
+                            return Poll::Ready(Some(Err(general_err!(
+                                "input stream lost"
+                            ))));
+                        }
+                    };
+
+                    let projection = self.projection.clone();
+                    self.state = StreamState::Reading(
+                        async move {
+                            let row_group_metadata = metadata.row_group(row_group_idx);
+                            let mut column_chunks =
+                                vec![None; row_group_metadata.columns().len()];
+
+                            // TODO: Combine consecutive ranges
+                            let fetch_ranges = (0..column_chunks.len())
+                                .into_iter()
+                                .filter_map(|idx| {
+                                    if !projection.leaf_included(idx) {
+                                        None
+                                    } else {
+                                        let column = row_group_metadata.column(idx);
+                                        let (start, length) = column.byte_range();
+
+                                        Some(start as usize..(start + length) as usize)
+                                    }
+                                })
+                                .collect();
+
+                            let mut chunk_data =
+                                input.get_byte_ranges(fetch_ranges).await?.into_iter();
+
+                            for (idx, chunk) in column_chunks.iter_mut().enumerate() {
+                                if !projection.leaf_included(idx) {
+                                    continue;
+                                }
+
+                                let column = row_group_metadata.column(idx);
+
+                                if let Some(data) = chunk_data.next() {
+                                    *chunk = Some(InMemoryColumnChunk {
+                                        num_values: column.num_values(),
+                                        compression: column.compression(),
+                                        physical_type: column.column_type(),
+                                        data,
+                                    });
+                                }
+                            }
+
+                            Ok((
+                                input,
+                                InMemoryRowGroup {
+                                    schema: metadata.file_metadata().schema_descr_ptr(),
+                                    row_count: row_group_metadata.num_rows() as usize,
+                                    column_chunks,
+                                },
+                            ))
+                        }
+                        .boxed(),
+                    )
+                }
+                StreamState::Reading(f) => {
+                    let result = futures::ready!(f.poll_unpin(cx));
+                    self.state = StreamState::Init;
+
+                    let row_group: Box<dyn RowGroupCollection> = match result {
+                        Ok((input, row_group)) => {
+                            self.input = Some(input);
+                            Box::new(row_group)
+                        }
+                        Err(e) => {
+                            self.state = StreamState::Error;
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                    };
+
+                    let parquet_schema = self.metadata.file_metadata().schema_descr_ptr();
+
+                    let array_reader = build_array_reader(
+                        parquet_schema,
+                        self.schema.clone(),
+                        self.projection.clone(),
+                        row_group,
+                    )?;
+
+                    let batch_reader = match ParquetRecordBatchReader::try_new(
+                        self.batch_size,
+                        array_reader,
+                    ) {
+                        Ok(reader) => reader,
+                        Err(e) => {
+                            self.state = StreamState::Error;
+                            return Poll::Ready(Some(Err(e)));
+                        }
+                    };
+
+                    self.state = StreamState::Decoding(batch_reader)
                 }
                 StreamState::Error => return Poll::Pending,
             }
