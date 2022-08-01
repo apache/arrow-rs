@@ -30,7 +30,7 @@ change. Supported object stores include:
 * [Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/)
 * [Google Cloud Storage](https://cloud.google.com/storage)
 * Local files
-* Memory,
+* Memory
 * Custom implementations
 
 

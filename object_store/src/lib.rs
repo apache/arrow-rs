@@ -68,7 +68,7 @@
 //! // create an ObjectStore
 //! let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
 //!
-//! // List all files in the 'data' path.
+//! // Recursively list all files below the 'data' path.
 //! // 1. On AWS S3 this would be the 'data/' prefix
 //! // 2. On a local filesystem, this would be the 'data' directory
 //! let prefix: Path = "data".try_into().unwrap();
@@ -97,6 +97,7 @@
 //! ```text
 //! Name: data/file01.parquet, size: 112832
 //! Name: data/file02.parquet, size: 143119
+//! Name: data/child/file03.parquet, size: 100
 //! ...
 //! ```
 //!
