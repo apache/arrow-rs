@@ -289,7 +289,6 @@ impl ParquetRecordBatchReader {
         &mut self,
         selection: &mut VecDeque<RowSelection>,
     ) -> Option<ArrowResult<RecordBatch>> {
-        println!("Type: {:?}", self.array_reader.get_data_type());
         let mut buffer: Vec<ArrayRef> = vec![];
         let mut selected = false;
         while let Some(front) = selection.pop_front() {
