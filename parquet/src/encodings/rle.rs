@@ -83,21 +83,14 @@ pub struct RleEncoder {
 
 impl RleEncoder {
     pub fn new(bit_width: u8, buffer_len: usize) -> Self {
-        let buffer = vec![0; buffer_len];
-        RleEncoder::new_from_buf(bit_width, buffer, 0)
+        let buffer = Vec::with_capacity(buffer_len);
+        RleEncoder::new_from_buf(bit_width, buffer)
     }
 
-    /// Initialize the encoder from existing `buffer` and the starting offset `start`.
-    pub fn new_from_buf(bit_width: u8, buffer: Vec<u8>, start: usize) -> Self {
-        assert!(bit_width <= 64, "bit_width ({}) out of range.", bit_width);
+    /// Initialize the encoder from existing `buffer`
+    pub fn new_from_buf(bit_width: u8, buffer: Vec<u8>) -> Self {
         let max_run_byte_size = RleEncoder::min_buffer_size(bit_width);
-        assert!(
-            buffer.len() >= max_run_byte_size,
-            "buffer length {} must be greater than {}",
-            buffer.len(),
-            max_run_byte_size
-        );
-        let bit_writer = BitWriter::new_from_buf(buffer, start);
+        let bit_writer = BitWriter::new_from_buf(buffer);
         RleEncoder {
             bit_width,
             bit_writer,
@@ -244,14 +237,11 @@ impl RleEncoder {
     fn flush_rle_run(&mut self) -> Result<()> {
         assert!(self.repeat_count > 0);
         let indicator_value = self.repeat_count << 1;
-        let mut result = self.bit_writer.put_vlq_int(indicator_value as u64);
-        result &= self.bit_writer.put_aligned(
+        self.bit_writer.put_vlq_int(indicator_value as u64);
+        self.bit_writer.put_aligned(
             self.current_value,
             bit_util::ceil(self.bit_width as i64, 8) as usize,
         );
-        if !result {
-            return Err(general_err!("Failed to write RLE run"));
-        }
         self.num_buffered_values = 0;
         self.repeat_count = 0;
         Ok(())
@@ -259,13 +249,12 @@ impl RleEncoder {
 
     fn flush_bit_packed_run(&mut self, update_indicator_byte: bool) -> Result<()> {
         if self.indicator_byte_pos < 0 {
-            self.indicator_byte_pos = self.bit_writer.skip(1)? as i64;
+            self.indicator_byte_pos = self.bit_writer.skip(1) as i64;
         }
 
         // Write all buffered values as bit-packed literals
         for i in 0..self.num_buffered_values {
-            let _ = self
-                .bit_writer
+            self.bit_writer
                 .put_value(self.buffered_values[i], self.bit_width as usize);
         }
         self.num_buffered_values = 0;
@@ -273,13 +262,11 @@ impl RleEncoder {
             // Write the indicator byte to the reserved position in `bit_writer`
             let num_groups = self.bit_packed_count / 8;
             let indicator_byte = ((num_groups << 1) | 1) as u8;
-            if !self.bit_writer.put_aligned_offset(
+            self.bit_writer.put_aligned_offset(
                 indicator_byte,
                 1,
                 self.indicator_byte_pos as usize,
-            ) {
-                return Err(general_err!("Not enough space to write indicator byte"));
-            }
+            );
             self.indicator_byte_pos = -1;
             self.bit_packed_count = 0;
         }
@@ -443,7 +430,8 @@ impl RleDecoder {
         let mut values_skipped = 0;
         while values_skipped < num_values {
             if self.rle_left > 0 {
-                let num_values = cmp::min(num_values - values_skipped, self.rle_left as usize);
+                let num_values =
+                    cmp::min(num_values - values_skipped, self.rle_left as usize);
                 self.rle_left -= num_values as u32;
                 values_skipped += num_values;
             } else if self.bit_packed_left > 0 {
@@ -452,10 +440,7 @@ impl RleDecoder {
                 let bit_reader =
                     self.bit_reader.as_mut().expect("bit_reader should be set");
 
-                num_values = bit_reader.skip(
-                    num_values,
-                    self.bit_width as usize,
-                );
+                num_values = bit_reader.skip(num_values, self.bit_width as usize);
                 if num_values == 0 {
                     // Handle writers which truncate the final block
                     self.bit_packed_left = 0;
@@ -587,7 +572,9 @@ mod tests {
         assert_eq!(skipped, 2);
 
         let mut buffer = vec![0; 6];
-        let remaining = decoder.get_batch::<i32>(&mut buffer).expect("getting remaining");
+        let remaining = decoder
+            .get_batch::<i32>(&mut buffer)
+            .expect("getting remaining");
         assert_eq!(remaining, 6);
         assert_eq!(buffer, expected);
     }
@@ -671,7 +658,9 @@ mod tests {
 
         let skipped = decoder.skip(50).expect("skipping first 50");
         assert_eq!(skipped, 50);
-        let remainder = decoder.get_batch::<bool>(&mut buffer).expect("getting remaining 50");
+        let remainder = decoder
+            .get_batch::<bool>(&mut buffer)
+            .expect("getting remaining 50");
         assert_eq!(remainder, 50);
         assert_eq!(buffer, expected);
 
@@ -687,7 +676,9 @@ mod tests {
         }
         let skipped = decoder.skip(50).expect("skipping first 50");
         assert_eq!(skipped, 50);
-        let remainder = decoder.get_batch::<bool>(&mut buffer).expect("getting remaining 50");
+        let remainder = decoder
+            .get_batch::<bool>(&mut buffer)
+            .expect("getting remaining 50");
         assert_eq!(remainder, 50);
         assert_eq!(buffer, expected);
     }
@@ -739,7 +730,9 @@ mod tests {
         let expected = vec![10, 20, 20, 20, 20, 30, 30, 30, 30, 30];
         let skipped = decoder.skip(2).expect("skipping two values");
         assert_eq!(skipped, 2);
-        let remainder = decoder.get_batch_with_dict::<i32>(&dict, &mut buffer, 10).expect("getting remainder");
+        let remainder = decoder
+            .get_batch_with_dict::<i32>(&dict, &mut buffer, 10)
+            .expect("getting remainder");
         assert_eq!(remainder, 10);
         assert_eq!(buffer, expected);
 
@@ -751,17 +744,12 @@ mod tests {
         let mut decoder: RleDecoder = RleDecoder::new(3);
         decoder.set_data(data);
         let mut buffer = vec![""; 8];
-        let expected = vec![
-            "eee", "fff", "ddd", "eee", "fff", "eee", "fff",
-            "fff",
-        ];
+        let expected = vec!["eee", "fff", "ddd", "eee", "fff", "eee", "fff", "fff"];
         let skipped = decoder.skip(4).expect("skipping four values");
         assert_eq!(skipped, 4);
-        let remainder = decoder.get_batch_with_dict::<&str>(
-            dict.as_slice(),
-            buffer.as_mut_slice(),
-            8,
-        ).expect("getting remainder");
+        let remainder = decoder
+            .get_batch_with_dict::<&str>(dict.as_slice(), buffer.as_mut_slice(), 8)
+            .expect("getting remainder");
         assert_eq!(remainder, 8);
         assert_eq!(buffer, expected);
     }

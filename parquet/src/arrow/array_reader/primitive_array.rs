@@ -184,7 +184,7 @@ where
                 let a = arrow::compute::cast(&array, &ArrowType::Date32)?;
                 arrow::compute::cast(&a, &target_type)?
             }
-            ArrowType::Decimal(p, s) => {
+            ArrowType::Decimal128(p, s) => {
                 let array = match array.data_type() {
                     ArrowType::Int32 => array
                         .as_any()

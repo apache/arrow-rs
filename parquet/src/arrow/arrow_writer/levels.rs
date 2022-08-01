@@ -88,7 +88,7 @@ fn is_leaf(data_type: &DataType) -> bool {
             | DataType::Interval(_)
             | DataType::Binary
             | DataType::LargeBinary
-            | DataType::Decimal(_, _)
+            | DataType::Decimal128(_, _)
             | DataType::FixedSizeBinary(_)
     )
 }
