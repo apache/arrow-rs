@@ -103,7 +103,9 @@ use crate::compression::{create_codec, Codec};
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::ParquetMetaData;
-use crate::file::serialized_reader::{decode_page, read_page_header};
+use crate::file::serialized_reader::{
+    decode_page, num_values_from_page_header, read_page_header,
+};
 use crate::file::FOOTER_SIZE;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
 
@@ -775,14 +777,20 @@ impl PageReader for InMemoryColumnChunkReader {
     }
 
     fn skip_next_page(&mut self) -> Result<()> {
-        if let Some(buffered_header) = self.next_page_header.take() {
-            // The next page header has already been peeked, so just advance the offset
-            self.offset += buffered_header.compressed_page_size as usize;
-        } else {
-            let mut cursor = Cursor::new(&self.chunk.data.as_ref()[self.offset..]);
-            let page_header = read_page_header(&mut cursor)?;
-            self.offset += cursor.position() as usize;
-            self.offset += page_header.compressed_page_size as usize;
+        if self.seen_num_values < self.chunk.num_values {
+            if let Some(buffered_header) = self.next_page_header.take() {
+                // The next page header has already been peeked, so just advance the offset
+                let num_values = num_values_from_page_header(&buffered_header);
+                self.seen_num_values += num_values;
+                self.offset += buffered_header.compressed_page_size as usize;
+            } else {
+                let mut cursor = Cursor::new(&self.chunk.data.as_ref()[self.offset..]);
+                let page_header = read_page_header(&mut cursor)?;
+                let num_values = num_values_from_page_header(&page_header);
+                self.seen_num_values += num_values;
+                self.offset += cursor.position() as usize;
+                self.offset += page_header.compressed_page_size as usize;
+            }
         }
 
         Ok(())
@@ -989,5 +997,11 @@ mod tests {
 
         assert_eq!(second_page.page_type(), crate::basic::PageType::DATA_PAGE);
         assert_eq!(second_page.num_values(), 8);
+
+        // Skip should noop since there are no more pages
+        reader.skip_next_page().expect("skipping again");
+
+        let page = reader.get_next_page().expect("getting fourth page");
+        assert!(page.is_none());
     }
 }

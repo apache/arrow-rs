@@ -389,6 +389,17 @@ pub(crate) fn read_page_header<T: Read>(input: &mut T) -> Result<PageHeader> {
     Ok(page_header)
 }
 
+/// Get the number of values contained in a page without decoding it
+pub(crate) fn num_values_from_page_header(page_header: &PageHeader) -> i64 {
+    if let Some(header) = page_header.data_page_header_v2.as_ref() {
+        header.num_values as i64
+    } else if let Some(header) = page_header.data_page_header.as_ref() {
+        header.num_values as i64
+    } else {
+        0
+    }
+}
+
 /// Decodes a [`Page`] from the provided `buffer`
 pub(crate) fn decode_page(
     page_header: PageHeader,
