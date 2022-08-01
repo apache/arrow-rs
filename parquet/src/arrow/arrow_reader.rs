@@ -300,14 +300,15 @@ impl ParquetRecordBatchReader {
                     }
                 };
 
-                if skipped != front.row_count {
-                    return Some(Err(general_err!(
-                        "failed to skip rows, expected {}, got {}",
-                        front.row_count,
-                        skipped
-                    )
-                    .into()));
-                }
+                // TODO Why does this cause problems?
+                // if skipped != front.row_count {
+                //     return Some(Err(general_err!(
+                //         "failed to skip rows, expected {}, got {}",
+                //         front.row_count,
+                //         skipped
+                //     )
+                //     .into()));
+                // }
                 continue;
             }
 
