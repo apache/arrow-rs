@@ -1626,10 +1626,10 @@ fn cast_string_to_date64<Offset: OffsetSizeTrait>(
 }
 
 fn seconds_since_midnight(time: &chrono::NaiveTime) -> i32 {
-    let sec = time.num_seconds_from_midnight();
-    let frac = time.nanosecond();
-    let adjust = if frac < 1_000_000_000 { 0 } else { 1 };
-    (sec + adjust) as i32
+    /// The number of nanoseconds per millisecond.
+    const NANOS_PER_SEC: u32 = 1_000_000_000;
+
+    (time.num_seconds_from_midnight() + time.nanosecond() / NANOS_PER_SEC) as i32
 }
 
 fn milliseconds_since_midnight(time: &chrono::NaiveTime) -> i32 {
@@ -1638,14 +1638,8 @@ fn milliseconds_since_midnight(time: &chrono::NaiveTime) -> i32 {
     /// The number of milliseconds per second.
     const MILLIS_PER_SEC: u32 = 1_000;
 
-    let sec = time.num_seconds_from_midnight() * MILLIS_PER_SEC;
-    let frac = time.nanosecond();
-    let (frac, adjust) = if frac < 1_000_000_000 {
-        (frac, 0)
-    } else {
-        (frac - 1_000_000_000, MILLIS_PER_SEC)
-    };
-    (sec + adjust + frac / NANOS_PER_MILLI) as i32
+    (time.num_seconds_from_midnight() * MILLIS_PER_SEC
+        + time.nanosecond() / NANOS_PER_MILLI) as i32
 }
 
 /// Casts generic string arrays to `Time32SecondArray`
@@ -1776,28 +1770,15 @@ fn microseconds_since_midnight(time: &chrono::NaiveTime) -> i64 {
     /// The number of microseconds per second.
     const MICROS_PER_SEC: i64 = 1_000_000;
 
-    let micros = (time.num_seconds_from_midnight() as i64) * MICROS_PER_SEC;
-    let frac = time.nanosecond();
-    let (frac, adjust) = if frac < 1_000_000_000 {
-        (frac as i64, 0)
-    } else {
-        (frac as i64 - 1_000_000_000, MICROS_PER_SEC)
-    };
-    micros + adjust + frac / NANOS_PER_MICRO
+    time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
+        + time.nanosecond() as i64 / NANOS_PER_MICRO
 }
 
 fn nanoseconds_since_midnight(time: &chrono::NaiveTime) -> i64 {
     /// The number of nanoseconds per second.
     const NANOS_PER_SEC: i64 = 1_000_000_000;
 
-    let nanos = (time.num_seconds_from_midnight() as i64) * NANOS_PER_SEC;
-    let frac = time.nanosecond();
-    let (frac, adjust) = if frac < 1_000_000_000 {
-        (frac as i64, 0)
-    } else {
-        (frac as i64 - 1_000_000_000, NANOS_PER_SEC)
-    };
-    nanos + adjust + frac
+    time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC + time.nanosecond() as i64
 }
 
 /// Casts generic string arrays to `Time64MicrosecondArray`
