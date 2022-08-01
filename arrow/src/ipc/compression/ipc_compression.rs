@@ -19,7 +19,6 @@ use crate::ipc::CompressionType;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CompressionCodecType {
-    NoCompression,
     Lz4Frame,
     Zstd,
 }
@@ -29,17 +28,18 @@ impl From<CompressionType> for CompressionCodecType {
         match compression_type {
             CompressionType::ZSTD => CompressionCodecType::Zstd,
             CompressionType::LZ4_FRAME => CompressionCodecType::Lz4Frame,
-            _ => CompressionCodecType::NoCompression,
+            other_type => {
+                unimplemented!("Not support compression type: {:?}", other_type)
+            }
         }
     }
 }
 
-impl From<CompressionCodecType> for Option<CompressionType> {
+impl From<CompressionCodecType> for CompressionType {
     fn from(codec: CompressionCodecType) -> Self {
         match codec {
-            CompressionCodecType::NoCompression => None,
-            CompressionCodecType::Lz4Frame => Some(CompressionType::LZ4_FRAME),
-            CompressionCodecType::Zstd => Some(CompressionType::ZSTD),
+            CompressionCodecType::Lz4Frame => CompressionType::LZ4_FRAME,
+            CompressionCodecType::Zstd => CompressionType::ZSTD,
         }
     }
 }
@@ -54,18 +54,21 @@ mod compression_function {
         pub fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<()> {
             match self {
                 CompressionCodecType::Lz4Frame => {
-                    let mut encoder = lz4::EncoderBuilder::new().build(output).unwrap();
-                    encoder.write_all(input).unwrap();
-                    encoder.finish().1.unwrap();
-                    Ok(())
+                    let mut encoder = lz4::EncoderBuilder::new().build(output)?;
+                    encoder.write_all(input)?;
+                    match encoder.finish().1 {
+                        Ok(_) => Ok(()),
+                        Err(e) => Err(e.into()),
+                    }
                 }
                 CompressionCodecType::Zstd => {
-                    let mut encoder = zstd::Encoder::new(output, 0).unwrap();
-                    encoder.write_all(input).unwrap();
-                    encoder.finish().unwrap();
-                    Ok(())
+                    let mut encoder = zstd::Encoder::new(output, 0)?;
+                    encoder.write_all(input)?;
+                    match encoder.finish() {
+                        Ok(_) => Ok(()),
+                        Err(e) => Err(e.into()),
+                    }
                 }
-                _ => Ok(()),
             }
         }
 
@@ -85,7 +88,6 @@ mod compression_function {
                         Err(e) => Err(e.into()),
                     }
                 }
-                _ => Ok(input.len()),
             };
             result
         }

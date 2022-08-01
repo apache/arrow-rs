@@ -63,7 +63,7 @@ pub struct IpcWriteOptions {
     /// version 2.0.0: V4, with legacy format enabled
     /// version 4.0.0: V5
     metadata_version: ipc::MetadataVersion,
-    batch_compression_type: CompressionCodecType,
+    batch_compression_type: Option<CompressionCodecType>,
 }
 
 impl IpcWriteOptions {
@@ -72,7 +72,7 @@ impl IpcWriteOptions {
         alignment: usize,
         write_legacy_ipc_format: bool,
         metadata_version: ipc::MetadataVersion,
-        batch_compression_type: CompressionCodecType,
+        batch_compression_type: Option<CompressionCodecType>,
     ) -> Result<Self> {
         if alignment == 0 || alignment % 8 != 0 {
             return Err(ArrowError::InvalidArgumentError(
@@ -80,11 +80,11 @@ impl IpcWriteOptions {
             ));
         }
         match batch_compression_type {
-            CompressionCodecType::NoCompression => {}
+            None => {}
             _ => {
-                if metadata_version != ipc::MetadataVersion::V5 {
+                if metadata_version < ipc::MetadataVersion::V5 {
                     return Err(ArrowError::InvalidArgumentError(
-                        "Compress buffer just support from metadata v5".to_string(),
+                        "Compression only supported in metadata v5 and above".to_string(),
                     ));
                 }
             }
@@ -129,7 +129,7 @@ impl IpcWriteOptions {
                 alignment,
                 write_legacy_ipc_format,
                 metadata_version,
-                batch_compression_type: CompressionCodecType::NoCompression,
+                batch_compression_type: None,
             }),
             ipc::MetadataVersion::V5 => {
                 if write_legacy_ipc_format {
@@ -142,7 +142,7 @@ impl IpcWriteOptions {
                         alignment,
                         write_legacy_ipc_format,
                         metadata_version,
-                        batch_compression_type: CompressionCodecType::NoCompression,
+                        batch_compression_type: None,
                     })
                 }
             }
@@ -157,7 +157,7 @@ impl Default for IpcWriteOptions {
             alignment: 8,
             write_legacy_ipc_format: false,
             metadata_version: ipc::MetadataVersion::V5,
-            batch_compression_type: CompressionCodecType::NoCompression,
+            batch_compression_type: None,
         }
     }
 }
@@ -382,7 +382,8 @@ impl IpcDataGenerator {
 
         // get the type of compression
         let compression_codec = write_options.batch_compression_type;
-        let compression_type: Option<CompressionType> = compression_codec.into();
+        let compression_type: Option<CompressionType> =
+            compression_codec.map(|v| v.into());
         let compression = {
             if let Some(codec) = compression_type {
                 let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
@@ -458,7 +459,8 @@ impl IpcDataGenerator {
 
         // get the type of compression
         let compression_codec = write_options.batch_compression_type;
-        let compression_type: Option<CompressionType> = compression_codec.into();
+        let compression_type: Option<CompressionType> =
+            compression_codec.map(|v| v.into());
         let compression = {
             if let Some(codec) = compression_type {
                 let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
@@ -1070,7 +1072,7 @@ fn write_array_data(
     offset: i64,
     num_rows: usize,
     null_count: usize,
-    compression_codec: &CompressionCodecType,
+    compression_codec: &Option<CompressionCodecType>,
     write_options: &IpcWriteOptions,
 ) -> i64 {
     let mut offset = offset;
@@ -1237,33 +1239,35 @@ fn write_buffer(
     buffers: &mut Vec<ipc::Buffer>,
     arrow_data: &mut Vec<u8>,
     offset: i64,
-    compression_codec: &CompressionCodecType,
+    compression_codec: &Option<CompressionCodecType>,
 ) -> i64 {
     let origin_buffer_len = buffer.len();
     let mut _compression_buffer = Vec::<u8>::new();
     let (data, uncompression_buffer_len) = match compression_codec {
-        CompressionCodecType::NoCompression => {
+        None => {
             // this buffer_len will not used in the following logic
             // If we don't use the compression, just write the data in the array
             (buffer, origin_buffer_len as i64)
         }
-        CompressionCodecType::Lz4Frame | CompressionCodecType::Zstd => {
-            if (origin_buffer_len as i64) == LENGTH_EMPTY_COMPRESSED_DATA {
-                (buffer, 0)
-            } else if cfg!(feature = "ipc_compression") || cfg!(test) {
-                #[cfg(any(feature = "ipc_compression", test))]
-                compression_codec
-                    .compress(buffer, &mut _compression_buffer)
-                    .unwrap();
-                let compression_len = _compression_buffer.len();
-                if compression_len > origin_buffer_len {
-                    // the length of compressed data is larger than uncompressed data
-                    // use the uncompressed data with -1
-                    // -1 indicate that we don't compress the data
-                    (buffer, LENGTH_NO_COMPRESSED_DATA)
+        Some(_compressor) => {
+            if cfg!(feature = "ipc_compression") || cfg!(test) {
+                if (origin_buffer_len as i64) == LENGTH_EMPTY_COMPRESSED_DATA {
+                    (buffer, LENGTH_EMPTY_COMPRESSED_DATA)
                 } else {
-                    // use the compressed data with uncompressed length
-                    (_compression_buffer.as_slice(), origin_buffer_len as i64)
+                    #[cfg(any(feature = "ipc_compression", test))]
+                    _compressor
+                        .compress(buffer, &mut _compression_buffer)
+                        .unwrap();
+                    let compression_len = _compression_buffer.len();
+                    if compression_len > origin_buffer_len {
+                        // the length of compressed data is larger than uncompressed data
+                        // use the uncompressed data with -1
+                        // -1 indicate that we don't compress the data
+                        (buffer, LENGTH_NO_COMPRESSED_DATA)
+                    } else {
+                        // use the compressed data with uncompressed length
+                        (_compression_buffer.as_slice(), origin_buffer_len as i64)
+                    }
                 }
             } else {
                 panic!("IPC compression not supported. Compile with feature 'ipc_compression' to enable");
@@ -1271,7 +1275,7 @@ fn write_buffer(
         }
     };
     let len = data.len() as i64;
-    let total_len = if compression_codec == &CompressionCodecType::NoCompression {
+    let total_len = if compression_codec.is_none() {
         buffers.push(ipc::Buffer::new(offset, len));
         len
     } else {
@@ -1312,6 +1316,7 @@ mod tests {
 
     #[test]
     fn test_write_with_empty_record_batch() {
+        let file_name = "arrow_lz4_empty";
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![];
         let array = Int32Array::from(values);
@@ -1320,12 +1325,13 @@ mod tests {
                 .unwrap();
         {
             let file =
-                File::create("target/debug/testdata/arrow_lz4.arrow_file").unwrap();
+                File::create(format!("target/debug/testdata/{}.arrow_file", file_name))
+                    .unwrap();
             let write_option = IpcWriteOptions::try_new_with_compression(
                 8,
                 false,
                 ipc::MetadataVersion::V5,
-                CompressionCodecType::Lz4Frame,
+                Some(CompressionCodecType::Lz4Frame),
             )
             .unwrap();
             let mut writer =
@@ -1336,7 +1342,7 @@ mod tests {
         {
             // read file
             let file =
-                File::open(format!("target/debug/testdata/{}.arrow_file", "arrow_lz4"))
+                File::open(format!("target/debug/testdata/{}.arrow_file", file_name))
                     .unwrap();
             let mut reader = FileReader::try_new(file, None).unwrap();
             loop {
@@ -1377,7 +1383,7 @@ mod tests {
                 8,
                 false,
                 ipc::MetadataVersion::V5,
-                CompressionCodecType::Lz4Frame,
+                Some(CompressionCodecType::Lz4Frame),
             )
             .unwrap();
             let mut writer =
@@ -1430,7 +1436,7 @@ mod tests {
                 8,
                 false,
                 ipc::MetadataVersion::V5,
-                CompressionCodecType::Zstd,
+                Some(CompressionCodecType::Zstd),
             )
             .unwrap();
             let mut writer =
@@ -1851,7 +1857,7 @@ mod tests {
                     8,
                     false,
                     ipc::MetadataVersion::V5,
-                    CompressionCodecType::Lz4Frame,
+                    Some(CompressionCodecType::Lz4Frame),
                 )
                 .unwrap();
                 let mut writer =
@@ -1902,7 +1908,7 @@ mod tests {
                     8,
                     false,
                     ipc::MetadataVersion::V5,
-                    CompressionCodecType::Zstd,
+                    Some(CompressionCodecType::Zstd),
                 )
                 .unwrap();
                 let mut writer =

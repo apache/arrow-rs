@@ -52,7 +52,7 @@ use DataType::*;
 fn read_buffer(
     buf: &ipc::Buffer,
     a_data: &[u8],
-    compression_codec: &CompressionCodecType,
+    compression_codec: &Option<CompressionCodecType>,
 ) -> Buffer {
     let start_offset = buf.offset() as usize;
     let end_offset = start_offset + buf.length() as usize;
@@ -62,9 +62,7 @@ fn read_buffer(
         return Buffer::from(buf_data);
     }
     match compression_codec {
-        CompressionCodecType::Lz4Frame | CompressionCodecType::Zstd
-            if cfg!(feature = "ipc_compression") || cfg!(test) =>
-        {
+        Some(_decompressor) if cfg!(feature = "ipc_compression") || cfg!(test) => {
             // 8byte + data
             // read the first 8 bytes
             // if the data is compressed, decompress the data, otherwise return as is
@@ -79,16 +77,17 @@ fn read_buffer(
                 Buffer::from(data)
             } else {
                 // decompress data using the codec
-                let mut _uncompressed_buffer = Vec::new();
+                let mut _uncompressed_buffer =
+                    Vec::with_capacity(decompressed_length as usize);
                 let _input_data = &buf_data[(LENGTH_OF_PREFIX_DATA as usize)..];
                 #[cfg(any(feature = "ipc_compression", test))]
-                compression_codec
+                _decompressor
                     .decompress(_input_data, &mut _uncompressed_buffer)
                     .unwrap();
                 Buffer::from(_uncompressed_buffer)
             }
         }
-        CompressionCodecType::NoCompression => Buffer::from(buf_data),
+        None => Buffer::from(buf_data),
         _ => {
             panic!("IPC compression not supported. Compile with feature 'ipc_compression' to enable");
         }
@@ -100,6 +99,7 @@ fn read_buffer(
 ///   -1: indicate that the data that follows is not compressed
 ///    0: indicate that there is no data
 ///   positive number: indicate the uncompressed length for the following data
+#[inline]
 fn read_uncompressed_size(buffer: &[u8]) -> i64 {
     let len_buffer = &buffer[0..8];
     // 64-bit little-endian signed integer
@@ -124,7 +124,7 @@ fn create_array(
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     mut node_index: usize,
     mut buffer_index: usize,
-    compression_codec: &CompressionCodecType,
+    compression_codec: &Option<CompressionCodecType>,
     metadata: &ipc::MetadataVersion,
 ) -> Result<(ArrayRef, usize, usize)> {
     use DataType::*;
@@ -676,13 +676,16 @@ pub fn read_record_batch(
     })?;
     let option_compression = batch.compression();
     let compression_codec = match option_compression {
-        None => CompressionCodecType::NoCompression,
+        None => Ok(None),
         Some(compression) => match compression.codec() {
-            CompressionType::ZSTD => CompressionCodecType::Zstd,
-            CompressionType::LZ4_FRAME => CompressionCodecType::Lz4Frame,
-            _ => CompressionCodecType::NoCompression,
+            CompressionType::ZSTD => Ok(Some(CompressionCodecType::Zstd)),
+            CompressionType::LZ4_FRAME => Ok(Some(CompressionCodecType::Lz4Frame)),
+            other_type => Err(ArrowError::InvalidArgumentError(format!(
+                "Not support compression type: {:?}",
+                other_type
+            ))),
         },
-    };
+    }?;
 
     // keep track of buffer and node index, the functions that create arrays mutate these
     let mut buffer_index = 0;
