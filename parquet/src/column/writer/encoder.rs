@@ -91,7 +91,7 @@ pub trait ColumnValueEncoder {
     /// Write the corresponding values to this [`ColumnValueEncoder`]
     fn write(&mut self, values: &Self::Values, offset: usize, len: usize) -> Result<()>;
 
-    /// Write the corresponding values to this [`ColumnValueEncoder`]
+    /// Write the values at the indexes in `indices` to this [`ColumnValueEncoder`]
     fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
 
     /// Returns the number of buffered values
