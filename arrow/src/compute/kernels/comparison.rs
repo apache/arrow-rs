@@ -304,23 +304,18 @@ fn replace_like_wildcards(text: &str) -> Result<String> {
     let mut chars_iter = text.chars().peekable();
     while let Some(c) = chars_iter.next() {
         if c == '\\' {
-            let next = chars_iter.peek().copied();
+            let next = chars_iter.peek();
             match next {
-                Some(next) => {
-                    if is_like_pattern(next) {
-                        result.push(next);
-                        // Skipping the next char as it is already appended
-                        chars_iter.next();
-                    } else {
-                        result.push('\\');
-                        result.push('\\');
-                    }
+                Some(next) if is_like_pattern(*next) => {
+                    result.push(*next);
+                    // Skipping the next char as it is already appended
+                    chars_iter.next();
                 }
-                None => {
+                _ => {
                     result.push('\\');
                     result.push('\\');
-                    return Ok(result);
                 }
+
             }
         } else if regex_syntax::is_meta_character(c) {
             result.push('\\');
