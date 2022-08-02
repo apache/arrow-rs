@@ -134,6 +134,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
 
     fn from_list(v: GenericListArray<OffsetSize>) -> Self {
         assert_eq!(
+            v.data().child_data().len(),
+            1,
+            "BinaryArray can only be created from list array of u8 values \
+             (i.e. List<PrimitiveArray<u8>>)."
+        );
+        assert_eq!(
             v.data_ref().child_data()[0].child_data().len(),
             0,
             "BinaryArray can only be created from list array of u8 values \

@@ -291,6 +291,12 @@ impl From<FixedSizeBinaryArray> for ArrayData {
 impl From<FixedSizeListArray> for FixedSizeBinaryArray {
     fn from(v: FixedSizeListArray) -> Self {
         assert_eq!(
+            v.data().child_data().len(),
+            1,
+            "FixedSizeBinaryArray can only be created from list array of u8 values \
+             (i.e. FixedSizeList<PrimitiveArray<u8>>)."
+        );
+        assert_eq!(
             v.data_ref().child_data()[0].child_data().len(),
             0,
             "FixedSizeBinaryArray can only be created from list array of u8 values \

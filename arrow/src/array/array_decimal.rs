@@ -190,17 +190,24 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
         precision: usize,
         scale: usize,
     ) -> U {
+        assert_eq!(
+            v.data().child_data().len(),
+            1,
+            "DecimalArray can only be created from list array of u8 values \
+             (i.e. FixedSizeList<PrimitiveArray<u8>>)."
+        );
         let child_data = &v.data_ref().child_data()[0];
+
         assert_eq!(
             child_data.child_data().len(),
             0,
-            "Decimal128Array can only be created from list array of u8 values \
+            "DecimalArray can only be created from list array of u8 values \
              (i.e. FixedSizeList<PrimitiveArray<u8>>)."
         );
         assert_eq!(
             child_data.data_type(),
             &DataType::UInt8,
-            "Decimal128Array can only be created from FixedSizeList<u8> arrays, mismatched data types."
+            "DecimalArray can only be created from FixedSizeList<u8> arrays, mismatched data types."
         );
         assert!(
             v.value_length() == Self::VALUE_LENGTH,
