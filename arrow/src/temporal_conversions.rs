@@ -20,13 +20,18 @@
 use chrono::{Duration, NaiveDateTime, NaiveTime};
 
 /// Number of seconds in a day
-const SECONDS_IN_DAY: i64 = 86_400;
+pub(crate) const SECONDS_IN_DAY: i64 = 86_400;
 /// Number of milliseconds in a second
-const MILLISECONDS: i64 = 1_000;
+pub(crate) const MILLISECONDS: i64 = 1_000;
 /// Number of microseconds in a second
-const MICROSECONDS: i64 = 1_000_000;
+pub(crate) const MICROSECONDS: i64 = 1_000_000;
 /// Number of nanoseconds in a second
-const NANOSECONDS: i64 = 1_000_000_000;
+pub(crate) const NANOSECONDS: i64 = 1_000_000_000;
+
+/// Number of milliseconds in a day
+pub(crate) const MILLISECONDS_IN_DAY: i64 = SECONDS_IN_DAY * MILLISECONDS;
+/// Number of days between 0001-01-01 and 1970-01-01
+pub(crate) const EPOCH_DAYS_FROM_CE: i32 = 719_163;
 
 /// converts a `i32` representing a `date32` to [`NaiveDateTime`]
 #[inline]
