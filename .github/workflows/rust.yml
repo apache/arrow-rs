@@ -95,35 +95,37 @@ jobs:
       - name: Run
         run: cargo fmt --all -- --check
 
-  coverage:
-    name: Coverage
-    runs-on: ubuntu-latest
-    # Note runs outside of a container
-    # otherwise we get this error:
-    # Failed to run tests: ASLR disable failed: EPERM: Operation not permitted
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: Setup Rust toolchain
-        run: |
-          rustup toolchain install stable
-          rustup default stable
-      - name: Install protobuf compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
-      - name: Cache Cargo
-        uses: actions/cache@v3
-        with:
-          path: /home/runner/.cargo
-          key: cargo-coverage-cache3-
-      - name: Run coverage
-        run: |
-          rustup toolchain install stable
-          rustup default stable
-          cargo install --version 0.18.2 cargo-tarpaulin
-          cargo tarpaulin --all --out Xml
-      - name: Report coverage
-        continue-on-error: true
-        run: bash <(curl -s https://codecov.io/bash)
+  # Commented out while fixed in https://github.com/apache/arrow-rs/issues/2279
+  #
+  # coverage:
+  #   name: Coverage
+  #   runs-on: ubuntu-latest
+  #   # Note runs outside of a container
+  #   # otherwise we get this error:
+  #   # Failed to run tests: ASLR disable failed: EPERM: Operation not permitted
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #       with:
+  #         submodules: true
+  #     - name: Setup Rust toolchain
+  #       run: |
+  #         rustup toolchain install stable
+  #         rustup default stable
+  #     - name: Install protobuf compiler
+  #       run: |
+  #         sudo apt-get update
+  #         sudo apt-get install -y protobuf-compiler
+  #     - name: Cache Cargo
+  #       uses: actions/cache@v3
+  #       with:
+  #         path: /home/runner/.cargo
+  #         key: cargo-coverage-cache3-
+  #     - name: Run coverage
+  #       run: |
+  #         rustup toolchain install stable
+  #         rustup default stable
+  #         cargo install --version 0.18.2 cargo-tarpaulin
+  #         cargo tarpaulin --all --out Xml
+  #     - name: Report coverage
+  #       continue-on-error: true
+  #       run: bash <(curl -s https://codecov.io/bash)
