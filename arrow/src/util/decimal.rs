@@ -267,9 +267,7 @@ fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
                 // right is positive value
                 Ordering::Less
             }
-            false => {
-                Ordering::Greater
-            }
+            false => Ordering::Greater,
         };
     }
     for i in 0..len {
