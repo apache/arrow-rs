@@ -35,7 +35,7 @@ use crate::datatypes::{
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_util;
-use regex::{escape, Regex};
+use regex::{escape, Regex, RegexBuilder};
 use std::collections::HashMap;
 
 /// Helper function to perform boolean lambda function on values from two array accessors, this
@@ -378,12 +378,15 @@ pub fn ilike_utf8<OffsetSize: OffsetSizeTrait>(
     right: &GenericStringArray<OffsetSize>,
 ) -> Result<BooleanArray> {
     regex_like(left, right, false, |re_pattern| {
-        Regex::new(&format!("(?i)^{}$", re_pattern)).map_err(|e| {
-            ArrowError::ComputeError(format!(
-                "Unable to build regex from ILIKE pattern: {}",
-                e
-            ))
-        })
+        RegexBuilder::new(&format!("(?i)^{}$", re_pattern))
+            .case_insensitive(true)
+            .build()
+            .map_err(|e| {
+                ArrowError::ComputeError(format!(
+                    "Unable to build regex from ILIKE pattern: {}",
+                    e
+                ))
+            })
     })
 }
 
@@ -3831,6 +3834,27 @@ mod tests {
         vec!["arrow", "ar%", "%ro%", "foo", "ar%r", "arrow_", "arrow_"],
         ilike_utf8,
         vec![true, true, true, false, false, true, false]
+    );
+    test_utf8!(
+        test_utf8_array_ilike_tricky_chars,
+        vec!["i", "I", "山"],
+        vec!["I", "i", "山"],
+        ilike_utf8,
+        vec![true, true, true]
+    );
+    test_utf8!(
+        test_utf8_array_ilike_tricky_chars2,
+        vec!["SS", "ß"],
+        vec!["ß", "SS"],
+        ilike_utf8,
+        vec![true, true]
+    );
+    test_utf8!(
+        test_utf8_array_ilike_tricky_chars3,
+        vec!["ı", "İ"],
+        vec!["I", "i"],
+        ilike_utf8,
+        vec![true, true]
     );
     test_utf8_scalar!(
         ilike_utf8_scalar_escape_testing,
