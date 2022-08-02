@@ -119,7 +119,16 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
         unsafe { self.value_unchecked(i) }
     }
 
+    /// Convert a list array to a string array.
+    /// This method is unsound because it does
+    /// not check the utf-8 validation for each element.
     fn from_list(v: GenericListArray<OffsetSize>) -> Self {
+        assert_eq!(
+            v.data().child_data().len(),
+            1,
+            "StringArray can only be created from list array of u8 values \
+             (i.e. List<PrimitiveArray<u8>>)."
+        );
         assert_eq!(
             v.data().child_data()[0].child_data().len(),
             0,
@@ -131,11 +140,20 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
             &DataType::UInt8,
             "StringArray can only be created from List<u8> arrays, mismatched data types."
         );
+        assert_eq!(
+            v.data_ref().child_data()[0].null_count(),
+            0,
+            "The child array cannot contain null values."
+        );
 
         let builder = ArrayData::builder(Self::get_data_type())
             .len(v.len())
+            .offset(v.offset())
             .add_buffer(v.data().buffers()[0].clone())
-            .add_buffer(v.data().child_data()[0].buffers()[0].clone())
+            .add_buffer(
+                v.data().child_data()[0].buffers()[0]
+                    .slice(v.data_ref().child_data()[0].offset()),
+            )
             .null_bit_buffer(v.data().null_buffer().cloned());
 
         let array_data = unsafe { builder.build_unchecked() };
@@ -409,7 +427,10 @@ pub type LargeStringArray = GenericStringArray<i64>;
 #[cfg(test)]
 mod tests {
 
-    use crate::array::{ListBuilder, StringBuilder};
+    use crate::{
+        array::{ListBuilder, StringBuilder},
+        datatypes::Field,
+    };
 
     use super::*;
 
@@ -674,5 +695,134 @@ mod tests {
         let arr =
             LargeStringArray::from_iter_values(BadIterator::new(3, 1, data.clone()));
         assert_eq!(expected, arr);
+    }
+
+    fn _test_generic_string_array_from_list_array<O: OffsetSizeTrait>() {
+        let values = b"HelloArrowAndParquet";
+        // "ArrowAndParquet"
+        let child_data = ArrayData::builder(DataType::UInt8)
+            .len(15)
+            .offset(5)
+            .add_buffer(Buffer::from(&values[..]))
+            .build()
+            .unwrap();
+
+        let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
+        let null_buffer = Buffer::from_slice_ref(&[0b101]);
+        let data_type = if O::IS_LARGE {
+            DataType::LargeList
+        } else {
+            DataType::List
+        }(Box::new(Field::new("item", DataType::UInt8, false)));
+
+        // [None, Some("Parquet")]
+        let array_data = ArrayData::builder(data_type)
+            .len(2)
+            .offset(1)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .null_bit_buffer(Some(null_buffer))
+            .add_child_data(child_data)
+            .build()
+            .unwrap();
+        let list_array = GenericListArray::<O>::from(array_data);
+        let string_array = GenericStringArray::<O>::from(list_array);
+
+        assert_eq!(2, string_array.len());
+        assert_eq!(1, string_array.null_count());
+        assert!(string_array.is_null(0));
+        assert!(string_array.is_valid(1));
+        assert_eq!("Parquet", string_array.value(1));
+    }
+
+    #[test]
+    fn test_string_array_from_list_array() {
+        _test_generic_string_array_from_list_array::<i32>();
+    }
+
+    #[test]
+    fn test_large_string_array_from_list_array() {
+        _test_generic_string_array_from_list_array::<i64>();
+    }
+
+    fn _test_generic_string_array_from_list_array_with_child_nulls_failed<
+        O: OffsetSizeTrait,
+    >() {
+        let values = b"HelloArrow";
+        let child_data = ArrayData::builder(DataType::UInt8)
+            .len(10)
+            .add_buffer(Buffer::from(&values[..]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b1010101010])))
+            .build()
+            .unwrap();
+
+        let offsets = [0, 5, 10].map(|n| O::from_usize(n).unwrap());
+        let data_type = if O::IS_LARGE {
+            DataType::LargeList
+        } else {
+            DataType::List
+        }(Box::new(Field::new("item", DataType::UInt8, false)));
+
+        // [None, Some(b"Parquet")]
+        let array_data = ArrayData::builder(data_type)
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_child_data(child_data)
+            .build()
+            .unwrap();
+        let list_array = GenericListArray::<O>::from(array_data);
+        drop(GenericStringArray::<O>::from(list_array));
+    }
+
+    #[test]
+    #[should_panic(expected = "The child array cannot contain null values.")]
+    fn test_stirng_array_from_list_array_with_child_nulls_failed() {
+        _test_generic_string_array_from_list_array_with_child_nulls_failed::<i32>();
+    }
+
+    #[test]
+    #[should_panic(expected = "The child array cannot contain null values.")]
+    fn test_large_string_array_from_list_array_with_child_nulls_failed() {
+        _test_generic_string_array_from_list_array_with_child_nulls_failed::<i64>();
+    }
+
+    fn _test_generic_string_array_from_list_array_wrong_type<O: OffsetSizeTrait>() {
+        let values = b"HelloArrow";
+        let child_data = ArrayData::builder(DataType::UInt16)
+            .len(5)
+            .add_buffer(Buffer::from(&values[..]))
+            .build()
+            .unwrap();
+
+        let offsets = [0, 2, 3].map(|n| O::from_usize(n).unwrap());
+        let data_type = if O::IS_LARGE {
+            DataType::LargeList
+        } else {
+            DataType::List
+        }(Box::new(Field::new("item", DataType::UInt16, false)));
+
+        let array_data = ArrayData::builder(data_type)
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_child_data(child_data)
+            .build()
+            .unwrap();
+        let list_array = GenericListArray::<O>::from(array_data);
+        drop(GenericStringArray::<O>::from(list_array));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "StringArray can only be created from List<u8> arrays, mismatched data types."
+    )]
+    fn test_string_array_from_list_array_wrong_type() {
+        _test_generic_string_array_from_list_array_wrong_type::<i32>();
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "StringArray can only be created from List<u8> arrays, mismatched data types."
+    )]
+    fn test_large_string_array_from_list_array_wrong_type() {
+        _test_generic_string_array_from_list_array_wrong_type::<i32>();
     }
 }
