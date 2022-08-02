@@ -56,7 +56,7 @@ use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
 ///     .with_precision_and_scale(23, 6)
 ///     .unwrap();
 ///
-///    assert_eq!(&DataType::Decimal(23, 6), decimal_array.data_type());
+///    assert_eq!(&DataType::Decimal128(23, 6), decimal_array.data_type());
 ///    assert_eq!(8_887_000_000_i128, decimal_array.value(0).as_i128());
 ///    assert_eq!("8887.000000", decimal_array.value_as_string(0));
 ///    assert_eq!(3, decimal_array.len());
@@ -170,7 +170,7 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
             Self::VALUE_LENGTH,
         );
         let data_type = if Self::VALUE_LENGTH == 16 {
-            DataType::Decimal(precision, scale)
+            DataType::Decimal128(precision, scale)
         } else {
             DataType::Decimal256(precision, scale)
         };
@@ -206,7 +206,7 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
         let list_offset = v.offset();
         let child_offset = child_data.offset();
         let data_type = if Self::VALUE_LENGTH == 16 {
-            DataType::Decimal(precision, scale)
+            DataType::Decimal128(precision, scale)
         } else {
             DataType::Decimal256(precision, scale)
         };
@@ -314,11 +314,11 @@ impl Decimal128Array {
 
         assert_eq!(
             self.data.data_type(),
-            &DataType::Decimal(self.precision, self.scale)
+            &DataType::Decimal128(self.precision, self.scale)
         );
 
         // safety: self.data is valid DataType::Decimal as checked above
-        let new_data_type = DataType::Decimal(precision, scale);
+        let new_data_type = DataType::Decimal128(precision, scale);
         self.precision = precision;
         self.scale = scale;
         self.data = self.data.with_data_type(new_data_type);
@@ -328,7 +328,7 @@ impl Decimal128Array {
     /// The default precision and scale used when not specified.
     pub fn default_type() -> DataType {
         // Keep maximum precision
-        DataType::Decimal(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE)
+        DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE)
     }
 }
 
@@ -341,7 +341,7 @@ impl From<ArrayData> for Decimal128Array {
         );
         let values = data.buffers()[0].as_ptr();
         let (precision, scale) = match data.data_type() {
-            DataType::Decimal(precision, scale) => (*precision, *scale),
+            DataType::Decimal128(precision, scale) => (*precision, *scale),
             _ => panic!("Expected data type to be Decimal"),
         };
         Self {
@@ -523,7 +523,7 @@ mod tests {
             192, 219, 180, 17, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 36, 75, 238, 253,
             255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
         ];
-        let array_data = ArrayData::builder(DataType::Decimal(38, 6))
+        let array_data = ArrayData::builder(DataType::Decimal128(38, 6))
             .len(2)
             .add_buffer(Buffer::from(&values[..]))
             .build()
@@ -541,7 +541,7 @@ mod tests {
         let mut result = decimal_builder.append_value(123456);
         let mut error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: 123456 is too large to store in a Decimal of precision 5. Max is 99999",
+            "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
             error.to_string()
         );
 
@@ -558,7 +558,7 @@ mod tests {
         result = decimal_builder.append_value(100);
         error = result.unwrap_err();
         assert_eq!(
-            "Invalid argument error: 100 is too large to store in a Decimal of precision 2. Max is 99",
+            "Invalid argument error: 100 is too large to store in a Decimal128 of precision 2. Max is 99",
             error.to_string()
         );
 
@@ -580,7 +580,7 @@ mod tests {
     fn test_decimal_from_iter_values() {
         let array = Decimal128Array::from_iter_values(vec![-100, 0, 101].into_iter());
         assert_eq!(array.len(), 3);
-        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
+        assert_eq!(array.data_type(), &DataType::Decimal128(38, 10));
         assert_eq!(-100_i128, array.value(0).into());
         assert!(!array.is_null(0));
         assert_eq!(0_i128, array.value(1).into());
@@ -594,7 +594,7 @@ mod tests {
         let array: Decimal128Array =
             vec![Some(-100), None, Some(101)].into_iter().collect();
         assert_eq!(array.len(), 3);
-        assert_eq!(array.data_type(), &DataType::Decimal(38, 10));
+        assert_eq!(array.data_type(), &DataType::Decimal128(38, 10));
         assert_eq!(-100_i128, array.value(0).into());
         assert!(!array.is_null(0));
         assert!(array.is_null(1));
@@ -665,7 +665,7 @@ mod tests {
             .with_precision_and_scale(20, 2)
             .unwrap();
 
-        assert_eq!(arr.data_type(), &DataType::Decimal(20, 2));
+        assert_eq!(arr.data_type(), &DataType::Decimal128(20, 2));
         assert_eq!(arr.precision(), 20);
         assert_eq!(arr.scale(), 2);
 
@@ -677,7 +677,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "-123223423432432 is too small to store in a Decimal of precision 5. Min is -99999"
+        expected = "-123223423432432 is too small to store in a Decimal128 of precision 5. Min is -99999"
     )]
     fn test_decimal_array_with_precision_and_scale_out_of_range() {
         Decimal128Array::from_iter_values([12345, 456, 7890, -123223423432432])

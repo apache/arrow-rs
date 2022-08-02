@@ -72,11 +72,11 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     match (from_type, to_type) {
         // TODO UTF8/unsigned numeric to decimal
         // cast one decimal type to another decimal type
-        (Decimal(_, _), Decimal(_, _)) => true,
+        (Decimal128(_, _), Decimal128(_, _)) => true,
         // signed numeric to decimal
-        (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal(_, _)) |
+        (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal128(_, _)) |
         // decimal to signed numeric
-        (Decimal(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
+        (Decimal128(_, _), Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64)
         | (
             Null,
             Boolean
@@ -109,8 +109,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | Map(_, _)
             | Dictionary(_, _)
         ) => true,
-        (Decimal(_, _), _) => false,
-        (_, Decimal(_, _)) => false,
+        (Decimal128(_, _), _) => false,
+        (_, Decimal128(_, _)) => false,
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
         (LargeList(list_from), LargeList(list_to)) => {
@@ -410,8 +410,10 @@ pub fn cast_with_options(
         return Ok(array.clone());
     }
     match (from_type, to_type) {
-        (Decimal(_, s1), Decimal(p2, s2)) => cast_decimal_to_decimal(array, s1, p2, s2),
-        (Decimal(_, scale), _) => {
+        (Decimal128(_, s1), Decimal128(p2, s2)) => {
+            cast_decimal_to_decimal(array, s1, p2, s2)
+        }
+        (Decimal128(_, scale), _) => {
             // cast decimal to other type
             match to_type {
                 Int8 => {
@@ -439,7 +441,7 @@ pub fn cast_with_options(
                 ))),
             }
         }
-        (_, Decimal(precision, scale)) => {
+        (_, Decimal128(precision, scale)) => {
             // cast data to decimal
             match from_type {
                 // TODO now just support signed numeric to decimal, support decimal to numeric later
@@ -2205,8 +2207,8 @@ mod tests {
 
     #[test]
     fn test_cast_decimal_to_decimal() {
-        let input_type = DataType::Decimal(20, 3);
-        let output_type = DataType::Decimal(20, 4);
+        let input_type = DataType::Decimal128(20, 3);
+        let output_type = DataType::Decimal128(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
         let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
         let input_decimal_array = create_decimal_array(&array, 20, 3).unwrap();
@@ -2226,15 +2228,15 @@ mod tests {
         let array = vec![Some(123456), None];
         let input_decimal_array = create_decimal_array(&array, 10, 0).unwrap();
         let array = Arc::new(input_decimal_array) as ArrayRef;
-        let result = cast(&array, &DataType::Decimal(2, 2));
+        let result = cast(&array, &DataType::Decimal128(2, 2));
         assert!(result.is_err());
-        assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal of precision 2. Max is 99",
+        assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal128 of precision 2. Max is 99",
                    result.unwrap_err().to_string());
     }
 
     #[test]
     fn test_cast_decimal_to_numeric() {
-        let decimal_type = DataType::Decimal(38, 2);
+        let decimal_type = DataType::Decimal128(38, 2);
         // negative test
         assert!(!can_cast_types(&decimal_type, &DataType::UInt8));
         let value_array: Vec<Option<i128>> =
@@ -2355,7 +2357,7 @@ mod tests {
     #[test]
     fn test_cast_numeric_to_decimal() {
         // test negative cast type
-        let decimal_type = DataType::Decimal(38, 6);
+        let decimal_type = DataType::Decimal128(38, 6);
         assert!(!can_cast_types(&DataType::UInt64, &decimal_type));
 
         // i8, i16, i32, i64
@@ -2408,9 +2410,9 @@ mod tests {
         // the 100 will be converted to 1000_i128, but it is out of range for max value in the precision 3.
         let array = Int8Array::from(vec![1, 2, 3, 4, 100]);
         let array = Arc::new(array) as ArrayRef;
-        let casted_array = cast(&array, &DataType::Decimal(3, 1));
+        let casted_array = cast(&array, &DataType::Decimal128(3, 1));
         assert!(casted_array.is_err());
-        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal of precision 3. Max is 999", casted_array.unwrap_err().to_string());
+        assert_eq!("Invalid argument error: 1000 is too large to store in a Decimal128 of precision 3. Max is 999", casted_array.unwrap_err().to_string());
 
         // test f32 to decimal type
         let array = Float32Array::from(vec![
@@ -4282,7 +4284,7 @@ mod tests {
 
     #[test]
     fn test_cast_null_array_to_from_decimal_array() {
-        let data_type = DataType::Decimal(12, 4);
+        let data_type = DataType::Decimal128(12, 4);
         let array = new_null_array(&DataType::Null, 4);
         assert_eq!(array.data_type(), &DataType::Null);
         let cast_array = cast(&array, &data_type).expect("cast failed");
@@ -4804,7 +4806,7 @@ mod tests {
             Dictionary(Box::new(DataType::Int8), Box::new(DataType::Int32)),
             Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
             Dictionary(Box::new(DataType::UInt32), Box::new(DataType::Utf8)),
-            Decimal(38, 0),
+            Decimal128(38, 0),
         ]
     }
 
