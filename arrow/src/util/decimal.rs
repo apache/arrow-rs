@@ -257,6 +257,7 @@ fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
     );
     assert_ne!(left.len(), 0, "Can't compare bytes array of length 0");
     let len = left.len();
+    // the sign bit is 1, the value is negative
     let left_negative = left[len - 1] >= 0x80_u8;
     let right_negative = right[len - 1] >= 0x80_u8;
     if left_negative != right_negative {
@@ -267,7 +268,6 @@ fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
                 Ordering::Less
             }
             false => {
-                //
                 Ordering::Greater
             }
         };
