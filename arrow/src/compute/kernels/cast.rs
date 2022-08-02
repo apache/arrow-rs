@@ -35,6 +35,7 @@
 //! assert_eq!(7.0, c.value(2));
 //! ```
 
+use chrono::Timelike;
 use std::str;
 use std::sync::Arc;
 
@@ -136,9 +137,25 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
 
         (Utf8, LargeUtf8) => true,
         (LargeUtf8, Utf8) => true,
-        (Utf8, Date32 | Date64 | Timestamp(TimeUnit::Nanosecond, None)) => true,
+        (Utf8,
+            Date32
+            | Date64
+            | Time32(TimeUnit::Second)
+            | Time32(TimeUnit::Millisecond)
+            | Time64(TimeUnit::Microsecond)
+            | Time64(TimeUnit::Nanosecond)
+            | Timestamp(TimeUnit::Nanosecond, None)
+        ) => true,
         (Utf8, _) => DataType::is_numeric(to_type),
-        (LargeUtf8, Date32 | Date64 | Timestamp(TimeUnit::Nanosecond, None)) => true,
+        (LargeUtf8,
+            Date32
+            | Date64
+            | Time32(TimeUnit::Second)
+            | Time32(TimeUnit::Millisecond)
+            | Time64(TimeUnit::Microsecond)
+            | Time64(TimeUnit::Nanosecond)
+            | Timestamp(TimeUnit::Nanosecond, None)
+        ) => true,
         (LargeUtf8, _) => DataType::is_numeric(to_type),
         (Timestamp(_, _), Utf8) | (Timestamp(_, _), LargeUtf8) => true,
         (Date32, Utf8) | (Date32, LargeUtf8) => true,
@@ -659,6 +676,18 @@ pub fn cast_with_options(
             Float64 => cast_string_to_numeric::<Float64Type, i32>(array, cast_options),
             Date32 => cast_string_to_date32::<i32>(&**array, cast_options),
             Date64 => cast_string_to_date64::<i32>(&**array, cast_options),
+            Time32(TimeUnit::Second) => {
+                cast_string_to_time32second::<i32>(&**array, cast_options)
+            }
+            Time32(TimeUnit::Millisecond) => {
+                cast_string_to_time32millisecond::<i32>(&**array, cast_options)
+            }
+            Time64(TimeUnit::Microsecond) => {
+                cast_string_to_time64microsecond::<i32>(&**array, cast_options)
+            }
+            Time64(TimeUnit::Nanosecond) => {
+                cast_string_to_time64nanosecond::<i32>(&**array, cast_options)
+            }
             Timestamp(TimeUnit::Nanosecond, None) => {
                 cast_string_to_timestamp_ns::<i32>(&**array, cast_options)
             }
@@ -793,6 +822,18 @@ pub fn cast_with_options(
             Float64 => cast_string_to_numeric::<Float64Type, i64>(array, cast_options),
             Date32 => cast_string_to_date32::<i64>(&**array, cast_options),
             Date64 => cast_string_to_date64::<i64>(&**array, cast_options),
+            Time32(TimeUnit::Second) => {
+                cast_string_to_time32second::<i64>(&**array, cast_options)
+            }
+            Time32(TimeUnit::Millisecond) => {
+                cast_string_to_time32millisecond::<i64>(&**array, cast_options)
+            }
+            Time64(TimeUnit::Microsecond) => {
+                cast_string_to_time64microsecond::<i64>(&**array, cast_options)
+            }
+            Time64(TimeUnit::Nanosecond) => {
+                cast_string_to_time64nanosecond::<i64>(&**array, cast_options)
+            }
             Timestamp(TimeUnit::Nanosecond, None) => {
                 cast_string_to_timestamp_ns::<i64>(&**array, cast_options)
             }
@@ -1584,6 +1625,282 @@ fn cast_string_to_date64<Offset: OffsetSizeTrait>(
     Ok(Arc::new(array) as ArrayRef)
 }
 
+/// Casts generic string arrays to `Time32SecondArray`
+fn cast_string_to_time32second<Offset: OffsetSizeTrait>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    /// The number of nanoseconds per millisecond.
+    const NANOS_PER_SEC: u32 = 1_000_000_000;
+
+    let string_array = array
+        .as_any()
+        .downcast_ref::<GenericStringArray<Offset>>()
+        .unwrap();
+
+    let array = if cast_options.safe {
+        let iter = (0..string_array.len()).map(|i| {
+            if string_array.is_null(i) {
+                None
+            } else {
+                string_array
+                    .value(i)
+                    .parse::<chrono::NaiveTime>()
+                    .map(|time| {
+                        (time.num_seconds_from_midnight()
+                            + time.nanosecond() / NANOS_PER_SEC)
+                            as i32
+                    })
+                    .ok()
+            }
+        });
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { Time32SecondArray::from_trusted_len_iter(iter) }
+    } else {
+        let vec = (0..string_array.len())
+            .map(|i| {
+                if string_array.is_null(i) {
+                    Ok(None)
+                } else {
+                    let string = string_array
+                        .value(i);
+                    chrono::Duration::days(3);
+                    let result = string
+                        .parse::<chrono::NaiveTime>()
+                        .map(|time| (time.num_seconds_from_midnight() + time.nanosecond() / NANOS_PER_SEC) as i32);
+
+                    Some(result.map_err(|_| {
+                        ArrowError::CastError(
+                            format!("Cannot cast string '{}' to value of arrow::datatypes::types::Time32SecondType type", string),
+                        )
+                    }))
+                        .transpose()
+                }
+            })
+            .collect::<Result<Vec<Option<i32>>>>()?;
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { Time32SecondArray::from_trusted_len_iter(vec.iter()) }
+    };
+
+    Ok(Arc::new(array) as ArrayRef)
+}
+
+/// Casts generic string arrays to `Time32MillisecondArray`
+fn cast_string_to_time32millisecond<Offset: OffsetSizeTrait>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    /// The number of nanoseconds per millisecond.
+    const NANOS_PER_MILLI: u32 = 1_000_000;
+    /// The number of milliseconds per second.
+    const MILLIS_PER_SEC: u32 = 1_000;
+
+    let string_array = array
+        .as_any()
+        .downcast_ref::<GenericStringArray<Offset>>()
+        .unwrap();
+
+    let array = if cast_options.safe {
+        let iter = (0..string_array.len()).map(|i| {
+            if string_array.is_null(i) {
+                None
+            } else {
+                string_array
+                    .value(i)
+                    .parse::<chrono::NaiveTime>()
+                    .map(|time| {
+                        (time.num_seconds_from_midnight() * MILLIS_PER_SEC
+                            + time.nanosecond() / NANOS_PER_MILLI)
+                            as i32
+                    })
+                    .ok()
+            }
+        });
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { Time32MillisecondArray::from_trusted_len_iter(iter) }
+    } else {
+        let vec = (0..string_array.len())
+            .map(|i| {
+                if string_array.is_null(i) {
+                    Ok(None)
+                } else {
+                    let string = string_array
+                        .value(i);
+
+                    let result = string
+                        .parse::<chrono::NaiveTime>()
+                        .map(|time| (time.num_seconds_from_midnight() * MILLIS_PER_SEC
+                            + time.nanosecond() / NANOS_PER_MILLI) as i32);
+
+                    Some(result.map_err(|_| {
+                        ArrowError::CastError(
+                            format!("Cannot cast string '{}' to value of arrow::datatypes::types::Time32MillisecondType type", string),
+                        )
+                    }))
+                        .transpose()
+                }
+            })
+            .collect::<Result<Vec<Option<i32>>>>()?;
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { Time32MillisecondArray::from_trusted_len_iter(vec.iter()) }
+    };
+
+    Ok(Arc::new(array) as ArrayRef)
+}
+
+/// Casts generic string arrays to `Time64MicrosecondArray`
+fn cast_string_to_time64microsecond<Offset: OffsetSizeTrait>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    /// The number of nanoseconds per microsecond.
+    const NANOS_PER_MICRO: i64 = 1_000;
+    /// The number of microseconds per second.
+    const MICROS_PER_SEC: i64 = 1_000_000;
+
+    let string_array = array
+        .as_any()
+        .downcast_ref::<GenericStringArray<Offset>>()
+        .unwrap();
+
+    let array = if cast_options.safe {
+        let iter = (0..string_array.len()).map(|i| {
+            if string_array.is_null(i) {
+                None
+            } else {
+                string_array
+                    .value(i)
+                    .parse::<chrono::NaiveTime>()
+                    .map(|time| {
+                        time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
+                            + time.nanosecond() as i64 / NANOS_PER_MICRO
+                    })
+                    .ok()
+            }
+        });
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { Time64MicrosecondArray::from_trusted_len_iter(iter) }
+    } else {
+        let vec = (0..string_array.len())
+            .map(|i| {
+                if string_array.is_null(i) {
+                    Ok(None)
+                } else {
+                    let string = string_array
+                        .value(i);
+
+                    let result = string
+                        .parse::<chrono::NaiveTime>()
+                        .map(|time| time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
+                            + time.nanosecond() as i64 / NANOS_PER_MICRO);
+
+                    Some(result.map_err(|_| {
+                        ArrowError::CastError(
+                            format!("Cannot cast string '{}' to value of arrow::datatypes::types::Time64MicrosecondType type", string),
+                        )
+                    }))
+                        .transpose()
+                }
+            })
+            .collect::<Result<Vec<Option<i64>>>>()?;
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { Time64MicrosecondArray::from_trusted_len_iter(vec.iter()) }
+    };
+
+    Ok(Arc::new(array) as ArrayRef)
+}
+
+/// Casts generic string arrays to `Time64NanosecondArray`
+fn cast_string_to_time64nanosecond<Offset: OffsetSizeTrait>(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    /// The number of nanoseconds per second.
+    const NANOS_PER_SEC: i64 = 1_000_000_000;
+
+    let string_array = array
+        .as_any()
+        .downcast_ref::<GenericStringArray<Offset>>()
+        .unwrap();
+
+    let array = if cast_options.safe {
+        let iter = (0..string_array.len()).map(|i| {
+            if string_array.is_null(i) {
+                None
+            } else {
+                string_array
+                    .value(i)
+                    .parse::<chrono::NaiveTime>()
+                    .map(|time| {
+                        time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC
+                            + time.nanosecond() as i64
+                    })
+                    .ok()
+            }
+        });
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { Time64NanosecondArray::from_trusted_len_iter(iter) }
+    } else {
+        let vec = (0..string_array.len())
+            .map(|i| {
+                if string_array.is_null(i) {
+                    Ok(None)
+                } else {
+                    let string = string_array
+                        .value(i);
+
+                    let result = string
+                        .parse::<chrono::NaiveTime>()
+                        .map(|time| time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC + time.nanosecond() as i64);
+
+                    Some(result.map_err(|_| {
+                        ArrowError::CastError(
+                            format!("Cannot cast string '{}' to value of arrow::datatypes::types::Time64NanosecondType type", string),
+                        )
+                    }))
+                        .transpose()
+                }
+            })
+            .collect::<Result<Vec<Option<i64>>>>()?;
+
+        // Benefit:
+        //     20% performance improvement
+        // Soundness:
+        //     The iterator is trustedLen because it comes from an `StringArray`.
+        unsafe { Time64NanosecondArray::from_trusted_len_iter(vec.iter()) }
+    };
+
+    Ok(Arc::new(array) as ArrayRef)
+}
+
 /// Casts generic string arrays to TimeStampNanosecondArray
 fn cast_string_to_timestamp_ns<Offset: OffsetSizeTrait>(
     array: &dyn Array,
@@ -2166,6 +2483,7 @@ where
 mod tests {
     use super::*;
     use crate::array::BasicDecimalArray;
+    use crate::datatypes::TimeUnit;
     use crate::util::decimal::Decimal128;
     use crate::{buffer::Buffer, util::display::array_value_to_string};
 
@@ -2849,6 +3167,102 @@ mod tests {
             let b = cast(array, &DataType::Date32).unwrap();
             let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
             assert_eq!(17890, c.value(0));
+            assert!(c.is_null(1));
+            assert!(c.is_null(2));
+        }
+    }
+
+    #[test]
+    fn test_cast_string_to_time32second() {
+        let a1 = Arc::new(StringArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("08:08:60.091323414"), // leap second
+            Some("08:08:61.091323414"), // not valid
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("08:08:60.091323414"), // leap second
+            Some("08:08:61.091323414"), // not valid
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
+        for array in &[a1, a2] {
+            let b = cast(array, &DataType::Time32(TimeUnit::Second)).unwrap();
+            let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
+            assert_eq!(29315, c.value(0));
+            assert_eq!(29340, c.value(1));
+            assert!(c.is_null(2));
+            assert!(c.is_null(3));
+            assert!(c.is_null(4));
+        }
+    }
+
+    #[test]
+    fn test_cast_string_to_time32millisecond() {
+        let a1 = Arc::new(StringArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("08:08:60.091323414"), // leap second
+            Some("08:08:61.091323414"), // not valid
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("08:08:60.091323414"), // leap second
+            Some("08:08:61.091323414"), // not valid
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
+        for array in &[a1, a2] {
+            let b = cast(array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
+            let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
+            assert_eq!(29315091, c.value(0));
+            assert_eq!(29340091, c.value(1));
+            assert!(c.is_null(2));
+            assert!(c.is_null(3));
+            assert!(c.is_null(4));
+        }
+    }
+
+    #[test]
+    fn test_cast_string_to_time64microsecond() {
+        let a1 = Arc::new(StringArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
+        for array in &[a1, a2] {
+            let b = cast(array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+            let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
+            assert_eq!(29315091323, c.value(0));
+            assert!(c.is_null(1));
+            assert!(c.is_null(2));
+        }
+    }
+
+    #[test]
+    fn test_cast_string_to_time64nanosecond() {
+        let a1 = Arc::new(StringArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
+        let a2 = Arc::new(LargeStringArray::from(vec![
+            Some("08:08:35.091323414"),
+            Some("Not a valid time"),
+            None,
+        ])) as ArrayRef;
+        for array in &[a1, a2] {
+            let b = cast(array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
+            let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
+            assert_eq!(29315091323414, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
         }
