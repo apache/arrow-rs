@@ -43,6 +43,9 @@ where
     column_desc: ColumnDescPtr,
     column_reader: Option<ColumnReaderImpl<T>>,
     converter: C,
+    need_consume_def_levels_buffer: Option<Vec<i16>>,
+    need_consume_rep_levels_buffer: Option<Vec<i16>>,
+    before_consume: bool,
     _parquet_type_marker: PhantomData<T>,
     _converter_marker: PhantomData<C>,
 }
@@ -61,6 +64,9 @@ where
     }
 
     fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        if !self.before_consume {
+            self.before_consume = true;
+        }
         // Try to initialize column reader
         if self.column_reader.is_none() {
             self.next_column_reader()?;
@@ -136,18 +142,18 @@ where
             .for_each(|buf| buf.truncate(num_read));
 
         if let Some(mut def_levels_buffer) = def_levels_buffer {
-            match &mut self.def_levels_buffer {
+            match &mut self.need_consume_def_levels_buffer {
                 None => {
-                    self.def_levels_buffer = Some(def_levels_buffer);
+                    self.need_consume_def_levels_buffer = Some(def_levels_buffer);
                 }
                 Some(buf) => buf.append(&mut def_levels_buffer),
             }
         }
 
         if let Some(mut rep_levels_buffer) = rep_levels_buffer {
-            match &mut self.rep_levels_buffer {
+            match &mut self.need_consume_rep_levels_buffer {
                 None => {
-                    self.rep_levels_buffer = Some(rep_levels_buffer);
+                    self.need_consume_rep_levels_buffer = Some(rep_levels_buffer);
                 }
                 Some(buf) => buf.append(&mut rep_levels_buffer),
             }
@@ -159,11 +165,11 @@ where
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
-        let data: Vec<Option<T::T>> = if self.def_levels_buffer.is_some() {
+        let data: Vec<Option<T::T>> = if self.need_consume_def_levels_buffer.is_some() {
             let data_buffer = std::mem::take(&mut self.data_buffer);
             data_buffer
                 .into_iter()
-                .zip(self.def_levels_buffer.as_ref().unwrap().iter())
+                .zip(self.need_consume_def_levels_buffer.as_ref().unwrap().iter())
                 .map(|(t, def_level)| {
                     if *def_level == self.column_desc.max_def_level() {
                         Some(t)
@@ -183,8 +189,9 @@ where
         }
 
         self.data_buffer = vec![];
-        self.def_levels_buffer = None;
-        self.rep_levels_buffer = None;
+        self.def_levels_buffer = std::mem::take(&mut self.need_consume_def_levels_buffer);
+        self.rep_levels_buffer = std::mem::take(&mut self.need_consume_rep_levels_buffer);
+        self.before_consume = false;
 
         Ok(array)
     }
@@ -206,11 +213,19 @@ where
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_levels_buffer.as_deref()
+        if self.before_consume {
+            self.need_consume_def_levels_buffer.as_deref()
+        } else {
+            self.def_levels_buffer.as_deref()
+        }
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_levels_buffer.as_deref()
+        if self.before_consume {
+            self.need_consume_rep_levels_buffer.as_deref()
+        } else {
+            self.rep_levels_buffer.as_deref()
+        }
     }
 }
 
@@ -241,6 +256,9 @@ where
             column_desc,
             column_reader: None,
             converter,
+            need_consume_def_levels_buffer: None,
+            need_consume_rep_levels_buffer: None,
+            before_consume: true,
             _parquet_type_marker: PhantomData,
             _converter_marker: PhantomData,
         })
