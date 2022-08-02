@@ -255,7 +255,7 @@ fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
         left.len(),
         right.len()
     );
-    assert_ne!(left.len(), 0, "Can't compare bytes array with zero len");
+    assert_ne!(left.len(), 0, "Can't compare bytes array of length 0");
     let len = left.len();
     let left_negative = left[len - 1] >= 0x80_u8;
     let right_negative = right[len - 1] >= 0x80_u8;
