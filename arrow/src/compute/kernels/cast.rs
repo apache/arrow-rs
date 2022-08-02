@@ -3139,8 +3139,8 @@ mod tests {
             None,
         ])) as ArrayRef;
         for array in &[a1, a2] {
-            let b =
-                cast(array, &DataType::Timestamp(TimeUnit::Nanosecond, None)).unwrap();
+            let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
+            let b = cast(array, &to_type).unwrap();
             let c = b
                 .as_any()
                 .downcast_ref::<TimestampNanosecondArray>()
@@ -3148,6 +3148,13 @@ mod tests {
             assert_eq!(1599566400000000000, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
+
+            let options = CastOptions { safe: false };
+            let err = cast_with_options(array, &to_type, &options).unwrap_err();
+            assert_eq!(
+                err.to_string(),
+                "Cast error: Error parsing 'Not a valid date' as timestamp"
+            );
         }
     }
 
@@ -3164,11 +3171,16 @@ mod tests {
             None,
         ])) as ArrayRef;
         for array in &[a1, a2] {
-            let b = cast(array, &DataType::Date32).unwrap();
+            let to_type = DataType::Date32;
+            let b = cast(array, &to_type).unwrap();
             let c = b.as_any().downcast_ref::<Date32Array>().unwrap();
             assert_eq!(17890, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
+
+            let options = CastOptions { safe: false };
+            let err = cast_with_options(array, &to_type, &options).unwrap_err();
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid date' to value of arrow::datatypes::types::Date32Type type");
         }
     }
 
@@ -3189,13 +3201,18 @@ mod tests {
             None,
         ])) as ArrayRef;
         for array in &[a1, a2] {
-            let b = cast(array, &DataType::Time32(TimeUnit::Second)).unwrap();
+            let to_type = DataType::Time32(TimeUnit::Second);
+            let b = cast(array, &to_type).unwrap();
             let c = b.as_any().downcast_ref::<Time32SecondArray>().unwrap();
             assert_eq!(29315, c.value(0));
             assert_eq!(29340, c.value(1));
             assert!(c.is_null(2));
             assert!(c.is_null(3));
             assert!(c.is_null(4));
+
+            let options = CastOptions { safe: false };
+            let err = cast_with_options(array, &to_type, &options).unwrap_err();
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of arrow::datatypes::types::Time32SecondType type");
         }
     }
 
@@ -3216,13 +3233,18 @@ mod tests {
             None,
         ])) as ArrayRef;
         for array in &[a1, a2] {
-            let b = cast(array, &DataType::Time32(TimeUnit::Millisecond)).unwrap();
+            let to_type = DataType::Time32(TimeUnit::Millisecond);
+            let b = cast(array, &to_type).unwrap();
             let c = b.as_any().downcast_ref::<Time32MillisecondArray>().unwrap();
             assert_eq!(29315091, c.value(0));
             assert_eq!(29340091, c.value(1));
             assert!(c.is_null(2));
             assert!(c.is_null(3));
             assert!(c.is_null(4));
+
+            let options = CastOptions { safe: false };
+            let err = cast_with_options(array, &to_type, &options).unwrap_err();
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of arrow::datatypes::types::Time32MillisecondType type");
         }
     }
 
@@ -3239,11 +3261,16 @@ mod tests {
             None,
         ])) as ArrayRef;
         for array in &[a1, a2] {
-            let b = cast(array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+            let to_type = DataType::Time64(TimeUnit::Microsecond);
+            let b = cast(array, &to_type).unwrap();
             let c = b.as_any().downcast_ref::<Time64MicrosecondArray>().unwrap();
             assert_eq!(29315091323, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
+
+            let options = CastOptions { safe: false };
+            let err = cast_with_options(array, &to_type, &options).unwrap_err();
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of arrow::datatypes::types::Time64MicrosecondType type");
         }
     }
 
@@ -3260,11 +3287,16 @@ mod tests {
             None,
         ])) as ArrayRef;
         for array in &[a1, a2] {
-            let b = cast(array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
+            let to_type = DataType::Time64(TimeUnit::Nanosecond);
+            let b = cast(array, &to_type).unwrap();
             let c = b.as_any().downcast_ref::<Time64NanosecondArray>().unwrap();
             assert_eq!(29315091323414, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
+
+            let options = CastOptions { safe: false };
+            let err = cast_with_options(array, &to_type, &options).unwrap_err();
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of arrow::datatypes::types::Time64NanosecondType type");
         }
     }
 
@@ -3281,11 +3313,16 @@ mod tests {
             None,
         ])) as ArrayRef;
         for array in &[a1, a2] {
-            let b = cast(array, &DataType::Date64).unwrap();
+            let to_type = DataType::Date64;
+            let b = cast(array, &to_type).unwrap();
             let c = b.as_any().downcast_ref::<Date64Array>().unwrap();
             assert_eq!(1599566400000, c.value(0));
             assert!(c.is_null(1));
             assert!(c.is_null(2));
+
+            let options = CastOptions { safe: false };
+            let err = cast_with_options(array, &to_type, &options).unwrap_err();
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid date' to value of arrow::datatypes::types::Date64Type type");
         }
     }
 
