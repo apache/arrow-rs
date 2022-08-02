@@ -630,7 +630,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             Encoding::RLE,
                             &self.rep_levels_sink[..],
                             max_rep_level,
-                        )?[..],
+                        )[..],
                     );
                 }
 
@@ -640,7 +640,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             Encoding::RLE,
                             &self.def_levels_sink[..],
                             max_def_level,
-                        )?[..],
+                        )[..],
                     );
                 }
 
@@ -671,14 +671,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
                 if max_rep_level > 0 {
                     let levels =
-                        self.encode_levels_v2(&self.rep_levels_sink[..], max_rep_level)?;
+                        self.encode_levels_v2(&self.rep_levels_sink[..], max_rep_level);
                     rep_levels_byte_len = levels.len();
                     buffer.extend_from_slice(&levels[..]);
                 }
 
                 if max_def_level > 0 {
                     let levels =
-                        self.encode_levels_v2(&self.def_levels_sink[..], max_def_level)?;
+                        self.encode_levels_v2(&self.def_levels_sink[..], max_def_level);
                     def_levels_byte_len = levels.len();
                     buffer.extend_from_slice(&levels[..]);
                 }
@@ -794,18 +794,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         encoding: Encoding,
         levels: &[i16],
         max_level: i16,
-    ) -> Result<Vec<u8>> {
+    ) -> Vec<u8> {
         let mut encoder = LevelEncoder::v1(encoding, max_level, levels.len());
-        encoder.put(levels)?;
+        encoder.put(levels);
         encoder.consume()
     }
 
     /// Encodes definition or repetition levels for Data Page v2.
     /// Encoding is always RLE.
     #[inline]
-    fn encode_levels_v2(&self, levels: &[i16], max_level: i16) -> Result<Vec<u8>> {
+    fn encode_levels_v2(&self, levels: &[i16], max_level: i16) -> Vec<u8> {
         let mut encoder = LevelEncoder::v2(max_level, levels.len());
-        encoder.put(levels)?;
+        encoder.put(levels);
         encoder.consume()
     }
 

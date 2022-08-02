@@ -374,7 +374,7 @@ impl DictEncoder {
         &mut self,
         min_value: Option<ByteArray>,
         max_value: Option<ByteArray>,
-    ) -> Result<DataPageValues<ByteArray>> {
+    ) -> DataPageValues<ByteArray> {
         let num_values = self.indices.len();
         let buffer_len = self.estimated_data_page_size();
         let mut buffer = Vec::with_capacity(buffer_len);
@@ -382,20 +382,18 @@ impl DictEncoder {
 
         let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer);
         for index in &self.indices {
-            if !encoder.put(*index as u64)? {
-                return Err(general_err!("Encoder doesn't have enough space"));
-            }
+            encoder.put(*index as u64)
         }
 
         self.indices.clear();
 
-        Ok(DataPageValues {
-            buf: encoder.consume()?.into(),
+        DataPageValues {
+            buf: encoder.consume().into(),
             num_values,
             encoding: Encoding::RLE_DICTIONARY,
             min_value,
             max_value,
-        })
+        }
     }
 }
 
@@ -500,7 +498,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
         let max_value = self.max_value.take();
 
         match &mut self.dict_encoder {
-            Some(encoder) => encoder.flush_data_page(min_value, max_value),
+            Some(encoder) => Ok(encoder.flush_data_page(min_value, max_value)),
             _ => self.fallback.flush_data_page(min_value, max_value),
         }
     }

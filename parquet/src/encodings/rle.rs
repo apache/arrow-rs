@@ -132,23 +132,21 @@ impl RleEncoder {
     }
 
     /// Encodes `value`, which must be representable with `bit_width` bits.
-    /// Returns true if the value fits in buffer, false if it doesn't, or
-    /// error if something is wrong.
     #[inline]
-    pub fn put(&mut self, value: u64) -> Result<bool> {
+    pub fn put(&mut self, value: u64) {
         // This function buffers 8 values at a time. After seeing 8 values, it
         // decides whether the current run should be encoded in bit-packed or RLE.
         if self.current_value == value {
             self.repeat_count += 1;
             if self.repeat_count > 8 {
                 // A continuation of last value. No need to buffer.
-                return Ok(true);
+                return;
             }
         } else {
             if self.repeat_count >= 8 {
                 // The current RLE run has ended and we've gathered enough. Flush first.
                 assert_eq!(self.bit_packed_count, 0);
-                self.flush_rle_run()?;
+                self.flush_rle_run();
             }
             self.repeat_count = 1;
             self.current_value = value;
@@ -159,10 +157,8 @@ impl RleEncoder {
         if self.num_buffered_values == 8 {
             // Buffered values are full. Flush them.
             assert_eq!(self.bit_packed_count % 8, 0);
-            self.flush_buffered_values()?;
+            self.flush_buffered_values();
         }
-
-        Ok(true)
     }
 
     #[inline]
@@ -180,17 +176,17 @@ impl RleEncoder {
     }
 
     #[inline]
-    pub fn consume(mut self) -> Result<Vec<u8>> {
-        self.flush()?;
-        Ok(self.bit_writer.consume())
+    pub fn consume(mut self) -> Vec<u8> {
+        self.flush();
+        self.bit_writer.consume()
     }
 
     /// Borrow equivalent of the `consume` method.
     /// Call `clear()` after invoking this method.
     #[inline]
-    pub fn flush_buffer(&mut self) -> Result<&[u8]> {
-        self.flush()?;
-        Ok(self.bit_writer.flush_buffer())
+    pub fn flush_buffer(&mut self) -> &[u8] {
+        self.flush();
+        self.bit_writer.flush_buffer()
     }
 
     /// Clears the internal state so this encoder can be reused (e.g., after becoming
@@ -208,7 +204,7 @@ impl RleEncoder {
     /// Flushes all remaining values and return the final byte buffer maintained by the
     /// internal writer.
     #[inline]
-    pub fn flush(&mut self) -> Result<()> {
+    pub fn flush(&mut self) {
         if self.bit_packed_count > 0
             || self.repeat_count > 0
             || self.num_buffered_values > 0
@@ -217,7 +213,7 @@ impl RleEncoder {
                 && (self.repeat_count == self.num_buffered_values
                     || self.num_buffered_values == 0);
             if self.repeat_count > 0 && all_repeat {
-                self.flush_rle_run()?;
+                self.flush_rle_run();
             } else {
                 // Buffer the last group of bit-packed values to 8 by padding with 0s.
                 if self.num_buffered_values > 0 {
@@ -227,14 +223,13 @@ impl RleEncoder {
                     }
                 }
                 self.bit_packed_count += self.num_buffered_values;
-                self.flush_bit_packed_run(true)?;
+                self.flush_bit_packed_run(true);
                 self.repeat_count = 0;
             }
         }
-        Ok(())
     }
 
-    fn flush_rle_run(&mut self) -> Result<()> {
+    fn flush_rle_run(&mut self) {
         assert!(self.repeat_count > 0);
         let indicator_value = self.repeat_count << 1;
         self.bit_writer.put_vlq_int(indicator_value as u64);
@@ -244,10 +239,9 @@ impl RleEncoder {
         );
         self.num_buffered_values = 0;
         self.repeat_count = 0;
-        Ok(())
     }
 
-    fn flush_bit_packed_run(&mut self, update_indicator_byte: bool) -> Result<()> {
+    fn flush_bit_packed_run(&mut self, update_indicator_byte: bool) {
         if self.indicator_byte_pos < 0 {
             self.indicator_byte_pos = self.bit_writer.skip(1) as i64;
         }
@@ -270,20 +264,19 @@ impl RleEncoder {
             self.indicator_byte_pos = -1;
             self.bit_packed_count = 0;
         }
-        Ok(())
     }
 
     #[inline(never)]
-    fn flush_buffered_values(&mut self) -> Result<()> {
+    fn flush_buffered_values(&mut self) {
         if self.repeat_count >= 8 {
             self.num_buffered_values = 0;
             if self.bit_packed_count > 0 {
                 // In this case we choose RLE encoding. Flush the current buffered values
                 // as bit-packed encoding.
                 assert_eq!(self.bit_packed_count % 8, 0);
-                self.flush_bit_packed_run(true)?
+                self.flush_bit_packed_run(true)
             }
-            return Ok(());
+            return;
         }
 
         self.bit_packed_count += self.num_buffered_values;
@@ -292,12 +285,11 @@ impl RleEncoder {
             // We've reached the maximum value that can be hold in a single bit-packed
             // run.
             assert!(self.indicator_byte_pos >= 0);
-            self.flush_bit_packed_run(true)?;
+            self.flush_bit_packed_run(true);
         } else {
-            self.flush_bit_packed_run(false)?;
+            self.flush_bit_packed_run(false);
         }
         self.repeat_count = 0;
-        Ok(())
     }
 }
 
@@ -585,11 +577,11 @@ mod tests {
         let mut encoder1 = RleEncoder::new(3, 256);
         let mut encoder2 = RleEncoder::new(3, 256);
         for value in data {
-            encoder1.put(value as u64).unwrap();
-            encoder2.put(value as u64).unwrap();
+            encoder1.put(value as u64);
+            encoder2.put(value as u64);
         }
-        let res1 = encoder1.flush_buffer().unwrap();
-        let res2 = encoder2.consume().unwrap();
+        let res1 = encoder1.flush_buffer();
+        let res2 = encoder2.consume();
         assert_eq!(res1, &res2[..]);
     }
 
@@ -763,10 +755,9 @@ mod tests {
         let buffer_len = 64 * 1024;
         let mut encoder = RleEncoder::new(bit_width, buffer_len);
         for v in values {
-            let result = encoder.put(*v as u64);
-            assert!(result.is_ok());
+            encoder.put(*v as u64)
         }
-        let buffer = ByteBufferPtr::new(encoder.consume().expect("Expect consume() OK"));
+        let buffer = ByteBufferPtr::new(encoder.consume());
         if expected_len != -1 {
             assert_eq!(buffer.len(), expected_len as usize);
         }
@@ -919,9 +910,9 @@ mod tests {
         let values: Vec<i16> = vec![0, 1, 1, 1, 1, 0, 0, 0, 0, 1];
         let mut encoder = RleEncoder::new(bit_width, buffer_len);
         for v in &values {
-            assert!(encoder.put(*v as u64).expect("put() should be OK"));
+            encoder.put(*v as u64)
         }
-        let buffer = encoder.consume().expect("consume() should be OK");
+        let buffer = encoder.consume();
         let mut decoder = RleDecoder::new(bit_width);
         decoder.set_data(ByteBufferPtr::new(buffer));
         let mut actual_values: Vec<i16> = vec![0; values.len()];
@@ -935,12 +926,10 @@ mod tests {
         let buffer_len = 64 * 1024;
         let mut encoder = RleEncoder::new(bit_width, buffer_len);
         for v in values {
-            let result = encoder.put(*v as u64).expect("put() should be OK");
-            assert!(result, "put() should not return false");
+            encoder.put(*v as u64)
         }
 
-        let buffer =
-            ByteBufferPtr::new(encoder.consume().expect("consume() should be OK"));
+        let buffer = ByteBufferPtr::new(encoder.consume());
 
         // Verify read
         let mut decoder = RleDecoder::new(bit_width);

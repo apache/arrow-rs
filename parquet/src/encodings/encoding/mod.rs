@@ -195,9 +195,7 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
 
         for value in values {
             let value = value.as_u64()?;
-            if !rle_encoder.put(value)? {
-                return Err(general_err!("RLE buffer is full"));
-            }
+            rle_encoder.put(value)
         }
         Ok(())
     }
@@ -227,7 +225,7 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
             .expect("RLE value encoder is not initialized");
 
         // Flush all encoder buffers and raw values
-        let mut buf = rle_encoder.consume()?;
+        let mut buf = rle_encoder.consume();
         assert!(buf.len() > 4, "should have had padding inserted");
 
         // Note that buf does not have any offset, all data is encoded bytes
