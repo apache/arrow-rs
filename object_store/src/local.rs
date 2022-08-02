@@ -229,6 +229,8 @@ impl Config {
         let mut url = self.root.clone();
         url.path_segments_mut()
             .expect("url path")
+            // technically not necessary as Path ignores empty segments
+            // but avoids creating paths with "//" which look odd in error messages.
             .pop_if_empty()
             .extend(location.parts());
 
