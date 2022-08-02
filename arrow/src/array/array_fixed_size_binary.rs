@@ -291,20 +291,34 @@ impl From<FixedSizeBinaryArray> for ArrayData {
 impl From<FixedSizeListArray> for FixedSizeBinaryArray {
     fn from(v: FixedSizeListArray) -> Self {
         assert_eq!(
-            v.data_ref().child_data()[0].child_data().len(),
+            v.data_ref().child_data().len(),
+            1,
+            "FixedSizeBinaryArray can only be created from list array of u8 values \
+             (i.e. FixedSizeList<PrimitiveArray<u8>>)."
+        );
+        let child_data = &v.data_ref().child_data()[0];
+
+        assert_eq!(
+            child_data.child_data().len(),
             0,
             "FixedSizeBinaryArray can only be created from list array of u8 values \
              (i.e. FixedSizeList<PrimitiveArray<u8>>)."
         );
         assert_eq!(
-            v.data_ref().child_data()[0].data_type(),
+            child_data.data_type(),
             &DataType::UInt8,
             "FixedSizeBinaryArray can only be created from FixedSizeList<u8> arrays, mismatched data types."
+        );
+        assert_eq!(
+            child_data.null_count(),
+            0,
+            "The child array cannot contain null values."
         );
 
         let builder = ArrayData::builder(DataType::FixedSizeBinary(v.value_length()))
             .len(v.len())
-            .add_buffer(v.data_ref().child_data()[0].buffers()[0].clone())
+            .offset(v.offset())
+            .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
             .null_bit_buffer(v.data_ref().null_buffer().cloned());
 
         let data = unsafe { builder.build_unchecked() };
@@ -413,13 +427,44 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_binary_array_from_fixed_size_list_array() {
+        let values = [0_u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+        let values_data = ArrayData::builder(DataType::UInt8)
+            .len(12)
+            .offset(2)
+            .add_buffer(Buffer::from_slice_ref(&values))
+            .build()
+            .unwrap();
+        // [null, [10, 11, 12, 13]]
+        let array_data = unsafe {
+            ArrayData::builder(DataType::FixedSizeList(
+                Box::new(Field::new("item", DataType::UInt8, false)),
+                4,
+            ))
+            .len(2)
+            .offset(1)
+            .add_child_data(values_data)
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b101])))
+            .build_unchecked()
+        };
+        let list_array = FixedSizeListArray::from(array_data);
+        let binary_array = FixedSizeBinaryArray::from(list_array);
+
+        assert_eq!(2, binary_array.len());
+        assert_eq!(1, binary_array.null_count());
+        assert!(binary_array.is_null(0));
+        assert!(binary_array.is_valid(1));
+        assert_eq!(&[10, 11, 12, 13], binary_array.value(1));
+    }
+
+    #[test]
     #[should_panic(
         expected = "FixedSizeBinaryArray can only be created from FixedSizeList<u8> arrays"
     )]
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
-    fn test_fixed_size_binary_array_from_incorrect_list_array() {
+    fn test_fixed_size_binary_array_from_incorrect_fixed_size_list_array() {
         let values: [u32; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
         let values_data = ArrayData::builder(DataType::UInt32)
             .len(12)
@@ -430,6 +475,30 @@ mod tests {
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
                 Box::new(Field::new("item", DataType::Binary, false)),
+                4,
+            ))
+            .len(3)
+            .add_child_data(values_data)
+            .build_unchecked()
+        };
+        let list_array = FixedSizeListArray::from(array_data);
+        drop(FixedSizeBinaryArray::from(list_array));
+    }
+
+    #[test]
+    #[should_panic(expected = "The child array cannot contain null values.")]
+    fn test_fixed_size_binary_array_from_fixed_size_list_array_with_child_nulls_failed() {
+        let values = [0_u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        let values_data = ArrayData::builder(DataType::UInt8)
+            .len(12)
+            .add_buffer(Buffer::from_slice_ref(&values))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b101010101010])))
+            .build()
+            .unwrap();
+
+        let array_data = unsafe {
+            ArrayData::builder(DataType::FixedSizeList(
+                Box::new(Field::new("item", DataType::UInt8, false)),
                 4,
             ))
             .len(3)
