@@ -21,7 +21,7 @@ version = "0.3.0"
 edition = "2021"
 license = "MIT/Apache-2.0"
 readme = "README.md"
-description = "A generic object store interface for uniformly interacting with AWS S3, Google Cloud Storage and Azure Blob Storage"
+description = "A generic object store interface for uniformly interacting with AWS S3, Google Cloud Storage, Azure Blob Storage and local files."
 keywords = [
     "object",
     "storage",

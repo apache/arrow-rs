@@ -192,7 +192,7 @@ struct CompleteMultipartUpload {
     parts: Vec<MultipartPart>,
 }
 
-/// Configuration for connecting to [Google Cloud Storage](https://cloud.google.com/storage/).
+/// Interface for [Google Cloud Storage](https://cloud.google.com/storage/).
 #[derive(Debug)]
 pub struct GoogleCloudStorage {
     client: Arc<GoogleCloudStorageClient>,
@@ -792,7 +792,8 @@ fn reader_credentials_file(
 /// ```
 /// # let BUCKET_NAME = "foo";
 /// # let SERVICE_ACCOUNT_PATH = "/tmp/foo.json";
-/// let gcs = object_store::gcp::GoogleCloudStorageBuilder::new()
+/// # use object_store::gcp::GoogleCloudStorageBuilder;
+/// let gcs = GoogleCloudStorageBuilder::new()
 ///  .with_service_account_path(SERVICE_ACCOUNT_PATH)
 ///  .with_bucket_name(BUCKET_NAME)
 ///  .build();

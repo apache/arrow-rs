@@ -209,7 +209,7 @@ impl From<Error> for super::Error {
     }
 }
 
-/// Configuration for connecting to [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
+/// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
 #[derive(Debug)]
 pub struct MicrosoftAzure {
     container_client: Arc<ContainerClient>,
@@ -587,7 +587,8 @@ fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
 /// # let ACCOUNT = "foo";
 /// # let BUCKET_NAME = "foo";
 /// # let ACCESS_KEY = "foo";
-/// let azure = object_store::azure::MicrosoftAzureBuilder::new()
+/// # use object_store::azure::MicrosoftAzureBuilder;
+/// let azure = MicrosoftAzureBuilder::new()
 ///  .with_account(ACCOUNT)
 ///  .with_access_key(ACCESS_KEY)
 ///  .with_container_name(BUCKET_NAME)
