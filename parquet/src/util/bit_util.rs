@@ -43,22 +43,6 @@ pub fn from_le_slice<T: FromBytes>(bs: &[u8]) -> T {
     T::from_le_bytes(b)
 }
 
-#[inline]
-fn zero_extend<I: AsBytes, O: FromBytes>(input: &[I], output: &mut [O]) {
-    for (input, out) in input.iter().zip(output.iter_mut()) {
-        // Zero-allocate buffer
-        let mut out_bytes = O::Buffer::default();
-        let in_bytes = input.as_bytes();
-        {
-            let out_bytes = out_bytes.as_mut();
-            let len = in_bytes.len();
-            (&mut out_bytes[..len]).copy_from_slice(&in_bytes[..len]);
-        }
-
-        *out = O::from_le_bytes(out_bytes);
-    }
-}
-
 pub trait FromBytes: Sized {
     type Buffer: AsMut<[u8]> + Default;
     fn from_le_bytes(bs: Self::Buffer) -> Self;
@@ -552,27 +536,45 @@ impl BitReader {
 
         // Try to read smaller batches if possible
         if size_of::<T>() > 4 && values_to_read - i >= 32 && num_bits <= 32 {
-            let mut buf = [0_u32; 32];
-            unpack32(&in_buf[self.byte_offset..], &mut buf, num_bits);
+            let mut out_buf = [0_u32; 32];
+            unpack32(&in_buf[self.byte_offset..], &mut out_buf, num_bits);
             self.byte_offset += 4 * num_bits;
-            zero_extend(&buf, &mut batch[i..]);
-            i += 32;
+
+            for out in out_buf {
+                // Zero-allocate buffer
+                let mut out_bytes = T::Buffer::default();
+                out_bytes.as_mut()[..4].copy_from_slice(&out.to_le_bytes());
+                batch[i] = T::from_le_bytes(out_bytes);
+                i += 1;
+            }
         }
 
         if size_of::<T>() > 2 && values_to_read - i >= 16 && num_bits <= 16 {
-            let mut buf = [0_u16; 16];
-            unpack16(&in_buf[self.byte_offset..], &mut buf, num_bits);
+            let mut out_buf = [0_u16; 16];
+            unpack16(&in_buf[self.byte_offset..], &mut out_buf, num_bits);
             self.byte_offset += 2 * num_bits;
-            zero_extend(&buf, &mut batch[i..]);
-            i += 16;
+
+            for out in out_buf {
+                // Zero-allocate buffer
+                let mut out_bytes = T::Buffer::default();
+                out_bytes.as_mut()[..2].copy_from_slice(&out.to_le_bytes());
+                batch[i] = T::from_le_bytes(out_bytes);
+                i += 1;
+            }
         }
 
         if size_of::<T>() > 1 && values_to_read - i >= 8 && num_bits <= 8 {
-            let mut buf = [0_u8; 8];
-            unpack8(&in_buf[self.byte_offset..], &mut buf, num_bits);
+            let mut out_buf = [0_u8; 8];
+            unpack8(&in_buf[self.byte_offset..], &mut out_buf, num_bits);
             self.byte_offset += num_bits;
-            zero_extend(&buf, &mut batch[i..]);
-            i += 8;
+
+            for out in out_buf {
+                // Zero-allocate buffer
+                let mut out_bytes = T::Buffer::default();
+                out_bytes.as_mut()[..1].copy_from_slice(&out.to_le_bytes());
+                batch[i] = T::from_le_bytes(out_bytes);
+                i += 1;
+            }
         }
 
         self.reload_buffer_values();
