@@ -291,24 +291,26 @@ impl From<FixedSizeBinaryArray> for ArrayData {
 impl From<FixedSizeListArray> for FixedSizeBinaryArray {
     fn from(v: FixedSizeListArray) -> Self {
         assert_eq!(
-            v.data().child_data().len(),
+            v.data_ref().child_data().len(),
             1,
             "FixedSizeBinaryArray can only be created from list array of u8 values \
              (i.e. FixedSizeList<PrimitiveArray<u8>>)."
         );
+        let child_data = &v.data_ref().child_data()[0];
+
         assert_eq!(
-            v.data_ref().child_data()[0].child_data().len(),
+            child_data.child_data().len(),
             0,
             "FixedSizeBinaryArray can only be created from list array of u8 values \
              (i.e. FixedSizeList<PrimitiveArray<u8>>)."
         );
         assert_eq!(
-            v.data_ref().child_data()[0].data_type(),
+            child_data.data_type(),
             &DataType::UInt8,
             "FixedSizeBinaryArray can only be created from FixedSizeList<u8> arrays, mismatched data types."
         );
         assert_eq!(
-            v.data_ref().child_data()[0].null_count(),
+            child_data.null_count(),
             0,
             "The child array cannot contain null values."
         );
@@ -316,10 +318,7 @@ impl From<FixedSizeListArray> for FixedSizeBinaryArray {
         let builder = ArrayData::builder(DataType::FixedSizeBinary(v.value_length()))
             .len(v.len())
             .offset(v.offset())
-            .add_buffer(
-                v.data_ref().child_data()[0].buffers()[0]
-                    .slice(v.data_ref().child_data()[0].offset()),
-            )
+            .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
             .null_bit_buffer(v.data_ref().null_buffer().cloned());
 
         let data = unsafe { builder.build_unchecked() };

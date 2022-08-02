@@ -124,24 +124,26 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     /// not check the utf-8 validation for each element.
     fn from_list(v: GenericListArray<OffsetSize>) -> Self {
         assert_eq!(
-            v.data().child_data().len(),
+            v.data_ref().child_data().len(),
             1,
             "StringArray can only be created from list array of u8 values \
              (i.e. List<PrimitiveArray<u8>>)."
         );
+        let child_data = &v.data_ref().child_data()[0];
+
         assert_eq!(
-            v.data().child_data()[0].child_data().len(),
+            child_data.child_data().len(),
             0,
             "StringArray can only be created from list array of u8 values \
              (i.e. List<PrimitiveArray<u8>>)."
         );
         assert_eq!(
-            v.data().child_data()[0].data_type(),
+            child_data.data_type(),
             &DataType::UInt8,
             "StringArray can only be created from List<u8> arrays, mismatched data types."
         );
         assert_eq!(
-            v.data_ref().child_data()[0].null_count(),
+            child_data.null_count(),
             0,
             "The child array cannot contain null values."
         );
@@ -150,10 +152,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
             .len(v.len())
             .offset(v.offset())
             .add_buffer(v.data().buffers()[0].clone())
-            .add_buffer(
-                v.data().child_data()[0].buffers()[0]
-                    .slice(v.data_ref().child_data()[0].offset()),
-            )
+            .add_buffer(child_data.buffers()[0].slice(child_data.offset()))
             .null_bit_buffer(v.data().null_buffer().cloned());
 
         let array_data = unsafe { builder.build_unchecked() };

@@ -191,7 +191,7 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
         scale: usize,
     ) -> U {
         assert_eq!(
-            v.data().child_data().len(),
+            v.data_ref().child_data().len(),
             1,
             "DecimalArray can only be created from list array of u8 values \
              (i.e. FixedSizeList<PrimitiveArray<u8>>)."
