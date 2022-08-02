@@ -147,14 +147,17 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         assert_eq!(
             v.data_ref().child_data()[0].null_count(),
             0,
-            "The child array of the list array cannot have nulls."
+            "The child array cannot contain null values."
         );
 
         let builder = ArrayData::builder(Self::get_data_type())
             .len(v.len())
             .offset(v.offset())
             .add_buffer(v.data_ref().buffers()[0].clone())
-            .add_buffer(v.data_ref().child_data()[0].buffers()[0].clone())
+            .add_buffer(
+                v.data_ref().child_data()[0].buffers()[0]
+                    .slice(v.data_ref().child_data()[0].offset()),
+            )
             .null_bit_buffer(v.data_ref().null_buffer().cloned());
 
         let data = unsafe { builder.build_unchecked() };
@@ -447,10 +450,7 @@ pub type LargeBinaryArray = GenericBinaryArray<i64>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        array::{LargeListArray, ListArray},
-        datatypes::Field,
-    };
+    use crate::{array::ListArray, datatypes::Field};
 
     #[test]
     fn test_binary_array() {
@@ -583,37 +583,38 @@ mod tests {
         assert_eq!(7, binary_array.value_length(1));
     }
 
-    #[test]
-    fn test_binary_array_from_list_array() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
-        let values_data = ArrayData::builder(DataType::UInt8)
+    fn _test_generic_binary_array_from_list_array<O: OffsetSizeTrait>() {
+        let values = b"helloparquet";
+        let child_data = ArrayData::builder(DataType::UInt8)
             .len(12)
             .add_buffer(Buffer::from(&values[..]))
             .build()
             .unwrap();
-        let offsets: [i32; 4] = [0, 5, 5, 12];
+        let offsets = [0, 5, 5, 12].map(|n| O::from_usize(n).unwrap());
 
         // Array data: ["hello", "", "parquet"]
-        let array_data1 = ArrayData::builder(DataType::Binary)
+        let array_data1 = ArrayData::builder(GenericBinaryArray::<O>::get_data_type())
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
             .build()
             .unwrap();
-        let binary_array1 = BinaryArray::from(array_data1);
+        let binary_array1 = GenericBinaryArray::<O>::from(array_data1);
 
-        let data_type =
-            DataType::List(Box::new(Field::new("item", DataType::UInt8, false)));
+        let data_type = if O::IS_LARGE {
+            DataType::LargeList
+        } else {
+            DataType::List
+        }(Box::new(Field::new("item", DataType::UInt8, false)));
+
         let array_data2 = ArrayData::builder(data_type)
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_child_data(values_data)
+            .add_child_data(child_data)
             .build()
             .unwrap();
-        let list_array = ListArray::from(array_data2);
-        let binary_array2 = BinaryArray::from(list_array);
+        let list_array = GenericListArray::<O>::from(array_data2);
+        let binary_array2 = GenericBinaryArray::<O>::from(list_array);
 
         assert_eq!(2, binary_array2.data().buffers().len());
         assert_eq!(0, binary_array2.data().child_data().len());
@@ -631,50 +632,101 @@ mod tests {
     }
 
     #[test]
+    fn test_binary_array_from_list_array() {
+        _test_generic_binary_array_from_list_array::<i32>();
+    }
+
+    #[test]
     fn test_large_binary_array_from_list_array() {
-        let values: [u8; 12] = [
-            b'h', b'e', b'l', b'l', b'o', b'p', b'a', b'r', b'q', b'u', b'e', b't',
-        ];
-        let values_data = ArrayData::builder(DataType::UInt8)
-            .len(12)
+        _test_generic_binary_array_from_list_array::<i64>();
+    }
+
+    fn _test_generic_binary_array_from_list_array_with_offset<O: OffsetSizeTrait>() {
+        let values = b"HelloArrowAndParquet";
+        // b"ArrowAndParquet"
+        let child_data = ArrayData::builder(DataType::UInt8)
+            .len(15)
+            .offset(5)
             .add_buffer(Buffer::from(&values[..]))
             .build()
             .unwrap();
-        let offsets: [i64; 4] = [0, 5, 5, 12];
 
-        // Array data: ["hello", "", "parquet"]
-        let array_data1 = ArrayData::builder(DataType::LargeBinary)
-            .len(3)
+        let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
+        let null_buffer = Buffer::from_slice_ref(&[0b101]);
+        let data_type = if O::IS_LARGE {
+            DataType::LargeList
+        } else {
+            DataType::List
+        }(Box::new(Field::new("item", DataType::UInt8, false)));
+
+        // [None, Some(b"Parquet")]
+        let array_data = ArrayData::builder(data_type)
+            .len(2)
+            .offset(1)
             .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_buffer(Buffer::from_slice_ref(&values))
+            .null_bit_buffer(Some(null_buffer))
+            .add_child_data(child_data)
             .build()
             .unwrap();
-        let binary_array1 = LargeBinaryArray::from(array_data1);
+        let list_array = GenericListArray::<O>::from(array_data);
+        let binary_array = GenericBinaryArray::<O>::from(list_array);
 
-        let data_type =
-            DataType::LargeList(Box::new(Field::new("item", DataType::UInt8, false)));
-        let array_data2 = ArrayData::builder(data_type)
-            .len(3)
-            .add_buffer(Buffer::from_slice_ref(&offsets))
-            .add_child_data(values_data)
+        assert_eq!(2, binary_array.len());
+        assert_eq!(1, binary_array.null_count());
+        assert!(binary_array.is_null(0));
+        assert!(binary_array.is_valid(1));
+        assert_eq!(b"Parquet", binary_array.value(1));
+    }
+
+    #[test]
+    fn test_binary_array_from_list_array_with_offset() {
+        _test_generic_binary_array_from_list_array_with_offset::<i32>();
+    }
+
+    #[test]
+    fn test_large_binary_array_from_list_array_with_offset() {
+        _test_generic_binary_array_from_list_array_with_offset::<i64>();
+    }
+
+    fn _test_generic_binary_array_from_list_array_with_child_nulls_failed<
+        O: OffsetSizeTrait,
+    >() {
+        let values = b"HelloArrow";
+        let child_data = ArrayData::builder(DataType::UInt8)
+            .len(10)
+            .add_buffer(Buffer::from(&values[..]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b1010101010])))
             .build()
             .unwrap();
-        let list_array = LargeListArray::from(array_data2);
-        let binary_array2 = LargeBinaryArray::from(list_array);
 
-        assert_eq!(2, binary_array2.data().buffers().len());
-        assert_eq!(0, binary_array2.data().child_data().len());
+        let offsets = [0, 5, 10].map(|n| O::from_usize(n).unwrap());
+        let data_type = if O::IS_LARGE {
+            DataType::LargeList
+        } else {
+            DataType::List
+        }(Box::new(Field::new("item", DataType::UInt8, false)));
 
-        assert_eq!(binary_array1.len(), binary_array2.len());
-        assert_eq!(binary_array1.null_count(), binary_array2.null_count());
-        assert_eq!(binary_array1.value_offsets(), binary_array2.value_offsets());
-        for i in 0..binary_array1.len() {
-            assert_eq!(binary_array1.value(i), binary_array2.value(i));
-            assert_eq!(binary_array1.value(i), unsafe {
-                binary_array2.value_unchecked(i)
-            });
-            assert_eq!(binary_array1.value_length(i), binary_array2.value_length(i));
-        }
+        // [None, Some(b"Parquet")]
+        let array_data = ArrayData::builder(data_type)
+            .len(2)
+            .add_buffer(Buffer::from_slice_ref(&offsets))
+            .add_child_data(child_data)
+            .build()
+            .unwrap();
+        let list_array = GenericListArray::<O>::from(array_data);
+        drop(GenericBinaryArray::<O>::from(list_array));
+    }
+
+    #[test]
+    #[should_panic(expected = "The child array cannot contain null values.")]
+    fn test_binary_array_from_list_array_with_child_nulls_failed() {
+        _test_generic_binary_array_from_list_array_with_child_nulls_failed::<i32>();
+    }
+
+    #[test]
+    #[should_panic(expected = "The child array cannot contain null values.")]
+    fn test_large_binary_array_from_list_array_with_child_nulls_failed() {
+        _test_generic_binary_array_from_list_array_with_child_nulls_failed::<i64>();
     }
 
     fn test_generic_binary_array_from_opt_vec<T: OffsetSizeTrait>() {
