@@ -183,7 +183,7 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     /// Build a decimal array from [`FixedSizeListArray`].
     ///
     /// NB: This function does not validate that each value is in the permissible
-    /// range for a decimal. And, the null buffer of the child array will be ignored.
+    /// range for a decimal.
     #[deprecated(note = "please use `from_fixed_size_binary_array` instead")]
     fn from_fixed_size_list_array(
         v: FixedSizeListArray,
@@ -201,6 +201,17 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
             child_data.data_type(),
             &DataType::UInt8,
             "Decimal128Array can only be created from FixedSizeList<u8> arrays, mismatched data types."
+        );
+        assert!(
+            v.value_length() == Self::VALUE_LENGTH,
+            "Value length of the array ({}) must equal to the byte width of the decimal ({})",
+            v.value_length(),
+            Self::VALUE_LENGTH,
+        );
+        assert_eq!(
+            v.data_ref().child_data()[0].null_count(),
+            0,
+            "The child array cannot contain null values."
         );
 
         let list_offset = v.offset();
@@ -790,6 +801,62 @@ mod tests {
         assert_eq!(decimal.len(), 2);
         assert!(decimal.is_null(0));
         assert_eq!(decimal.value_as_string(1), "56".to_string());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    #[should_panic(expected = "The child array cannot contain null values.")]
+    fn test_decimal_array_from_fixed_size_list_with_child_nulls_failed() {
+        let value_data = ArrayData::builder(DataType::UInt8)
+            .len(16)
+            .add_buffer(Buffer::from_slice_ref(&[12_i128]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b1010101010101010])))
+            .build()
+            .unwrap();
+
+        // Construct a list array from the above two
+        let list_data_type = DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::UInt8, false)),
+            16,
+        );
+        let list_data = ArrayData::builder(list_data_type)
+            .len(1)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+        let list_array = FixedSizeListArray::from(list_data);
+        drop(Decimal128Array::from_fixed_size_list_array(
+            list_array, 38, 0,
+        ));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    #[should_panic(
+        expected = "Value length of the array (8) must equal to the byte width of the decimal (16)"
+    )]
+    fn test_decimal_array_from_fixed_size_list_with_wrong_length() {
+        let value_data = ArrayData::builder(DataType::UInt8)
+            .len(16)
+            .add_buffer(Buffer::from_slice_ref(&[12_i128]))
+            .null_bit_buffer(Some(Buffer::from_slice_ref(&[0b1010101010101010])))
+            .build()
+            .unwrap();
+
+        // Construct a list array from the above two
+        let list_data_type = DataType::FixedSizeList(
+            Box::new(Field::new("item", DataType::UInt8, false)),
+            8,
+        );
+        let list_data = ArrayData::builder(list_data_type)
+            .len(2)
+            .add_child_data(value_data)
+            .build()
+            .unwrap();
+        let list_array = FixedSizeListArray::from(list_data);
+        drop(Decimal128Array::from_fixed_size_list_array(
+            list_array, 38, 0,
+        ));
     }
 
     #[test]
