@@ -770,6 +770,44 @@ mod tests {
     }
 
     #[test]
+    fn test_int32_nullable_struct() {
+        let int32 = Int32Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);
+        let data = ArrayDataBuilder::new(ArrowDataType::Struct(vec![Field::new(
+            "int32",
+            int32.data_type().clone(),
+            false,
+        )]))
+        .len(8)
+        .null_bit_buffer(Some(Buffer::from(&[0b11101111])))
+        .child_data(vec![int32.into_data()])
+        .build()
+        .unwrap();
+
+        let written = RecordBatch::try_from_iter([(
+            "struct",
+            Arc::new(StructArray::from(data)) as ArrayRef,
+        )])
+        .unwrap();
+
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer =
+            ArrowWriter::try_new(&mut buffer, written.schema(), None).unwrap();
+        writer.write(&written).unwrap();
+        writer.close().unwrap();
+
+        let read = ParquetFileArrowReader::try_new(Bytes::from(buffer))
+            .unwrap()
+            .get_record_reader(3)
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+
+        assert_eq!(&written.slice(0, 3), &read[0]);
+        assert_eq!(&written.slice(3, 3), &read[1]);
+        assert_eq!(&written.slice(6, 2), &read[2]);
+    }
+
+    #[test]
     #[ignore] // https://github.com/apache/arrow-rs/issues/2253
     fn test_decimal_list() {
         let decimals = Decimal128Array::from_iter_values([1, 2, 3, 4, 5, 6, 7, 8]);

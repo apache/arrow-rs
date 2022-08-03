@@ -108,8 +108,11 @@ impl<I: OffsetSizeTrait + ScalarValue> ArrayReader for ByteArrayReader<I> {
         &self.data_type
     }
 
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)
+    }
+
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_bitmap_buffer();
         self.def_levels_buffer = self.record_reader.consume_def_levels();

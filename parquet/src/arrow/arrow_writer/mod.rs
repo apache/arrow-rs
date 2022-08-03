@@ -1161,7 +1161,7 @@ mod tests {
             Some(props),
         )
         .expect("Unable to write file");
-        writer.write(&expected_batch).unwrap();
+        writer.write(expected_batch).unwrap();
         writer.close().unwrap();
 
         let mut arrow_reader =

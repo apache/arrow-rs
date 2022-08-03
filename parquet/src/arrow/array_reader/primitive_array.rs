@@ -95,10 +95,11 @@ where
         &self.data_type
     }
 
-    /// Reads at most `batch_size` records into array.
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)
+    }
 
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
         let target_type = self.get_data_type().clone();
         let arrow_data_type = match T::get_physical_type() {
             PhysicalType::BOOLEAN => ArrowType::Boolean,

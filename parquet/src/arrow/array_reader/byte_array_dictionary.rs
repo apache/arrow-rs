@@ -25,7 +25,7 @@ use arrow::buffer::Buffer;
 use arrow::datatypes::{ArrowNativeType, DataType as ArrowType};
 
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
-use crate::arrow::array_reader::{read_records, ArrayReader, skip_records};
+use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
 use crate::arrow::buffer::{
     dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer,
 };
@@ -167,8 +167,11 @@ where
         &self.data_type
     }
 
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)
+    }
+
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_bitmap_buffer();
         let array = buffer.into_array(null_buffer, &self.data_type)?;
