@@ -149,10 +149,11 @@ impl Schema {
                     // merge metadata
                     if let Some(old_val) = merged.metadata.get(&key) {
                         if old_val != &value {
-                            return Err(ArrowError::SchemaError(
-                                "Fail to merge schema due to conflicting metadata."
-                                    .to_string(),
-                            ));
+                            return Err(ArrowError::SchemaError(format!(
+                                "Fail to merge schema due to conflicting metadata. \
+                                         Key '{}' has different values '{}' and '{}'",
+                                key, old_val, value
+                            )));
                         }
                     }
                     merged.metadata.insert(key, value);
