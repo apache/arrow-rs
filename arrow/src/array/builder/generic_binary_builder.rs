@@ -15,12 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{
-    array::{
-        ArrayBuilder, ArrayDataBuilder, ArrayRef, GenericBinaryArray, OffsetSizeTrait,
-        UInt8BufferBuilder,
-    },
-    datatypes::DataType,
+use crate::array::{
+    ArrayBuilder, ArrayDataBuilder, ArrayRef, GenericBinaryArray, OffsetSizeTrait,
+    UInt8BufferBuilder,
 };
 use std::any::Any;
 use std::sync::Arc;
@@ -80,11 +77,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
 
     /// Builds the [`GenericBinaryArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericBinaryArray<OffsetSize> {
-        let array_type = if OffsetSize::IS_LARGE {
-            DataType::LargeBinary
-        } else {
-            DataType::Binary
-        };
+        let array_type = GenericBinaryArray::<OffsetSize>::get_data_type();
         let array_builder = ArrayDataBuilder::new(array_type)
             .len(self.len())
             .add_buffer(self.offsets_builder.finish())

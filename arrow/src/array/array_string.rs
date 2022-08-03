@@ -40,9 +40,7 @@ pub struct GenericStringArray<OffsetSize: OffsetSizeTrait> {
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
     /// Get the data type of the array.
-    // Declare this function as `pub const fn` after
-    // https://github.com/rust-lang/rust/issues/93706 is merged.
-    pub fn get_data_type() -> DataType {
+    pub const fn get_data_type() -> DataType {
         if OffsetSize::IS_LARGE {
             DataType::LargeUtf8
         } else {
