@@ -614,23 +614,41 @@ where
     let mut output_buffer = MutableBuffer::new_null(len);
     let output_slice = output_buffer.as_slice_mut();
 
-    indices
-        .iter()
-        .enumerate()
-        .try_for_each::<_, Result<()>>(|(i, index)| {
-            if let Some(index) = index {
-                let index = ToPrimitive::to_usize(&index).ok_or_else(|| {
+    let indices_has_nulls = indices.null_count() > 0;
+
+    if indices_has_nulls {
+        indices
+            .iter()
+            .enumerate()
+            .try_for_each::<_, Result<()>>(|(i, index)| {
+                if let Some(index) = index {
+                    let index = ToPrimitive::to_usize(&index).ok_or_else(|| {
+                        ArrowError::ComputeError("Cast to usize failed".to_string())
+                    })?;
+
+                    if bit_util::get_bit(values_slice, values_offset + index) {
+                        bit_util::set_bit(output_slice, i);
+                    }
+                }
+
+                Ok(())
+            })?;
+    } else {
+        indices
+            .values()
+            .iter()
+            .enumerate()
+            .try_for_each::<_, Result<()>>(|(i, index)| {
+                let index = ToPrimitive::to_usize(index).ok_or_else(|| {
                     ArrowError::ComputeError("Cast to usize failed".to_string())
                 })?;
 
                 if bit_util::get_bit(values_slice, values_offset + index) {
                     bit_util::set_bit(output_slice, i);
                 }
-            }
-
-            Ok(())
-        })?;
-
+                Ok(())
+            })?;
+    }
     Ok(output_buffer.into())
 }
 
