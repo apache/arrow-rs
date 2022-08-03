@@ -94,7 +94,8 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 
 use crate::arrow::array_reader::{build_array_reader, RowGroupCollection};
-use crate::arrow::arrow_reader::{ParquetRecordBatchReader, RowSelection};
+use crate::arrow::arrow_reader::ParquetRecordBatchReader;
+
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::ProjectionMask;
 use crate::basic::Compression;
@@ -345,142 +346,6 @@ where
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
     }
-
-    pub fn poll_next_selection(
-        &mut self,
-        cx: &mut Context<'_>,
-        mut selection: VecDeque<RowSelection>,
-    ) -> Poll<Option<Result<RecordBatch>>> {
-        loop {
-            match &mut self.state {
-                StreamState::Decoding(batch_reader) => {
-                    let next = batch_reader.next_selection(&mut selection);
-
-                    match next {
-                        Some(Ok(batch)) => {
-                            return Poll::Ready(Some(Ok(batch)));
-                        }
-                        Some(Err(e)) => {
-                            self.state = StreamState::Error;
-                            return Poll::Ready(Some(Err(ParquetError::ArrowError(
-                                e.to_string(),
-                            ))));
-                        }
-                        None => self.state = StreamState::Init,
-                    }
-                }
-                StreamState::Init => {
-                    let row_group_idx = match self.row_groups.pop_front() {
-                        Some(idx) => idx,
-                        None => return Poll::Ready(None),
-                    };
-
-                    let metadata = self.metadata.clone();
-                    let mut input = match self.input.take() {
-                        Some(input) => input,
-                        None => {
-                            self.state = StreamState::Error;
-                            return Poll::Ready(Some(Err(general_err!(
-                                "input stream lost"
-                            ))));
-                        }
-                    };
-
-                    let projection = self.projection.clone();
-                    self.state = StreamState::Reading(
-                        async move {
-                            let row_group_metadata = metadata.row_group(row_group_idx);
-                            let mut column_chunks =
-                                vec![None; row_group_metadata.columns().len()];
-
-                            // TODO: Combine consecutive ranges
-                            let fetch_ranges = (0..column_chunks.len())
-                                .into_iter()
-                                .filter_map(|idx| {
-                                    if !projection.leaf_included(idx) {
-                                        None
-                                    } else {
-                                        let column = row_group_metadata.column(idx);
-                                        let (start, length) = column.byte_range();
-
-                                        Some(start as usize..(start + length) as usize)
-                                    }
-                                })
-                                .collect();
-
-                            let mut chunk_data =
-                                input.get_byte_ranges(fetch_ranges).await?.into_iter();
-
-                            for (idx, chunk) in column_chunks.iter_mut().enumerate() {
-                                if !projection.leaf_included(idx) {
-                                    continue;
-                                }
-
-                                let column = row_group_metadata.column(idx);
-
-                                if let Some(data) = chunk_data.next() {
-                                    *chunk = Some(InMemoryColumnChunk {
-                                        num_values: column.num_values(),
-                                        compression: column.compression(),
-                                        physical_type: column.column_type(),
-                                        data,
-                                    });
-                                }
-                            }
-
-                            Ok((
-                                input,
-                                InMemoryRowGroup {
-                                    schema: metadata.file_metadata().schema_descr_ptr(),
-                                    row_count: row_group_metadata.num_rows() as usize,
-                                    column_chunks,
-                                },
-                            ))
-                        }
-                        .boxed(),
-                    )
-                }
-                StreamState::Reading(f) => {
-                    let result = futures::ready!(f.poll_unpin(cx));
-                    self.state = StreamState::Init;
-
-                    let row_group: Box<dyn RowGroupCollection> = match result {
-                        Ok((input, row_group)) => {
-                            self.input = Some(input);
-                            Box::new(row_group)
-                        }
-                        Err(e) => {
-                            self.state = StreamState::Error;
-                            return Poll::Ready(Some(Err(e)));
-                        }
-                    };
-
-                    let parquet_schema = self.metadata.file_metadata().schema_descr_ptr();
-
-                    let array_reader = build_array_reader(
-                        parquet_schema,
-                        self.schema.clone(),
-                        self.projection.clone(),
-                        row_group,
-                    )?;
-
-                    let batch_reader = match ParquetRecordBatchReader::try_new(
-                        self.batch_size,
-                        array_reader,
-                    ) {
-                        Ok(reader) => reader,
-                        Err(e) => {
-                            self.state = StreamState::Error;
-                            return Poll::Ready(Some(Err(e)));
-                        }
-                    };
-
-                    self.state = StreamState::Decoding(batch_reader)
-                }
-                StreamState::Error => return Poll::Pending,
-            }
-        }
-    }
 }
 
 impl<T> Stream for ParquetRecordBatchStream<T>
@@ -619,8 +484,67 @@ where
     }
 }
 
+pub(crate) fn make_reader<T>(
+    mut input: T,
+    metadata: Arc<ParquetMetaData>,
+    row_group_idx: usize,
+    projection: ProjectionMask,
+) -> BoxFuture<'static, Result<(T, InMemoryRowGroup)>>
+where
+    T: AsyncFileReader + Unpin + Send + 'static,
+{
+    async move {
+        let row_group_metadata = metadata.row_group(row_group_idx);
+        let mut column_chunks = vec![None; row_group_metadata.columns().len()];
+
+        // TODO: Combine consecutive ranges
+        let fetch_ranges = (0..column_chunks.len())
+            .into_iter()
+            .filter_map(|idx| {
+                if !projection.leaf_included(idx) {
+                    None
+                } else {
+                    let column = row_group_metadata.column(idx);
+                    let (start, length) = column.byte_range();
+
+                    Some(start as usize..(start + length) as usize)
+                }
+            })
+            .collect();
+
+        let mut chunk_data = input.get_byte_ranges(fetch_ranges).await?.into_iter();
+
+        for (idx, chunk) in column_chunks.iter_mut().enumerate() {
+            if !projection.leaf_included(idx) {
+                continue;
+            }
+
+            let column = row_group_metadata.column(idx);
+
+            if let Some(data) = chunk_data.next() {
+                *chunk = Some(InMemoryColumnChunk {
+                    num_values: column.num_values(),
+                    compression: column.compression(),
+                    physical_type: column.column_type(),
+                    data,
+                });
+            }
+        }
+
+        Ok((
+            input,
+            InMemoryRowGroup {
+                schema: metadata.file_metadata().schema_descr_ptr(),
+                row_count: row_group_metadata.num_rows() as usize,
+                column_chunks,
+            },
+        ))
+    }
+    .boxed()
+}
+
 /// An in-memory collection of column chunks
-struct InMemoryRowGroup {
+pub(crate) struct InMemoryRowGroup {
     schema: SchemaDescPtr,
     column_chunks: Vec<Option<InMemoryColumnChunk>>,
     row_count: usize,

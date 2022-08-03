@@ -20,8 +20,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef};
-use arrow::compute::concat;
+use arrow::array::Array;
+
 use arrow::datatypes::{DataType as ArrowType, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
@@ -282,72 +282,6 @@ pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
     selection: Option<VecDeque<RowSelection>>,
-}
-
-impl ParquetRecordBatchReader {
-    pub fn next_selection(
-        &mut self,
-        selection: &mut VecDeque<RowSelection>,
-    ) -> Option<ArrowResult<RecordBatch>> {
-        let mut buffer: Vec<ArrayRef> = vec![];
-        let mut selected = false;
-        while let Some(front) = selection.pop_front() {
-            if front.skip {
-                let skipped = match self.array_reader.skip_records(front.row_count) {
-                    Ok(skipped) => skipped,
-                    Err(e) => {
-                        return Some(Err(e.into()));
-                    }
-                };
-
-                // TODO Why does this cause problems?
-                // if skipped != front.row_count {
-                //     return Some(Err(general_err!(
-                //         "failed to skip rows, expected {}, got {}",
-                //         front.row_count,
-                //         skipped
-                //     )
-                //     .into()));
-                // }
-                continue;
-            }
-
-            selected = true;
-            match self.array_reader.next_batch(front.row_count) {
-                Err(error) => return Some(Err(error.into())),
-                Ok(array) => {
-                    if array.len() > 0 {
-                        buffer.push(array);
-                    }
-                }
-            }
-        }
-
-        if !selected {
-            return Some(Ok(RecordBatch::new_empty(self.schema.clone())));
-        }
-
-        let array = concat(
-            buffer
-                .iter()
-                .map(|a| a.as_ref())
-                .collect::<Vec<&dyn Array>>()
-                .as_slice(),
-        )
-        .ok()?;
-
-        let struct_array =
-            array.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-                ArrowError::ParquetError(
-                    "Struct array reader should return struct array".to_string(),
-                )
-            });
-
-        match struct_array {
-            Err(err) => Some(Err(err)),
-            Ok(e) => (e.len() > 0).then(|| Ok(RecordBatch::from(e))),
-        }
-    }
 }
 
 impl Iterator for ParquetRecordBatchReader {

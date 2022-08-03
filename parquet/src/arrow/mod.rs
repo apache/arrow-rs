@@ -127,6 +127,9 @@ mod buffer;
 #[cfg(feature = "async")]
 pub mod async_reader;
 
+#[cfg(feature = "async")]
+pub mod async_filter_reader;
+
 mod record_reader;
 experimental!(mod schema);
 
