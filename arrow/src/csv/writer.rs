@@ -27,8 +27,6 @@
 //! use arrow::csv;
 //! use arrow::datatypes::*;
 //! use arrow::record_batch::RecordBatch;
-//! use arrow::util::test_util::get_temp_file;
-//! use std::fs::File;
 //! use std::sync::Arc;
 //!
 //! let schema = Schema::new(vec![
@@ -56,9 +54,9 @@
 //! )
 //! .unwrap();
 //!
-//! let file = get_temp_file("out.csv", &[]);
+//! let mut output = Vec::with_capacity(1024);
 //!
-//! let mut writer = csv::Writer::new(file);
+//! let mut writer = csv::Writer::new(&mut output);
 //! let batches = vec![&batch, &batch];
 //! for batch in batches {
 //!     writer.write(batch).unwrap();
