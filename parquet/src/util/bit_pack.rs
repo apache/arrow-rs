@@ -17,51 +17,6 @@
 
 //! Vectorised bit-packing utilities
 
-macro_rules! unroll_impl {
-    (1, $offset:expr, $v:ident, $c:block) => {{
-        const $v: usize = $offset;
-        $c
-    }};
-    (2, $offset:expr, $v:ident, $c:block) => {{
-        unroll_impl!(1, $offset, $v, $c);
-        unroll_impl!(1, $offset + 1, $v, $c);
-    }};
-    (4, $offset:expr, $v:ident, $c:block) => {{
-        unroll_impl!(2, 0, __v4, { unroll_impl!(2, __v4 * 2 + $offset, $v, $c) });
-    }};
-    (8, $offset:expr, $v:ident, $c:block) => {{
-        unroll_impl!(2, 0, __v8, { unroll_impl!(4, __v8 * 4 + $offset, $v, $c) });
-    }};
-    (16, $offset:expr, $v:ident, $c:block) => {{
-        unroll_impl!(4, 0, __v16, {
-            unroll_impl!(4, __v16 * 4 + $offset, $v, $c)
-        });
-    }};
-    (32, $offset:expr, $v:ident, $c:block) => {{
-        unroll_impl!(2, 0, __v32, {
-            unroll_impl!(16, __v32 * 16 + $offset, $v, $c)
-        });
-    }};
-    (64, $offset:expr, $v:ident, $c:block) => {{
-        unroll_impl!(2, 0, __v64, {
-            unroll_impl!(32, __v64 * 32 + $offset, $v, $c)
-        });
-    }};
-}
-
-/// Manually unrolls a loop body, this is useful for two reasons
-///
-/// - force unrolling of a loop so that LLVM optimises it properly
-/// - call a const generic function with the loop value
-macro_rules! unroll {
-    (for $v:ident in 0..$end:tt $c:block) => {
-        #[allow(non_upper_case_globals)]
-        {
-            unroll_impl!($end, 0, $v, $c)
-        }
-    };
-}
-
 /// Macro that generates an unpack function taking the number of bits as a const generic
 macro_rules! unpack_impl {
     ($t:ty, $bytes:literal, $bits:tt) => {
@@ -90,7 +45,7 @@ macro_rules! unpack_impl {
                 )
             };
 
-            unroll!(for i in 0..$bits {
+            seq_macro::seq!(i in 0..$bits {
                 let start_bit = i * NUM_BITS;
                 let end_bit = start_bit + NUM_BITS;
 
@@ -124,14 +79,11 @@ macro_rules! unpack {
         /// Unpack packed `input` into `output` with a bit width of `num_bits`
         pub fn $name(input: &[u8], output: &mut [$t; $bits], num_bits: usize) {
             // This will get optimised into a jump table
-            unroll!(for i in 0..$bits {
+            seq_macro::seq!(i in 0..=$bits {
                 if i == num_bits {
                     return $name::unpack::<i>(input, output);
                 }
             });
-            if num_bits == $bits {
-                return $name::unpack::<$bits>(input, output);
-            }
             unreachable!("invalid num_bits {}", num_bits);
         }
     };
@@ -151,45 +103,6 @@ mod tests {
     fn generate() -> Vec<u8> {
         let mut rand = thread_rng();
         (0..8).map(|_| rand.gen()).collect()
-    }
-
-    #[test]
-    fn test_unroll() {
-        let mut vec = vec![];
-        unroll!(for i in 0..1 {
-            vec.push(i);
-        });
-        assert_eq!(vec, (0..1).collect::<Vec<_>>());
-
-        let mut vec = vec![];
-        unroll!(for i in 0..4 {
-            vec.push(i);
-        });
-        assert_eq!(vec, (0..4).collect::<Vec<_>>());
-
-        let mut vec = vec![];
-        unroll!(for i in 0..8 {
-            vec.push(i);
-        });
-        assert_eq!(vec, (0..8).collect::<Vec<_>>());
-
-        let mut vec = vec![];
-        unroll!(for i in 0..16 {
-            vec.push(i);
-        });
-        assert_eq!(vec, (0..16).collect::<Vec<_>>());
-
-        let mut vec = vec![];
-        unroll!(for i in 0..32 {
-            vec.push(i);
-        });
-        assert_eq!(vec, (0..32).collect::<Vec<_>>());
-
-        let mut vec = vec![];
-        unroll!(for i in 0..64 {
-            vec.push(i);
-        });
-        assert_eq!(vec, (0..64).collect::<Vec<_>>());
     }
 
     #[test]
