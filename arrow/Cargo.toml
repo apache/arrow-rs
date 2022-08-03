@@ -49,6 +49,7 @@ half = { version = "2.0", default-features = false }
 hashbrown = { version = "0.12", default-features = false }
 csv_crate = { version = "1.1", default-features = false, optional = true, package="csv" }
 regex = { version = "1.5.6", default-features = false, features = ["std", "unicode"] }
+regex-syntax = { version = "0.6.27", default-features = false, features = ["unicode"] }
 lazy_static = { version = "1.4", default-features = false }
 packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
