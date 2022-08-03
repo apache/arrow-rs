@@ -46,6 +46,12 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
         DataType::Utf8
     };
 
+    /// Get the data type of the array.
+    #[deprecated(note = "please use `Self::DATA_TYPE` instead")]
+    pub const fn get_data_type() -> DataType {
+        Self::DATA_TYPE
+    }
+
     /// Returns the length for the element at index `i`.
     #[inline]
     pub fn value_length(&self, i: usize) -> OffsetSize {
