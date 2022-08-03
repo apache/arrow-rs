@@ -108,6 +108,7 @@ To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 */
 
 use std::{
+    collections::BTreeMap,
     convert::TryFrom,
     ffi::CStr,
     ffi::CString,
@@ -134,6 +135,35 @@ bitflags! {
     }
 }
 
+// TODO: Does something like this already exist?
+struct SliceCursor<'a> {
+    slice: &'a [u8],
+    pos: usize,
+}
+
+impl<'a> SliceCursor<'a> {
+    fn new(slice: &'a [u8]) -> Self {
+        SliceCursor { slice, pos: 0 }
+    }
+
+    fn get_four(&mut self) -> [u8; 4] {
+        let out: [u8; 4] = [
+            self.slice[self.pos],
+            self.slice[self.pos + 1],
+            self.slice[self.pos + 2],
+            self.slice[self.pos + 3]
+        ];
+        self.pos += 4;
+        out
+    }
+
+    fn get_slice(&mut self, len: usize) -> Vec<u8> {
+        let out = self.slice[self.pos..self.pos+len].to_vec();
+        self.pos += len;
+        out
+    }
+}
+
 /// ABI-compatible struct for `ArrowSchema` from C Data Interface
 /// See <https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions>
 /// This was created by bindgen
@@ -154,6 +184,7 @@ pub struct FFI_ArrowSchema {
 struct SchemaPrivateData {
     children: Box<[*mut FFI_ArrowSchema]>,
     dictionary: *mut FFI_ArrowSchema,
+    metadata_length: usize,
 }
 
 // callback used to drop [FFI_ArrowSchema] when it is exported.
@@ -210,6 +241,7 @@ impl FFI_ArrowSchema {
         let mut private_data = Box::new(SchemaPrivateData {
             children: children_ptr,
             dictionary: dictionary_ptr,
+            metadata_length: 0,
         });
 
         // intentionally set from private_data (see https://github.com/apache/arrow-rs/issues/580)
@@ -229,6 +261,41 @@ impl FFI_ArrowSchema {
 
     pub fn with_flags(mut self, flags: Flags) -> Result<Self> {
         self.flags = flags.bits();
+        Ok(self)
+    }
+
+    pub fn with_metadata(
+        mut self,
+        metadata: Option<&BTreeMap<String, String>>,
+    ) -> Result<Self> {
+        if let Some(metadata) = metadata {
+            if metadata.len() > 0 {
+                let mut metadata_serialized: Vec<u8> = Vec::new();
+                metadata_serialized.extend((metadata.len() as i32).to_ne_bytes());
+
+                for (key, value) in metadata.into_iter() {
+                    let key_len = key.len() as i32;
+                    let value_len = value.len() as i32;
+
+                    metadata_serialized.extend(key_len.to_ne_bytes());
+                    metadata_serialized.extend_from_slice(key.as_bytes());
+                    metadata_serialized.extend(value_len.to_ne_bytes());
+                    metadata_serialized.extend_from_slice(value.as_bytes());
+                }
+                let metadata_serialized = metadata_serialized.into_boxed_slice();
+                unsafe {
+                    let mut private_data =
+                        Box::from_raw(self.private_data as *mut SchemaPrivateData);
+                    private_data.metadata_length = metadata_serialized.len();
+                }
+                self.metadata = metadata_serialized.as_ptr() as *const c_char;
+            } else {
+                self.metadata = std::ptr::null_mut();
+            }
+        } else {
+            self.metadata = std::ptr::null_mut();
+        }
+
         Ok(self)
     }
 
@@ -262,6 +329,40 @@ impl FFI_ArrowSchema {
         unsafe { CStr::from_ptr(self.name) }
             .to_str()
             .expect("The external API has a non-utf8 as name")
+    }
+
+    /// returns the metadata of this schema.
+    pub fn metadata(&self) -> Option<BTreeMap<String, String>> {
+        if self.metadata.is_null() {
+            None
+        } else {
+            let length = unsafe {
+                Box::from_raw(self.private_data as *mut SchemaPrivateData).metadata_length
+            };
+            let metadata =
+                unsafe { std::slice::from_raw_parts(self.metadata as *const u8, length) };
+            let mut cursor = SliceCursor::new(metadata);
+
+            let num_entries = i32::from_ne_bytes(cursor.get_four());
+
+            let mut out = BTreeMap::new();
+
+            for _ in 1..num_entries {
+                let key_len = i32::from_ne_bytes(cursor.get_four()) as usize;
+                let key =
+                    String::from_utf8(cursor.get_slice(key_len))
+                        .unwrap();
+
+                let value_len = i32::from_ne_bytes(cursor.get_four()) as usize;
+                let value =
+                    String::from_utf8(cursor.get_slice(value_len))
+                        .unwrap();
+
+                out.insert(key, value);
+            }
+
+            Some(out)
+        }
     }
 
     pub fn flags(&self) -> Option<Flags> {
@@ -912,11 +1013,12 @@ mod tests {
         export_array_into_raw, make_array, Array, ArrayData, BooleanArray,
         Decimal128Array, DictionaryArray, DurationSecondArray, FixedSizeBinaryArray,
         FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericStringArray,
-        Int32Array, MapArray, NullArray, OffsetSizeTrait, Time32MillisecondArray,
-        TimestampMillisecondArray, UInt32Array,
+        Int32Array, MapArray, NullArray, OffsetSizeTrait, StructArray,
+        Time32MillisecondArray, TimestampMillisecondArray, UInt32Array,
     };
     use crate::compute::kernels;
     use crate::datatypes::{Field, Int8Type};
+    use std::collections::BTreeMap;
     use std::convert::TryFrom;
 
     #[test]
@@ -1478,6 +1580,29 @@ mod tests {
         // perform some operation
         let array = array.as_any().downcast_ref::<MapArray>().unwrap();
         assert_eq!(array, &map_array);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_struct_array() -> Result<()> {
+        let metadata: BTreeMap<String, String> =
+            [("Hello".to_string(), "World! 😊".to_string())].into();
+        let struct_array = StructArray::from(vec![(
+            Field::new("a", DataType::Int32, false).with_metadata(Some(metadata)),
+            Arc::new(Int32Array::from(vec![2, 4, 6])) as Arc<dyn Array>,
+        )]);
+
+        // export it
+        let array = ArrowArray::try_from(struct_array.data().clone())?;
+
+        // (simulate consumer) import it
+        let data = ArrayData::try_from(array)?;
+        let array = make_array(data);
+
+        // perform some operation
+        let array = array.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(array, &struct_array);
 
         Ok(())
     }

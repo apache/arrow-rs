@@ -139,6 +139,14 @@ def test_field_roundtrip(pyarrow_type):
         assert field == pyarrow_field
 
 
+def test_field_metadata_roundtrip():
+    metadata = {"hello": "World! 😊", "x": "2"}
+    pyarrow_field = pa.field("test", pa.int32(), metadata=metadata)
+    field = rust.round_trip_field(pyarrow_field)
+    assert field == pyarrow_field
+    assert field.metadata == pyarrow_field.metadata
+
+
 def test_schema_roundtrip():
     pyarrow_fields = zip(string.ascii_lowercase, _supported_pyarrow_types)
     pyarrow_schema = pa.schema(pyarrow_fields)

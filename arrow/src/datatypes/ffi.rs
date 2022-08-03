@@ -176,7 +176,9 @@ impl TryFrom<&FFI_ArrowSchema> for Field {
 
     fn try_from(c_schema: &FFI_ArrowSchema) -> Result<Self> {
         let dtype = DataType::try_from(c_schema)?;
-        let field = Field::new(c_schema.name(), dtype, c_schema.nullable());
+        let mut field = Field::new(c_schema.name(), dtype, c_schema.nullable());
+        field.set_metadata(c_schema.metadata());
+
         Ok(field)
     }
 }
@@ -302,7 +304,8 @@ impl TryFrom<&Field> for FFI_ArrowSchema {
 
         FFI_ArrowSchema::try_from(field.data_type())?
             .with_name(field.name())?
-            .with_flags(flags)
+            .with_flags(flags)?
+            .with_metadata(field.metadata())
     }
 }
 
