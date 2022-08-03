@@ -1469,9 +1469,9 @@ where
                 v.map(|v| {
                     lexical_core::parse(v.as_bytes()).map_err(|_| {
                         ArrowError::CastError(format!(
-                            "Cannot cast string '{}' to value of {} type",
+                            "Cannot cast string '{}' to value of {:?} type",
                             v,
-                            std::any::type_name::<T>()
+                            T::DATA_TYPE,
                         ))
                     })
                 })
@@ -1512,18 +1512,21 @@ fn cast_string_to_date32<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Date32Array::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array.iter()
+        let vec = string_array
+            .iter()
             .map(|v| {
                 v.map(|v| {
-                    v
-                        .parse::<chrono::NaiveDate>()
+                    v.parse::<chrono::NaiveDate>()
                         .map(|date| date.num_days_from_ce() - EPOCH_DAYS_FROM_CE)
                         .map_err(|_| {
-                        ArrowError::CastError(
-                            format!("Cannot cast string '{}' to value of arrow::datatypes::types::Date32Type type", v))
+                            ArrowError::CastError(format!(
+                                "Cannot cast string '{}' to value of {:?} type",
+                                v,
+                                DataType::Date32
+                            ))
                         })
                 })
-                    .transpose()
+                .transpose()
             })
             .collect::<Result<Vec<Option<i32>>>>()?;
 
@@ -1562,19 +1565,21 @@ fn cast_string_to_date64<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Date64Array::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array.iter()
+        let vec = string_array
+            .iter()
             .map(|v| {
                 v.map(|v| {
-                    v
-                        .parse::<chrono::NaiveDateTime>()
+                    v.parse::<chrono::NaiveDateTime>()
                         .map(|datetime| datetime.timestamp_millis())
                         .map_err(|_| {
-                            ArrowError::CastError(
-                                format!("Cannot cast string '{}' to value of arrow::datatypes::types::Date64Type type", v),
-                        )
+                            ArrowError::CastError(format!(
+                                "Cannot cast string '{}' to value of {:?} type",
+                                v,
+                                DataType::Date64
+                            ))
                         })
                 })
-                    .transpose()
+                .transpose()
             })
             .collect::<Result<Vec<Option<i64>>>>()?;
 
@@ -1620,19 +1625,25 @@ fn cast_string_to_time32second<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Time32SecondArray::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array.iter()
+        let vec = string_array
+            .iter()
             .map(|v| {
                 v.map(|v| {
-                    v
-                        .parse::<chrono::NaiveTime>()
-                        .map(|time| (time.num_seconds_from_midnight() + time.nanosecond() / NANOS_PER_SEC) as i32)
+                    v.parse::<chrono::NaiveTime>()
+                        .map(|time| {
+                            (time.num_seconds_from_midnight()
+                                + time.nanosecond() / NANOS_PER_SEC)
+                                as i32
+                        })
                         .map_err(|_| {
-                            ArrowError::CastError(
-                                format!("Cannot cast string '{}' to value of arrow::datatypes::types::Time32SecondType type", v),
-                        )
+                            ArrowError::CastError(format!(
+                                "Cannot cast string '{}' to value of {:?} type",
+                                v,
+                                DataType::Time32(TimeUnit::Second)
+                            ))
                         })
                 })
-                    .transpose()
+                .transpose()
             })
             .collect::<Result<Vec<Option<i32>>>>()?;
 
@@ -1680,20 +1691,25 @@ fn cast_string_to_time32millisecond<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Time32MillisecondArray::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array.iter()
+        let vec = string_array
+            .iter()
             .map(|v| {
                 v.map(|v| {
-                    v
-                        .parse::<chrono::NaiveTime>()
-                        .map(|time| (time.num_seconds_from_midnight() * MILLIS_PER_SEC
-                            + time.nanosecond() / NANOS_PER_MILLI) as i32)
+                    v.parse::<chrono::NaiveTime>()
+                        .map(|time| {
+                            (time.num_seconds_from_midnight() * MILLIS_PER_SEC
+                                + time.nanosecond() / NANOS_PER_MILLI)
+                                as i32
+                        })
                         .map_err(|_| {
-                        ArrowError::CastError(
-                            format!("Cannot cast string '{}' to value of arrow::datatypes::types::Time32MillisecondType type", v),
-                        )
+                            ArrowError::CastError(format!(
+                                "Cannot cast string '{}' to value of {:?} type",
+                                v,
+                                DataType::Time32(TimeUnit::Millisecond)
+                            ))
                         })
                 })
-                    .transpose()
+                .transpose()
             })
             .collect::<Result<Vec<Option<i32>>>>()?;
 
@@ -1740,20 +1756,24 @@ fn cast_string_to_time64microsecond<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Time64MicrosecondArray::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array.iter()
+        let vec = string_array
+            .iter()
             .map(|v| {
                 v.map(|v| {
-                    v
-                        .parse::<chrono::NaiveTime>()
-                        .map(|time| time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
-                             + time.nanosecond() as i64 / NANOS_PER_MICRO)
+                    v.parse::<chrono::NaiveTime>()
+                        .map(|time| {
+                            time.num_seconds_from_midnight() as i64 * MICROS_PER_SEC
+                                + time.nanosecond() as i64 / NANOS_PER_MICRO
+                        })
                         .map_err(|_| {
-                            ArrowError::CastError(
-                                format!("Cannot cast string '{}' to value of arrow::datatypes::types::Time64MicrosecondType type", v),
-                            )
+                            ArrowError::CastError(format!(
+                                "Cannot cast string '{}' to value of {:?} type",
+                                v,
+                                DataType::Time64(TimeUnit::Microsecond)
+                            ))
                         })
                 })
-                    .transpose()
+                .transpose()
             })
             .collect::<Result<Vec<Option<i64>>>>()?;
 
@@ -1798,19 +1818,24 @@ fn cast_string_to_time64nanosecond<Offset: OffsetSizeTrait>(
         //     The iterator is trustedLen because it comes from an `StringArray`.
         unsafe { Time64NanosecondArray::from_trusted_len_iter(iter) }
     } else {
-        let vec = string_array.iter()
+        let vec = string_array
+            .iter()
             .map(|v| {
                 v.map(|v| {
-                    v
-                        .parse::<chrono::NaiveTime>()
-                        .map(|time| time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC + time.nanosecond() as i64)
+                    v.parse::<chrono::NaiveTime>()
+                        .map(|time| {
+                            time.num_seconds_from_midnight() as i64 * NANOS_PER_SEC
+                                + time.nanosecond() as i64
+                        })
                         .map_err(|_| {
-                            ArrowError::CastError(
-                                format!("Cannot cast string '{}' to value of arrow::datatypes::types::Time64NanosecondType type", v),
-                        )
+                            ArrowError::CastError(format!(
+                                "Cannot cast string '{}' to value of {:?} type",
+                                v,
+                                DataType::Time64(TimeUnit::Nanosecond)
+                            ))
                         })
                 })
-                    .transpose()
+                .transpose()
             })
             .collect::<Result<Vec<Option<i64>>>>()?;
 
@@ -2856,9 +2881,13 @@ mod tests {
         match result {
             Ok(_) => panic!("expected error"),
             Err(e) => {
-                assert!(e.to_string().contains(
-                    "Cast error: Cannot cast string 'seven' to value of arrow::datatypes::types::Int32Type type"
-                ))
+                assert!(
+                    e.to_string().contains(
+                        "Cast error: Cannot cast string 'seven' to value of Int32 type",
+                    ),
+                    "Error: {}",
+                    e
+                )
             }
         }
     }
@@ -3093,7 +3122,7 @@ mod tests {
 
             let options = CastOptions { safe: false };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid date' to value of arrow::datatypes::types::Date32Type type");
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid date' to value of Date32 type");
         }
     }
 
@@ -3125,7 +3154,7 @@ mod tests {
 
             let options = CastOptions { safe: false };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of arrow::datatypes::types::Time32SecondType type");
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(Second) type");
         }
     }
 
@@ -3157,7 +3186,7 @@ mod tests {
 
             let options = CastOptions { safe: false };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of arrow::datatypes::types::Time32MillisecondType type");
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string '08:08:61.091323414' to value of Time32(Millisecond) type");
         }
     }
 
@@ -3183,7 +3212,7 @@ mod tests {
 
             let options = CastOptions { safe: false };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of arrow::datatypes::types::Time64MicrosecondType type");
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of Time64(Microsecond) type");
         }
     }
 
@@ -3209,7 +3238,7 @@ mod tests {
 
             let options = CastOptions { safe: false };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of arrow::datatypes::types::Time64NanosecondType type");
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid time' to value of Time64(Nanosecond) type");
         }
     }
 
@@ -3235,7 +3264,7 @@ mod tests {
 
             let options = CastOptions { safe: false };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
-            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid date' to value of arrow::datatypes::types::Date64Type type");
+            assert_eq!(err.to_string(), "Cast error: Cannot cast string 'Not a valid date' to value of Date64 type");
         }
     }
 
