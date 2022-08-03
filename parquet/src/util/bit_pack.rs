@@ -99,12 +99,6 @@ mod tests {
     use super::*;
     use rand::{thread_rng, Rng};
 
-    #[inline(never)]
-    fn generate() -> Vec<u8> {
-        let mut rand = thread_rng();
-        (0..8).map(|_| rand.gen()).collect()
-    }
-
     #[test]
     fn test_basic() {
         let input = [0xFF; 4096];
