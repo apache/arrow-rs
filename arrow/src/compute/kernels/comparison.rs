@@ -320,7 +320,6 @@ fn replace_like_wildcards(pattern: &str) -> Result<String> {
                     result.push('\\');
                     result.push('\\');
                 }
-
             }
         } else if regex_syntax::is_meta_character(c) {
             result.push('\\');
@@ -370,7 +369,9 @@ pub fn nlike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         for i in 0..left.len() {
             result.append(left.value(i) != right);
         }
-    } else if right.ends_with('%') && !right[..right.len() - 1].contains(is_like_pattern)
+    } else if right.ends_with('%')
+        && !right.ends_with("\\%")
+        && !right[..right.len() - 1].contains(is_like_pattern)
     {
         // fast path, can use ends_with
         for i in 0..left.len() {
@@ -443,7 +444,9 @@ pub fn ilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         for i in 0..left.len() {
             result.append(left.value(i) == right);
         }
-    } else if right.ends_with('%') && !right[..right.len() - 1].contains(is_like_pattern)
+    } else if right.ends_with('%')
+        && !right.ends_with("\\%")
+        && !right[..right.len() - 1].contains(is_like_pattern)
     {
         // fast path, can use ends_with
         for i in 0..left.len() {
@@ -524,7 +527,9 @@ pub fn nilike_utf8_scalar<OffsetSize: OffsetSizeTrait>(
         for i in 0..left.len() {
             result.append(left.value(i) != right);
         }
-    } else if right.ends_with('%') && !right[..right.len() - 1].contains(is_like_pattern)
+    } else if right.ends_with('%')
+        && !right.ends_with("\\%")
+        && !right[..right.len() - 1].contains(is_like_pattern)
     {
         // fast path, can use ends_with
         for i in 0..left.len() {
