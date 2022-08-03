@@ -298,10 +298,15 @@ pub fn like_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     Ok(BooleanArray::from(data))
 }
 
-fn replace_like_wildcards(text: &str) -> Result<String> {
+/// Transforms a like `pattern` to a regex compatible pattern. To achieve that, it does:
+///
+/// 1. Replace like wildcards for regex expressions as the pattern will be evaluated using regex match: `%` => `.*` and `_` => `.`
+/// 2. Escape regex meta characters to match them and not be evaluated as regex special chars. For example: `.` => `\\.`
+/// 3. Replace escaped like wildcards removing the escape characters to be able to match it as a regex. For example: `\\%` => `%`
+fn replace_like_wildcards(pattern: &str) -> Result<String> {
     let mut result = String::new();
-    let text = String::from(text);
-    let mut chars_iter = text.chars().peekable();
+    let pattern = String::from(pattern);
+    let mut chars_iter = pattern.chars().peekable();
     while let Some(c) = chars_iter.next() {
         if c == '\\' {
             let next = chars_iter.peek();
@@ -3794,28 +3799,28 @@ mod tests {
     #[test]
     fn test_replace_like_wildcards() {
         let a_eq = "_%";
-        let expected = String::from("..*");
+        let expected = "..*";
         assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
     }
 
     #[test]
     fn test_replace_like_wildcards_leave_like_meta_chars() {
         let a_eq = "\\%\\_";
-        let expected = String::from("%_");
+        let expected = "%_";
         assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
     }
 
     #[test]
     fn test_replace_like_wildcards_with_multiple_escape_chars() {
         let a_eq = "\\\\%";
-        let expected = String::from("\\\\%");
+        let expected = "\\\\%";
         assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
     }
 
     #[test]
     fn test_replace_like_wildcards_escape_regex_meta_char() {
         let a_eq = ".";
-        let expected = String::from("\\.");
+        let expected = "\\.";
         assert_eq!(replace_like_wildcards(a_eq).unwrap(), expected);
     }
 
