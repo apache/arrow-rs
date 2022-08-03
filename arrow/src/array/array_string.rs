@@ -39,14 +39,12 @@ pub struct GenericStringArray<OffsetSize: OffsetSizeTrait> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
-    /// Get the data type of the array.
-    pub const fn get_data_type() -> DataType {
-        if OffsetSize::IS_LARGE {
-            DataType::LargeUtf8
-        } else {
-            DataType::Utf8
-        }
-    }
+    /// Data type of the array.
+    pub const DATA_TYPE: DataType = if OffsetSize::IS_LARGE {
+        DataType::LargeUtf8
+    } else {
+        DataType::Utf8
+    };
 
     /// Returns the length for the element at index `i`.
     #[inline]
@@ -146,7 +144,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
             "The child array cannot contain null values."
         );
 
-        let builder = ArrayData::builder(Self::get_data_type())
+        let builder = ArrayData::builder(Self::DATA_TYPE)
             .len(v.len())
             .offset(v.offset())
             .add_buffer(v.data().buffers()[0].clone())
@@ -185,7 +183,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericStringArray<OffsetSize> {
         assert!(!offsets.is_empty()); // wrote at least one
         let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
 
-        let array_data = ArrayData::builder(Self::get_data_type())
+        let array_data = ArrayData::builder(Self::DATA_TYPE)
             .len(actual_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into());
@@ -262,7 +260,7 @@ where
 
         // calculate actual data_len, which may be different from the iterator's upper bound
         let data_len = (offsets.len() / offset_size) - 1;
-        let array_data = ArrayData::builder(Self::get_data_type())
+        let array_data = ArrayData::builder(Self::DATA_TYPE)
             .len(data_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into())
@@ -340,10 +338,7 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericBinaryArray<OffsetSize>>
     for GenericStringArray<OffsetSize>
 {
     fn from(v: GenericBinaryArray<OffsetSize>) -> Self {
-        let builder = v
-            .into_data()
-            .into_builder()
-            .data_type(Self::get_data_type());
+        let builder = v.into_data().into_builder().data_type(Self::DATA_TYPE);
         let data = unsafe { builder.build_unchecked() };
         Self::from(data)
     }
@@ -353,7 +348,7 @@ impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericStringArray<OffsetS
     fn from(data: ArrayData) -> Self {
         assert_eq!(
             data.data_type(),
-            &Self::get_data_type(),
+            &Self::DATA_TYPE,
             "[Large]StringArray expects Datatype::[Large]Utf8"
         );
         assert_eq!(

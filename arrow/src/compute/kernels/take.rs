@@ -771,12 +771,11 @@ where
         };
     }
 
-    let array_data =
-        ArrayData::builder(GenericStringArray::<OffsetSize>::get_data_type())
-            .len(data_len)
-            .add_buffer(offsets_buffer.into())
-            .add_buffer(values.into())
-            .null_bit_buffer(nulls);
+    let array_data = ArrayData::builder(GenericStringArray::<OffsetSize>::DATA_TYPE)
+        .len(data_len)
+        .add_buffer(offsets_buffer.into())
+        .add_buffer(values.into())
+        .null_bit_buffer(nulls);
 
     let array_data = unsafe { array_data.build_unchecked() };
 

@@ -77,7 +77,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryBuilder<OffsetSize> {
 
     /// Builds the [`GenericBinaryArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericBinaryArray<OffsetSize> {
-        let array_type = GenericBinaryArray::<OffsetSize>::get_data_type();
+        let array_type = GenericBinaryArray::<OffsetSize>::DATA_TYPE;
         let array_builder = ArrayDataBuilder::new(array_type)
             .len(self.len())
             .add_buffer(self.offsets_builder.finish())
