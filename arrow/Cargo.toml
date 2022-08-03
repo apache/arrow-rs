@@ -77,6 +77,8 @@ pyarrow = ["pyo3"]
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
 force_validate = []
+# Enable ffi support
+ffi = []
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features =  ["std", "std_rng"] }

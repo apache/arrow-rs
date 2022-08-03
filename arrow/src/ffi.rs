@@ -29,14 +29,16 @@
 //! # use arrow::array::{Int32Array, Array, ArrayData, export_array_into_raw, make_array, make_array_from_raw};
 //! # use arrow::error::{Result, ArrowError};
 //! # use arrow::compute::kernels::arithmetic;
-//! # use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+//! # use arrow::ffi::{ArrowArray, FFI_ArrowArray, FFI_ArrowSchema};
 //! # use std::convert::TryFrom;
 //! # fn main() -> Result<()> {
 //! // create an array natively
 //! let array = Int32Array::from(vec![Some(1), None, Some(3)]);
 //!
 //! // export it
-//! let (array_ptr, schema_ptr) = array.to_raw()?;
+//!
+//! let ffi_array = ArrowArray::try_new(array.data().clone())?;
+//! let (array_ptr, schema_ptr) = ArrowArray::into_raw(ffi_array);
 //!
 //! // consumed and used by something else...
 //!
@@ -456,7 +458,7 @@ struct ArrayPrivateData {
 
 impl FFI_ArrowArray {
     /// creates a new `FFI_ArrowArray` from existing data.
-    /// # Safety
+    /// # Memory Leaks
     /// This method releases `buffers`. Consumers of this struct *must* call `release` before
     /// releasing this struct, or contents in `buffers` leak.
     pub fn new(data: &ArrayData) -> Self {
@@ -836,10 +838,11 @@ impl<'a> ArrowArrayRef for ArrowArrayChild<'a> {
 
 impl ArrowArray {
     /// creates a new `ArrowArray`. This is used to export to the C Data Interface.
-    /// # Safety
-    /// See safety of [ArrowArray]
-    #[allow(clippy::too_many_arguments)]
-    pub unsafe fn try_new(data: ArrayData) -> Result<Self> {
+    ///
+    /// # Memory Leaks
+    /// This method releases `buffers`. Consumers of this struct *must* call `release` before
+    /// releasing this struct, or contents in `buffers` leak.
+    pub fn try_new(data: ArrayData) -> Result<Self> {
         let array = Arc::new(FFI_ArrowArray::new(&data));
         let schema = Arc::new(FFI_ArrowSchema::try_from(data.data_type())?);
         Ok(ArrowArray { array, schema })

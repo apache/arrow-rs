@@ -238,7 +238,9 @@ pub mod compute;
 pub mod csv;
 pub mod datatypes;
 pub mod error;
+#[cfg(feature = "ffi")]
 pub mod ffi;
+#[cfg(feature = "ffi")]
 pub mod ffi_stream;
 #[cfg(feature = "ipc")]
 pub mod ipc;

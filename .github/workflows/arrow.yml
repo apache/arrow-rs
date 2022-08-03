@@ -51,9 +51,9 @@ jobs:
       - name: Test
         run: |
           cargo test -p arrow
-      - name: Test --features=force_validate,prettyprint
+      - name: Test --features=force_validate,prettyprint,ffi
         run: |
-          cargo test -p arrow --features=force_validate,prettyprint
+          cargo test -p arrow --features=force_validate,prettyprint,ffi
       - name: Run examples
         run: |
           # Test arrow examples
@@ -153,8 +153,8 @@ jobs:
       - name: Build
         run: |
           cd arrow
-          cargo build --no-default-features --features=csv,ipc,simd --target wasm32-unknown-unknown
-          cargo build --no-default-features --features=csv,ipc,simd --target wasm32-wasi
+          cargo build --no-default-features --features=csv,ipc,simd,ffi --target wasm32-unknown-unknown
+          cargo build --no-default-features --features=csv,ipc,simd,ffi --target wasm32-wasi
 
   clippy:
     name: Clippy
@@ -172,4 +172,4 @@ jobs:
           rustup component add clippy
       - name: Run clippy
         run: |
-          cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils --all-targets -- -D warnings
+          cargo clippy -p arrow --features=prettyprint,csv,ipc,test_utils,ffi --all-targets -- -D warnings

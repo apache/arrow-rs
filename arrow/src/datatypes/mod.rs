@@ -37,8 +37,10 @@ pub use types::*;
 mod datatype;
 pub use datatype::*;
 mod delta;
-mod ffi;
 
+#[cfg(feature = "ffi")]
+mod ffi;
+#[cfg(feature = "ffi")]
 pub use ffi::*;
 
 /// A reference-counted reference to a [`Schema`](crate::datatypes::Schema).
