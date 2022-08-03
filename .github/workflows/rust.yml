@@ -50,33 +50,37 @@ jobs:
           export RUSTFLAGS="-C debuginfo=0"
           cargo test
 
-  # Commented out while fixed in https://github.com/apache/arrow-rs/issues/2279
-  #
-  # # Check workspace wide compile and test with default features for
-  # # windows
-  # windows:
-  #   name: Test on Windows
-  #   runs-on: windows-latest
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #       with:
-  #         submodules: true
-  #     - name: Install protoc with NuGet
-  #       run: |
-  #         nuget.exe install Google.Protobuf -Version 3.21.4 -OutputDirectory d:\\proto
-  #         nuget.exe install Grpc.Tools -Version 2.47.0 -OutputDirectory d:\\proto
-  #     - name: Setup Rust toolchain
-  #       run: |
-  #         rustup toolchain install stable --no-self-update
-  #         rustup default stable
-  #     - name: Run tests
-  #       shell: bash
-  #       run: |
-  #         # do not produce debug symbols to keep memory usage down
-  #         export RUSTFLAGS="-C debuginfo=0"
-  #         # This is where protoc is installed
-  #         export PATH=$PATH:/d/proto/Grpc.Tools.2.47.0/tools/windows_x86
-  #         cargo test
+
+  # Check workspace wide compile and test with default features for
+  # windows
+  windows:
+    name: Test on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Install protobuf compiler in /d/protoc
+        shell: bash
+        run: |
+          mkdir /d/protoc
+          cd /d/protoc
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protoc-21.4-win64.zip
+          unzip protoc-21.4-win64.zip
+          export PATH=$PATH:/d/protoc/bin
+          protoc --version
+
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - name: Run tests
+        shell: bash
+        run: |
+          # do not produce debug symbols to keep memory usage down
+          export RUSTFLAGS="-C debuginfo=0"
+          export PATH=$PATH:/d/protoc/bin
+          cargo test
 
 
   # Run cargo fmt for all crates
@@ -95,37 +99,40 @@ jobs:
       - name: Run
         run: cargo fmt --all -- --check
 
-  # Commented out while fixed in https://github.com/apache/arrow-rs/issues/2279
-  #
-  # coverage:
-  #   name: Coverage
-  #   runs-on: ubuntu-latest
-  #   # Note runs outside of a container
-  #   # otherwise we get this error:
-  #   # Failed to run tests: ASLR disable failed: EPERM: Operation not permitted
-  #   steps:
-  #     - uses: actions/checkout@v2
-  #       with:
-  #         submodules: true
-  #     - name: Setup Rust toolchain
-  #       run: |
-  #         rustup toolchain install stable
-  #         rustup default stable
-  #     - name: Install protobuf compiler
-  #       run: |
-  #         sudo apt-get update
-  #         sudo apt-get install -y protobuf-compiler
-  #     - name: Cache Cargo
-  #       uses: actions/cache@v3
-  #       with:
-  #         path: /home/runner/.cargo
-  #         key: cargo-coverage-cache3-
-  #     - name: Run coverage
-  #       run: |
-  #         rustup toolchain install stable
-  #         rustup default stable
-  #         cargo install --version 0.18.2 cargo-tarpaulin
-  #         cargo tarpaulin --all --out Xml
-  #     - name: Report coverage
-  #       continue-on-error: true
-  #       run: bash <(curl -s https://codecov.io/bash)
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    # Note runs outside of a container
+    # otherwise we get this error:
+    # Failed to run tests: ASLR disable failed: EPERM: Operation not permitted
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install stable
+          rustup default stable
+      - name: Install protobuf compiler in /protoc
+        run: |
+          sudo mkdir /protoc
+          sudo chmod a+rwx /protoc
+          cd /protoc
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protoc-21.4-linux-x86_64.zip
+          unzip protoc-21.4-linux-x86_64.zip
+      - name: Cache Cargo
+        uses: actions/cache@v3
+        with:
+          path: /home/runner/.cargo
+          key: cargo-coverage-cache3-
+      - name: Run coverage
+        run: |
+          export PATH=$PATH:/protoc/bin
+          rustup toolchain install stable
+          rustup default stable
+          cargo install --version 0.18.2 cargo-tarpaulin
+          cargo tarpaulin --all --out Xml
+      - name: Report coverage
+        continue-on-error: true
+        run: bash <(curl -s https://codecov.io/bash)
