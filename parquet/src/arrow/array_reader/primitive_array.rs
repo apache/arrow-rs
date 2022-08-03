@@ -25,8 +25,8 @@ use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::{
-    ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder, Decimal128Array,
-    Float32Array, Float64Array, Int32Array, Int64Array,
+    ArrayDataBuilder, ArrayRef, BasicDecimalArray, BooleanArray, BooleanBufferBuilder,
+    Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use arrow::buffer::Buffer;
 use arrow::datatypes::DataType as ArrowType;

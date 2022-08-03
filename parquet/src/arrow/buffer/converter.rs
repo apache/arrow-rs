@@ -17,11 +17,11 @@
 
 use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, BinaryBuilder, Decimal128Array, FixedSizeBinaryArray,
-    FixedSizeBinaryBuilder, IntervalDayTimeArray, IntervalDayTimeBuilder,
-    IntervalYearMonthArray, IntervalYearMonthBuilder, LargeBinaryArray,
-    LargeBinaryBuilder, LargeStringArray, LargeStringBuilder, StringArray, StringBuilder,
-    TimestampNanosecondArray,
+    Array, ArrayRef, BasicDecimalArray, BinaryArray, BinaryBuilder, Decimal128Array,
+    FixedSizeBinaryArray, FixedSizeBinaryBuilder, IntervalDayTimeArray,
+    IntervalDayTimeBuilder, IntervalYearMonthArray, IntervalYearMonthBuilder,
+    LargeBinaryArray, LargeBinaryBuilder, LargeStringArray, LargeStringBuilder,
+    StringArray, StringBuilder, TimestampNanosecondArray,
 };
 use std::convert::{From, TryInto};
 use std::sync::Arc;
