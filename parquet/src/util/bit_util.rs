@@ -458,12 +458,13 @@ impl BitReader {
         true
     }
 
-    /// Read multiple values from their packed representation
+    /// Read multiple values from their packed representation where each element is represented
+    /// by `num_bits` bits.
     ///
     /// # Panics
     ///
     /// This function panics if
-    /// - `bit_width` is larger than the bit-capacity of `T`
+    /// - `num_bits` is larger than the bit-capacity of `T`
     ///
     pub fn get_batch<T: FromBytes>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
         assert!(num_bits <= size_of::<T>() * 8);
