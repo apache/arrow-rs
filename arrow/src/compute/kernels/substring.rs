@@ -205,7 +205,7 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
     });
     let data = unsafe {
         ArrayData::new_unchecked(
-            GenericStringArray::<OffsetSize>::get_data_type(),
+            GenericStringArray::<OffsetSize>::DATA_TYPE,
             array.len(),
             None,
             array
@@ -294,7 +294,7 @@ fn binary_substring<OffsetSize: OffsetSizeTrait>(
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            GenericBinaryArray::<OffsetSize>::get_data_type(),
+            GenericBinaryArray::<OffsetSize>::DATA_TYPE,
             array.len(),
             None,
             array
@@ -425,7 +425,7 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            GenericStringArray::<OffsetSize>::get_data_type(),
+            GenericStringArray::<OffsetSize>::DATA_TYPE,
             array.len(),
             None,
             array
@@ -587,7 +587,7 @@ mod tests {
         // set the first and third element to be valid
         let bitmap = [0b101_u8];
 
-        let data = ArrayData::builder(GenericBinaryArray::<O>::get_data_type())
+        let data = ArrayData::builder(GenericBinaryArray::<O>::DATA_TYPE)
             .len(2)
             .add_buffer(Buffer::from_slice_ref(offsets))
             .add_buffer(Buffer::from_iter(values))
@@ -814,7 +814,7 @@ mod tests {
         // set the first and third element to be valid
         let bitmap = [0b101_u8];
 
-        let data = ArrayData::builder(GenericStringArray::<O>::get_data_type())
+        let data = ArrayData::builder(GenericStringArray::<O>::DATA_TYPE)
             .len(2)
             .add_buffer(Buffer::from_slice_ref(offsets))
             .add_buffer(Buffer::from(values))
@@ -939,7 +939,7 @@ mod tests {
         // set the first and third element to be valid
         let bitmap = [0b101_u8];
 
-        let data = ArrayData::builder(GenericStringArray::<O>::get_data_type())
+        let data = ArrayData::builder(GenericStringArray::<O>::DATA_TYPE)
             .len(2)
             .add_buffer(Buffer::from_slice_ref(offsets))
             .add_buffer(Buffer::from(values))
