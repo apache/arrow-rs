@@ -127,8 +127,15 @@ impl<OffsetSize: OffsetSizeTrait> PartialEq<GenericListArray<OffsetSize>> for Va
 
 impl<T: ArrowPrimitiveType> JsonEqual for DictionaryArray<T> {
     fn equals_json(&self, json: &[&Value]) -> bool {
-        // todo: this is wrong: we must test the values also
+        // TODO: this is wrong: we must test the values also (#2294)
         self.keys().equals_json(json)
+    }
+}
+
+impl<'a, K: ArrowPrimitiveType, V> JsonEqual for TypedDictionaryArray<'a, K, V> {
+    fn equals_json(&self, json: &[&Value]) -> bool {
+        // TODO: this is wrong: we must test the values also (#2294)
+        self.dictionary.equals_json(json)
     }
 }
 
