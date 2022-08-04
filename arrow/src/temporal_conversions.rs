@@ -147,7 +147,7 @@ pub(crate) fn split_second(v: i64, base: i64) -> (i64, u32) {
         let mut part = v % base;
 
         if part > 0 {
-            seconds = seconds + 1;
+            seconds += 1;
             part = base - part;
         }
         (-seconds, part as u32)
