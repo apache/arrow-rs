@@ -1054,8 +1054,8 @@ mod tests {
     {
         // Print out options to facilitate debugging failures on CI
         println!(
-            "Running single_column_reader_test ConvertedType::{}/ArrowType::{:?} with Options: {:?}",
-            converted_type, arrow_type, opts
+            "Running type {:?} single_column_reader_test ConvertedType::{}/ArrowType::{:?} with Options: {:?}",
+            T::get_physical_type(), converted_type, arrow_type, opts
         );
 
         let (repetition, def_levels) = match opts.null_percent.as_ref() {
