@@ -51,6 +51,8 @@ pub struct ArrowJson {
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ArrowJsonSchema {
     pub fields: Vec<ArrowJsonField>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Vec<HashMap<String, String>>>,
 }
 
 /// Fields are left as JSON `Value` as they vary by `DataType`
@@ -158,6 +160,8 @@ impl ArrowJson {
             match batch {
                 Some(Ok(batch)) => {
                     if json_batch != batch {
+                        println!("json: {:?}", json_batch);
+                        println!("batch: {:?}", batch);
                         return Ok(false);
                     }
                 }
@@ -211,7 +215,20 @@ impl ArrowJsonSchema {
             .iter()
             .map(|field| field.to_arrow_field())
             .collect();
-        Ok(Schema::new(arrow_fields?))
+
+        if let Some(metadatas) = &self.metadata {
+            let mut metadata: HashMap<String, String> = HashMap::new();
+
+            metadatas.iter().for_each(|pair| {
+                let key = pair.get("key").unwrap();
+                let value = pair.get("value").unwrap();
+                metadata.insert(key.clone(), value.clone());
+            });
+
+            Ok(Schema::new_with_metadata(arrow_fields?, metadata))
+        } else {
+            Ok(Schema::new(arrow_fields?))
+        }
     }
 }
 
