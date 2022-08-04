@@ -228,6 +228,14 @@ enum Error {
         source: rusoto_core::region::ParseRegionError,
     },
 
+    #[snafu(display(
+        "Region must be specified for AWS S3. Regions should look like `us-east-2`"
+    ))]
+    MissingRegion {},
+
+    #[snafu(display("Missing bucket name"))]
+    MissingBucketName {},
+
     #[snafu(display("Missing aws-access-key"))]
     MissingAccessKey,
 
@@ -252,7 +260,7 @@ impl From<Error> for super::Error {
     }
 }
 
-/// Configuration for connecting to [Amazon S3](https://aws.amazon.com/s3/).
+/// Interface for [Amazon S3](https://aws.amazon.com/s3/).
 pub struct AmazonS3 {
     /// S3 client w/o any connection limit.
     ///
@@ -584,99 +592,197 @@ fn convert_object_meta(object: rusoto_s3::Object, bucket: &str) -> Result<Object
 
 /// Configure a connection to Amazon S3 using the specified credentials in
 /// the specified Amazon region and bucket.
-#[allow(clippy::too_many_arguments)]
-pub fn new_s3(
-    access_key_id: Option<impl Into<String>>,
-    secret_access_key: Option<impl Into<String>>,
-    region: impl Into<String>,
-    bucket_name: impl Into<String>,
-    endpoint: Option<impl Into<String>>,
-    session_token: Option<impl Into<String>>,
+///
+/// # Example
+/// ```
+/// # let REGION = "foo";
+/// # let BUCKET_NAME = "foo";
+/// # let ACCESS_KEY_ID = "foo";
+/// # let SECRET_KEY = "foo";
+/// # use object_store::aws::AmazonS3Builder;
+/// let s3 = AmazonS3Builder::new()
+///  .with_region(REGION)
+///  .with_bucket_name(BUCKET_NAME)
+///  .with_access_key_id(ACCESS_KEY_ID)
+///  .with_secret_access_key(SECRET_KEY)
+///  .build();
+/// ```
+#[derive(Debug)]
+pub struct AmazonS3Builder {
+    access_key_id: Option<String>,
+    secret_access_key: Option<String>,
+    region: Option<String>,
+    bucket_name: Option<String>,
+    endpoint: Option<String>,
+    token: Option<String>,
     max_connections: NonZeroUsize,
     allow_http: bool,
-) -> Result<AmazonS3> {
-    let region = region.into();
-    let region: rusoto_core::Region = match endpoint {
-        None => region.parse().context(InvalidRegionSnafu { region })?,
-        Some(endpoint) => rusoto_core::Region::Custom {
-            name: region,
-            endpoint: endpoint.into(),
-        },
-    };
-
-    let mut builder = HyperBuilder::default();
-    builder.pool_max_idle_per_host(max_connections.get());
-
-    let connector = if allow_http {
-        hyper_rustls::HttpsConnectorBuilder::new()
-            .with_webpki_roots()
-            .https_or_http()
-            .enable_http1()
-            .enable_http2()
-            .build()
-    } else {
-        hyper_rustls::HttpsConnectorBuilder::new()
-            .with_webpki_roots()
-            .https_only()
-            .enable_http1()
-            .enable_http2()
-            .build()
-    };
-
-    let http_client = rusoto_core::request::HttpClient::from_builder(builder, connector);
-
-    let client = match (access_key_id, secret_access_key, session_token) {
-        (Some(access_key_id), Some(secret_access_key), Some(session_token)) => {
-            let credentials_provider = StaticProvider::new(
-                access_key_id.into(),
-                secret_access_key.into(),
-                Some(session_token.into()),
-                None,
-            );
-            rusoto_s3::S3Client::new_with(http_client, credentials_provider, region)
-        }
-        (Some(access_key_id), Some(secret_access_key), None) => {
-            let credentials_provider = StaticProvider::new_minimal(
-                access_key_id.into(),
-                secret_access_key.into(),
-            );
-            rusoto_s3::S3Client::new_with(http_client, credentials_provider, region)
-        }
-        (None, Some(_), _) => return Err(Error::MissingAccessKey.into()),
-        (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
-        _ if std::env::var_os("AWS_WEB_IDENTITY_TOKEN_FILE").is_some() => {
-            rusoto_s3::S3Client::new_with(
-                http_client,
-                WebIdentityProvider::from_k8s_env(),
-                region,
-            )
-        }
-        _ => rusoto_s3::S3Client::new_with(
-            http_client,
-            InstanceMetadataProvider::new(),
-            region,
-        ),
-    };
-
-    Ok(AmazonS3 {
-        client_unrestricted: client,
-        connection_semaphore: Arc::new(Semaphore::new(max_connections.get())),
-        bucket_name: bucket_name.into(),
-    })
 }
 
-/// Create a new [`AmazonS3`] that always errors
-pub fn new_failing_s3() -> Result<AmazonS3> {
-    new_s3(
-        Some("foo"),
-        Some("bar"),
-        "us-east-1",
-        "bucket",
-        None as Option<&str>,
-        None as Option<&str>,
-        NonZeroUsize::new(16).unwrap(),
-        true,
-    )
+impl Default for AmazonS3Builder {
+    fn default() -> Self {
+        Self {
+            access_key_id: None,
+            secret_access_key: None,
+            region: None,
+            bucket_name: None,
+            endpoint: None,
+            token: None,
+            max_connections: NonZeroUsize::new(16).unwrap(),
+            allow_http: false,
+        }
+    }
+}
+
+impl AmazonS3Builder {
+    /// Create a new [`AmazonS3Builder`] with default values.
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Set the AWS Access Key (required)
+    pub fn with_access_key_id(mut self, access_key_id: impl Into<String>) -> Self {
+        self.access_key_id = Some(access_key_id.into());
+        self
+    }
+
+    /// Set the AWS Secret Access Key (required)
+    pub fn with_secret_access_key(
+        mut self,
+        secret_access_key: impl Into<String>,
+    ) -> Self {
+        self.secret_access_key = Some(secret_access_key.into());
+        self
+    }
+
+    /// Set the region (e.g. `us-east-1`) (required)
+    pub fn with_region(mut self, region: impl Into<String>) -> Self {
+        self.region = Some(region.into());
+        self
+    }
+
+    /// Set the bucket_name (required)
+    pub fn with_bucket_name(mut self, bucket_name: impl Into<String>) -> Self {
+        self.bucket_name = Some(bucket_name.into());
+        self
+    }
+
+    /// Sets the endpoint for communicating with AWS S3. Default value
+    /// is based on region.
+    ///
+    /// For example, this might be set to `"http://localhost:4566:`
+    /// for testing against a localstack instance.
+    pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
+        self.endpoint = Some(endpoint.into());
+        self
+    }
+
+    /// Set the token to use for requests (passed to underlying provider)
+    pub fn with_token(mut self, token: impl Into<String>) -> Self {
+        self.token = Some(token.into());
+        self
+    }
+
+    /// Sets the maximum number of concurrent outstanding
+    /// connectons. Default is `16`.
+    #[deprecated(note = "use LimitStore instead")]
+    pub fn with_max_connections(mut self, max_connections: NonZeroUsize) -> Self {
+        self.max_connections = max_connections;
+        self
+    }
+
+    /// Sets what protocol is allowed. If `allow_http` is :
+    /// * false (default):  Only HTTPS are allowed
+    /// * true:  HTTP and HTTPS are allowed
+    pub fn with_allow_http(mut self, allow_http: bool) -> Self {
+        self.allow_http = allow_http;
+        self
+    }
+
+    /// Create a [`AmazonS3`] instance from the provided values,
+    /// consuming `self`.
+    pub fn build(self) -> Result<AmazonS3> {
+        let Self {
+            access_key_id,
+            secret_access_key,
+            region,
+            bucket_name,
+            endpoint,
+            token,
+            max_connections,
+            allow_http,
+        } = self;
+
+        let region = region.ok_or(Error::MissingRegion {})?;
+        let bucket_name = bucket_name.ok_or(Error::MissingBucketName {})?;
+
+        let region: rusoto_core::Region = match endpoint {
+            None => region.parse().context(InvalidRegionSnafu { region })?,
+            Some(endpoint) => rusoto_core::Region::Custom {
+                name: region,
+                endpoint,
+            },
+        };
+
+        let mut builder = HyperBuilder::default();
+        builder.pool_max_idle_per_host(max_connections.get());
+
+        let connector = if allow_http {
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_webpki_roots()
+                .https_or_http()
+                .enable_http1()
+                .enable_http2()
+                .build()
+        } else {
+            hyper_rustls::HttpsConnectorBuilder::new()
+                .with_webpki_roots()
+                .https_only()
+                .enable_http1()
+                .enable_http2()
+                .build()
+        };
+
+        let http_client =
+            rusoto_core::request::HttpClient::from_builder(builder, connector);
+
+        let client = match (access_key_id, secret_access_key, token) {
+            (Some(access_key_id), Some(secret_access_key), Some(token)) => {
+                let credentials_provider = StaticProvider::new(
+                    access_key_id,
+                    secret_access_key,
+                    Some(token),
+                    None,
+                );
+                rusoto_s3::S3Client::new_with(http_client, credentials_provider, region)
+            }
+            (Some(access_key_id), Some(secret_access_key), None) => {
+                let credentials_provider =
+                    StaticProvider::new_minimal(access_key_id, secret_access_key);
+                rusoto_s3::S3Client::new_with(http_client, credentials_provider, region)
+            }
+            (None, Some(_), _) => return Err(Error::MissingAccessKey.into()),
+            (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
+            _ if std::env::var_os("AWS_WEB_IDENTITY_TOKEN_FILE").is_some() => {
+                rusoto_s3::S3Client::new_with(
+                    http_client,
+                    WebIdentityProvider::from_k8s_env(),
+                    region,
+                )
+            }
+            _ => rusoto_s3::S3Client::new_with(
+                http_client,
+                InstanceMetadataProvider::new(),
+                region,
+            ),
+        };
+
+        Ok(AmazonS3 {
+            client_unrestricted: client,
+            connection_semaphore: Arc::new(Semaphore::new(max_connections.get())),
+            bucket_name,
+        })
+    }
 }
 
 /// S3 client bundled w/ a semaphore permit.
@@ -1057,7 +1163,7 @@ mod tests {
             get_nonexistent_object, list_uses_directories_correctly, list_with_delimiter,
             put_get_delete_list, rename_and_copy, stream_get,
         },
-        Error as ObjectStoreError, ObjectStore,
+        Error as ObjectStoreError,
     };
     use bytes::Bytes;
     use std::env;
@@ -1067,17 +1173,9 @@ mod tests {
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
-    #[derive(Debug)]
-    struct AwsConfig {
-        access_key_id: String,
-        secret_access_key: String,
-        region: String,
-        bucket: String,
-        endpoint: Option<String>,
-        token: Option<String>,
-    }
-
-    // Helper macro to skip tests if TEST_INTEGRATION and the AWS environment variables are not set.
+    // Helper macro to skip tests if TEST_INTEGRATION and the AWS
+    // environment variables are not set. Returns a configured
+    // AmazonS3Builder
     macro_rules! maybe_skip_integration {
         () => {{
             dotenv::dotenv().ok();
@@ -1116,18 +1214,38 @@ mod tests {
                 );
                 return;
             } else {
-                AwsConfig {
-                    access_key_id: env::var("AWS_ACCESS_KEY_ID")
-                        .expect("already checked AWS_ACCESS_KEY_ID"),
-                    secret_access_key: env::var("AWS_SECRET_ACCESS_KEY")
-                        .expect("already checked AWS_SECRET_ACCESS_KEY"),
-                    region: env::var("AWS_DEFAULT_REGION")
-                        .expect("already checked AWS_DEFAULT_REGION"),
-                    bucket: env::var("OBJECT_STORE_BUCKET")
-                        .expect("already checked OBJECT_STORE_BUCKET"),
-                    endpoint: env::var("AWS_ENDPOINT").ok(),
-                    token: env::var("AWS_SESSION_TOKEN").ok(),
-                }
+                let config = AmazonS3Builder::new()
+                    .with_access_key_id(
+                        env::var("AWS_ACCESS_KEY_ID")
+                            .expect("already checked AWS_ACCESS_KEY_ID"),
+                    )
+                    .with_secret_access_key(
+                        env::var("AWS_SECRET_ACCESS_KEY")
+                            .expect("already checked AWS_SECRET_ACCESS_KEY"),
+                    )
+                    .with_region(
+                        env::var("AWS_DEFAULT_REGION")
+                            .expect("already checked AWS_DEFAULT_REGION"),
+                    )
+                    .with_bucket_name(
+                        env::var("OBJECT_STORE_BUCKET")
+                            .expect("already checked OBJECT_STORE_BUCKET"),
+                    )
+                    .with_allow_http(true);
+
+                let config = if let Some(endpoint) = env::var("AWS_ENDPOINT").ok() {
+                    config.with_endpoint(endpoint)
+                } else {
+                    config
+                };
+
+                let config = if let Some(token) = env::var("AWS_SESSION_TOKEN").ok() {
+                    config.with_token(token)
+                } else {
+                    config
+                };
+
+                config
             }
         }};
     }
@@ -1148,24 +1266,10 @@ mod tests {
         r
     }
 
-    fn make_integration(config: AwsConfig) -> AmazonS3 {
-        new_s3(
-            Some(config.access_key_id),
-            Some(config.secret_access_key),
-            config.region,
-            config.bucket,
-            config.endpoint,
-            config.token,
-            NonZeroUsize::new(16).unwrap(),
-            true,
-        )
-        .expect("Valid S3 config")
-    }
-
     #[tokio::test]
     async fn s3_test() {
         let config = maybe_skip_integration!();
-        let integration = make_integration(config);
+        let integration = config.build().unwrap();
 
         check_credentials(put_get_delete_list(&integration).await).unwrap();
         check_credentials(list_uses_directories_correctly(&integration).await).unwrap();
@@ -1177,7 +1281,7 @@ mod tests {
     #[tokio::test]
     async fn s3_test_get_nonexistent_location() {
         let config = maybe_skip_integration!();
-        let integration = make_integration(config);
+        let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1204,9 +1308,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_get_nonexistent_bucket() {
-        let mut config = maybe_skip_integration!();
-        config.bucket = NON_EXISTENT_NAME.into();
-        let integration = make_integration(config);
+        let config = maybe_skip_integration!().with_bucket_name(NON_EXISTENT_NAME);
+        let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1220,9 +1323,9 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_put_nonexistent_bucket() {
-        let mut config = maybe_skip_integration!();
-        config.bucket = NON_EXISTENT_NAME.into();
-        let integration = make_integration(config);
+        let config = maybe_skip_integration!().with_bucket_name(NON_EXISTENT_NAME);
+
+        let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
         let data = Bytes::from("arbitrary data");
@@ -1244,7 +1347,7 @@ mod tests {
     #[tokio::test]
     async fn s3_test_delete_nonexistent_location() {
         let config = maybe_skip_integration!();
-        let integration = make_integration(config);
+        let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 
@@ -1253,9 +1356,8 @@ mod tests {
 
     #[tokio::test]
     async fn s3_test_delete_nonexistent_bucket() {
-        let mut config = maybe_skip_integration!();
-        config.bucket = NON_EXISTENT_NAME.into();
-        let integration = make_integration(config);
+        let config = maybe_skip_integration!().with_bucket_name(NON_EXISTENT_NAME);
+        let integration = config.build().unwrap();
 
         let location = Path::from_iter([NON_EXISTENT_NAME]);
 

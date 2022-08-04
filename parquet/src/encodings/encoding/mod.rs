@@ -17,7 +17,7 @@
 
 //! Contains all supported encoders for Parquet.
 
-use std::{cmp, io::Write, marker::PhantomData};
+use std::{cmp, marker::PhantomData};
 
 use crate::basic::*;
 use crate::data_type::private::ParquetValueType;
@@ -27,9 +27,12 @@ use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::{
     bit_util::{self, num_required_bits, BitWriter},
-    hash_util,
     memory::ByteBufferPtr,
 };
+
+pub use dict_encoder::DictEncoder;
+
+mod dict_encoder;
 
 // ----------------------------------------------------------------------
 // Encoders
@@ -155,225 +158,6 @@ impl<T: DataType> Encoder<T> for PlainEncoder<T> {
 }
 
 // ----------------------------------------------------------------------
-// Dictionary encoding
-
-const INITIAL_HASH_TABLE_SIZE: usize = 1024;
-const MAX_HASH_LOAD: f32 = 0.7;
-const HASH_SLOT_EMPTY: i32 = -1;
-
-/// Dictionary encoder.
-/// The dictionary encoding builds a dictionary of values encountered in a given column.
-/// The dictionary page is written first, before the data pages of the column chunk.
-///
-/// Dictionary page format: the entries in the dictionary - in dictionary order -
-/// using the plain encoding.
-///
-/// Data page format: the bit width used to encode the entry ids stored as 1 byte
-/// (max bit width = 32), followed by the values encoded using RLE/Bit packed described
-/// above (with the given bit width).
-pub struct DictEncoder<T: DataType> {
-    // Descriptor for the column to be encoded.
-    desc: ColumnDescPtr,
-
-    // Size of the table. **Must be** a power of 2.
-    hash_table_size: usize,
-
-    // Store `hash_table_size` - 1, so that `j & mod_bitmask` is equivalent to
-    // `j % hash_table_size`, but uses far fewer CPU cycles.
-    mod_bitmask: u32,
-
-    // Stores indices which map (many-to-one) to the values in the `uniques` array.
-    // Here we are using fix-sized array with linear probing.
-    // A slot with `HASH_SLOT_EMPTY` indicates the slot is not currently occupied.
-    hash_slots: Vec<i32>,
-
-    // Indices that have not yet be written out by `write_indices()`.
-    buffered_indices: Vec<i32>,
-
-    // The unique observed values.
-    uniques: Vec<T::T>,
-
-    // Size in bytes needed to encode this dictionary.
-    uniques_size_in_bytes: usize,
-}
-
-impl<T: DataType> DictEncoder<T> {
-    /// Creates new dictionary encoder.
-    pub fn new(desc: ColumnDescPtr) -> Self {
-        let mut slots = vec![];
-        slots.resize(INITIAL_HASH_TABLE_SIZE, -1);
-        Self {
-            desc,
-            hash_table_size: INITIAL_HASH_TABLE_SIZE,
-            mod_bitmask: (INITIAL_HASH_TABLE_SIZE - 1) as u32,
-            hash_slots: slots,
-            buffered_indices: vec![],
-            uniques: vec![],
-            uniques_size_in_bytes: 0,
-        }
-    }
-
-    /// Returns true if dictionary entries are sorted, false otherwise.
-    #[inline]
-    pub fn is_sorted(&self) -> bool {
-        // Sorting is not supported currently.
-        false
-    }
-
-    /// Returns number of unique values (keys) in the dictionary.
-    pub fn num_entries(&self) -> usize {
-        self.uniques.len()
-    }
-
-    /// Returns size of unique values (keys) in the dictionary, in bytes.
-    pub fn dict_encoded_size(&self) -> usize {
-        self.uniques_size_in_bytes
-    }
-
-    /// Writes out the dictionary values with PLAIN encoding in a byte buffer, and return
-    /// the result.
-    #[inline]
-    pub fn write_dict(&self) -> Result<ByteBufferPtr> {
-        let mut plain_encoder = PlainEncoder::<T>::new(self.desc.clone(), vec![]);
-        plain_encoder.put(&self.uniques)?;
-        plain_encoder.flush_buffer()
-    }
-
-    /// Writes out the dictionary values with RLE encoding in a byte buffer, and return
-    /// the result.
-    pub fn write_indices(&mut self) -> Result<ByteBufferPtr> {
-        // TODO: the caller should allocate the buffer
-        let buffer_len = self.estimated_data_encoded_size();
-        let mut buffer: Vec<u8> = vec![0; buffer_len as usize];
-        buffer[0] = self.bit_width() as u8;
-
-        // Write bit width in the first byte
-        buffer.write_all((self.bit_width() as u8).as_bytes())?;
-        let mut encoder = RleEncoder::new_from_buf(self.bit_width(), buffer, 1);
-        for index in &self.buffered_indices {
-            if !encoder.put(*index as u64)? {
-                return Err(general_err!("Encoder doesn't have enough space"));
-            }
-        }
-        self.buffered_indices.clear();
-        Ok(ByteBufferPtr::new(encoder.consume()?))
-    }
-
-    #[inline]
-    #[allow(clippy::unnecessary_wraps)]
-    fn put_one(&mut self, value: &T::T) -> Result<()> {
-        let mut j = (hash_util::hash(value, 0) & self.mod_bitmask) as usize;
-        let mut index = self.hash_slots[j];
-
-        while index != HASH_SLOT_EMPTY && self.uniques[index as usize] != *value {
-            j += 1;
-            if j == self.hash_table_size {
-                j = 0;
-            }
-            index = self.hash_slots[j];
-        }
-
-        if index == HASH_SLOT_EMPTY {
-            index = self.insert_fresh_slot(j, value.clone());
-        }
-
-        self.buffered_indices.push(index);
-        Ok(())
-    }
-
-    #[inline(never)]
-    fn insert_fresh_slot(&mut self, slot: usize, value: T::T) -> i32 {
-        let index = self.uniques.len() as i32;
-        self.hash_slots[slot] = index;
-
-        let (base_size, num_elements) = value.dict_encoding_size();
-
-        let unique_size = match T::get_physical_type() {
-            Type::BYTE_ARRAY => base_size + num_elements,
-            Type::FIXED_LEN_BYTE_ARRAY => self.desc.type_length() as usize,
-            _ => base_size,
-        };
-
-        self.uniques_size_in_bytes += unique_size;
-        self.uniques.push(value);
-
-        if self.uniques.len() > (self.hash_table_size as f32 * MAX_HASH_LOAD) as usize {
-            self.double_table_size();
-        }
-
-        index
-    }
-
-    #[inline]
-    fn bit_width(&self) -> u8 {
-        let num_entries = self.uniques.len();
-        if num_entries <= 1 {
-            num_entries as u8
-        } else {
-            num_required_bits(num_entries as u64 - 1)
-        }
-    }
-
-    fn double_table_size(&mut self) {
-        let new_size = self.hash_table_size * 2;
-        let mut new_hash_slots = vec![];
-        new_hash_slots.resize(new_size, HASH_SLOT_EMPTY);
-        for i in 0..self.hash_table_size {
-            let index = self.hash_slots[i];
-            if index == HASH_SLOT_EMPTY {
-                continue;
-            }
-            let value = &self.uniques[index as usize];
-            let mut j = (hash_util::hash(value, 0) & ((new_size - 1) as u32)) as usize;
-            let mut slot = new_hash_slots[j];
-            while slot != HASH_SLOT_EMPTY && self.uniques[slot as usize] != *value {
-                j += 1;
-                if j == new_size {
-                    j = 0;
-                }
-                slot = new_hash_slots[j];
-            }
-
-            new_hash_slots[j] = index;
-        }
-
-        self.hash_table_size = new_size;
-        self.mod_bitmask = (new_size - 1) as u32;
-        self.hash_slots = new_hash_slots;
-    }
-}
-
-impl<T: DataType> Encoder<T> for DictEncoder<T> {
-    #[inline]
-    fn put(&mut self, values: &[T::T]) -> Result<()> {
-        for i in values {
-            self.put_one(i)?
-        }
-        Ok(())
-    }
-
-    // Performance Note:
-    // As far as can be seen these functions are rarely called and as such we can hint to the
-    // compiler that they dont need to be folded into hot locations in the final output.
-    #[cold]
-    fn encoding(&self) -> Encoding {
-        Encoding::PLAIN_DICTIONARY
-    }
-
-    #[inline]
-    fn estimated_data_encoded_size(&self) -> usize {
-        let bit_width = self.bit_width();
-        1 + RleEncoder::min_buffer_size(bit_width)
-            + RleEncoder::max_buffer_size(bit_width, self.buffered_indices.len())
-    }
-
-    #[inline]
-    fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {
-        self.write_indices()
-    }
-}
-
-// ----------------------------------------------------------------------
 // RLE encoding
 
 const DEFAULT_RLE_BUFFER_LEN: usize = 1024;
@@ -402,15 +186,16 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
         ensure_phys_ty!(Type::BOOLEAN, "RleValueEncoder only supports BoolType");
 
-        if self.encoder.is_none() {
-            self.encoder = Some(RleEncoder::new(1, DEFAULT_RLE_BUFFER_LEN));
-        }
-        let rle_encoder = self.encoder.as_mut().unwrap();
+        let rle_encoder = self.encoder.get_or_insert_with(|| {
+            let mut buffer = Vec::with_capacity(DEFAULT_RLE_BUFFER_LEN);
+            // Reserve space for length
+            buffer.extend_from_slice(&[0; 4]);
+            RleEncoder::new_from_buf(1, buffer)
+        });
+
         for value in values {
             let value = value.as_u64()?;
-            if !rle_encoder.put(value)? {
-                return Err(general_err!("RLE buffer is full"));
-            }
+            rle_encoder.put(value)
         }
         Ok(())
     }
@@ -436,25 +221,18 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
         ensure_phys_ty!(Type::BOOLEAN, "RleValueEncoder only supports BoolType");
         let rle_encoder = self
             .encoder
-            .as_mut()
+            .take()
             .expect("RLE value encoder is not initialized");
 
         // Flush all encoder buffers and raw values
-        let encoded_data = {
-            let buf = rle_encoder.flush_buffer()?;
+        let mut buf = rle_encoder.consume();
+        assert!(buf.len() > 4, "should have had padding inserted");
 
-            // Note that buf does not have any offset, all data is encoded bytes
-            let len = (buf.len() as i32).to_le();
-            let len_bytes = len.as_bytes();
-            let mut encoded_data = vec![];
-            encoded_data.extend_from_slice(len_bytes);
-            encoded_data.extend_from_slice(buf);
-            encoded_data
-        };
-        // Reset rle encoder for the next batch
-        rle_encoder.clear();
+        // Note that buf does not have any offset, all data is encoded bytes
+        let len = (buf.len() - 4) as i32;
+        buf[..4].copy_from_slice(&len.to_le_bytes());
 
-        Ok(ByteBufferPtr::new(encoded_data))
+        Ok(ByteBufferPtr::new(buf))
     }
 }
 
@@ -509,7 +287,7 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
         let block_size = DEFAULT_BLOCK_SIZE;
         let num_mini_blocks = DEFAULT_NUM_MINI_BLOCKS;
         let mini_block_size = block_size / num_mini_blocks;
-        assert!(mini_block_size % 8 == 0);
+        assert_eq!(mini_block_size % 8, 0);
         Self::assert_supported_type();
 
         DeltaBitPackEncoder {
@@ -562,7 +340,7 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
         self.bit_writer.put_zigzag_vlq_int(min_delta);
 
         // Slice to store bit width for each mini block
-        let offset = self.bit_writer.skip(self.num_mini_blocks)?;
+        let offset = self.bit_writer.skip(self.num_mini_blocks);
 
         for i in 0..self.num_mini_blocks {
             // Find how many values we need to encode - either block size or whatever
@@ -580,14 +358,15 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             }
 
             // Compute the max delta in current mini block
-            let mut max_delta = i64::min_value();
+            let mut max_delta = i64::MIN;
             for j in 0..n {
                 max_delta =
                     cmp::max(max_delta, self.deltas[i * self.mini_block_size + j]);
             }
 
             // Compute bit width to store (max_delta - min_delta)
-            let bit_width = num_required_bits(self.subtract_u64(max_delta, min_delta)) as usize;
+            let bit_width =
+                num_required_bits(self.subtract_u64(max_delta, min_delta)) as usize;
             self.bit_writer.write_at(offset + i, bit_width as u8);
 
             // Encode values in current mini block using min_delta and bit_width
@@ -1088,7 +867,7 @@ mod tests {
         let mut values = vec![];
         values.extend_from_slice(&[true; 16]);
         values.extend_from_slice(&[false; 16]);
-        run_test::<BoolType>(Encoding::RLE, -1, &values, 0, 2, 0);
+        run_test::<BoolType>(Encoding::RLE, -1, &values, 0, 6, 0);
 
         // DELTA_LENGTH_BYTE_ARRAY
         run_test::<ByteArrayType>(

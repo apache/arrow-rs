@@ -62,7 +62,20 @@ pub trait ArrayReader: Send {
     fn get_data_type(&self) -> &ArrowType;
 
     /// Reads at most `batch_size` records into an arrow array and return it.
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef>;
+    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
+        self.read_records(batch_size)?;
+        self.consume_batch()
+    }
+
+    /// Reads at most `batch_size` records' bytes into buffer
+    ///
+    /// Returns the number of records read, which can be less than `batch_size` if
+    /// pages is exhausted.
+    fn read_records(&mut self, batch_size: usize) -> Result<usize>;
+
+    /// Consume all currently stored buffer data
+    /// into an arrow array and return it.
+    fn consume_batch(&mut self) -> Result<ArrayRef>;
 
     /// Skips over `num_records` records, returning the number of rows skipped
     fn skip_records(&mut self, num_records: usize) -> Result<usize>;

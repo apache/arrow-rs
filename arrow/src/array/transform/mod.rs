@@ -205,7 +205,7 @@ fn build_extend_dictionary(
 fn build_extend(array: &ArrayData) -> Extend {
     use crate::datatypes::*;
     match array.data_type() {
-        DataType::Decimal(_, _) => primitive::build_extend::<i128>(array),
+        DataType::Decimal128(_, _) => primitive::build_extend::<i128>(array),
         DataType::Null => null::build_extend(array),
         DataType::Boolean => boolean::build_extend(array),
         DataType::UInt8 => primitive::build_extend::<u8>(array),
@@ -256,7 +256,7 @@ fn build_extend(array: &ArrayData) -> Extend {
 fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
     use crate::datatypes::*;
     Box::new(match data_type {
-        DataType::Decimal(_, _) => primitive::extend_nulls::<i128>,
+        DataType::Decimal128(_, _) => primitive::extend_nulls::<i128>,
         DataType::Null => null::extend_nulls,
         DataType::Boolean => boolean::extend_nulls,
         DataType::UInt8 => primitive::extend_nulls::<u8>,
@@ -410,7 +410,7 @@ impl<'a> MutableArrayData<'a> {
         };
 
         let child_data = match &data_type {
-            DataType::Decimal(_, _)
+            DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::Null
             | DataType::Boolean
@@ -675,6 +675,7 @@ mod tests {
 
     use super::*;
 
+    use crate::array::BasicDecimalArray;
     use crate::array::Decimal128Array;
     use crate::{
         array::{
@@ -708,7 +709,7 @@ mod tests {
     fn test_decimal() {
         let decimal_array =
             create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
-        let arrays = vec![decimal_array.data()];
+        let arrays = vec![Array::data(&decimal_array)];
         let mut a = MutableArrayData::new(arrays, true, 3);
         a.extend(0, 0, 3);
         a.extend(0, 2, 3);

@@ -28,27 +28,58 @@ on:
 jobs:
 
   # Check workspace wide compile and test with default features for
-  # mac and windows
-  windows-and-macos:
-    name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ windows-latest, macos-latest ]
-        rust: [ stable ]
+  # mac
+  macos:
+    name: Test on Mac
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: true
+      - name: Install protoc with brew
+        run: |
+          brew install protobuf
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }} --no-self-update
-          rustup default ${{ matrix.rust }}
+          rustup toolchain install stable --no-self-update
+          rustup default stable
       - name: Run tests
         shell: bash
         run: |
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
+          cargo test
+
+
+  # Check workspace wide compile and test with default features for
+  # windows
+  windows:
+    name: Test on Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Install protobuf compiler in /d/protoc
+        shell: bash
+        run: |
+          mkdir /d/protoc
+          cd /d/protoc
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protoc-21.4-win64.zip
+          unzip protoc-21.4-win64.zip
+          export PATH=$PATH:/d/protoc/bin
+          protoc --version
+
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - name: Run tests
+        shell: bash
+        run: |
+          # do not produce debug symbols to keep memory usage down
+          export RUSTFLAGS="-C debuginfo=0"
+          export PATH=$PATH:/d/protoc/bin
           cargo test
 
 

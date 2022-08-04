@@ -30,16 +30,21 @@ use crate::util::memory::ByteBufferPtr;
 
 /// A collection of [`ParquetValueType`] encoded by a [`ColumnValueEncoder`]
 pub trait ColumnValues {
-    /// The underlying value type
-    type T: ParquetValueType;
-
     /// The number of values in this collection
     fn len(&self) -> usize;
+}
 
-    /// Returns the min and max values in this collection, skipping any NaN values
-    ///
-    /// Returns `None` if no values found
-    fn min_max(&self, descr: &ColumnDescriptor) -> Option<(&Self::T, &Self::T)>;
+#[cfg(any(feature = "arrow", test))]
+impl<T: arrow::array::Array> ColumnValues for T {
+    fn len(&self) -> usize {
+        arrow::array::Array::len(self)
+    }
+}
+
+impl<T: ParquetValueType> ColumnValues for [T] {
+    fn len(&self) -> usize {
+        self.len()
+    }
 }
 
 /// The encoded data for a dictionary page
@@ -67,7 +72,16 @@ pub trait ColumnValueEncoder {
     type T: ParquetValueType;
 
     /// The values encoded by this encoder
-    type Values: ColumnValues<T = Self::T> + ?Sized;
+    type Values: ColumnValues + ?Sized;
+
+    /// Returns the min and max values in this collection, skipping any NaN values
+    ///
+    /// Returns `None` if no values found
+    fn min_max(
+        &self,
+        values: &Self::Values,
+        value_indices: Option<&[usize]>,
+    ) -> Option<(Self::T, Self::T)>;
 
     /// Create a new [`ColumnValueEncoder`]
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self>
@@ -76,6 +90,9 @@ pub trait ColumnValueEncoder {
 
     /// Write the corresponding values to this [`ColumnValueEncoder`]
     fn write(&mut self, values: &Self::Values, offset: usize, len: usize) -> Result<()>;
+
+    /// Write the values at the indexes in `indices` to this [`ColumnValueEncoder`]
+    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()>;
 
     /// Returns the number of buffered values
     fn num_values(&self) -> usize;
@@ -110,10 +127,39 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     max_value: Option<T::T>,
 }
 
+impl<T: DataType> ColumnValueEncoderImpl<T> {
+    fn write_slice(&mut self, slice: &[T::T]) -> Result<()> {
+        if self.statistics_enabled == EnabledStatistics::Page {
+            if let Some((min, max)) = self.min_max(slice, None) {
+                update_min(&self.descr, &min, &mut self.min_value);
+                update_max(&self.descr, &max, &mut self.max_value);
+            }
+        }
+
+        match &mut self.dict_encoder {
+            Some(encoder) => encoder.put(slice),
+            _ => self.encoder.put(slice),
+        }
+    }
+}
+
 impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     type T = T::T;
 
     type Values = [T::T];
+
+    fn min_max(
+        &self,
+        values: &Self::Values,
+        value_indices: Option<&[usize]>,
+    ) -> Option<(Self::T, Self::T)> {
+        match value_indices {
+            Some(indices) => {
+                get_min_max(&self.descr, indices.iter().map(|x| &values[*x]))
+            }
+            None => get_min_max(&self.descr, values.iter()),
+        }
+    }
 
     fn try_new(descr: &ColumnDescPtr, props: &WriterProperties) -> Result<Self> {
         let dict_supported = props.dictionary_enabled(descr.path())
@@ -152,17 +198,12 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             )
         })?;
 
-        if self.statistics_enabled == EnabledStatistics::Page {
-            if let Some((min, max)) = slice.min_max(&self.descr) {
-                update_min(&self.descr, min, &mut self.min_value);
-                update_max(&self.descr, max, &mut self.max_value);
-            }
-        }
+        self.write_slice(slice)
+    }
 
-        match &mut self.dict_encoder {
-            Some(encoder) => encoder.put(slice),
-            _ => self.encoder.put(slice),
-        }
+    fn write_gather(&mut self, values: &Self::Values, indices: &[usize]) -> Result<()> {
+        let slice: Vec<_> = indices.iter().map(|idx| values[*idx].clone()).collect();
+        self.write_slice(&slice)
     }
 
     fn num_values(&self) -> usize {
@@ -221,36 +262,30 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 }
 
-impl<T: ParquetValueType> ColumnValues for [T] {
-    type T = T;
-
-    fn len(&self) -> usize {
-        self.len()
-    }
-
-    fn min_max(&self, descr: &ColumnDescriptor) -> Option<(&T, &T)> {
-        let mut iter = self.iter();
-
-        let first = loop {
-            let next = iter.next()?;
-            if !is_nan(next) {
-                break next;
-            }
-        };
-
-        let mut min = first;
-        let mut max = first;
-        for val in iter {
-            if is_nan(val) {
-                continue;
-            }
-            if compare_greater(descr, min, val) {
-                min = val;
-            }
-            if compare_greater(descr, val, max) {
-                max = val;
-            }
+fn get_min_max<'a, T, I>(descr: &ColumnDescriptor, mut iter: I) -> Option<(T, T)>
+where
+    T: ParquetValueType + 'a,
+    I: Iterator<Item = &'a T>,
+{
+    let first = loop {
+        let next = iter.next()?;
+        if !is_nan(next) {
+            break next;
         }
-        Some((min, max))
+    };
+
+    let mut min = first;
+    let mut max = first;
+    for val in iter {
+        if is_nan(val) {
+            continue;
+        }
+        if compare_greater(descr, min, val) {
+            min = val;
+        }
+        if compare_greater(descr, val, max) {
+            max = val;
+        }
     }
+    Some((min.clone(), max.clone()))
 }

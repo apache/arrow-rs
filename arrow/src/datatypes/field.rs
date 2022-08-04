@@ -675,7 +675,7 @@ impl Field {
             | DataType::FixedSizeBinary(_)
             | DataType::Utf8
             | DataType::LargeUtf8
-            | DataType::Decimal(_, _)
+            | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _) => {
                 if self.data_type != from.data_type {
                     return Err(ArrowError::SchemaError(

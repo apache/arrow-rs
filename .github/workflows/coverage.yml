@@ -28,18 +28,24 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ stable ]
+    # Note runs outside of a container
+    # otherwise we get this error:
+    # Failed to run tests: ASLR disable failed: EPERM: Operation not permitted
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: true
       - name: Setup Rust toolchain
         run: |
-          rustup toolchain install ${{ matrix.rust }}
-          rustup default ${{ matrix.rust }}
+          rustup toolchain install stable
+          rustup default stable
+      - name: Install protobuf compiler in /protoc
+        run: |
+          sudo mkdir /protoc
+          sudo chmod a+rwx /protoc
+          cd /protoc
+          curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v21.4/protoc-21.4-linux-x86_64.zip
+          unzip protoc-21.4-linux-x86_64.zip
       - name: Cache Cargo
         uses: actions/cache@v3
         with:
@@ -47,6 +53,7 @@ jobs:
           key: cargo-coverage-cache3-
       - name: Run coverage
         run: |
+          export PATH=$PATH:/protoc/bin
           rustup toolchain install stable
           rustup default stable
           cargo install --version 0.18.2 cargo-tarpaulin

@@ -25,8 +25,8 @@ use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::{
-    ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder, Decimal128Array,
-    Float32Array, Float64Array, Int32Array, Int64Array,
+    ArrayDataBuilder, ArrayRef, BasicDecimalArray, BooleanArray, BooleanBufferBuilder,
+    Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use arrow::buffer::Buffer;
 use arrow::datatypes::DataType as ArrowType;
@@ -95,10 +95,11 @@ where
         &self.data_type
     }
 
-    /// Reads at most `batch_size` records into array.
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)?;
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        read_records(&mut self.record_reader, self.pages.as_mut(), batch_size)
+    }
 
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
         let target_type = self.get_data_type().clone();
         let arrow_data_type = match T::get_physical_type() {
             PhysicalType::BOOLEAN => ArrowType::Boolean,
@@ -183,7 +184,7 @@ where
                 let a = arrow::compute::cast(&array, &ArrowType::Date32)?;
                 arrow::compute::cast(&a, &target_type)?
             }
-            ArrowType::Decimal(p, s) => {
+            ArrowType::Decimal128(p, s) => {
                 let array = match array.data_type() {
                     ArrowType::Int32 => array
                         .as_any()

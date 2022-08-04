@@ -27,7 +27,7 @@ use crate::column::writer::encoder::{
 use crate::compression::{create_codec, Codec};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
-use crate::encodings::levels::{max_buffer_size, LevelEncoder};
+use crate::encodings::levels::LevelEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ColumnIndexBuilder, OffsetIndexBuilder};
 use crate::file::properties::EnabledStatistics;
@@ -249,9 +249,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
     }
 
-    fn write_batch_internal(
+    pub(crate) fn write_batch_internal(
         &mut self,
         values: &E::Values,
+        value_indices: Option<&[usize]>,
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
         min: Option<&E::T>,
@@ -290,9 +291,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     panic!("min/max should be both set or both None")
                 }
                 (None, None) => {
-                    if let Some((min, max)) = values.min_max(&self.descr) {
-                        update_min(&self.descr, min, &mut self.min_column_value);
-                        update_max(&self.descr, max, &mut self.max_column_value);
+                    if let Some((min, max)) = self.encoder.min_max(values, value_indices)
+                    {
+                        update_min(&self.descr, &min, &mut self.min_column_value);
+                        update_max(&self.descr, &max, &mut self.max_column_value);
                     }
                 }
             };
@@ -311,6 +313,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             values_offset += self.write_mini_batch(
                 values,
                 values_offset,
+                value_indices,
                 write_batch_size,
                 def_levels.map(|lv| &lv[levels_offset..levels_offset + write_batch_size]),
                 rep_levels.map(|lv| &lv[levels_offset..levels_offset + write_batch_size]),
@@ -321,6 +324,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         values_offset += self.write_mini_batch(
             values,
             values_offset,
+            value_indices,
             num_levels - levels_offset,
             def_levels.map(|lv| &lv[levels_offset..]),
             rep_levels.map(|lv| &lv[levels_offset..]),
@@ -348,7 +352,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
     ) -> Result<usize> {
-        self.write_batch_internal(values, def_levels, rep_levels, None, None, None)
+        self.write_batch_internal(values, None, def_levels, rep_levels, None, None, None)
     }
 
     /// Writer may optionally provide pre-calculated statistics for use when computing
@@ -369,6 +373,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     ) -> Result<usize> {
         self.write_batch_internal(
             values,
+            None,
             def_levels,
             rep_levels,
             min,
@@ -427,6 +432,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         &mut self,
         values: &E::Values,
         values_offset: usize,
+        value_indices: Option<&[usize]>,
         num_levels: usize,
         def_levels: Option<&[i16]>,
         rep_levels: Option<&[i16]>,
@@ -490,7 +496,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             self.num_buffered_rows += num_levels as u32;
         }
 
-        self.encoder.write(values, values_offset, values_to_write)?;
+        match value_indices {
+            Some(indices) => {
+                let indices = &indices[values_offset..values_offset + values_to_write];
+                self.encoder.write_gather(values, indices)?;
+            }
+            None => self.encoder.write(values, values_offset, values_to_write)?,
+        }
+
         self.num_buffered_values += num_levels as u32;
 
         if self.should_add_data_page() {
@@ -617,7 +630,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             Encoding::RLE,
                             &self.rep_levels_sink[..],
                             max_rep_level,
-                        )?[..],
+                        )[..],
                     );
                 }
 
@@ -627,7 +640,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                             Encoding::RLE,
                             &self.def_levels_sink[..],
                             max_def_level,
-                        )?[..],
+                        )[..],
                     );
                 }
 
@@ -658,14 +671,14 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
                 if max_rep_level > 0 {
                     let levels =
-                        self.encode_levels_v2(&self.rep_levels_sink[..], max_rep_level)?;
+                        self.encode_levels_v2(&self.rep_levels_sink[..], max_rep_level);
                     rep_levels_byte_len = levels.len();
                     buffer.extend_from_slice(&levels[..]);
                 }
 
                 if max_def_level > 0 {
                     let levels =
-                        self.encode_levels_v2(&self.def_levels_sink[..], max_def_level)?;
+                        self.encode_levels_v2(&self.def_levels_sink[..], max_def_level);
                     def_levels_byte_len = levels.len();
                     buffer.extend_from_slice(&levels[..]);
                 }
@@ -781,20 +794,18 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         encoding: Encoding,
         levels: &[i16],
         max_level: i16,
-    ) -> Result<Vec<u8>> {
-        let size = max_buffer_size(encoding, max_level, levels.len());
-        let mut encoder = LevelEncoder::v1(encoding, max_level, vec![0; size]);
-        encoder.put(levels)?;
+    ) -> Vec<u8> {
+        let mut encoder = LevelEncoder::v1(encoding, max_level, levels.len());
+        encoder.put(levels);
         encoder.consume()
     }
 
     /// Encodes definition or repetition levels for Data Page v2.
     /// Encoding is always RLE.
     #[inline]
-    fn encode_levels_v2(&self, levels: &[i16], max_level: i16) -> Result<Vec<u8>> {
-        let size = max_buffer_size(Encoding::RLE, max_level, levels.len());
-        let mut encoder = LevelEncoder::v2(max_level, vec![0; size]);
-        encoder.put(levels)?;
+    fn encode_levels_v2(&self, levels: &[i16], max_level: i16) -> Vec<u8> {
+        let mut encoder = LevelEncoder::v2(max_level, levels.len());
+        encoder.put(levels);
         encoder.consume()
     }
 

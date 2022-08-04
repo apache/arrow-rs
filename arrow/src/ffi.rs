@@ -29,14 +29,16 @@
 //! # use arrow::array::{Int32Array, Array, ArrayData, export_array_into_raw, make_array, make_array_from_raw};
 //! # use arrow::error::{Result, ArrowError};
 //! # use arrow::compute::kernels::arithmetic;
-//! # use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
+//! # use arrow::ffi::{ArrowArray, FFI_ArrowArray, FFI_ArrowSchema};
 //! # use std::convert::TryFrom;
 //! # fn main() -> Result<()> {
 //! // create an array natively
 //! let array = Int32Array::from(vec![Some(1), None, Some(3)]);
 //!
 //! // export it
-//! let (array_ptr, schema_ptr) = array.to_raw()?;
+//!
+//! let ffi_array = ArrowArray::try_new(array.data().clone())?;
+//! let (array_ptr, schema_ptr) = ArrowArray::into_raw(ffi_array);
 //!
 //! // consumed and used by something else...
 //!
@@ -322,7 +324,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Int64, 1) | (DataType::Date64, 1) | (DataType::Time64(_), 1) => size_of::<i64>() * 8,
         (DataType::Float32, 1) => size_of::<f32>() * 8,
         (DataType::Float64, 1) => size_of::<f64>() * 8,
-        (DataType::Decimal(..), 1) => size_of::<i128>() * 8,
+        (DataType::Decimal128(..), 1) => size_of::<i128>() * 8,
         (DataType::Timestamp(..), 1) => size_of::<i64>() * 8,
         (DataType::Duration(..), 1) => size_of::<i64>() * 8,
         // primitive types have a single buffer
@@ -337,7 +339,7 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Int64, _) | (DataType::Date64, _) | (DataType::Time64(_), _) |
         (DataType::Float32, _) |
         (DataType::Float64, _) |
-        (DataType::Decimal(..), _) |
+        (DataType::Decimal128(..), _) |
         (DataType::Timestamp(..), _) |
         (DataType::Duration(..), _) => {
             return Err(ArrowError::CDataInterface(format!(
@@ -456,7 +458,7 @@ struct ArrayPrivateData {
 
 impl FFI_ArrowArray {
     /// creates a new `FFI_ArrowArray` from existing data.
-    /// # Safety
+    /// # Memory Leaks
     /// This method releases `buffers`. Consumers of this struct *must* call `release` before
     /// releasing this struct, or contents in `buffers` leak.
     pub fn new(data: &ArrayData) -> Self {
@@ -836,10 +838,11 @@ impl<'a> ArrowArrayRef for ArrowArrayChild<'a> {
 
 impl ArrowArray {
     /// creates a new `ArrowArray`. This is used to export to the C Data Interface.
-    /// # Safety
-    /// See safety of [ArrowArray]
-    #[allow(clippy::too_many_arguments)]
-    pub unsafe fn try_new(data: ArrayData) -> Result<Self> {
+    ///
+    /// # Memory Leaks
+    /// This method releases `buffers`. Consumers of this struct *must* call `release` before
+    /// releasing this struct, or contents in `buffers` leak.
+    pub fn try_new(data: ArrayData) -> Result<Self> {
         let array = Arc::new(FFI_ArrowArray::new(&data));
         let schema = Arc::new(FFI_ArrowSchema::try_from(data.data_type())?);
         Ok(ArrowArray { array, schema })
@@ -908,6 +911,7 @@ impl<'a> ArrowArrayChild<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::array::BasicDecimalArray;
     use crate::array::{
         export_array_into_raw, make_array, Array, ArrayData, BooleanArray,
         Decimal128Array, DictionaryArray, DurationSecondArray, FixedSizeBinaryArray,
@@ -953,7 +957,7 @@ mod tests {
             .unwrap();
 
         // export it
-        let array = ArrowArray::try_from(original_array.data().clone())?;
+        let array = ArrowArray::try_from(Array::data(&original_array).clone())?;
 
         // (simulate consumer) import it
         let data = ArrayData::try_from(array)?;

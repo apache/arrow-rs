@@ -33,7 +33,7 @@ use super::schema::{
     decimal_length_from_precision,
 };
 
-use crate::column::writer::{get_column_writer, ColumnWriter};
+use crate::column::writer::{get_column_writer, ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::RowGroupMetaDataPtr;
 use crate::file::properties::WriterProperties;
@@ -41,6 +41,7 @@ use crate::file::writer::{SerializedColumnWriter, SerializedRowGroupWriter};
 use crate::{data_type::*, file::writer::SerializedFileWriter};
 use levels::{calculate_array_levels, LevelInfo};
 
+mod byte_array;
 mod levels;
 
 /// An object-safe API for writing an [`ArrayRef`]
@@ -66,17 +67,32 @@ impl<'a> ArrayWriter for ColumnArrayWriter<'a> {
 
 fn get_writer<'a, W: Write>(
     row_group_writer: &'a mut SerializedRowGroupWriter<'_, W>,
+    data_type: &ArrowDataType,
 ) -> Result<Box<dyn ArrayWriter + 'a>> {
     let array_writer = row_group_writer
-        .next_column_with_factory(|descr, props, page_writer, on_close| {
-            // TODO: Special case array readers (#1764)
+        .next_column_with_factory(
+            |descr, props, page_writer, on_close| match data_type {
+                ArrowDataType::Utf8
+                | ArrowDataType::LargeUtf8
+                | ArrowDataType::Binary
+                | ArrowDataType::LargeBinary => Ok(byte_array::make_byte_array_writer(
+                    descr,
+                    data_type.clone(),
+                    props.clone(),
+                    page_writer,
+                    on_close,
+                )),
+                _ => {
+                    let column_writer =
+                        get_column_writer(descr, props.clone(), page_writer);
 
-            let column_writer = get_column_writer(descr, props.clone(), page_writer);
-            let serialized_writer =
-                SerializedColumnWriter::new(column_writer, Some(on_close));
+                    let serialized_writer =
+                        SerializedColumnWriter::new(column_writer, Some(on_close));
 
-            Ok(Box::new(ColumnArrayWriter(Some(serialized_writer))))
-        })?
+                    Ok(Box::new(ColumnArrayWriter(Some(serialized_writer))))
+                }
+            },
+        )?
         .expect("Unable to get column writer");
     Ok(array_writer)
 }
@@ -302,10 +318,10 @@ fn write_leaves<W: Write>(
         | ArrowDataType::Binary
         | ArrowDataType::Utf8
         | ArrowDataType::LargeUtf8
-        | ArrowDataType::Decimal(_, _)
+        | ArrowDataType::Decimal128(_, _)
         | ArrowDataType::Decimal256(_, _)
         | ArrowDataType::FixedSizeBinary(_) => {
-            let mut writer = get_writer(row_group_writer)?;
+            let mut writer = get_writer(row_group_writer, &data_type)?;
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
                 writer.write(
                     array,
@@ -365,7 +381,7 @@ fn write_leaves<W: Write>(
             Ok(())
         }
         ArrowDataType::Dictionary(_, value_type) => {
-            let mut writer = get_writer(row_group_writer)?;
+            let mut writer = get_writer(row_group_writer, value_type)?;
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
                 // cast dictionary to a primitive
                 let array = arrow::compute::cast(array, value_type)?;
@@ -399,33 +415,25 @@ fn write_leaf(
     let indices = levels.non_null_indices();
     let written = match writer {
         ColumnWriter::Int32ColumnWriter(ref mut typed) => {
-            let values = match column.data_type() {
+            match column.data_type() {
                 ArrowDataType::Date64 => {
                     // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
-                    let array = if let ArrowDataType::Date64 = column.data_type() {
-                        let array = arrow::compute::cast(column, &ArrowDataType::Date32)?;
-                        arrow::compute::cast(&array, &ArrowDataType::Int32)?
-                    } else {
-                        arrow::compute::cast(column, &ArrowDataType::Int32)?
-                    };
+                    let array = arrow::compute::cast(column, &ArrowDataType::Date32)?;
+                    let array = arrow::compute::cast(&array, &ArrowDataType::Int32)?;
+
                     let array = array
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
                         .expect("Unable to get int32 array");
-                    get_numeric_array_slice::<Int32Type, _>(array, indices)
+                    write_primitive(typed, array.values(), levels)?
                 }
                 ArrowDataType::UInt32 => {
+                    let data = column.data();
+                    let offset = data.offset();
                     // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
                     // `(i32::MAX as u32)..u32::MAX` to `i32::MIN..0`
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::UInt32Array>()
-                        .expect("Unable to get u32 array");
-                    let array = arrow::compute::unary::<_, _, arrow::datatypes::Int32Type>(
-                        array,
-                        |x| x as i32,
-                    );
-                    get_numeric_array_slice::<Int32Type, _>(&array, indices)
+                    let array: &[i32] = data.buffers()[0].typed_data();
+                    write_primitive(typed, &array[offset..offset + data.len()], levels)?
                 }
                 _ => {
                     let array = arrow::compute::cast(column, &ArrowDataType::Int32)?;
@@ -433,14 +441,9 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int32Array>()
                         .expect("Unable to get i32 array");
-                    get_numeric_array_slice::<Int32Type, _>(array, indices)
+                    write_primitive(typed, array.values(), levels)?
                 }
-            };
-            typed.write_batch(
-                values.as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
-            )?
+            }
         }
         ColumnWriter::BoolColumnWriter(ref mut typed) => {
             let array = column
@@ -454,26 +457,21 @@ fn write_leaf(
             )?
         }
         ColumnWriter::Int64ColumnWriter(ref mut typed) => {
-            let values = match column.data_type() {
+            match column.data_type() {
                 ArrowDataType::Int64 => {
                     let array = column
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
                         .expect("Unable to get i64 array");
-                    get_numeric_array_slice::<Int64Type, _>(array, indices)
+                    write_primitive(typed, array.values(), levels)?
                 }
                 ArrowDataType::UInt64 => {
                     // follow C++ implementation and use overflow/reinterpret cast from  u64 to i64 which will map
                     // `(i64::MAX as u64)..u64::MAX` to `i64::MIN..0`
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::UInt64Array>()
-                        .expect("Unable to get u64 array");
-                    let array = arrow::compute::unary::<_, _, arrow::datatypes::Int64Type>(
-                        array,
-                        |x| x as i64,
-                    );
-                    get_numeric_array_slice::<Int64Type, _>(&array, indices)
+                    let data = column.data();
+                    let offset = data.offset();
+                    let array: &[i64] = data.buffers()[0].typed_data();
+                    write_primitive(typed, &array[offset..offset + data.len()], levels)?
                 }
                 _ => {
                     let array = arrow::compute::cast(column, &ArrowDataType::Int64)?;
@@ -481,14 +479,9 @@ fn write_leaf(
                         .as_any()
                         .downcast_ref::<arrow_array::Int64Array>()
                         .expect("Unable to get i64 array");
-                    get_numeric_array_slice::<Int64Type, _>(array, indices)
+                    write_primitive(typed, array.values(), levels)?
                 }
-            };
-            typed.write_batch(
-                values.as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
-            )?
+            }
         }
         ColumnWriter::Int96ColumnWriter(ref mut _typed) => {
             unreachable!("Currently unreachable because data type not supported")
@@ -498,70 +491,18 @@ fn write_leaf(
                 .as_any()
                 .downcast_ref::<arrow_array::Float32Array>()
                 .expect("Unable to get Float32 array");
-            typed.write_batch(
-                get_numeric_array_slice::<FloatType, _>(array, indices).as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
-            )?
+            write_primitive(typed, array.values(), levels)?
         }
         ColumnWriter::DoubleColumnWriter(ref mut typed) => {
             let array = column
                 .as_any()
                 .downcast_ref::<arrow_array::Float64Array>()
                 .expect("Unable to get Float64 array");
-            typed.write_batch(
-                get_numeric_array_slice::<DoubleType, _>(array, indices).as_slice(),
-                levels.def_levels(),
-                levels.rep_levels(),
-            )?
+            write_primitive(typed, array.values(), levels)?
         }
-        ColumnWriter::ByteArrayColumnWriter(ref mut typed) => match column.data_type() {
-            ArrowDataType::Binary => {
-                let array = column
-                    .as_any()
-                    .downcast_ref::<arrow_array::BinaryArray>()
-                    .expect("Unable to get BinaryArray array");
-                typed.write_batch(
-                    get_binary_array(array).as_slice(),
-                    levels.def_levels(),
-                    levels.rep_levels(),
-                )?
-            }
-            ArrowDataType::Utf8 => {
-                let array = column
-                    .as_any()
-                    .downcast_ref::<arrow_array::StringArray>()
-                    .expect("Unable to get LargeBinaryArray array");
-                typed.write_batch(
-                    get_string_array(array).as_slice(),
-                    levels.def_levels(),
-                    levels.rep_levels(),
-                )?
-            }
-            ArrowDataType::LargeBinary => {
-                let array = column
-                    .as_any()
-                    .downcast_ref::<arrow_array::LargeBinaryArray>()
-                    .expect("Unable to get LargeBinaryArray array");
-                typed.write_batch(
-                    get_large_binary_array(array).as_slice(),
-                    levels.def_levels(),
-                    levels.rep_levels(),
-                )?
-            }
-            ArrowDataType::LargeUtf8 => {
-                let array = column
-                    .as_any()
-                    .downcast_ref::<arrow_array::LargeStringArray>()
-                    .expect("Unable to get LargeUtf8 array");
-                typed.write_batch(
-                    get_large_string_array(array).as_slice(),
-                    levels.def_levels(),
-                    levels.rep_levels(),
-                )?
-            }
-            _ => unreachable!("Currently unreachable because data type not supported"),
-        },
+        ColumnWriter::ByteArrayColumnWriter(_) => {
+            unreachable!("should use ByteArrayWriter")
+        }
         ColumnWriter::FixedLenByteArrayColumnWriter(ref mut typed) => {
             let bytes = match column.data_type() {
                 ArrowDataType::Interval(interval_unit) => match interval_unit {
@@ -595,7 +536,7 @@ fn write_leaf(
                         .unwrap();
                     get_fsb_array_slice(array, indices)
                 }
-                ArrowDataType::Decimal(_, _) => {
+                ArrowDataType::Decimal128(_, _) => {
                     let array = column
                         .as_any()
                         .downcast_ref::<arrow_array::Decimal128Array>()
@@ -619,55 +560,20 @@ fn write_leaf(
     Ok(written as i64)
 }
 
-macro_rules! def_get_binary_array_fn {
-    ($name:ident, $ty:ty) => {
-        fn $name(array: &$ty) -> Vec<ByteArray> {
-            let mut byte_array = ByteArray::new();
-            let ptr = crate::util::memory::ByteBufferPtr::new(
-                array.value_data().as_slice().to_vec(),
-            );
-            byte_array.set_data(ptr);
-            array
-                .value_offsets()
-                .windows(2)
-                .enumerate()
-                .filter_map(|(i, offsets)| {
-                    if array.is_valid(i) {
-                        let start = offsets[0] as usize;
-                        let len = offsets[1] as usize - start;
-                        Some(byte_array.slice(start, len))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        }
-    };
-}
-
-// TODO: These methods don't handle non null indices correctly (#1753)
-def_get_binary_array_fn!(get_binary_array, arrow_array::BinaryArray);
-def_get_binary_array_fn!(get_string_array, arrow_array::StringArray);
-def_get_binary_array_fn!(get_large_binary_array, arrow_array::LargeBinaryArray);
-def_get_binary_array_fn!(get_large_string_array, arrow_array::LargeStringArray);
-
-/// Get the underlying numeric array slice, skipping any null values.
-/// If there are no null values, it might be quicker to get the slice directly instead of
-/// calling this function.
-fn get_numeric_array_slice<T, A>(
-    array: &arrow_array::PrimitiveArray<A>,
-    indices: &[usize],
-) -> Vec<T::T>
-where
-    T: DataType,
-    A: arrow::datatypes::ArrowNumericType,
-    T::T: From<A::Native>,
-{
-    let mut values = Vec::with_capacity(indices.len());
-    for i in indices {
-        values.push(array.value(*i).into())
-    }
-    values
+fn write_primitive<'a, T: DataType>(
+    writer: &mut ColumnWriterImpl<'a, T>,
+    values: &[T::T],
+    levels: LevelInfo,
+) -> Result<usize> {
+    writer.write_batch_internal(
+        values,
+        Some(levels.non_null_indices()),
+        levels.def_levels(),
+        levels.rep_levels(),
+        None,
+        None,
+        None,
+    )
 }
 
 fn get_bool_array_slice(
@@ -756,7 +662,9 @@ mod tests {
     use arrow::{array::*, buffer::Buffer};
 
     use crate::arrow::{ArrowReader, ParquetFileArrowReader};
+    use crate::basic::Encoding;
     use crate::file::metadata::ParquetMetaData;
+    use crate::file::properties::WriterVersion;
     use crate::file::{
         reader::{FileReader, SerializedFileReader},
         statistics::Statistics,
@@ -952,7 +860,7 @@ mod tests {
 
     #[test]
     fn arrow_writer_decimal() {
-        let decimal_field = Field::new("a", DataType::Decimal(5, 2), false);
+        let decimal_field = Field::new("a", DataType::Decimal128(5, 2), false);
         let schema = Schema::new(vec![decimal_field]);
 
         let decimal_values = vec![10_000, 50_000, 0, -100]
@@ -1226,20 +1134,34 @@ mod tests {
 
     const SMALL_SIZE: usize = 7;
 
-    fn roundtrip(expected_batch: RecordBatch, max_row_group_size: Option<usize>) -> File {
+    fn roundtrip(
+        expected_batch: RecordBatch,
+        max_row_group_size: Option<usize>,
+    ) -> Vec<File> {
+        let mut files = vec![];
+        for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+            let mut props = WriterProperties::builder().set_writer_version(version);
+
+            if let Some(size) = max_row_group_size {
+                props = props.set_max_row_group_size(size)
+            }
+
+            let props = props.build();
+            files.push(roundtrip_opts(&expected_batch, props))
+        }
+        files
+    }
+
+    fn roundtrip_opts(expected_batch: &RecordBatch, props: WriterProperties) -> File {
         let file = tempfile::tempfile().unwrap();
 
         let mut writer = ArrowWriter::try_new(
             file.try_clone().unwrap(),
             expected_batch.schema(),
-            max_row_group_size.map(|size| {
-                WriterProperties::builder()
-                    .set_max_row_group_size(size)
-                    .build()
-            }),
+            Some(props),
         )
         .expect("Unable to write file");
-        writer.write(&expected_batch).unwrap();
+        writer.write(expected_batch).unwrap();
         writer.close().unwrap();
 
         let mut arrow_reader =
@@ -1264,20 +1186,59 @@ mod tests {
         file
     }
 
-    fn one_column_roundtrip(
-        values: ArrayRef,
-        nullable: bool,
-        max_row_group_size: Option<usize>,
-    ) -> File {
-        let schema = Schema::new(vec![Field::new(
-            "col",
-            values.data_type().clone(),
-            nullable,
-        )]);
-        let expected_batch =
-            RecordBatch::try_new(Arc::new(schema), vec![values]).unwrap();
+    fn one_column_roundtrip(values: ArrayRef, nullable: bool) -> Vec<File> {
+        let data_type = values.data_type().clone();
+        let schema = Schema::new(vec![Field::new("col", data_type, nullable)]);
+        one_column_roundtrip_with_schema(values, Arc::new(schema))
+    }
 
-        roundtrip(expected_batch, max_row_group_size)
+    fn one_column_roundtrip_with_schema(
+        values: ArrayRef,
+        schema: SchemaRef,
+    ) -> Vec<File> {
+        let encodings = match values.data_type() {
+            DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Binary
+            | DataType::LargeBinary => vec![
+                Encoding::PLAIN,
+                Encoding::DELTA_BYTE_ARRAY,
+                Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            ],
+            DataType::Int64
+            | DataType::Int32
+            | DataType::Int16
+            | DataType::Int8
+            | DataType::UInt64
+            | DataType::UInt32
+            | DataType::UInt16
+            | DataType::UInt8 => vec![Encoding::PLAIN, Encoding::DELTA_BINARY_PACKED],
+            _ => vec![Encoding::PLAIN],
+        };
+
+        let expected_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
+
+        let row_group_sizes = [1024, SMALL_SIZE, SMALL_SIZE / 2, SMALL_SIZE / 2 + 1, 10];
+
+        let mut files = vec![];
+        for dictionary_size in [0, 1, 1024] {
+            for encoding in &encodings {
+                for version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0] {
+                    for row_group_size in row_group_sizes {
+                        let props = WriterProperties::builder()
+                            .set_writer_version(version)
+                            .set_max_row_group_size(row_group_size)
+                            .set_dictionary_enabled(dictionary_size != 0)
+                            .set_dictionary_pagesize_limit(dictionary_size.max(1))
+                            .set_encoding(*encoding)
+                            .build();
+
+                        files.push(roundtrip_opts(&expected_batch, props))
+                    }
+                }
+            }
+        }
+        files
     }
 
     fn values_required<A, I>(iter: I)
@@ -1287,7 +1248,7 @@ mod tests {
     {
         let raw_values: Vec<_> = iter.into_iter().collect();
         let values = Arc::new(A::from(raw_values));
-        one_column_roundtrip(values, false, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(values, false);
     }
 
     fn values_optional<A, I>(iter: I)
@@ -1301,7 +1262,7 @@ mod tests {
             .map(|(i, v)| if i % 2 == 0 { None } else { Some(v) })
             .collect();
         let optional_values = Arc::new(A::from(optional_raw_values));
-        one_column_roundtrip(optional_values, true, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(optional_values, true);
     }
 
     fn required_and_optional<A, I>(iter: I)
@@ -1316,12 +1277,12 @@ mod tests {
     #[test]
     fn all_null_primitive_single_column() {
         let values = Arc::new(Int32Array::from(vec![None; SMALL_SIZE]));
-        one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(values, true);
     }
     #[test]
     fn null_single_column() {
         let values = Arc::new(NullArray::new(SMALL_SIZE));
-        one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(values, true);
         // null arrays are always nullable, a test with non-nullable nulls fails
     }
 
@@ -1417,7 +1378,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampSecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip(values, false, Some(3));
+        one_column_roundtrip(values, false);
     }
 
     #[test]
@@ -1425,7 +1386,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMillisecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip(values, false, Some(SMALL_SIZE / 2 + 1));
+        one_column_roundtrip(values, false);
     }
 
     #[test]
@@ -1433,7 +1394,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampMicrosecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip(values, false, Some(SMALL_SIZE / 2 + 2));
+        one_column_roundtrip(values, false);
     }
 
     #[test]
@@ -1441,7 +1402,7 @@ mod tests {
         let raw_values: Vec<_> = (0..SMALL_SIZE as i64).collect();
         let values = Arc::new(TimestampNanosecondArray::from_vec(raw_values, None));
 
-        one_column_roundtrip(values, false, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(values, false);
     }
 
     #[test]
@@ -1548,7 +1509,7 @@ mod tests {
         builder.append_value(b"1112").unwrap();
         let array = Arc::new(builder.finish());
 
-        one_column_roundtrip(array, true, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(array, true);
     }
 
     #[test]
@@ -1626,7 +1587,7 @@ mod tests {
         let a = ListArray::from(a_list_data);
         let values = Arc::new(a);
 
-        one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(values, true);
     }
 
     #[test]
@@ -1652,7 +1613,7 @@ mod tests {
         let a = LargeListArray::from(a_list_data);
         let values = Arc::new(a);
 
-        one_column_roundtrip(values, true, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(values, true);
     }
 
     #[test]
@@ -1668,10 +1629,10 @@ mod tests {
         ];
 
         let list = ListArray::from_iter_primitive::<Int32Type, _, _>(data.clone());
-        one_column_roundtrip(Arc::new(list), true, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(Arc::new(list), true);
 
         let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(data);
-        one_column_roundtrip(Arc::new(list), true, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(Arc::new(list), true);
     }
 
     #[test]
@@ -1681,7 +1642,7 @@ mod tests {
         let s = StructArray::from(vec![(struct_field_a, Arc::new(a_values) as ArrayRef)]);
 
         let values = Arc::new(s);
-        one_column_roundtrip(values, false, Some(SMALL_SIZE / 2));
+        one_column_roundtrip(values, false);
     }
 
     #[test]
@@ -1702,9 +1663,7 @@ mod tests {
             .collect();
 
         // build a record batch
-        let expected_batch = RecordBatch::try_new(schema, vec![Arc::new(d)]).unwrap();
-
-        roundtrip(expected_batch, Some(SMALL_SIZE / 2));
+        one_column_roundtrip_with_schema(Arc::new(d), schema);
     }
 
     #[test]
@@ -1728,10 +1687,7 @@ mod tests {
         builder.append(12345678).unwrap();
         let d = builder.finish();
 
-        // build a record batch
-        let expected_batch = RecordBatch::try_new(schema, vec![Arc::new(d)]).unwrap();
-
-        roundtrip(expected_batch, Some(SMALL_SIZE / 2));
+        one_column_roundtrip_with_schema(Arc::new(d), schema);
     }
 
     #[test]
@@ -1751,16 +1707,13 @@ mod tests {
             .copied()
             .collect();
 
-        // build a record batch
-        let expected_batch = RecordBatch::try_new(schema, vec![Arc::new(d)]).unwrap();
-
-        roundtrip(expected_batch, Some(SMALL_SIZE / 2));
+        one_column_roundtrip_with_schema(Arc::new(d), schema);
     }
 
     #[test]
     fn u32_min_max() {
         // check values roundtrip through parquet
-        let values = Arc::new(UInt32Array::from_iter_values(vec![
+        let src = vec![
             u32::MIN,
             u32::MIN + 1,
             (i32::MAX as u32) - 1,
@@ -1768,30 +1721,40 @@ mod tests {
             (i32::MAX as u32) + 1,
             u32::MAX - 1,
             u32::MAX,
-        ]));
-        let file = one_column_roundtrip(values, false, None);
+        ];
+        let values = Arc::new(UInt32Array::from_iter_values(src.iter().cloned()));
+        let files = one_column_roundtrip(values, false);
 
-        // check statistics are valid
-        let reader = SerializedFileReader::new(file).unwrap();
-        let metadata = reader.metadata();
-        assert_eq!(metadata.num_row_groups(), 1);
-        let row_group = metadata.row_group(0);
-        assert_eq!(row_group.num_columns(), 1);
-        let column = row_group.column(0);
-        let stats = column.statistics().unwrap();
-        assert!(stats.has_min_max_set());
-        if let Statistics::Int32(stats) = stats {
-            assert_eq!(*stats.min() as u32, u32::MIN);
-            assert_eq!(*stats.max() as u32, u32::MAX);
-        } else {
-            panic!("Statistics::Int32 missing")
+        for file in files {
+            // check statistics are valid
+            let reader = SerializedFileReader::new(file).unwrap();
+            let metadata = reader.metadata();
+
+            let mut row_offset = 0;
+            for row_group in metadata.row_groups() {
+                assert_eq!(row_group.num_columns(), 1);
+                let column = row_group.column(0);
+
+                let num_values = column.num_values() as usize;
+                let src_slice = &src[row_offset..row_offset + num_values];
+                row_offset += column.num_values() as usize;
+
+                let stats = column.statistics().unwrap();
+                assert!(stats.has_min_max_set());
+                if let Statistics::Int32(stats) = stats {
+                    assert_eq!(*stats.min() as u32, *src_slice.iter().min().unwrap());
+                    assert_eq!(*stats.max() as u32, *src_slice.iter().max().unwrap());
+                } else {
+                    panic!("Statistics::Int32 missing")
+                }
+            }
         }
     }
 
     #[test]
     fn u64_min_max() {
         // check values roundtrip through parquet
-        let values = Arc::new(UInt64Array::from_iter_values(vec![
+        let src = vec![
             u64::MIN,
             u64::MIN + 1,
             (i64::MAX as u64) - 1,
@@ -1799,23 +1762,33 @@ mod tests {
             (i64::MAX as u64) + 1,
             u64::MAX - 1,
             u64::MAX,
-        ]));
-        let file = one_column_roundtrip(values, false, None);
+        ];
+        let values = Arc::new(UInt64Array::from_iter_values(src.iter().cloned()));
+        let files = one_column_roundtrip(values, false);
 
-        // check statistics are valid
-        let reader = SerializedFileReader::new(file).unwrap();
-        let metadata = reader.metadata();
-        assert_eq!(metadata.num_row_groups(), 1);
-        let row_group = metadata.row_group(0);
-        assert_eq!(row_group.num_columns(), 1);
-        let column = row_group.column(0);
-        let stats = column.statistics().unwrap();
-        assert!(stats.has_min_max_set());
-        if let Statistics::Int64(stats) = stats {
-            assert_eq!(*stats.min() as u64, u64::MIN);
-            assert_eq!(*stats.max() as u64, u64::MAX);
-        } else {
-            panic!("Statistics::Int64 missing")
+        for file in files {
+            // check statistics are valid
+            let reader = SerializedFileReader::new(file).unwrap();
+            let metadata = reader.metadata();
+
+            let mut row_offset = 0;
+            for row_group in metadata.row_groups() {
+                assert_eq!(row_group.num_columns(), 1);
+                let column = row_group.column(0);
+
+                let num_values = column.num_values() as usize;
+                let src_slice = &src[row_offset..row_offset + num_values];
+                row_offset += column.num_values() as usize;
+
+                let stats = column.statistics().unwrap();
+                assert!(stats.has_min_max_set());
+                if let Statistics::Int64(stats) = stats {
+                    assert_eq!(*stats.min() as u64, *src_slice.iter().min().unwrap());
+                    assert_eq!(*stats.max() as u64, *src_slice.iter().max().unwrap());
+                } else {
+                    panic!("Statistics::Int64 missing")
+                }
+            }
         }
     }
 
@@ -1823,17 +1796,19 @@ mod tests {
     fn statistics_null_counts_only_nulls() {
         // check that null-count statistics for "only NULL"-columns are correct
         let values = Arc::new(UInt64Array::from(vec![None, None]));
-        let file = one_column_roundtrip(values, true, None);
+        let files = one_column_roundtrip(values, true);
 
-        // check statistics are valid
-        let reader = SerializedFileReader::new(file).unwrap();
-        let metadata = reader.metadata();
-        assert_eq!(metadata.num_row_groups(), 1);
-        let row_group = metadata.row_group(0);
-        assert_eq!(row_group.num_columns(), 1);
-        let column = row_group.column(0);
-        let stats = column.statistics().unwrap();
-        assert_eq!(stats.null_count(), 2);
+        for file in files {
+            // check statistics are valid
+            let reader = SerializedFileReader::new(file).unwrap();
+            let metadata = reader.metadata();
+            assert_eq!(metadata.num_row_groups(), 1);
+            let row_group = metadata.row_group(0);
+            assert_eq!(row_group.num_columns(), 1);
+            let column = row_group.column(0);
+            let stats = column.statistics().unwrap();
+            assert_eq!(stats.null_count(), 2);
+        }
     }
 
     #[test]
@@ -1923,7 +1898,7 @@ mod tests {
 
         let array = Arc::new(list_builder.finish());
 
-        one_column_roundtrip(array, true, Some(10));
+        one_column_roundtrip(array, true);
     }
 
     fn row_group_sizes(metadata: &ParquetMetaData) -> Vec<i64> {
