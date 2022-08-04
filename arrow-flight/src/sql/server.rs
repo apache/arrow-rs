@@ -19,7 +19,6 @@ use std::pin::Pin;
 
 use futures::Stream;
 use prost::Message;
-use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 
 use super::{
@@ -86,7 +85,7 @@ pub trait FlightSqlService:
     /// Get a FlightInfo for listing schemas.
     async fn get_flight_info_schemas(
         &self,
-        query: CommandGetSqlInfo,
+        query: CommandGetDbSchemas,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 

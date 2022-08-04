@@ -122,7 +122,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn get_flight_info_schemas(
         &self,
-        _query: CommandGetSqlInfo,
+        _query: CommandGetDbSchemas,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented(
