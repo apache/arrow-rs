@@ -176,6 +176,7 @@ mod cast;
 mod data;
 mod equal;
 mod equal_json;
+#[cfg(feature = "ffi")]
 mod ffi;
 mod iterator;
 mod null;
@@ -615,7 +616,8 @@ pub use self::cast::{
 
 // ------------------------------ C Data Interface ---------------------------
 
-pub use self::array::{export_array_into_raw, make_array_from_raw};
+#[cfg(feature = "ffi")]
+pub use self::ffi::{export_array_into_raw, make_array_from_raw};
 
 #[cfg(test)]
 mod tests {

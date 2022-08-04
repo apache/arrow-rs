@@ -73,11 +73,13 @@ prettyprint = ["comfy-table"]
 # an optional dependency for supporting compile to wasm32-unknown-unknown
 # target without assuming an environment containing JavaScript.
 test_utils = ["rand"]
-pyarrow = ["pyo3"]
+pyarrow = ["pyo3", "ffi"]
 # force_validate runs full data validation for all arrays that are created
 # this is not enabled by default as it is too computationally expensive
 # but is run as part of our CI checks
 force_validate = []
+# Enable ffi support
+ffi = []
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
