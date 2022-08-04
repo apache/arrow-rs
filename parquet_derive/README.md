@@ -32,8 +32,8 @@ Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-parquet = "19.0.0"
-parquet_derive = "19.0.0"
+parquet = "20.0.0"
+parquet_derive = "20.0.0"
 ```
 
 and this to your crate root:
