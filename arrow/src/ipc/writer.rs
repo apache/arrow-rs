@@ -1861,8 +1861,6 @@ mod tests {
         let record_batch_slice = record_batch.slice(0, 1);
         let deserialized_batch = deserialize(serialize(&record_batch_slice));
 
-        // dbg!(serialize(&record_batch).len());
-        // dbg!(serialize(&record_batch_slice).len());
         assert!(serialize(&record_batch).len() > serialize(&record_batch_slice).len());
         assert_eq!(record_batch_slice, deserialized_batch);
     }
