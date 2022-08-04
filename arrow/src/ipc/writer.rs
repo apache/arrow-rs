@@ -1851,12 +1851,10 @@ mod tests {
     #[test]
     fn truncate_ipc_string_array_with_all_empty_string() {
         fn create_batch() -> RecordBatch {
-            let schema = Schema::new(vec![
-                Field::new("a", DataType::Utf8, true),
-            ]);
-            let a = StringArray::from(vec![Some(""), Some(""), Some(""), Some(""), Some("")]);
-            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])
-                .unwrap()
+            let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
+            let a =
+                StringArray::from(vec![Some(""), Some(""), Some(""), Some(""), Some("")]);
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap()
         }
 
         let record_batch = create_batch();
