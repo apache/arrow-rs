@@ -41,17 +41,17 @@ use std::task::{Context, Poll};
 
 pub struct RowFilter {
     projection: ProjectionMask,
-    predicate: Box<dyn Fn(&RecordBatch) -> Result<BooleanArray>>,
+    predicate: Arc<dyn Fn(&RecordBatch) -> Result<BooleanArray> + Send + Sync>,
 }
 
 impl RowFilter {
     pub fn new<F>(projection: ProjectionMask, f: F) -> Self
     where
-        F: Fn(&RecordBatch) -> Result<BooleanArray> + 'static,
+        F: Fn(&RecordBatch) -> Result<BooleanArray> + Send + Sync + 'static,
     {
         Self {
             projection,
-            predicate: Box::new(f),
+            predicate: Arc::new(f),
         }
     }
 }
@@ -77,12 +77,12 @@ pub struct FilteredParquetRecordBatchStreamBuilder<T> {
 
     projection: ProjectionMask,
 
-    row_filter: RowFilter,
+    row_filter: Option<RowFilter>,
 }
 
 impl<T: AsyncFileReader> FilteredParquetRecordBatchStreamBuilder<T> {
     /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
-    pub async fn new(mut input: T, filter: RowFilter) -> Result<Self> {
+    pub async fn new(mut input: T) -> Result<Self> {
         let metadata = input.get_metadata().await?;
 
         let schema = Arc::new(parquet_to_arrow_schema(
@@ -97,7 +97,7 @@ impl<T: AsyncFileReader> FilteredParquetRecordBatchStreamBuilder<T> {
             batch_size: 1024,
             row_groups: None,
             projection: ProjectionMask::all(),
-            row_filter: filter,
+            row_filter: None,
         })
     }
 
@@ -137,52 +137,66 @@ impl<T: AsyncFileReader> FilteredParquetRecordBatchStreamBuilder<T> {
         }
     }
 
-    /// Build a new [`ParquetRecordBatchStream`]
-    pub fn build(self) -> Result<FilteredParquetRecordBatchStream<T>> {
-        let schema_desc = self.metadata.file_metadata().schema_descr();
-
-        let mut selection_indices = vec![];
-        let mut output_indices = vec![];
-
-        for idx in 0..schema_desc.num_columns() {
-            if self.projection.leaf_included(idx) {
-                output_indices.push(idx);
-                if !self.row_filter.projection.leaf_included(idx) {
-                    selection_indices.push(idx);
-                }
-            }
+    pub fn with_row_filter(self, row_filter: RowFilter) -> Self {
+        Self {
+            row_filter: Some(row_filter),
+            ..self
         }
+    }
 
-        let projection = ProjectionMask::leaves(schema_desc, selection_indices);
-        let out_schema = Arc::new(self.schema().project(&output_indices)?);
+    /// Build a new [`ParquetRecordBatchStream`]
+    pub fn build(mut self) -> Result<FilteredParquetRecordBatchStream<T>> {
+        if let Some(row_filter) = self.row_filter.take() {
+            let schema_desc = self.metadata.file_metadata().schema_descr();
 
-        let num_row_groups = self.metadata.row_groups().len();
+            let mut selection_indices = vec![];
+            let mut output_indices = vec![];
 
-        let row_groups = match self.row_groups {
-            Some(row_groups) => {
-                if let Some(col) = row_groups.iter().find(|x| **x >= num_row_groups) {
-                    return Err(general_err!(
-                        "row group {} out of bounds 0..{}",
-                        col,
-                        num_row_groups
-                    ));
+            for idx in 0..schema_desc.num_columns() {
+                if self.projection.leaf_included(idx) {
+                    output_indices.push(idx);
+                    if !row_filter.projection.leaf_included(idx) {
+                        selection_indices.push(idx);
+                    }
                 }
-                row_groups.into()
             }
-            None => (0..self.metadata.row_groups().len()).collect(),
-        };
 
-        Ok(FilteredParquetRecordBatchStream {
-            row_groups,
-            projection,
-            batch_size: self.batch_size,
-            metadata: self.metadata,
-            file_schema: self.schema,
-            schema: out_schema,
-            input: Some(self.input),
-            state: FilterStreamState::Init,
-            row_filter: self.row_filter,
-        })
+            let projection = ProjectionMask::leaves(schema_desc, selection_indices);
+            let out_schema = Arc::new(self.schema().project(&output_indices)?);
+
+            let num_row_groups = self.metadata.row_groups().len();
+
+            let row_groups = match self.row_groups {
+                Some(row_groups) => {
+                    if let Some(col) = row_groups.iter().find(|x| **x >= num_row_groups) {
+                        return Err(general_err!(
+                            "row group {} out of bounds 0..{}",
+                            col,
+                            num_row_groups
+                        ));
+                    }
+                    row_groups.into()
+                }
+                None => (0..self.metadata.row_groups().len()).collect(),
+            };
+
+            Ok(FilteredParquetRecordBatchStream {
+                row_groups,
+                projection,
+                batch_size: self.batch_size,
+                metadata: self.metadata,
+                file_schema: self.schema,
+                schema: out_schema,
+                input: Some(self.input),
+                state: FilterStreamState::Init,
+                row_filter,
+            })
+        } else {
+            Err(ParquetError::General(
+                "Failed to build FilteredParquetRecordBatchStream, no filter was set"
+                    .to_owned(),
+            ))
+        }
     }
 }
 
@@ -283,11 +297,15 @@ where
                     let mut buffer = vec![];
                     loop {
                         match batch_reader.next() {
-                            Some(Ok(batch)) => buffer.push(batch),
+                            Some(Ok(batch)) => {
+                                if batch.num_rows() > 0 {
+                                    buffer.push(batch);
+                                }
+                            }
                             Some(Err(e)) => {
                                 self.state = FilterStreamState::Error;
                                 return Poll::Ready(Some(Err(ParquetError::ArrowError(
-                                    e.to_string(),
+                                    format!("Error getting next filter batch: {:?}", e),
                                 ))));
                             }
                             None => break,
@@ -347,7 +365,7 @@ where
                         Err(e) => {
                             self.state = FilterStreamState::Error;
                             return Poll::Ready(Some(Err(ParquetError::ArrowError(
-                                e.to_string(),
+                                format!("Error merging filter record batches: {:?}", e),
                             ))));
                         }
                     }
@@ -581,15 +599,15 @@ mod test {
             });
 
         let requests = async_reader.requests.clone();
-        let builder =
-            FilteredParquetRecordBatchStreamBuilder::new(async_reader, filter_none)
-                .await
-                .unwrap();
+        let builder = FilteredParquetRecordBatchStreamBuilder::new(async_reader)
+            .await
+            .unwrap();
 
         let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![1, 2]);
         let stream = builder
             .with_projection(mask.clone())
             .with_batch_size(1024)
+            .with_row_filter(filter_none)
             .build()
             .unwrap();
 
@@ -643,15 +661,15 @@ mod test {
                 Ok(BooleanArray::from(vec![false; batch.num_rows()]))
             });
 
-        let builder =
-            FilteredParquetRecordBatchStreamBuilder::new(async_reader, filter_all)
-                .await
-                .unwrap();
+        let builder = FilteredParquetRecordBatchStreamBuilder::new(async_reader)
+            .await
+            .unwrap();
 
         let mask = ProjectionMask::leaves(builder.parquet_schema(), vec![1, 2]);
         let stream = builder
             .with_projection(mask.clone())
             .with_batch_size(1024)
+            .with_row_filter(filter_all)
             .build()
             .unwrap();
 
@@ -690,12 +708,15 @@ mod test {
             });
 
         let requests = async_reader.requests.clone();
-        let builder =
-            FilteredParquetRecordBatchStreamBuilder::new(async_reader, filter_all)
-                .await
-                .unwrap();
+        let builder = FilteredParquetRecordBatchStreamBuilder::new(async_reader)
+            .await
+            .unwrap();
 
-        let stream = builder.with_batch_size(1024).build().unwrap();
+        let stream = builder
+            .with_batch_size(1024)
+            .with_row_filter(filter_all)
+            .build()
+            .unwrap();
 
         let schema = stream.schema().clone();
 

@@ -137,7 +137,12 @@ pub use self::arrow_reader::ArrowReader;
 pub use self::arrow_reader::ParquetFileArrowReader;
 pub use self::arrow_writer::ArrowWriter;
 #[cfg(feature = "async")]
+pub use self::async_filter_reader::FilteredParquetRecordBatchStreamBuilder;
+#[cfg(feature = "async")]
+pub use self::async_filter_reader::RowFilter;
+#[cfg(feature = "async")]
 pub use self::async_reader::ParquetRecordBatchStreamBuilder;
+
 use crate::schema::types::SchemaDescriptor;
 
 pub use self::schema::{
