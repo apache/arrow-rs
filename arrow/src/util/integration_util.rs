@@ -458,13 +458,23 @@ pub fn array_from_json(
                 .zip(json_col.data.unwrap())
             {
                 match is_valid {
-                    1 => b.append_value(
-                        value
-                            .as_str()
-                            .unwrap()
-                            .parse()
-                            .expect("Unable to parse string as u64"),
-                    ),
+                    1 => {
+                        if value.is_string() {
+                            b.append_value(
+                                value
+                                    .as_str()
+                                    .unwrap()
+                                    .parse()
+                                    .expect("Unable to parse string as u64"),
+                            )
+                        } else if value.is_number() {
+                            b.append_value(
+                                value.as_u64().expect("Unable to read number as u64"),
+                            )
+                        } else {
+                            panic!("Unable to parse value {:?} as u64", value)
+                        }
+                    }
                     _ => b.append_null(),
                 };
             }
@@ -1248,22 +1258,25 @@ mod tests {
             .len(3)
             .add_buffer(value_offsets)
             .add_child_data(value_data.into_data())
+            .null_bit_buffer(Some(Buffer::from([0b00000011])))
             .build()
             .unwrap();
         let lists = ListArray::from(list_data);
 
         let structs_int32s = Int32Array::from(vec![None, Some(-2), None]);
         let structs_utf8s = StringArray::from(vec![None, None, Some("aaaaaa")]);
-        let structs = StructArray::from(vec![
-            (
-                Field::new("int32s", DataType::Int32, true),
-                Arc::new(structs_int32s) as ArrayRef,
-            ),
-            (
-                Field::new("utf8s", DataType::Utf8, true),
-                Arc::new(structs_utf8s) as ArrayRef,
-            ),
+        let struct_data_type = DataType::Struct(vec![
+            Field::new("int32s", DataType::Int32, true),
+            Field::new("utf8s", DataType::Utf8, true),
         ]);
+        let struct_data = ArrayData::builder(struct_data_type)
+            .len(3)
+            .add_child_data(structs_int32s.data().clone())
+            .add_child_data(structs_utf8s.data().clone())
+            .null_bit_buffer(Some(Buffer::from([0b00000011])))
+            .build()
+            .unwrap();
+        let structs = StructArray::from(struct_data);
 
         let record_batch = RecordBatch::try_new(
             Arc::new(schema.clone()),

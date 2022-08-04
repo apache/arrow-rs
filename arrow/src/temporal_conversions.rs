@@ -127,7 +127,7 @@ pub fn timestamp_ns_to_datetime(v: i64) -> NaiveDateTime {
         // extract seconds from nanoseconds
         v / NANOSECONDS,
         // discard extracted seconds
-        (v % NANOSECONDS) as u32,
+        if v > 0 { (v % NANOSECONDS) as u32 } else { 0 },
     )
 }
 
