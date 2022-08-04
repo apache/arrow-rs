@@ -421,13 +421,24 @@ impl<T: ArrowPrimitiveType> fmt::Debug for DictionaryArray<T> {
 ///     assert_eq!(maybe_val.unwrap(), orig)
 /// }
 /// ```
-#[derive(Copy, Clone)]
 pub struct TypedDictionaryArray<'a, K: ArrowPrimitiveType, V> {
     /// The dictionary array
     dictionary: &'a DictionaryArray<K>,
     /// The values of the dictionary
     values: &'a V,
 }
+
+// Manually implement `Clone` to avoid `V: Clone` type constraint
+impl<'a, K: ArrowPrimitiveType, V> Clone for TypedDictionaryArray<'a, K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            dictionary: self.dictionary,
+            values: self.values,
+        }
+    }
+}
+
+impl<'a, K: ArrowPrimitiveType, V> Copy for TypedDictionaryArray<'a, K, V> {}
 
 impl<'a, K: ArrowPrimitiveType, V> fmt::Debug for TypedDictionaryArray<'a, K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
