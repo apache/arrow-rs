@@ -94,91 +94,113 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn get_flight_info_statement(
         &self,
         _query: CommandStatementQuery,
-        _request: FlightDescriptor,
-        _metadata: MetadataMap,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "get_flight_info_statement not implemented",
+        ))
     }
+
     async fn get_flight_info_prepared_statement(
         &self,
         _query: CommandPreparedStatementQuery,
-        _request: FlightDescriptor,
-        _metadata: MetadataMap,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "get_flight_info_prepared_statement not implemented",
+        ))
     }
+
     async fn get_flight_info_catalogs(
         &self,
         _query: CommandGetCatalogs,
-        _request: FlightDescriptor,
-        _metadata: MetadataMap,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "get_flight_info_catalogs not implemented",
+        ))
     }
+
     async fn get_flight_info_schemas(
         &self,
-        _query: CommandGetDbSchemas,
-        _request: FlightDescriptor,
-        _metadata: MetadataMap,
+        _query: CommandGetSqlInfo,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "get_flight_info_schemas not implemented",
+        ))
     }
+
     async fn get_flight_info_tables(
         &self,
         _query: CommandGetTables,
-        _request: FlightDescriptor,
-        _metadata: MetadataMap,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "get_flight_info_tables not implemented",
+        ))
     }
+
     async fn get_flight_info_table_types(
         &self,
         _query: CommandGetTableTypes,
-        _request: FlightDescriptor,
-        _metadata: MetadataMap,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "get_flight_info_table_types not implemented",
+        ))
     }
+
     async fn get_flight_info_sql_info(
         &self,
         _query: CommandGetSqlInfo,
-        _request: FlightDescriptor,
-        _metadata: MetadataMap,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "get_flight_info_sql_info not implemented",
+        ))
     }
+
     async fn get_flight_info_primary_keys(
         &self,
         _query: CommandGetPrimaryKeys,
-        _request: FlightDescriptor,
-        _metadata: MetadataMap,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "get_flight_info_primary_keys not implemented",
+        ))
     }
+
     async fn get_flight_info_exported_keys(
         &self,
         _query: CommandGetExportedKeys,
-        _request: FlightDescriptor,
-        _metadata: MetadataMap,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "get_flight_info_exported_keys not implemented",
+        ))
     }
+
     async fn get_flight_info_imported_keys(
         &self,
         _query: CommandGetImportedKeys,
-        _request: FlightDescriptor,
-        _metadata: MetadataMap,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "get_flight_info_imported_keys not implemented",
+        ))
     }
+
     async fn get_flight_info_cross_reference(
         &self,
         _query: CommandGetCrossReference,
-        _request: FlightDescriptor,
-        _metadata: MetadataMap,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "get_flight_info_imported_keys not implemented",
+        ))
     }
+
     // do_get
     async fn do_get_statement(
         &self,
@@ -258,6 +280,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
+
     // do_put
     async fn do_put_statement_update(
         &self,
@@ -266,22 +289,27 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<i64, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
+
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
-        _request: Streaming<FlightData>,
-        _metadata: MetadataMap,
+        _request: Request<Streaming<FlightData>>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "do_put_prepared_statement_query not implemented",
+        ))
     }
+
     async fn do_put_prepared_statement_update(
         &self,
         _query: CommandPreparedStatementUpdate,
-        _request: Streaming<FlightData>,
-        _metadata: MetadataMap,
+        _request: Request<Streaming<FlightData>>,
     ) -> Result<i64, Status> {
-        Err(Status::unimplemented("Not yet implemented"))
+        Err(Status::unimplemented(
+            "do_put_prepared_statement_update not implemented",
+        ))
     }
+
     // do_action
     async fn do_action_create_prepared_statement(
         &self,

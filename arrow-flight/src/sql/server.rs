@@ -66,88 +66,77 @@ pub trait FlightSqlService:
     async fn get_flight_info_statement(
         &self,
         query: CommandStatementQuery,
-        request: FlightDescriptor,
-        metadata: MetadataMap,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
     /// Get a FlightInfo for executing an already created prepared statement.
     async fn get_flight_info_prepared_statement(
         &self,
         query: CommandPreparedStatementQuery,
-        request: FlightDescriptor,
-        metadata: MetadataMap,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
     /// Get a FlightInfo for listing catalogs.
     async fn get_flight_info_catalogs(
         &self,
         query: CommandGetCatalogs,
-        request: FlightDescriptor,
-        metadata: MetadataMap,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
     /// Get a FlightInfo for listing schemas.
     async fn get_flight_info_schemas(
         &self,
         query: CommandGetDbSchemas,
-        request: FlightDescriptor,
-        metadata: MetadataMap,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
     /// Get a FlightInfo for listing tables.
     async fn get_flight_info_tables(
         &self,
         query: CommandGetTables,
-        request: FlightDescriptor,
-        metadata: MetadataMap,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
     /// Get a FlightInfo to extract information about the table types.
     async fn get_flight_info_table_types(
         &self,
         query: CommandGetTableTypes,
-        request: FlightDescriptor,
-        metadata: MetadataMap,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
     /// Get a FlightInfo for retrieving other information (See SqlInfo).
     async fn get_flight_info_sql_info(
         &self,
         query: CommandGetSqlInfo,
-        request: FlightDescriptor,
-        metadata: MetadataMap,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
     /// Get a FlightInfo to extract information about primary and foreign keys.
     async fn get_flight_info_primary_keys(
         &self,
         query: CommandGetPrimaryKeys,
-        request: FlightDescriptor,
-        metadata: MetadataMap,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
     /// Get a FlightInfo to extract information about exported keys.
     async fn get_flight_info_exported_keys(
         &self,
         query: CommandGetExportedKeys,
-        request: FlightDescriptor,
-        metadata: MetadataMap,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
     /// Get a FlightInfo to extract information about imported keys.
     async fn get_flight_info_imported_keys(
         &self,
         query: CommandGetImportedKeys,
-        request: FlightDescriptor,
-        metadata: MetadataMap,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
     /// Get a FlightInfo to extract information about cross reference.
     async fn get_flight_info_cross_reference(
         &self,
         query: CommandGetCrossReference,
-        request: FlightDescriptor,
-        metadata: MetadataMap,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
     // do_get
@@ -156,77 +145,77 @@ pub trait FlightSqlService:
     async fn do_get_statement(
         &self,
         ticket: TicketStatementQuery,
-        metadata: MetadataMap,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
     /// Get a FlightDataStream containing the prepared statement query results.
     async fn do_get_prepared_statement(
         &self,
         query: CommandPreparedStatementQuery,
-        metadata: MetadataMap,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
     /// Get a FlightDataStream containing the list of catalogs.
     async fn do_get_catalogs(
         &self,
         query: CommandGetCatalogs,
-        metadata: MetadataMap,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
     /// Get a FlightDataStream containing the list of schemas.
     async fn do_get_schemas(
         &self,
         query: CommandGetDbSchemas,
-        metadata: MetadataMap,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
     /// Get a FlightDataStream containing the list of tables.
     async fn do_get_tables(
         &self,
         query: CommandGetTables,
-        metadata: MetadataMap,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
     /// Get a FlightDataStream containing the data related to the table types.
     async fn do_get_table_types(
         &self,
         query: CommandGetTableTypes,
-        metadata: MetadataMap,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
     /// Get a FlightDataStream containing the list of SqlInfo results.
     async fn do_get_sql_info(
         &self,
         query: CommandGetSqlInfo,
-        metadata: MetadataMap,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
     /// Get a FlightDataStream containing the data related to the primary and foreign keys.
     async fn do_get_primary_keys(
         &self,
         query: CommandGetPrimaryKeys,
-        metadata: MetadataMap,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
     /// Get a FlightDataStream containing the data related to the exported keys.
     async fn do_get_exported_keys(
         &self,
         query: CommandGetExportedKeys,
-        metadata: MetadataMap,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
     /// Get a FlightDataStream containing the data related to the imported keys.
     async fn do_get_imported_keys(
         &self,
         query: CommandGetImportedKeys,
-        metadata: MetadataMap,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
     /// Get a FlightDataStream containing the data related to the cross reference.
     async fn do_get_cross_reference(
         &self,
         query: CommandGetCrossReference,
-        metadata: MetadataMap,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status>;
 
     // do_put
@@ -235,23 +224,21 @@ pub trait FlightSqlService:
     async fn do_put_statement_update(
         &self,
         ticket: CommandStatementUpdate,
-        metadata: MetadataMap,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<i64, Status>;
 
     /// Bind parameters to given prepared statement.
     async fn do_put_prepared_statement_query(
         &self,
         query: CommandPreparedStatementQuery,
-        request: Streaming<FlightData>,
-        metadata: MetadataMap,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status>;
 
     /// Execute an update SQL prepared statement.
     async fn do_put_prepared_statement_update(
         &self,
         query: CommandPreparedStatementUpdate,
-        request: Streaming<FlightData>,
-        metadata: MetadataMap,
+        request: Request<Streaming<FlightData>>,
     ) -> Result<i64, Status>;
 
     // do_action
@@ -260,14 +247,14 @@ pub trait FlightSqlService:
     async fn do_action_create_prepared_statement(
         &self,
         query: ActionCreatePreparedStatementRequest,
-        metadata: MetadataMap,
+        request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status>;
 
     /// Close a prepared statement.
     async fn do_action_close_prepared_statement(
         &self,
         query: ActionClosePreparedStatementRequest,
-        metadata: MetadataMap,
+        request: Request<Action>,
     );
 
     /// Register a new SqlInfo result, making it available when calling GetSqlInfo.
@@ -313,19 +300,17 @@ where
 
     async fn get_flight_info(
         &self,
-        tonic_request: Request<FlightDescriptor>,
+        request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        let md = tonic_request.metadata().clone();
-        let request = tonic_request.into_inner();
         let any: prost_types::Any =
-            prost::Message::decode(&*request.cmd).map_err(decode_error_to_status)?;
+            Message::decode(&*request.get_ref().cmd).map_err(decode_error_to_status)?;
 
         if any.is::<CommandStatementQuery>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.get_flight_info_statement(token, request, md).await;
+            return self.get_flight_info_statement(token, request).await;
         }
         if any.is::<CommandPreparedStatementQuery>() {
             let handle = any
@@ -333,7 +318,7 @@ where
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
             return self
-                .get_flight_info_prepared_statement(handle, request, md)
+                .get_flight_info_prepared_statement(handle, request)
                 .await;
         }
         if any.is::<CommandGetCatalogs>() {
@@ -341,65 +326,63 @@ where
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.get_flight_info_catalogs(token, request, md).await;
+            return self.get_flight_info_catalogs(token, request).await;
         }
         if any.is::<CommandGetDbSchemas>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.get_flight_info_schemas(token, request, md).await;
+            return self.get_flight_info_schemas(token, request).await;
         }
         if any.is::<CommandGetTables>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.get_flight_info_tables(token, request, md).await;
+            return self.get_flight_info_tables(token, request).await;
         }
         if any.is::<CommandGetTableTypes>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.get_flight_info_table_types(token, request, md).await;
+            return self.get_flight_info_table_types(token, request).await;
         }
         if any.is::<CommandGetSqlInfo>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.get_flight_info_sql_info(token, request, md).await;
+            return self.get_flight_info_sql_info(token, request).await;
         }
         if any.is::<CommandGetPrimaryKeys>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.get_flight_info_primary_keys(token, request, md).await;
+            return self.get_flight_info_primary_keys(token, request).await;
         }
         if any.is::<CommandGetExportedKeys>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.get_flight_info_exported_keys(token, request, md).await;
+            return self.get_flight_info_exported_keys(token, request).await;
         }
         if any.is::<CommandGetImportedKeys>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.get_flight_info_imported_keys(token, request, md).await;
+            return self.get_flight_info_imported_keys(token, request).await;
         }
         if any.is::<CommandGetCrossReference>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self
-                .get_flight_info_cross_reference(token, request, md)
-                .await;
+            return self.get_flight_info_cross_reference(token, request).await;
         }
 
         Err(Status::unimplemented(format!(
@@ -417,104 +400,100 @@ where
 
     async fn do_get(
         &self,
-        tonic_request: Request<Ticket>,
+        request: Request<Ticket>,
     ) -> Result<Response<Self::DoGetStream>, Status> {
-        let md = tonic_request.metadata().clone();
-        let request = tonic_request.into_inner();
-        let any: prost_types::Any =
-            prost::Message::decode(&*request.ticket).map_err(decode_error_to_status)?;
+        let any: prost_types::Any = prost::Message::decode(&*request.get_ref().ticket)
+            .map_err(decode_error_to_status)?;
 
         if any.is::<TicketStatementQuery>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.do_get_statement(token, md).await;
+            return self.do_get_statement(token, request).await;
         }
         if any.is::<CommandPreparedStatementQuery>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.do_get_prepared_statement(token, md).await;
+            return self.do_get_prepared_statement(token, request).await;
         }
         if any.is::<CommandGetCatalogs>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.do_get_catalogs(token, md).await;
+            return self.do_get_catalogs(token, request).await;
         }
         if any.is::<CommandGetDbSchemas>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.do_get_schemas(token, md).await;
+            return self.do_get_schemas(token, request).await;
         }
         if any.is::<CommandGetTables>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.do_get_tables(token, md).await;
+            return self.do_get_tables(token, request).await;
         }
         if any.is::<CommandGetTableTypes>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.do_get_table_types(token, md).await;
+            return self.do_get_table_types(token, request).await;
         }
         if any.is::<CommandGetSqlInfo>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.do_get_sql_info(token, md).await;
+            return self.do_get_sql_info(token, request).await;
         }
         if any.is::<CommandGetPrimaryKeys>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.do_get_primary_keys(token, md).await;
+            return self.do_get_primary_keys(token, request).await;
         }
         if any.is::<CommandGetExportedKeys>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.do_get_exported_keys(token, md).await;
+            return self.do_get_exported_keys(token, request).await;
         }
         if any.is::<CommandGetImportedKeys>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.do_get_imported_keys(token, md).await;
+            return self.do_get_imported_keys(token, request).await;
         }
         if any.is::<CommandGetCrossReference>() {
             let token = any
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self.do_get_cross_reference(token, md).await;
+            return self.do_get_cross_reference(token, request).await;
         }
 
         Err(Status::unimplemented(format!(
             "do_get: The defined request is invalid: {:?}",
-            String::from_utf8(request.ticket).unwrap()
+            String::from_utf8(request.get_ref().ticket.clone()).unwrap()
         )))
     }
 
     async fn do_put(
         &self,
-        tonic_request: Request<Streaming<FlightData>>,
+        mut request: Request<Streaming<FlightData>>,
     ) -> Result<Response<Self::DoPutStream>, Status> {
-        let md = tonic_request.metadata().clone();
-        let mut request = tonic_request.into_inner();
-        let cmd = request.message().await?.unwrap();
+        let cmd = request.get_mut().message().await?.unwrap();
         let any: prost_types::Any =
             prost::Message::decode(&*cmd.flight_descriptor.unwrap().cmd)
                 .map_err(decode_error_to_status)?;
@@ -523,7 +502,7 @@ where
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            let record_count = self.do_put_statement_update(token, md).await?;
+            let record_count = self.do_put_statement_update(token, request).await?;
             let result = DoPutUpdateResult { record_count };
             let output = futures::stream::iter(vec![Ok(super::super::gen::PutResult {
                 app_metadata: result.as_any().encode_to_vec(),
@@ -535,9 +514,7 @@ where
                 .unpack()
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
-            return self
-                .do_put_prepared_statement_query(token, request, md)
-                .await;
+            return self.do_put_prepared_statement_query(token, request).await;
         }
         if any.is::<CommandPreparedStatementUpdate>() {
             let handle = any
@@ -545,7 +522,7 @@ where
                 .map_err(arrow_error_to_status)?
                 .expect("unreachable");
             let record_count = self
-                .do_put_prepared_statement_update(handle, request, md)
+                .do_put_prepared_statement_update(handle, request)
                 .await?;
             let result = DoPutUpdateResult { record_count };
             let output = futures::stream::iter(vec![Ok(super::super::gen::PutResult {
@@ -588,14 +565,11 @@ where
 
     async fn do_action(
         &self,
-        tonic_request: Request<Action>,
+        request: Request<Action>,
     ) -> Result<Response<Self::DoActionStream>, Status> {
-        let md = tonic_request.metadata().clone();
-        let request = tonic_request.into_inner();
-
-        if request.r#type == CREATE_PREPARED_STATEMENT {
-            let any: prost_types::Any =
-                prost::Message::decode(&*request.body).map_err(decode_error_to_status)?;
+        if request.get_ref().r#type == CREATE_PREPARED_STATEMENT {
+            let any: prost_types::Any = Message::decode(&*request.get_ref().body)
+                .map_err(decode_error_to_status)?;
 
             let cmd: ActionCreatePreparedStatementRequest = any
                 .unpack()
@@ -605,15 +579,17 @@ where
                         "Unable to unpack ActionCreatePreparedStatementRequest.",
                     )
                 })?;
-            let stmt = self.do_action_create_prepared_statement(cmd, md).await?;
+            let stmt = self
+                .do_action_create_prepared_statement(cmd, request)
+                .await?;
             let output = futures::stream::iter(vec![Ok(super::super::gen::Result {
                 body: stmt.as_any().encode_to_vec(),
             })]);
             return Ok(Response::new(Box::pin(output)));
         }
-        if request.r#type == CLOSE_PREPARED_STATEMENT {
-            let any: prost_types::Any =
-                prost::Message::decode(&*request.body).map_err(decode_error_to_status)?;
+        if request.get_ref().r#type == CLOSE_PREPARED_STATEMENT {
+            let any: prost_types::Any = Message::decode(&*request.get_ref().body)
+                .map_err(decode_error_to_status)?;
 
             let cmd: ActionClosePreparedStatementRequest = any
                 .unpack()
@@ -623,13 +599,13 @@ where
                         "Unable to unpack ActionClosePreparedStatementRequest.",
                     )
                 })?;
-            self.do_action_close_prepared_statement(cmd, md).await;
+            self.do_action_close_prepared_statement(cmd, request).await;
             return Ok(Response::new(Box::pin(futures::stream::empty())));
         }
 
         Err(Status::invalid_argument(format!(
             "do_action: The defined request is invalid: {:?}",
-            request.r#type
+            request.get_ref().r#type
         )))
     }
 
