@@ -888,8 +888,8 @@ fn get_buffer_element_width(spec: &BufferSpec) -> usize {
 #[inline]
 fn get_value_offset_byte_width(data_type: &DataType) -> usize {
     match data_type {
-        DataType::Binary | DataType::Utf8 => 8,
-        DataType::LargeBinary | DataType::LargeUtf8 => 16,
+        DataType::Binary | DataType::Utf8 => 4,
+        DataType::LargeBinary | DataType::LargeUtf8 => 8,
         _ => unreachable!(),
     }
 }
