@@ -19,7 +19,7 @@
 //! development platform for in-memory data.
 //!
 //! Please see the [arrow crates.io](https://crates.io/crates/arrow)
-//! page for feature flags and tips to improve performance
+//! page for feature flags and tips to improve performance.
 //!
 //! # Columnar Format
 //!
