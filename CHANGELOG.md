@@ -26,50 +26,45 @@
 **Breaking changes:**
 
 - Make FFI support optional, change APIs to be `safe` \(\#2302\) [\#2303](https://github.com/apache/arrow-rs/pull/2303) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Remove test\_utils from default features \(\#2298\) [\#2299](https://github.com/apache/arrow-rs/pull/2299) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
-- Rename DataType::Decimal to DataType::Decimal128 [\#2229](https://github.com/apache/arrow-rs/pull/2229) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
-- Add Decimal128Iter and Decimal256Iter and do maximum precision/scale check [\#2140](https://github.com/apache/arrow-rs/pull/2140) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Remove `test_utils` from default features \(\#2298\) [\#2299](https://github.com/apache/arrow-rs/pull/2299) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
+- Rename `DataType::Decimal` to `DataType::Decimal128` [\#2229](https://github.com/apache/arrow-rs/pull/2229) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
+- Add `Decimal128Iter` and `Decimal256Iter` and do maximum precision/scale check [\#2140](https://github.com/apache/arrow-rs/pull/2140) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([viirya](https://github.com/viirya))
 
 **Implemented enhancements:**
 
 - Optimize take\_bits for non-null indices [\#2306](https://github.com/apache/arrow-rs/issues/2306) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Make FFI support Optional via Feature Flag [\#2302](https://github.com/apache/arrow-rs/issues/2302)
-- ffi::ArrowArray::try\_new is safe [\#2301](https://github.com/apache/arrow-rs/issues/2301)
+- Make FFI support optional via Feature Flag `ffi` [\#2302](https://github.com/apache/arrow-rs/issues/2302) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Mark `ffi::ArrowArray::try_new` is safe [\#2301](https://github.com/apache/arrow-rs/issues/2301) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Remove test\_utils from default arrow-rs features [\#2298](https://github.com/apache/arrow-rs/issues/2298) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Move with\_precision\_and\_scale to Decimal array trait [\#2291](https://github.com/apache/arrow-rs/issues/2291)
-- Improve performance of string --\> numeric/time/date/timetamp cast kernels [\#2285](https://github.com/apache/arrow-rs/issues/2285) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Add unpack8, unpack16 and unpack64 [\#2276](https://github.com/apache/arrow-rs/issues/2276)
-- Use initial capacity for interner hashmap [\#2273](https://github.com/apache/arrow-rs/issues/2273)
-- Switch object\_store to log crate from tokio-tracing [\#2255](https://github.com/apache/arrow-rs/issues/2255)
--  Impl FromIterator for Decimal256Array [\#2248](https://github.com/apache/arrow-rs/issues/2248)
-- Separate ArrayReader::next\_batch with ArrayReader::read\_records and ArrayReader::consume\_batch [\#2236](https://github.com/apache/arrow-rs/issues/2236)
-- Disable value validation for Decimal256 case [\#2233](https://github.com/apache/arrow-rs/issues/2233)
-- Rename DataType::Decimal to DataType::Decimal128 [\#2228](https://github.com/apache/arrow-rs/issues/2228)
-- Automatically Grow Parquet BitWriter Buffer [\#2226](https://github.com/apache/arrow-rs/issues/2226)
-- Add append\_option support to Decimal128Builder and Decimal256Builder [\#2224](https://github.com/apache/arrow-rs/issues/2224)
-- Split the `FixedSizeBinaryArray` and `FixedSizeListArray` from `array_binary.rs` and `array_list.rs` [\#2217](https://github.com/apache/arrow-rs/issues/2217)
-- Don't Box Values in PrimitiveDictionaryBuilder [\#2215](https://github.com/apache/arrow-rs/issues/2215)
-- `FlightSqlService` trait does not allow `impl`s to do handshake [\#2210](https://github.com/apache/arrow-rs/issues/2210)
+- Move `with_precision_and_scale` to `Decimal` array traits [\#2291](https://github.com/apache/arrow-rs/issues/2291) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Improve readability and maybe performance of string --\> numeric/time/date/timetamp cast kernels [\#2285](https://github.com/apache/arrow-rs/issues/2285) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add vectorized unpacking for 8, 16, and 64 bit integers [\#2276](https://github.com/apache/arrow-rs/issues/2276) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Use initial capacity for interner hashmap [\#2273](https://github.com/apache/arrow-rs/issues/2273) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+-  Impl FromIterator for Decimal256Array [\#2248](https://github.com/apache/arrow-rs/issues/2248) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Separate `ArrayReader::next_batch`with `ArrayReader::read_records` and `ArrayReader::consume_batch` [\#2236](https://github.com/apache/arrow-rs/issues/2236) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Rename `DataType::Decimal` to `DataType::Decimal128` [\#2228](https://github.com/apache/arrow-rs/issues/2228) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Automatically Grow Parquet BitWriter Buffer [\#2226](https://github.com/apache/arrow-rs/issues/2226) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Add `append_option` support to `Decimal128Builder` and `Decimal256Builder` [\#2224](https://github.com/apache/arrow-rs/issues/2224) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Split the `FixedSizeBinaryArray` and `FixedSizeListArray` from `array_binary.rs` and `array_list.rs` [\#2217](https://github.com/apache/arrow-rs/issues/2217) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Don't `Box` Values in `PrimitiveDictionaryBuilder` [\#2215](https://github.com/apache/arrow-rs/issues/2215) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - object\_store: Create explicit test for symlinks [\#2206](https://github.com/apache/arrow-rs/issues/2206)
 - object\_store: Make builder style configuration for object stores [\#2203](https://github.com/apache/arrow-rs/issues/2203)
 - object\_store: Add example in the main documentation readme [\#2202](https://github.com/apache/arrow-rs/issues/2202)
-- Use BitChunks in equal\_bits [\#2186](https://github.com/apache/arrow-rs/issues/2186)
-- Implement `Hash` for `Schema` [\#2182](https://github.com/apache/arrow-rs/issues/2182)
-- read decimal data type from parquet file with binary physical type [\#2159](https://github.com/apache/arrow-rs/issues/2159)
-- The `GenericStringBuilder` should use `GenericBinaryBuilder` [\#2156](https://github.com/apache/arrow-rs/issues/2156)
-- Improve Arrow CI [\#2149](https://github.com/apache/arrow-rs/issues/2149)
-- Need update version to 1.62 [\#2143](https://github.com/apache/arrow-rs/issues/2143) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
-- Check precision and scale against maximum value when constructing Decimal128 and Decimal256 [\#2139](https://github.com/apache/arrow-rs/issues/2139)
-- Use ArrayAccessor in Decimal128Iter and Decimal256Iter [\#2138](https://github.com/apache/arrow-rs/issues/2138)
-- Use ArrayAccessor and FromIterator in Cast Kernels [\#2137](https://github.com/apache/arrow-rs/issues/2137)
-- Use ArrayAccessor in Comparison Kernels [\#2135](https://github.com/apache/arrow-rs/issues/2135)
+- Use BitChunks in equal\_bits [\#2186](https://github.com/apache/arrow-rs/issues/2186) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Implement `Hash` for `Schema` [\#2182](https://github.com/apache/arrow-rs/issues/2182) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- read decimal data type from parquet file with binary physical type [\#2159](https://github.com/apache/arrow-rs/issues/2159) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- The `GenericStringBuilder` should use `GenericBinaryBuilder` [\#2156](https://github.com/apache/arrow-rs/issues/2156) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Update Rust version to 1.62 [\#2143](https://github.com/apache/arrow-rs/issues/2143) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
+- Check precision and scale against maximum value when constructing `Decimal128` and `Decimal256` [\#2139](https://github.com/apache/arrow-rs/issues/2139) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Use `ArrayAccessor` in `Decimal128Iter` and `Decimal256Iter` [\#2138](https://github.com/apache/arrow-rs/issues/2138) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Use `ArrayAccessor` and `FromIterator` in Cast Kernels [\#2137](https://github.com/apache/arrow-rs/issues/2137) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Use `ArrayAccessor` in Comparison Kernels [\#2135](https://github.com/apache/arrow-rs/issues/2135) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Support peek\_next\_page\(\) and skip\_next\_page in InMemoryColumnChunkReader. [\#2129](https://github.com/apache/arrow-rs/issues/2129)
-- Support filter for parquet data type [\#2126](https://github.com/apache/arrow-rs/issues/2126)
-- Lazily materialize the null buffer builder for all array builders. [\#2125](https://github.com/apache/arrow-rs/issues/2125)
-- Do value validation for Decimal256 [\#2112](https://github.com/apache/arrow-rs/issues/2112)
-- Support skip\_def\_levels  for ColumnLevelDecoder [\#2107](https://github.com/apache/arrow-rs/issues/2107)
-- Add integration test for scan rows  with selection [\#2106](https://github.com/apache/arrow-rs/issues/2106)
-- Add support for casting from string to Time32 / Time64 [\#2053](https://github.com/apache/arrow-rs/issues/2053)
+- Lazily materialize the null buffer builder for all array builders. [\#2125](https://github.com/apache/arrow-rs/issues/2125) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Do value validation for `Decimal256` [\#2112](https://github.com/apache/arrow-rs/issues/2112) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Support `skip_def_levels`  for `ColumnLevelDecoder` [\#2107](https://github.com/apache/arrow-rs/issues/2107) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Add integration test for scan rows  with selection [\#2106](https://github.com/apache/arrow-rs/issues/2106) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Support for casting from Utf8/String to `Time32` / `Time64` [\#2053](https://github.com/apache/arrow-rs/issues/2053) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 
 **Fixed bugs:**
 
@@ -77,6 +72,7 @@
 - Error order for comparing the decimal128 or decimal256 [\#2256](https://github.com/apache/arrow-rs/issues/2256)
 - Fix maximum and minimum for decimal values for precision greater than 38 [\#2246](https://github.com/apache/arrow-rs/issues/2246)
 - `IntervalMonthDayNanoType::make_value()` does not match C implementation [\#2234](https://github.com/apache/arrow-rs/issues/2234)
+- `FlightSqlService` trait does not allow `impl`s to do handshake [\#2210](https://github.com/apache/arrow-rs/issues/2210) [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 - EnabledStatistics::None not working [\#2185](https://github.com/apache/arrow-rs/issues/2185)
 - Boolean ArrayData Equality Incorrect Slice Handling [\#2184](https://github.com/apache/arrow-rs/issues/2184)
 - Test `local::tests::test_list_root` fails on main on macos [\#2174](https://github.com/apache/arrow-rs/issues/2174)
@@ -90,6 +86,8 @@
 
 **Closed issues:**
 
+- Switch object\_store to log crate from tokio-tracing [\#2255](https://github.com/apache/arrow-rs/issues/2255)
+- Support filter for parquet data type [\#2126](https://github.com/apache/arrow-rs/issues/2126) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - IP clearance for object\_store\_rs donation [\#2096](https://github.com/apache/arrow-rs/issues/2096)
 - Make skip value in ByteArrayDecoderDictionary avoid decoding [\#2088](https://github.com/apache/arrow-rs/issues/2088)
 
