@@ -1017,7 +1017,7 @@ fn write_array_data(
     ) {
         let offset_buffer = &array_data.buffers()[0];
         let value_offset_byte_width = get_value_offset_byte_width(data_type);
-        let min_length = array_data.len() * value_offset_byte_width;
+        let min_length = (array_data.len() + 1) * value_offset_byte_width;
         if buffer_need_truncate(
             array_data.offset(),
             offset_buffer,
