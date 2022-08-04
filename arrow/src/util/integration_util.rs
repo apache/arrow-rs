@@ -23,7 +23,7 @@ use hex::decode;
 use num::BigInt;
 use num::Signed;
 use serde_derive::{Deserialize, Serialize};
-use serde_json::{Map as SJMap, Number as VNumber, Value};
+use serde_json::{Map as SJMap, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -156,7 +156,11 @@ impl ArrowJson {
         for json_batch in self.get_record_batches()?.into_iter() {
             let batch = reader.next();
             match batch {
-                Some(Ok(batch)) if json_batch != batch => return Ok(false),
+                Some(Ok(batch)) => {
+                    if json_batch != batch {
+                        return Ok(false);
+                    }
+                }
                 _ => return Ok(false),
             }
         }
@@ -180,7 +184,7 @@ impl ArrowJson {
             .map(|col| record_batch_from_json(&schema, col.clone(), Some(&dictionaries)))
             .collect();
 
-        Ok(batches?)
+        batches
     }
 }
 
@@ -1006,217 +1010,6 @@ impl ArrowJsonBatch {
     }
 }
 
-/// Convert an Arrow JSON column/array into a vector of `Value`
-fn json_from_col(col: &ArrowJsonColumn, data_type: &DataType) -> Vec<Value> {
-    match data_type {
-        DataType::List(field) => json_from_list_col(col, field.data_type()),
-        DataType::FixedSizeList(field, list_size) => {
-            json_from_fixed_size_list_col(col, field.data_type(), *list_size as usize)
-        }
-        DataType::Struct(fields) => json_from_struct_col(col, fields),
-        DataType::Map(field, keys_sorted) => json_from_map_col(col, field, *keys_sorted),
-        DataType::Int64
-        | DataType::UInt64
-        | DataType::Date64
-        | DataType::Time64(_)
-        | DataType::Timestamp(_, _)
-        | DataType::Duration(_) => {
-            // convert int64 data from strings to numbers
-            let converted_col: Vec<Value> = col
-                .data
-                .clone()
-                .unwrap()
-                .iter()
-                .map(|v| {
-                    Value::Number(match v {
-                        Value::Number(number) => number.clone(),
-                        Value::String(string) => VNumber::from(
-                            string
-                                .parse::<i64>()
-                                .expect("Unable to parse string as i64"),
-                        ),
-                        t => panic!("Cannot convert {} to number", t),
-                    })
-                })
-                .collect();
-            merge_json_array(
-                col.validity.as_ref().unwrap().as_slice(),
-                converted_col.as_slice(),
-            )
-        }
-        DataType::Null => vec![],
-        _ => merge_json_array(
-            col.validity.as_ref().unwrap().as_slice(),
-            &col.data.clone().unwrap(),
-        ),
-    }
-}
-
-/// Merge VALIDITY and DATA vectors from a primitive data type into a `Value` vector with nulls
-fn merge_json_array(validity: &[u8], data: &[Value]) -> Vec<Value> {
-    validity
-        .iter()
-        .zip(data)
-        .map(|(v, d)| match v {
-            0 => Value::Null,
-            1 => d.clone(),
-            _ => panic!("Validity data should be 0 or 1"),
-        })
-        .collect()
-}
-
-/// Convert an Arrow JSON column/array of a `DataType::Struct` into a vector of `Value`
-fn json_from_struct_col(col: &ArrowJsonColumn, fields: &[Field]) -> Vec<Value> {
-    let mut values = Vec::with_capacity(col.count);
-
-    let children: Vec<Vec<Value>> = col
-        .children
-        .clone()
-        .unwrap()
-        .iter()
-        .zip(fields)
-        .map(|(child, field)| json_from_col(child, field.data_type()))
-        .collect();
-
-    // create a struct from children
-    for j in 0..col.count {
-        let mut map = serde_json::map::Map::new();
-        for i in 0..children.len() {
-            map.insert(fields[i].name().to_string(), children[i][j].clone());
-        }
-        values.push(Value::Object(map));
-    }
-
-    values
-}
-
-/// Convert an Arrow JSON column/array of a `DataType::List` into a vector of `Value`
-fn json_from_list_col(col: &ArrowJsonColumn, data_type: &DataType) -> Vec<Value> {
-    let mut values = Vec::with_capacity(col.count);
-
-    // get the inner array
-    let child = &col.children.clone().expect("list type must have children")[0];
-    let offsets: Vec<usize> = col
-        .offset
-        .clone()
-        .unwrap()
-        .iter()
-        .map(|o| match o {
-            Value::String(s) => s.parse::<usize>().unwrap(),
-            Value::Number(n) => n.as_u64().unwrap() as usize,
-            _ => panic!(
-                "Offsets should be numbers or strings that are convertible to numbers"
-            ),
-        })
-        .collect();
-    let inner = match data_type {
-        DataType::List(ref field) => json_from_col(child, field.data_type()),
-        DataType::Struct(fields) => json_from_struct_col(col, fields),
-        _ => merge_json_array(
-            child.validity.as_ref().unwrap().as_slice(),
-            &child.data.clone().unwrap(),
-        ),
-    };
-
-    for i in 0..col.count {
-        match &col.validity {
-            Some(validity) => match &validity[i] {
-                0 => values.push(Value::Null),
-                1 => {
-                    values.push(Value::Array(inner[offsets[i]..offsets[i + 1]].to_vec()))
-                }
-                _ => panic!("Validity data should be 0 or 1"),
-            },
-            None => {
-                // Null type does not have a validity vector
-            }
-        }
-    }
-
-    values
-}
-
-/// Convert an Arrow JSON column/array of a `DataType::List` into a vector of `Value`
-fn json_from_fixed_size_list_col(
-    col: &ArrowJsonColumn,
-    data_type: &DataType,
-    list_size: usize,
-) -> Vec<Value> {
-    let mut values = Vec::with_capacity(col.count);
-
-    // get the inner array
-    let child = &col.children.clone().expect("list type must have children")[0];
-    let inner = match data_type {
-        DataType::List(ref field) => json_from_col(child, field.data_type()),
-        DataType::FixedSizeList(ref field, _) => json_from_col(child, field.data_type()),
-        DataType::Struct(fields) => json_from_struct_col(col, fields),
-        _ => merge_json_array(
-            child.validity.as_ref().unwrap().as_slice(),
-            &child.data.clone().unwrap(),
-        ),
-    };
-
-    for i in 0..col.count {
-        match &col.validity {
-            Some(validity) => match &validity[i] {
-                0 => values.push(Value::Null),
-                1 => values.push(Value::Array(
-                    inner[(list_size * i)..(list_size * (i + 1))].to_vec(),
-                )),
-                _ => panic!("Validity data should be 0 or 1"),
-            },
-            None => {}
-        }
-    }
-
-    values
-}
-
-fn json_from_map_col(
-    col: &ArrowJsonColumn,
-    field: &Field,
-    _keys_sorted: bool,
-) -> Vec<Value> {
-    let mut values = Vec::with_capacity(col.count);
-
-    // get the inner array
-    let child = &col.children.clone().expect("list type must have children")[0];
-    let offsets: Vec<usize> = col
-        .offset
-        .clone()
-        .unwrap()
-        .iter()
-        .map(|o| match o {
-            Value::String(s) => s.parse::<usize>().unwrap(),
-            Value::Number(n) => n.as_u64().unwrap() as usize,
-            _ => panic!(
-                "Offsets should be numbers or strings that are convertible to numbers"
-            ),
-        })
-        .collect();
-
-    let inner = match field.data_type() {
-        DataType::Struct(fields) => json_from_struct_col(child, fields),
-        _ => panic!("Map child must be Struct"),
-    };
-
-    for i in 0..col.count {
-        match &col.validity {
-            Some(validity) => match &validity[i] {
-                0 => values.push(Value::Null),
-                1 => {
-                    values.push(Value::Array(inner[offsets[i]..offsets[i + 1]].to_vec()))
-                }
-                _ => panic!("Validity data should be 0 or 1"),
-            },
-            None => {
-                // Null type does not have a validity vector
-            }
-        }
-    }
-
-    values
-}
 #[cfg(test)]
 mod tests {
     use super::*;
