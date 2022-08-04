@@ -19,6 +19,7 @@ use arrow_flight::sql::{ActionCreatePreparedStatementResult, SqlInfo};
 use arrow_flight::{FlightData, HandshakeRequest, HandshakeResponse};
 use futures::Stream;
 use std::pin::Pin;
+use tonic::metadata::MetadataMap;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -94,6 +95,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandStatementQuery,
         _request: FlightDescriptor,
+        _metadata: MetadataMap,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -101,6 +103,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandPreparedStatementQuery,
         _request: FlightDescriptor,
+        _metadata: MetadataMap,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -108,6 +111,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandGetCatalogs,
         _request: FlightDescriptor,
+        _metadata: MetadataMap,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -115,6 +119,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandGetDbSchemas,
         _request: FlightDescriptor,
+        _metadata: MetadataMap,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -122,6 +127,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandGetTables,
         _request: FlightDescriptor,
+        _metadata: MetadataMap,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -129,6 +135,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandGetTableTypes,
         _request: FlightDescriptor,
+        _metadata: MetadataMap,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -136,6 +143,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandGetSqlInfo,
         _request: FlightDescriptor,
+        _metadata: MetadataMap,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -143,6 +151,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandGetPrimaryKeys,
         _request: FlightDescriptor,
+        _metadata: MetadataMap,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -150,6 +159,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandGetExportedKeys,
         _request: FlightDescriptor,
+        _metadata: MetadataMap,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -157,6 +167,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandGetImportedKeys,
         _request: FlightDescriptor,
+        _metadata: MetadataMap,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -164,6 +175,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandGetCrossReference,
         _request: FlightDescriptor,
+        _metadata: MetadataMap,
     ) -> Result<Response<FlightInfo>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -171,6 +183,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_get_statement(
         &self,
         _ticket: TicketStatementQuery,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -178,60 +191,70 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_get_prepared_statement(
         &self,
         _query: CommandPreparedStatementQuery,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_get_catalogs(
         &self,
         _query: CommandGetCatalogs,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_get_schemas(
         &self,
         _query: CommandGetDbSchemas,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_get_tables(
         &self,
         _query: CommandGetTables,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_get_table_types(
         &self,
         _query: CommandGetTableTypes,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_get_sql_info(
         &self,
         _query: CommandGetSqlInfo,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_get_primary_keys(
         &self,
         _query: CommandGetPrimaryKeys,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_get_exported_keys(
         &self,
         _query: CommandGetExportedKeys,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_get_imported_keys(
         &self,
         _query: CommandGetImportedKeys,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_get_cross_reference(
         &self,
         _query: CommandGetCrossReference,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -239,6 +262,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
+        _metadata: MetadataMap,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -246,6 +270,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandPreparedStatementQuery,
         _request: Streaming<FlightData>,
+        _metadata: MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -253,6 +278,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         &self,
         _query: CommandPreparedStatementUpdate,
         _request: Streaming<FlightData>,
+        _metadata: MetadataMap,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
@@ -260,12 +286,14 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_action_create_prepared_statement(
         &self,
         _query: ActionCreatePreparedStatementRequest,
+        _metadata: MetadataMap,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         Err(Status::unimplemented("Not yet implemented"))
     }
     async fn do_action_close_prepared_statement(
         &self,
         _query: ActionClosePreparedStatementRequest,
+        _metadata: MetadataMap,
     ) {
         unimplemented!("Not yet implemented")
     }
