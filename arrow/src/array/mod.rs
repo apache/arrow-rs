@@ -175,7 +175,6 @@ mod builder;
 mod cast;
 mod data;
 mod equal;
-mod equal_json;
 #[cfg(feature = "ffi")]
 mod ffi;
 mod iterator;
@@ -596,10 +595,6 @@ pub use self::transform::{Capacities, MutableArrayData};
 // --------------------- Array Iterator ---------------------
 
 pub use self::iterator::*;
-
-// --------------------- Array Equality ---------------------
-
-pub use self::equal_json::JsonEqual;
 
 // --------------------- Array's values comparison ---------------------
 

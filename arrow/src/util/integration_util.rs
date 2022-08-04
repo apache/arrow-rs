@@ -19,13 +19,22 @@
 //!
 //! These utilities define structs that read the integration JSON format for integration testing purposes.
 
+use hex::decode;
+use num::BigInt;
+use num::Signed;
 use serde_derive::{Deserialize, Serialize};
 use serde_json::{Map as SJMap, Number as VNumber, Value};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::array::*;
+use crate::buffer::{Buffer, MutableBuffer};
+use crate::compute;
 use crate::datatypes::*;
-use crate::error::Result;
+use crate::error::{ArrowError, Result};
 use crate::record_batch::{RecordBatch, RecordBatchReader};
+use crate::util::bit_util;
+use crate::util::decimal::{BasicDecimal, Decimal256};
 
 /// A struct that represents an Arrow file with a schema and record batches
 #[derive(Deserialize, Serialize, Debug)]
@@ -107,14 +116,14 @@ pub struct DictionaryIndexType {
 }
 
 /// A struct that partially reads the Arrow JSON record batch
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ArrowJsonBatch {
     count: usize,
     pub columns: Vec<ArrowJsonColumn>,
 }
 
 /// A struct that partially reads the Arrow JSON dictionary batch
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 #[allow(non_snake_case)]
 pub struct ArrowJsonDictionaryBatch {
     pub id: i64,
@@ -139,17 +148,39 @@ pub struct ArrowJsonColumn {
 
 impl ArrowJson {
     /// Compare the Arrow JSON with a record batch reader
-    pub fn equals_reader(&self, reader: &mut dyn RecordBatchReader) -> bool {
+    pub fn equals_reader(&self, reader: &mut dyn RecordBatchReader) -> Result<bool> {
         if !self.schema.equals_schema(&reader.schema()) {
-            return false;
+            return Ok(false);
         }
-        self.batches.iter().all(|col| {
+
+        for json_batch in self.get_record_batches()?.into_iter() {
             let batch = reader.next();
             match batch {
-                Some(Ok(batch)) => col.equals_batch(&batch),
-                _ => false,
+                Some(Ok(batch)) if json_batch != batch => return Ok(false),
+                _ => return Ok(false),
             }
-        })
+        }
+
+        Ok(true)
+    }
+
+    pub fn get_record_batches(&self) -> Result<Vec<RecordBatch>> {
+        let schema = self.schema.to_arrow_schema()?;
+
+        let mut dictionaries = HashMap::new();
+        self.dictionaries.iter().for_each(|dict_batches| {
+            dict_batches.iter().for_each(|d| {
+                dictionaries.insert(d.id, d.clone());
+            });
+        });
+
+        let batches: Result<Vec<_>> = self
+            .batches
+            .iter()
+            .map(|col| record_batch_from_json(&schema, col.clone(), Some(&dictionaries)))
+            .collect();
+
+        Ok(batches?)
     }
 }
 
@@ -168,6 +199,15 @@ impl ArrowJsonSchema {
             }
         }
         true
+    }
+
+    fn to_arrow_schema(&self) -> Result<Schema> {
+        let arrow_fields: Result<Vec<_>> = self
+            .fields
+            .iter()
+            .map(|field| field.to_arrow_field())
+            .collect();
+        Ok(Schema::new(arrow_fields?))
     }
 }
 
@@ -199,251 +239,721 @@ impl ArrowJsonField {
     }
 }
 
-impl ArrowJsonBatch {
-    /// Compare the Arrow JSON record batch with a `RecordBatch`
-    fn equals_batch(&self, batch: &RecordBatch) -> bool {
-        if self.count != batch.num_rows() {
-            return false;
-        }
-        let num_columns = self.columns.len();
-        if num_columns != batch.num_columns() {
-            return false;
-        }
-        let schema = batch.schema();
-        self.columns
-            .iter()
-            .zip(batch.columns())
-            .zip(schema.fields())
-            .all(|((col, arr), field)| {
-                // compare each column based on its type
-                if &col.name != field.name() {
-                    return false;
-                }
-                let json_array: Vec<Value> = json_from_col(col, field.data_type());
-                match field.data_type() {
-                    DataType::Null => {
-                        let arr: &NullArray =
-                            arr.as_any().downcast_ref::<NullArray>().unwrap();
-                        // NullArrays should have the same length, json_array is empty
-                        arr.len() == col.count
-                    }
-                    DataType::Boolean => {
-                        let arr = arr.as_any().downcast_ref::<BooleanArray>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Int8 => {
-                        let arr = arr.as_any().downcast_ref::<Int8Array>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Int16 => {
-                        let arr = arr.as_any().downcast_ref::<Int16Array>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Int32 | DataType::Date32 | DataType::Time32(_) => {
-                        let arr = Int32Array::from(arr.data().clone());
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Int64
-                    | DataType::Date64
-                    | DataType::Time64(_)
-                    | DataType::Timestamp(_, _)
-                    | DataType::Duration(_) => {
-                        let arr = Int64Array::from(arr.data().clone());
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Interval(IntervalUnit::YearMonth) => {
-                        let arr = IntervalYearMonthArray::from(arr.data().clone());
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Interval(IntervalUnit::DayTime) => {
-                        let arr = IntervalDayTimeArray::from(arr.data().clone());
-                        let x = json_array
-                            .iter()
-                            .map(|v| {
-                                match v {
-                                    Value::Null => Value::Null,
-                                    Value::Object(v) => {
-                                        // interval has days and milliseconds
-                                        let days: i32 =
-                                            v.get("days").unwrap().as_i64().unwrap()
-                                                as i32;
-                                        let milliseconds: i32 = v
-                                            .get("milliseconds")
-                                            .unwrap()
-                                            .as_i64()
-                                            .unwrap()
-                                            as i32;
-                                        let value: i64 = unsafe {
-                                            std::mem::transmute::<[i32; 2], i64>([
-                                                days,
-                                                milliseconds,
-                                            ])
-                                        };
-                                        Value::Number(VNumber::from(value))
-                                    }
-                                    // return null if Value is not an object
-                                    _ => Value::Null,
-                                }
-                            })
-                            .collect::<Vec<Value>>();
-                        arr.equals_json(&x.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Interval(IntervalUnit::MonthDayNano) => {
-                        let arr = IntervalMonthDayNanoArray::from(arr.data().clone());
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::UInt8 => {
-                        let arr = arr.as_any().downcast_ref::<UInt8Array>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::UInt16 => {
-                        let arr = arr.as_any().downcast_ref::<UInt16Array>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::UInt32 => {
-                        let arr = arr.as_any().downcast_ref::<UInt32Array>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::UInt64 => {
-                        let arr = arr.as_any().downcast_ref::<UInt64Array>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Float32 => {
-                        let arr = arr.as_any().downcast_ref::<Float32Array>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Float64 => {
-                        let arr = arr.as_any().downcast_ref::<Float64Array>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Binary => {
-                        let arr = arr.as_any().downcast_ref::<BinaryArray>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::LargeBinary => {
-                        let arr =
-                            arr.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::FixedSizeBinary(_) => {
-                        let arr =
-                            arr.as_any().downcast_ref::<FixedSizeBinaryArray>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Utf8 => {
-                        let arr = arr.as_any().downcast_ref::<StringArray>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::LargeUtf8 => {
-                        let arr =
-                            arr.as_any().downcast_ref::<LargeStringArray>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::List(_) => {
-                        let arr = arr.as_any().downcast_ref::<ListArray>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::LargeList(_) => {
-                        let arr = arr.as_any().downcast_ref::<LargeListArray>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::FixedSizeList(_, _) => {
-                        let arr =
-                            arr.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Struct(_) => {
-                        let arr = arr.as_any().downcast_ref::<StructArray>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Map(_, _) => {
-                        let arr = arr.as_any().downcast_ref::<MapArray>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Decimal128(_, _) => {
-                        let arr = arr.as_any().downcast_ref::<Decimal128Array>().unwrap();
-                        arr.equals_json(&json_array.iter().collect::<Vec<&Value>>()[..])
-                    }
-                    DataType::Dictionary(ref key_type, _) => match key_type.as_ref() {
-                        DataType::Int8 => {
-                            let arr = arr
-                                .as_any()
-                                .downcast_ref::<Int8DictionaryArray>()
-                                .unwrap();
-                            arr.equals_json(
-                                &json_array.iter().collect::<Vec<&Value>>()[..],
-                            )
-                        }
-                        DataType::Int16 => {
-                            let arr = arr
-                                .as_any()
-                                .downcast_ref::<Int16DictionaryArray>()
-                                .unwrap();
-                            arr.equals_json(
-                                &json_array.iter().collect::<Vec<&Value>>()[..],
-                            )
-                        }
-                        DataType::Int32 => {
-                            let arr = arr
-                                .as_any()
-                                .downcast_ref::<Int32DictionaryArray>()
-                                .unwrap();
-                            arr.equals_json(
-                                &json_array.iter().collect::<Vec<&Value>>()[..],
-                            )
-                        }
-                        DataType::Int64 => {
-                            let arr = arr
-                                .as_any()
-                                .downcast_ref::<Int64DictionaryArray>()
-                                .unwrap();
-                            arr.equals_json(
-                                &json_array.iter().collect::<Vec<&Value>>()[..],
-                            )
-                        }
-                        DataType::UInt8 => {
-                            let arr = arr
-                                .as_any()
-                                .downcast_ref::<UInt8DictionaryArray>()
-                                .unwrap();
-                            arr.equals_json(
-                                &json_array.iter().collect::<Vec<&Value>>()[..],
-                            )
-                        }
-                        DataType::UInt16 => {
-                            let arr = arr
-                                .as_any()
-                                .downcast_ref::<UInt16DictionaryArray>()
-                                .unwrap();
-                            arr.equals_json(
-                                &json_array.iter().collect::<Vec<&Value>>()[..],
-                            )
-                        }
-                        DataType::UInt32 => {
-                            let arr = arr
-                                .as_any()
-                                .downcast_ref::<UInt32DictionaryArray>()
-                                .unwrap();
-                            arr.equals_json(
-                                &json_array.iter().collect::<Vec<&Value>>()[..],
-                            )
-                        }
-                        DataType::UInt64 => {
-                            let arr = arr
-                                .as_any()
-                                .downcast_ref::<UInt64DictionaryArray>()
-                                .unwrap();
-                            arr.equals_json(
-                                &json_array.iter().collect::<Vec<&Value>>()[..],
-                            )
-                        }
-                        t => panic!("Unsupported dictionary comparison for {:?}", t),
-                    },
-                    t => panic!("Unsupported comparison for {:?}", t),
-                }
-            })
+pub fn record_batch_from_json(
+    schema: &Schema,
+    json_batch: ArrowJsonBatch,
+    json_dictionaries: Option<&HashMap<i64, ArrowJsonDictionaryBatch>>,
+) -> Result<RecordBatch> {
+    let mut columns = vec![];
+
+    for (field, json_col) in schema.fields().iter().zip(json_batch.columns) {
+        let col = array_from_json(field, json_col, json_dictionaries)?;
+        columns.push(col);
     }
 
+    RecordBatch::try_new(Arc::new(schema.clone()), columns)
+}
+
+/// Construct an Arrow array from a partially typed JSON column
+pub fn array_from_json(
+    field: &Field,
+    json_col: ArrowJsonColumn,
+    dictionaries: Option<&HashMap<i64, ArrowJsonDictionaryBatch>>,
+) -> Result<ArrayRef> {
+    match field.data_type() {
+        DataType::Null => Ok(Arc::new(NullArray::new(json_col.count))),
+        DataType::Boolean => {
+            let mut b = BooleanBuilder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_bool().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Int8 => {
+            let mut b = Int8Builder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_i64().ok_or_else(|| {
+                        ArrowError::JsonError(format!(
+                            "Unable to get {:?} as int64",
+                            value
+                        ))
+                    })? as i8),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Int16 => {
+            let mut b = Int16Builder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_i64().unwrap() as i16),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Int32
+        | DataType::Date32
+        | DataType::Time32(_)
+        | DataType::Interval(IntervalUnit::YearMonth) => {
+            let mut b = Int32Builder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_i64().unwrap() as i32),
+                    _ => b.append_null(),
+                };
+            }
+            let array = Arc::new(b.finish()) as ArrayRef;
+            compute::cast(&array, field.data_type())
+        }
+        DataType::Int64
+        | DataType::Date64
+        | DataType::Time64(_)
+        | DataType::Timestamp(_, _)
+        | DataType::Duration(_)
+        | DataType::Interval(IntervalUnit::DayTime) => {
+            let mut b = Int64Builder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(match value {
+                        Value::Number(n) => n.as_i64().unwrap(),
+                        Value::String(s) => {
+                            s.parse().expect("Unable to parse string as i64")
+                        }
+                        Value::Object(ref map)
+                            if map.contains_key("days")
+                                && map.contains_key("milliseconds") =>
+                        {
+                            match field.data_type() {
+                                DataType::Interval(IntervalUnit::DayTime) => {
+                                    let days = map.get("days").unwrap();
+                                    let milliseconds = map.get("milliseconds").unwrap();
+
+                                    match (days, milliseconds) {
+                                        (Value::Number(d), Value::Number(m)) => {
+                                            let mut bytes = [0_u8; 8];
+                                            let m = (m.as_i64().unwrap() as i32)
+                                                .to_le_bytes();
+                                            let d = (d.as_i64().unwrap() as i32)
+                                                .to_le_bytes();
+
+                                            let c = [d, m].concat();
+                                            bytes.copy_from_slice(c.as_slice());
+                                            i64::from_le_bytes(bytes)
+                                        }
+                                        _ => panic!(
+                                            "Unable to parse {:?} as interval daytime",
+                                            value
+                                        ),
+                                    }
+                                }
+                                _ => panic!(
+                                    "Unable to parse {:?} as interval daytime",
+                                    value
+                                ),
+                            }
+                        }
+                        _ => panic!("Unable to parse {:?} as number", value),
+                    }),
+                    _ => b.append_null(),
+                };
+            }
+            let array = Arc::new(b.finish()) as ArrayRef;
+            compute::cast(&array, field.data_type())
+        }
+        DataType::UInt8 => {
+            let mut b = UInt8Builder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_u64().unwrap() as u8),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::UInt16 => {
+            let mut b = UInt16Builder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_u64().unwrap() as u16),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::UInt32 => {
+            let mut b = UInt32Builder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_u64().unwrap() as u32),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::UInt64 => {
+            let mut b = UInt64Builder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(
+                        value
+                            .as_str()
+                            .unwrap()
+                            .parse()
+                            .expect("Unable to parse string as u64"),
+                    ),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let mut b = IntervalMonthDayNanoBuilder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(match value {
+                        Value::Object(v) => {
+                            let months = v.get("months").unwrap();
+                            let days = v.get("days").unwrap();
+                            let nanoseconds = v.get("nanoseconds").unwrap();
+                            match (months, days, nanoseconds) {
+                                (
+                                    Value::Number(months),
+                                    Value::Number(days),
+                                    Value::Number(nanoseconds),
+                                ) => {
+                                    let months = months.as_i64().unwrap() as i32;
+                                    let days = days.as_i64().unwrap() as i32;
+                                    let nanoseconds = nanoseconds.as_i64().unwrap();
+                                    let months_days_ns: i128 = ((nanoseconds as i128)
+                                        & 0xFFFFFFFFFFFFFFFF)
+                                        << 64
+                                        | ((days as i128) & 0xFFFFFFFF) << 32
+                                        | ((months as i128) & 0xFFFFFFFF);
+                                    months_days_ns
+                                }
+                                (_, _, _) => {
+                                    panic!("Unable to parse {:?} as MonthDayNano", v)
+                                }
+                            }
+                        }
+                        _ => panic!("Unable to parse {:?} as MonthDayNano", value),
+                    }),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Float32 => {
+            let mut b = Float32Builder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_f64().unwrap() as f32),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Float64 => {
+            let mut b = Float64Builder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_f64().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Binary => {
+            let mut b = BinaryBuilder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => {
+                        let v = decode(value.as_str().unwrap()).unwrap();
+                        b.append_value(&v)
+                    }
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::LargeBinary => {
+            let mut b = LargeBinaryBuilder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => {
+                        let v = decode(value.as_str().unwrap()).unwrap();
+                        b.append_value(&v)
+                    }
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Utf8 => {
+            let mut b = StringBuilder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::LargeUtf8 => {
+            let mut b = LargeStringBuilder::new(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::FixedSizeBinary(len) => {
+            let mut b = FixedSizeBinaryBuilder::new(json_col.count, *len);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => {
+                        let v = hex::decode(value.as_str().unwrap()).unwrap();
+                        b.append_value(&v)?
+                    }
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::List(child_field) => {
+            let null_buf = create_null_buf(&json_col);
+            let children = json_col.children.clone().unwrap();
+            let child_array = array_from_json(
+                child_field,
+                children.get(0).unwrap().clone(),
+                dictionaries,
+            )?;
+            let offsets: Vec<i32> = json_col
+                .offset
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap() as i32)
+                .collect();
+            let list_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .offset(0)
+                .add_buffer(Buffer::from(&offsets.to_byte_slice()))
+                .add_child_data(child_array.into_data())
+                .null_bit_buffer(Some(null_buf))
+                .build()
+                .unwrap();
+            Ok(Arc::new(ListArray::from(list_data)))
+        }
+        DataType::LargeList(child_field) => {
+            let null_buf = create_null_buf(&json_col);
+            let children = json_col.children.clone().unwrap();
+            let child_array = array_from_json(
+                child_field,
+                children.get(0).unwrap().clone(),
+                dictionaries,
+            )?;
+            let offsets: Vec<i64> = json_col
+                .offset
+                .unwrap()
+                .iter()
+                .map(|v| match v {
+                    Value::Number(n) => n.as_i64().unwrap(),
+                    Value::String(s) => s.parse::<i64>().unwrap(),
+                    _ => panic!("64-bit offset must be either string or number"),
+                })
+                .collect();
+            let list_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .offset(0)
+                .add_buffer(Buffer::from(&offsets.to_byte_slice()))
+                .add_child_data(child_array.into_data())
+                .null_bit_buffer(Some(null_buf))
+                .build()
+                .unwrap();
+            Ok(Arc::new(LargeListArray::from(list_data)))
+        }
+        DataType::FixedSizeList(child_field, _) => {
+            let children = json_col.children.clone().unwrap();
+            let child_array = array_from_json(
+                child_field,
+                children.get(0).unwrap().clone(),
+                dictionaries,
+            )?;
+            let null_buf = create_null_buf(&json_col);
+            let list_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .add_child_data(child_array.into_data())
+                .null_bit_buffer(Some(null_buf))
+                .build()
+                .unwrap();
+            Ok(Arc::new(FixedSizeListArray::from(list_data)))
+        }
+        DataType::Struct(fields) => {
+            // construct struct with null data
+            let null_buf = create_null_buf(&json_col);
+            let mut array_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .null_bit_buffer(Some(null_buf));
+
+            for (field, col) in fields.iter().zip(json_col.children.unwrap()) {
+                let array = array_from_json(field, col, dictionaries)?;
+                array_data = array_data.add_child_data(array.into_data());
+            }
+
+            let array = StructArray::from(array_data.build().unwrap());
+            Ok(Arc::new(array))
+        }
+        DataType::Dictionary(key_type, value_type) => {
+            let dict_id = field.dict_id().ok_or_else(|| {
+                ArrowError::JsonError(format!(
+                    "Unable to find dict_id for field {:?}",
+                    field
+                ))
+            })?;
+            // find dictionary
+            let dictionary = dictionaries
+                .ok_or_else(|| {
+                    ArrowError::JsonError(format!(
+                        "Unable to find any dictionaries for field {:?}",
+                        field
+                    ))
+                })?
+                .get(&dict_id);
+            match dictionary {
+                Some(dictionary) => dictionary_array_from_json(
+                    field,
+                    json_col,
+                    key_type,
+                    value_type,
+                    dictionary,
+                    dictionaries,
+                ),
+                None => Err(ArrowError::JsonError(format!(
+                    "Unable to find dictionary for field {:?}",
+                    field
+                ))),
+            }
+        }
+        DataType::Decimal128(precision, scale) => {
+            let mut b = Decimal128Builder::new(json_col.count, *precision, *scale);
+            // C++ interop tests involve incompatible decimal values
+            unsafe {
+                b.disable_value_validation();
+            }
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => {
+                        b.append_value(value.as_str().unwrap().parse::<i128>().unwrap())?
+                    }
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Decimal256(precision, scale) => {
+            let mut b = Decimal256Builder::new(json_col.count, *precision, *scale);
+            // C++ interop tests involve incompatible decimal values
+            unsafe {
+                b.disable_value_validation();
+            }
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => {
+                        let str = value.as_str().unwrap();
+                        let integer = BigInt::parse_bytes(str.as_bytes(), 10).unwrap();
+                        let integer_bytes = integer.to_signed_bytes_le();
+                        let mut bytes = if integer.is_positive() {
+                            [0_u8; 32]
+                        } else {
+                            [255_u8; 32]
+                        };
+                        bytes[0..integer_bytes.len()]
+                            .copy_from_slice(integer_bytes.as_slice());
+                        let decimal =
+                            Decimal256::try_new_from_bytes(*precision, *scale, &bytes)
+                                .unwrap();
+                        b.append_value(&decimal)?;
+                    }
+                    _ => b.append_null(),
+                }
+            }
+            Ok(Arc::new(b.finish()))
+        }
+        DataType::Map(child_field, _) => {
+            let null_buf = create_null_buf(&json_col);
+            let children = json_col.children.clone().unwrap();
+            let child_array = array_from_json(
+                child_field,
+                children.get(0).unwrap().clone(),
+                dictionaries,
+            )?;
+            let offsets: Vec<i32> = json_col
+                .offset
+                .unwrap()
+                .iter()
+                .map(|v| v.as_i64().unwrap() as i32)
+                .collect();
+            let array_data = ArrayData::builder(field.data_type().clone())
+                .len(json_col.count)
+                .add_buffer(Buffer::from(&offsets.to_byte_slice()))
+                .add_child_data(child_array.into_data())
+                .null_bit_buffer(Some(null_buf))
+                .build()
+                .unwrap();
+
+            let array = MapArray::from(array_data);
+            Ok(Arc::new(array))
+        }
+        DataType::Union(fields, field_type_ids, _) => {
+            let type_ids = if let Some(type_id) = json_col.type_id {
+                type_id
+            } else {
+                return Err(ArrowError::JsonError(
+                    "Cannot find expected type_id in json column".to_string(),
+                ));
+            };
+
+            let offset: Option<Buffer> = json_col.offset.map(|offsets| {
+                let offsets: Vec<i32> =
+                    offsets.iter().map(|v| v.as_i64().unwrap() as i32).collect();
+                Buffer::from(&offsets.to_byte_slice())
+            });
+
+            let mut children: Vec<(Field, Arc<dyn Array>)> = vec![];
+            for (field, col) in fields.iter().zip(json_col.children.unwrap()) {
+                let array = array_from_json(field, col, dictionaries)?;
+                children.push((field.clone(), array));
+            }
+
+            let array = UnionArray::try_new(
+                field_type_ids,
+                Buffer::from(&type_ids.to_byte_slice()),
+                offset,
+                children,
+            )
+            .unwrap();
+            Ok(Arc::new(array))
+        }
+        t => Err(ArrowError::JsonError(format!(
+            "data type {:?} not supported",
+            t
+        ))),
+    }
+}
+
+pub fn dictionary_array_from_json(
+    field: &Field,
+    json_col: ArrowJsonColumn,
+    dict_key: &DataType,
+    dict_value: &DataType,
+    dictionary: &ArrowJsonDictionaryBatch,
+    dictionaries: Option<&HashMap<i64, ArrowJsonDictionaryBatch>>,
+) -> Result<ArrayRef> {
+    match dict_key {
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64 => {
+            let null_buf = create_null_buf(&json_col);
+
+            // build the key data into a buffer, then construct values separately
+            let key_field = Field::new_dict(
+                "key",
+                dict_key.clone(),
+                field.is_nullable(),
+                field
+                    .dict_id()
+                    .expect("Dictionary fields must have a dict_id value"),
+                field
+                    .dict_is_ordered()
+                    .expect("Dictionary fields must have a dict_is_ordered value"),
+            );
+            let keys = array_from_json(&key_field, json_col, None)?;
+            // note: not enough info on nullability of dictionary
+            let value_field = Field::new("value", dict_value.clone(), true);
+            let values = array_from_json(
+                &value_field,
+                dictionary.data.columns[0].clone(),
+                dictionaries,
+            )?;
+
+            // convert key and value to dictionary data
+            let dict_data = ArrayData::builder(field.data_type().clone())
+                .len(keys.len())
+                .add_buffer(keys.data().buffers()[0].clone())
+                .null_bit_buffer(Some(null_buf))
+                .add_child_data(values.into_data())
+                .build()
+                .unwrap();
+
+            let array = match dict_key {
+                DataType::Int8 => {
+                    Arc::new(Int8DictionaryArray::from(dict_data)) as ArrayRef
+                }
+                DataType::Int16 => Arc::new(Int16DictionaryArray::from(dict_data)),
+                DataType::Int32 => Arc::new(Int32DictionaryArray::from(dict_data)),
+                DataType::Int64 => Arc::new(Int64DictionaryArray::from(dict_data)),
+                DataType::UInt8 => Arc::new(UInt8DictionaryArray::from(dict_data)),
+                DataType::UInt16 => Arc::new(UInt16DictionaryArray::from(dict_data)),
+                DataType::UInt32 => Arc::new(UInt32DictionaryArray::from(dict_data)),
+                DataType::UInt64 => Arc::new(UInt64DictionaryArray::from(dict_data)),
+                _ => unreachable!(),
+            };
+            Ok(array)
+        }
+        _ => Err(ArrowError::JsonError(format!(
+            "Dictionary key type {:?} not supported",
+            dict_key
+        ))),
+    }
+}
+
+/// A helper to create a null buffer from a Vec<bool>
+fn create_null_buf(json_col: &ArrowJsonColumn) -> Buffer {
+    let num_bytes = bit_util::ceil(json_col.count, 8);
+    let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, false);
+    json_col
+        .validity
+        .clone()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .for_each(|(i, v)| {
+            let null_slice = null_buf.as_slice_mut();
+            if *v != 0 {
+                bit_util::set_bit(null_slice, i);
+            }
+        });
+    null_buf.into()
+}
+
+impl ArrowJsonBatch {
     pub fn from_batch(batch: &RecordBatch) -> ArrowJsonBatch {
         let mut json_batch = ArrowJsonBatch {
             count: batch.num_rows(),
@@ -1005,6 +1515,6 @@ mod tests {
         // test schemas
         assert!(arrow_json.schema.equals_schema(&schema));
         // test record batch
-        assert!(arrow_json.batches[0].equals_batch(&record_batch));
+        assert_eq!(arrow_json.get_record_batches().unwrap()[0], record_batch);
     }
 }
