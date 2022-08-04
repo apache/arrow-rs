@@ -593,13 +593,9 @@ mod tests {
         let schema = file_metadata.schema_descr_ptr();
         let mask = ProjectionMask::leaves(&schema, vec![0]);
 
-        let mut array_reader = build_array_reader(
-            schema,
-            Arc::new(arrow_schema),
-            mask,
-            Box::new(file_reader),
-        )
-        .unwrap();
+        let mut array_reader =
+            build_array_reader(Arc::new(arrow_schema), mask, &file_reader)
+                .unwrap();
 
         let batch = array_reader.next_batch(100).unwrap();
         assert_eq!(batch.data_type(), array_reader.get_data_type());

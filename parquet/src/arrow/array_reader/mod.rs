@@ -100,7 +100,7 @@ pub trait ArrayReader: Send {
 /// A collection of row groups
 pub trait RowGroupCollection {
     /// Get schema of parquet file.
-    fn schema(&self) -> Result<SchemaDescPtr>;
+    fn schema(&self) -> SchemaDescPtr;
 
     /// Get the numer of rows in this collection
     fn num_rows(&self) -> usize;
@@ -110,8 +110,8 @@ pub trait RowGroupCollection {
 }
 
 impl RowGroupCollection for Arc<dyn FileReader> {
-    fn schema(&self) -> Result<SchemaDescPtr> {
-        Ok(self.metadata().file_metadata().schema_descr_ptr())
+    fn schema(&self) -> SchemaDescPtr {
+        self.metadata().file_metadata().schema_descr_ptr()
     }
 
     fn num_rows(&self) -> usize {

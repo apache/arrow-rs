@@ -39,20 +39,18 @@ use crate::data_type::{
     Int64Type, Int96Type,
 };
 use crate::errors::Result;
-use crate::schema::types::{ColumnDescriptor, ColumnPath, SchemaDescPtr, Type};
+use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
 
 /// Create array reader from parquet schema, projection mask, and parquet file reader.
 pub fn build_array_reader(
-    parquet_schema: SchemaDescPtr,
     arrow_schema: SchemaRef,
     mask: ProjectionMask,
-    row_groups: Box<dyn RowGroupCollection>,
+    row_groups: &dyn RowGroupCollection,
 ) -> Result<Box<dyn ArrayReader>> {
-    let field =
-        convert_schema(parquet_schema.as_ref(), mask, Some(arrow_schema.as_ref()))?;
+    let field = convert_schema(&row_groups.schema(), mask, Some(arrow_schema.as_ref()))?;
 
     match &field {
-        Some(field) => build_reader(field, row_groups.as_ref()),
+        Some(field) => build_reader(field, row_groups),
         None => Ok(make_empty_array_reader(row_groups.num_rows())),
     }
 }
@@ -336,13 +334,8 @@ mod tests {
         )
         .unwrap();
 
-        let array_reader = build_array_reader(
-            file_reader.metadata().file_metadata().schema_descr_ptr(),
-            Arc::new(arrow_schema),
-            mask,
-            Box::new(file_reader),
-        )
-        .unwrap();
+        let array_reader =
+            build_array_reader(Arc::new(arrow_schema), mask, &file_reader).unwrap();
 
         // Create arrow types
         let arrow_type = DataType::Struct(vec![Field::new(

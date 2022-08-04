@@ -36,6 +36,15 @@ use crate::file::reader::{ChunkReader, FileReader, SerializedFileReader};
 use crate::file::serialized_reader::ReadOptionsBuilder;
 use crate::schema::types::SchemaDescriptor;
 
+mod filter;
+mod selection;
+
+// TODO: Make these public once stable (#1792)
+#[allow(unused_imports)]
+pub(crate) use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+#[allow(unused_imports)]
+pub(crate) use selection::{RowSelection, RowSelector};
+
 /// Arrow reader api.
 /// With this api, user can get arrow schema from parquet file, and read parquet data
 /// into arrow arrays.
@@ -72,39 +81,10 @@ pub trait ArrowReader {
     ) -> Result<Self::RecordReader>;
 }
 
-/// [`RowSelection`] allows selecting or skipping a provided number of rows
-/// when scanning the parquet file
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RowSelection {
-    /// The number of rows
-    pub row_count: usize,
-
-    /// If true, skip `row_count` rows
-    pub skip: bool,
-}
-
-impl RowSelection {
-    /// Select `row_count` rows
-    pub fn select(row_count: usize) -> Self {
-        Self {
-            row_count,
-            skip: false,
-        }
-    }
-
-    /// Skip `row_count` rows
-    pub fn skip(row_count: usize) -> Self {
-        Self {
-            row_count,
-            skip: true,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ArrowReaderOptions {
     skip_arrow_metadata: bool,
-    selection: Option<Vec<RowSelection>>,
+    selection: Option<RowSelection>,
 }
 
 impl ArrowReaderOptions {
@@ -128,11 +108,8 @@ impl ArrowReaderOptions {
 
     /// Scan rows from the parquet file according to the provided `selection`
     ///
-    /// TODO: Make public once row selection fully implemented (#1792)
-    pub(crate) fn with_row_selection(
-        self,
-        selection: impl Into<Vec<RowSelection>>,
-    ) -> Self {
+    /// TODO: Revisit this API, as [`Self`] is provided before the file metadata is available
+    pub(crate) fn with_row_selection(self, selection: impl Into<RowSelection>) -> Self {
         Self {
             selection: Some(selection.into()),
             ..self
@@ -140,6 +117,9 @@ impl ArrowReaderOptions {
     }
 }
 
+/// An `ArrowReader` that can be used to synchronously read parquet data as [`RecordBatch`]
+///
+/// See [`crate::arrow::async_reader`] for an asynchronous interface
 pub struct ParquetFileArrowReader {
     file_reader: Arc<dyn FileReader>,
 
@@ -175,21 +155,13 @@ impl ArrowReader for ParquetFileArrowReader {
         mask: ProjectionMask,
         batch_size: usize,
     ) -> Result<ParquetRecordBatchReader> {
-        let array_reader = build_array_reader(
-            self.file_reader
-                .metadata()
-                .file_metadata()
-                .schema_descr_ptr(),
-            Arc::new(self.get_schema()?),
-            mask,
-            Box::new(self.file_reader.clone()),
-        )?;
+        let array_reader =
+            build_array_reader(Arc::new(self.get_schema()?), mask, &self.file_reader)?;
 
-        let selection = self.options.selection.clone().map(Into::into);
         Ok(ParquetRecordBatchReader::new(
             batch_size,
             array_reader,
-            selection,
+            self.options.selection.clone(),
         ))
     }
 }
@@ -276,11 +248,13 @@ impl ParquetFileArrowReader {
     }
 }
 
+/// An `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`]
+/// read from a parquet data source
 pub struct ParquetRecordBatchReader {
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
-    selection: Option<VecDeque<RowSelection>>,
+    selection: Option<VecDeque<RowSelector>>,
 }
 
 impl Iterator for ParquetRecordBatchReader {
@@ -312,7 +286,7 @@ impl Iterator for ParquetRecordBatchReader {
                     Some(remaining) if remaining != 0 => {
                         // if page row count less than batch_size we must set batch size to page row count.
                         // add check avoid dead loop
-                        selection.push_front(RowSelection::select(remaining));
+                        selection.push_front(RowSelector::select(remaining));
                         self.batch_size
                     }
                     _ => front.row_count,
@@ -349,22 +323,13 @@ impl RecordBatchReader for ParquetRecordBatchReader {
 }
 
 impl ParquetRecordBatchReader {
-    pub fn try_new(
-        batch_size: usize,
-        array_reader: Box<dyn ArrayReader>,
-    ) -> Result<Self> {
-        Ok(Self::new(batch_size, array_reader, None))
-    }
-
     /// Create a new [`ParquetRecordBatchReader`] that will read at most `batch_size` rows at
     /// a time from [`ArrayReader`] based on the configured `selection`. If `selection` is `None`
     /// all rows will be returned
-    ///
-    /// TODO: Make public once row selection fully implemented (#1792)
     pub(crate) fn new(
         batch_size: usize,
         array_reader: Box<dyn ArrayReader>,
-        selection: Option<VecDeque<RowSelection>>,
+        selection: Option<RowSelection>,
     ) -> Self {
         let schema = match array_reader.get_data_type() {
             ArrowType::Struct(ref fields) => Schema::new(fields.clone()),
@@ -375,9 +340,34 @@ impl ParquetRecordBatchReader {
             batch_size,
             array_reader,
             schema: Arc::new(schema),
-            selection,
+            selection: selection.map(Into::into),
         }
     }
+}
+
+/// Evaluates an [`ArrowPredicate`] returning the [`RowSelection`]
+///
+/// If this [`ParquetRecordBatchReader`] has a [`RowSelection`], the
+/// returned [`RowSelection`] will be the conjunction of this and
+/// the rows selected by `predicate`
+pub(crate) fn evaluate_predicate(
+    batch_size: usize,
+    array_reader: Box<dyn ArrayReader>,
+    selection: Option<RowSelection>,
+    predicate: &mut dyn ArrowPredicate,
+) -> Result<RowSelection> {
+    let reader =
+        ParquetRecordBatchReader::new(batch_size, array_reader, selection.clone());
+    let mut filters = vec![];
+    for maybe_batch in reader {
+        filters.push(predicate.filter(maybe_batch?)?);
+    }
+
+    let raw = RowSelection::from_filters(&filters);
+    Ok(match selection {
+        Some(selection) => selection.and(&raw),
+        None => raw,
+    })
 }
 
 #[cfg(test)]
@@ -402,7 +392,7 @@ mod tests {
 
     use crate::arrow::arrow_reader::{
         ArrowReader, ArrowReaderOptions, ParquetFileArrowReader,
-        ParquetRecordBatchReader, RowSelection,
+        ParquetRecordBatchReader, RowSelection, RowSelector,
     };
     use crate::arrow::buffer::converter::{
         BinaryArrayConverter, Converter, FixedSizeArrayConverter, FromConverter,
@@ -1693,12 +1683,12 @@ mod tests {
     /// a `batch_size` and `selection`
     fn get_expected_batches(
         column: &RecordBatch,
-        selection: &[RowSelection],
+        selection: &RowSelection,
         batch_size: usize,
     ) -> Vec<RecordBatch> {
         let mut expected_batches = vec![];
 
-        let mut selection: VecDeque<_> = selection.iter().cloned().collect();
+        let mut selection: VecDeque<_> = selection.clone().into();
         let mut row_offset = 0;
         let mut last_start = None;
         while row_offset < column.num_rows() && !selection.is_empty() {
@@ -1792,7 +1782,7 @@ mod tests {
         fn create_skip_reader(
             test_file: &File,
             batch_size: usize,
-            selections: Vec<RowSelection>,
+            selections: RowSelection,
         ) -> ParquetRecordBatchReader {
             let arrow_reader_options =
                 ArrowReaderOptions::new().with_row_selection(selections);
@@ -1809,7 +1799,7 @@ mod tests {
             step_len: usize,
             total_len: usize,
             skip_first: bool,
-        ) -> Vec<RowSelection> {
+        ) -> RowSelection {
             let mut remaining = total_len;
             let mut skip = skip_first;
             let mut vec = vec![];
@@ -1819,14 +1809,14 @@ mod tests {
                 } else {
                     remaining
                 };
-                vec.push(RowSelection {
+                vec.push(RowSelector {
                     row_count: step,
                     skip,
                 });
                 remaining -= step;
                 skip = !skip;
             }
-            vec
+            vec.into()
         }
     }
 }
