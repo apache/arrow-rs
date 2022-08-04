@@ -41,7 +41,7 @@ However, for historical reasons, this crate uses versions with major numbers gre
 The `parquet` crate provides the following features which may be enabled in your `Cargo.toml`:
 
 - `arrow` (default) - support for reading / writing [`arrow`](https://crates.io/crates/arrow) arrays to / from parquet
-- `async`  - support `async` APIs for reading parquet
+- `async` - support `async` APIs for reading parquet
 - `json` - support for reading / writing `json` data to / from parquet
 - `brotli` (default) - support for parquet using `brotli` compression
 - `flate2` (default) - support for parquet using `gzip` compression
