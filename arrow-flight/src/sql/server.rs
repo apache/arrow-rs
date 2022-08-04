@@ -86,7 +86,7 @@ pub trait FlightSqlService:
     /// Get a FlightInfo for listing schemas.
     async fn get_flight_info_schemas(
         &self,
-        query: CommandGetDbSchemas,
+        query: CommandGetSqlInfo,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status>;
 
