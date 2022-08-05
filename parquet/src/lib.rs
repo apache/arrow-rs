@@ -19,6 +19,9 @@
 //! [Apache Parquet](https://parquet.apache.org/), part of
 //! the [Apache Arrow](https://arrow.apache.org/) project.
 //!
+//! Please see the [parquet crates.io](https://crates.io/crates/parquet)
+//! page for feature flags and tips to improve performance.
+//!
 //! # Getting Started
 //! Start with some examples:
 //!

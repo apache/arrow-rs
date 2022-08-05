@@ -92,6 +92,25 @@ fn create_string_bench_batch(
     )?)
 }
 
+fn create_string_dictionary_bench_batch(
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+) -> Result<RecordBatch> {
+    let fields = vec![Field::new(
+        "_1",
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        true,
+    )];
+    let schema = Schema::new(fields);
+    Ok(create_random_batch(
+        Arc::new(schema),
+        size,
+        null_density,
+        true_density,
+    )?)
+}
+
 fn create_string_bench_batch_non_null(
     size: usize,
     null_density: f32,
@@ -343,6 +362,18 @@ fn bench_primitive_writer(c: &mut Criterion) {
             .sum(),
     ));
     group.bench_function("4096 values string", |b| {
+        b.iter(|| write_batch(&batch).unwrap())
+    });
+
+    let batch = create_string_dictionary_bench_batch(4096, 0.25, 0.75).unwrap();
+    group.throughput(Throughput::Bytes(
+        batch
+            .columns()
+            .iter()
+            .map(|f| f.get_array_memory_size() as u64)
+            .sum(),
+    ));
+    group.bench_function("4096 values string dictionary", |b| {
         b.iter(|| write_batch(&batch).unwrap())
     });
 

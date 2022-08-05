@@ -18,41 +18,8 @@
 //! A complete, safe, native Rust implementation of [Apache Arrow](https://arrow.apache.org), a cross-language
 //! development platform for in-memory data.
 //!
-//! # Performance Tips
-//!
-//! Arrow aims to be as fast as possible out of the box, whilst not compromising on safety. However,
-//! it relies heavily on LLVM auto-vectorisation to achieve this. Unfortunately the LLVM defaults,
-//! particularly for x86_64, favour portability over performance, and LLVM will consequently avoid
-//! using more recent instructions that would result in errors on older CPUs.
-//!
-//! To address this it is recommended that you specify the override the LLVM defaults either
-//! by setting the `RUSTFLAGS` environment variable, or by setting `rustflags` in your
-//! [Cargo configuration](https://doc.rust-lang.org/cargo/reference/config.html)
-//!
-//! Enable all features supported by the current CPU
-//!
-//! ```ignore
-//! RUSTFLAGS="-C target-cpu=native"
-//! ```
-//!
-//! Enable all features supported by the current CPU, and enable full use of AVX512
-//!
-//! ```ignore
-//! RUSTFLAGS="-C target-cpu=native -C target-feature=-prefer-256-bit"
-//! ```
-//!
-//! Enable all features supported by CPUs more recent than haswell (2013)
-//!
-//! ```ignore
-//! RUSTFLAGS="-C target-cpu=haswell"
-//! ```
-//!
-//! For a full list of features and target CPUs use
-//!
-//! ```ignore
-//! $ rustc --print target-cpus
-//! $ rustc --print target-features
-//! ```
+//! Please see the [arrow crates.io](https://crates.io/crates/arrow)
+//! page for feature flags and tips to improve performance.
 //!
 //! # Columnar Format
 //!

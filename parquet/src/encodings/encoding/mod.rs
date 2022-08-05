@@ -241,7 +241,6 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
 
 const MAX_PAGE_HEADER_WRITER_SIZE: usize = 32;
 const MAX_BIT_WRITER_SIZE: usize = 10 * 1024 * 1024;
-const DEFAULT_BLOCK_SIZE: usize = 128;
 const DEFAULT_NUM_MINI_BLOCKS: usize = 4;
 
 /// Delta bit packed encoder.
@@ -284,11 +283,18 @@ pub struct DeltaBitPackEncoder<T: DataType> {
 impl<T: DataType> DeltaBitPackEncoder<T> {
     /// Creates new delta bit packed encoder.
     pub fn new() -> Self {
-        let block_size = DEFAULT_BLOCK_SIZE;
-        let num_mini_blocks = DEFAULT_NUM_MINI_BLOCKS;
-        let mini_block_size = block_size / num_mini_blocks;
-        assert_eq!(mini_block_size % 8, 0);
         Self::assert_supported_type();
+
+        // Size miniblocks so that they can be efficiently decoded
+        let mini_block_size = match T::T::PHYSICAL_TYPE {
+            Type::INT32 => 32,
+            Type::INT64 => 64,
+            _ => unreachable!(),
+        };
+
+        let num_mini_blocks = DEFAULT_NUM_MINI_BLOCKS;
+        let block_size = mini_block_size * num_mini_blocks;
+        assert_eq!(block_size % 128, 0);
 
         DeltaBitPackEncoder {
             page_header_writer: BitWriter::new(MAX_PAGE_HEADER_WRITER_SIZE),

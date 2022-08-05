@@ -175,7 +175,6 @@ mod builder;
 mod cast;
 mod data;
 mod equal;
-mod equal_json;
 #[cfg(feature = "ffi")]
 mod ffi;
 mod iterator;
@@ -209,7 +208,7 @@ pub use self::array_fixed_size_list::FixedSizeListArray;
 #[deprecated(note = "Please use `Decimal128Array` instead")]
 pub type DecimalArray = Decimal128Array;
 
-pub use self::array_dictionary::DictionaryArray;
+pub use self::array_dictionary::{DictionaryArray, TypedDictionaryArray};
 pub use self::array_list::LargeListArray;
 pub use self::array_list::ListArray;
 pub use self::array_map::MapArray;
@@ -596,10 +595,6 @@ pub use self::transform::{Capacities, MutableArrayData};
 // --------------------- Array Iterator ---------------------
 
 pub use self::iterator::*;
-
-// --------------------- Array Equality ---------------------
-
-pub use self::equal_json::JsonEqual;
 
 // --------------------- Array's values comparison ---------------------
 

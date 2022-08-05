@@ -97,7 +97,6 @@ unpack!(unpack64, u64, 8, 64);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{thread_rng, Rng};
 
     #[test]
     fn test_basic() {
