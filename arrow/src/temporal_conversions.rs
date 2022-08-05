@@ -183,8 +183,8 @@ pub fn duration_ns_to_duration(v: i64) -> Duration {
 #[cfg(test)]
 mod tests {
     use crate::temporal_conversions::{
-        date64_to_datetime, timestamp_ms_to_datetime, timestamp_ns_to_datetime,
-        timestamp_us_to_datetime,
+        date64_to_datetime, split_second, timestamp_ms_to_datetime,
+        timestamp_ns_to_datetime, timestamp_us_to_datetime, NANOSECONDS,
     };
     use chrono::NaiveDateTime;
 
@@ -238,5 +238,24 @@ mod tests {
             date64_to_datetime(-1_001),
             NaiveDateTime::from_timestamp(-2, 999_000_000)
         );
+    }
+
+    #[test]
+    fn test_split_seconds() {
+        let (sec, nano_sec) = split_second(100, NANOSECONDS);
+        assert_eq!(sec, 0);
+        assert_eq!(nano_sec, 100);
+
+        let (sec, nano_sec) = split_second(123_000_000_456, NANOSECONDS);
+        assert_eq!(sec, 123);
+        assert_eq!(nano_sec, 456);
+
+        let (sec, nano_sec) = split_second(-1, NANOSECONDS);
+        assert_eq!(sec, -1);
+        assert_eq!(nano_sec, 999_999_999);
+
+        let (sec, nano_sec) = split_second(-123_000_000_001, NANOSECONDS);
+        assert_eq!(sec, -124);
+        assert_eq!(nano_sec, 999_999_999);
     }
 }
