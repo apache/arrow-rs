@@ -31,7 +31,7 @@
 //!
 //! [automatic cleanup]: https://aws.amazon.com/blogs/aws/s3-lifecycle-management-update-support-for-multipart-uploads-and-delete-markers/
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
-use crate::util::format_http_range;
+use crate::util::{coalesce_ranges, format_http_range, OBJECT_STORE_COALESCE_DEFAULT};
 use crate::MultipartId;
 use crate::{
     collect_bytes,
@@ -400,6 +400,19 @@ impl ObjectStore for AmazonS3 {
         let size_hint = range.end - range.start;
         let stream = self.get_object(location, Some(range)).await?;
         collect_bytes(stream, Some(size_hint)).await
+    }
+
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> Result<Vec<Bytes>> {
+        coalesce_ranges(
+            ranges,
+            |range| self.get_range(location, range),
+            OBJECT_STORE_COALESCE_DEFAULT,
+        )
+        .await
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {

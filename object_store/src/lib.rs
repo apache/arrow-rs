@@ -231,6 +231,20 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// in the given byte range
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes>;
 
+    /// Return the bytes that are stored at the specified location
+    /// in the given byte ranges
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> Result<Vec<Bytes>> {
+        let mut out = Vec::with_capacity(ranges.len());
+        for range in ranges {
+            out.push(self.get_range(location, range.clone()).await?)
+        }
+        Ok(out)
+    }
+
     /// Return the metadata for the specified location
     async fn head(&self, location: &Path) -> Result<ObjectMeta>;
 
@@ -555,6 +569,12 @@ mod tests {
 
             // Should be a non-fatal error
             out_of_range_result.unwrap_err();
+
+            let ranges = vec![0..1, 2..3, 0..5];
+            let bytes = storage.get_ranges(&location, &ranges).await.unwrap();
+            for (range, bytes) in ranges.iter().zip(bytes) {
+                assert_eq!(bytes, expected_data.slice(range.clone()))
+            }
         }
 
         let head = storage.head(&location).await?;

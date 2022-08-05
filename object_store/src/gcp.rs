@@ -47,6 +47,7 @@ use snafu::{ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 
 use crate::client::retry::RetryExt;
+use crate::util::{coalesce_ranges, OBJECT_STORE_COALESCE_DEFAULT};
 use crate::{
     client::{oauth::OAuthProvider, token::TokenCache},
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
@@ -714,6 +715,19 @@ impl ObjectStore for GoogleCloudStorage {
         Ok(response.bytes().await.context(GetRequestSnafu {
             path: location.as_ref(),
         })?)
+    }
+
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> Result<Vec<Bytes>> {
+        coalesce_ranges(
+            ranges,
+            |range| self.get_range(location, range),
+            OBJECT_STORE_COALESCE_DEFAULT,
+        )
+        .await
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
