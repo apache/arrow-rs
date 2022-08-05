@@ -15,8 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# tests for workspace wide
-name: Rust
+# workspace wide tests
+name: rust
 
 # trigger for all PRs and changes to master
 on:

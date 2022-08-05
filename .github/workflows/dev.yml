@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Dev
+name: dev
 
 # trigger for all PRs and changes to master
 on:
@@ -43,7 +43,7 @@ jobs:
         run: ./dev/release/run-rat.sh .
 
   prettier:
-    name: Use prettier to check formatting of markdown documents
+    name: Markdown format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
