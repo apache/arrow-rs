@@ -92,6 +92,7 @@ tempfile = { version = "3", default-features = false }
 [[example]]
 name = "dynamic_types"
 required-features = ["prettyprint"]
+path="./examples/dynamic_types.rs"
 
 [[bench]]
 name = "aggregate_kernels"
