@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Coverage
+name: coverage
 
 # Trigger only on pushes to master, not pull requests
 on:

@@ -16,7 +16,7 @@
 # under the License.
 
 # Attempt to cancel stale workflow runs to save github actions runner time
-name: Cancel stale runs
+name: cancel
 
 on:
   workflow_run:
