@@ -413,6 +413,8 @@ impl<T: ArrowPrimitiveType> fmt::Debug for DictionaryArray<T> {
 ///
 /// let orig = ["a", "b", "a", "b"];
 /// let dictionary = DictionaryArray::<Int32Type>::from_iter(orig);
+///
+/// // `TypedDictionaryArray` allows you to access the values directly
 /// let typed = dictionary.downcast_dict::<StringArray>().unwrap();
 ///
 /// for (maybe_val, orig) in typed.into_iter().zip(orig) {
@@ -422,14 +424,26 @@ impl<T: ArrowPrimitiveType> fmt::Debug for DictionaryArray<T> {
 #[derive(Copy, Clone)]
 pub struct TypedDictionaryArray<'a, K: ArrowPrimitiveType, V> {
     /// The dictionary array
-    pub dictionary: &'a DictionaryArray<K>,
+    dictionary: &'a DictionaryArray<K>,
     /// The values of the dictionary
-    pub values: &'a V,
+    values: &'a V,
 }
 
 impl<'a, K: ArrowPrimitiveType, V> fmt::Debug for TypedDictionaryArray<'a, K, V> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "TypedDictionaryArray({:?})", self.dictionary)
+    }
+}
+
+impl<'a, K: ArrowPrimitiveType, V> TypedDictionaryArray<'a, K, V> {
+    /// Returns the keys of this [`TypedDictionaryArray`]
+    pub fn keys(&self) -> &'a PrimitiveArray<K> {
+        self.dictionary.keys()
+    }
+
+    /// Returns the values of this [`TypedDictionaryArray`]
+    pub fn values(&self) -> &'a V {
+        self.values
     }
 }
 
