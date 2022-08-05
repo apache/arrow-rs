@@ -91,7 +91,10 @@ fn arrow_to_json(arrow_name: &str, json_name: &str, verbose: bool) -> Result<()>
     for f in reader.schema().fields() {
         fields.push(ArrowJsonField::from(f));
     }
-    let schema = ArrowJsonSchema { fields };
+    let schema = ArrowJsonSchema {
+        fields,
+        metadata: None,
+    };
 
     let batches = reader
         .map(|batch| Ok(ArrowJsonBatch::from_batch(&batch?)))

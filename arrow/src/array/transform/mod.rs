@@ -675,6 +675,7 @@ mod tests {
 
     use super::*;
 
+    use crate::array::BasicDecimalArray;
     use crate::array::Decimal128Array;
     use crate::{
         array::{
@@ -708,7 +709,7 @@ mod tests {
     fn test_decimal() {
         let decimal_array =
             create_decimal_array(&[Some(1), Some(2), None, Some(3)], 10, 3);
-        let arrays = vec![decimal_array.data()];
+        let arrays = vec![Array::data(&decimal_array)];
         let mut a = MutableArrayData::new(arrays, true, 3);
         a.extend(0, 0, 3);
         a.extend(0, 2, 3);

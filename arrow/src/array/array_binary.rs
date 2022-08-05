@@ -37,15 +37,17 @@ pub struct GenericBinaryArray<OffsetSize: OffsetSizeTrait> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
+    /// Data type of the array.
+    pub const DATA_TYPE: DataType = if OffsetSize::IS_LARGE {
+        DataType::LargeBinary
+    } else {
+        DataType::Binary
+    };
+
     /// Get the data type of the array.
-    // Declare this function as `pub const fn` after
-    // https://github.com/rust-lang/rust/issues/93706 is merged.
-    pub fn get_data_type() -> DataType {
-        if OffsetSize::IS_LARGE {
-            DataType::LargeBinary
-        } else {
-            DataType::Binary
-        }
+    #[deprecated(note = "please use `Self::DATA_TYPE` instead")]
+    pub const fn get_data_type() -> DataType {
+        Self::DATA_TYPE
     }
 
     /// Returns the length for value at index `i`.
@@ -158,7 +160,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
             "The child array cannot contain null values."
         );
 
-        let builder = ArrayData::builder(Self::get_data_type())
+        let builder = ArrayData::builder(Self::DATA_TYPE)
             .len(v.len())
             .offset(v.offset())
             .add_buffer(v.data_ref().buffers()[0].clone())
@@ -197,7 +199,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         assert!(!offsets.is_empty()); // wrote at least one
         let actual_len = (offsets.len() / std::mem::size_of::<OffsetSize>()) - 1;
 
-        let array_data = ArrayData::builder(Self::get_data_type())
+        let array_data = ArrayData::builder(Self::DATA_TYPE)
             .len(actual_len)
             .add_buffer(offsets.into())
             .add_buffer(values.into());
@@ -276,7 +278,7 @@ impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericBinaryArray<OffsetS
     fn from(data: ArrayData) -> Self {
         assert_eq!(
             data.data_type(),
-            &Self::get_data_type(),
+            &Self::DATA_TYPE,
             "[Large]BinaryArray expects Datatype::[Large]Binary"
         );
         assert_eq!(
@@ -353,7 +355,7 @@ where
 
         // calculate actual data_len, which may be different from the iterator's upper bound
         let data_len = offsets.len() - 1;
-        let array_data = ArrayData::builder(Self::get_data_type())
+        let array_data = ArrayData::builder(Self::DATA_TYPE)
             .len(data_len)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))
@@ -598,7 +600,7 @@ mod tests {
         let offsets = [0, 5, 5, 12].map(|n| O::from_usize(n).unwrap());
 
         // Array data: ["hello", "", "parquet"]
-        let array_data1 = ArrayData::builder(GenericBinaryArray::<O>::get_data_type())
+        let array_data1 = ArrayData::builder(GenericBinaryArray::<O>::DATA_TYPE)
             .len(3)
             .add_buffer(Buffer::from_slice_ref(&offsets))
             .add_buffer(Buffer::from_slice_ref(&values))

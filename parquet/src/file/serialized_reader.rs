@@ -1512,7 +1512,9 @@ mod tests {
             if i != 351 {
                 assert!((meta.num_rows == 21) || (meta.num_rows == 20));
             } else {
-                assert_eq!(meta.num_rows, 11);
+                // last page first row index is 7290, total row count is 7300
+                // because first row start with zero, last page row count should be 10.
+                assert_eq!(meta.num_rows, 10);
             }
             assert!(!meta.is_dict);
             vec.push(meta);

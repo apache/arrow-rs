@@ -16,19 +16,16 @@
 // under the License.
 
 use std::any::Any;
-use std::convert::{From, TryFrom};
+use std::convert::From;
 use std::fmt;
 use std::sync::Arc;
 
 use super::*;
-use crate::array::equal_json::JsonEqual;
 use crate::buffer::{Buffer, MutableBuffer};
-use crate::error::Result;
-use crate::ffi;
 
 /// Trait for dealing with different types of array at runtime when the type of the
 /// array is not known in advance.
-pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
+pub trait Array: fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`](std::any::Any) so that it can be
     /// downcasted to a specific implementation.
     ///
@@ -216,15 +213,6 @@ pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
         self.data_ref().get_array_memory_size() + std::mem::size_of_val(self)
             - std::mem::size_of::<ArrayData>()
     }
-
-    /// returns two pointers that represent this array in the C Data Interface (FFI)
-    fn to_raw(
-        &self,
-    ) -> Result<(*const ffi::FFI_ArrowArray, *const ffi::FFI_ArrowSchema)> {
-        let data = self.data().clone();
-        let array = ffi::ArrowArray::try_from(data)?;
-        Ok(ffi::ArrowArray::into_raw(array))
-    }
 }
 
 /// A reference-counted reference to a generic `Array`.
@@ -287,14 +275,6 @@ impl Array for ArrayRef {
     fn get_array_memory_size(&self) -> usize {
         self.as_ref().get_array_memory_size()
     }
-
-    fn to_raw(
-        &self,
-    ) -> Result<(*const ffi::FFI_ArrowArray, *const ffi::FFI_ArrowSchema)> {
-        let data = self.data().clone();
-        let array = ffi::ArrowArray::try_from(data)?;
-        Ok(ffi::ArrowArray::into_raw(array))
-    }
 }
 
 impl<'a, T: Array> Array for &'a T {
@@ -352,12 +332,6 @@ impl<'a, T: Array> Array for &'a T {
 
     fn get_array_memory_size(&self) -> usize {
         T::get_array_memory_size(self)
-    }
-
-    fn to_raw(
-        &self,
-    ) -> Result<(*const ffi::FFI_ArrowArray, *const ffi::FFI_ArrowSchema)> {
-        T::to_raw(self)
     }
 }
 
@@ -731,42 +705,6 @@ fn new_null_sized_decimal(
             vec![],
         )
     })
-}
-
-/// Creates a new array from two FFI pointers. Used to import arrays from the C Data Interface
-/// # Safety
-/// Assumes that these pointers represent valid C Data Interfaces, both in memory
-/// representation and lifetime via the `release` mechanism.
-pub unsafe fn make_array_from_raw(
-    array: *const ffi::FFI_ArrowArray,
-    schema: *const ffi::FFI_ArrowSchema,
-) -> Result<ArrayRef> {
-    let array = ffi::ArrowArray::try_from_raw(array, schema)?;
-    let data = ArrayData::try_from(array)?;
-    Ok(make_array(data))
-}
-
-/// Exports an array to raw pointers of the C Data Interface provided by the consumer.
-/// # Safety
-/// Assumes that these pointers represent valid C Data Interfaces, both in memory
-/// representation and lifetime via the `release` mechanism.
-///
-/// This function copies the content of two FFI structs [ffi::FFI_ArrowArray] and
-/// [ffi::FFI_ArrowSchema] in the array to the location pointed by the raw pointers.
-/// Usually the raw pointers are provided by the array data consumer.
-pub unsafe fn export_array_into_raw(
-    src: ArrayRef,
-    out_array: *mut ffi::FFI_ArrowArray,
-    out_schema: *mut ffi::FFI_ArrowSchema,
-) -> Result<()> {
-    let data = src.data();
-    let array = ffi::FFI_ArrowArray::new(data);
-    let schema = ffi::FFI_ArrowSchema::try_from(data.data_type())?;
-
-    std::ptr::write_unaligned(out_array, array);
-    std::ptr::write_unaligned(out_schema, schema);
-
-    Ok(())
 }
 
 // Helper function for printing potentially long arrays.

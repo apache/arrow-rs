@@ -18,7 +18,8 @@
 use std::{cmp, mem::size_of};
 
 use crate::data_type::AsBytes;
-use crate::util::{bit_packing::unpack32, memory::ByteBufferPtr};
+use crate::util::bit_pack::{unpack16, unpack32, unpack64, unpack8};
+use crate::util::memory::ByteBufferPtr;
 
 #[inline]
 pub fn from_ne_slice<T: FromBytes>(bs: &[u8]) -> T {
@@ -457,12 +458,13 @@ impl BitReader {
         true
     }
 
-    /// Read multiple values from their packed representation
+    /// Read multiple values from their packed representation where each element is represented
+    /// by `num_bits` bits.
     ///
     /// # Panics
     ///
     /// This function panics if
-    /// - `bit_width` is larger than the bit-capacity of `T`
+    /// - `num_bits` is larger than the bit-capacity of `T`
     ///
     pub fn get_batch<T: FromBytes>(&mut self, batch: &mut [T], num_bits: usize) -> usize {
         assert!(num_bits <= size_of::<T>() * 8);
@@ -476,17 +478,6 @@ impl BitReader {
 
         let mut i = 0;
 
-        if num_bits > 32 {
-            // No fast path - read values individually
-            while i < values_to_read {
-                batch[i] = self
-                    .get_value(num_bits)
-                    .expect("expected to have more data");
-                i += 1;
-            }
-            return values_to_read;
-        }
-
         // First align bit offset to byte offset
         if self.bit_offset != 0 {
             while i < values_to_read && self.bit_offset != 0 {
@@ -497,46 +488,104 @@ impl BitReader {
             }
         }
 
-        let in_buf = &self.buffer.data()[self.byte_offset..];
-        let mut in_ptr = in_buf as *const [u8] as *const u8 as *const u32;
-        if size_of::<T>() == 4 {
-            while values_to_read - i >= 32 {
-                let out_ptr = &mut batch[i..] as *mut [T] as *mut T as *mut u32;
-                in_ptr = unsafe { unpack32(in_ptr, out_ptr, num_bits) };
-                self.byte_offset += 4 * num_bits;
-                i += 32;
-            }
-        } else {
-            let mut out_buf = [0u32; 32];
-            let out_ptr = &mut out_buf as &mut [u32] as *mut [u32] as *mut u32;
-            while values_to_read - i >= 32 {
-                in_ptr = unsafe { unpack32(in_ptr, out_ptr, num_bits) };
-                self.byte_offset += 4 * num_bits;
+        let in_buf = self.buffer.data();
 
-                for out in out_buf {
-                    // Zero-allocate buffer
-                    let mut out_bytes = T::Buffer::default();
-                    let in_bytes = out.to_le_bytes();
-
-                    {
-                        let out_bytes = out_bytes.as_mut();
-                        let len = out_bytes.len().min(in_bytes.len());
-                        (&mut out_bytes[..len]).copy_from_slice(&in_bytes[..len]);
-                    }
-
-                    batch[i] = T::from_le_bytes(out_bytes);
-                    i += 1;
+        // Read directly into output buffer
+        match size_of::<T>() {
+            1 => {
+                let ptr = batch.as_mut_ptr() as *mut u8;
+                let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
+                while values_to_read - i >= 8 {
+                    let out_slice = (&mut out[i..i + 8]).try_into().unwrap();
+                    unpack8(&in_buf[self.byte_offset..], out_slice, num_bits);
+                    self.byte_offset += num_bits;
+                    i += 8;
                 }
+            }
+            2 => {
+                let ptr = batch.as_mut_ptr() as *mut u16;
+                let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
+                while values_to_read - i >= 16 {
+                    let out_slice = (&mut out[i..i + 16]).try_into().unwrap();
+                    unpack16(&in_buf[self.byte_offset..], out_slice, num_bits);
+                    self.byte_offset += 2 * num_bits;
+                    i += 16;
+                }
+            }
+            4 => {
+                let ptr = batch.as_mut_ptr() as *mut u32;
+                let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
+                while values_to_read - i >= 32 {
+                    let out_slice = (&mut out[i..i + 32]).try_into().unwrap();
+                    unpack32(&in_buf[self.byte_offset..], out_slice, num_bits);
+                    self.byte_offset += 4 * num_bits;
+                    i += 32;
+                }
+            }
+            8 => {
+                let ptr = batch.as_mut_ptr() as *mut u64;
+                let out = unsafe { std::slice::from_raw_parts_mut(ptr, batch.len()) };
+                while values_to_read - i >= 64 {
+                    let out_slice = (&mut out[i..i + 64]).try_into().unwrap();
+                    unpack64(&in_buf[self.byte_offset..], out_slice, num_bits);
+                    self.byte_offset += 8 * num_bits;
+                    i += 64;
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        // Try to read smaller batches if possible
+        if size_of::<T>() > 4 && values_to_read - i >= 32 && num_bits <= 32 {
+            let mut out_buf = [0_u32; 32];
+            unpack32(&in_buf[self.byte_offset..], &mut out_buf, num_bits);
+            self.byte_offset += 4 * num_bits;
+
+            for out in out_buf {
+                // Zero-allocate buffer
+                let mut out_bytes = T::Buffer::default();
+                out_bytes.as_mut()[..4].copy_from_slice(&out.to_le_bytes());
+                batch[i] = T::from_le_bytes(out_bytes);
+                i += 1;
             }
         }
 
-        assert!(values_to_read - i < 32);
+        if size_of::<T>() > 2 && values_to_read - i >= 16 && num_bits <= 16 {
+            let mut out_buf = [0_u16; 16];
+            unpack16(&in_buf[self.byte_offset..], &mut out_buf, num_bits);
+            self.byte_offset += 2 * num_bits;
+
+            for out in out_buf {
+                // Zero-allocate buffer
+                let mut out_bytes = T::Buffer::default();
+                out_bytes.as_mut()[..2].copy_from_slice(&out.to_le_bytes());
+                batch[i] = T::from_le_bytes(out_bytes);
+                i += 1;
+            }
+        }
+
+        if size_of::<T>() > 1 && values_to_read - i >= 8 && num_bits <= 8 {
+            let mut out_buf = [0_u8; 8];
+            unpack8(&in_buf[self.byte_offset..], &mut out_buf, num_bits);
+            self.byte_offset += num_bits;
+
+            for out in out_buf {
+                // Zero-allocate buffer
+                let mut out_bytes = T::Buffer::default();
+                out_bytes.as_mut()[..1].copy_from_slice(&out.to_le_bytes());
+                batch[i] = T::from_le_bytes(out_bytes);
+                i += 1;
+            }
+        }
 
         self.reload_buffer_values();
+
+        // Read any trailing values
         while i < values_to_read {
-            batch[i] = self
+            let value = self
                 .get_value(num_bits)
                 .expect("expected to have more data");
+            batch[i] = value;
             i += 1;
         }
 
@@ -1014,11 +1063,12 @@ mod tests {
     fn test_get_batch() {
         const SIZE: &[usize] = &[1, 31, 32, 33, 128, 129];
         for s in SIZE {
-            for i in 0..33 {
+            for i in 0..=64 {
                 match i {
                     0..=8 => test_get_batch_helper::<u8>(*s, i),
                     9..=16 => test_get_batch_helper::<u16>(*s, i),
-                    _ => test_get_batch_helper::<u32>(*s, i),
+                    17..=32 => test_get_batch_helper::<u32>(*s, i),
+                    _ => test_get_batch_helper::<u64>(*s, i),
                 }
             }
         }
@@ -1028,13 +1078,18 @@ mod tests {
     where
         T: FromBytes + Default + Clone + Debug + Eq,
     {
-        assert!(num_bits <= 32);
+        assert!(num_bits <= 64);
         let num_bytes = ceil(num_bits, 8);
         let mut writer = BitWriter::new(num_bytes as usize * total);
 
-        let values: Vec<u32> = random_numbers::<u32>(total)
+        let mask = match num_bits {
+            64 => u64::MAX,
+            _ => (1 << num_bits) - 1,
+        };
+
+        let values: Vec<u64> = random_numbers::<u64>(total)
             .iter()
-            .map(|v| v & ((1u64 << num_bits) - 1) as u32)
+            .map(|v| v & mask)
             .collect();
 
         // Generic values used to check against actual values read from `get_batch`.
@@ -1050,9 +1105,12 @@ mod tests {
         assert_eq!(values_read, values.len());
         for i in 0..batch.len() {
             assert_eq!(
-                batch[i], expected_values[i],
-                "num_bits = {}, index = {}",
-                num_bits, i
+                batch[i],
+                expected_values[i],
+                "max_num_bits = {}, num_bits = {}, index = {}",
+                size_of::<T>() * 8,
+                num_bits,
+                i
             );
         }
     }

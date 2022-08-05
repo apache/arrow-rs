@@ -33,69 +33,17 @@ use super::schema::{
     decimal_length_from_precision,
 };
 
-use crate::column::writer::{get_column_writer, ColumnWriter, ColumnWriterImpl};
+use crate::arrow::arrow_writer::byte_array::ByteArrayWriter;
+use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::RowGroupMetaDataPtr;
 use crate::file::properties::WriterProperties;
-use crate::file::writer::{SerializedColumnWriter, SerializedRowGroupWriter};
+use crate::file::writer::SerializedRowGroupWriter;
 use crate::{data_type::*, file::writer::SerializedFileWriter};
 use levels::{calculate_array_levels, LevelInfo};
 
 mod byte_array;
 mod levels;
-
-/// An object-safe API for writing an [`ArrayRef`]
-trait ArrayWriter {
-    fn write(&mut self, array: &ArrayRef, levels: LevelInfo) -> Result<()>;
-
-    fn close(&mut self) -> Result<()>;
-}
-
-/// Fallback implementation for writing an [`ArrayRef`] that uses [`SerializedColumnWriter`]
-struct ColumnArrayWriter<'a>(Option<SerializedColumnWriter<'a>>);
-
-impl<'a> ArrayWriter for ColumnArrayWriter<'a> {
-    fn write(&mut self, array: &ArrayRef, levels: LevelInfo) -> Result<()> {
-        write_leaf(self.0.as_mut().unwrap().untyped(), array, levels)?;
-        Ok(())
-    }
-
-    fn close(&mut self) -> Result<()> {
-        self.0.take().unwrap().close()
-    }
-}
-
-fn get_writer<'a, W: Write>(
-    row_group_writer: &'a mut SerializedRowGroupWriter<'_, W>,
-    data_type: &ArrowDataType,
-) -> Result<Box<dyn ArrayWriter + 'a>> {
-    let array_writer = row_group_writer
-        .next_column_with_factory(
-            |descr, props, page_writer, on_close| match data_type {
-                ArrowDataType::Utf8
-                | ArrowDataType::LargeUtf8
-                | ArrowDataType::Binary
-                | ArrowDataType::LargeBinary => Ok(byte_array::make_byte_array_writer(
-                    descr,
-                    data_type.clone(),
-                    props.clone(),
-                    page_writer,
-                    on_close,
-                )),
-                _ => {
-                    let column_writer =
-                        get_column_writer(descr, props.clone(), page_writer);
-
-                    let serialized_writer =
-                        SerializedColumnWriter::new(column_writer, Some(on_close));
-
-                    Ok(Box::new(ColumnArrayWriter(Some(serialized_writer))))
-                }
-            },
-        )?
-        .expect("Unable to get column writer");
-    Ok(array_writer)
-}
 
 /// Arrow writer
 ///
@@ -314,22 +262,24 @@ fn write_leaves<W: Write>(
         | ArrowDataType::Time64(_)
         | ArrowDataType::Duration(_)
         | ArrowDataType::Interval(_)
-        | ArrowDataType::LargeBinary
-        | ArrowDataType::Binary
-        | ArrowDataType::Utf8
-        | ArrowDataType::LargeUtf8
         | ArrowDataType::Decimal128(_, _)
         | ArrowDataType::Decimal256(_, _)
         | ArrowDataType::FixedSizeBinary(_) => {
-            let mut writer = get_writer(row_group_writer, &data_type)?;
+            let mut col_writer = row_group_writer.next_column()?.unwrap();
             for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
-                writer.write(
-                    array,
-                    levels.pop().expect("Levels exhausted"),
-                )?;
+                write_leaf(col_writer.untyped(), array, levels.pop().expect("Levels exhausted"))?;
             }
-            writer.close()?;
-            Ok(())
+            col_writer.close()
+        }
+        ArrowDataType::LargeBinary
+        | ArrowDataType::Binary
+        | ArrowDataType::Utf8
+        | ArrowDataType::LargeUtf8 => {
+            let mut col_writer = row_group_writer.next_column_with_factory(ByteArrayWriter::new)?.unwrap();
+            for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
+                col_writer.write(array, levels.pop().expect("Levels exhausted"))?;
+            }
+            col_writer.close()
         }
         ArrowDataType::List(_) | ArrowDataType::LargeList(_) => {
             let arrays: Vec<_> = arrays.iter().map(|array|{
@@ -380,18 +330,21 @@ fn write_leaves<W: Write>(
             write_leaves(row_group_writer, &values, levels)?;
             Ok(())
         }
-        ArrowDataType::Dictionary(_, value_type) => {
-            let mut writer = get_writer(row_group_writer, value_type)?;
-            for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
-                // cast dictionary to a primitive
-                let array = arrow::compute::cast(array, value_type)?;
-                writer.write(
-                    &array,
-                    levels.pop().expect("Levels exhausted"),
-                )?;
+        ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
+            ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
+                let mut col_writer = row_group_writer.next_column_with_factory(ByteArrayWriter::new)?.unwrap();
+                for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
+                    col_writer.write(array, levels.pop().expect("Levels exhausted"))?;
+                }
+                col_writer.close()
             }
-            writer.close()?;
-            Ok(())
+            _ => {
+                let mut col_writer = row_group_writer.next_column()?.unwrap();
+                for (array, levels) in arrays.iter().zip(levels.iter_mut()) {
+                    write_leaf(col_writer.untyped(), array, levels.pop().expect("Levels exhausted"))?;
+                }
+                col_writer.close()
+            }
         }
         ArrowDataType::Float16 => Err(ParquetError::ArrowError(
             "Float16 arrays not supported".to_string(),

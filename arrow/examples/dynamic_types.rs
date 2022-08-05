@@ -65,10 +65,7 @@ fn main() -> Result<()> {
     let batch =
         RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id), Arc::new(nested)])?;
 
-    #[cfg(feature = "prettyprint")]
-    {
-        print_batches(&[batch.clone()]).unwrap();
-    }
+    print_batches(&[batch.clone()]).unwrap();
 
     process(&batch);
     Ok(())
@@ -108,8 +105,5 @@ fn process(batch: &RecordBatch) {
     )
     .unwrap();
 
-    #[cfg(feature = "prettyprint")]
-    {
-        print_batches(&[projection]).unwrap();
-    }
+    print_batches(&[projection]).unwrap();
 }
