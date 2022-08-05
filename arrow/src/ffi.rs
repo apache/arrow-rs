@@ -1034,12 +1034,9 @@ mod tests {
             .collect::<Buffer>();
 
         // Construct a list array from the above two
-        let list_data_type = match std::mem::size_of::<Offset>() {
-            4 => DataType::List(Box::new(Field::new("item", DataType::Int32, false))),
-            _ => {
-                DataType::LargeList(Box::new(Field::new("item", DataType::Int32, false)))
-            }
-        };
+        let list_data_type = GenericListArray::<Offset>::DATA_TYPE_CONSTRUCTOR(Box::new(
+            Field::new("item", DataType::Int32, false),
+        ));
 
         let list_data = ArrayData::builder(list_data_type)
             .len(3)

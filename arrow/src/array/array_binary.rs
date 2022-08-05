@@ -236,7 +236,7 @@ impl<'a, T: OffsetSizeTrait> GenericBinaryArray<T> {
 
 impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericBinaryArray<OffsetSize> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let prefix = if OffsetSize::IS_LARGE { "Large" } else { "" };
+        let prefix = OffsetSize::PREFIX;
 
         write!(f, "{}BinaryArray\n[\n", prefix)?;
         print_long_array(self, f, |array, index, f| {
@@ -608,11 +608,9 @@ mod tests {
             .unwrap();
         let binary_array1 = GenericBinaryArray::<O>::from(array_data1);
 
-        let data_type = if O::IS_LARGE {
-            DataType::LargeList
-        } else {
-            DataType::List
-        }(Box::new(Field::new("item", DataType::UInt8, false)));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+            Field::new("item", DataType::UInt8, false),
+        ));
 
         let array_data2 = ArrayData::builder(data_type)
             .len(3)
@@ -660,11 +658,9 @@ mod tests {
 
         let offsets = [0, 5, 8, 15].map(|n| O::from_usize(n).unwrap());
         let null_buffer = Buffer::from_slice_ref(&[0b101]);
-        let data_type = if O::IS_LARGE {
-            DataType::LargeList
-        } else {
-            DataType::List
-        }(Box::new(Field::new("item", DataType::UInt8, false)));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+            Field::new("item", DataType::UInt8, false),
+        ));
 
         // [None, Some(b"Parquet")]
         let array_data = ArrayData::builder(data_type)
@@ -707,11 +703,9 @@ mod tests {
             .unwrap();
 
         let offsets = [0, 5, 10].map(|n| O::from_usize(n).unwrap());
-        let data_type = if O::IS_LARGE {
-            DataType::LargeList
-        } else {
-            DataType::List
-        }(Box::new(Field::new("item", DataType::UInt8, false)));
+        let data_type = GenericListArray::<O>::DATA_TYPE_CONSTRUCTOR(Box::new(
+            Field::new("item", DataType::UInt8, false),
+        ));
 
         // [None, Some(b"Parquet")]
         let array_data = ArrayData::builder(data_type)
