@@ -21,12 +21,11 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::*;
-use crate::array::equal_json::JsonEqual;
 use crate::buffer::{Buffer, MutableBuffer};
 
 /// Trait for dealing with different types of array at runtime when the type of the
 /// array is not known in advance.
-pub trait Array: fmt::Debug + Send + Sync + JsonEqual {
+pub trait Array: fmt::Debug + Send + Sync {
     /// Returns the array as [`Any`](std::any::Any) so that it can be
     /// downcasted to a specific implementation.
     ///
