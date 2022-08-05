@@ -75,7 +75,7 @@ pub fn concat_elements_utf8<Offset: OffsetSizeTrait>(
         output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
     }
 
-    let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::get_data_type())
+    let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::DATA_TYPE)
         .len(left.len())
         .add_buffer(output_offsets.finish())
         .add_buffer(output_values.finish())
@@ -155,7 +155,7 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
         output_offsets.append(Offset::from_usize(output_values.len()).unwrap());
     }
 
-    let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::get_data_type())
+    let builder = ArrayDataBuilder::new(GenericStringArray::<Offset>::DATA_TYPE)
         .len(size)
         .add_buffer(output_offsets.finish())
         .add_buffer(output_values.finish())

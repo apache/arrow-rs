@@ -15,26 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "test_utils")]
-pub mod bench_util;
-pub mod bit_chunk_iterator;
-pub mod bit_iterator;
-pub(crate) mod bit_mask;
-pub mod bit_util;
-#[cfg(feature = "test_utils")]
-pub mod data_gen;
-pub mod display;
-#[cfg(any(test, feature = "test_utils"))]
-pub mod integration_util;
-#[cfg(feature = "prettyprint")]
-pub mod pretty;
-pub(crate) mod serialization;
-pub mod string_writer;
-#[cfg(any(test, feature = "test_utils"))]
-pub mod test_util;
+//! Generic utilities reqwest based ObjectStore implementations
 
-mod trusted_len;
-pub(crate) use trusted_len::trusted_len_unzip;
-
-pub mod decimal;
-pub(crate) mod reader_parser;
+pub mod backoff;
+pub mod oauth;
+pub mod retry;
+pub mod token;
