@@ -117,7 +117,7 @@ it relies heavily on LLVM auto-vectorisation to achieve this. Unfortunately the 
 particularly for x86_64, favour portability over performance, and LLVM will consequently avoid
 using more recent instructions that would result in errors on older CPUs.
 
-To address this it is recommended that you specify the override the LLVM defaults either
+To address this it is recommended that you override the LLVM defaults either
 by setting the `RUSTFLAGS` environment variable, or by setting `rustflags` in your
 [Cargo configuration](https://doc.rust-lang.org/cargo/reference/config.html)
 
