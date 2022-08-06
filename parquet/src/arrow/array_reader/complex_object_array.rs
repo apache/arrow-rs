@@ -206,8 +206,7 @@ where
                 .column_reader
                 .as_mut()
                 .unwrap()
-                .skip_records(remain_to_skip)
-                .unwrap();
+                .skip_records(remain_to_skip)?;
             num_read += skip;
             //  skip < remain_to_skip means end of row group
             //  self.next_column_reader() == false means end of file
