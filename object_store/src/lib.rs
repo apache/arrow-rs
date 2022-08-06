@@ -165,10 +165,10 @@ pub mod memory;
 pub mod path;
 pub mod throttle;
 
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "aws"))]
 mod client;
 
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "aws"))]
 pub use client::{backoff::BackoffConfig, retry::RetryConfig};
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
@@ -469,6 +469,16 @@ pub enum Error {
     #[cfg(feature = "gcp")]
     #[snafu(display("OAuth error: {}", source), context(false))]
     OAuth { source: client::oauth::Error },
+}
+
+impl From<Error> for std::io::Error {
+    fn from(e: Error) -> Self {
+        let kind = match &e {
+            Error::NotFound { .. } => std::io::ErrorKind::NotFound,
+            _ => std::io::ErrorKind::Other,
+        };
+        Self::new(kind, e)
+    }
 }
 
 #[cfg(test)]

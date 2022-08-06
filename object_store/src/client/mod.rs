@@ -18,6 +18,8 @@
 //! Generic utilities reqwest based ObjectStore implementations
 
 pub mod backoff;
+#[cfg(feature = "gcp")]
 pub mod oauth;
+pub mod pagination;
 pub mod retry;
 pub mod token;
