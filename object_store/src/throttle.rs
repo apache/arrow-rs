@@ -308,11 +308,11 @@ mod tests {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
 
-        put_get_delete_list(&store).await.unwrap();
-        list_uses_directories_correctly(&store).await.unwrap();
-        list_with_delimiter(&store).await.unwrap();
-        rename_and_copy(&store).await.unwrap();
-        copy_if_not_exists(&store).await.unwrap();
+        put_get_delete_list(&store).await;
+        list_uses_directories_correctly(&store).await;
+        list_with_delimiter(&store).await;
+        rename_and_copy(&store).await;
+        copy_if_not_exists(&store).await;
     }
 
     #[tokio::test]

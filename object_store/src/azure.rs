@@ -857,10 +857,10 @@ mod tests {
     async fn azure_blob_test() {
         let integration = maybe_skip_integration!().build().unwrap();
 
-        put_get_delete_list(&integration).await.unwrap();
-        list_uses_directories_correctly(&integration).await.unwrap();
-        list_with_delimiter(&integration).await.unwrap();
-        rename_and_copy(&integration).await.unwrap();
-        copy_if_not_exists(&integration).await.unwrap();
+        put_get_delete_list(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
     }
 }
