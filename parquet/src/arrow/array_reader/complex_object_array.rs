@@ -197,19 +197,24 @@ where
     }
 
     fn skip_records(&mut self, num_records: usize) -> Result<usize> {
-        match self.column_reader.as_mut() {
-            Some(reader) => reader.skip_records(num_records),
-            None => {
-                if self.next_column_reader()? {
-                    self.column_reader
-                        .as_mut()
-                        .unwrap()
-                        .skip_records(num_records)
-                } else {
-                    Ok(0)
-                }
+        let mut num_read = 0;
+        while (self.column_reader.is_some() || self.next_column_reader()?)
+            && num_read < num_records
+        {
+            let remain_to_skip = num_records - num_read;
+            let skip = self
+                .column_reader
+                .as_mut()
+                .unwrap()
+                .skip_records(remain_to_skip)?;
+            num_read += skip;
+            //  skip < remain_to_skip means end of row group
+            //  self.next_column_reader() == false means end of file
+            if skip < remain_to_skip && !self.next_column_reader()? {
+                break;
             }
         }
+        Ok(num_read)
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
