@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::ArrowError;
+use crate::error::{ArrowError, Result};
 use crate::ipc::CompressionType;
+use std::io::{Read, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CompressionCodecType {
@@ -24,8 +25,6 @@ pub enum CompressionCodecType {
     Zstd,
 }
 
-// TODO make this try/from to return errors
-#[cfg(feature = "ipc_compression")]
 impl TryFrom<CompressionType> for CompressionCodecType {
     fn try_from(compression_type: CompressionType) -> Self {
         match compression_type {
@@ -41,18 +40,6 @@ impl TryFrom<CompressionType> for CompressionCodecType {
     }
 }
 
-#[cfg(not(feature = "ipc_compression"))]
-impl TryFrom<CompressionType> for CompressionCodecType {
-    type Error = ArrowError;
-
-    fn try_from(compression_type: CompressionType) -> Result<Self, ArrowError> {
-        Err(ArrowError::InvalidArgumentError(
-            format!("compression type {:?} not supported because arrow was not compiled with the ipc_compression feature", compression_type))
-            )
-    }
-}
-
-#[cfg(feature = "ipc_compression")]
 impl From<CompressionCodecType> for CompressionType {
     fn from(codec: CompressionCodecType) -> Self {
         match codec {
@@ -62,68 +49,64 @@ impl From<CompressionCodecType> for CompressionType {
     }
 }
 
-#[cfg(not(feature = "ipc_compression"))]
-impl TryFrom<CompressionCodecType> for CompressionType {
-    type Error = ArrowError;
-    fn try_from(codec: CompressionCodecType) -> Result<Self, ArrowError> {
-        return Err(ArrowError::InvalidArgumentError(
-            format!("codec type {:?} not supported because arrow was not compiled with the ipc_compression feature", codec)));
-    }
-}
-
-#[cfg(feature = "ipc_compression")]
-mod compression_function {
-    use crate::error::Result;
-    use crate::ipc::compression::ipc_compression::CompressionCodecType;
-    use std::io::{Read, Write};
-
-    impl CompressionCodecType {
-        pub fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<()> {
-            match self {
-                CompressionCodecType::Lz4Frame => {
-                    let mut encoder = lz4::EncoderBuilder::new().build(output)?;
-                    encoder.write_all(input)?;
-                    match encoder.finish().1 {
-                        Ok(_) => Ok(()),
-                        Err(e) => Err(e.into()),
-                    }
+impl CompressionCodecType {
+    pub fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<()> {
+        match self {
+            CompressionCodecType::Lz4Frame => {
+                let mut encoder = lz4::EncoderBuilder::new().build(output)?;
+                encoder.write_all(input)?;
+                match encoder.finish().1 {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e.into()),
                 }
-                CompressionCodecType::Zstd => {
-                    let mut encoder = zstd::Encoder::new(output, 0)?;
-                    encoder.write_all(input)?;
-                    match encoder.finish() {
-                        Ok(_) => Ok(()),
-                        Err(e) => Err(e.into()),
-                    }
+            }
+            CompressionCodecType::Zstd => {
+                let mut encoder = zstd::Encoder::new(output, 0)?;
+                encoder.write_all(input)?;
+                match encoder.finish() {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e.into()),
                 }
             }
         }
-
-        pub fn decompress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<usize> {
-            let result: Result<usize> = match self {
-                CompressionCodecType::Lz4Frame => {
-                    let mut decoder = lz4::Decoder::new(input)?;
-                    match decoder.read_to_end(output) {
-                        Ok(size) => Ok(size),
-                        Err(e) => Err(e.into()),
-                    }
-                }
-                CompressionCodecType::Zstd => {
-                    let mut decoder = zstd::Decoder::new(input)?;
-                    match decoder.read_to_end(output) {
-                        Ok(size) => Ok(size),
-                        Err(e) => Err(e.into()),
-                    }
-                }
-            };
-            result
-        }
     }
+
+    pub fn decompress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<usize> {
+        let result: Result<usize> = match self {
+            CompressionCodecType::Lz4Frame => {
+                let mut decoder = lz4::Decoder::new(input)?;
+                match decoder.read_to_end(output) {
+                    Ok(size) => Ok(size),
+                    Err(e) => Err(e.into()),
+                }
+            }
+            CompressionCodecType::Zstd => {
+                let mut decoder = zstd::Decoder::new(input)?;
+                match decoder.read_to_end(output) {
+                    Ok(size) => Ok(size),
+                    Err(e) => Err(e.into()),
+                }
+            }
+        };
+        result
+    }
+}
+
+/// Get the uncompressed length
+/// Notes:
+///   -1: indicate that the data that follows is not compressed
+///    0: indicate that there is no data
+///   positive number: indicate the uncompressed length for the following data
+#[inline]
+fn read_uncompressed_size(buffer: &[u8]) -> i64 {
+    let len_buffer = &buffer[0..8];
+    // 64-bit little-endian signed integer
+    i64::from_le_bytes(len_buffer.try_into().unwrap())
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::ipc::compression::ipc_compression::CompressionCodecType;
+    use super::*;
 
     #[test]
     fn test_lz4_compression() {

@@ -34,7 +34,6 @@ use crate::ipc;
 use crate::record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 
 use crate::ipc::compression::CompressionCodecType;
-use crate::ipc::CompressionType;
 use ipc::CONTINUATION_MARKER;
 use DataType::*;
 
@@ -92,18 +91,6 @@ fn read_buffer(
         Some(_decompressor) => unreachable!(),
         None => Buffer::from(buf_data),
     })
-}
-
-/// Get the uncompressed length
-/// Notes:
-///   -1: indicate that the data that follows is not compressed
-///    0: indicate that there is no data
-///   positive number: indicate the uncompressed length for the following data
-#[inline]
-fn read_uncompressed_size(buffer: &[u8]) -> i64 {
-    let len_buffer = &buffer[0..8];
-    // 64-bit little-endian signed integer
-    i64::from_le_bytes(len_buffer.try_into().unwrap())
 }
 
 /// Coordinates reading arrays based on data types.
@@ -277,7 +264,7 @@ fn create_array(
             // In V4, union types has validity bitmap
             // In V5 and later, union types have no validity bitmap
             if metadata < &ipc::MetadataVersion::V5 {
-                read_buffer(&buffers[buffer_index], data, compression_codec);
+                read_buffer(&buffers[buffer_index], data, compression_codec)?;
                 buffer_index += 1;
             }
 
@@ -674,18 +661,10 @@ pub fn read_record_batch(
     let field_nodes = batch.nodes().ok_or_else(|| {
         ArrowError::IoError("Unable to get field nodes from IPC RecordBatch".to_string())
     })?;
-    let option_compression = batch.compression();
-    let compression_codec = match option_compression {
-        None => Ok(None),
-        Some(compression) => match compression.codec() {
-            CompressionType::ZSTD => Ok(Some(CompressionCodecType::Zstd)),
-            CompressionType::LZ4_FRAME => Ok(Some(CompressionCodecType::Lz4Frame)),
-            other_type => Err(ArrowError::InvalidArgumentError(format!(
-                "Not support compression type: {:?}",
-                other_type
-            ))),
-        },
-    }?;
+    let batch_compression = batch.compression();
+    let compression_codec: Option<CompressionCodecType> = batch_compression
+        .map(|batch_compression| batch_compression.codec().try_into())
+        .transpose()?;
 
     // keep track of buffer and node index, the functions that create arrays mutate these
     let mut buffer_index = 0;
