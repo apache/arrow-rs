@@ -391,7 +391,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use rand::{thread_rng, RngCore};
+    use rand::{thread_rng, Rng, RngCore};
     use tempfile::tempfile;
 
     use arrow::array::*;
