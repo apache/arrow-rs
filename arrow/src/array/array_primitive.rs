@@ -552,14 +552,13 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
 
     /// Construct a timestamp array with new timezone
     pub fn with_timezone(&self, timezone: String) -> Self {
-        let array_data =
-            ArrayData::builder(DataType::Timestamp(T::get_time_unit(), Some(timezone)))
-                .len(self.len())
-                .null_count(self.data.null_count())
-                .offset(self.data.offset())
-                .add_buffer(self.data.buffers()[0].clone())
-                .null_bit_buffer(self.data.null_buffer().map(|b| b.clone()));
-        let array_data = unsafe { array_data.build_unchecked() };
+        let array_data = unsafe {
+            self.data
+                .clone()
+                .into_builder()
+                .data_type(DataType::Timestamp(T::get_time_unit(), Some(timezone)))
+                .build_unchecked()
+        };
         PrimitiveArray::from(array_data)
     }
 }
