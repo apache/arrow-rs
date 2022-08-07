@@ -34,9 +34,6 @@ use crate::ipc;
 use crate::record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 
 use crate::ipc::compression::CompressionCodecType;
-use crate::ipc::compression::{
-    LENGTH_EMPTY_COMPRESSED_DATA, LENGTH_NO_COMPRESSED_DATA, LENGTH_OF_PREFIX_DATA,
-};
 use crate::ipc::CompressionType;
 use ipc::CONTINUATION_MARKER;
 use DataType::*;
@@ -54,16 +51,21 @@ fn read_buffer(
     buf: &ipc::Buffer,
     a_data: &[u8],
     compression_codec: &Option<CompressionCodecType>,
-) -> Buffer {
+) -> Result<Buffer> {
     let start_offset = buf.offset() as usize;
     let end_offset = start_offset + buf.length() as usize;
     let buf_data = &a_data[start_offset..end_offset];
     // corner case: empty buffer
     if buf_data.is_empty() {
-        return Buffer::from(buf_data);
+        return Ok(Buffer::from(buf_data));
     }
-    match compression_codec {
-        Some(_decompressor) if cfg!(feature = "ipc_compression") || cfg!(test) => {
+    Ok(match compression_codec {
+        #[cfg(feature = "ipc_compression")]
+        Some(decompressor) => {
+            use crate::ipc::compression::{
+                LENGTH_EMPTY_COMPRESSED_DATA, LENGTH_NO_COMPRESSED_DATA,
+                LENGTH_OF_PREFIX_DATA,
+            };
             // 8byte + data
             // read the first 8 bytes
             // if the data is compressed, decompress the data, otherwise return as is
@@ -80,19 +82,16 @@ fn read_buffer(
                 // decompress data using the codec
                 let mut _uncompressed_buffer =
                     Vec::with_capacity(decompressed_length as usize);
-                let _input_data = &buf_data[(LENGTH_OF_PREFIX_DATA as usize)..];
-                #[cfg(any(feature = "ipc_compression", test))]
-                _decompressor
-                    .decompress(_input_data, &mut _uncompressed_buffer)
-                    .unwrap();
+                let input_data = &buf_data[(LENGTH_OF_PREFIX_DATA as usize)..];
+                decompressor.decompress(input_data, &mut _uncompressed_buffer)?;
                 Buffer::from(_uncompressed_buffer)
             }
         }
+        // creating the compressor will fail if ipc_compression is not enabled
+        #[cfg(not(feature = "ipc_compression"))]
+        Some(_decompressor) => unreachable!(),
         None => Buffer::from(buf_data),
-        _ => {
-            panic!("IPC compression not supported. Compile with feature 'ipc_compression' to enable");
-        }
-    }
+    })
 }
 
 /// Get the uncompressed length
@@ -138,7 +137,7 @@ fn create_array(
                 buffers[buffer_index..buffer_index + 3]
                     .iter()
                     .map(|buf| read_buffer(buf, data, compression_codec))
-                    .collect(),
+                    .collect::<Result<_>>()?,
             );
             node_index += 1;
             buffer_index += 3;
@@ -151,7 +150,7 @@ fn create_array(
                 buffers[buffer_index..buffer_index + 2]
                     .iter()
                     .map(|buf| read_buffer(buf, data, compression_codec))
-                    .collect(),
+                    .collect::<Result<_>>()?,
             );
             node_index += 1;
             buffer_index += 2;
@@ -162,7 +161,7 @@ fn create_array(
             let list_buffers: Vec<Buffer> = buffers[buffer_index..buffer_index + 2]
                 .iter()
                 .map(|buf| read_buffer(buf, data, compression_codec))
-                .collect();
+                .collect::<Result<_>>()?;
             node_index += 1;
             buffer_index += 2;
             let triple = create_array(
@@ -186,7 +185,7 @@ fn create_array(
             let list_buffers: Vec<Buffer> = buffers[buffer_index..=buffer_index]
                 .iter()
                 .map(|buf| read_buffer(buf, data, compression_codec))
-                .collect();
+                .collect::<Result<_>>()?;
             node_index += 1;
             buffer_index += 1;
             let triple = create_array(
@@ -208,7 +207,7 @@ fn create_array(
         Struct(struct_fields) => {
             let struct_node = &nodes[node_index];
             let null_buffer: Buffer =
-                read_buffer(&buffers[buffer_index], data, compression_codec);
+                read_buffer(&buffers[buffer_index], data, compression_codec)?;
             node_index += 1;
             buffer_index += 1;
 
@@ -247,7 +246,7 @@ fn create_array(
             let index_buffers: Vec<Buffer> = buffers[buffer_index..buffer_index + 2]
                 .iter()
                 .map(|buf| read_buffer(buf, data, compression_codec))
-                .collect();
+                .collect::<Result<_>>()?;
 
             let dict_id = field.dict_id().ok_or_else(|| {
                 ArrowError::IoError(format!("Field {} does not have dict id", field))
@@ -283,7 +282,7 @@ fn create_array(
             }
 
             let type_ids: Buffer =
-                read_buffer(&buffers[buffer_index], data, compression_codec)[..len]
+                read_buffer(&buffers[buffer_index], data, compression_codec)?[..len]
                     .into();
 
             buffer_index += 1;
@@ -291,7 +290,7 @@ fn create_array(
             let value_offsets = match mode {
                 UnionMode::Dense => {
                     let buffer =
-                        read_buffer(&buffers[buffer_index], data, compression_codec);
+                        read_buffer(&buffers[buffer_index], data, compression_codec)?;
                     buffer_index += 1;
                     Some(buffer[..len * 4].into())
                 }
@@ -350,7 +349,7 @@ fn create_array(
                 buffers[buffer_index..buffer_index + 2]
                     .iter()
                     .map(|buf| read_buffer(buf, data, compression_codec))
-                    .collect(),
+                    .collect::<Result<_>>()?,
             );
             node_index += 1;
             buffer_index += 2;

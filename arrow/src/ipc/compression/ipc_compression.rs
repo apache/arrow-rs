@@ -17,6 +17,7 @@
 
 use crate::error::ArrowError;
 use crate::ipc::CompressionType;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CompressionCodecType {
     Lz4Frame,
@@ -70,7 +71,7 @@ impl TryFrom<CompressionCodecType> for CompressionType {
     }
 }
 
-#[cfg(any(feature = "ipc_compression", test))]
+#[cfg(feature = "ipc_compression")]
 mod compression_function {
     use crate::error::Result;
     use crate::ipc::compression::ipc_compression::CompressionCodecType;
