@@ -617,7 +617,7 @@ mod tests {
     use std::thread;
 
     use crate::buffer::Buffer;
-    use crate::compute::{eq_dyn, hour};
+    use crate::compute::eq_dyn;
     use crate::datatypes::DataType;
 
     #[test]
@@ -1115,6 +1115,7 @@ mod tests {
     #[cfg(feature = "chrono-tz")]
     #[test]
     fn test_with_timezone() {
+        use crate::compute::hour;
         let a: TimestampMicrosecondArray = vec![37800000000, 86339000000].into();
 
         let b = hour(&a).unwrap();
