@@ -48,6 +48,7 @@ use futures::{
     Future, Stream, StreamExt, TryStreamExt,
 };
 use hyper::client::Builder as HyperBuilder;
+use percent_encoding::{percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use rusoto_core::ByteStream;
 use rusoto_credential::{InstanceMetadataProvider, StaticProvider};
 use rusoto_s3::S3;
@@ -61,6 +62,17 @@ use std::{
 use tokio::io::AsyncWrite;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, warn};
+
+// Do not URI-encode any of the unreserved characters that RFC 3986 defines:
+// A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
+const STRICT_ENCODE_SET: AsciiSet = NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+/// This struct is used to maintain the URI path encoding
+const STRICT_PATH_ENCODE_SET: AsciiSet = STRICT_ENCODE_SET.remove(b'/');
 
 /// The maximum number of times a request will be retried in the case of an AWS server error
 pub const MAX_NUM_RETRIES: u32 = 3;
@@ -541,9 +553,15 @@ impl ObjectStore for AmazonS3 {
         let to = to.as_ref();
         let bucket_name = self.bucket_name.clone();
 
+        let copy_source = format!(
+            "{}/{}",
+            &bucket_name,
+            percent_encode(from.as_ref(), &STRICT_PATH_ENCODE_SET)
+        );
+
         let request_factory = move || rusoto_s3::CopyObjectRequest {
             bucket: bucket_name.clone(),
-            copy_source: format!("{}/{}", &bucket_name, from),
+            copy_source,
             key: to.to_string(),
             ..Default::default()
         };
