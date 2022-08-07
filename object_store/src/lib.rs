@@ -635,7 +635,14 @@ mod tests {
 
         assert_eq!(files, vec![emoji_file.clone()]);
 
+        let dst = Path::from("foo.parquet");
+        storage.copy(&emoji_file, &dst).await.unwrap();
+        let mut files = flatten_list_stream(storage, None).await.unwrap();
+        files.sort_unstable();
+        assert_eq!(files, vec![emoji_file.clone(), dst.clone()]);
+
         storage.delete(&emoji_file).await.unwrap();
+        storage.delete(&dst).await.unwrap();
         let files = flatten_list_stream(storage, Some(&emoji_prefix))
             .await
             .unwrap();
