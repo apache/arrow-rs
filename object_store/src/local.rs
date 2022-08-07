@@ -1270,16 +1270,17 @@ mod tests {
         let name = "L%3ABC.parquet";
         create_file(name);
 
-        let res = integration.list_with_delimiter(None).await;
-
-        // this will fail with:
-        // InvalidPath { source: BadSegment { path: "L%3ABC.parquet", source: InvalidPart { actual: "L%3ABC.parquet", expected: "L:BC.parquet" } } }'
-        res.unwrap();
-
-        let res = integration.head(&Path::from(name)).await;
-        res.unwrap();
-
+        // this works with the patch now - note it's list vs list_with_delimeters
         let res = integration.list(None).await;
         res.unwrap();
+
+        let res = integration.list_with_delimiter(None).await;
+        // before the patch, this would fail with:
+        // InvalidPath { source: BadSegment { path: "L%3ABC.parquet", source: InvalidPart { actual: "L%3ABC.parquet", expected: "L:BC.parquet" } } }'
+        // now it fails with:
+        res.unwrap();
+
+
+
     }
 }
