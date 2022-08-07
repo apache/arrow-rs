@@ -1247,4 +1247,32 @@ mod tests {
             0
         );
     }
+
+    #[tokio::test]
+    async fn filesystem_filename_with_percent() {
+        let temp_dir = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(temp_dir.path()).unwrap();
+
+        let create_file = |path: &str| -> PathBuf {
+            let file = temp_dir.path().join(path);
+            let file_res = file.clone();
+            std::fs::write(file, path).unwrap();
+            return file_res;
+        };
+        let name = "L%3ABC.parquet";
+        create_file(name);
+
+        let res = integration.list_with_delimiter(None).await;
+
+        // this will fail with:
+        // InvalidPath { source: BadSegment { path: "L%3ABC.parquet", source: InvalidPart { actual: "L%3ABC.parquet", expected: "L:BC.parquet" } } }'
+        res.unwrap();
+
+        let res = integration.head(&Path::from(name)).await;
+        res.unwrap();
+
+        let res = integration.list(None).await;
+        res.unwrap();
+    }
+
 }
