@@ -1272,7 +1272,13 @@ mod tests {
 
         // this works with the patch now - note it's list vs list_with_delimeters
         let res = integration.list(None).await;
-        res.unwrap();
+        // res.unwrap();
+
+        let the_list : Vec<_> = res.unwrap().try_collect().await.unwrap();
+        for r in the_list {
+            println!("res = {r:?}");
+        }
+
 
         let res = integration.list_with_delimiter(None).await;
         // before the patch, this would fail with:
