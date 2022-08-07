@@ -39,7 +39,7 @@ use crate::ipc;
 use crate::record_batch::RecordBatch;
 use crate::util::bit_util;
 
-use crate::ipc::compression::ipc_compression::CompressionCodecType;
+use crate::ipc::compression::CompressionCodecType;
 use crate::ipc::compression::{
     LENGTH_EMPTY_COMPRESSED_DATA, LENGTH_NO_COMPRESSED_DATA, LENGTH_OF_PREFIX_DATA,
 };
@@ -328,7 +328,7 @@ impl IpcDataGenerator {
                         dict_id,
                         dict_values,
                         write_options,
-                    ));
+                    )?);
                 }
             }
             _ => self._encode_dictionaries(
@@ -362,7 +362,7 @@ impl IpcDataGenerator {
             )?;
         }
 
-        let encoded_message = self.record_batch_to_bytes(batch, write_options);
+        let encoded_message = self.record_batch_to_bytes(batch, write_options)?;
         Ok((encoded_dictionaries, encoded_message))
     }
 
@@ -372,7 +372,7 @@ impl IpcDataGenerator {
         &self,
         batch: &RecordBatch,
         write_options: &IpcWriteOptions,
-    ) -> EncodedData {
+    ) -> Result<EncodedData> {
         let mut fbb = FlatBufferBuilder::new();
 
         let mut nodes: Vec<ipc::FieldNode> = vec![];
@@ -383,7 +383,7 @@ impl IpcDataGenerator {
         // get the type of compression
         let compression_codec = write_options.batch_compression_type;
         let compression_type: Option<CompressionType> =
-            compression_codec.map(|v| v.into());
+            compression_codec.map(|v| v.try_into()).transpose()?;
         let compression = {
             if let Some(codec) = compression_type {
                 let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
@@ -437,10 +437,10 @@ impl IpcDataGenerator {
         fbb.finish(root, None);
         let finished_data = fbb.finished_data();
 
-        EncodedData {
+        Ok(EncodedData {
             ipc_message: finished_data.to_vec(),
             arrow_data,
-        }
+        })
     }
 
     /// Write dictionary values into two sets of bytes, one for the header (ipc::Message) and the
@@ -450,7 +450,7 @@ impl IpcDataGenerator {
         dict_id: i64,
         array_data: &ArrayData,
         write_options: &IpcWriteOptions,
-    ) -> EncodedData {
+    ) -> Result<EncodedData> {
         let mut fbb = FlatBufferBuilder::new();
 
         let mut nodes: Vec<ipc::FieldNode> = vec![];
@@ -460,7 +460,7 @@ impl IpcDataGenerator {
         // get the type of compression
         let compression_codec = write_options.batch_compression_type;
         let compression_type: Option<CompressionType> =
-            compression_codec.map(|v| v.into());
+            compression_codec.map(|v| v.try_into()).transpose()?;
         let compression = {
             if let Some(codec) = compression_type {
                 let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
@@ -522,10 +522,10 @@ impl IpcDataGenerator {
         fbb.finish(root, None);
         let finished_data = fbb.finished_data();
 
-        EncodedData {
+        Ok(EncodedData {
             ipc_message: finished_data.to_vec(),
             arrow_data,
-        }
+        })
     }
 }
 

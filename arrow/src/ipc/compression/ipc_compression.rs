@@ -15,32 +15,58 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::ArrowError;
 use crate::ipc::CompressionType;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CompressionCodecType {
     Lz4Frame,
     Zstd,
 }
 
-impl From<CompressionType> for CompressionCodecType {
-    fn from(compression_type: CompressionType) -> Self {
+// TODO make this try/from to return errors
+#[cfg(feature = "ipc_compression")]
+impl TryFrom<CompressionType> for CompressionCodecType {
+    fn try_from(compression_type: CompressionType) -> Self {
         match compression_type {
             CompressionType::ZSTD => CompressionCodecType::Zstd,
             CompressionType::LZ4_FRAME => CompressionCodecType::Lz4Frame,
             other_type => {
-                unimplemented!("Not support compression type: {:?}", other_type)
+                return ArrowError::InvalidArgumentError(format!(
+                    "compression type {:?} not supported ",
+                    compression_type
+                ))
             }
         }
     }
 }
 
+#[cfg(not(feature = "ipc_compression"))]
+impl TryFrom<CompressionType> for CompressionCodecType {
+    type Error = ArrowError;
+
+    fn try_from(compression_type: CompressionType) -> Result<Self, ArrowError> {
+        Err(ArrowError::InvalidArgumentError(
+            format!("compression type {:?} not supported because arrow was not compiled with the ipc_compression feature", compression_type))
+            )
+    }
+}
+
+#[cfg(feature = "ipc_compression")]
 impl From<CompressionCodecType> for CompressionType {
     fn from(codec: CompressionCodecType) -> Self {
         match codec {
             CompressionCodecType::Lz4Frame => CompressionType::LZ4_FRAME,
             CompressionCodecType::Zstd => CompressionType::ZSTD,
         }
+    }
+}
+
+#[cfg(not(feature = "ipc_compression"))]
+impl TryFrom<CompressionCodecType> for CompressionType {
+    type Error = ArrowError;
+    fn try_from(codec: CompressionCodecType) -> Result<Self, ArrowError> {
+        return Err(ArrowError::InvalidArgumentError(
+            format!("codec type {:?} not supported because arrow was not compiled with the ipc_compression feature", codec)));
     }
 }
 

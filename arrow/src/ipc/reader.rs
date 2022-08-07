@@ -21,6 +21,7 @@
 //! however the `FileReader` expects a reader that supports `Seek`ing
 
 use std::collections::HashMap;
+use std::fmt;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
@@ -32,7 +33,7 @@ use crate::error::{ArrowError, Result};
 use crate::ipc;
 use crate::record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 
-use crate::ipc::compression::ipc_compression::CompressionCodecType;
+use crate::ipc::compression::CompressionCodecType;
 use crate::ipc::compression::{
     LENGTH_EMPTY_COMPRESSED_DATA, LENGTH_NO_COMPRESSED_DATA, LENGTH_OF_PREFIX_DATA,
 };
@@ -847,6 +848,21 @@ pub struct FileReader<R: Read + Seek> {
     projection: Option<(Vec<usize>, Schema)>,
 }
 
+impl<R: Read + Seek> fmt::Debug for FileReader<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
+        f.debug_struct("StreamReader<R>")
+            .field("reader", &"BufReader<..>")
+            .field("schema", &self.schema)
+            .field("blocks", &self.blocks)
+            .field("current_block", &self.current_block)
+            .field("total_blocks", &self.total_blocks)
+            .field("dictionaries_by_id", &self.dictionaries_by_id)
+            .field("metadata_version", &self.metadata_version)
+            .field("projection", &self.projection)
+            .finish()
+    }
+}
+
 impl<R: Read + Seek> FileReader<R> {
     /// Try to create a new file reader
     ///
@@ -1096,6 +1112,18 @@ pub struct StreamReader<R: Read> {
 
     /// Optional projection
     projection: Option<(Vec<usize>, Schema)>,
+}
+
+impl<R: Read> fmt::Debug for StreamReader<R> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
+        f.debug_struct("StreamReader<R>")
+            .field("reader", &"BufReader<..>")
+            .field("schema", &self.schema)
+            .field("dictionaries_by_id", &self.dictionaries_by_id)
+            .field("finished", &self.finished)
+            .field("projection", &self.projection)
+            .finish()
+    }
 }
 
 impl<R: Read> StreamReader<R> {
@@ -1500,6 +1528,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ipc_compression")]
     fn read_generated_streams_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
@@ -1526,6 +1555,27 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "ipc_compression"))]
+    fn read_generated_streams_200() {
+        let testdata = crate::util::test_util::arrow_test_data();
+        let version = "2.0.0-compression";
+
+        // the test is repetitive, thus we can read all supported files at once
+        let paths = vec!["generated_lz4", "generated_zstd"];
+        paths.iter().for_each(|path| {
+            let file = File::open(format!(
+                "{}/arrow-ipc-stream/integration/{}/{}.stream",
+                testdata, version, path
+            ))
+            .unwrap();
+
+            let err = StreamReader::try_new(file, None).unwrap_err();
+            assert_eq!(err.to_string(), "not supported compression");
+        });
+    }
+
+    #[test]
+    #[cfg(feature = "ipc_compression")]
     fn read_generated_files_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
@@ -1543,6 +1593,25 @@ mod tests {
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
             assert!(arrow_json.equals_reader(&mut reader));
+        });
+    }
+
+    #[test]
+    #[cfg(not(feature = "ipc_compression"))]
+    fn read_generated_files_200() {
+        let testdata = crate::util::test_util::arrow_test_data();
+        let version = "2.0.0-compression";
+        // the test is repetitive, thus we can read all supported files at once
+        let paths = vec!["generated_lz4", "generated_zstd"];
+        paths.iter().for_each(|path| {
+            let file = File::open(format!(
+                "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
+                testdata, version, path
+            ))
+            .unwrap();
+
+            let err = FileReader::try_new(file, None).unwrap_err();
+            assert_eq!(err.to_string(), "not supported compression");
         });
     }
 
