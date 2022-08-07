@@ -126,7 +126,6 @@ pub enum Error {
 /// Path::parse("..").unwrap_err();
 /// Path::parse("/foo//").unwrap_err();
 /// Path::parse("😀").unwrap_err();
-/// Path::parse("%Q").unwrap_err();
 /// ```
 ///
 /// [RFC 1738]: https://www.ietf.org/rfc/rfc1738.txt

@@ -641,6 +641,42 @@ mod tests {
             .unwrap();
         assert!(files.is_empty());
 
+        // Test handling of paths containing percent-encoded sequences
+
+        // "HELLO" percent encoded
+        let hello_prefix = Path::parse("%48%45%4C%4C%4F").unwrap();
+        let path = hello_prefix.child("foo.parquet");
+
+        storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
+        let files = flatten_list_stream(storage, Some(&hello_prefix))
+            .await
+            .unwrap();
+        assert_eq!(files, vec![path.clone()]);
+
+        // Cannot list by decoded representation
+        let files = flatten_list_stream(storage, Some(&Path::from("HELLO")))
+            .await
+            .unwrap();
+        assert!(files.is_empty());
+
+        // Cannot access by decoded representation
+        let err = storage
+            .head(&Path::from("HELLO/foo.parquet"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+
+        storage.delete(&path).await.unwrap();
+
+        // Can also write non-percent encoded sequences
+        let path = Path::parse("%Q.parquet").unwrap();
+        storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
+
+        let files = flatten_list_stream(storage, None).await.unwrap();
+        assert_eq!(files, vec![path.clone()]);
+
+        storage.delete(&path).await.unwrap();
+
         Ok(())
     }
 
