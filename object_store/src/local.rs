@@ -26,6 +26,7 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use futures::{stream::BoxStream, StreamExt};
+use percent_encoding::percent_decode;
 use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use std::fs::{metadata, symlink_metadata, File};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -225,17 +226,24 @@ impl LocalFileSystem {
 
 impl Config {
     /// Return filesystem path of the given location
-    fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
+    fn path_to_filesystem(&self, location: &Path) -> Result<std::path::PathBuf> {
         let mut url = self.root.clone();
-        url.path_segments_mut()
-            .expect("url path")
-            // technically not necessary as Path ignores empty segments
-            // but avoids creating paths with "//" which look odd in error messages.
-            .pop_if_empty()
-            .extend(location.parts());
+        let location_parts = location.parts();
+        for a_part in location_parts {
+            println!("========== a_part: {a_part:?}");
+            let part_as_str = a_part.as_ref();
+            let decoded = percent_decode(part_as_str.as_bytes())
+                .decode_utf8()
+                .unwrap()
+                .into_owned();
+            url.path_segments_mut()
+                .expect("url path")
+                .push(decoded.as_str()); // try push
+        }
 
-        url.to_file_path()
-            .map_err(|_| Error::InvalidUrl { url }.into())
+        let filepath = url.to_file_path();
+        println!("path_to_filesystem filepath = {filepath:?}");
+        filepath.map_err(|_| Error::InvalidUrl { url }.into())
     }
 
     fn filesystem_to_path(&self, location: &std::path::Path) -> Result<Path> {
@@ -1274,5 +1282,4 @@ mod tests {
         let res = integration.list(None).await;
         res.unwrap();
     }
-
 }
