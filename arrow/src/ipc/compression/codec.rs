@@ -79,7 +79,7 @@ impl CompressionCodec {
                 // data
                 output.truncate(original_output_len);
                 output.extend_from_slice(&LENGTH_NO_COMPRESSED_DATA.to_le_bytes());
-                output.extend_from_slice(&input);
+                output.extend_from_slice(input);
             }
         }
         Ok(output.len() - original_output_len)

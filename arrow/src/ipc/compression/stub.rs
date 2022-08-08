@@ -44,6 +44,7 @@ impl TryFrom<CompressionType> for CompressionCodec {
 }
 
 impl CompressionCodec {
+    #[allow(clippy::ptr_arg)]
     pub(crate) fn compress_to_vec(
         &self,
         _input: &[u8],

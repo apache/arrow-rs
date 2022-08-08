@@ -74,12 +74,12 @@ impl IpcWriteOptions {
     ) -> Result<Self> {
         self.batch_compression_type = batch_compression_type;
 
-        if let Some(_) = self.batch_compression_type.as_ref() {
-            if self.metadata_version < ipc::MetadataVersion::V5 {
-                return Err(ArrowError::InvalidArgumentError(
-                    "Compression only supported in metadata v5 and above".to_string(),
-                ));
-            }
+        if self.batch_compression_type.is_some()
+            && self.metadata_version < ipc::MetadataVersion::V5
+        {
+            return Err(ArrowError::InvalidArgumentError(
+                "Compression only supported in metadata v5 and above".to_string(),
+            ));
         }
         Ok(self)
     }
