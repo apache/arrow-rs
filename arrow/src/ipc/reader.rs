@@ -1477,7 +1477,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(ipc_compression)]
+    #[cfg(feature = "ipc_compression")]
     fn read_generated_streams_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
@@ -1504,8 +1504,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(ipc_compression))]
-    fn read_generated_streams_200() {
+    #[cfg(not(feature = "ipc_compression"))]
+    fn read_generated_streams_200_negative() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
 
@@ -1529,7 +1529,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(ipc_compression)]
+    #[cfg(feature = "ipc_compression")]
     fn read_generated_files_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
@@ -1551,8 +1551,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(ipc_compression))]
-    fn read_generated_files_200() {
+    #[cfg(not(feature = "ipc_compression"))]
+    fn read_generated_files_200_negative() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
         // the test is repetitive, thus we can read all supported files at once

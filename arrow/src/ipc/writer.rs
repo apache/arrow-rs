@@ -67,7 +67,7 @@ pub struct IpcWriteOptions {
 impl IpcWriteOptions {
     /// Configures compression when writing IPC files. Requires the
     /// `ipc_compression` feature of the crate to be activated.
-    #[cfg(ipc_compression)]
+    #[cfg(feature = "ipc_compression")]
     pub fn try_with_compression(
         mut self,
         batch_compression_type: Option<ipc::CompressionType>,
@@ -1269,8 +1269,8 @@ mod tests {
     use crate::util::integration_util::*;
 
     #[test]
-    #[cfg(ipc_compression)]
-    fn test_write_with_empty_record_batch() {
+    #[cfg(feature = "ipc_compression")]
+    fn test_write_empty_record_batch_lz4_compression() {
         let file_name = "arrow_lz4_empty";
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![];
@@ -1325,7 +1325,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(ipc_compression)]
+    #[cfg(feature = "ipc_compression")]
     fn test_write_file_with_lz4_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
@@ -1379,7 +1379,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(ipc_compression)]
+    #[cfg(feature = "ipc_compression")]
     fn test_write_file_with_zstd_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
@@ -1789,7 +1789,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(ipc_compression)]
+    #[cfg(feature = "ipc_compression")]
     fn read_and_rewrite_compression_files_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
@@ -1842,7 +1842,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(ipc_compression)]
+    #[cfg(feature = "ipc_compression")]
     fn read_and_rewrite_compression_stream_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";

@@ -65,7 +65,7 @@ bitflags = { version = "1.2.1", default-features = false }
 
 [features]
 default = ["csv", "ipc", "test_utils"]
-ipc_compression = ["zstd", "lz4"]
+ipc_compression = ["ipc", "zstd", "lz4"]
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
 simd = ["packed_simd"]
