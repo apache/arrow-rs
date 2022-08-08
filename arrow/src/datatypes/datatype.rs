@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::cmp::Ordering;
 use num::{BigInt, Num, ToPrimitive};
 use std::fmt;
 
@@ -263,6 +264,89 @@ impl fmt::Display for DataType {
     }
 }
 
+// Max value of little-endian format for each precision.
+pub(crate) const MAX_DECIMAL_BYTES_FOR_EACH_PRECISION : [[u8;16];38]  = [
+    9_i128.to_le_bytes(),
+    99_i128.to_le_bytes(),
+    999_i128.to_le_bytes(),
+    9999_i128.to_le_bytes(),
+    99999_i128.to_le_bytes(),
+    999999_i128.to_le_bytes(),
+    9999999_i128.to_le_bytes(),
+    99999999_i128.to_le_bytes(),
+    999999999_i128.to_le_bytes(),
+    9999999999_i128.to_le_bytes(),
+    99999999999_i128.to_le_bytes(),
+    999999999999_i128.to_le_bytes(),
+    9999999999999_i128.to_le_bytes(),
+    99999999999999_i128.to_le_bytes(),
+    999999999999999_i128.to_le_bytes(),
+    9999999999999999_i128.to_le_bytes(),
+    99999999999999999_i128.to_le_bytes(),
+    999999999999999999_i128.to_le_bytes(),
+    9999999999999999999_i128.to_le_bytes(),
+    99999999999999999999_i128.to_le_bytes(),
+    999999999999999999999_i128.to_le_bytes(),
+    9999999999999999999999_i128.to_le_bytes(),
+    99999999999999999999999_i128.to_le_bytes(),
+    999999999999999999999999_i128.to_le_bytes(),
+    9999999999999999999999999_i128.to_le_bytes(),
+    99999999999999999999999999_i128.to_le_bytes(),
+    999999999999999999999999999_i128.to_le_bytes(),
+    9999999999999999999999999999_i128.to_le_bytes(),
+    99999999999999999999999999999_i128.to_le_bytes(),
+    999999999999999999999999999999_i128.to_le_bytes(),
+    9999999999999999999999999999999_i128.to_le_bytes(),
+    99999999999999999999999999999999_i128.to_le_bytes(),
+    999999999999999999999999999999999_i128.to_le_bytes(),
+    9999999999999999999999999999999999_i128.to_le_bytes(),
+    99999999999999999999999999999999999_i128.to_le_bytes(),
+    999999999999999999999999999999999999_i128.to_le_bytes(),
+    9999999999999999999999999999999999999_i128.to_le_bytes(),
+    99999999999999999999999999999999999999_i128.to_le_bytes(),
+];
+
+pub(crate) const MIN_DECIMAL_BYTES_FOR_EACH_PRECISION: [[u8; 16]; 38] = [
+    (-9_i128).to_le_bytes(),
+    (-99_i128).to_le_bytes(),
+    (-999_i128).to_le_bytes(),
+    (-9999_i128).to_le_bytes(),
+    (-99999_i128).to_le_bytes(),
+    (-999999_i128).to_le_bytes(),
+    (-9999999_i128).to_le_bytes(),
+    (-99999999_i128).to_le_bytes(),
+    (-999999999_i128).to_le_bytes(),
+    (-9999999999_i128).to_le_bytes(),
+    (-99999999999_i128).to_le_bytes(),
+    (-999999999999_i128).to_le_bytes(),
+    (-9999999999999_i128).to_le_bytes(),
+    (-99999999999999_i128).to_le_bytes(),
+    (-999999999999999_i128).to_le_bytes(),
+    (-9999999999999999_i128).to_le_bytes(),
+    (-99999999999999999_i128).to_le_bytes(),
+    (-999999999999999999_i128).to_le_bytes(),
+    (-9999999999999999999_i128).to_le_bytes(),
+    (-99999999999999999999_i128).to_le_bytes(),
+    (-999999999999999999999_i128).to_le_bytes(),
+    (-9999999999999999999999_i128).to_le_bytes(),
+    (-99999999999999999999999_i128).to_le_bytes(),
+    (-999999999999999999999999_i128).to_le_bytes(),
+    (-9999999999999999999999999_i128).to_le_bytes(),
+    (-99999999999999999999999999_i128).to_le_bytes(),
+    (-999999999999999999999999999_i128).to_le_bytes(),
+    (-9999999999999999999999999999_i128).to_le_bytes(),
+    (-99999999999999999999999999999_i128).to_le_bytes(),
+    (-999999999999999999999999999999_i128).to_le_bytes(),
+    (-9999999999999999999999999999999_i128).to_le_bytes(),
+    (-99999999999999999999999999999999_i128).to_le_bytes(),
+    (-999999999999999999999999999999999_i128).to_le_bytes(),
+    (-9999999999999999999999999999999999_i128).to_le_bytes(),
+    (-99999999999999999999999999999999999_i128).to_le_bytes(),
+    (-999999999999999999999999999999999999_i128).to_le_bytes(),
+    (-9999999999999999999999999999999999999_i128).to_le_bytes(),
+    (-99999999999999999999999999999999999999_i128).to_le_bytes(),
+];
+
 /// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value
 /// that can be stored in [DataType::Decimal128] value of precision `p`
 pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
@@ -477,6 +561,76 @@ pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Resul
     } else {
         Ok(value)
     }
+}
+
+// duplicate code
+#[inline]
+fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
+    assert_eq!(
+        left.len(),
+        right.len(),
+        "Can't compare bytes array with different len: {}, {}",
+        left.len(),
+        right.len()
+    );
+    assert_ne!(left.len(), 0, "Can't compare bytes array of length 0");
+    let len = left.len();
+    // the sign bit is 1, the value is negative
+    let left_negative = left[len - 1] >= 0x80_u8;
+    let right_negative = right[len - 1] >= 0x80_u8;
+    if left_negative != right_negative {
+        return match left_negative {
+            true => {
+                // left is negative value
+                // right is positive value
+                Ordering::Less
+            }
+            false => Ordering::Greater,
+        };
+    }
+    for i in 0..len {
+        let l_byte = left[len - 1 - i];
+        let r_byte = right[len - 1 - i];
+        match l_byte.cmp(&r_byte) {
+            Ordering::Less => {
+                return Ordering::Less;
+            }
+            Ordering::Greater => {
+                return Ordering::Greater;
+            }
+            Ordering::Equal => {}
+        }
+    }
+    Ordering::Equal
+}
+
+pub(crate) fn validate_decimal_precision_with_bytes(lt_value: &[u8], precision: usize) -> Result<i128> {
+    if precision > DECIMAL128_MAX_PRECISION {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Max precision of a Decimal128 is {}, but got {}",
+            DECIMAL128_MAX_PRECISION, precision,
+        )));
+    }
+
+    let max = MAX_DECIMAL_BYTES_FOR_EACH_PRECISION[precision - 1];
+    let min = MIN_DECIMAL_BYTES_FOR_EACH_PRECISION[precision - 1];
+    if singed_cmp_le_bytes(lt_value, &max) == Ordering::Greater {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{:?} is too large to store in a Decimal128 of precision {}. Max is {:?}",
+            lt_value, precision, max
+        )))
+    } else if singed_cmp_le_bytes(lt_value, &min) == Ordering::Less {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{:?} is too small to store in a Decimal128 of precision {}. Min is {:?}",
+            lt_value, precision, min
+        )))
+    } else {
+        Ok(1)
+    }
+}
+
+pub(crate) fn validate_decimal256_precision_with_bytes(lt_value : &[u8], precision: usize) {
+
 }
 
 /// Validates that the specified string value can be properly

@@ -204,3 +204,7 @@ required-features = ["test_utils"]
 [[bench]]
 name = "array_data_validate"
 harness = false
+
+[[bench]]
+name = "decimal_validate"
+harness = false
