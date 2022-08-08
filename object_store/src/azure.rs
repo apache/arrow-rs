@@ -33,7 +33,8 @@ use crate::{
     GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
 };
 use async_trait::async_trait;
-use azure_core::{prelude::*, HttpClient};
+use azure_core::{auth::TokenCredential, prelude::*, HttpClient};
+use azure_storage::core::clients::StorageClient;
 use azure_storage::core::prelude::{AsStorageClient, StorageAccountClient};
 use azure_storage_blobs::blob::responses::ListBlobsResponse;
 use azure_storage_blobs::blob::Blob;
@@ -49,6 +50,7 @@ use futures::{
 };
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeSet;
+use std::fmt::{Debug, Formatter};
 use std::io;
 use std::{convert::TryInto, sync::Arc};
 use tokio::io::AsyncWrite;
@@ -595,12 +597,23 @@ fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
 ///  .with_container_name(BUCKET_NAME)
 ///  .build();
 /// ```
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct MicrosoftAzureBuilder {
     account: Option<String>,
     access_key: Option<String>,
     container_name: Option<String>,
+    token_credential: Option<Arc<dyn TokenCredential>>,
     use_emulator: bool,
+}
+
+impl Debug for MicrosoftAzureBuilder {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MicrosoftAzureBuilder {{ account: {:?}, container_name: {:?} }}",
+            self.account, self.container_name
+        )
+    }
 }
 
 impl MicrosoftAzureBuilder {
@@ -615,7 +628,7 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Set the Azure Access Key (required)
+    /// Set the Azure Access Key (required - one of token_credential ot access key)
     pub fn with_access_key(mut self, access_key: impl Into<String>) -> Self {
         self.access_key = Some(access_key.into());
         self
@@ -624,6 +637,15 @@ impl MicrosoftAzureBuilder {
     /// Set the Azure Container Name (required)
     pub fn with_container_name(mut self, container_name: impl Into<String>) -> Self {
         self.container_name = Some(container_name.into());
+        self
+    }
+
+    /// Set a TokenCredential to be used for authentication (required - one of token_credential ot access key)
+    pub fn with_token_credential(
+        mut self,
+        token_credential: Arc<dyn TokenCredential>,
+    ) -> Self {
+        self.token_credential = Some(token_credential);
         self
     }
 
@@ -640,6 +662,7 @@ impl MicrosoftAzureBuilder {
             account,
             access_key,
             container_name,
+            token_credential,
             use_emulator,
         } = self;
 
@@ -673,14 +696,16 @@ impl MicrosoftAzureBuilder {
 
             (true, storage_client)
         } else {
-            (
-                false,
-                StorageAccountClient::new_access_key(
+            let client = if let Some(credential) = self.token_credential {
+                StorageClient::new_bearer_token(http_client, account, bearer_token)
+            } else {
+                StorageClient::new_access_key(
                     Arc::clone(&http_client),
                     &account,
                     &access_key,
-                ),
-            )
+                )
+            };
+            (false, client)
         };
 
         let storage_client = storage_account_client.as_storage_client();
