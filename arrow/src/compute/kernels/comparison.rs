@@ -2248,6 +2248,8 @@ where
     compare_dict_op!(left, right, op, PrimitiveArray<T>)
 }
 
+// Compares two dictionary using bit-equality (helps reduce how much code is instantiated as
+// types with the same underlying native type can share the instantiated code).
 fn cmp_dict_bit_equal<K, T, F>(
     left: &DictionaryArray<K>,
     right: &DictionaryArray<K>,
