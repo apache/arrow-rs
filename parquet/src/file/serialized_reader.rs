@@ -39,8 +39,7 @@ use crate::util::{io::TryClone, memory::ByteBufferPtr};
 
 // export `SliceableCursor` and `FileSource` publically so clients can
 // re-use the logic in their own ParquetFileWriter wrappers
-#[allow(deprecated)]
-pub use crate::util::{cursor::SliceableCursor, io::FileSource};
+pub use crate::util::io::FileSource;
 
 // ----------------------------------------------------------------------
 // Implementations of traits facilitating the creation of a new reader
@@ -83,22 +82,6 @@ impl ChunkReader for Bytes {
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
         let start = start as usize;
         Ok(self.slice(start..start + length).reader())
-    }
-}
-
-#[allow(deprecated)]
-impl Length for SliceableCursor {
-    fn len(&self) -> u64 {
-        SliceableCursor::len(self)
-    }
-}
-
-#[allow(deprecated)]
-impl ChunkReader for SliceableCursor {
-    type T = SliceableCursor;
-
-    fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
-        self.slice(start, length).map_err(|e| e.into())
     }
 }
 
