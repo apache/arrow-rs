@@ -393,13 +393,6 @@ impl BitReader {
         Some(from_ne_slice(v.as_bytes()))
     }
 
-    /// Skip one value of size `num_bits`.
-    ///
-    /// Returns `false` if there are no more values to skip, `true` otherwise.
-    pub fn skip_value(&mut self, num_bits: usize) -> bool {
-        self.skip(1, num_bits) == 1
-    }
-
     /// Read multiple values from their packed representation where each element is represented
     /// by `num_bits` bits.
     ///
@@ -704,26 +697,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bit_reader_skip_value() {
-        let buffer = vec![255, 0];
-        let mut bit_reader = BitReader::from(buffer);
-        let skipped = bit_reader.skip_value(1);
-        assert!(skipped);
-        assert_eq!(bit_reader.get_value::<i32>(1), Some(1));
-        let skipped = bit_reader.skip_value(2);
-        assert!(skipped);
-        assert_eq!(bit_reader.get_value::<i32>(2), Some(3));
-        let skipped = bit_reader.skip_value(1);
-        assert!(skipped);
-        assert_eq!(bit_reader.get_value::<i32>(4), Some(1));
-        let skipped = bit_reader.skip_value(1);
-        assert!(skipped);
-        assert_eq!(bit_reader.get_value::<i32>(4), Some(0));
-        let skipped = bit_reader.skip_value(1);
-        assert!(!skipped);
-    }
-
-    #[test]
     fn test_bit_reader_skip() {
         let buffer = vec![255, 0];
         let mut bit_reader = BitReader::from(buffer);
@@ -755,7 +728,7 @@ mod tests {
         let buffer = vec![10, 0, 0, 0, 20, 0, 30, 0, 0, 0, 40, 0];
         let mut bit_reader = BitReader::from(buffer);
         assert_eq!(bit_reader.get_value::<i64>(32), Some(10));
-        let skipped = bit_reader.skip_value(16);
+        let skipped = bit_reader.skip(1, 16);
         assert!(skipped);
         assert_eq!(bit_reader.get_value::<i64>(32), Some(30));
         assert_eq!(bit_reader.get_value::<i64>(16), Some(40));
