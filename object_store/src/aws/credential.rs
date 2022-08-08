@@ -248,7 +248,7 @@ pub enum CredentialProvider {
     Static {
         credential: Arc<AwsCredential>,
     },
-    /// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html
+    /// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html>
     Instance {
         cache: TokenCache<Arc<AwsCredential>>,
     },
@@ -331,7 +331,7 @@ impl From<InstanceCredentials> for AwsCredential {
     }
 }
 
-/// https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html#instance-metadata-security-credentials
+/// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/iam-roles-for-amazon-ec2.html#instance-metadata-security-credentials>
 async fn instance_creds(
     client: &Client,
     retry_config: &RetryConfig,
@@ -406,7 +406,7 @@ impl From<AssumeRoleCredentials> for AwsCredential {
     }
 }
 
-/// https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts-technical-overview.html
+/// <https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts-technical-overview.html>
 async fn web_identity(
     client: &Client,
     retry_config: &RetryConfig,
