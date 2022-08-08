@@ -23,17 +23,17 @@ use crate::error::{ArrowError, Result};
 use crate::ipc::CompressionType;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CompressionCodecType {}
+pub enum CompressionCodec {}
 
-impl TryFrom<CompressionCodecType> for CompressionType {
+impl TryFrom<CompressionCodec> for CompressionType {
     type Error = ArrowError;
-    fn try_from(codec: CompressionCodecType) -> Result<Self> {
+    fn try_from(codec: CompressionCodec) -> Result<Self> {
         return Err(ArrowError::InvalidArgumentError(
             format!("codec type {:?} not supported because arrow was not compiled with the ipc_compression feature", codec)));
     }
 }
 
-impl TryFrom<CompressionType> for CompressionCodecType {
+impl TryFrom<CompressionType> for CompressionCodec {
     type Error = ArrowError;
 
     fn try_from(compression_type: CompressionType) -> Result<Self> {
@@ -43,7 +43,7 @@ impl TryFrom<CompressionType> for CompressionCodecType {
     }
 }
 
-impl CompressionCodecType {
+impl CompressionCodec {
     pub(crate) fn compress_to_vec(
         &self,
         _input: &[u8],

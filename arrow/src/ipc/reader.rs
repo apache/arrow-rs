@@ -33,7 +33,7 @@ use crate::error::{ArrowError, Result};
 use crate::ipc;
 use crate::record_batch::{RecordBatch, RecordBatchOptions, RecordBatchReader};
 
-use crate::ipc::compression::CompressionCodecType;
+use crate::ipc::compression::CompressionCodec;
 use ipc::CONTINUATION_MARKER;
 use DataType::*;
 
@@ -49,7 +49,7 @@ use DataType::*;
 fn read_buffer(
     buf: &ipc::Buffer,
     a_data: &[u8],
-    compression_codec: &Option<CompressionCodecType>,
+    compression_codec: &Option<CompressionCodec>,
 ) -> Result<Buffer> {
     let start_offset = buf.offset() as usize;
     let end_offset = start_offset + buf.length() as usize;
@@ -82,7 +82,7 @@ fn create_array(
     dictionaries_by_id: &HashMap<i64, ArrayRef>,
     mut node_index: usize,
     mut buffer_index: usize,
-    compression_codec: &Option<CompressionCodecType>,
+    compression_codec: &Option<CompressionCodec>,
     metadata: &ipc::MetadataVersion,
 ) -> Result<(ArrayRef, usize, usize)> {
     use DataType::*;
@@ -633,7 +633,7 @@ pub fn read_record_batch(
         ArrowError::IoError("Unable to get field nodes from IPC RecordBatch".to_string())
     })?;
     let batch_compression = batch.compression();
-    let compression_codec: Option<CompressionCodecType> = batch_compression
+    let compression_codec: Option<CompressionCodec> = batch_compression
         .map(|batch_compression| batch_compression.codec().try_into())
         .transpose()?;
 

@@ -16,11 +16,11 @@
 // under the License.
 
 #[cfg(feature = "ipc_compression")]
-mod ipc_compression;
+mod codec;
 #[cfg(feature = "ipc_compression")]
-pub(crate) use ipc_compression::CompressionCodecType;
+pub(crate) use codec::CompressionCodec;
 
 #[cfg(not(feature = "ipc_compression"))]
-mod stubs;
+mod stub;
 #[cfg(not(feature = "ipc_compression"))]
-pub(crate) use stubs::CompressionCodecType;
+pub(crate) use stub::CompressionCodec;

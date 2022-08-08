@@ -23,16 +23,17 @@ const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum CompressionCodecType {
+/// Represents compressing a ipc stream using a particular compression algorithm
+pub enum CompressionCodec {
     Lz4Frame,
     Zstd,
 }
 
-impl TryFrom<CompressionType> for CompressionCodecType {
+impl TryFrom<CompressionType> for CompressionCodec {
     fn try_from(compression_type: CompressionType) -> Self {
         match compression_type {
-            CompressionType::ZSTD => CompressionCodecType::Zstd,
-            CompressionType::LZ4_FRAME => CompressionCodecType::Lz4Frame,
+            CompressionType::ZSTD => CompressionCodec::Zstd,
+            CompressionType::LZ4_FRAME => CompressionCodec::Lz4Frame,
             other_type => {
                 return ArrowError::InvalidArgumentError(format!(
                     "compression type {:?} not supported ",
@@ -43,16 +44,16 @@ impl TryFrom<CompressionType> for CompressionCodecType {
     }
 }
 
-impl From<CompressionCodecType> for CompressionType {
-    fn from(codec: CompressionCodecType) -> Self {
+impl From<CompressionCodec> for CompressionType {
+    fn from(codec: CompressionCodec) -> Self {
         match codec {
-            CompressionCodecType::Lz4Frame => CompressionType::LZ4_FRAME,
-            CompressionCodecType::Zstd => CompressionType::ZSTD,
+            CompressionCodec::Lz4Frame => CompressionType::LZ4_FRAME,
+            CompressionCodec::Zstd => CompressionType::ZSTD,
         }
     }
 }
 
-impl CompressionCodecType {
+impl CompressionCodec {
     /// Compresses the data in `input` to `output` and appends the
     /// data using the specified compression mechanism.
     ///
@@ -126,7 +127,7 @@ impl CompressionCodecType {
     /// using the specified compression
     fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<()> {
         match self {
-            CompressionCodecType::Lz4Frame => {
+            CompressionCodec::Lz4Frame => {
                 let mut encoder = lz4::EncoderBuilder::new().build(output)?;
                 encoder.write_all(input)?;
                 match encoder.finish().1 {
@@ -134,7 +135,7 @@ impl CompressionCodecType {
                     Err(e) => Err(e.into()),
                 }
             }
-            CompressionCodecType::Zstd => {
+            CompressionCodec::Zstd => {
                 let mut encoder = zstd::Encoder::new(output, 0)?;
                 encoder.write_all(input)?;
                 match encoder.finish() {
@@ -149,14 +150,14 @@ impl CompressionCodecType {
     /// using the specified compression
     fn decompress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<usize> {
         let result: Result<usize> = match self {
-            CompressionCodecType::Lz4Frame => {
+            CompressionCodec::Lz4Frame => {
                 let mut decoder = lz4::Decoder::new(input)?;
                 match decoder.read_to_end(output) {
                     Ok(size) => Ok(size),
                     Err(e) => Err(e.into()),
                 }
             }
-            CompressionCodecType::Zstd => {
+            CompressionCodec::Zstd => {
                 let mut decoder = zstd::Decoder::new(input)?;
                 match decoder.read_to_end(output) {
                     Ok(size) => Ok(size),
@@ -187,7 +188,7 @@ mod tests {
     #[test]
     fn test_lz4_compression() {
         let input_bytes = "hello lz4".as_bytes();
-        let codec: CompressionCodecType = CompressionCodecType::Lz4Frame;
+        let codec: CompressionCodec = CompressionCodec::Lz4Frame;
         let mut output_bytes: Vec<u8> = Vec::new();
         codec.compress(input_bytes, &mut output_bytes).unwrap();
         let mut result_output_bytes: Vec<u8> = Vec::new();
@@ -200,7 +201,7 @@ mod tests {
     #[test]
     fn test_zstd_compression() {
         let input_bytes = "hello zstd".as_bytes();
-        let codec: CompressionCodecType = CompressionCodecType::Zstd;
+        let codec: CompressionCodec = CompressionCodec::Zstd;
         let mut output_bytes: Vec<u8> = Vec::new();
         codec.compress(input_bytes, &mut output_bytes).unwrap();
         let mut result_output_bytes: Vec<u8> = Vec::new();

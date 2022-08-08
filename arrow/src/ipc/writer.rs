@@ -39,7 +39,7 @@ use crate::ipc;
 use crate::record_batch::RecordBatch;
 use crate::util::bit_util;
 
-use crate::ipc::compression::CompressionCodecType;
+use crate::ipc::compression::CompressionCodec;
 use ipc::CONTINUATION_MARKER;
 
 /// IPC write options used to control the behaviour of the writer
@@ -367,7 +367,7 @@ impl IpcDataGenerator {
             c.finish()
         });
 
-        let compression_codec: Option<CompressionCodecType> = batch_compression_type
+        let compression_codec: Option<CompressionCodec> = batch_compression_type
             .map(|batch_compression_type| batch_compression_type.try_into())
             .transpose()?;
 
@@ -444,7 +444,7 @@ impl IpcDataGenerator {
             c.finish()
         });
 
-        let compression_codec: Option<CompressionCodecType> = batch_compression_type
+        let compression_codec: Option<CompressionCodec> = batch_compression_type
             .map(|batch_compression_type| batch_compression_type.try_into())
             .transpose()?;
 
@@ -1049,7 +1049,7 @@ fn write_array_data(
     offset: i64,
     num_rows: usize,
     null_count: usize,
-    compression_codec: &Option<CompressionCodecType>,
+    compression_codec: &Option<CompressionCodec>,
     write_options: &IpcWriteOptions,
 ) -> Result<i64> {
     let mut offset = offset;
@@ -1220,7 +1220,7 @@ fn write_buffer(
     buffers: &mut Vec<ipc::Buffer>, // output buffer descriptors
     arrow_data: &mut Vec<u8>,       // output stream
     offset: i64,                    // current output stream offset
-    compression_codec: &Option<CompressionCodecType>,
+    compression_codec: &Option<CompressionCodec>,
 ) -> Result<i64> {
     let len: i64 = match compression_codec {
         Some(compressor) => compressor.compress_to_vec(buffer, arrow_data)?,
@@ -1286,7 +1286,7 @@ mod tests {
                 8,
                 false,
                 ipc::MetadataVersion::V5,
-                Some(CompressionCodecType::Lz4Frame),
+                Some(CompressionCodec::Lz4Frame),
             )
             .unwrap();
             let mut writer =
@@ -1340,7 +1340,7 @@ mod tests {
                 8,
                 false,
                 ipc::MetadataVersion::V5,
-                Some(CompressionCodecType::Lz4Frame),
+                Some(CompressionCodec::Lz4Frame),
             )
             .unwrap();
             let mut writer =
@@ -1394,7 +1394,7 @@ mod tests {
                 8,
                 false,
                 ipc::MetadataVersion::V5,
-                Some(CompressionCodecType::Zstd),
+                Some(CompressionCodec::Zstd),
             )
             .unwrap();
             let mut writer =
@@ -1816,7 +1816,7 @@ mod tests {
                     8,
                     false,
                     ipc::MetadataVersion::V5,
-                    Some(CompressionCodecType::Lz4Frame),
+                    Some(CompressionCodec::Lz4Frame),
                 )
                 .unwrap();
                 let mut writer =
@@ -1868,7 +1868,7 @@ mod tests {
                     8,
                     false,
                     ipc::MetadataVersion::V5,
-                    Some(CompressionCodecType::Zstd),
+                    Some(CompressionCodec::Zstd),
                 )
                 .unwrap();
                 let mut writer =
