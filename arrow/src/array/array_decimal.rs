@@ -360,7 +360,7 @@ impl BasicDecimalArray<Decimal256, Decimal256Array> for Decimal256Array {
     fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
         if precision < self.precision {
             for v in self.iter().flatten() {
-                validate_decimal256_precision(&v.to_string(), precision)?;
+                validate_decimal256_precision(&v.to_big_int(), precision)?;
             }
         }
         Ok(())

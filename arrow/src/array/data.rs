@@ -401,11 +401,17 @@ impl ArrayData {
     #[inline]
     pub(crate) fn with_data_type(mut self, new_data_type: DataType) -> Self {
         assert!(
-            matches!(self.data_type, DataType::Decimal128(_, _)),
+            matches!(
+                self.data_type,
+                DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+            ),
             "only DecimalType is supported for existing type"
         );
         assert!(
-            matches!(new_data_type, DataType::Decimal128(_, _)),
+            matches!(
+                new_data_type,
+                DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+            ),
             "only DecimalType is supported for new datatype"
         );
         self.data_type = new_data_type;
@@ -1044,8 +1050,7 @@ impl ArrayData {
                     let offset = pos * 32;
                     let raw_bytes = &values[offset..offset + 32];
                     let integer = BigInt::from_signed_bytes_le(raw_bytes);
-                    let value_str = integer.to_string();
-                    validate_decimal256_precision(&value_str, *p)?;
+                    validate_decimal256_precision(&integer, *p)?;
                 }
                 Ok(())
             }
