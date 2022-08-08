@@ -40,7 +40,6 @@ use crate::file::{
 use crate::schema::types::{
     self, ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr,
 };
-use crate::util::io::TryClone;
 
 /// A wrapper around a [`Write`] that keeps track of the number
 /// of bytes that have been written
@@ -108,11 +107,6 @@ pub type OnCloseRowGroup<'a> = Box<
         ) -> Result<()>
         + 'a,
 >;
-
-#[deprecated = "use std::io::Write"]
-pub trait ParquetWriter: Write + std::io::Seek + TryClone {}
-#[allow(deprecated)]
-impl<T: Write + std::io::Seek + TryClone> ParquetWriter for T {}
 
 // ----------------------------------------------------------------------
 // Serialized impl for file & row group writers
