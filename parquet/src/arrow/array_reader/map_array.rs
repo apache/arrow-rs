@@ -32,7 +32,6 @@ pub struct MapArrayReader {
     value_reader: Box<dyn ArrayReader>,
     data_type: ArrowType,
     map_def_level: i16,
-    map_rep_level: i16,
 }
 
 impl MapArrayReader {
@@ -41,14 +40,12 @@ impl MapArrayReader {
         value_reader: Box<dyn ArrayReader>,
         data_type: ArrowType,
         def_level: i16,
-        rep_level: i16,
     ) -> Self {
         Self {
             key_reader,
             value_reader,
             data_type,
-            map_def_level: rep_level,
-            map_rep_level: def_level,
+            map_def_level: def_level,
         }
     }
 }

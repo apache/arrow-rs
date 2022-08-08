@@ -314,7 +314,6 @@ mod tests {
         let list_reader = ListArrayReader::<i32>::new(
             Box::new(reader),
             expected_l.data_type().clone(),
-            ArrowType::Int32,
             3,
             1,
             true,

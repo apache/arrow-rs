@@ -144,10 +144,11 @@ pub struct InMemoryWriteableCursor {
     buffer: Arc<Mutex<Cursor<Vec<u8>>>>,
 }
 
-#[allow(deprecated)]
+#[allow(deprecated, unused)]
 impl InMemoryWriteableCursor {
     /// Consume this instance and return the underlying buffer as long as there are no other
     /// references to this instance.
+
     pub fn into_inner(self) -> Option<Vec<u8>> {
         Arc::try_unwrap(self.buffer)
             .ok()

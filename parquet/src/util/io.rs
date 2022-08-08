@@ -168,6 +168,7 @@ pub struct FileSink<W: ParquetWriter> {
 }
 
 #[allow(deprecated)]
+#[allow(unused)]
 impl<W: ParquetWriter> FileSink<W> {
     /// Creates new file sink.
     /// Position is set to whatever position file has.
@@ -214,7 +215,7 @@ mod tests {
 
     use std::iter;
 
-    use crate::util::test_common::get_test_file;
+    use crate::util::test_common::file_util::get_test_file;
 
     #[test]
     fn test_io_read_fully() {
