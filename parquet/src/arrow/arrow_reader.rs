@@ -291,7 +291,7 @@ impl Iterator for ParquetRecordBatchReader {
         match self.selection.as_mut() {
             Some(selection) => {
                 while read_records < self.batch_size && !selection.is_empty() {
-                    let front = selection.pop_front()?;
+                    let front = selection.pop_front().unwrap();
                     if front.skip {
                         let skipped =
                             match self.array_reader.skip_records(front.row_count) {
@@ -322,11 +322,7 @@ impl Iterator for ParquetRecordBatchReader {
                         _ => front.row_count,
                     };
                     match self.array_reader.read_records(to_read) {
-                        Ok(rec) if rec == 0 =>
-                        // no more data in file, the last batch in this reader
-                        {
-                            break
-                        }
+                        Ok(0) => break,
                         Ok(rec) => read_records += rec,
                         Err(error) => return Some(Err(error.into())),
                     }
