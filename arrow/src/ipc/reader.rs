@@ -58,39 +58,10 @@ fn read_buffer(
     if buf_data.is_empty() {
         return Ok(Buffer::from(buf_data));
     }
-    Ok(match compression_codec {
-        #[cfg(feature = "ipc_compression")]
-        Some(decompressor) => {
-            use crate::ipc::compression::{
-                LENGTH_EMPTY_COMPRESSED_DATA, LENGTH_NO_COMPRESSED_DATA,
-                LENGTH_OF_PREFIX_DATA,
-            };
-            // 8byte + data
-            // read the first 8 bytes
-            // if the data is compressed, decompress the data, otherwise return as is
-            let decompressed_length = read_uncompressed_size(buf_data);
-            if decompressed_length == LENGTH_EMPTY_COMPRESSED_DATA {
-                // emtpy
-                let empty = Vec::<u8>::new();
-                Buffer::from(empty)
-            } else if decompressed_length == LENGTH_NO_COMPRESSED_DATA {
-                // not compress
-                let data = &buf_data[(LENGTH_OF_PREFIX_DATA as usize)..];
-                Buffer::from(data)
-            } else {
-                // decompress data using the codec
-                let mut _uncompressed_buffer =
-                    Vec::with_capacity(decompressed_length as usize);
-                let input_data = &buf_data[(LENGTH_OF_PREFIX_DATA as usize)..];
-                decompressor.decompress(input_data, &mut _uncompressed_buffer)?;
-                Buffer::from(_uncompressed_buffer)
-            }
-        }
-        // creating the compressor will fail if ipc_compression is not enabled
-        #[cfg(not(feature = "ipc_compression"))]
-        Some(_decompressor) => unreachable!(),
-        None => Buffer::from(buf_data),
-    })
+    match compression_codec {
+        Some(decompressor) => decompressor.decompress_to_buffer(buf_data),
+        None => Ok(Buffer::from(buf_data)),
+    }
 }
 
 /// Coordinates reading arrays based on data types.

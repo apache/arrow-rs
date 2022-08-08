@@ -40,9 +40,6 @@ use crate::record_batch::RecordBatch;
 use crate::util::bit_util;
 
 use crate::ipc::compression::CompressionCodecType;
-use crate::ipc::compression::{
-    LENGTH_EMPTY_COMPRESSED_DATA, LENGTH_NO_COMPRESSED_DATA, LENGTH_OF_PREFIX_DATA,
-};
 use crate::ipc::CompressionType;
 use ipc::CONTINUATION_MARKER;
 
@@ -406,7 +403,7 @@ impl IpcDataGenerator {
                 array.null_count(),
                 &compression_codec,
                 write_options,
-            );
+            )?;
         }
         // pad the tail of body data
         let len = arrow_data.len();
@@ -1074,7 +1071,7 @@ fn write_array_data(
     null_count: usize,
     compression_codec: &Option<CompressionCodecType>,
     write_options: &IpcWriteOptions,
-) -> i64 {
+) -> Result<i64> {
     let mut offset = offset;
     if !matches!(array_data.data_type(), DataType::Null) {
         nodes.push(ipc::FieldNode::new(num_rows as i64, null_count as i64));
@@ -1102,7 +1099,7 @@ fn write_array_data(
             arrow_data,
             offset,
             compression_codec,
-        );
+        )?;
     }
 
     let data_type = array_data.data_type();
@@ -1138,7 +1135,7 @@ fn write_array_data(
                 arrow_data,
                 offset,
                 compression_codec,
-            );
+            )?;
 
             let buffer_length = min(total_bytes, value_buffer.len() - byte_offset);
             let buffer_slice =
@@ -1149,17 +1146,17 @@ fn write_array_data(
                 arrow_data,
                 offset,
                 compression_codec,
-            );
+            )?;
         } else {
-            array_data.buffers().iter().for_each(|buffer| {
+            for buffer in array_data.buffers() {
                 offset = write_buffer(
                     buffer.as_slice(),
                     buffers,
                     arrow_data,
                     offset,
                     compression_codec,
-                );
-            });
+                )?;
+            }
         }
     } else if DataType::is_numeric(data_type)
         || DataType::is_temporal(data_type)
@@ -1188,7 +1185,7 @@ fn write_array_data(
                 arrow_data,
                 offset,
                 compression_codec,
-            );
+            )?;
         } else {
             offset = write_buffer(
                 buffer.as_slice(),
@@ -1196,17 +1193,18 @@ fn write_array_data(
                 arrow_data,
                 offset,
                 compression_codec,
-            );
+            )?;
         }
     } else {
-        array_data.buffers().iter().for_each(|buffer| {
-            offset = write_buffer(buffer, buffers, arrow_data, offset, compression_codec);
-        });
+        for buffer in array_data.buffers() {
+            offset =
+                write_buffer(buffer, buffers, arrow_data, offset, compression_codec)?;
+        }
     }
 
     if !matches!(array_data.data_type(), DataType::Dictionary(_, _)) {
         // recursively write out nested structures
-        array_data.child_data().iter().for_each(|data_ref| {
+        for data_ref in array_data.child_data() {
             // write the nested data (e.g list data)
             offset = write_array_data(
                 data_ref,
@@ -1218,14 +1216,17 @@ fn write_array_data(
                 data_ref.null_count(),
                 compression_codec,
                 write_options,
-            );
-        });
+            )?;
+        }
     }
 
-    offset
+    Ok(offset)
 }
 
-/// Write a buffer to a vector of bytes, and add its ipc::Buffer to a vector
+/// Write a buffer into `arrow_data`, a vector of bytes, and adds its
+/// [`ipc::Buffer`] to `buffers`. Returns the new offset in `arrow_data`
+///
+///
 /// From <https://github.com/apache/arrow/blob/6a936c4ff5007045e86f65f1a6b6c3c955ad5103/format/Message.fbs#L58>
 /// Each constituent buffer is first compressed with the indicated
 /// compressor, and then written with the uncompressed length in the first 8
@@ -1235,61 +1236,34 @@ fn write_array_data(
 /// follows is not compressed, which can be useful for cases where
 /// compression does not yield appreciable savings.
 fn write_buffer(
-    buffer: &[u8],
-    buffers: &mut Vec<ipc::Buffer>,
-    arrow_data: &mut Vec<u8>,
-    offset: i64,
+    buffer: &[u8],                  // input
+    buffers: &mut Vec<ipc::Buffer>, // output buffer descriptors
+    arrow_data: &mut Vec<u8>,       // output stream
+    offset: i64,                    // current output stream offset
     compression_codec: &Option<CompressionCodecType>,
-) -> i64 {
-    let origin_buffer_len = buffer.len();
-    let mut _compression_buffer = Vec::<u8>::new();
-    let (data, uncompression_buffer_len) = match compression_codec {
+) -> Result<i64> {
+    let len: i64 = match compression_codec {
+        Some(compressor) => compressor.compress_to_vec(buffer, arrow_data)?,
         None => {
-            // this buffer_len will not used in the following logic
-            // If we don't use the compression, just write the data in the array
-            (buffer, origin_buffer_len as i64)
+            arrow_data.extend_from_slice(buffer);
+            buffer.len()
         }
-        Some(_compressor) => {
-            if cfg!(feature = "ipc_compression") || cfg!(test) {
-                if (origin_buffer_len as i64) == LENGTH_EMPTY_COMPRESSED_DATA {
-                    (buffer, LENGTH_EMPTY_COMPRESSED_DATA)
-                } else {
-                    #[cfg(any(feature = "ipc_compression", test))]
-                    _compressor
-                        .compress(buffer, &mut _compression_buffer)
-                        .unwrap();
-                    let compression_len = _compression_buffer.len();
-                    if compression_len > origin_buffer_len {
-                        // the length of compressed data is larger than uncompressed data
-                        // use the uncompressed data with -1
-                        // -1 indicate that we don't compress the data
-                        (buffer, LENGTH_NO_COMPRESSED_DATA)
-                    } else {
-                        // use the compressed data with uncompressed length
-                        (_compression_buffer.as_slice(), origin_buffer_len as i64)
-                    }
-                }
-            } else {
-                panic!("IPC compression not supported. Compile with feature 'ipc_compression' to enable");
-            }
-        }
-    };
-    let len = data.len() as i64;
-    let total_len = if compression_codec.is_none() {
-        buffers.push(ipc::Buffer::new(offset, len));
-        len
-    } else {
-        buffers.push(ipc::Buffer::new(offset, LENGTH_OF_PREFIX_DATA + len));
-        // write the prefix of the uncompressed length
-        let uncompression_len_buf: [u8; 8] = uncompression_buffer_len.to_le_bytes();
-        arrow_data.extend_from_slice(&uncompression_len_buf);
-        LENGTH_OF_PREFIX_DATA + len
-    };
-    arrow_data.extend_from_slice(data);
+    }
+    .try_into()
+    .map_err(|e| {
+        ArrowError::InvalidArgumentError(format!(
+            "Could not convert compressed size to i64: {}",
+            e
+        ))
+    })?;
+
+    // make new indx entry
+    buffers.push(ipc::Buffer::new(offset, len));
     // padding and make offset 8 bytes aligned
     let pad_len = pad_to_8(len as u32) as i64;
     arrow_data.extend_from_slice(&vec![0u8; pad_len as usize][..]);
-    offset + total_len + pad_len
+
+    Ok(offset + len + pad_len)
 }
 
 /// Calculate an 8-byte boundary and return the number of bytes needed to pad to 8 bytes
@@ -1315,6 +1289,7 @@ mod tests {
     use crate::util::integration_util::*;
 
     #[test]
+    #[cfg(feature = "ipc_compression")]
     fn test_write_with_empty_record_batch() {
         let file_name = "arrow_lz4_empty";
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
@@ -1368,7 +1343,9 @@ mod tests {
             }
         }
     }
+
     #[test]
+    #[cfg(feature = "ipc_compression")]
     fn test_write_file_with_lz4_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
@@ -1422,6 +1399,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ipc_compression")]
     fn test_write_file_with_zstd_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
@@ -1831,6 +1809,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ipc_compression")]
     fn read_and_rewrite_compression_files_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
@@ -1883,6 +1862,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ipc_compression")]
     fn read_and_rewrite_compression_stream_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";

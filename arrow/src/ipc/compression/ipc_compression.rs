@@ -19,6 +19,9 @@ use crate::error::{ArrowError, Result};
 use crate::ipc::CompressionType;
 use std::io::{Read, Write};
 
+const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
+const LENGTH_OF_PREFIX_DATA: i64 = 8;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CompressionCodecType {
     Lz4Frame,
@@ -50,7 +53,78 @@ impl From<CompressionCodecType> for CompressionType {
 }
 
 impl CompressionCodecType {
-    pub fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<()> {
+    /// Compresses the data in `input` to `output` and appends the
+    /// data using the specified compression mechanism.
+    ///
+    /// returns the number of bytes written to the stream
+    ///
+    /// Writes this format to output:
+    /// ```text
+    /// [8 bytes]:         uncompressed length
+    /// [reminaing bytes]: compressed data stream
+    /// ```
+    pub(crate) fn compress_to_vec(
+        &self,
+        input: &[u8],
+        output: &mut Vec<u8>,
+    ) -> Result<usize> {
+        let uncompressed_data_len = input.len();
+        let original_output_len = output.len();
+
+        if uncompressed_data_len == 0 {
+            // empty input, nothing to do
+        } else {
+            // write compressed data directly into the output buffer
+            output.extend_from_slice(&uncompressed_data_len.to_le_bytes());
+            self.compress(input, output)?;
+
+            let compression_len = output.len();
+            if compression_len > origin_buffer_len {
+                // length of compressed data was larger than
+                // uncompressed data, use the uncompressed data with
+                // length -1 to indicate that we don't compress the
+                // data
+                output.resize(original_output_len);
+                output.extend_from_slice(&LENGTH_NO_COMPRESSED_DATA.to_le_bytes());
+                output.extend_from_slice(&input);
+            }
+        }
+        Ok(output.len() - original_output_len)
+    }
+
+    /// Decompresses the input into a [`Buffer`]
+    ///
+    /// The input should look like:
+    /// ```text
+    /// [8 bytes]:         uncompressed length
+    /// [reminaing bytes]: compressed data stream
+    /// ```
+    pub(crate) fn decompress_to_buffer(&self, input: &[u8]) -> Result<Buffer> {
+        // read the first 8 bytes to determine if the data is
+        // compressed
+        let decompressed_length = read_uncompressed_size(input);
+        let buffer = if decompressed_length == 0 {
+            // emtpy
+            let empty = Vec::<u8>::new();
+            Buffer::from(empty)
+        } else if decompressed_length == LENGTH_NO_COMPRESSED_DATA {
+            // not compress
+            let data = &input[(LENGTH_OF_PREFIX_DATA as usize)..];
+            Buffer::from(data)
+        } else {
+            // decompress data using the codec
+            let mut _uncompressed_buffer =
+                Vec::with_capacity(decompressed_length as usize);
+            let input_data = &input[(LENGTH_OF_PREFIX_DATA as usize)..];
+            self.decompress(input_data, &mut _uncompressed_buffer)?;
+            Buffer::from(_uncompressed_buffer)
+        };
+        Ok(buffer);
+    }
+
+    /// Compress the data in input buffer and write to output buffer
+    /// using the specified compression
+    fn compress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<()> {
         match self {
             CompressionCodecType::Lz4Frame => {
                 let mut encoder = lz4::EncoderBuilder::new().build(output)?;
@@ -71,7 +145,9 @@ impl CompressionCodecType {
         }
     }
 
-    pub fn decompress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<usize> {
+    /// Decompress the data in input buffer and write to output buffer
+    /// using the specified compression
+    fn decompress(&self, input: &[u8], output: &mut Vec<u8>) -> Result<usize> {
         let result: Result<usize> = match self {
             CompressionCodecType::Lz4Frame => {
                 let mut decoder = lz4::Decoder::new(input)?;

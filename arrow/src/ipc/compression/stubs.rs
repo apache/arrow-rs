@@ -18,6 +18,7 @@
 //! Stubs that implement the same interface as ipc_compression
 //! but always error.
 
+use crate::buffer::Buffer;
 use crate::error::{ArrowError, Result};
 use crate::ipc::CompressionType;
 
@@ -43,13 +44,17 @@ impl TryFrom<CompressionType> for CompressionCodecType {
 }
 
 impl CompressionCodecType {
-    pub fn compress(&self, _input: &[u8], _output: &mut Vec<u8>) -> Result<()> {
+    pub(crate) fn compress_to_vec(
+        &self,
+        _input: &[u8],
+        _output: &mut Vec<u8>,
+    ) -> Result<usize> {
         Err(ArrowError::InvalidArgumentError(
             "compression not supported because arrow was not compiled with the ipc_compression feature".to_string()
         ))
     }
 
-    pub fn decompress(&self, _input: &[u8], _output: &mut Vec<u8>) -> Result<usize> {
+    pub(crate) fn decompress_to_buffer(&self, _input: &[u8]) -> Result<Buffer> {
         Err(ArrowError::InvalidArgumentError(
             "decompression not supported because arrow was not compiled with the ipc_compression feature".to_string()
         ))
