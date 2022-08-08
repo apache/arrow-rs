@@ -142,12 +142,14 @@ impl LevelEncoder {
 /// Decoder for definition/repetition levels.
 /// Currently only supports RLE and BIT_PACKED encoding for Data Page v1 and
 /// RLE for Data Page v2.
+#[allow(unused)]
 pub enum LevelDecoder {
     Rle(Option<usize>, RleDecoder),
     RleV2(Option<usize>, RleDecoder),
     BitPacked(Option<usize>, u8, BitReader),
 }
 
+#[allow(unused)]
 impl LevelDecoder {
     /// Creates new level decoder based on encoding and max definition/repetition level.
     /// This method only initializes level decoder, `set_data` method must be called
@@ -274,7 +276,7 @@ impl LevelDecoder {
 mod tests {
     use super::*;
 
-    use crate::util::test_common::random_numbers_range;
+    use crate::util::test_common::rand_gen::random_numbers_range;
 
     fn test_internal_roundtrip(enc: Encoding, levels: &[i16], max_level: i16, v2: bool) {
         let mut encoder = if v2 {

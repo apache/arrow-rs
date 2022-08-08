@@ -574,8 +574,6 @@ pub(crate) mod private {
 
     use super::{ParquetError, Result, SliceAsBytes};
 
-    pub type BitIndex = u64;
-
     /// Sealed trait to start to remove specialisation from implementations
     ///
     /// This is done to force the associated value type to be unimplementable outside of this
@@ -707,19 +705,6 @@ pub(crate) mod private {
         #[inline]
         fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
             self
-        }
-    }
-
-    /// Hopelessly unsafe function that emulates `num::as_ne_bytes`
-    ///
-    /// It is not recommended to use this outside of this private module as, while it
-    /// _should_ work for primitive values, it is little better than a transmutation
-    /// and can act as a backdoor into mis-interpreting types as arbitary byte slices
-    #[inline]
-    fn as_raw<'a, T>(value: *const T) -> &'a [u8] {
-        unsafe {
-            let value = value as *const u8;
-            std::slice::from_raw_parts(value, std::mem::size_of::<T>())
         }
     }
 

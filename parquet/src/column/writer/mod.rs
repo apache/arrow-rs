@@ -258,6 +258,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn write_batch_internal(
         &mut self,
         values: &E::Values,
@@ -907,12 +908,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             _ => {}
         }
     }
-
-    /// Returns reference to the underlying page writer.
-    /// This method is intended to use in tests only.
-    fn get_page_writer_ref(&self) -> &dyn PageWriter {
-        self.page_writer.as_ref()
-    }
 }
 
 fn update_min<T: ParquetValueType>(
@@ -1101,7 +1096,7 @@ mod tests {
         writer::SerializedPageWriter,
     };
     use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
-    use crate::util::{io::FileSource, test_common::random_numbers_range};
+    use crate::util::{io::FileSource, test_common::rand_gen::random_numbers_range};
 
     use super::*;
 
@@ -2408,20 +2403,6 @@ mod tests {
         get_typed_column_writer::<T>(column_writer)
     }
 
-    /// Returns decimals column reader.
-    fn get_test_decimals_column_reader<T: DataType>(
-        page_reader: Box<dyn PageReader>,
-        max_def_level: i16,
-        max_rep_level: i16,
-    ) -> ColumnReaderImpl<T> {
-        let descr = Arc::new(get_test_decimals_column_descr::<T>(
-            max_def_level,
-            max_rep_level,
-        ));
-        let column_reader = get_column_reader(descr, page_reader);
-        get_typed_column_reader::<T>(column_reader)
-    }
-
     /// Returns descriptor for Decimal type with primitive column.
     fn get_test_decimals_column_descr<T: DataType>(
         max_def_level: i16,
@@ -2454,20 +2435,6 @@ mod tests {
         ));
         let column_writer = get_column_writer(descr, props, page_writer);
         get_typed_column_writer::<T>(column_writer)
-    }
-
-    ///  Returns column reader for UINT32 Column provided as ConvertedType only
-    fn get_test_unsigned_int_given_as_converted_column_reader<T: DataType>(
-        page_reader: Box<dyn PageReader>,
-        max_def_level: i16,
-        max_rep_level: i16,
-    ) -> ColumnReaderImpl<T> {
-        let descr = Arc::new(get_test_converted_type_unsigned_integer_column_descr::<T>(
-            max_def_level,
-            max_rep_level,
-        ));
-        let column_reader = get_column_reader(descr, page_reader);
-        get_typed_column_reader::<T>(column_reader)
     }
 
     /// Returns column descriptor for UINT32 Column provided as ConvertedType only

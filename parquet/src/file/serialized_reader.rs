@@ -141,6 +141,7 @@ pub struct SerializedFileReader<R: ChunkReader> {
 /// A builder for [`ReadOptions`].
 /// For the predicates that are added to the builder,
 /// they will be chained using 'AND' to filter the row groups.
+#[derive(Default)]
 pub struct ReadOptionsBuilder {
     predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
     enable_page_index: bool,
@@ -149,10 +150,7 @@ pub struct ReadOptionsBuilder {
 impl ReadOptionsBuilder {
     /// New builder
     pub fn new() -> Self {
-        ReadOptionsBuilder {
-            predicates: vec![],
-            enable_page_index: false,
-        }
+        Self::default()
     }
 
     /// Add a predicate on row group metadata to the reading option,
@@ -692,7 +690,7 @@ mod tests {
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::bit_util::from_le_slice;
-    use crate::util::test_common::{get_test_file, get_test_path};
+    use crate::util::test_common::file_util::{get_test_file, get_test_path};
     use parquet_format::BoundaryOrder;
     use std::sync::Arc;
 

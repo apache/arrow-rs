@@ -167,7 +167,7 @@ mod tests {
 
     use std::iter;
 
-    use crate::util::test_common::get_test_file;
+    use crate::util::test_common::file_util::get_test_file;
 
     #[test]
     fn test_io_read_fully() {

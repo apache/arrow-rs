@@ -48,8 +48,7 @@ pub fn utf8_column() -> ColumnDescPtr {
 
 /// Encode `data` with the provided `encoding`
 pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> ByteBufferPtr {
-    let descriptor = utf8_column();
-    let mut encoder = get_encoder::<ByteArrayType>(descriptor, encoding).unwrap();
+    let mut encoder = get_encoder::<ByteArrayType>(encoding).unwrap();
 
     encoder.put(data).unwrap();
     encoder.flush_buffer().unwrap()
