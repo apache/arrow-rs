@@ -116,10 +116,7 @@ pub trait AsyncFileReader {
     fn get_byte_ranges(
         &mut self,
         ranges: Vec<Range<usize>>,
-    ) -> BoxFuture<'_, Result<Vec<Bytes>>>
-    where
-        Self: Send,
-    {
+    ) -> BoxFuture<'_, Result<Vec<Bytes>>> {
         async move {
             let mut result = Vec::with_capacity(ranges.len());
 
