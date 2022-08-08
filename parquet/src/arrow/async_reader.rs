@@ -108,7 +108,7 @@ use crate::file::FOOTER_SIZE;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
 
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
-pub trait AsyncFileReader {
+pub trait AsyncFileReader: Send {
     /// Retrieve the bytes in `range`
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>>;
 
