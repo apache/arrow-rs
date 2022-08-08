@@ -478,7 +478,7 @@ impl IpcDataGenerator {
             array_data.null_count(),
             &compression_codec,
             write_options,
-        );
+        )?;
 
         // pad the tail of body data
         let len = arrow_data.len();

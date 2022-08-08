@@ -1510,16 +1510,21 @@ mod tests {
         let version = "2.0.0-compression";
 
         // the test is repetitive, thus we can read all supported files at once
-        let paths = vec!["generated_lz4", "generated_zstd"];
-        paths.iter().for_each(|path| {
+        let cases = vec![("generated_lz4", "LZ4_FRAME"), ("generated_zstd", "ZSTD")];
+        cases.iter().for_each(|(path, compression_name)| {
             let file = File::open(format!(
                 "{}/arrow-ipc-stream/integration/{}/{}.stream",
                 testdata, version, path
             ))
             .unwrap();
 
-            let err = StreamReader::try_new(file, None).unwrap_err();
-            assert_eq!(err.to_string(), "not supported compression");
+            let mut reader = StreamReader::try_new(file, None).unwrap();
+            let err = reader.next().unwrap().unwrap_err();
+            let expected_error = format!(
+                "Invalid argument error: compression type {} not supported because arrow was not compiled with the ipc_compression feature",
+                compression_name
+            );
+            assert_eq!(err.to_string(), expected_error);
         });
     }
 
@@ -1551,16 +1556,22 @@ mod tests {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
         // the test is repetitive, thus we can read all supported files at once
-        let paths = vec!["generated_lz4", "generated_zstd"];
-        paths.iter().for_each(|path| {
+        let cases = vec![("generated_lz4", "LZ4_FRAME"), ("generated_zstd", "ZSTD")];
+        cases.iter().for_each(|(path, compression_name)| {
             let file = File::open(format!(
                 "{}/arrow-ipc-stream/integration/{}/{}.arrow_file",
                 testdata, version, path
             ))
             .unwrap();
 
-            let err = FileReader::try_new(file, None).unwrap_err();
-            assert_eq!(err.to_string(), "not supported compression");
+            let mut reader = FileReader::try_new(file, None).unwrap();
+
+            let err = reader.next().unwrap().unwrap_err();
+            let expected_error = format!(
+                "Invalid argument error: compression type {} not supported because arrow was not compiled with the ipc_compression feature",
+                compression_name
+            );
+            assert_eq!(err.to_string(), expected_error);
         });
     }
 
