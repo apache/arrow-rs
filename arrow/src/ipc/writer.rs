@@ -40,7 +40,6 @@ use crate::record_batch::RecordBatch;
 use crate::util::bit_util;
 
 use crate::ipc::compression::CompressionCodecType;
-use crate::ipc::CompressionType;
 use ipc::CONTINUATION_MARKER;
 
 /// IPC write options used to control the behaviour of the writer
@@ -60,49 +59,27 @@ pub struct IpcWriteOptions {
     /// version 2.0.0: V4, with legacy format enabled
     /// version 4.0.0: V5
     metadata_version: ipc::MetadataVersion,
-    batch_compression_type: Option<CompressionCodecType>,
+    /// Compression, if desired. Only supported when `ipc_compression`
+    /// feature is enabled
+    batch_compression_type: Option<ipc::CompressionType>,
 }
 
 impl IpcWriteOptions {
-    #[cfg(any(feature = "ipc_compression", test))]
-    pub fn try_new_with_compression(
-        alignment: usize,
-        write_legacy_ipc_format: bool,
-        metadata_version: ipc::MetadataVersion,
-        batch_compression_type: Option<CompressionCodecType>,
+    /// Configures compression when writing IPC files. Requires the
+    /// `ipc_compression` feature of the crate to be activated.
+    #[cfg(ipc_compression)]
+    pub fn try_with_compression(
+        mut self,
+        batch_compression_type: Option<ipc::CompressionType>,
     ) -> Result<Self> {
-        if alignment == 0 || alignment % 8 != 0 {
-            return Err(ArrowError::InvalidArgumentError(
-                "Alignment should be greater than 0 and be a multiple of 8".to_string(),
-            ));
-        }
-        match batch_compression_type {
-            None => {}
-            _ => {
-                if metadata_version < ipc::MetadataVersion::V5 {
-                    return Err(ArrowError::InvalidArgumentError(
-                        "Compression only supported in metadata v5 and above".to_string(),
-                    ));
-                }
+        self.batch_compression_type = batch_compression_type;
+
+        if let Some(compression) = self.batch_compression_type.as_ref() {
+            if self.metadata_version < ipc::MetadataVersion::V5 {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Compression only supported in metadata v5 and above".to_string(),
+                ));
             }
-        };
-        match metadata_version {
-            ipc::MetadataVersion::V5 => {
-                if write_legacy_ipc_format {
-                    Err(ArrowError::InvalidArgumentError(
-                        "Legacy IPC format only supported on metadata version 4"
-                            .to_string(),
-                    ))
-                } else {
-                    Ok(Self {
-                        alignment,
-                        write_legacy_ipc_format,
-                        metadata_version,
-                        batch_compression_type,
-                    })
-                }
-            }
-            z => panic!("Unsupported ipc::MetadataVersion {:?}", z),
         }
     }
     /// Try create IpcWriteOptions, checking for incompatible settings
@@ -143,7 +120,10 @@ impl IpcWriteOptions {
                     })
                 }
             }
-            z => panic!("Unsupported ipc::MetadataVersion {:?}", z),
+            z => Err(ArrowError::InvalidArgumentError(format!(
+                "Unsupported ipc::MetadataVersion {:?}",
+                z
+            ))),
         }
     }
 }
@@ -378,19 +358,19 @@ impl IpcDataGenerator {
         let mut offset = 0;
 
         // get the type of compression
-        let compression_codec = write_options.batch_compression_type;
-        let compression_type: Option<CompressionType> =
-            compression_codec.map(|v| v.try_into()).transpose()?;
-        let compression = {
-            if let Some(codec) = compression_type {
-                let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
-                c.add_method(ipc::BodyCompressionMethod::BUFFER);
-                c.add_codec(codec);
-                Some(c.finish())
-            } else {
-                None
-            }
-        };
+        let batch_compression_type = write_options.batch_compression_type;
+
+        let compression = batch_compression_type.map(|batch_compression_type| {
+            let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
+            c.add_method(ipc::BodyCompressionMethod::BUFFER);
+            c.add_codec(batch_compression_type);
+            c.finish()
+        });
+
+        let compression_codec: Option<CompressionCodecType> = batch_compression_type
+            .map(|batch_compression_type| batch_compression_type.try_into())
+            .transpose()?;
+
         for array in batch.columns() {
             let array_data = array.data();
             offset = write_array_data(
@@ -455,19 +435,19 @@ impl IpcDataGenerator {
         let mut arrow_data: Vec<u8> = vec![];
 
         // get the type of compression
-        let compression_codec = write_options.batch_compression_type;
-        let compression_type: Option<CompressionType> =
-            compression_codec.map(|v| v.try_into()).transpose()?;
-        let compression = {
-            if let Some(codec) = compression_type {
-                let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
-                c.add_method(ipc::BodyCompressionMethod::BUFFER);
-                c.add_codec(codec);
-                Some(c.finish())
-            } else {
-                None
-            }
-        };
+        let batch_compression_type = write_options.batch_compression_type;
+
+        let compression = batch_compression_type.map(|batch_compression_type| {
+            let mut c = ipc::BodyCompressionBuilder::new(&mut fbb);
+            c.add_method(ipc::BodyCompressionMethod::BUFFER);
+            c.add_codec(batch_compression_type);
+            c.finish()
+        });
+
+        let compression_codec: Option<CompressionCodecType> = batch_compression_type
+            .map(|batch_compression_type| batch_compression_type.try_into())
+            .transpose()?;
+
         write_array_data(
             array_data,
             &mut buffers,
@@ -1289,7 +1269,7 @@ mod tests {
     use crate::util::integration_util::*;
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(ipc_compression)]
     fn test_write_with_empty_record_batch() {
         let file_name = "arrow_lz4_empty";
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
@@ -1345,7 +1325,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(ipc_compression)]
     fn test_write_file_with_lz4_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
@@ -1399,7 +1379,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(ipc_compression)]
     fn test_write_file_with_zstd_compression() {
         let schema = Schema::new(vec![Field::new("field1", DataType::Int32, true)]);
         let values: Vec<Option<i32>> = vec![Some(12), Some(1)];
@@ -1809,7 +1789,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(ipc_compression)]
     fn read_and_rewrite_compression_files_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
@@ -1862,7 +1842,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(ipc_compression)]
     fn read_and_rewrite_compression_stream_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
