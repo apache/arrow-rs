@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use percent_encoding::{percent_decode, percent_encode, AsciiSet, CONTROLS};
+use percent_encoding::{percent_encode, AsciiSet, CONTROLS};
 use std::borrow::Cow;
 
 use crate::path::DELIMITER_BYTE;
@@ -23,11 +23,15 @@ use snafu::Snafu;
 
 /// Error returned by [`PathPart::parse`]
 #[derive(Debug, Snafu)]
-#[snafu(display("Invalid path segment - got \"{}\" expected: \"{}\"", actual, expected))]
+#[snafu(display(
+    "Encountered illegal character sequence \"{}\" whilst parsing path segment \"{}\"",
+    illegal,
+    segment
+))]
 #[allow(missing_copy_implementations)]
 pub struct InvalidPart {
-    actual: String,
-    expected: String,
+    segment: String,
+    illegal: String,
 }
 
 /// The PathPart type exists to validate the directory/file names that form part
@@ -43,19 +47,38 @@ pub struct PathPart<'a> {
 impl<'a> PathPart<'a> {
     /// Parse the provided path segment as a [`PathPart`] returning an error if invalid
     pub fn parse(segment: &'a str) -> Result<Self, InvalidPart> {
-        let decoded: Cow<'a, [u8]> = percent_decode(segment.as_bytes()).into();
-        let part = PathPart::from(decoded.as_ref());
-        if segment != part.as_ref() {
+        if segment == "." || segment == ".." {
             return Err(InvalidPart {
-                actual: segment.to_string(),
-                expected: part.raw.to_string(),
+                segment: segment.to_string(),
+                illegal: segment.to_string(),
             });
+        }
+
+        for (idx, b) in segment.as_bytes().iter().cloned().enumerate() {
+            // A percent character is always valid, even if not
+            // followed by a valid 2-digit hex code
+            // https://url.spec.whatwg.org/#percent-encoded-bytes
+            if b == b'%' {
+                continue;
+            }
+
+            if !b.is_ascii() || should_percent_encode(b) {
+                return Err(InvalidPart {
+                    segment: segment.to_string(),
+                    // This is correct as only single byte characters up to this point
+                    illegal: segment.chars().nth(idx).unwrap().to_string(),
+                });
+            }
         }
 
         Ok(Self {
             raw: segment.into(),
         })
     }
+}
+
+fn should_percent_encode(c: u8) -> bool {
+    percent_encode(&[c], INVALID).next().unwrap().len() != 1
 }
 
 /// Characters we want to encode.
@@ -144,5 +167,19 @@ mod tests {
     fn path_part_cant_be_two_dots() {
         let part: PathPart<'_> = "..".into();
         assert_eq!(part.raw, "%2E%2E");
+    }
+
+    #[test]
+    fn path_part_parse() {
+        PathPart::parse("foo").unwrap();
+        PathPart::parse("foo/bar").unwrap_err();
+
+        // Test percent-encoded path
+        PathPart::parse("foo%2Fbar").unwrap();
+        PathPart::parse("L%3ABC.parquet").unwrap();
+
+        // Test path containing bad escape sequence
+        PathPart::parse("%Z").unwrap();
+        PathPart::parse("%%").unwrap();
     }
 }

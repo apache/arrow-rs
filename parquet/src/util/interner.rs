@@ -20,6 +20,8 @@ use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
 use std::hash::Hash;
 
+const DEFAULT_DEDUP_CAPACITY: usize = 4096;
+
 /// Storage trait for [`Interner`]
 pub trait Storage {
     type Key: Copy;
@@ -34,6 +36,7 @@ pub trait Storage {
 }
 
 /// A generic value interner supporting various different [`Storage`]
+#[derive(Debug, Default)]
 pub struct Interner<S: Storage> {
     state: ahash::RandomState,
 
@@ -52,7 +55,7 @@ impl<S: Storage> Interner<S> {
     pub fn new(storage: S) -> Self {
         Self {
             state: Default::default(),
-            dedup: Default::default(),
+            dedup: HashMap::with_capacity_and_hasher(DEFAULT_DEDUP_CAPACITY, ()),
             storage,
         }
     }
@@ -83,6 +86,11 @@ impl<S: Storage> Interner<S> {
     /// Returns the storage for this interner
     pub fn storage(&self) -> &S {
         &self.storage
+    }
+
+    /// Unwraps the inner storage
+    pub fn into_inner(self) -> S {
+        self.storage
     }
 }
 

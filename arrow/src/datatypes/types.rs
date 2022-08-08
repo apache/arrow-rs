@@ -232,6 +232,18 @@ impl IntervalDayTimeType {
         days: i32,
         millis: i32,
     ) -> <IntervalDayTimeType as ArrowPrimitiveType>::Native {
+        /*
+        https://github.com/apache/arrow/blob/02c8598d264c839a5b5cf3109bfd406f3b8a6ba5/cpp/src/arrow/type.h#L1433
+        struct DayMilliseconds {
+            int32_t days = 0;
+            int32_t milliseconds = 0;
+            ...
+        }
+        64      56      48      40      32      24      16      8       0
+        +-------+-------+-------+-------+-------+-------+-------+-------+
+        |             days              |         milliseconds          |
+        +-------+-------+-------+-------+-------+-------+-------+-------+
+        */
         let m = millis as u64 & u32::MAX as u64;
         let d = (days as u64 & u32::MAX as u64) << 32;
         (m | d) as <IntervalDayTimeType as ArrowPrimitiveType>::Native
@@ -264,9 +276,21 @@ impl IntervalMonthDayNanoType {
         days: i32,
         nanos: i64,
     ) -> <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native {
-        let m = months as u128 & u32::MAX as u128;
-        let d = (days as u128 & u32::MAX as u128) << 32;
-        let n = (nanos as u128) << 64;
+        /*
+        https://github.com/apache/arrow/blob/02c8598d264c839a5b5cf3109bfd406f3b8a6ba5/cpp/src/arrow/type.h#L1475
+        struct MonthDayNanos {
+            int32_t months;
+            int32_t days;
+            int64_t nanoseconds;
+        }
+        128     112     96      80      64      48      32      16      0
+        +-------+-------+-------+-------+-------+-------+-------+-------+
+        |     months    |      days     |             nanos             |
+        +-------+-------+-------+-------+-------+-------+-------+-------+
+        */
+        let m = (months as u128 & u32::MAX as u128) << 96;
+        let d = (days as u128 & u32::MAX as u128) << 64;
+        let n = nanos as u128 & u64::MAX as u128;
         (m | d | n) as <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native
     }
 
@@ -278,9 +302,9 @@ impl IntervalMonthDayNanoType {
     pub fn to_parts(
         i: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> (i32, i32, i64) {
-        let nanos = (i >> 64) as i64;
-        let days = (i >> 32) as i32;
-        let months = i as i32;
+        let months = (i >> 96) as i32;
+        let days = (i >> 64) as i32;
+        let nanos = i as i64;
         (months, days, nanos)
     }
 }
@@ -428,5 +452,46 @@ impl Date64Type {
         let res = res.add(Duration::days(days as i64));
         let res = res.add(Duration::nanoseconds(nanos));
         Date64Type::from_naive_date(res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn month_day_nano_should_roundtrip() {
+        let value = IntervalMonthDayNanoType::make_value(1, 2, 3);
+        assert_eq!(IntervalMonthDayNanoType::to_parts(value), (1, 2, 3));
+    }
+
+    #[test]
+    fn month_day_nano_should_roundtrip_neg() {
+        let value = IntervalMonthDayNanoType::make_value(-1, -2, -3);
+        assert_eq!(IntervalMonthDayNanoType::to_parts(value), (-1, -2, -3));
+    }
+
+    #[test]
+    fn day_time_should_roundtrip() {
+        let value = IntervalDayTimeType::make_value(1, 2);
+        assert_eq!(IntervalDayTimeType::to_parts(value), (1, 2));
+    }
+
+    #[test]
+    fn day_time_should_roundtrip_neg() {
+        let value = IntervalDayTimeType::make_value(-1, -2);
+        assert_eq!(IntervalDayTimeType::to_parts(value), (-1, -2));
+    }
+
+    #[test]
+    fn year_month_should_roundtrip() {
+        let value = IntervalYearMonthType::make_value(1, 2);
+        assert_eq!(IntervalYearMonthType::to_months(value), 14);
+    }
+
+    #[test]
+    fn year_month_should_roundtrip_neg() {
+        let value = IntervalYearMonthType::make_value(-1, -2);
+        assert_eq!(IntervalYearMonthType::to_months(value), -14);
     }
 }

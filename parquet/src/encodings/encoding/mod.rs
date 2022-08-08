@@ -186,15 +186,16 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
     fn put(&mut self, values: &[T::T]) -> Result<()> {
         ensure_phys_ty!(Type::BOOLEAN, "RleValueEncoder only supports BoolType");
 
-        if self.encoder.is_none() {
-            self.encoder = Some(RleEncoder::new(1, DEFAULT_RLE_BUFFER_LEN));
-        }
-        let rle_encoder = self.encoder.as_mut().unwrap();
+        let rle_encoder = self.encoder.get_or_insert_with(|| {
+            let mut buffer = Vec::with_capacity(DEFAULT_RLE_BUFFER_LEN);
+            // Reserve space for length
+            buffer.extend_from_slice(&[0; 4]);
+            RleEncoder::new_from_buf(1, buffer)
+        });
+
         for value in values {
             let value = value.as_u64()?;
-            if !rle_encoder.put(value)? {
-                return Err(general_err!("RLE buffer is full"));
-            }
+            rle_encoder.put(value)
         }
         Ok(())
     }
@@ -220,25 +221,18 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
         ensure_phys_ty!(Type::BOOLEAN, "RleValueEncoder only supports BoolType");
         let rle_encoder = self
             .encoder
-            .as_mut()
+            .take()
             .expect("RLE value encoder is not initialized");
 
         // Flush all encoder buffers and raw values
-        let encoded_data = {
-            let buf = rle_encoder.flush_buffer()?;
+        let mut buf = rle_encoder.consume();
+        assert!(buf.len() > 4, "should have had padding inserted");
 
-            // Note that buf does not have any offset, all data is encoded bytes
-            let len = (buf.len() as i32).to_le();
-            let len_bytes = len.as_bytes();
-            let mut encoded_data = vec![];
-            encoded_data.extend_from_slice(len_bytes);
-            encoded_data.extend_from_slice(buf);
-            encoded_data
-        };
-        // Reset rle encoder for the next batch
-        rle_encoder.clear();
+        // Note that buf does not have any offset, all data is encoded bytes
+        let len = (buf.len() - 4) as i32;
+        buf[..4].copy_from_slice(&len.to_le_bytes());
 
-        Ok(ByteBufferPtr::new(encoded_data))
+        Ok(ByteBufferPtr::new(buf))
     }
 }
 
@@ -247,7 +241,6 @@ impl<T: DataType> Encoder<T> for RleValueEncoder<T> {
 
 const MAX_PAGE_HEADER_WRITER_SIZE: usize = 32;
 const MAX_BIT_WRITER_SIZE: usize = 10 * 1024 * 1024;
-const DEFAULT_BLOCK_SIZE: usize = 128;
 const DEFAULT_NUM_MINI_BLOCKS: usize = 4;
 
 /// Delta bit packed encoder.
@@ -290,11 +283,18 @@ pub struct DeltaBitPackEncoder<T: DataType> {
 impl<T: DataType> DeltaBitPackEncoder<T> {
     /// Creates new delta bit packed encoder.
     pub fn new() -> Self {
-        let block_size = DEFAULT_BLOCK_SIZE;
-        let num_mini_blocks = DEFAULT_NUM_MINI_BLOCKS;
-        let mini_block_size = block_size / num_mini_blocks;
-        assert!(mini_block_size % 8 == 0);
         Self::assert_supported_type();
+
+        // Size miniblocks so that they can be efficiently decoded
+        let mini_block_size = match T::T::PHYSICAL_TYPE {
+            Type::INT32 => 32,
+            Type::INT64 => 64,
+            _ => unreachable!(),
+        };
+
+        let num_mini_blocks = DEFAULT_NUM_MINI_BLOCKS;
+        let block_size = mini_block_size * num_mini_blocks;
+        assert_eq!(block_size % 128, 0);
 
         DeltaBitPackEncoder {
             page_header_writer: BitWriter::new(MAX_PAGE_HEADER_WRITER_SIZE),
@@ -346,7 +346,7 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
         self.bit_writer.put_zigzag_vlq_int(min_delta);
 
         // Slice to store bit width for each mini block
-        let offset = self.bit_writer.skip(self.num_mini_blocks)?;
+        let offset = self.bit_writer.skip(self.num_mini_blocks);
 
         for i in 0..self.num_mini_blocks {
             // Find how many values we need to encode - either block size or whatever
@@ -364,7 +364,7 @@ impl<T: DataType> DeltaBitPackEncoder<T> {
             }
 
             // Compute the max delta in current mini block
-            let mut max_delta = i64::min_value();
+            let mut max_delta = i64::MIN;
             for j in 0..n {
                 max_delta =
                     cmp::max(max_delta, self.deltas[i * self.mini_block_size + j]);
@@ -873,7 +873,7 @@ mod tests {
         let mut values = vec![];
         values.extend_from_slice(&[true; 16]);
         values.extend_from_slice(&[false; 16]);
-        run_test::<BoolType>(Encoding::RLE, -1, &values, 0, 2, 0);
+        run_test::<BoolType>(Encoding::RLE, -1, &values, 0, 6, 0);
 
         // DELTA_LENGTH_BYTE_ARRAY
         run_test::<ByteArrayType>(

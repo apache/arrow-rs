@@ -117,6 +117,18 @@ impl Decimal128Builder {
         self.builder.append_null()
     }
 
+    /// Appends an `Option<impl Into<i128>>` into the builder.
+    #[inline]
+    pub fn append_option(&mut self, value: Option<impl Into<i128>>) -> Result<()> {
+        match value {
+            None => {
+                self.append_null();
+                Ok(())
+            }
+            Some(value) => self.append_value(value),
+        }
+    }
+
     /// Builds the `Decimal128Array` and reset this builder.
     pub fn finish(&mut self) -> Decimal128Array {
         Decimal128Array::from_fixed_size_binary_array(
@@ -219,6 +231,18 @@ impl Decimal256Builder {
         self.builder.append_null()
     }
 
+    /// Appends an `Option<&Decimal256>` into the builder.
+    #[inline]
+    pub fn append_option(&mut self, value: Option<&Decimal256>) -> Result<()> {
+        match value {
+            None => {
+                self.append_null();
+                Ok(())
+            }
+            Some(value) => self.append_value(value),
+        }
+    }
+
     /// Builds the [`Decimal256Array`] and reset this builder.
     pub fn finish(&mut self) -> Decimal256Array {
         Decimal256Array::from_fixed_size_binary_array(
@@ -237,7 +261,7 @@ mod tests {
     use crate::array::array_decimal::{BasicDecimalArray, Decimal128Array};
     use crate::array::{array_decimal, Array};
     use crate::datatypes::DataType;
-    use crate::util::decimal::Decimal128;
+    use crate::util::decimal::{Decimal128, Decimal256};
 
     #[test]
     fn test_decimal_builder() {
@@ -246,11 +270,13 @@ mod tests {
         builder.append_value(8_887_000_000_i128).unwrap();
         builder.append_null();
         builder.append_value(-8_887_000_000_i128).unwrap();
+        builder.append_option(None::<i128>).unwrap();
+        builder.append_option(Some(8_887_000_000_i128)).unwrap();
         let decimal_array: Decimal128Array = builder.finish();
 
-        assert_eq!(&DataType::Decimal(38, 6), decimal_array.data_type());
-        assert_eq!(3, decimal_array.len());
-        assert_eq!(1, decimal_array.null_count());
+        assert_eq!(&DataType::Decimal128(38, 6), decimal_array.data_type());
+        assert_eq!(5, decimal_array.len());
+        assert_eq!(2, decimal_array.null_count());
         assert_eq!(32, decimal_array.value_offset(2));
         assert_eq!(16, decimal_array.value_length());
     }
@@ -268,7 +294,7 @@ mod tests {
             .unwrap();
         let decimal_array: Decimal128Array = builder.finish();
 
-        assert_eq!(&DataType::Decimal(38, 6), decimal_array.data_type());
+        assert_eq!(&DataType::Decimal128(38, 6), decimal_array.data_type());
         assert_eq!(3, decimal_array.len());
         assert_eq!(1, decimal_array.null_count());
         assert_eq!(32, decimal_array.value_offset(2));
@@ -296,11 +322,14 @@ mod tests {
         let value = Decimal256::try_new_from_bytes(40, 6, bytes.as_slice()).unwrap();
         builder.append_value(&value).unwrap();
 
+        builder.append_option(None::<&Decimal256>).unwrap();
+        builder.append_option(Some(&value)).unwrap();
+
         let decimal_array: Decimal256Array = builder.finish();
 
         assert_eq!(&DataType::Decimal256(40, 6), decimal_array.data_type());
-        assert_eq!(4, decimal_array.len());
-        assert_eq!(1, decimal_array.null_count());
+        assert_eq!(6, decimal_array.len());
+        assert_eq!(2, decimal_array.null_count());
         assert_eq!(64, decimal_array.value_offset(2));
         assert_eq!(32, decimal_array.value_length());
 
@@ -328,31 +357,29 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 76. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
+        expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 75. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
     )]
     fn test_decimal256_builder_out_of_range_precision_scale() {
-        let mut builder = Decimal256Builder::new(30, 76, 6);
+        let mut builder = Decimal256Builder::new(30, 75, 6);
 
         let big_value = BigInt::from_str_radix("9999999999999999999999999999999999999999999999999999999999999999999999999999", 10).unwrap();
-        let bytes = big_value.to_signed_bytes_le();
-        let value = Decimal256::try_new_from_bytes(76, 6, &bytes).unwrap();
+        let value = Decimal256::from_big_int(&big_value, 75, 6).unwrap();
         builder.append_value(&value).unwrap();
     }
 
     #[test]
     #[should_panic(
-        expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 76. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
+        expected = "9999999999999999999999999999999999999999999999999999999999999999999999999999 is too large to store in a Decimal256 of precision 75. Max is 999999999999999999999999999999999999999999999999999999999999999999999999999"
     )]
     fn test_decimal256_data_validation() {
-        let mut builder = Decimal256Builder::new(30, 76, 6);
+        let mut builder = Decimal256Builder::new(30, 75, 6);
         // Disable validation at builder
         unsafe {
             builder.disable_value_validation();
         }
 
         let big_value = BigInt::from_str_radix("9999999999999999999999999999999999999999999999999999999999999999999999999999", 10).unwrap();
-        let bytes = big_value.to_signed_bytes_le();
-        let value = Decimal256::try_new_from_bytes(76, 6, &bytes).unwrap();
+        let value = Decimal256::from_big_int(&big_value, 75, 6).unwrap();
         builder
             .append_value(&value)
             .expect("should not validate invalid value at builder");

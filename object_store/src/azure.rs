@@ -185,6 +185,15 @@ enum Error {
         env_value: String,
         source: url::ParseError,
     },
+
+    #[snafu(display("Account must be specified"))]
+    MissingAccount {},
+
+    #[snafu(display("Access key must be specified"))]
+    MissingAccessKey {},
+
+    #[snafu(display("Container name must be specified"))]
+    MissingContainerName {},
 }
 
 impl From<Error> for super::Error {
@@ -200,7 +209,7 @@ impl From<Error> for super::Error {
     }
 }
 
-/// Configuration for connecting to [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
+/// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
 #[derive(Debug)]
 pub struct MicrosoftAzure {
     container_client: Arc<ContainerClient>,
@@ -461,14 +470,15 @@ impl ObjectStore for MicrosoftAzure {
 
 impl MicrosoftAzure {
     /// helper function to create a source url for copy function
-    fn get_copy_from_url(&self, from: &Path) -> Result<reqwest::Url> {
-        Ok(reqwest::Url::parse(&format!(
-            "{}/{}/{}",
-            &self.blob_base_url, self.container_name, from
-        ))
-        .context(UnableToParseUrlSnafu {
-            container: &self.container_name,
-        })?)
+    fn get_copy_from_url(&self, from: &Path) -> Result<Url> {
+        let mut url =
+            Url::parse(&format!("{}/{}", &self.blob_base_url, self.container_name))
+                .context(UnableToParseUrlSnafu {
+                    container: &self.container_name,
+                })?;
+
+        url.path_segments_mut().unwrap().extend(from.parts());
+        Ok(url)
     }
 
     async fn list_impl(
@@ -570,73 +580,126 @@ fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
     Ok(url)
 }
 
-/// Configure a connection to container with given name on Microsoft Azure
-/// Blob store.
+/// Configure a connection to Mirosoft Azure Blob Storage bucket using
+/// the specified credentials.
 ///
-/// The credentials `account` and `access_key` must provide access to the
-/// store.
-pub fn new_azure(
-    account: impl Into<String>,
-    access_key: impl Into<String>,
-    container_name: impl Into<String>,
+/// # Example
+/// ```
+/// # let ACCOUNT = "foo";
+/// # let BUCKET_NAME = "foo";
+/// # let ACCESS_KEY = "foo";
+/// # use object_store::azure::MicrosoftAzureBuilder;
+/// let azure = MicrosoftAzureBuilder::new()
+///  .with_account(ACCOUNT)
+///  .with_access_key(ACCESS_KEY)
+///  .with_container_name(BUCKET_NAME)
+///  .build();
+/// ```
+#[derive(Debug, Default)]
+pub struct MicrosoftAzureBuilder {
+    account: Option<String>,
+    access_key: Option<String>,
+    container_name: Option<String>,
     use_emulator: bool,
-) -> Result<MicrosoftAzure> {
-    let account = account.into();
-    let access_key = access_key.into();
-    let http_client: Arc<dyn HttpClient> = Arc::new(reqwest::Client::new());
+}
 
-    let (is_emulator, storage_account_client) = if use_emulator {
-        check_if_emulator_works()?;
-        // Allow overriding defaults. Values taken from
-        // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
-        let http_client = azure_core::new_http_client();
-        let blob_storage_url =
-            url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
-        let queue_storage_url =
-            url_from_env("AZURITE_QUEUE_STORAGE_URL", "http://127.0.0.1:10001")?;
-        let table_storage_url =
-            url_from_env("AZURITE_TABLE_STORAGE_URL", "http://127.0.0.1:10002")?;
-        let filesystem_url =
-            url_from_env("AZURITE_TABLE_STORAGE_URL", "http://127.0.0.1:10004")?;
+impl MicrosoftAzureBuilder {
+    /// Create a new [`MicrosoftAzureBuilder`] with default values.
+    pub fn new() -> Self {
+        Default::default()
+    }
 
-        let storage_client = StorageAccountClient::new_emulator(
-            http_client,
-            &blob_storage_url,
-            &table_storage_url,
-            &queue_storage_url,
-            &filesystem_url,
-        );
+    /// Set the Azure Account (required)
+    pub fn with_account(mut self, account: impl Into<String>) -> Self {
+        self.account = Some(account.into());
+        self
+    }
 
-        (true, storage_client)
-    } else {
-        (
-            false,
-            StorageAccountClient::new_access_key(
-                Arc::clone(&http_client),
-                &account,
-                &access_key,
-            ),
-        )
-    };
+    /// Set the Azure Access Key (required)
+    pub fn with_access_key(mut self, access_key: impl Into<String>) -> Self {
+        self.access_key = Some(access_key.into());
+        self
+    }
 
-    let storage_client = storage_account_client.as_storage_client();
-    let blob_base_url = storage_account_client
-        .blob_storage_url()
-        .as_ref()
-        // make url ending consistent between the emulator and remote storage account
-        .trim_end_matches('/')
-        .to_string();
+    /// Set the Azure Container Name (required)
+    pub fn with_container_name(mut self, container_name: impl Into<String>) -> Self {
+        self.container_name = Some(container_name.into());
+        self
+    }
 
-    let container_name = container_name.into();
+    /// Set if the Azure emulator should be used (defaults to false)
+    pub fn with_use_emulator(mut self, use_emulator: bool) -> Self {
+        self.use_emulator = use_emulator;
+        self
+    }
 
-    let container_client = storage_client.as_container_client(&container_name);
+    /// Configure a connection to container with given name on Microsoft Azure
+    /// Blob store.
+    pub fn build(self) -> Result<MicrosoftAzure> {
+        let Self {
+            account,
+            access_key,
+            container_name,
+            use_emulator,
+        } = self;
 
-    Ok(MicrosoftAzure {
-        container_client,
-        container_name,
-        blob_base_url,
-        is_emulator,
-    })
+        let account = account.ok_or(Error::MissingAccount {})?;
+        let access_key = access_key.ok_or(Error::MissingAccessKey {})?;
+        let container_name = container_name.ok_or(Error::MissingContainerName {})?;
+
+        let http_client: Arc<dyn HttpClient> = Arc::new(reqwest::Client::new());
+
+        let (is_emulator, storage_account_client) = if use_emulator {
+            check_if_emulator_works()?;
+            // Allow overriding defaults. Values taken from
+            // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
+            let http_client = azure_core::new_http_client();
+            let blob_storage_url =
+                url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
+            let queue_storage_url =
+                url_from_env("AZURITE_QUEUE_STORAGE_URL", "http://127.0.0.1:10001")?;
+            let table_storage_url =
+                url_from_env("AZURITE_TABLE_STORAGE_URL", "http://127.0.0.1:10002")?;
+            let filesystem_url =
+                url_from_env("AZURITE_TABLE_STORAGE_URL", "http://127.0.0.1:10004")?;
+
+            let storage_client = StorageAccountClient::new_emulator(
+                http_client,
+                &blob_storage_url,
+                &table_storage_url,
+                &queue_storage_url,
+                &filesystem_url,
+            );
+
+            (true, storage_client)
+        } else {
+            (
+                false,
+                StorageAccountClient::new_access_key(
+                    Arc::clone(&http_client),
+                    &account,
+                    &access_key,
+                ),
+            )
+        };
+
+        let storage_client = storage_account_client.as_storage_client();
+        let blob_base_url = storage_account_client
+            .blob_storage_url()
+            .as_ref()
+            // make url ending consistent between the emulator and remote storage account
+            .trim_end_matches('/')
+            .to_string();
+
+        let container_client = storage_client.as_container_client(&container_name);
+
+        Ok(MicrosoftAzure {
+            container_client,
+            container_name,
+            blob_base_url,
+            is_emulator,
+        })
+    }
 }
 
 // Relevant docs: https://azure.github.io/Storage/docs/application-and-user-data/basics/azure-blob-storage-upload-apis/
@@ -729,20 +792,12 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
 
 #[cfg(test)]
 mod tests {
-    use crate::azure::new_azure;
+    use super::*;
     use crate::tests::{
         copy_if_not_exists, list_uses_directories_correctly, list_with_delimiter,
         put_get_delete_list, rename_and_copy,
     };
     use std::env;
-
-    #[derive(Debug)]
-    struct AzureConfig {
-        storage_account: String,
-        access_key: String,
-        bucket: String,
-        use_emulator: bool,
-    }
 
     // Helper macro to skip tests if TEST_INTEGRATION and the Azure environment
     // variables are not set.
@@ -785,33 +840,28 @@ mod tests {
                 );
                 return;
             } else {
-                AzureConfig {
-                    storage_account: env::var("AZURE_STORAGE_ACCOUNT")
-                        .unwrap_or_default(),
-                    access_key: env::var("AZURE_STORAGE_ACCESS_KEY").unwrap_or_default(),
-                    bucket: env::var("OBJECT_STORE_BUCKET")
-                        .expect("already checked OBJECT_STORE_BUCKET"),
-                    use_emulator,
-                }
+                MicrosoftAzureBuilder::new()
+                    .with_account(env::var("AZURE_STORAGE_ACCOUNT").unwrap_or_default())
+                    .with_access_key(
+                        env::var("AZURE_STORAGE_ACCESS_KEY").unwrap_or_default(),
+                    )
+                    .with_container_name(
+                        env::var("OBJECT_STORE_BUCKET")
+                            .expect("already checked OBJECT_STORE_BUCKET"),
+                    )
+                    .with_use_emulator(use_emulator)
             }
         }};
     }
 
     #[tokio::test]
     async fn azure_blob_test() {
-        let config = maybe_skip_integration!();
-        let integration = new_azure(
-            config.storage_account,
-            config.access_key,
-            config.bucket,
-            config.use_emulator,
-        )
-        .unwrap();
+        let integration = maybe_skip_integration!().build().unwrap();
 
-        put_get_delete_list(&integration).await.unwrap();
-        list_uses_directories_correctly(&integration).await.unwrap();
-        list_with_delimiter(&integration).await.unwrap();
-        rename_and_copy(&integration).await.unwrap();
-        copy_if_not_exists(&integration).await.unwrap();
+        put_get_delete_list(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
     }
 }

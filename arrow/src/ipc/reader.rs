@@ -535,7 +535,7 @@ fn create_primitive_array(
 
             unsafe { builder.build_unchecked() }
         }
-        Decimal(_, _) | Decimal256(_, _) => {
+        Decimal128(_, _) | Decimal256(_, _) => {
             // read 3 buffers
             let builder = ArrayData::builder(data_type.clone())
                 .len(length)
@@ -1277,7 +1277,7 @@ mod tests {
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader));
+            assert!(arrow_json.equals_reader(&mut reader).unwrap());
         });
     }
 
@@ -1398,7 +1398,7 @@ mod tests {
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader));
+            assert!(arrow_json.equals_reader(&mut reader).unwrap());
             // the next batch must be empty
             assert!(reader.next().is_none());
             // the stream must indicate that it's finished
@@ -1435,7 +1435,7 @@ mod tests {
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader));
+            assert!(arrow_json.equals_reader(&mut reader).unwrap());
         });
     }
 
@@ -1468,7 +1468,7 @@ mod tests {
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader));
+            assert!(arrow_json.equals_reader(&mut reader).unwrap());
             // the next batch must be empty
             assert!(reader.next().is_none());
             // the stream must indicate that it's finished

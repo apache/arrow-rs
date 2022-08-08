@@ -33,16 +33,16 @@ We use the term "kernel" to refer to particular general operation that contains 
 
 Types of functions
 
-* Scalar functions: elementwise functions that perform scalar operations in a
+- Scalar functions: elementwise functions that perform scalar operations in a
   vectorized manner. These functions are generally valid for SQL-like
   context. These are called "scalar" in that the functions executed consider
   each value in an array independently, and the output array or arrays have the
   same length as the input arrays. The result for each array cell is generally
   independent of its position in the array.
-* Vector functions, which produce a result whose output is generally dependent
+- Vector functions, which produce a result whose output is generally dependent
   on the entire contents of the input arrays. These functions **are generally
   not valid** for SQL-like processing because the output size may be different
   than the input size, and the result may change based on the order of the
   values in the array. This includes things like array subselection, sorting,
   hashing, and more.
-* Scalar aggregate functions of which can be used in a SQL-like context
+- Scalar aggregate functions of which can be used in a SQL-like context

@@ -33,11 +33,11 @@ use super::Field;
 /// memory layout.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Schema {
-    pub(crate) fields: Vec<Field>,
+    pub fields: Vec<Field>,
     /// A map of key-value pairs containing additional meta data.
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     #[serde(default)]
-    pub(crate) metadata: HashMap<String, String>,
+    pub metadata: HashMap<String, String>,
 }
 
 impl Schema {
@@ -149,10 +149,11 @@ impl Schema {
                     // merge metadata
                     if let Some(old_val) = merged.metadata.get(&key) {
                         if old_val != &value {
-                            return Err(ArrowError::SchemaError(
-                                "Fail to merge schema due to conflicting metadata."
-                                    .to_string(),
-                            ));
+                            return Err(ArrowError::SchemaError(format!(
+                                "Fail to merge schema due to conflicting metadata. \
+                                         Key '{}' has different values '{}' and '{}'",
+                                key, old_val, value
+                            )));
                         }
                     }
                     merged.metadata.insert(key, value);

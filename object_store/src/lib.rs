@@ -28,15 +28,129 @@
 
 //! # object_store
 //!
-//! This crate provides APIs for interacting with object storage services.
+//! This crate provides a uniform API for interacting with object storage services and
+//! local files via the the [`ObjectStore`] trait.
 //!
-//! It currently supports PUT (single or chunked/concurrent), GET, DELETE, HEAD and list for:
+//! # Create an [`ObjectStore`] implementation:
 //!
-//! * [Google Cloud Storage](https://cloud.google.com/storage/)
-//! * [Amazon S3](https://aws.amazon.com/s3/)
-//! * [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/#overview)
-//! * In-memory
-//! * Local file storage
+//! * [Google Cloud Storage](https://cloud.google.com/storage/): [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)
+//! * [Amazon S3](https://aws.amazon.com/s3/): [`AmazonS3Builder`](aws::AmazonS3Builder)
+//! * [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/):: [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)
+//! * In Memory: [`InMemory`](memory::InMemory)
+//! * Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)
+//!
+//! # Adapters
+//!
+//! [`ObjectStore`] instances can be composed with various adapters
+//! which add additional functionality:
+//!
+//! * Rate Throttling: [`ThrottleConfig`](throttle::ThrottleConfig)
+//! * Concurrent Request Limit: [`LimitStore`](limit::LimitStore)
+//!
+//!
+//! # Listing objects:
+//!
+//! Use the [`ObjectStore::list`] method to iterate over objects in
+//! remote storage or files in the local filesystem:
+//!
+//! ```
+//! # use object_store::local::LocalFileSystem;
+//! # // use LocalFileSystem for example
+//! # fn get_object_store() -> LocalFileSystem {
+//! #   LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # }
+//!
+//! # async fn example() {
+//! use std::sync::Arc;
+//! use object_store::{path::Path, ObjectStore};
+//! use futures::stream::StreamExt;
+//!
+//! // create an ObjectStore
+//! let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//!
+//! // Recursively list all files below the 'data' path.
+//! // 1. On AWS S3 this would be the 'data/' prefix
+//! // 2. On a local filesystem, this would be the 'data' directory
+//! let prefix: Path = "data".try_into().unwrap();
+//!
+//! // Get an `async` stream of Metadata objects:
+//!  let list_stream = object_store
+//!      .list(Some(&prefix))
+//!      .await
+//!      .expect("Error listing files");
+//!
+//!  // Print a line about each object based on its metadata
+//!  // using for_each from `StreamExt` trait.
+//!  list_stream
+//!      .for_each(move |meta|  {
+//!          async {
+//!              let meta = meta.expect("Error listing");
+//!              println!("Name: {}, size: {}", meta.location, meta.size);
+//!          }
+//!      })
+//!      .await;
+//! # }
+//! ```
+//!
+//! Which will print out something like the following:
+//!
+//! ```text
+//! Name: data/file01.parquet, size: 112832
+//! Name: data/file02.parquet, size: 143119
+//! Name: data/child/file03.parquet, size: 100
+//! ...
+//! ```
+//!
+//! # Fetching objects
+//!
+//! Use the [`ObjectStore::get`] method to fetch the data bytes
+//! from remote storage or files in the local filesystem as a stream.
+//!
+//! ```
+//! # use object_store::local::LocalFileSystem;
+//! # // use LocalFileSystem for example
+//! # fn get_object_store() -> LocalFileSystem {
+//! #   LocalFileSystem::new_with_prefix("/tmp").unwrap()
+//! # }
+//!
+//! # async fn example() {
+//! use std::sync::Arc;
+//! use object_store::{path::Path, ObjectStore};
+//! use futures::stream::StreamExt;
+//!
+//! // create an ObjectStore
+//! let object_store: Arc<dyn ObjectStore> = Arc::new(get_object_store());
+//!
+//! // Retrieve a specific file
+//! let path: Path = "data/file01.parquet".try_into().unwrap();
+//!
+//! // fetch the bytes from object store
+//! let stream = object_store
+//!     .get(&path)
+//!     .await
+//!     .unwrap()
+//!     .into_stream();
+//!
+//! // Count the '0's using `map` from `StreamExt` trait
+//! let num_zeros = stream
+//!     .map(|bytes| {
+//!         let bytes = bytes.unwrap();
+//!        bytes.iter().filter(|b| **b == 0).count()
+//!     })
+//!     .collect::<Vec<usize>>()
+//!     .await
+//!     .into_iter()
+//!     .sum::<usize>();
+//!
+//! println!("Num zeros in {} is {}", path, num_zeros);
+//! # }
+//! ```
+//!
+//! Which will print out something like the following:
+//!
+//! ```text
+//! Num zeros in data/file01.parquet is 657
+//! ```
 //!
 
 #[cfg(feature = "aws")]
@@ -45,23 +159,26 @@ pub mod aws;
 pub mod azure;
 #[cfg(feature = "gcp")]
 pub mod gcp;
+pub mod limit;
 pub mod local;
 pub mod memory;
 pub mod path;
 pub mod throttle;
 
 #[cfg(feature = "gcp")]
-mod oauth;
+mod client;
 
 #[cfg(feature = "gcp")]
-mod token;
+pub use client::{backoff::BackoffConfig, retry::RetryConfig};
 
 #[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
 mod multipart;
 mod util;
 
 use crate::path::Path;
-use crate::util::{collect_bytes, maybe_spawn_blocking};
+use crate::util::{
+    coalesce_ranges, collect_bytes, maybe_spawn_blocking, OBJECT_STORE_COALESCE_DEFAULT,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -115,6 +232,21 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Return the bytes that are stored at the specified location
     /// in the given byte range
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes>;
+
+    /// Return the bytes that are stored at the specified location
+    /// in the given byte ranges
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> Result<Vec<Bytes>> {
+        coalesce_ranges(
+            ranges,
+            |range| self.get_range(location, range),
+            OBJECT_STORE_COALESCE_DEFAULT,
+        )
+        .await
+    }
 
     /// Return the metadata for the specified location
     async fn head(&self, location: &Path) -> Result<ObjectMeta>;
@@ -336,7 +468,7 @@ pub enum Error {
 
     #[cfg(feature = "gcp")]
     #[snafu(display("OAuth error: {}", source), context(false))]
-    OAuth { source: oauth::Error },
+    OAuth { source: client::oauth::Error },
 }
 
 #[cfg(test)]
@@ -363,15 +495,12 @@ mod tests {
     use crate::test_util::flatten_list_stream;
     use tokio::io::AsyncWriteExt;
 
-    type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
-    type Result<T, E = Error> = std::result::Result<T, E>;
-
-    pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) -> Result<()> {
+    pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) {
         let store_str = storage.to_string();
 
         delete_fixtures(storage).await;
 
-        let content_list = flatten_list_stream(storage, None).await?;
+        let content_list = flatten_list_stream(storage, None).await.unwrap();
         assert!(
             content_list.is_empty(),
             "Expected list to be empty; found: {:?}",
@@ -382,16 +511,16 @@ mod tests {
 
         let data = Bytes::from("arbitrary data");
         let expected_data = data.clone();
-        storage.put(&location, data).await?;
+        storage.put(&location, data).await.unwrap();
 
         let root = Path::from("/");
 
         // List everything
-        let content_list = flatten_list_stream(storage, None).await?;
+        let content_list = flatten_list_stream(storage, None).await.unwrap();
         assert_eq!(content_list, &[location.clone()]);
 
         // Should behave the same as no prefix
-        let content_list = flatten_list_stream(storage, Some(&root)).await?;
+        let content_list = flatten_list_stream(storage, Some(&root)).await.unwrap();
         assert_eq!(content_list, &[location.clone()]);
 
         // List with delimiter
@@ -408,15 +537,15 @@ mod tests {
 
         // List everything starting with a prefix that should return results
         let prefix = Path::from("test_dir");
-        let content_list = flatten_list_stream(storage, Some(&prefix)).await?;
+        let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
         assert_eq!(content_list, &[location.clone()]);
 
         // List everything starting with a prefix that shouldn't return results
         let prefix = Path::from("something");
-        let content_list = flatten_list_stream(storage, Some(&prefix)).await?;
+        let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
         assert!(content_list.is_empty());
 
-        let read_data = storage.get(&location).await?.bytes().await?;
+        let read_data = storage.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(&*read_data, expected_data);
 
         // Test range request
@@ -440,14 +569,20 @@ mod tests {
 
             // Should be a non-fatal error
             out_of_range_result.unwrap_err();
+
+            let ranges = vec![0..1, 2..3, 0..5];
+            let bytes = storage.get_ranges(&location, &ranges).await.unwrap();
+            for (range, bytes) in ranges.iter().zip(bytes) {
+                assert_eq!(bytes, expected_data.slice(range.clone()))
+            }
         }
 
-        let head = storage.head(&location).await?;
+        let head = storage.head(&location).await.unwrap();
         assert_eq!(head.size, expected_data.len());
 
-        storage.delete(&location).await?;
+        storage.delete(&location).await.unwrap();
 
-        let content_list = flatten_list_stream(storage, None).await?;
+        let content_list = flatten_list_stream(storage, None).await.unwrap();
         assert!(content_list.is_empty());
 
         let err = storage.get(&location).await.unwrap_err();
@@ -520,13 +655,54 @@ mod tests {
 
         assert_eq!(files, vec![emoji_file.clone()]);
 
+        let dst = Path::from("foo.parquet");
+        storage.copy(&emoji_file, &dst).await.unwrap();
+        let mut files = flatten_list_stream(storage, None).await.unwrap();
+        files.sort_unstable();
+        assert_eq!(files, vec![emoji_file.clone(), dst.clone()]);
+
         storage.delete(&emoji_file).await.unwrap();
+        storage.delete(&dst).await.unwrap();
         let files = flatten_list_stream(storage, Some(&emoji_prefix))
             .await
             .unwrap();
         assert!(files.is_empty());
 
-        Ok(())
+        // Test handling of paths containing percent-encoded sequences
+
+        // "HELLO" percent encoded
+        let hello_prefix = Path::parse("%48%45%4C%4C%4F").unwrap();
+        let path = hello_prefix.child("foo.parquet");
+
+        storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
+        let files = flatten_list_stream(storage, Some(&hello_prefix))
+            .await
+            .unwrap();
+        assert_eq!(files, vec![path.clone()]);
+
+        // Cannot list by decoded representation
+        let files = flatten_list_stream(storage, Some(&Path::from("HELLO")))
+            .await
+            .unwrap();
+        assert!(files.is_empty());
+
+        // Cannot access by decoded representation
+        let err = storage
+            .head(&Path::from("HELLO/foo.parquet"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+
+        storage.delete(&path).await.unwrap();
+
+        // Can also write non-percent encoded sequences
+        let path = Path::parse("%Q.parquet").unwrap();
+        storage.put(&path, Bytes::from(vec![0, 1])).await.unwrap();
+
+        let files = flatten_list_stream(storage, None).await.unwrap();
+        assert_eq!(files, vec![path.clone()]);
+
+        storage.delete(&path).await.unwrap();
     }
 
     fn get_vec_of_bytes(chunk_length: usize, num_chunks: usize) -> Vec<Bytes> {
@@ -535,15 +711,15 @@ mod tests {
             .collect()
     }
 
-    pub(crate) async fn stream_get(storage: &DynObjectStore) -> Result<()> {
+    pub(crate) async fn stream_get(storage: &DynObjectStore) {
         let location = Path::from("test_dir/test_upload_file.txt");
 
         // Can write to storage
         let data = get_vec_of_bytes(5_000_000, 10);
         let bytes_expected = data.concat();
-        let (_, mut writer) = storage.put_multipart(&location).await?;
+        let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {
-            writer.write_all(chunk).await?;
+            writer.write_all(chunk).await.unwrap();
         }
 
         // Object should not yet exist in store
@@ -554,26 +730,29 @@ mod tests {
             crate::Error::NotFound { .. }
         ));
 
-        writer.shutdown().await?;
-        let bytes_written = storage.get(&location).await?.bytes().await?;
+        writer.shutdown().await.unwrap();
+        let bytes_written = storage.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes_expected, bytes_written);
 
         // Can overwrite some storage
         let data = get_vec_of_bytes(5_000, 5);
         let bytes_expected = data.concat();
-        let (_, mut writer) = storage.put_multipart(&location).await?;
+        let (_, mut writer) = storage.put_multipart(&location).await.unwrap();
         for chunk in &data {
-            writer.write_all(chunk).await?;
+            writer.write_all(chunk).await.unwrap();
         }
-        writer.shutdown().await?;
-        let bytes_written = storage.get(&location).await?.bytes().await?;
+        writer.shutdown().await.unwrap();
+        let bytes_written = storage.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes_expected, bytes_written);
 
         // We can abort an empty write
         let location = Path::from("test_dir/test_abort_upload.txt");
-        let (upload_id, writer) = storage.put_multipart(&location).await?;
+        let (upload_id, writer) = storage.put_multipart(&location).await.unwrap();
         drop(writer);
-        storage.abort_multipart(&location, &upload_id).await?;
+        storage
+            .abort_multipart(&location, &upload_id)
+            .await
+            .unwrap();
         let get_res = storage.get(&location).await;
         assert!(get_res.is_err());
         assert!(matches!(
@@ -582,30 +761,29 @@ mod tests {
         ));
 
         // We can abort an in-progress write
-        let (upload_id, mut writer) = storage.put_multipart(&location).await?;
+        let (upload_id, mut writer) = storage.put_multipart(&location).await.unwrap();
         if let Some(chunk) = data.get(0) {
-            writer.write_all(chunk).await?;
-            let _ = writer.write(chunk).await?;
+            writer.write_all(chunk).await.unwrap();
+            let _ = writer.write(chunk).await.unwrap();
         }
         drop(writer);
 
-        storage.abort_multipart(&location, &upload_id).await?;
+        storage
+            .abort_multipart(&location, &upload_id)
+            .await
+            .unwrap();
         let get_res = storage.get(&location).await;
         assert!(get_res.is_err());
         assert!(matches!(
             get_res.unwrap_err(),
             crate::Error::NotFound { .. }
         ));
-
-        Ok(())
     }
 
-    pub(crate) async fn list_uses_directories_correctly(
-        storage: &DynObjectStore,
-    ) -> Result<()> {
+    pub(crate) async fn list_uses_directories_correctly(storage: &DynObjectStore) {
         delete_fixtures(storage).await;
 
-        let content_list = flatten_list_stream(storage, None).await?;
+        let content_list = flatten_list_stream(storage, None).await.unwrap();
         assert!(
             content_list.is_empty(),
             "Expected list to be empty; found: {:?}",
@@ -616,25 +794,23 @@ mod tests {
         let location2 = Path::from("foo.bar/y.json");
 
         let data = Bytes::from("arbitrary data");
-        storage.put(&location1, data.clone()).await?;
-        storage.put(&location2, data).await?;
+        storage.put(&location1, data.clone()).await.unwrap();
+        storage.put(&location2, data).await.unwrap();
 
         let prefix = Path::from("foo");
-        let content_list = flatten_list_stream(storage, Some(&prefix)).await?;
+        let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
         assert_eq!(content_list, &[location1.clone()]);
 
         let prefix = Path::from("foo/x");
-        let content_list = flatten_list_stream(storage, Some(&prefix)).await?;
+        let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
         assert_eq!(content_list, &[]);
-
-        Ok(())
     }
 
-    pub(crate) async fn list_with_delimiter(storage: &DynObjectStore) -> Result<()> {
+    pub(crate) async fn list_with_delimiter(storage: &DynObjectStore) {
         delete_fixtures(storage).await;
 
         // ==================== check: store is empty ====================
-        let content_list = flatten_list_stream(storage, None).await?;
+        let content_list = flatten_list_stream(storage, None).await.unwrap();
         assert!(content_list.is_empty());
 
         // ==================== do: create files ====================
@@ -696,10 +872,8 @@ mod tests {
         }
 
         // ==================== check: store is empty ====================
-        let content_list = flatten_list_stream(storage, None).await?;
+        let content_list = flatten_list_stream(storage, None).await.unwrap();
         assert!(content_list.is_empty());
-
-        Ok(())
     }
 
     pub(crate) async fn get_nonexistent_object(
@@ -715,7 +889,7 @@ mod tests {
         storage.get(&location).await?.bytes().await
     }
 
-    pub(crate) async fn rename_and_copy(storage: &DynObjectStore) -> Result<()> {
+    pub(crate) async fn rename_and_copy(storage: &DynObjectStore) {
         // Create two objects
         let path1 = Path::from("test1");
         let path2 = Path::from("test2");
@@ -723,29 +897,27 @@ mod tests {
         let contents2 = Bytes::from("dogs");
 
         // copy() make both objects identical
-        storage.put(&path1, contents1.clone()).await?;
-        storage.put(&path2, contents2.clone()).await?;
-        storage.copy(&path1, &path2).await?;
-        let new_contents = storage.get(&path2).await?.bytes().await?;
+        storage.put(&path1, contents1.clone()).await.unwrap();
+        storage.put(&path2, contents2.clone()).await.unwrap();
+        storage.copy(&path1, &path2).await.unwrap();
+        let new_contents = storage.get(&path2).await.unwrap().bytes().await.unwrap();
         assert_eq!(&new_contents, &contents1);
 
         // rename() copies contents and deletes original
-        storage.put(&path1, contents1.clone()).await?;
-        storage.put(&path2, contents2.clone()).await?;
-        storage.rename(&path1, &path2).await?;
-        let new_contents = storage.get(&path2).await?.bytes().await?;
+        storage.put(&path1, contents1.clone()).await.unwrap();
+        storage.put(&path2, contents2.clone()).await.unwrap();
+        storage.rename(&path1, &path2).await.unwrap();
+        let new_contents = storage.get(&path2).await.unwrap().bytes().await.unwrap();
         assert_eq!(&new_contents, &contents1);
         let result = storage.get(&path1).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
 
         // Clean up
-        storage.delete(&path2).await?;
-
-        Ok(())
+        storage.delete(&path2).await.unwrap();
     }
 
-    pub(crate) async fn copy_if_not_exists(storage: &DynObjectStore) -> Result<()> {
+    pub(crate) async fn copy_if_not_exists(storage: &DynObjectStore) {
         // Create two objects
         let path1 = Path::from("test1");
         let path2 = Path::from("test2");
@@ -753,8 +925,8 @@ mod tests {
         let contents2 = Bytes::from("dogs");
 
         // copy_if_not_exists() errors if destination already exists
-        storage.put(&path1, contents1.clone()).await?;
-        storage.put(&path2, contents2.clone()).await?;
+        storage.put(&path1, contents1.clone()).await.unwrap();
+        storage.put(&path2, contents2.clone()).await.unwrap();
         let result = storage.copy_if_not_exists(&path1, &path2).await;
         assert!(result.is_err());
         assert!(matches!(
@@ -763,19 +935,17 @@ mod tests {
         ));
 
         // copy_if_not_exists() copies contents and allows deleting original
-        storage.delete(&path2).await?;
-        storage.copy_if_not_exists(&path1, &path2).await?;
-        storage.delete(&path1).await?;
-        let new_contents = storage.get(&path2).await?.bytes().await?;
+        storage.delete(&path2).await.unwrap();
+        storage.copy_if_not_exists(&path1, &path2).await.unwrap();
+        storage.delete(&path1).await.unwrap();
+        let new_contents = storage.get(&path2).await.unwrap().bytes().await.unwrap();
         assert_eq!(&new_contents, &contents1);
         let result = storage.get(&path1).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), crate::Error::NotFound { .. }));
 
         // Clean up
-        storage.delete(&path2).await?;
-
-        Ok(())
+        storage.delete(&path2).await.unwrap();
     }
 
     async fn delete_fixtures(storage: &DynObjectStore) {

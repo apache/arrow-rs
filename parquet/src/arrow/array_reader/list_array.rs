@@ -78,9 +78,13 @@ impl<OffsetSize: OffsetSizeTrait> ArrayReader for ListArrayReader<OffsetSize> {
         &self.data_type
     }
 
-    fn next_batch(&mut self, batch_size: usize) -> Result<ArrayRef> {
-        let next_batch_array = self.item_reader.next_batch(batch_size)?;
+    fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+        let size = self.item_reader.read_records(batch_size)?;
+        Ok(size)
+    }
 
+    fn consume_batch(&mut self) -> Result<ArrayRef> {
+        let next_batch_array = self.item_reader.consume_batch()?;
         if next_batch_array.len() == 0 {
             return Ok(new_empty_array(&self.data_type));
         }
@@ -264,10 +268,7 @@ mod tests {
         item_nullable: bool,
     ) -> ArrowType {
         let field = Box::new(Field::new("item", data_type, item_nullable));
-        match OffsetSize::IS_LARGE {
-            true => ArrowType::LargeList(field),
-            false => ArrowType::List(field),
-        }
+        GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field)
     }
 
     fn downcast<OffsetSize: OffsetSizeTrait>(

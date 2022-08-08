@@ -16,11 +16,10 @@
 // under the License.
 
 use crate::basic::Encoding;
-use crate::column::page::{PageMetadata, PageReader};
 use crate::column::page::{Page, PageIterator};
+use crate::column::page::{PageMetadata, PageReader};
 use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
-use crate::encodings::levels::max_buffer_size;
 use crate::encodings::levels::LevelEncoder;
 use crate::errors::Result;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
@@ -75,10 +74,9 @@ impl DataPageBuilderImpl {
         if max_level <= 0 {
             return 0;
         }
-        let size = max_buffer_size(Encoding::RLE, max_level, levels.len());
-        let mut level_encoder = LevelEncoder::v1(Encoding::RLE, max_level, vec![0; size]);
-        level_encoder.put(levels).expect("put() should be OK");
-        let encoded_levels = level_encoder.consume().expect("consume() should be OK");
+        let mut level_encoder = LevelEncoder::v1(Encoding::RLE, max_level, levels.len());
+        level_encoder.put(levels);
+        let encoded_levels = level_encoder.consume();
         // Actual encoded bytes (without length offset)
         let encoded_bytes = &encoded_levels[mem::size_of::<i32>()..];
         if self.datapage_v2 {

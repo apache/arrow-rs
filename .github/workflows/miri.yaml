@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: MIRI
+name: miri
 
 # trigger for all PRs that touch certain files and changes to master
 on:

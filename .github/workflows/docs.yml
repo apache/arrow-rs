@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Docs
+name: docs
 
 # trigger for all PRs and changes to master
 on:

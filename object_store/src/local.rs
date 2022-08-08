@@ -68,56 +68,56 @@ pub(crate) enum Error {
     #[snafu(display("Unable to create dir {}: {}", path.display(), source))]
     UnableToCreateDir {
         source: io::Error,
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
 
     #[snafu(display("Unable to create file {}: {}", path.display(), err))]
     UnableToCreateFile {
-        path: std::path::PathBuf,
+        path: PathBuf,
         err: io::Error,
     },
 
     #[snafu(display("Unable to delete file {}: {}", path.display(), source))]
     UnableToDeleteFile {
         source: io::Error,
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
 
     #[snafu(display("Unable to open file {}: {}", path.display(), source))]
     UnableToOpenFile {
         source: io::Error,
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
 
     #[snafu(display("Unable to read data from file {}: {}", path.display(), source))]
     UnableToReadBytes {
         source: io::Error,
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
 
     #[snafu(display("Out of range of file {}, expected: {}, actual: {}", path.display(), expected, actual))]
     OutOfRange {
-        path: std::path::PathBuf,
+        path: PathBuf,
         expected: usize,
         actual: usize,
     },
 
     #[snafu(display("Unable to copy file from {} to {}: {}", from.display(), to.display(), source))]
     UnableToCopyFile {
-        from: std::path::PathBuf,
-        to: std::path::PathBuf,
+        from: PathBuf,
+        to: PathBuf,
         source: io::Error,
     },
 
     NotFound {
-        path: std::path::PathBuf,
+        path: PathBuf,
         source: io::Error,
     },
 
     #[snafu(display("Error seeking file {}: {}", path.display(), source))]
     Seek {
         source: io::Error,
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
 
     #[snafu(display("Unable to convert URL \"{}\" to filesystem path", url))]
@@ -170,6 +170,17 @@ impl From<Error> for super::Error {
 ///
 /// If not called from a tokio context, this will perform IO on the current thread with
 /// no additional complexity or overheads
+///
+/// # Symlinks
+///
+/// [`LocalFileSystem`] will follow symlinks as normal, however, it is worth noting:
+///
+/// * Broken symlinks will be silently ignored by listing operations
+/// * No effort is made to prevent breaking symlinks when deleting files
+/// * Symlinks that resolve to paths outside the root **will** be followed
+/// * Mutating a file through one or more symlinks will mutate the underlying file
+/// * Deleting a path that resolves to a symlink will only delete the symlink
+///
 #[derive(Debug)]
 pub struct LocalFileSystem {
     config: Arc<Config>,
@@ -214,10 +225,13 @@ impl LocalFileSystem {
 
 impl Config {
     /// Return filesystem path of the given location
-    fn path_to_filesystem(&self, location: &Path) -> Result<std::path::PathBuf> {
+    fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
         let mut url = self.root.clone();
         url.path_segments_mut()
             .expect("url path")
+            // technically not necessary as Path ignores empty segments
+            // but avoids creating paths with "//" which look odd in error messages.
+            .pop_if_empty()
             .extend(location.parts());
 
         url.to_file_path()
@@ -308,26 +322,25 @@ impl ObjectStore for LocalFileSystem {
         let path = self.config.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
             let mut file = open_file(&path)?;
-            let to_read = range.end - range.start;
-            file.seek(SeekFrom::Start(range.start as u64))
-                .context(SeekSnafu { path: &path })?;
+            read_range(&mut file, &path, range)
+        })
+        .await
+    }
 
-            let mut buf = Vec::with_capacity(to_read);
-            let read = file
-                .take(to_read as u64)
-                .read_to_end(&mut buf)
-                .context(UnableToReadBytesSnafu { path: &path })?;
-
-            ensure!(
-                read == to_read,
-                OutOfRangeSnafu {
-                    path: &path,
-                    expected: to_read,
-                    actual: read
-                }
-            );
-
-            Ok(buf.into())
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> Result<Vec<Bytes>> {
+        let path = self.config.path_to_filesystem(location)?;
+        let ranges = ranges.to_vec();
+        maybe_spawn_blocking(move || {
+            // Vectored IO might be faster
+            let mut file = open_file(&path)?;
+            ranges
+                .into_iter()
+                .map(|r| read_range(&mut file, &path, r))
+                .collect()
         })
         .await
     }
@@ -371,7 +384,8 @@ impl ObjectStore for LocalFileSystem {
 
         let walkdir = WalkDir::new(&root_path)
             // Don't include the root directory itself
-            .min_depth(1);
+            .min_depth(1)
+            .follow_links(true);
 
         let s = walkdir.into_iter().flat_map(move |result_dir_entry| {
             match convert_walkdir_result(result_dir_entry) {
@@ -433,7 +447,10 @@ impl ObjectStore for LocalFileSystem {
         let resolved_prefix = config.path_to_filesystem(&prefix)?;
 
         maybe_spawn_blocking(move || {
-            let walkdir = WalkDir::new(&resolved_prefix).min_depth(1).max_depth(1);
+            let walkdir = WalkDir::new(&resolved_prefix)
+                .min_depth(1)
+                .max_depth(1)
+                .follow_links(true);
 
             let mut common_prefixes = BTreeSet::new();
             let mut objects = Vec::new();
@@ -732,7 +749,29 @@ impl AsyncWrite for LocalUpload {
     }
 }
 
-fn open_file(path: &std::path::PathBuf) -> Result<File> {
+fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<Bytes> {
+    let to_read = range.end - range.start;
+    file.seek(SeekFrom::Start(range.start as u64))
+        .context(SeekSnafu { path })?;
+
+    let mut buf = Vec::with_capacity(to_read);
+    let read = file
+        .take(to_read as u64)
+        .read_to_end(&mut buf)
+        .context(UnableToReadBytesSnafu { path })?;
+
+    ensure!(
+        read == to_read,
+        OutOfRangeSnafu {
+            path,
+            expected: to_read,
+            actual: read
+        }
+    );
+    Ok(buf.into())
+}
+
+fn open_file(path: &PathBuf) -> Result<File> {
     let file = File::open(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::NotFound {
@@ -749,7 +788,7 @@ fn open_file(path: &std::path::PathBuf) -> Result<File> {
     Ok(file)
 }
 
-fn open_writable_file(path: &std::path::PathBuf) -> Result<File> {
+fn open_writable_file(path: &PathBuf) -> Result<File> {
     match File::create(&path) {
         Ok(f) => Ok(f),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -861,7 +900,8 @@ mod tests {
         },
         Error as ObjectStoreError, ObjectStore,
     };
-    use tempfile::TempDir;
+    use futures::TryStreamExt;
+    use tempfile::{NamedTempFile, TempDir};
     use tokio::io::AsyncWriteExt;
 
     #[tokio::test]
@@ -869,12 +909,12 @@ mod tests {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
 
-        put_get_delete_list(&integration).await.unwrap();
-        list_uses_directories_correctly(&integration).await.unwrap();
-        list_with_delimiter(&integration).await.unwrap();
-        rename_and_copy(&integration).await.unwrap();
-        copy_if_not_exists(&integration).await.unwrap();
-        stream_get(&integration).await.unwrap();
+        put_get_delete_list(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        stream_get(&integration).await;
     }
 
     #[test]
@@ -882,10 +922,10 @@ mod tests {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
         futures::executor::block_on(async move {
-            put_get_delete_list(&integration).await.unwrap();
-            list_uses_directories_correctly(&integration).await.unwrap();
-            list_with_delimiter(&integration).await.unwrap();
-            stream_get(&integration).await.unwrap();
+            put_get_delete_list(&integration).await;
+            list_uses_directories_correctly(&integration).await;
+            list_with_delimiter(&integration).await;
+            stream_get(&integration).await;
         });
     }
 
@@ -1030,6 +1070,124 @@ mod tests {
         }
     }
 
+    async fn check_list(
+        integration: &LocalFileSystem,
+        prefix: Option<&Path>,
+        expected: &[&str],
+    ) {
+        let result: Vec<_> = integration
+            .list(prefix)
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let mut strings: Vec<_> = result.iter().map(|x| x.location.as_ref()).collect();
+        strings.sort_unstable();
+        assert_eq!(&strings, expected)
+    }
+
+    #[tokio::test]
+    #[cfg(target_family = "unix")]
+    async fn test_symlink() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let subdir = root.path().join("a");
+        std::fs::create_dir(&subdir).unwrap();
+        let file = subdir.join("file.parquet");
+        std::fs::write(file, "test").unwrap();
+
+        check_list(&integration, None, &["a/file.parquet"]).await;
+        integration
+            .head(&Path::from("a/file.parquet"))
+            .await
+            .unwrap();
+
+        // Follow out of tree symlink
+        let other = NamedTempFile::new().unwrap();
+        std::os::unix::fs::symlink(other.path(), root.path().join("test.parquet"))
+            .unwrap();
+
+        // Should return test.parquet even though out of tree
+        check_list(&integration, None, &["a/file.parquet", "test.parquet"]).await;
+
+        // Can fetch test.parquet
+        integration.head(&Path::from("test.parquet")).await.unwrap();
+
+        // Follow in tree symlink
+        std::os::unix::fs::symlink(&subdir, root.path().join("b")).unwrap();
+        check_list(
+            &integration,
+            None,
+            &["a/file.parquet", "b/file.parquet", "test.parquet"],
+        )
+        .await;
+        check_list(&integration, Some(&Path::from("b")), &["b/file.parquet"]).await;
+
+        // Can fetch through symlink
+        integration
+            .head(&Path::from("b/file.parquet"))
+            .await
+            .unwrap();
+
+        // Ignore broken symlink
+        std::os::unix::fs::symlink(
+            root.path().join("foo.parquet"),
+            root.path().join("c"),
+        )
+        .unwrap();
+
+        check_list(
+            &integration,
+            None,
+            &["a/file.parquet", "b/file.parquet", "test.parquet"],
+        )
+        .await;
+
+        let mut r = integration.list_with_delimiter(None).await.unwrap();
+        r.common_prefixes.sort_unstable();
+        assert_eq!(r.common_prefixes.len(), 2);
+        assert_eq!(r.common_prefixes[0].as_ref(), "a");
+        assert_eq!(r.common_prefixes[1].as_ref(), "b");
+        assert_eq!(r.objects.len(), 1);
+        assert_eq!(r.objects[0].location.as_ref(), "test.parquet");
+
+        let r = integration
+            .list_with_delimiter(Some(&Path::from("a")))
+            .await
+            .unwrap();
+        assert_eq!(r.common_prefixes.len(), 0);
+        assert_eq!(r.objects.len(), 1);
+        assert_eq!(r.objects[0].location.as_ref(), "a/file.parquet");
+
+        // Deleting a symlink doesn't delete the source file
+        integration
+            .delete(&Path::from("test.parquet"))
+            .await
+            .unwrap();
+        assert!(other.path().exists());
+
+        check_list(&integration, None, &["a/file.parquet", "b/file.parquet"]).await;
+
+        // Deleting through a symlink deletes both files
+        integration
+            .delete(&Path::from("b/file.parquet"))
+            .await
+            .unwrap();
+
+        check_list(&integration, None, &[]).await;
+
+        // Adding a file through a symlink creates in both paths
+        integration
+            .put(&Path::from("b/file.parquet"), Bytes::from(vec![0, 1, 2]))
+            .await
+            .unwrap();
+
+        check_list(&integration, None, &["a/file.parquet", "b/file.parquet"]).await;
+    }
+
     #[tokio::test]
     async fn invalid_path() {
         let root = TempDir::new().unwrap();
@@ -1075,7 +1233,7 @@ mod tests {
             .to_string();
 
         assert!(
-            err.contains("Invalid path segment - got \"💀\" expected: \"%F0%9F%92%80\""),
+            err.contains("Encountered illegal character sequence \"💀\" whilst parsing path segment \"💀\""),
             "{}",
             err
         );
@@ -1109,5 +1267,23 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn filesystem_filename_with_percent() {
+        let temp_dir = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(temp_dir.path()).unwrap();
+        let filename = "L%3ABC.parquet";
+
+        std::fs::write(temp_dir.path().join(filename), "foo").unwrap();
+
+        let list_stream = integration.list(None).await.unwrap();
+        let res: Vec<_> = list_stream.try_collect().await.unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].location.as_ref(), filename);
+
+        let res = integration.list_with_delimiter(None).await.unwrap();
+        assert_eq!(res.objects.len(), 1);
+        assert_eq!(res.objects[0].location.as_ref(), filename);
     }
 }

@@ -163,6 +163,8 @@ mod array_binary;
 mod array_boolean;
 mod array_decimal;
 mod array_dictionary;
+mod array_fixed_size_binary;
+mod array_fixed_size_list;
 mod array_list;
 mod array_map;
 mod array_primitive;
@@ -173,7 +175,7 @@ mod builder;
 mod cast;
 mod data;
 mod equal;
-mod equal_json;
+#[cfg(feature = "ffi")]
 mod ffi;
 mod iterator;
 mod null;
@@ -195,18 +197,18 @@ pub use self::data::ArrayDataRef;
 pub(crate) use self::data::BufferSpec;
 
 pub use self::array_binary::BinaryArray;
-pub use self::array_binary::FixedSizeBinaryArray;
 pub use self::array_binary::LargeBinaryArray;
 pub use self::array_boolean::BooleanArray;
 pub use self::array_decimal::BasicDecimalArray;
 pub use self::array_decimal::Decimal128Array;
 pub use self::array_decimal::Decimal256Array;
+pub use self::array_fixed_size_binary::FixedSizeBinaryArray;
+pub use self::array_fixed_size_list::FixedSizeListArray;
 
 #[deprecated(note = "Please use `Decimal128Array` instead")]
 pub type DecimalArray = Decimal128Array;
 
-pub use self::array_dictionary::DictionaryArray;
-pub use self::array_list::FixedSizeListArray;
+pub use self::array_dictionary::{DictionaryArray, TypedDictionaryArray};
 pub use self::array_list::LargeListArray;
 pub use self::array_list::ListArray;
 pub use self::array_map::MapArray;
@@ -594,10 +596,6 @@ pub use self::transform::{Capacities, MutableArrayData};
 
 pub use self::iterator::*;
 
-// --------------------- Array Equality ---------------------
-
-pub use self::equal_json::JsonEqual;
-
 // --------------------- Array's values comparison ---------------------
 
 pub use self::ord::{build_compare, DynComparator};
@@ -613,7 +611,8 @@ pub use self::cast::{
 
 // ------------------------------ C Data Interface ---------------------------
 
-pub use self::array::{export_array_into_raw, make_array_from_raw};
+#[cfg(feature = "ffi")]
+pub use self::ffi::{export_array_into_raw, make_array_from_raw};
 
 #[cfg(test)]
 mod tests {

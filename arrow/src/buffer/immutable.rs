@@ -22,7 +22,6 @@ use std::sync::Arc;
 use std::{convert::AsRef, usize};
 
 use crate::alloc::{Allocation, Deallocation};
-use crate::ffi::FFI_ArrowArray;
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::{bytes::Bytes, datatypes::ArrowNativeType};
 
@@ -75,30 +74,6 @@ impl Buffer {
     pub unsafe fn from_raw_parts(ptr: NonNull<u8>, len: usize, capacity: usize) -> Self {
         assert!(len <= capacity);
         Buffer::build_with_arguments(ptr, len, Deallocation::Arrow(capacity))
-    }
-
-    /// Creates a buffer from an existing memory region (must already be byte-aligned), this
-    /// `Buffer` **does not** free this piece of memory when dropped.
-    ///
-    /// # Arguments
-    ///
-    /// * `ptr` - Pointer to raw parts
-    /// * `len` - Length of raw parts in **bytes**
-    /// * `data` - An [crate::ffi::FFI_ArrowArray] with the data
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
-    /// bytes and that the foreign deallocator frees the region.
-    #[deprecated(
-        note = "use from_custom_allocation instead which makes it clearer that the allocation is in fact owned"
-    )]
-    pub unsafe fn from_unowned(
-        ptr: NonNull<u8>,
-        len: usize,
-        data: Arc<FFI_ArrowArray>,
-    ) -> Self {
-        Self::from_custom_allocation(ptr, len, data)
     }
 
     /// Creates a buffer from an existing memory region. Ownership of the memory is tracked via reference counting

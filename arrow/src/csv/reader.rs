@@ -544,7 +544,7 @@ fn parse(
             let field = &fields[i];
             match field.data_type() {
                 DataType::Boolean => build_boolean_array(line_number, rows, i),
-                DataType::Decimal(precision, scale) => {
+                DataType::Decimal128(precision, scale) => {
                     build_decimal_array(line_number, rows, i, *precision, *scale)
                 }
                 DataType::Int8 => {
@@ -1206,8 +1206,8 @@ mod tests {
     fn test_csv_reader_with_decimal() {
         let schema = Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
-            Field::new("lat", DataType::Decimal(38, 6), false),
-            Field::new("lng", DataType::Decimal(38, 6), false),
+            Field::new("lat", DataType::Decimal128(38, 6), false),
+            Field::new("lng", DataType::Decimal128(38, 6), false),
         ]);
 
         let file = File::open("test/data/decimal_test.csv").unwrap();

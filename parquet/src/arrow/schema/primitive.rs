@@ -112,7 +112,7 @@ fn decimal_type(scale: i32, precision: i32) -> Result<DataType> {
         .try_into()
         .map_err(|_| arrow_err!("precision cannot be negative: {}", precision))?;
 
-    Ok(DataType::Decimal(precision, scale))
+    Ok(DataType::Decimal128(precision, scale))
 }
 
 fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
@@ -224,7 +224,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
     }
 }
 
-fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32 ) -> Result<DataType> {
+fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<DataType> {
     match (info.logical_type(), info.converted_type()) {
         (Some(LogicalType::String), _) => Ok(DataType::Utf8),
         (Some(LogicalType::Json), _) => Ok(DataType::Binary),
@@ -235,8 +235,12 @@ fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32 ) -> Result<
         (None, ConvertedType::BSON) => Ok(DataType::Binary),
         (None, ConvertedType::ENUM) => Ok(DataType::Binary),
         (None, ConvertedType::UTF8) => Ok(DataType::Utf8),
-        (Some(LogicalType::Decimal {precision, scale}), _) => Ok(DataType::Decimal(precision as usize, scale as usize)),
-        (None, ConvertedType::DECIMAL) => Ok(DataType::Decimal(precision as usize, scale as usize)),
+        (Some(LogicalType::Decimal { precision, scale }), _) => {
+            Ok(DataType::Decimal128(precision as usize, scale as usize))
+        }
+        (None, ConvertedType::DECIMAL) => {
+            Ok(DataType::Decimal128(precision as usize, scale as usize))
+        }
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet BYTE_ARRAY logical type {:?} or converted type {}",
             logical,
