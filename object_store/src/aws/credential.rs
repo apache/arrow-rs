@@ -272,12 +272,13 @@ impl CredentialProvider {
             CredentialProvider::Instance { cache } => {
                 cache
                     .get_or_insert_with(|| {
-                        instance_creds(client, retry_config).map_err(|source| {
-                            crate::Error::Generic {
+                        const METADATA_ENDPOINT: &str = "http://169.254.169.254";
+                        instance_creds(client, retry_config, METADATA_ENDPOINT).map_err(
+                            |source| crate::Error::Generic {
                                 store: "S3",
                                 source,
-                            }
-                        })
+                            },
+                        )
                     })
                     .await
             }
@@ -334,13 +335,12 @@ impl From<InstanceCredentials> for AwsCredential {
 async fn instance_creds(
     client: &Client,
     retry_config: &RetryConfig,
+    endpoint: &str,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
-    const AWS_CREDENTIALS_PROVIDER_IP: &str = "169.254.169.254";
-    const AWS_CREDENTIALS_PROVIDER_PATH: &str =
-        "latest/meta-data/iam/security-credentials";
+    const CREDENTIALS_PATH: &str = "latest/meta-data/iam/security-credentials";
     const AWS_EC2_METADATA_TOKEN_HEADER: &str = "X-aws-ec2-metadata-token";
 
-    let token_url = format!("http://{}/latest/api/token", AWS_CREDENTIALS_PROVIDER_IP);
+    let token_url = format!("{}/latest/api/token", endpoint);
     let token = client
         .request(Method::PUT, token_url)
         .header("X-aws-ec2-metadata-token-ttl-seconds", "600") // 10 minute TTL
@@ -349,10 +349,7 @@ async fn instance_creds(
         .text()
         .await?;
 
-    let role_url = format!(
-        "http://{}/{}/",
-        AWS_CREDENTIALS_PROVIDER_IP, AWS_CREDENTIALS_PROVIDER_PATH
-    );
+    let role_url = format!("{}/{}/", endpoint, CREDENTIALS_PATH);
     let role = client
         .request(Method::GET, role_url)
         .header(AWS_EC2_METADATA_TOKEN_HEADER, &token)
@@ -361,10 +358,7 @@ async fn instance_creds(
         .text()
         .await?;
 
-    let creds_url = format!(
-        "http://{}/{}/{}",
-        AWS_CREDENTIALS_PROVIDER_IP, AWS_CREDENTIALS_PROVIDER_PATH, role
-    );
+    let creds_url = format!("{}/{}/{}", endpoint, CREDENTIALS_PATH, role);
     let creds: InstanceCredentials = client
         .request(Method::GET, creds_url)
         .header(AWS_EC2_METADATA_TOKEN_HEADER, &token)
@@ -451,6 +445,7 @@ async fn web_identity(
 mod tests {
     use super::*;
     use reqwest::{Client, Method};
+    use std::env;
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
     #[test]
@@ -488,5 +483,42 @@ mod tests {
 
         signer.sign(&mut request);
         assert_eq!(request.headers().get(AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4")
+    }
+
+    #[tokio::test]
+    async fn test_instance_metadata() {
+        if !env::var("TEST_INTEGRATION").is_ok() {
+            eprintln!("skipping AWS integration test");
+        }
+
+        // For example https://github.com/aws/amazon-ec2-metadata-mock
+        let endpoint = env::var("EC2_METADATA_ENDPOINT").unwrap();
+        let client = Client::new();
+        let retry_config = RetryConfig::default();
+
+        // Verify only allows IMDSv2
+        let resp = client
+            .request(Method::GET, format!("{}/latest/meta-data/ami-id", endpoint))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "Ensure metadata endpoint is set to only allow IMDSv2"
+        );
+
+        let creds = instance_creds(&client, &retry_config, &endpoint)
+            .await
+            .unwrap();
+
+        let id = &creds.token.key_id;
+        let secret = &creds.token.secret_key;
+        let token = creds.token.token.as_ref().unwrap();
+
+        assert!(!id.is_empty());
+        assert!(!secret.is_empty());
+        assert!(!token.is_empty())
     }
 }
