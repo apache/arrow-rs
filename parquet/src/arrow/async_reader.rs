@@ -78,7 +78,7 @@
 use std::collections::VecDeque;
 use std::fmt::Formatter;
 
-use std::io::{Cursor, SeekFrom};
+use std::io::{Cursor, Read, SeekFrom};
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -88,7 +88,7 @@ use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
 use futures::stream::Stream;
-use parquet_format::{PageHeader, PageType};
+use parquet_format::{PageHeader, PageLocation, PageType};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use arrow::datatypes::SchemaRef;
@@ -541,6 +541,170 @@ impl RowGroupCollection for InMemoryRowGroup {
             column_schema: self.schema.columns()[i].clone(),
             reader: Some(page_reader),
         }))
+    }
+}
+
+struct SparseInMemoryRowGroup {
+    schema: SchemaDescPtr,
+    column_chunks: Vec<Option<SparseInMemoryColumnChunk>>,
+    row_count: usize,
+}
+
+struct SparseInMemoryColumnChunk {
+    num_values: i64,
+    compression: Compression,
+    physical_type: crate::basic::Type,
+    pages: Vec<Option<Bytes>>,
+    page_locations: Vec<PageLocation>,
+}
+
+impl SparseInMemoryColumnChunk {
+    async fn fetch<T: AsyncFileReader + Send>(
+        &mut self,
+        input: &mut T,
+        selection: &RowSelection,
+        page_locations: &[PageLocation],
+    ) -> Result<()> {
+        let num_pages = page_locations.len();
+
+        let mut fetch_ranges = Vec::with_capacity(num_pages);
+        let mut fetch_pages = Vec::with_capacity(num_pages);
+
+        let mut page_offset = 0;
+        let mut row_offset = 0;
+
+        for selector in selection.selectors() {
+            row_offset += selector.row_count;
+            if fetch_pages
+                .last()
+                .map(|idx| *idx == page_offset)
+                .unwrap_or(false)
+            {
+                page_offset += 1;
+            }
+
+            while page_offset < page_locations.len()
+                && page_locations[page_offset].first_row_index <= row_offset as i64
+            {
+                if !selector.skip {
+                    let range_start = page_locations[page_offset].offset;
+                    let range_end = range_start
+                        + page_locations[page_offset].compressed_page_size as i64;
+                    fetch_ranges.push(range_start as usize..range_end as usize);
+                    fetch_pages.push(page_offset);
+                }
+                page_offset += 1;
+            }
+        }
+
+        let chunk_data = input.get_byte_ranges(fetch_ranges).await?.into_iter();
+
+        for (idx, chunk) in fetch_pages.into_iter().zip(chunk_data) {
+            self.pages[idx] = Some(chunk);
+        }
+
+        Ok(())
+    }
+}
+
+struct SparseInMemoryColumnChunkReader {
+    page_set: SparseInMemoryColumnChunk,
+    decompressor: Option<Box<dyn Codec>>,
+    offset: usize,
+    seen_num_values: i64,
+}
+
+impl SparseInMemoryColumnChunkReader {
+    fn new(page_set: SparseInMemoryColumnChunk) -> Result<Self> {
+        let decompressor = create_codec(page_set.compression)?;
+        let result = Self {
+            page_set,
+            decompressor,
+            offset: 0,
+            seen_num_values: 0,
+        };
+        Ok(result)
+    }
+}
+
+impl Iterator for SparseInMemoryColumnChunkReader {
+    type Item = Result<Page>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.get_next_page().transpose()
+    }
+}
+
+impl PageReader for SparseInMemoryColumnChunkReader {
+    fn get_next_page(&mut self) -> Result<Option<Page>> {
+        self.page_set
+            .pages
+            .get(self.offset)
+            .map(|data| match data {
+                Some(data) => {
+                    let mut cursor = Cursor::new(data);
+
+                    let page_header = read_page_header(&mut cursor)?;
+                    self.offset += 1;
+
+                    let compressed_size = page_header.compressed_page_size as usize;
+
+                    let start_offset = cursor.position() as usize;
+                    let end_offset = start_offset + compressed_size;
+
+                    let buffer = cursor.into_inner().slice(start_offset..end_offset);
+
+                    let result = match page_header.type_ {
+                        PageType::DataPage | PageType::DataPageV2 => {
+                            let decoded = decode_page(
+                                page_header,
+                                buffer.into(),
+                                self.page_set.physical_type,
+                                self.decompressor.as_mut(),
+                            )?;
+                            self.seen_num_values += decoded.num_values() as i64;
+                            decoded
+                        }
+                        _ => {
+                            return Err(ParquetError::ArrowError(format!(
+                            "Error reading next page, page at index {} not a data page",
+                            self.offset
+                        )))
+                        }
+                    };
+
+                    Ok(result)
+                }
+                None => Err(ParquetError::ArrowError(format!(
+                    "Error reading next page, page at index {} not fetched",
+                    self.offset
+                ))),
+            })
+            .transpose()
+    }
+
+    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
+        if self.offset < self.page_set.page_locations.len() - 2 {
+            Ok(Some(PageMetadata {
+                num_rows: self.page_set.page_locations[self.offset + 1].first_row_index
+                    as usize
+                    - self.page_set.page_locations[self.offset].first_row_index as usize,
+                is_dict: false,
+            }))
+        } else if self.offset == self.page_set.page_locations.len() - 1 {
+            Ok(Some(PageMetadata {
+                num_rows: self.page_set.num_values as usize
+                    - self.page_set.page_locations[self.offset].first_row_index as usize,
+                is_dict: false,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn skip_next_page(&mut self) -> Result<()> {
+        self.offset += 1;
+        Ok(())
     }
 }
 
