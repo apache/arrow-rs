@@ -54,18 +54,19 @@ impl<'a> PathPart<'a> {
             });
         }
 
-        for (idx, char) in segment.char_indices() {
+        for (idx, b) in segment.as_bytes().iter().cloned().enumerate() {
             // A percent character is always valid, even if not
             // followed by a valid 2-digit hex code
             // https://url.spec.whatwg.org/#percent-encoded-bytes
-            if char == '%' {
+            if b == b'%' {
                 continue;
             }
 
-            if !char.is_ascii() || should_percent_encode(segment.as_bytes()[idx]) {
+            if !b.is_ascii() || should_percent_encode(b) {
                 return Err(InvalidPart {
                     segment: segment.to_string(),
-                    illegal: char.to_string(),
+                    // This is correct as only single byte characters up to this point
+                    illegal: segment.chars().nth(idx).unwrap().to_string(),
                 });
             }
         }
