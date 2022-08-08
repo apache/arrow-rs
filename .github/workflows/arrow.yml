@@ -50,7 +50,7 @@ jobs:
           cargo test -p arrow
       - name: Test --features=force_validate,prettyprint
         run: |
-          cargo test -p arrow --features=force_validate,prettyprint
+          cargo test -p arrow --features=force_validate,prettyprint,ipc_compression
       - name: Run examples
         run: |
           # Test arrow examples
