@@ -34,14 +34,17 @@ use crate::{
 /// trait declaring an offset size, relevant for i32 vs i64 array types.
 pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
     const IS_LARGE: bool;
+    const PREFIX: &'static str;
 }
 
 impl OffsetSizeTrait for i32 {
     const IS_LARGE: bool = false;
+    const PREFIX: &'static str = "";
 }
 
 impl OffsetSizeTrait for i64 {
     const IS_LARGE: bool = true;
+    const PREFIX: &'static str = "Large";
 }
 
 /// Generic struct for a variable-size list array.
@@ -57,6 +60,16 @@ pub struct GenericListArray<OffsetSize> {
 }
 
 impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
+    /// The data type constructor of list array.
+    /// The input is the schema of the child array and
+    /// the output is the [`DataType`], List or LargeList.
+    pub const DATA_TYPE_CONSTRUCTOR: fn(Box<Field>) -> DataType = if OffsetSize::IS_LARGE
+    {
+        DataType::LargeList
+    } else {
+        DataType::List
+    };
+
     /// Returns a reference to the values of this list.
     pub fn values(&self) -> ArrayRef {
         self.values.clone()
@@ -170,11 +183,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
             .collect();
 
         let field = Box::new(Field::new("item", T::DATA_TYPE, true));
-        let data_type = if OffsetSize::IS_LARGE {
-            DataType::LargeList(field)
-        } else {
-            DataType::List(field)
-        };
+        let data_type = Self::DATA_TYPE_CONSTRUCTOR(field);
         let array_data = ArrayData::builder(data_type)
             .len(null_buf.len())
             .add_buffer(offsets.into())
@@ -274,7 +283,7 @@ impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor for &'a GenericListArray<Off
 
 impl<OffsetSize: OffsetSizeTrait> fmt::Debug for GenericListArray<OffsetSize> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let prefix = if OffsetSize::IS_LARGE { "Large" } else { "" };
+        let prefix = OffsetSize::PREFIX;
 
         write!(f, "{}ListArray\n[\n", prefix)?;
         print_long_array(self, f, |array, index, f| {

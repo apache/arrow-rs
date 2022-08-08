@@ -549,6 +549,18 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
         let array_data = unsafe { array_data.build_unchecked() };
         PrimitiveArray::from(array_data)
     }
+
+    /// Construct a timestamp array with new timezone
+    pub fn with_timezone(&self, timezone: String) -> Self {
+        let array_data = unsafe {
+            self.data
+                .clone()
+                .into_builder()
+                .data_type(DataType::Timestamp(T::get_time_unit(), Some(timezone)))
+                .build_unchecked()
+        };
+        PrimitiveArray::from(array_data)
+    }
 }
 
 impl<T: ArrowTimestampType> PrimitiveArray<T> {
@@ -1098,5 +1110,22 @@ mod tests {
             result.unwrap(),
             BooleanArray::from(vec![true, true, true, true, true])
         );
+    }
+
+    #[cfg(feature = "chrono-tz")]
+    #[test]
+    fn test_with_timezone() {
+        use crate::compute::hour;
+        let a: TimestampMicrosecondArray = vec![37800000000, 86339000000].into();
+
+        let b = hour(&a).unwrap();
+        assert_eq!(10, b.value(0));
+        assert_eq!(23, b.value(1));
+
+        let a = a.with_timezone(String::from("America/Los_Angeles"));
+
+        let b = hour(&a).unwrap();
+        assert_eq!(2, b.value(0));
+        assert_eq!(15, b.value(1));
     }
 }

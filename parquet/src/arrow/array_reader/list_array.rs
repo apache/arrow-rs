@@ -268,10 +268,7 @@ mod tests {
         item_nullable: bool,
     ) -> ArrowType {
         let field = Box::new(Field::new("item", data_type, item_nullable));
-        match OffsetSize::IS_LARGE {
-            true => ArrowType::LargeList(field),
-            false => ArrowType::List(field),
-        }
+        GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field)
     }
 
     fn downcast<OffsetSize: OffsetSizeTrait>(

@@ -470,14 +470,15 @@ impl ObjectStore for MicrosoftAzure {
 
 impl MicrosoftAzure {
     /// helper function to create a source url for copy function
-    fn get_copy_from_url(&self, from: &Path) -> Result<reqwest::Url> {
-        Ok(reqwest::Url::parse(&format!(
-            "{}/{}/{}",
-            &self.blob_base_url, self.container_name, from
-        ))
-        .context(UnableToParseUrlSnafu {
-            container: &self.container_name,
-        })?)
+    fn get_copy_from_url(&self, from: &Path) -> Result<Url> {
+        let mut url =
+            Url::parse(&format!("{}/{}", &self.blob_base_url, self.container_name))
+                .context(UnableToParseUrlSnafu {
+                    container: &self.container_name,
+                })?;
+
+        url.path_segments_mut().unwrap().extend(from.parts());
+        Ok(url)
     }
 
     async fn list_impl(
@@ -857,10 +858,10 @@ mod tests {
     async fn azure_blob_test() {
         let integration = maybe_skip_integration!().build().unwrap();
 
-        put_get_delete_list(&integration).await.unwrap();
-        list_uses_directories_correctly(&integration).await.unwrap();
-        list_with_delimiter(&integration).await.unwrap();
-        rename_and_copy(&integration).await.unwrap();
-        copy_if_not_exists(&integration).await.unwrap();
+        put_get_delete_list(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
     }
 }

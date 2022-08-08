@@ -322,26 +322,25 @@ impl ObjectStore for LocalFileSystem {
         let path = self.config.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
             let mut file = open_file(&path)?;
-            let to_read = range.end - range.start;
-            file.seek(SeekFrom::Start(range.start as u64))
-                .context(SeekSnafu { path: &path })?;
+            read_range(&mut file, &path, range)
+        })
+        .await
+    }
 
-            let mut buf = Vec::with_capacity(to_read);
-            let read = file
-                .take(to_read as u64)
-                .read_to_end(&mut buf)
-                .context(UnableToReadBytesSnafu { path: &path })?;
-
-            ensure!(
-                read == to_read,
-                OutOfRangeSnafu {
-                    path: &path,
-                    expected: to_read,
-                    actual: read
-                }
-            );
-
-            Ok(buf.into())
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> Result<Vec<Bytes>> {
+        let path = self.config.path_to_filesystem(location)?;
+        let ranges = ranges.to_vec();
+        maybe_spawn_blocking(move || {
+            // Vectored IO might be faster
+            let mut file = open_file(&path)?;
+            ranges
+                .into_iter()
+                .map(|r| read_range(&mut file, &path, r))
+                .collect()
         })
         .await
     }
@@ -750,6 +749,28 @@ impl AsyncWrite for LocalUpload {
     }
 }
 
+fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<Bytes> {
+    let to_read = range.end - range.start;
+    file.seek(SeekFrom::Start(range.start as u64))
+        .context(SeekSnafu { path })?;
+
+    let mut buf = Vec::with_capacity(to_read);
+    let read = file
+        .take(to_read as u64)
+        .read_to_end(&mut buf)
+        .context(UnableToReadBytesSnafu { path })?;
+
+    ensure!(
+        read == to_read,
+        OutOfRangeSnafu {
+            path,
+            expected: to_read,
+            actual: read
+        }
+    );
+    Ok(buf.into())
+}
+
 fn open_file(path: &PathBuf) -> Result<File> {
     let file = File::open(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -888,12 +909,12 @@ mod tests {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
 
-        put_get_delete_list(&integration).await.unwrap();
-        list_uses_directories_correctly(&integration).await.unwrap();
-        list_with_delimiter(&integration).await.unwrap();
-        rename_and_copy(&integration).await.unwrap();
-        copy_if_not_exists(&integration).await.unwrap();
-        stream_get(&integration).await.unwrap();
+        put_get_delete_list(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        stream_get(&integration).await;
     }
 
     #[test]
@@ -901,10 +922,10 @@ mod tests {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
         futures::executor::block_on(async move {
-            put_get_delete_list(&integration).await.unwrap();
-            list_uses_directories_correctly(&integration).await.unwrap();
-            list_with_delimiter(&integration).await.unwrap();
-            stream_get(&integration).await.unwrap();
+            put_get_delete_list(&integration).await;
+            list_uses_directories_correctly(&integration).await;
+            list_with_delimiter(&integration).await;
+            stream_get(&integration).await;
         });
     }
 
@@ -1212,7 +1233,7 @@ mod tests {
             .to_string();
 
         assert!(
-            err.contains("Invalid path segment - got \"💀\" expected: \"%F0%9F%92%80\""),
+            err.contains("Encountered illegal character sequence \"💀\" whilst parsing path segment \"💀\""),
             "{}",
             err
         );
@@ -1246,5 +1267,23 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn filesystem_filename_with_percent() {
+        let temp_dir = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(temp_dir.path()).unwrap();
+        let filename = "L%3ABC.parquet";
+
+        std::fs::write(temp_dir.path().join(filename), "foo").unwrap();
+
+        let list_stream = integration.list(None).await.unwrap();
+        let res: Vec<_> = list_stream.try_collect().await.unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].location.as_ref(), filename);
+
+        let res = integration.list_with_delimiter(None).await.unwrap();
+        assert_eq!(res.objects.len(), 1);
+        assert_eq!(res.objects[0].location.as_ref(), filename);
     }
 }

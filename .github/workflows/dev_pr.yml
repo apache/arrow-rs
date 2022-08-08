@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-name: Dev PR
+name: dev_pr
 
 # Trigger whenever a PR is changed (title as well as new / changed commits)
 on:
