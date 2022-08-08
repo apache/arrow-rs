@@ -418,9 +418,11 @@ async fn web_identity(
     let bytes = client
         .request(Method::POST, endpoint)
         .query(&[
+            ("Action", "AssumeRoleWithWebIdentity"),
             ("DurationSeconds", "3600"),
             ("RoleArn", role_arn),
             ("RoleSessionName", session_name),
+            ("Version", "2011-06-15"),
             ("WebIdentityToken", token),
         ])
         .send_retry(retry_config)
