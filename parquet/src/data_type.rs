@@ -946,7 +946,7 @@ pub(crate) mod private {
                 .as_mut()
                 .expect("set_data should have been called");
             let num_values = std::cmp::min(buffer.len(), decoder.num_values);
-            for i in 0..num_values {
+            for val_array in buffer.iter_mut().take(num_values) {
                 let len: usize =
                     read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref())
                         as usize;
@@ -956,7 +956,7 @@ pub(crate) mod private {
                     return Err(eof_err!("Not enough bytes to decode"));
                 }
 
-                let val: &mut Self = buffer[i].as_mut_any().downcast_mut().unwrap();
+                let val: &mut Self = val_array.as_mut_any().downcast_mut().unwrap();
 
                 val.set_data(data.range(decoder.start, len));
                 decoder.start += len;
