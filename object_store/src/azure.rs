@@ -628,7 +628,7 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Set the Azure Access Key (required - one of token_credential ot access key)
+    /// Set the Azure Access Key (required - one of token_credential or access key)
     pub fn with_access_key(mut self, access_key: impl Into<String>) -> Self {
         self.access_key = Some(access_key.into());
         self
@@ -640,7 +640,7 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Set a TokenCredential to be used for authentication (required - one of token_credential ot access key)
+    /// Set a TokenCredential to be used for authentication (required - one of token_credential or access key)
     pub fn with_token_credential(
         mut self,
         token_credential: Arc<dyn TokenCredential>,
