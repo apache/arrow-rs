@@ -129,6 +129,12 @@ pub(crate) enum Error {
         path: String,
         source: io::Error,
     },
+
+    #[snafu(display("Unable to canonicalize filesystem root: {}", path.display()))]
+    UnableToCanonicalize {
+        path: PathBuf,
+        source: io::Error,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -214,10 +220,17 @@ impl LocalFileSystem {
     }
 
     /// Create new filesystem storage with `prefix` applied to all paths
+    ///
+    /// Returns an error if the path does not exist
+    ///
     pub fn new_with_prefix(prefix: impl AsRef<std::path::Path>) -> Result<Self> {
+        let path = std::fs::canonicalize(&prefix).context(UnableToCanonicalizeSnafu {
+            path: prefix.as_ref(),
+        })?;
+
         Ok(Self {
             config: Arc::new(Config {
-                root: filesystem_path_to_url(prefix)?,
+                root: filesystem_path_to_url(path)?,
             }),
         })
     }
@@ -1285,5 +1298,12 @@ mod tests {
         let res = integration.list_with_delimiter(None).await.unwrap();
         assert_eq!(res.objects.len(), 1);
         assert_eq!(res.objects[0].location.as_ref(), filename);
+    }
+
+    #[tokio::test]
+    async fn relative_root() {
+        LocalFileSystem::new_with_prefix(".").unwrap();
+        LocalFileSystem::new_with_prefix("..").unwrap();
+        LocalFileSystem::new_with_prefix("../..").unwrap();
     }
 }
