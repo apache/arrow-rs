@@ -322,26 +322,25 @@ impl ObjectStore for LocalFileSystem {
         let path = self.config.path_to_filesystem(location)?;
         maybe_spawn_blocking(move || {
             let mut file = open_file(&path)?;
-            let to_read = range.end - range.start;
-            file.seek(SeekFrom::Start(range.start as u64))
-                .context(SeekSnafu { path: &path })?;
+            read_range(&mut file, &path, range)
+        })
+        .await
+    }
 
-            let mut buf = Vec::with_capacity(to_read);
-            let read = file
-                .take(to_read as u64)
-                .read_to_end(&mut buf)
-                .context(UnableToReadBytesSnafu { path: &path })?;
-
-            ensure!(
-                read == to_read,
-                OutOfRangeSnafu {
-                    path: &path,
-                    expected: to_read,
-                    actual: read
-                }
-            );
-
-            Ok(buf.into())
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> Result<Vec<Bytes>> {
+        let path = self.config.path_to_filesystem(location)?;
+        let ranges = ranges.to_vec();
+        maybe_spawn_blocking(move || {
+            // Vectored IO might be faster
+            let mut file = open_file(&path)?;
+            ranges
+                .into_iter()
+                .map(|r| read_range(&mut file, &path, r))
+                .collect()
         })
         .await
     }
@@ -748,6 +747,28 @@ impl AsyncWrite for LocalUpload {
             }
         }
     }
+}
+
+fn read_range(file: &mut File, path: &PathBuf, range: Range<usize>) -> Result<Bytes> {
+    let to_read = range.end - range.start;
+    file.seek(SeekFrom::Start(range.start as u64))
+        .context(SeekSnafu { path })?;
+
+    let mut buf = Vec::with_capacity(to_read);
+    let read = file
+        .take(to_read as u64)
+        .read_to_end(&mut buf)
+        .context(UnableToReadBytesSnafu { path })?;
+
+    ensure!(
+        read == to_read,
+        OutOfRangeSnafu {
+            path,
+            expected: to_read,
+            actual: read
+        }
+    );
+    Ok(buf.into())
 }
 
 fn open_file(path: &PathBuf) -> Result<File> {

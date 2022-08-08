@@ -128,6 +128,22 @@ impl ObjectStore for InMemory {
         Ok(data.slice(range))
     }
 
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> Result<Vec<Bytes>> {
+        let data = self.get_bytes(location).await?;
+        ranges
+            .iter()
+            .map(|range| {
+                ensure!(range.end <= data.len(), OutOfRangeSnafu);
+                ensure!(range.start <= range.end, BadRangeSnafu);
+                Ok(data.slice(range.clone()))
+            })
+            .collect()
+    }
+
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let last_modified = Utc::now();
         let bytes = self.get_bytes(location).await?;
