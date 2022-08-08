@@ -198,12 +198,6 @@ where
         self.num_records += buffered_records;
         self.num_values += buffered_values;
 
-        self.consume_def_levels();
-        self.consume_rep_levels();
-        self.consume_record_data();
-        self.consume_bitmap();
-        self.reset();
-
         let remaining = num_records - buffered_records;
 
         if remaining == 0 {

@@ -1003,14 +1003,14 @@ mod test {
     async fn gcs_test() {
         let integration = maybe_skip_integration!().build().unwrap();
 
-        put_get_delete_list(&integration).await.unwrap();
-        list_uses_directories_correctly(&integration).await.unwrap();
-        list_with_delimiter(&integration).await.unwrap();
-        rename_and_copy(&integration).await.unwrap();
+        put_get_delete_list(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
         if integration.client.base_url == default_gcs_base_url() {
             // Fake GCS server does not yet implement XML Multipart uploads
             // https://github.com/fsouza/fake-gcs-server/issues/852
-            stream_get(&integration).await.unwrap();
+            stream_get(&integration).await;
         }
     }
 
