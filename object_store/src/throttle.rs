@@ -197,12 +197,28 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
     async fn get_range(&self, location: &Path, range: Range<usize>) -> Result<Bytes> {
         let config = self.config();
 
-        let sleep_duration = config.wait_delete_per_call
+        let sleep_duration = config.wait_get_per_call
             + config.wait_get_per_byte * (range.end - range.start) as u32;
 
         sleep(sleep_duration).await;
 
         self.inner.get_range(location, range).await
+    }
+
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> Result<Vec<Bytes>> {
+        let config = self.config();
+
+        let total_bytes: usize = ranges.iter().map(|range| range.end - range.start).sum();
+        let sleep_duration =
+            config.wait_get_per_call + config.wait_get_per_byte * total_bytes as u32;
+
+        sleep(sleep_duration).await;
+
+        self.inner.get_ranges(location, ranges).await
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
@@ -260,10 +276,22 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.copy(from, to).await
     }
 
+    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        sleep(self.config().wait_put_per_call).await;
+
+        self.inner.rename(from, to).await
+    }
+
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         sleep(self.config().wait_put_per_call).await;
 
         self.inner.copy_if_not_exists(from, to).await
+    }
+
+    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        sleep(self.config().wait_put_per_call).await;
+
+        self.inner.rename_if_not_exists(from, to).await
     }
 }
 

@@ -176,7 +176,9 @@ mod multipart;
 mod util;
 
 use crate::path::Path;
-use crate::util::{collect_bytes, maybe_spawn_blocking};
+use crate::util::{
+    coalesce_ranges, collect_bytes, maybe_spawn_blocking, OBJECT_STORE_COALESCE_DEFAULT,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -238,11 +240,12 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         location: &Path,
         ranges: &[Range<usize>],
     ) -> Result<Vec<Bytes>> {
-        let mut out = Vec::with_capacity(ranges.len());
-        for range in ranges {
-            out.push(self.get_range(location, range.clone()).await?)
-        }
-        Ok(out)
+        coalesce_ranges(
+            ranges,
+            |range| self.get_range(location, range),
+            OBJECT_STORE_COALESCE_DEFAULT,
+        )
+        .await
     }
 
     /// Return the metadata for the specified location

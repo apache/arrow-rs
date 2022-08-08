@@ -73,11 +73,9 @@ where
 }
 
 /// Range requests with a gap less than or equal to this,
-/// will be coalesced into a single request
-#[cfg(any(feature = "azure", feature = "aws", feature = "gcp"))]
-pub const OBJECT_STORE_COALESCE_DEFAULT: usize = 10 * 1024;
+/// will be coalesced into a single request by [`coalesce_ranges`]
+pub const OBJECT_STORE_COALESCE_DEFAULT: usize = 1024 * 1024;
 
-#[cfg(any(test, feature = "azure", feature = "aws", feature = "gcp"))]
 /// Takes a function to fetch ranges and coalesces adjacent ranges if they are
 /// less than `coalesce` bytes apart. Out of order `ranges` are not coalesced
 pub async fn coalesce_ranges<F, Fut>(
@@ -125,7 +123,7 @@ mod tests {
     #[tokio::test]
     async fn test_coalesce_ranges() {
         let do_fetch = |ranges: Vec<Range<usize>>, coalesce: usize| async move {
-            let max = ranges.iter().map(|x| x.end).max().unwrap();
+            let max = ranges.iter().map(|x| x.end).max().unwrap_or(0);
             let src: Vec<_> = (0..max).map(|x| x as u8).collect();
 
             let mut fetches = vec![];
@@ -146,6 +144,15 @@ mod tests {
             }
             fetches
         };
+
+        let fetches = do_fetch(vec![], 0).await;
+        assert_eq!(fetches, vec![]);
+
+        let fetches = do_fetch(vec![0..3], 0).await;
+        assert_eq!(fetches, vec![0..3]);
+
+        let fetches = do_fetch(vec![0..2, 3..5], 0).await;
+        assert_eq!(fetches, vec![0..2, 3..5]);
 
         let fetches = do_fetch(vec![0..1, 1..2], 0).await;
         assert_eq!(fetches, vec![0..2]);

@@ -26,7 +26,6 @@
 //! [ObjectStore::abort_multipart] is a no-op, since Azure Blob Store doesn't provide
 //! a way to drop old blocks. Instead unused blocks are automatically cleaned up
 //! after 7 days.
-use crate::util::{coalesce_ranges, OBJECT_STORE_COALESCE_DEFAULT};
 use crate::{
     multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart},
     path::{Path, DELIMITER},
@@ -330,19 +329,6 @@ impl ObjectStore for MicrosoftAzure {
             })?;
 
         Ok(blob.data)
-    }
-
-    async fn get_ranges(
-        &self,
-        location: &Path,
-        ranges: &[std::ops::Range<usize>],
-    ) -> Result<Vec<Bytes>> {
-        coalesce_ranges(
-            ranges,
-            |range| self.get_range(location, range),
-            OBJECT_STORE_COALESCE_DEFAULT,
-        )
-        .await
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
