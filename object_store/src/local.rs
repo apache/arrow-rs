@@ -1212,7 +1212,7 @@ mod tests {
             .to_string();
 
         assert!(
-            err.contains("Invalid path segment - got \"💀\" expected: \"%F0%9F%92%80\""),
+            err.contains("Encountered illegal character sequence \"💀\" whilst parsing path segment \"💀\""),
             "{}",
             err
         );
@@ -1246,5 +1246,23 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn filesystem_filename_with_percent() {
+        let temp_dir = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(temp_dir.path()).unwrap();
+        let filename = "L%3ABC.parquet";
+
+        std::fs::write(temp_dir.path().join(filename), "foo").unwrap();
+
+        let list_stream = integration.list(None).await.unwrap();
+        let res: Vec<_> = list_stream.try_collect().await.unwrap();
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].location.as_ref(), filename);
+
+        let res = integration.list_with_delimiter(None).await.unwrap();
+        assert_eq!(res.objects.len(), 1);
+        assert_eq!(res.objects[0].location.as_ref(), filename);
     }
 }
