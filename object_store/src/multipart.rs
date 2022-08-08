@@ -186,7 +186,18 @@ where
 
         // If shutdown task is not set, set it
         let parts = std::mem::take(&mut self.completed_parts);
-        let parts = parts.into_iter().map(Option::unwrap).collect();
+        let parts = parts
+            .into_iter()
+            .enumerate()
+            .map(|(idx, part)| {
+                part.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Missing information for upload part {}", idx),
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?;
 
         let inner = Arc::clone(&self.inner);
         let completion_task = self.completion_task.get_or_insert_with(|| {
