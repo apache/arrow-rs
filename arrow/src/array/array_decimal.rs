@@ -57,7 +57,7 @@ use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
 ///    // set precision and scale so values are interpreted
 ///    // as `8887.000000`, `Null`, and `-8887.000000`
 ///    let decimal_array = decimal_array
-///     .with_precision_and_scale(23, 6)
+///     .with_precision_and_scale(23, 6, true)
 ///     .unwrap();
 ///
 ///    assert_eq!(&DataType::Decimal128(23, 6), decimal_array.data_type());
@@ -253,11 +253,15 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     /// Returns a Decimal array with the same data as self, with the
     /// specified precision.
     ///
+    /// If make sure that all values in this array are not out of ranges/bounds with the specified precision,
+    /// please set `need_validation` to `false, otherwise set to `true`.
+    ///
     /// Returns an Error if:
     /// 1. `precision` is larger than [`Self::MAX_PRECISION`]
     /// 2. `scale` is larger than [`Self::MAX_SCALE`];
     /// 3. `scale` is > `precision`
-    fn with_precision_and_scale(self, precision: usize, scale: usize) -> Result<U>
+    /// 4. `need_validation` is `true`, but some values are out of ranges/bounds
+    fn with_precision_and_scale(self, precision: usize, scale: usize, need_validation: bool) -> Result<U>
     where
         Self: Sized,
     {
@@ -282,10 +286,9 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
             )));
         }
 
-        // Ensure that all values are within the requested
-        // precision. For performance, only check if the precision is
-        // decreased
-        self.validate_decimal_precision(precision)?;
+        if need_validation {
+            self.validate_decimal_precision(precision)?;
+        }
 
         let data_type = if Self::VALUE_LENGTH == 16 {
             DataType::Decimal128(self.precision(), self.scale())

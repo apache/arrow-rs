@@ -184,6 +184,8 @@ where
                 let a = arrow::compute::cast(&array, &ArrowType::Date32)?;
                 arrow::compute::cast(&a, &target_type)?
             }
+            // In the parquet file, if the logical/converted type is decimal and the physical type
+            // is INT32 or INT64, don't need to do validation.
             ArrowType::Decimal128(p, s) => {
                 let array = match array.data_type() {
                     ArrowType::Int32 => array
@@ -208,7 +210,7 @@ where
                         ))
                     }
                 }
-                .with_precision_and_scale(p, s)?;
+                .with_precision_and_scale(p, s, false)?;
 
                 Arc::new(array) as ArrayRef
             }

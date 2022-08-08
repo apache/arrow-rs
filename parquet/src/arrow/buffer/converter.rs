@@ -82,11 +82,12 @@ impl Converter<Vec<Option<FixedLenByteArray>>, Decimal128Array>
     for DecimalArrayConverter
 {
     fn convert(&self, source: Vec<Option<FixedLenByteArray>>) -> Result<Decimal128Array> {
+        // In the parquet file, if the logical/converted type is decimal, don't need to do validation.
         let array = source
             .into_iter()
             .map(|array| array.map(|array| from_bytes_to_i128(array.data())))
             .collect::<Decimal128Array>()
-            .with_precision_and_scale(self.precision as usize, self.scale as usize)?;
+            .with_precision_and_scale(self.precision as usize, self.scale as usize, false)?;
 
         Ok(array)
     }
@@ -94,11 +95,12 @@ impl Converter<Vec<Option<FixedLenByteArray>>, Decimal128Array>
 
 impl Converter<Vec<Option<ByteArray>>, Decimal128Array> for DecimalArrayConverter {
     fn convert(&self, source: Vec<Option<ByteArray>>) -> Result<Decimal128Array> {
+        // In the parquet file, if the logical/converted type is decimal, don't need to do validation.
         let array = source
             .into_iter()
             .map(|array| array.map(|array| from_bytes_to_i128(array.data())))
             .collect::<Decimal128Array>()
-            .with_precision_and_scale(self.precision as usize, self.scale as usize)?;
+            .with_precision_and_scale(self.precision as usize, self.scale as usize, false)?;
 
         Ok(array)
     }

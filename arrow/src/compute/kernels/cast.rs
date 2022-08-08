@@ -431,8 +431,8 @@ pub fn cast_with_options(
         return Ok(array.clone());
     }
     match (from_type, to_type) {
-        (Decimal128(_, s1), Decimal128(p2, s2)) => {
-            cast_decimal_to_decimal(array, s1, p2, s2)
+        (Decimal128(p1, s1), Decimal128(p2, s2)) => {
+            cast_decimal_to_decimal(array, p1,s1, p2, s2)
         }
         (Decimal128(_, scale), _) => {
             // cast decimal to other type
@@ -1254,6 +1254,7 @@ const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
 /// Cast one type of decimal array to another type of decimal array
 fn cast_decimal_to_decimal(
     array: &ArrayRef,
+    input_precision, &usize,
     input_scale: &usize,
     output_precision: &usize,
     output_scale: &usize,
@@ -1276,8 +1277,17 @@ fn cast_decimal_to_decimal(
             .iter()
             .map(|v| v.map(|v| v.as_i128() * mul))
             .collect::<Decimal128Array>()
-    }
-    .with_precision_and_scale(*output_precision, *output_scale)?;
+    };
+    // For decimal cast to decimal, if the range of output is gt_eq than the input, don't need to
+    // do validation.
+    let output_array  = match output_precision-output_scale>=input_precision - input_scale {
+        true => {
+            output_array.with_precision_and_scale(*output_precision, *output_scale, false)
+        }
+        false => {
+            output_array.with_precision_and_scale(*output_precision, *output_scale, true)
+        }
+    }?;
 
     Ok(Arc::new(output_array))
 }
