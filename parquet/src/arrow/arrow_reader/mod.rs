@@ -21,6 +21,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::array::Array;
+use arrow::compute::prep_null_mask_filter;
 use arrow::datatypes::{DataType as ArrowType, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
@@ -353,18 +354,20 @@ impl ParquetRecordBatchReader {
 pub(crate) fn evaluate_predicate(
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
-    selection: Option<RowSelection>,
+    input_selection: Option<RowSelection>,
     predicate: &mut dyn ArrowPredicate,
 ) -> Result<RowSelection> {
     let reader =
-        ParquetRecordBatchReader::new(batch_size, array_reader, selection.clone());
+        ParquetRecordBatchReader::new(batch_size, array_reader, input_selection.clone());
     let mut filters = vec![];
     for maybe_batch in reader {
-        filters.push(predicate.filter(maybe_batch?)?);
+        let filter = predicate.filter(maybe_batch?)?;
+        let filter = prep_null_mask_filter(&filter)?;
+        filters.push(filter);
     }
 
     let raw = RowSelection::from_filters(&filters);
-    Ok(match selection {
+    Ok(match input_selection {
         Some(selection) => selection.and(&raw),
         None => raw,
     })

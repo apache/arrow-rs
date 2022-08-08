@@ -22,14 +22,17 @@ use arrow::record_batch::RecordBatch;
 
 /// A predicate operating on [`RecordBatch`]
 pub trait ArrowPredicate: Send + 'static {
-    /// Returns the projection mask for this predicate
+    /// Returns the [`ProjectionMask`] that describes the columns required
+    /// to evaluate this predicate. All projected columns will be provided in the `batch`
+    /// passed to [`filter`](Self::filter)
     fn projection(&self) -> &ProjectionMask;
 
     /// Called with a [`RecordBatch`] containing the columns identified by [`Self::mask`],
     /// with `true` values in the returned [`BooleanArray`] indicating rows
     /// matching the predicate.
     ///
-    /// The returned [`BooleanArray`] must not contain any nulls
+    /// All row that are `true` in returned [`BooleanArray`] will be returned to the reader.
+    /// Any rows that are `false` or `Null` will not be
     fn filter(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray>;
 }
 
@@ -43,7 +46,10 @@ impl<F> ArrowPredicateFn<F>
 where
     F: FnMut(RecordBatch) -> ArrowResult<BooleanArray> + Send + 'static,
 {
-    /// Create a new [`ArrowPredicateFn`]
+    /// Create a new [`ArrowPredicateFn`]. `f` will be passed batches
+    /// that contains the columns specified in `projection`
+    /// and returns a [`BooleanArray`] that describes which rows should
+    /// be passed along
     pub fn new(projection: ProjectionMask, f: F) -> Self {
         Self { f, projection }
     }
@@ -69,18 +75,26 @@ where
 /// to the first predicate, and each predicate in turn will then be used to compute
 /// a more refined [`RowSelection`] to use when evaluating the subsequent predicates.
 ///
-/// Once all predicates have been evaluated, the resulting [`RowSelection`] will be
-/// used to return just the desired rows.
+/// Once all predicates have been evaluated, the final [`RowSelection`] is applied
+/// to the overall [`ColumnProjection`] to produce the final output [`RecordBatch`].
 ///
 /// This design has a couple of implications:
 ///
-/// * [`RowFilter`] can be used to skip fetching IO, in addition to decode overheads
+/// * [`RowFilter`] can be used to skip entire pages, and thus IO, in addition to CPU decode overheads
 /// * Columns may be decoded multiple times if they appear in multiple [`ProjectionMask`]
 /// * IO will be deferred until needed by a [`ProjectionMask`]
 ///
 /// As such there is a trade-off between a single large predicate, or multiple predicates,
 /// that will depend on the shape of the data. Whilst multiple smaller predicates may
 /// minimise the amount of data scanned/decoded, it may not be faster overall.
+///
+/// For example, if a predicate that needs a single column of data filters out all but
+/// 1% of the rows, applying it as one of the early `ArrowPredicateFn` will likely significantly
+/// improve performance.
+///
+/// As a counter example, if a predicate needs several columns of data to evaluate but
+/// leaves 99% of the rows, it may be better to not filter the data from parquet and
+/// apply the filter after the RecordBatch has been fully decoded.
 ///
 pub struct RowFilter {
     /// A list of [`ArrowPredicate`]

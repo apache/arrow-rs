@@ -21,8 +21,7 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
 
-/// [`RowSelection`] is a collection of [`RowSelect`] used to skip rows when
-/// scanning a parquet file
+/// [`RowSelector`] represents a range of rows to scan from a parquet file
 #[derive(Debug, Clone, Copy)]
 pub struct RowSelector {
     /// The number of rows
