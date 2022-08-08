@@ -22,7 +22,6 @@ use crate::array::ArrayData;
 use crate::array::ArrayRef;
 use crate::array::GenericListArray;
 use crate::array::OffsetSizeTrait;
-use crate::datatypes::DataType;
 use crate::datatypes::Field;
 
 use super::{ArrayBuilder, BufferBuilder, NullBufferBuilder};
@@ -135,11 +134,7 @@ where
             values_data.data_type().clone(),
             true, // TODO: find a consistent way of getting this
         ));
-        let data_type = if OffsetSize::IS_LARGE {
-            DataType::LargeList(field)
-        } else {
-            DataType::List(field)
-        };
+        let data_type = GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field);
         let array_data_builder = ArrayData::builder(data_type)
             .len(len)
             .add_buffer(offset_buffer)
@@ -163,6 +158,7 @@ mod tests {
     use crate::array::builder::ListBuilder;
     use crate::array::{Array, Int32Array, Int32Builder};
     use crate::buffer::Buffer;
+    use crate::datatypes::DataType;
 
     fn _test_generic_list_array_builder<O: OffsetSizeTrait>() {
         let values_builder = Int32Builder::new(10);

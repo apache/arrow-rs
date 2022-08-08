@@ -48,6 +48,7 @@ use futures::{
     Future, Stream, StreamExt, TryStreamExt,
 };
 use hyper::client::Builder as HyperBuilder;
+use percent_encoding::{percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use rusoto_core::ByteStream;
 use rusoto_credential::{InstanceMetadataProvider, StaticProvider};
 use rusoto_s3::S3;
@@ -61,6 +62,17 @@ use std::{
 use tokio::io::AsyncWrite;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{debug, warn};
+
+// Do not URI-encode any of the unreserved characters that RFC 3986 defines:
+// A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
+const STRICT_ENCODE_SET: AsciiSet = NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
+
+/// This struct is used to maintain the URI path encoding
+const STRICT_PATH_ENCODE_SET: AsciiSet = STRICT_ENCODE_SET.remove(b'/');
 
 /// The maximum number of times a request will be retried in the case of an AWS server error
 pub const MAX_NUM_RETRIES: u32 = 3;
@@ -541,9 +553,15 @@ impl ObjectStore for AmazonS3 {
         let to = to.as_ref();
         let bucket_name = self.bucket_name.clone();
 
+        let copy_source = format!(
+            "{}/{}",
+            &bucket_name,
+            percent_encode(from.as_ref(), &STRICT_PATH_ENCODE_SET)
+        );
+
         let request_factory = move || rusoto_s3::CopyObjectRequest {
             bucket: bucket_name.clone(),
-            copy_source: format!("{}/{}", &bucket_name, from),
+            copy_source,
             key: to.to_string(),
             ..Default::default()
         };
@@ -1009,34 +1027,6 @@ where
     }
 }
 
-impl Error {
-    #[cfg(test)]
-    fn s3_error_due_to_credentials(&self) -> bool {
-        use rusoto_core::RusotoError;
-        use Error::*;
-
-        matches!(
-            self,
-            UnableToPutData {
-                source: RusotoError::Credentials(_),
-                bucket: _,
-                path: _,
-            } | UnableToGetData {
-                source: RusotoError::Credentials(_),
-                bucket: _,
-                path: _,
-            } | UnableToDeleteData {
-                source: RusotoError::Credentials(_),
-                bucket: _,
-                path: _,
-            } | UnableToListData {
-                source: RusotoError::Credentials(_),
-                bucket: _,
-            }
-        )
-    }
-}
-
 struct S3MultiPartUpload {
     bucket: String,
     key: String,
@@ -1168,9 +1158,6 @@ mod tests {
     use bytes::Bytes;
     use std::env;
 
-    type TestError = Box<dyn std::error::Error + Send + Sync + 'static>;
-    type Result<T, E = TestError> = std::result::Result<T, E>;
-
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
     // Helper macro to skip tests if TEST_INTEGRATION and the AWS
@@ -1250,32 +1237,16 @@ mod tests {
         }};
     }
 
-    fn check_credentials<T>(r: Result<T>) -> Result<T> {
-        if let Err(e) = &r {
-            let e = &**e;
-            if let Some(e) = e.downcast_ref::<Error>() {
-                if e.s3_error_due_to_credentials() {
-                    eprintln!(
-                        "Try setting the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY \
-                               environment variables"
-                    );
-                }
-            }
-        }
-
-        r
-    }
-
     #[tokio::test]
     async fn s3_test() {
         let config = maybe_skip_integration!();
         let integration = config.build().unwrap();
 
-        check_credentials(put_get_delete_list(&integration).await).unwrap();
-        check_credentials(list_uses_directories_correctly(&integration).await).unwrap();
-        check_credentials(list_with_delimiter(&integration).await).unwrap();
-        check_credentials(rename_and_copy(&integration).await).unwrap();
-        check_credentials(stream_get(&integration).await).unwrap();
+        put_get_delete_list(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        stream_get(&integration).await;
     }
 
     #[tokio::test]

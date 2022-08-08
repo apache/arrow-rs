@@ -1215,7 +1215,7 @@ mod tests {
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader));
+            assert!(arrow_json.equals_reader(&mut reader).unwrap());
         });
     }
 
@@ -1336,7 +1336,7 @@ mod tests {
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader));
+            assert!(arrow_json.equals_reader(&mut reader).unwrap());
             // the next batch must be empty
             assert!(reader.next().is_none());
             // the stream must indicate that it's finished
@@ -1373,7 +1373,7 @@ mod tests {
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader));
+            assert!(arrow_json.equals_reader(&mut reader).unwrap());
         });
     }
 
@@ -1406,7 +1406,7 @@ mod tests {
 
             // read expected JSON output
             let arrow_json = read_gzip_json(version, path);
-            assert!(arrow_json.equals_reader(&mut reader));
+            assert!(arrow_json.equals_reader(&mut reader).unwrap());
             // the next batch must be empty
             assert!(reader.next().is_none());
             // the stream must indicate that it's finished
