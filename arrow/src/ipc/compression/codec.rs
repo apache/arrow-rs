@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::buffer::Buffer;
 use crate::error::{ArrowError, Result};
 use crate::ipc::CompressionType;
 use std::io::{Read, Write};
@@ -30,25 +31,16 @@ pub enum CompressionCodec {
 }
 
 impl TryFrom<CompressionType> for CompressionCodec {
-    fn try_from(compression_type: CompressionType) -> Self {
-        match compression_type {
-            CompressionType::ZSTD => CompressionCodec::Zstd,
-            CompressionType::LZ4_FRAME => CompressionCodec::Lz4Frame,
-            other_type => {
-                return ArrowError::InvalidArgumentError(format!(
-                    "compression type {:?} not supported ",
-                    compression_type
-                ))
-            }
-        }
-    }
-}
+    type Error = ArrowError;
 
-impl From<CompressionCodec> for CompressionType {
-    fn from(codec: CompressionCodec) -> Self {
-        match codec {
-            CompressionCodec::Lz4Frame => CompressionType::LZ4_FRAME,
-            CompressionCodec::Zstd => CompressionType::ZSTD,
+    fn try_from(compression_type: CompressionType) -> Result<Self> {
+        match compression_type {
+            CompressionType::ZSTD => Ok(CompressionCodec::Zstd),
+            CompressionType::LZ4_FRAME => Ok(CompressionCodec::Lz4Frame),
+            other_type => Err(ArrowError::NotYetImplemented(format!(
+                "compression type {:?} not supported ",
+                other_type
+            ))),
         }
     }
 }
@@ -80,12 +72,12 @@ impl CompressionCodec {
             self.compress(input, output)?;
 
             let compression_len = output.len();
-            if compression_len > origin_buffer_len {
+            if compression_len > uncompressed_data_len {
                 // length of compressed data was larger than
                 // uncompressed data, use the uncompressed data with
                 // length -1 to indicate that we don't compress the
                 // data
-                output.resize(original_output_len);
+                output.truncate(original_output_len);
                 output.extend_from_slice(&LENGTH_NO_COMPRESSED_DATA.to_le_bytes());
                 output.extend_from_slice(&input);
             }
@@ -109,7 +101,7 @@ impl CompressionCodec {
             let empty = Vec::<u8>::new();
             Buffer::from(empty)
         } else if decompressed_length == LENGTH_NO_COMPRESSED_DATA {
-            // not compress
+            // no compression
             let data = &input[(LENGTH_OF_PREFIX_DATA as usize)..];
             Buffer::from(data)
         } else {
@@ -120,7 +112,7 @@ impl CompressionCodec {
             self.decompress(input_data, &mut _uncompressed_buffer)?;
             Buffer::from(_uncompressed_buffer)
         };
-        Ok(buffer);
+        Ok(buffer)
     }
 
     /// Compress the data in input buffer and write to output buffer

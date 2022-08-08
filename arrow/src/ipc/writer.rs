@@ -74,13 +74,14 @@ impl IpcWriteOptions {
     ) -> Result<Self> {
         self.batch_compression_type = batch_compression_type;
 
-        if let Some(compression) = self.batch_compression_type.as_ref() {
+        if let Some(_) = self.batch_compression_type.as_ref() {
             if self.metadata_version < ipc::MetadataVersion::V5 {
                 return Err(ArrowError::InvalidArgumentError(
                     "Compression only supported in metadata v5 and above".to_string(),
                 ));
             }
         }
+        Ok(self)
     }
     /// Try create IpcWriteOptions, checking for incompatible settings
     pub fn try_new(
@@ -1282,13 +1283,12 @@ mod tests {
             let file =
                 File::create(format!("target/debug/testdata/{}.arrow_file", file_name))
                     .unwrap();
-            let write_option = IpcWriteOptions::try_new_with_compression(
-                8,
-                false,
-                ipc::MetadataVersion::V5,
-                Some(CompressionCodec::Lz4Frame),
-            )
-            .unwrap();
+            let write_option =
+                IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
+                    .unwrap()
+                    .try_with_compression(Some(ipc::CompressionType::LZ4_FRAME))
+                    .unwrap();
+
             let mut writer =
                 FileWriter::try_new_with_options(file, &schema, write_option).unwrap();
             writer.write(&record_batch).unwrap();
@@ -1336,13 +1336,12 @@ mod tests {
         {
             let file =
                 File::create("target/debug/testdata/arrow_lz4.arrow_file").unwrap();
-            let write_option = IpcWriteOptions::try_new_with_compression(
-                8,
-                false,
-                ipc::MetadataVersion::V5,
-                Some(CompressionCodec::Lz4Frame),
-            )
-            .unwrap();
+            let write_option =
+                IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
+                    .unwrap()
+                    .try_with_compression(Some(ipc::CompressionType::LZ4_FRAME))
+                    .unwrap();
+
             let mut writer =
                 FileWriter::try_new_with_options(file, &schema, write_option).unwrap();
             writer.write(&record_batch).unwrap();
@@ -1390,13 +1389,12 @@ mod tests {
         {
             let file =
                 File::create("target/debug/testdata/arrow_zstd.arrow_file").unwrap();
-            let write_option = IpcWriteOptions::try_new_with_compression(
-                8,
-                false,
-                ipc::MetadataVersion::V5,
-                Some(CompressionCodec::Zstd),
-            )
-            .unwrap();
+            let write_option =
+                IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
+                    .unwrap()
+                    .try_with_compression(Some(ipc::CompressionType::ZSTD))
+                    .unwrap();
+
             let mut writer =
                 FileWriter::try_new_with_options(file, &schema, write_option).unwrap();
             writer.write(&record_batch).unwrap();
@@ -1812,13 +1810,12 @@ mod tests {
                 ))
                 .unwrap();
                 // write IPC version 5
-                let options = IpcWriteOptions::try_new_with_compression(
-                    8,
-                    false,
-                    ipc::MetadataVersion::V5,
-                    Some(CompressionCodec::Lz4Frame),
-                )
-                .unwrap();
+                let options =
+                    IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
+                        .unwrap()
+                        .try_with_compression(Some(ipc::CompressionType::LZ4_FRAME))
+                        .unwrap();
+
                 let mut writer =
                     FileWriter::try_new_with_options(file, &reader.schema(), options)
                         .unwrap();
@@ -1864,13 +1861,12 @@ mod tests {
                     version, path
                 ))
                 .unwrap();
-                let options = IpcWriteOptions::try_new_with_compression(
-                    8,
-                    false,
-                    ipc::MetadataVersion::V5,
-                    Some(CompressionCodec::Zstd),
-                )
-                .unwrap();
+                let options =
+                    IpcWriteOptions::try_new(8, false, ipc::MetadataVersion::V5)
+                        .unwrap()
+                        .try_with_compression(Some(ipc::CompressionType::ZSTD))
+                        .unwrap();
+
                 let mut writer =
                     StreamWriter::try_new_with_options(file, &reader.schema(), options)
                         .unwrap();
