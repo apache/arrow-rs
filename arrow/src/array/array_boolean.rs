@@ -233,19 +233,46 @@ impl<'a> BooleanArray {
     }
 }
 
+fn new_with_size_hint(
+    (_, data_len): (usize, Option<usize>),
+) -> (usize, MutableBuffer, MutableBuffer) {
+    let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
+
+    let num_bytes = bit_util::ceil(data_len, 8);
+    (
+        data_len,
+        MutableBuffer::from_len_zeroed(num_bytes),
+        MutableBuffer::from_len_zeroed(num_bytes),
+    )
+}
+
+unsafe fn boolean_array_from_builders(
+    data_len: usize,
+    null_builder: MutableBuffer,
+    val_builder: MutableBuffer,
+) -> BooleanArray {
+    let data = ArrayData::new_unchecked(
+        DataType::Boolean,
+        data_len,
+        None,
+        Some(null_builder.into()),
+        0,
+        vec![val_builder.into()],
+        vec![],
+    );
+    BooleanArray::from(data)
+}
+
 impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray {
     fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
         let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
 
-        let num_bytes = bit_util::ceil(data_len, 8);
-        let mut null_builder = MutableBuffer::from_len_zeroed(num_bytes);
-        let mut val_builder = MutableBuffer::from_len_zeroed(num_bytes);
+        let (data_len, mut null_builder, mut val_builder) =
+            new_with_size_hint(iter.size_hint());
 
         let data = val_builder.as_slice_mut();
-
         let null_slice = null_builder.as_slice_mut();
+
         iter.enumerate().for_each(|(i, item)| {
             if let Some(a) = item.borrow() {
                 bit_util::set_bit(null_slice, i);
@@ -255,18 +282,7 @@ impl<Ptr: Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray {
             }
         });
 
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                data_len,
-                None,
-                Some(null_builder.into()),
-                0,
-                vec![val_builder.into()],
-                vec![],
-            )
-        };
-        BooleanArray::from(data)
+        unsafe { boolean_array_from_builders(data_len, null_builder, val_builder) }
     }
 }
 
