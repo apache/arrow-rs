@@ -1477,7 +1477,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(ipc_compression)]
     fn read_generated_streams_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
@@ -1504,7 +1504,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "ipc_compression"))]
+    #[cfg(not(ipc_compression))]
     fn read_generated_streams_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
@@ -1529,7 +1529,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ipc_compression")]
+    #[cfg(ipc_compression)]
     fn read_generated_files_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";
@@ -1551,7 +1551,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "ipc_compression"))]
+    #[cfg(not(ipc_compression))]
     fn read_generated_files_200() {
         let testdata = crate::util::test_util::arrow_test_data();
         let version = "2.0.0-compression";

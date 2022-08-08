@@ -15,12 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[cfg(feature = "ipc_compression")]
+#[cfg(ipc_compression)]
 mod ipc_compression;
-#[cfg(feature = "ipc_compression")]
+#[cfg(ipc_compression)]
 pub(crate) use ipc_compression::CompressionCodecType;
 
-#[cfg(not(feature = "ipc_compression"))]
+#[cfg(not(ipc_compression))]
 mod stubs;
-#[cfg(not(feature = "ipc_compression"))]
+#[cfg(not(ipc_compression))]
 pub(crate) use stubs::CompressionCodecType;
