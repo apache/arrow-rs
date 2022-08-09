@@ -243,72 +243,87 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
     (signed_headers, canonical_headers)
 }
 
+/// Provides credentials for use when signing requests
 #[derive(Debug)]
 pub enum CredentialProvider {
-    Static {
-        credential: Arc<AwsCredential>,
-    },
-    /// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html>
-    Instance {
-        cache: TokenCache<Arc<AwsCredential>>,
-    },
-    WebIdentity {
-        cache: TokenCache<Arc<AwsCredential>>,
-        token: String,
-        role_arn: String,
-        session_name: String,
-        endpoint: String,
-    },
+    Static(StaticCredentialProvider),
+    Instance(InstanceCredentialProvider),
+    WebIdentity(WebIdentityProvider),
 }
 
 impl CredentialProvider {
-    pub async fn get_credential(
-        &self,
-        client: &Client,
-        retry_config: &RetryConfig,
-    ) -> Result<Arc<AwsCredential>> {
+    pub async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
         match self {
-            CredentialProvider::Static { credential } => Ok(Arc::clone(credential)),
-            CredentialProvider::Instance { cache } => {
-                cache
-                    .get_or_insert_with(|| {
-                        const METADATA_ENDPOINT: &str = "http://169.254.169.254";
-                        instance_creds(client, retry_config, METADATA_ENDPOINT).map_err(
-                            |source| crate::Error::Generic {
-                                store: "S3",
-                                source,
-                            },
-                        )
-                    })
-                    .await
-            }
-            CredentialProvider::WebIdentity {
-                cache,
-                token,
-                role_arn,
-                session_name,
-                endpoint,
-            } => {
-                cache
-                    .get_or_insert_with(|| {
-                        web_identity(
-                            client,
-                            retry_config,
-                            token,
-                            role_arn,
-                            session_name,
-                            endpoint,
-                        )
-                        .map_err(|source| {
-                            crate::Error::Generic {
-                                store: "S3",
-                                source,
-                            }
-                        })
-                    })
-                    .await
-            }
+            CredentialProvider::Static(s) => Ok(Arc::clone(&s.credential)),
+            CredentialProvider::Instance(c) => c.get_credential().await,
+            CredentialProvider::WebIdentity(c) => c.get_credential().await,
         }
+    }
+}
+
+/// A static set of credentials
+#[derive(Debug)]
+pub struct StaticCredentialProvider {
+    pub credential: Arc<AwsCredential>,
+}
+
+/// Credentials sourced from the instance metadata service
+///
+/// <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html>
+#[derive(Debug)]
+pub struct InstanceCredentialProvider {
+    pub cache: TokenCache<Arc<AwsCredential>>,
+    pub client: Client,
+    pub retry_config: RetryConfig,
+}
+
+impl InstanceCredentialProvider {
+    async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
+        self.cache
+            .get_or_insert_with(|| {
+                const METADATA_ENDPOINT: &str = "http://169.254.169.254";
+                instance_creds(&self.client, &self.retry_config, METADATA_ENDPOINT)
+                    .map_err(|source| crate::Error::Generic {
+                        store: "S3",
+                        source,
+                    })
+            })
+            .await
+    }
+}
+
+/// Credentials sourced using AssumeRoleWithWebIdentity
+///
+/// <https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts-technical-overview.html>
+#[derive(Debug)]
+pub struct WebIdentityProvider {
+    pub cache: TokenCache<Arc<AwsCredential>>,
+    pub token: String,
+    pub role_arn: String,
+    pub session_name: String,
+    pub endpoint: String,
+    pub client: Client,
+    pub retry_config: RetryConfig,
+}
+
+impl WebIdentityProvider {
+    async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
+        self.cache
+            .get_or_insert_with(|| {
+                web_identity(
+                    &self.client,
+                    &self.retry_config,
+                    &self.token,
+                    &self.role_arn,
+                    &self.session_name,
+                    &self.endpoint,
+                )
+                .map_err(|source| crate::Error::Generic {
+                    store: "S3",
+                    source,
+                })
+            })
+            .await
     }
 }
 

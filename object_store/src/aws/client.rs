@@ -230,10 +230,7 @@ impl S3Client {
     }
 
     async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
-        self.config
-            .credentials
-            .get_credential(&self.client, &self.config.retry_config)
-            .await
+        self.config.credentials.get_credential().await
     }
 
     /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>

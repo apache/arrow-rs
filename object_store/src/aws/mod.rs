@@ -36,6 +36,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
+use reqwest::Client;
 use snafu::{OptionExt, ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::ops::Range;
@@ -44,7 +45,10 @@ use tokio::io::AsyncWrite;
 use tracing::info;
 
 use crate::aws::client::{S3Client, S3Config};
-use crate::aws::credential::{AwsCredential, CredentialProvider};
+use crate::aws::credential::{
+    AwsCredential, CredentialProvider, InstanceCredentialProvider,
+    StaticCredentialProvider, WebIdentityProvider,
+};
 use crate::multipart::{CloudMultiPartUpload, CloudMultiPartUploadImpl, UploadPart};
 use crate::{
     GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Path, Result,
@@ -409,13 +413,13 @@ impl AmazonS3Builder {
         let credentials = match (self.access_key_id, self.secret_access_key, self.token) {
             (Some(key_id), Some(secret_key), token) => {
                 info!("Using Static credential provider");
-                CredentialProvider::Static {
+                CredentialProvider::Static(StaticCredentialProvider {
                     credential: Arc::new(AwsCredential {
                         key_id,
                         secret_key,
                         token,
                     }),
-                }
+                })
             }
             (None, Some(_), _) => return Err(Error::MissingAccessKeyId.into()),
             (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
@@ -434,19 +438,30 @@ impl AmazonS3Builder {
 
                     let endpoint = format!("https://sts.{}.amazonaws.com", region);
 
-                    CredentialProvider::WebIdentity {
+                    // Disallow non-HTTPs requests
+                    let client = Client::builder().https_only(true).build().unwrap();
+
+                    CredentialProvider::WebIdentity(WebIdentityProvider {
                         cache: Default::default(),
                         token,
                         session_name,
                         role_arn,
                         endpoint,
-                    }
+                        client,
+                        retry_config: self.retry_config.clone(),
+                    })
                 }
                 _ => {
                     info!("Using Instance credential provider");
-                    CredentialProvider::Instance {
+
+                    // The instance metadata endpoint is access over HTTP
+                    let client = Client::builder().https_only(false).build().unwrap();
+
+                    CredentialProvider::Instance(InstanceCredentialProvider {
                         cache: Default::default(),
-                    }
+                        client,
+                        retry_config: self.retry_config.clone(),
+                    })
                 }
             },
         };
