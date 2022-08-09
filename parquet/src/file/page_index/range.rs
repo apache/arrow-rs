@@ -213,6 +213,7 @@ impl RowRanges {
         result
     }
 
+    #[allow(unused)]
     pub fn row_count(&self) -> usize {
         self.ranges.iter().map(|x| x.count()).sum()
     }

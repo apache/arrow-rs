@@ -363,7 +363,7 @@ mod tests {
 
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::schema::types::ColumnPath;
-    use crate::util::test_common::get_test_file;
+    use crate::util::test_common::file_util::get_test_file;
 
     #[test]
     #[should_panic(expected = "Expected positive batch size, found: 0")]

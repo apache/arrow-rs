@@ -88,49 +88,17 @@ impl FromBytes for bool {
 
 from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64, f32, f64 }
 
-/// Reads `$size` of bytes from `$src`, and reinterprets them as type `$ty`, in
-/// little-endian order. `$ty` must implement the `Default` trait. Otherwise this won't
-/// compile.
+/// Reads `size` of bytes from `src`, and reinterprets them as type `ty`, in
+/// little-endian order.
 /// This is copied and modified from byteorder crate.
-macro_rules! read_num_bytes {
-    ($ty:ty, $size:expr, $src:expr) => {{
-        assert!($size <= $src.len());
-        let mut buffer = <$ty as $crate::util::bit_util::FromBytes>::Buffer::default();
-        buffer.as_mut()[..$size].copy_from_slice(&$src[..$size]);
-        <$ty>::from_ne_bytes(buffer)
-    }};
-}
-
-/// Converts value `val` of type `T` to a byte vector, by reading `num_bytes` from `val`.
-/// NOTE: if `val` is less than the size of `T` then it can be truncated.
-#[inline]
-pub fn convert_to_bytes<T>(val: &T, num_bytes: usize) -> Vec<u8>
+pub(crate) fn read_num_bytes<T>(size: usize, src: &[u8]) -> T
 where
-    T: ?Sized + AsBytes,
+    T: FromBytes,
 {
-    let mut bytes: Vec<u8> = vec![0; num_bytes];
-    memcpy_value(val.as_bytes(), num_bytes, &mut bytes);
-    bytes
-}
-
-#[inline]
-pub fn memcpy(source: &[u8], target: &mut [u8]) {
-    assert!(target.len() >= source.len());
-    target[..source.len()].copy_from_slice(source)
-}
-
-#[inline]
-pub fn memcpy_value<T>(source: &T, num_bytes: usize, target: &mut [u8])
-where
-    T: ?Sized + AsBytes,
-{
-    assert!(
-        target.len() >= num_bytes,
-        "Not enough space. Only had {} bytes but need to put {} bytes",
-        target.len(),
-        num_bytes
-    );
-    memcpy(&source.as_bytes()[..num_bytes], target)
+    assert!(size <= src.len());
+    let mut buffer = <T as FromBytes>::Buffer::default();
+    buffer.as_mut()[..size].copy_from_slice(&src[..size]);
+    <T>::from_ne_bytes(buffer)
 }
 
 /// Returns the ceil of value/divisor.
@@ -150,16 +118,6 @@ pub fn trailing_bits(v: u64, num_bits: usize) -> u64 {
     } else {
         v & ((1 << num_bits) - 1)
     }
-}
-
-#[inline]
-pub fn set_array_bit(bits: &mut [u8], i: usize) {
-    bits[i / 8] |= 1 << (i % 8);
-}
-
-#[inline]
-pub fn unset_array_bit(bits: &mut [u8], i: usize) {
-    bits[i / 8] &= !(1 << (i % 8));
 }
 
 /// Returns the minimum number of bits needed to represent the value 'x'
@@ -383,7 +341,7 @@ impl BitReader {
     pub fn new(buffer: ByteBufferPtr) -> Self {
         let total_bytes = buffer.len();
         let num_bytes = cmp::min(8, total_bytes);
-        let buffered_values = read_num_bytes!(u64, num_bytes, buffer.as_ref());
+        let buffered_values = read_num_bytes::<u64>(num_bytes, buffer.as_ref());
         BitReader {
             buffer,
             buffered_values,
@@ -397,7 +355,7 @@ impl BitReader {
         self.buffer = buffer;
         self.total_bytes = self.buffer.len();
         let num_bytes = cmp::min(8, self.total_bytes);
-        self.buffered_values = read_num_bytes!(u64, num_bytes, self.buffer.as_ref());
+        self.buffered_values = read_num_bytes::<u64>(num_bytes, self.buffer.as_ref());
         self.byte_offset = 0;
         self.bit_offset = 0;
     }
@@ -666,7 +624,7 @@ impl BitReader {
 
         // Advance byte_offset to next unread byte and read num_bytes
         self.byte_offset += bytes_read;
-        let v = read_num_bytes!(T, num_bytes, self.buffer.data()[self.byte_offset..]);
+        let v = read_num_bytes::<T>(num_bytes, &self.buffer.data()[self.byte_offset..]);
         self.byte_offset += num_bytes;
 
         // Reset buffered_values
@@ -717,7 +675,7 @@ impl BitReader {
     fn reload_buffer_values(&mut self) {
         let bytes_to_read = cmp::min(self.total_bytes - self.byte_offset, 8);
         self.buffered_values =
-            read_num_bytes!(u64, bytes_to_read, self.buffer.data()[self.byte_offset..]);
+            read_num_bytes::<u64>(bytes_to_read, &self.buffer.data()[self.byte_offset..]);
     }
 }
 
@@ -728,20 +686,11 @@ impl From<Vec<u8>> for BitReader {
     }
 }
 
-/// Returns the nearest multiple of `factor` that is `>=` than `num`. Here `factor` must
-/// be a power of 2.
-///
-/// Copied from the arrow crate to make arrow optional
-pub fn round_upto_power_of_2(num: usize, factor: usize) -> usize {
-    debug_assert!(factor > 0 && (factor & (factor - 1)) == 0);
-    (num + (factor - 1)) & !(factor - 1)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::test_common::*;
     use super::*;
 
+    use crate::util::test_common::rand_gen::random_numbers;
     use rand::distributions::{Distribution, Standard};
     use std::fmt::Debug;
 
@@ -872,25 +821,6 @@ mod tests {
         assert_eq!(bit_reader.get_zigzag_vlq_int(), Some(-1));
         assert_eq!(bit_reader.get_zigzag_vlq_int(), Some(1));
         assert_eq!(bit_reader.get_zigzag_vlq_int(), Some(-2));
-    }
-
-    #[test]
-    fn test_set_array_bit() {
-        let mut buffer = vec![0, 0, 0];
-        set_array_bit(&mut buffer[..], 1);
-        assert_eq!(buffer, vec![2, 0, 0]);
-        set_array_bit(&mut buffer[..], 4);
-        assert_eq!(buffer, vec![18, 0, 0]);
-        unset_array_bit(&mut buffer[..], 1);
-        assert_eq!(buffer, vec![16, 0, 0]);
-        set_array_bit(&mut buffer[..], 10);
-        assert_eq!(buffer, vec![16, 4, 0]);
-        set_array_bit(&mut buffer[..], 10);
-        assert_eq!(buffer, vec![16, 4, 0]);
-        set_array_bit(&mut buffer[..], 11);
-        assert_eq!(buffer, vec![16, 12, 0]);
-        unset_array_bit(&mut buffer[..], 10);
-        assert_eq!(buffer, vec![16, 8, 0]);
     }
 
     #[test]

@@ -834,6 +834,12 @@ pub struct ColumnIndexBuilder {
     valid: bool,
 }
 
+impl Default for ColumnIndexBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ColumnIndexBuilder {
     pub fn new() -> Self {
         ColumnIndexBuilder {
@@ -885,6 +891,12 @@ pub struct OffsetIndexBuilder {
     compressed_page_size_array: Vec<i32>,
     first_row_index_array: Vec<i64>,
     current_first_row_index: i64,
+}
+
+impl Default for OffsetIndexBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OffsetIndexBuilder {

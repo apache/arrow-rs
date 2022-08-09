@@ -174,6 +174,12 @@ pub struct PageWriteSpec {
     pub bytes_written: u64,
 }
 
+impl Default for PageWriteSpec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PageWriteSpec {
     /// Creates new spec with default page write metrics.
     pub fn new() -> Self {

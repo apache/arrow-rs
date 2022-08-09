@@ -102,13 +102,11 @@ fn build_list_reader(
 
     let data_type = field.arrow_type.clone();
     let item_reader = build_reader(&children[0], row_groups)?;
-    let item_type = item_reader.get_data_type().clone();
 
     match is_large {
         false => Ok(Box::new(ListArrayReader::<i32>::new(
             item_reader,
             data_type,
-            item_type,
             field.def_level,
             field.rep_level,
             field.nullable,
@@ -116,7 +114,6 @@ fn build_list_reader(
         true => Ok(Box::new(ListArrayReader::<i64>::new(
             item_reader,
             data_type,
-            item_type,
             field.def_level,
             field.rep_level,
             field.nullable,
@@ -316,7 +313,7 @@ mod tests {
     use super::*;
     use crate::arrow::parquet_to_arrow_schema;
     use crate::file::reader::{FileReader, SerializedFileReader};
-    use crate::util::test_common::get_test_file;
+    use crate::util::test_common::file_util::get_test_file;
     use arrow::datatypes::Field;
     use std::sync::Arc;
 

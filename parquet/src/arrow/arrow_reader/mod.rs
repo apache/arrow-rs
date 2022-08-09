@@ -37,7 +37,9 @@ use crate::file::reader::{ChunkReader, FileReader, SerializedFileReader};
 use crate::file::serialized_reader::ReadOptionsBuilder;
 use crate::schema::types::SchemaDescriptor;
 
+#[allow(unused)]
 mod filter;
+#[allow(unused)]
 mod selection;
 
 // TODO: Make these public once stable (#1792)
@@ -90,7 +92,7 @@ pub struct ArrowReaderOptions {
 
 impl ArrowReaderOptions {
     /// Create a new [`ArrowReaderOptions`] with the default settings
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -110,6 +112,7 @@ impl ArrowReaderOptions {
     /// Scan rows from the parquet file according to the provided `selection`
     ///
     /// TODO: Revisit this API, as [`Self`] is provided before the file metadata is available
+    #[allow(unused)]
     pub(crate) fn with_row_selection(self, selection: impl Into<RowSelection>) -> Self {
         Self {
             selection: Some(selection.into()),
@@ -363,6 +366,7 @@ impl ParquetRecordBatchReader {
 /// If this [`ParquetRecordBatchReader`] has a [`RowSelection`], the
 /// returned [`RowSelection`] will be the conjunction of this and
 /// the rows selected by `predicate`
+#[allow(unused)]
 pub(crate) fn evaluate_predicate(
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
@@ -425,7 +429,7 @@ mod tests {
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
-    use crate::util::test_common::RandGen;
+    use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
     fn test_arrow_reader_all_columns() {

@@ -128,8 +128,4 @@ jobs:
           rustup component add clippy
       - name: Run clippy
         run: |
-          # Only run clippy for the library at this time,
-          # as there are clippy errors for other targets
-          cargo clippy -p parquet --all-features --lib -- -D warnings
-          # https://github.com/apache/arrow-rs/issues/1254
-          #cargo clippy -p parquet --all-targets --all-features -- -D warnings
+          cargo clippy -p parquet --all-targets --all-features -- -D warnings

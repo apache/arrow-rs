@@ -207,8 +207,8 @@ impl From<Vec<RowSelector>> for RowSelection {
     }
 }
 
-impl Into<VecDeque<RowSelector>> for RowSelection {
-    fn into(self) -> VecDeque<RowSelector> {
-        self.selectors.into()
+impl From<RowSelection> for VecDeque<RowSelector> {
+    fn from(r: RowSelection) -> Self {
+        r.selectors.into()
     }
 }
