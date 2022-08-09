@@ -18,7 +18,7 @@
 //! An object store implementation for a local filesystem
 use crate::{
     maybe_spawn_blocking,
-    path::{filesystem_path_to_url, Path},
+    path::{absolute_path_to_url, Path},
     GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
 };
 use async_trait::async_trait;
@@ -230,14 +230,14 @@ impl LocalFileSystem {
 
         Ok(Self {
             config: Arc::new(Config {
-                root: filesystem_path_to_url(path)?,
+                root: absolute_path_to_url(path)?,
             }),
         })
     }
 }
 
 impl Config {
-    /// Return filesystem path of the given location
+    /// Return an absolute filesystem path of the given location
     fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
         let mut url = self.root.clone();
         url.path_segments_mut()
@@ -251,8 +251,9 @@ impl Config {
             .map_err(|_| Error::InvalidUrl { url }.into())
     }
 
+    /// Resolves the provided absolute filesystem path to a [`Path`] prefix
     fn filesystem_to_path(&self, location: &std::path::Path) -> Result<Path> {
-        Ok(Path::from_filesystem_path_with_base(
+        Ok(Path::from_absolute_path_with_base(
             location,
             Some(&self.root),
         )?)
