@@ -378,7 +378,10 @@ pub(crate) fn evaluate_predicate(
     let mut filters = vec![];
     for maybe_batch in reader {
         let filter = predicate.filter(maybe_batch?)?;
-        filters.push(prep_null_mask_filter(&filter));
+        match filter.null_count() {
+            0 => filters.push(filter),
+            _ => filters.push(prep_null_mask_filter(&filter)),
+        };
     }
 
     let raw = RowSelection::from_filters(&filters);
