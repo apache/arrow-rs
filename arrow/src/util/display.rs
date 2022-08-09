@@ -23,7 +23,6 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use crate::array::Array;
-use crate::array::BasicDecimalArray;
 use crate::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, DataType, Field, Int16Type, Int32Type,
     Int64Type, Int8Type, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,

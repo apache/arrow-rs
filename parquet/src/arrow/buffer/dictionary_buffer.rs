@@ -49,6 +49,7 @@ impl<K: ScalarValue, V: ScalarValue> Default for DictionaryBuffer<K, V> {
 impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
     DictionaryBuffer<K, V>
 {
+    #[allow(unused)]
     pub fn len(&self) -> usize {
         match self {
             Self::Dict { keys, .. } => keys.len(),

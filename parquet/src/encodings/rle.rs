@@ -45,7 +45,6 @@ use crate::util::{
 /// Maximum groups per bit-packed run. Current value is 64.
 const MAX_GROUPS_PER_BIT_PACKED_RUN: usize = 1 << 6;
 const MAX_VALUES_PER_BIT_PACKED_RUN: usize = MAX_GROUPS_PER_BIT_PACKED_RUN * 8;
-const MAX_WRITER_BUF_SIZE: usize = 1 << 10;
 
 /// A RLE/Bit-Packing hybrid encoder.
 // TODO: tracking memory usage
@@ -55,9 +54,6 @@ pub struct RleEncoder {
 
     // Underlying writer which holds an internal buffer.
     bit_writer: BitWriter,
-
-    // The maximum byte size a single run can take.
-    max_run_byte_size: usize,
 
     // Buffered values for bit-packed runs.
     buffered_values: [u64; 8],
@@ -82,6 +78,7 @@ pub struct RleEncoder {
 }
 
 impl RleEncoder {
+    #[allow(unused)]
     pub fn new(bit_width: u8, buffer_len: usize) -> Self {
         let buffer = Vec::with_capacity(buffer_len);
         RleEncoder::new_from_buf(bit_width, buffer)
@@ -89,12 +86,10 @@ impl RleEncoder {
 
     /// Initialize the encoder from existing `buffer`
     pub fn new_from_buf(bit_width: u8, buffer: Vec<u8>) -> Self {
-        let max_run_byte_size = RleEncoder::min_buffer_size(bit_width);
         let bit_writer = BitWriter::new_from_buf(buffer);
         RleEncoder {
             bit_width,
             bit_writer,
-            max_run_byte_size,
             buffered_values: [0; 8],
             num_buffered_values: 0,
             current_value: 0,
@@ -162,6 +157,7 @@ impl RleEncoder {
     }
 
     #[inline]
+    #[allow(unused)]
     pub fn buffer(&self) -> &[u8] {
         self.bit_writer.buffer()
     }
@@ -171,6 +167,7 @@ impl RleEncoder {
         self.bit_writer.bytes_written()
     }
 
+    #[allow(unused)]
     pub fn is_empty(&self) -> bool {
         self.bit_writer.bytes_written() == 0
     }
@@ -184,6 +181,7 @@ impl RleEncoder {
     /// Borrow equivalent of the `consume` method.
     /// Call `clear()` after invoking this method.
     #[inline]
+    #[allow(unused)]
     pub fn flush_buffer(&mut self) -> &[u8] {
         self.flush();
         self.bit_writer.flush_buffer()
@@ -192,6 +190,7 @@ impl RleEncoder {
     /// Clears the internal state so this encoder can be reused (e.g., after becoming
     /// full).
     #[inline]
+    #[allow(unused)]
     pub fn clear(&mut self) {
         self.bit_writer.clear();
         self.num_buffered_values = 0;

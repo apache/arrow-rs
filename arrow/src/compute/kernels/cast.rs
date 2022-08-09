@@ -51,7 +51,6 @@ use crate::temporal_conversions::{
     EPOCH_DAYS_FROM_CE, MICROSECONDS, MILLISECONDS, MILLISECONDS_IN_DAY, NANOSECONDS,
     SECONDS_IN_DAY,
 };
-use crate::util::decimal::BasicDecimal;
 use crate::{array::*, compute::take};
 use crate::{buffer::Buffer, util::serialization::lexical_to_string};
 use num::cast::AsPrimitive;
@@ -436,30 +435,18 @@ pub fn cast_with_options(
         return Ok(array.clone());
     }
     match (from_type, to_type) {
-        (Decimal128(_, s1), Decimal128(p2, s2)) => cast_decimal_to_decimal::<
-            crate::util::decimal::Decimal128,
-            crate::util::decimal::Decimal128,
-            Decimal128Array,
-            Decimal128Array,
-        >(array, s1, p2, s2),
-        (Decimal256(_, s1), Decimal256(p2, s2)) => cast_decimal_to_decimal::<
-            crate::util::decimal::Decimal256,
-            crate::util::decimal::Decimal256,
-            Decimal256Array,
-            Decimal256Array,
-        >(array, s1, p2, s2),
-        (Decimal128(_, s1), Decimal256(p2, s2)) => cast_decimal_to_decimal::<
-            crate::util::decimal::Decimal128,
-            crate::util::decimal::Decimal256,
-            Decimal128Array,
-            Decimal256Array,
-        >(array, s1, p2, s2),
-        (Decimal256(_, s1), Decimal128(p2, s2)) => cast_decimal_to_decimal::<
-            crate::util::decimal::Decimal256,
-            crate::util::decimal::Decimal128,
-            Decimal256Array,
-            Decimal128Array,
-        >(array, s1, p2, s2),
+        (Decimal128(_, s1), Decimal128(p2, s2)) => {
+            cast_decimal_to_decimal::<16, 16>(array, s1, p2, s2)
+        }
+        (Decimal256(_, s1), Decimal256(p2, s2)) => {
+            cast_decimal_to_decimal::<32, 32>(array, s1, p2, s2)
+        }
+        (Decimal128(_, s1), Decimal256(p2, s2)) => {
+            cast_decimal_to_decimal::<16, 32>(array, s1, p2, s2)
+        }
+        (Decimal256(_, s1), Decimal128(p2, s2)) => {
+            cast_decimal_to_decimal::<32, 16>(array, s1, p2, s2)
+        }
         (Decimal128(_, scale), _) => {
             // cast decimal to other type
             match to_type {
@@ -1278,12 +1265,7 @@ const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
 }
 
 /// Cast one type of decimal array to another type of decimal array
-fn cast_decimal_to_decimal<
-    T1: BasicDecimal,
-    T2: BasicDecimal,
-    D1: BasicDecimalArray<T1, D1> + From<ArrayData>,
-    D2: BasicDecimalArray<T2, D2> + From<ArrayData>,
->(
+fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
     array: &ArrayRef,
     input_scale: &usize,
     output_precision: &usize,
@@ -1293,10 +1275,10 @@ fn cast_decimal_to_decimal<
         // For example, input_scale is 4 and output_scale is 3;
         // Original value is 11234_i128, and will be cast to 1123_i128.
         let div = 10_i128.pow((input_scale - output_scale) as u32);
-        if D1::VALUE_LENGTH == 16 {
+        if BYTE_WIDTH1 == 16 {
             let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
             let iter = array.iter().map(|v| v.map(|v| v.as_i128() / div));
-            if D2::VALUE_LENGTH == 16 {
+            if BYTE_WIDTH2 == 16 {
                 let output_array = iter
                     .collect::<Decimal128Array>()
                     .with_precision_and_scale(*output_precision, *output_scale)?;
@@ -1313,7 +1295,7 @@ fn cast_decimal_to_decimal<
         } else {
             let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
             let iter = array.iter().map(|v| v.map(|v| v.to_big_int().div(div)));
-            if D2::VALUE_LENGTH == 16 {
+            if BYTE_WIDTH2 == 16 {
                 let values = iter
                     .map(|v| {
                         if v.is_none() {
@@ -1349,10 +1331,10 @@ fn cast_decimal_to_decimal<
         // For example, input_scale is 3 and output_scale is 4;
         // Original value is 1123_i128, and will be cast to 11230_i128.
         let mul = 10_i128.pow((output_scale - input_scale) as u32);
-        if D1::VALUE_LENGTH == 16 {
+        if BYTE_WIDTH1 == 16 {
             let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
             let iter = array.iter().map(|v| v.map(|v| v.as_i128() * mul));
-            if D2::VALUE_LENGTH == 16 {
+            if BYTE_WIDTH2 == 16 {
                 let output_array = iter
                     .collect::<Decimal128Array>()
                     .with_precision_and_scale(*output_precision, *output_scale)?;
@@ -1369,7 +1351,7 @@ fn cast_decimal_to_decimal<
         } else {
             let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
             let iter = array.iter().map(|v| v.map(|v| v.to_big_int().mul(mul)));
-            if D2::VALUE_LENGTH == 16 {
+            if BYTE_WIDTH2 == 16 {
                 let values = iter
                     .map(|v| {
                         if v.is_none() {
@@ -2542,7 +2524,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::BasicDecimalArray;
     use crate::datatypes::TimeUnit;
     use crate::util::decimal::{Decimal128, Decimal256};
     use crate::{buffer::Buffer, util::display::array_value_to_string};

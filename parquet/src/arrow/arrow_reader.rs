@@ -85,6 +85,7 @@ pub(crate) struct RowSelection {
 
 impl RowSelection {
     /// Select `row_count` rows
+    #[allow(unused)]
     pub fn select(row_count: usize) -> Self {
         Self {
             row_count,
@@ -93,6 +94,7 @@ impl RowSelection {
     }
 
     /// Skip `row_count` rows
+    #[allow(unused)]
     pub fn skip(row_count: usize) -> Self {
         Self {
             row_count,
@@ -109,7 +111,7 @@ pub struct ArrowReaderOptions {
 
 impl ArrowReaderOptions {
     /// Create a new [`ArrowReaderOptions`] with the default settings
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -129,6 +131,7 @@ impl ArrowReaderOptions {
     /// Scan rows from the parquet file according to the provided `selection`
     ///
     /// TODO: Make public once row selection fully implemented (#1792)
+    #[allow(unused)]
     pub(crate) fn with_row_selection(
         self,
         selection: impl Into<Vec<RowSelection>>,
@@ -287,43 +290,55 @@ impl Iterator for ParquetRecordBatchReader {
     type Item = ArrowResult<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let to_read = match self.selection.as_mut() {
-            Some(selection) => loop {
-                let front = selection.pop_front()?;
-                if front.skip {
-                    let skipped = match self.array_reader.skip_records(front.row_count) {
-                        Ok(skipped) => skipped,
-                        Err(e) => return Some(Err(e.into())),
+        let mut read_records = 0;
+        match self.selection.as_mut() {
+            Some(selection) => {
+                while read_records < self.batch_size && !selection.is_empty() {
+                    let front = selection.pop_front().unwrap();
+                    if front.skip {
+                        let skipped =
+                            match self.array_reader.skip_records(front.row_count) {
+                                Ok(skipped) => skipped,
+                                Err(e) => return Some(Err(e.into())),
+                            };
+
+                        if skipped != front.row_count {
+                            return Some(Err(general_err!(
+                                "failed to skip rows, expected {}, got {}",
+                                front.row_count,
+                                skipped
+                            )
+                            .into()));
+                        }
+                        continue;
+                    }
+
+                    // try to read record
+                    let need_read = self.batch_size - read_records;
+                    let to_read = match front.row_count.checked_sub(need_read) {
+                        Some(remaining) if remaining != 0 => {
+                            // if page row count less than batch_size we must set batch size to page row count.
+                            // add check avoid dead loop
+                            selection.push_front(RowSelection::select(remaining));
+                            need_read
+                        }
+                        _ => front.row_count,
                     };
-
-                    if skipped != front.row_count {
-                        return Some(Err(general_err!(
-                            "failed to skip rows, expected {}, got {}",
-                            front.row_count,
-                            skipped
-                        )
-                        .into()));
+                    match self.array_reader.read_records(to_read) {
+                        Ok(0) => break,
+                        Ok(rec) => read_records += rec,
+                        Err(error) => return Some(Err(error.into())),
                     }
-                    continue;
                 }
-
-                // try to read record
-                let to_read = match front.row_count.checked_sub(self.batch_size) {
-                    Some(remaining) if remaining != 0 => {
-                        // if page row count less than batch_size we must set batch size to page row count.
-                        // add check avoid dead loop
-                        selection.push_front(RowSelection::select(remaining));
-                        self.batch_size
-                    }
-                    _ => front.row_count,
-                };
-
-                break to_read;
-            },
-            None => self.batch_size,
+            }
+            None => {
+                if let Err(error) = self.array_reader.read_records(self.batch_size) {
+                    return Some(Err(error.into()));
+                }
+            }
         };
 
-        match self.array_reader.next_batch(to_read) {
+        match self.array_reader.consume_batch() {
             Err(error) => Some(Err(error.into())),
             Ok(array) => {
                 let struct_array =
@@ -421,7 +436,7 @@ mod tests {
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
-    use crate::util::test_common::RandGen;
+    use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
     fn test_arrow_reader_all_columns() {
@@ -1212,15 +1227,9 @@ mod tests {
         loop {
             let maybe_batch = record_reader.next();
             if total_read < expected_data.len() {
-                let mut end =
-                    min(total_read + opts.record_batch_size, expected_data.len());
+                let end = min(total_read + opts.record_batch_size, expected_data.len());
                 let batch = maybe_batch.unwrap().unwrap();
-                //TODO remove this after implement https://github.com/apache/arrow-rs/issues/2197
-                if opts.row_selections.is_none() {
-                    assert_eq!(end - total_read, batch.num_rows());
-                } else {
-                    end = end.min(total_read + batch.num_rows())
-                }
+                assert_eq!(end - total_read, batch.num_rows());
 
                 let mut data = vec![];
                 data.extend_from_slice(&expected_data[total_read..end]);
