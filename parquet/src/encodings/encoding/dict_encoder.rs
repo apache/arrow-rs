@@ -73,9 +73,6 @@ impl<T: DataType> Storage for KeyStorage<T> {
 /// (max bit width = 32), followed by the values encoded using RLE/Bit packed described
 /// above (with the given bit width).
 pub struct DictEncoder<T: DataType> {
-    /// Descriptor for the column to be encoded.
-    desc: ColumnDescPtr,
-
     interner: Interner<KeyStorage<T>>,
 
     /// The buffered indices
@@ -92,7 +89,6 @@ impl<T: DataType> DictEncoder<T> {
         };
 
         Self {
-            desc,
             interner: Interner::new(storage),
             indices: vec![],
         }
@@ -117,7 +113,7 @@ impl<T: DataType> DictEncoder<T> {
     /// Writes out the dictionary values with PLAIN encoding in a byte buffer, and return
     /// the result.
     pub fn write_dict(&self) -> Result<ByteBufferPtr> {
-        let mut plain_encoder = PlainEncoder::<T>::new(self.desc.clone(), vec![]);
+        let mut plain_encoder = PlainEncoder::<T>::new();
         plain_encoder.put(&self.interner.storage().uniques)?;
         plain_encoder.flush_buffer()
     }

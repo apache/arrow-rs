@@ -85,6 +85,7 @@ pub(crate) struct RowSelection {
 
 impl RowSelection {
     /// Select `row_count` rows
+    #[allow(unused)]
     pub fn select(row_count: usize) -> Self {
         Self {
             row_count,
@@ -93,6 +94,7 @@ impl RowSelection {
     }
 
     /// Skip `row_count` rows
+    #[allow(unused)]
     pub fn skip(row_count: usize) -> Self {
         Self {
             row_count,
@@ -109,7 +111,7 @@ pub struct ArrowReaderOptions {
 
 impl ArrowReaderOptions {
     /// Create a new [`ArrowReaderOptions`] with the default settings
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -129,6 +131,7 @@ impl ArrowReaderOptions {
     /// Scan rows from the parquet file according to the provided `selection`
     ///
     /// TODO: Make public once row selection fully implemented (#1792)
+    #[allow(unused)]
     pub(crate) fn with_row_selection(
         self,
         selection: impl Into<Vec<RowSelection>>,
@@ -433,7 +436,7 @@ mod tests {
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
-    use crate::util::test_common::RandGen;
+    use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
     fn test_arrow_reader_all_columns() {

@@ -84,8 +84,8 @@ pub async fn coalesce_ranges<F, Fut>(
     coalesce: usize,
 ) -> Result<Vec<Bytes>>
 where
-    F: FnMut(std::ops::Range<usize>) -> Fut,
-    Fut: std::future::Future<Output = Result<Bytes>>,
+    F: Send + FnMut(std::ops::Range<usize>) -> Fut,
+    Fut: std::future::Future<Output = Result<Bytes>> + Send,
 {
     let mut ret = Vec::with_capacity(ranges.len());
     let mut start_idx = 0;
@@ -105,8 +105,7 @@ where
         let start = ranges[start_idx].start;
         let end = ranges[end_idx - 1].end;
         let bytes = fetch(start..end).await?;
-        for i in start_idx..end_idx {
-            let range = ranges[i].clone();
+        for range in ranges.iter().take(end_idx).skip(start_idx) {
             ret.push(bytes.slice(range.start - start..range.end - start))
         }
         start_idx = end_idx;

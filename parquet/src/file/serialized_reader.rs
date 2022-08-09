@@ -39,8 +39,7 @@ use crate::util::{io::TryClone, memory::ByteBufferPtr};
 
 // export `SliceableCursor` and `FileSource` publically so clients can
 // re-use the logic in their own ParquetFileWriter wrappers
-#[allow(deprecated)]
-pub use crate::util::{cursor::SliceableCursor, io::FileSource};
+pub use crate::util::io::FileSource;
 
 // ----------------------------------------------------------------------
 // Implementations of traits facilitating the creation of a new reader
@@ -83,22 +82,6 @@ impl ChunkReader for Bytes {
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
         let start = start as usize;
         Ok(self.slice(start..start + length).reader())
-    }
-}
-
-#[allow(deprecated)]
-impl Length for SliceableCursor {
-    fn len(&self) -> u64 {
-        SliceableCursor::len(self)
-    }
-}
-
-#[allow(deprecated)]
-impl ChunkReader for SliceableCursor {
-    type T = SliceableCursor;
-
-    fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
-        self.slice(start, length).map_err(|e| e.into())
     }
 }
 
@@ -158,6 +141,7 @@ pub struct SerializedFileReader<R: ChunkReader> {
 /// A builder for [`ReadOptions`].
 /// For the predicates that are added to the builder,
 /// they will be chained using 'AND' to filter the row groups.
+#[derive(Default)]
 pub struct ReadOptionsBuilder {
     predicates: Vec<Box<dyn FnMut(&RowGroupMetaData, usize) -> bool>>,
     enable_page_index: bool,
@@ -166,10 +150,7 @@ pub struct ReadOptionsBuilder {
 impl ReadOptionsBuilder {
     /// New builder
     pub fn new() -> Self {
-        ReadOptionsBuilder {
-            predicates: vec![],
-            enable_page_index: false,
-        }
+        Self::default()
     }
 
     /// Add a predicate on row group metadata to the reading option,
@@ -709,7 +690,7 @@ mod tests {
     use crate::record::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::bit_util::from_le_slice;
-    use crate::util::test_common::{get_test_file, get_test_path};
+    use crate::util::test_common::file_util::{get_test_file, get_test_path};
     use parquet_format::BoundaryOrder;
     use std::sync::Arc;
 

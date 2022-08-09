@@ -1116,7 +1116,6 @@ mod tests {
     use std::io::{Cursor, Write};
     use tempfile::NamedTempFile;
 
-    use crate::array::BasicDecimalArray;
     use crate::array::*;
     use crate::compute::cast;
     use crate::datatypes::Field;
