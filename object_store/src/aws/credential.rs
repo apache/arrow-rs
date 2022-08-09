@@ -82,7 +82,10 @@ impl<'a> RequestSigner<'a> {
             request.headers_mut().insert(TOKEN_HEADER, token_val);
         }
 
-        let host_val = HeaderValue::from_str(request.url().host_str().unwrap()).unwrap();
+        let host_val = HeaderValue::from_str(
+            &request.url()[url::Position::BeforeHost..url::Position::AfterPort],
+        )
+        .unwrap();
         request.headers_mut().insert("host", host_val);
 
         let date_str = self.date.format("%Y%m%dT%H%M%SZ").to_string();
@@ -500,6 +503,42 @@ mod tests {
 
         signer.sign(&mut request);
         assert_eq!(request.headers().get(AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4")
+    }
+
+    #[test]
+    fn test_sign_port() {
+        let client = Client::new();
+
+        let credential = AwsCredential {
+            key_id: "H20ABqCkLZID4rLe".to_string(),
+            secret_key: "jMqRDgxSsBqqznfmddGdu1TmmZOJQxdM".to_string(),
+            token: None,
+        };
+
+        let date = DateTime::parse_from_rfc3339("2022-08-09T13:05:25Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let mut request = client
+            .request(Method::GET, "http://localhost:9000/tsm-schemas")
+            .query(&[
+                ("delimiter", "/"),
+                ("encoding-type", "url"),
+                ("list-type", "2"),
+                ("prefix", ""),
+            ])
+            .build()
+            .unwrap();
+
+        let signer = RequestSigner {
+            date,
+            credential: &credential,
+            service: "s3",
+            region: "us-east-1",
+        };
+
+        signer.sign(&mut request);
+        assert_eq!(request.headers().get(AUTH_HEADER).unwrap(), "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=9ebf2f92872066c99ac94e573b4e1b80f4dbb8a32b1e8e23178318746e7d1b4d")
     }
 
     #[tokio::test]
