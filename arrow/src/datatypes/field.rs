@@ -870,7 +870,7 @@ mod test {
         let field1 = Field::new(
             "field1",
             DataType::Struct(vec![child_field1.clone()]),
-            false,
+            true,
         );
         let field2 = Field::new(
             "field1",
