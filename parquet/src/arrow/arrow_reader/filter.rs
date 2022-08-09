@@ -27,7 +27,7 @@ pub trait ArrowPredicate: Send + 'static {
     /// passed to [`filter`](Self::filter)
     fn projection(&self) -> &ProjectionMask;
 
-    /// Called with a [`RecordBatch`] containing the columns identified by [`Self::mask`],
+    /// Called with a [`RecordBatch`] containing the columns identified by [`Self::projection`],
     /// with `true` values in the returned [`BooleanArray`] indicating rows
     /// matching the predicate.
     ///
@@ -76,7 +76,7 @@ where
 /// a more refined [`RowSelection`] to use when evaluating the subsequent predicates.
 ///
 /// Once all predicates have been evaluated, the final [`RowSelection`] is applied
-/// to the overall [`ColumnProjection`] to produce the final output [`RecordBatch`].
+/// to the top-level [`ProjectionMask`] to produce the final output [`RecordBatch`].
 ///
 /// This design has a couple of implications:
 ///
@@ -96,6 +96,7 @@ where
 /// leaves 99% of the rows, it may be better to not filter the data from parquet and
 /// apply the filter after the RecordBatch has been fully decoded.
 ///
+/// [`RowSelection`]: [super::selection::RowSelection]
 pub struct RowFilter {
     /// A list of [`ArrowPredicate`]
     pub(crate) predicates: Vec<Box<dyn ArrowPredicate>>,

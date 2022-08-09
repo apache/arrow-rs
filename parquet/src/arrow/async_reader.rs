@@ -266,6 +266,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// row groups should not be included in the [`RowSelection`]
     ///
     /// TODO: Make public once stable (#1792)
+    #[allow(unused)]
     pub(crate) fn with_row_selection(self, selection: RowSelection) -> Self {
         Self {
             selection: Some(selection),
@@ -276,6 +277,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     /// Provide a [`RowFilter`] to skip decoding rows
     ///
     /// TODO: Make public once stable (#1792)
+    #[allow(unused)]
     pub(crate) fn with_row_filter(self, filter: RowFilter) -> Self {
         Self {
             filter: Some(filter),
