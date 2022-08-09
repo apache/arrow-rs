@@ -39,7 +39,7 @@ fn validate_decimal256_array_slow(array: &Decimal256Array) {
 }
 
 fn validate_decimal256_array_fast(array: &Decimal256Array) {
-//    array.validate_decimal_with_bytes(35).unwrap();
+    array.validate_decimal_with_bytes(35).unwrap();
 }
 
 fn validate_decimal128_benchmark(c: &mut Criterion) {
@@ -57,7 +57,7 @@ fn validate_decimal128_benchmark(c: &mut Criterion) {
 
 fn validate_decimal256_benchmark(c: &mut Criterion) {
     // decimal array slow
-    let mut decimal_builder = Decimal256Builder::new(20000, 76, 0);
+    let mut decimal_builder = Decimal256Builder::new(2000, 76, 0);
     let mut bytes = vec![0; 32];
     bytes[0..16].clone_from_slice(&12324_i128.to_le_bytes());
     for _ in 0..200000 {
@@ -66,19 +66,19 @@ fn validate_decimal256_benchmark(c: &mut Criterion) {
             .unwrap();
     }
     let decimal_array256 = decimal_builder.finish();
-    c.bench_function("validate_decimal256_array_slow 20000", |b| {
+    c.bench_function("validate_decimal256_array_slow 2000", |b| {
         b.iter(|| validate_decimal256_array_slow(&decimal_array256))
     });
 
     // decimal array fast
-    c.bench_function("validate_decimal256_array_fast 20000", |b| {
+    c.bench_function("validate_decimal256_array_fast 2000", |b| {
         b.iter(|| validate_decimal256_array_fast(&decimal_array256))
     });
 }
 
 criterion_group!(
     benches,
-    validate_decimal128_benchmark,
+    // validate_decimal128_benchmark,
     validate_decimal256_benchmark
 );
 // criterion_group!(benches, validate_decimal256_benchmark);
