@@ -17,7 +17,6 @@
 
 //! Defines sort kernel for `ArrayRef`
 
-use crate::array::BasicDecimalArray;
 use crate::array::*;
 use crate::buffer::MutableBuffer;
 use crate::compute::take;

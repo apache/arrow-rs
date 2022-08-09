@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{ArrayAccessor, Decimal128Iter, Decimal256Iter};
+use crate::array::ArrayAccessor;
 use num::BigInt;
 use std::borrow::Borrow;
 use std::convert::From;
@@ -25,17 +25,17 @@ use std::{any::Any, iter::FromIterator};
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, FixedSizeListArray,
 };
-use super::{BooleanBufferBuilder, FixedSizeBinaryArray};
+use super::{BasicDecimalIter, BooleanBufferBuilder, FixedSizeBinaryArray};
 #[allow(deprecated)]
 pub use crate::array::DecimalIter;
 use crate::buffer::{Buffer, MutableBuffer};
+use crate::datatypes::DataType;
 use crate::datatypes::{
     validate_decimal256_precision, validate_decimal_precision, DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+    DECIMAL_DEFAULT_SCALE,
 };
-use crate::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE};
 use crate::error::{ArrowError, Result};
-use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
+use crate::util::decimal::{BasicDecimal, Decimal256};
 
 /// `Decimal128Array` stores fixed width decimal numbers,
 /// with a fixed precision and scale.
@@ -71,19 +71,9 @@ use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
 ///    assert_eq!(6, decimal_array.scale());
 /// ```
 ///
-pub struct Decimal128Array {
-    data: ArrayData,
-    value_data: RawPtrBox<u8>,
-    precision: usize,
-    scale: usize,
-}
+pub type Decimal128Array = BasicDecimalArray<16>;
 
-pub struct Decimal256Array {
-    data: ArrayData,
-    value_data: RawPtrBox<u8>,
-    precision: usize,
-    scale: usize,
-}
+pub type Decimal256Array = BasicDecimalArray<32>;
 
 mod private_decimal {
     pub trait DecimalArrayPrivate {
@@ -91,24 +81,37 @@ mod private_decimal {
     }
 }
 
-pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
-    private_decimal::DecimalArrayPrivate
-{
-    const VALUE_LENGTH: i32;
-    const DEFAULT_TYPE: DataType;
-    const MAX_PRECISION: usize;
-    const MAX_SCALE: usize;
+pub struct BasicDecimalArray<const BYTE_WIDTH: usize> {
+    data: ArrayData,
+    value_data: RawPtrBox<u8>,
+    precision: usize,
+    scale: usize,
+}
 
-    fn data(&self) -> &ArrayData;
+impl<const BYTE_WIDTH: usize> BasicDecimalArray<BYTE_WIDTH> {
+    const VALUE_LENGTH: i32 = BYTE_WIDTH as i32;
+    const DEFAULT_TYPE: DataType = BasicDecimal::<BYTE_WIDTH>::DEFAULT_TYPE;
+    const MAX_PRECISION: usize = BasicDecimal::<BYTE_WIDTH>::MAX_PRECISION;
+    const MAX_SCALE: usize = BasicDecimal::<BYTE_WIDTH>::MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType =
+        BasicDecimal::<BYTE_WIDTH>::TYPE_CONSTRUCTOR;
+
+    pub fn data(&self) -> &ArrayData {
+        &self.data
+    }
 
     /// Return the precision (total digits) that can be stored by this array
-    fn precision(&self) -> usize;
+    pub fn precision(&self) -> usize {
+        self.precision
+    }
 
     /// Return the scale (digits after the decimal) that can be stored by this array
-    fn scale(&self) -> usize;
+    pub fn scale(&self) -> usize {
+        self.scale
+    }
 
     /// Returns the element at index `i`.
-    fn value(&self, i: usize) -> T {
+    pub fn value(&self, i: usize) -> BasicDecimal<BYTE_WIDTH> {
         assert!(i < self.data().len(), "Out of bounds access");
 
         unsafe { self.value_unchecked(i) }
@@ -117,7 +120,7 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     /// Returns the element at index `i`.
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
-    unsafe fn value_unchecked(&self, i: usize) -> T {
+    pub unsafe fn value_unchecked(&self, i: usize) -> BasicDecimal<BYTE_WIDTH> {
         let data = self.data();
         let offset = i + data.offset();
         let raw_val = {
@@ -127,14 +130,14 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
                 Self::VALUE_LENGTH as usize,
             )
         };
-        T::new(self.precision(), self.scale(), raw_val)
+        BasicDecimal::<BYTE_WIDTH>::new(self.precision(), self.scale(), raw_val)
     }
 
     /// Returns the offset for the element at index `i`.
     ///
     /// Note this doesn't do any bound checking, for performance reason.
     #[inline]
-    fn value_offset(&self, i: usize) -> i32 {
+    pub fn value_offset(&self, i: usize) -> i32 {
         self.value_offset_at(self.data().offset() + i)
     }
 
@@ -142,22 +145,22 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     ///
     /// All elements have the same length as the array is a fixed size.
     #[inline]
-    fn value_length(&self) -> i32 {
+    pub fn value_length(&self) -> i32 {
         Self::VALUE_LENGTH
     }
 
     /// Returns a clone of the value data buffer
-    fn value_data(&self) -> Buffer {
+    pub fn value_data(&self) -> Buffer {
         self.data().buffers()[0].clone()
     }
 
     #[inline]
-    fn value_offset_at(&self, i: usize) -> i32 {
+    pub fn value_offset_at(&self, i: usize) -> i32 {
         Self::VALUE_LENGTH * i as i32
     }
 
     #[inline]
-    fn value_as_string(&self, row: usize) -> String {
+    pub fn value_as_string(&self, row: usize) -> String {
         self.value(row).to_string()
     }
 
@@ -165,11 +168,11 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     ///
     /// NB: This function does not validate that each value is in the permissible
     /// range for a decimal
-    fn from_fixed_size_binary_array(
+    pub fn from_fixed_size_binary_array(
         v: FixedSizeBinaryArray,
         precision: usize,
         scale: usize,
-    ) -> U {
+    ) -> Self {
         assert!(
             v.value_length() == Self::VALUE_LENGTH,
             "Value length of the array ({}) must equal to the byte width of the decimal ({})",
@@ -184,7 +187,7 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
         let builder = v.into_data().into_builder().data_type(data_type);
 
         let array_data = unsafe { builder.build_unchecked() };
-        U::from(array_data)
+        Self::from(array_data)
     }
 
     /// Build a decimal array from [`FixedSizeListArray`].
@@ -192,11 +195,11 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     /// NB: This function does not validate that each value is in the permissible
     /// range for a decimal.
     #[deprecated(note = "please use `from_fixed_size_binary_array` instead")]
-    fn from_fixed_size_list_array(
+    pub fn from_fixed_size_list_array(
         v: FixedSizeListArray,
         precision: usize,
         scale: usize,
-    ) -> U {
+    ) -> Self {
         assert_eq!(
             v.data_ref().child_data().len(),
             1,
@@ -242,12 +245,47 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
             .offset(list_offset);
 
         let array_data = unsafe { builder.build_unchecked() };
-        U::from(array_data)
+        Self::from(array_data)
     }
 
     /// The default precision and scale used when not specified.
-    fn default_type() -> DataType {
+    pub const fn default_type() -> DataType {
         Self::DEFAULT_TYPE
+    }
+
+    fn raw_value_data_ptr(&self) -> *const u8 {
+        self.value_data.as_ptr()
+    }
+}
+
+impl Decimal128Array {
+    /// Creates a [Decimal128Array] with default precision and scale,
+    /// based on an iterator of `i128` values without nulls
+    pub fn from_iter_values<I: IntoIterator<Item = i128>>(iter: I) -> Self {
+        let val_buf: Buffer = iter.into_iter().collect();
+        let data = unsafe {
+            ArrayData::new_unchecked(
+                Self::default_type(),
+                val_buf.len() / std::mem::size_of::<i128>(),
+                None,
+                None,
+                0,
+                vec![val_buf],
+                vec![],
+            )
+        };
+        Decimal128Array::from(data)
+    }
+
+    /// Validates decimal values in this array can be properly interpreted
+    /// with the specified precision.
+    pub fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
+        if precision < self.precision {
+            for v in self.iter().flatten() {
+                validate_decimal_precision(v.as_i128(), precision)?;
+            }
+        }
+        Ok(())
     }
 
     /// Returns a Decimal array with the same data as self, with the
@@ -257,7 +295,7 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
     /// 1. `precision` is larger than [`Self::MAX_PRECISION`]
     /// 2. `scale` is larger than [`Self::MAX_SCALE`];
     /// 3. `scale` is > `precision`
-    fn with_precision_and_scale(self, precision: usize, scale: usize) -> Result<U>
+    pub fn with_precision_and_scale(self, precision: usize, scale: usize) -> Result<Self>
     where
         Self: Sized,
     {
@@ -287,77 +325,20 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
         // decreased
         self.validate_decimal_precision(precision)?;
 
-        let data_type = if Self::VALUE_LENGTH == 16 {
-            DataType::Decimal128(self.precision(), self.scale())
-        } else {
-            DataType::Decimal256(self.precision(), self.scale())
-        };
+        let data_type = Self::TYPE_CONSTRUCTOR(self.precision, self.scale);
         assert_eq!(self.data().data_type(), &data_type);
 
         // safety: self.data is valid DataType::Decimal as checked above
-        let new_data_type = if Self::VALUE_LENGTH == 16 {
-            DataType::Decimal128(precision, scale)
-        } else {
-            DataType::Decimal256(precision, scale)
-        };
+        let new_data_type = Self::TYPE_CONSTRUCTOR(precision, scale);
 
         Ok(self.data().clone().with_data_type(new_data_type).into())
     }
+}
 
+impl Decimal256Array {
     /// Validates decimal values in this array can be properly interpreted
     /// with the specified precision.
-    fn validate_decimal_precision(&self, precision: usize) -> Result<()>;
-}
-
-impl BasicDecimalArray<Decimal128, Decimal128Array> for Decimal128Array {
-    const VALUE_LENGTH: i32 = 16;
-    const DEFAULT_TYPE: DataType =
-        DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
-    const MAX_PRECISION: usize = DECIMAL128_MAX_PRECISION;
-    const MAX_SCALE: usize = DECIMAL128_MAX_SCALE;
-
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
-    fn precision(&self) -> usize {
-        self.precision
-    }
-
-    fn scale(&self) -> usize {
-        self.scale
-    }
-
-    fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
-        if precision < self.precision {
-            for v in self.iter().flatten() {
-                validate_decimal_precision(v.as_i128(), precision)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl BasicDecimalArray<Decimal256, Decimal256Array> for Decimal256Array {
-    const VALUE_LENGTH: i32 = 32;
-    const DEFAULT_TYPE: DataType =
-        DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
-    const MAX_PRECISION: usize = DECIMAL256_MAX_PRECISION;
-    const MAX_SCALE: usize = DECIMAL256_MAX_SCALE;
-
-    fn data(&self) -> &ArrayData {
-        &self.data
-    }
-
-    fn precision(&self) -> usize {
-        self.precision
-    }
-
-    fn scale(&self) -> usize {
-        self.scale
-    }
-
-    fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
+    pub fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
         if precision < self.precision {
             for v in self.iter().flatten() {
                 validate_decimal256_precision(&v.to_string(), precision)?;
@@ -365,60 +346,66 @@ impl BasicDecimalArray<Decimal256, Decimal256Array> for Decimal256Array {
         }
         Ok(())
     }
-}
 
-impl Decimal128Array {
-    /// Creates a [Decimal128Array] with default precision and scale,
-    /// based on an iterator of `i128` values without nulls
-    pub fn from_iter_values<I: IntoIterator<Item = i128>>(iter: I) -> Self {
-        let val_buf: Buffer = iter.into_iter().collect();
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                Self::default_type(),
-                val_buf.len() / std::mem::size_of::<i128>(),
-                None,
-                None,
-                0,
-                vec![val_buf],
-                vec![],
-            )
-        };
-        Decimal128Array::from(data)
-    }
-}
-
-impl From<ArrayData> for Decimal128Array {
-    fn from(data: ArrayData) -> Self {
-        assert_eq!(
-            data.buffers().len(),
-            1,
-            "Decimal128Array data should contain 1 buffer only (values)"
-        );
-        let values = data.buffers()[0].as_ptr();
-        let (precision, scale) = match data.data_type() {
-            DataType::Decimal128(precision, scale) => (*precision, *scale),
-            _ => panic!("Expected data type to be Decimal"),
-        };
-        Self {
-            data,
-            value_data: unsafe { RawPtrBox::new(values) },
-            precision,
-            scale,
+    /// Returns a Decimal array with the same data as self, with the
+    /// specified precision.
+    ///
+    /// Returns an Error if:
+    /// 1. `precision` is larger than [`Self::MAX_PRECISION`]
+    /// 2. `scale` is larger than [`Self::MAX_SCALE`];
+    /// 3. `scale` is > `precision`
+    pub fn with_precision_and_scale(self, precision: usize, scale: usize) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        if precision > Self::MAX_PRECISION {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "precision {} is greater than max {}",
+                precision,
+                Self::MAX_PRECISION
+            )));
         }
+        if scale > Self::MAX_SCALE {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "scale {} is greater than max {}",
+                scale,
+                Self::MAX_SCALE
+            )));
+        }
+        if scale > precision {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "scale {} is greater than precision {}",
+                scale, precision
+            )));
+        }
+
+        // Ensure that all values are within the requested
+        // precision. For performance, only check if the precision is
+        // decreased
+        self.validate_decimal_precision(precision)?;
+
+        let data_type = Self::TYPE_CONSTRUCTOR(self.precision, self.scale);
+        assert_eq!(self.data().data_type(), &data_type);
+
+        // safety: self.data is valid DataType::Decimal as checked above
+        let new_data_type = Self::TYPE_CONSTRUCTOR(precision, scale);
+
+        Ok(self.data().clone().with_data_type(new_data_type).into())
     }
 }
 
-impl From<ArrayData> for Decimal256Array {
+impl<const BYTE_WIDTH: usize> From<ArrayData> for BasicDecimalArray<BYTE_WIDTH> {
     fn from(data: ArrayData) -> Self {
         assert_eq!(
             data.buffers().len(),
             1,
-            "Decimal256Array data should contain 1 buffer only (values)"
+            "DecimalArray data should contain 1 buffer only (values)"
         );
         let values = data.buffers()[0].as_ptr();
-        let (precision, scale) = match data.data_type() {
-            DataType::Decimal256(precision, scale) => (*precision, *scale),
-            _ => panic!("Expected data type to be Decimal256"),
+        let (precision, scale) = match (data.data_type(), BYTE_WIDTH) {
+            (DataType::Decimal128(precision, scale), 16)
+            | (DataType::Decimal256(precision, scale), 32) => (*precision, *scale),
+            _ => panic!("Expected data type to be Decimal"),
         };
         Self {
             data,
@@ -446,17 +433,13 @@ impl From<BigInt> for Decimal256 {
     }
 }
 
-fn build_decimal_array_from<U: BasicDecimalArray<T, U>, T>(
+fn build_decimal_array_from<const BYTE_WIDTH: usize>(
     null_buf: BooleanBufferBuilder,
     buffer: Buffer,
-) -> U
-where
-    T: BasicDecimal,
-    U: From<ArrayData>,
-{
+) -> BasicDecimalArray<BYTE_WIDTH> {
     let data = unsafe {
         ArrayData::new_unchecked(
-            U::default_type(),
+            BasicDecimalArray::<BYTE_WIDTH>::default_type(),
             null_buf.len(),
             None,
             Some(null_buf.into()),
@@ -465,7 +448,7 @@ where
             vec![],
         )
     };
-    U::from(data)
+    BasicDecimalArray::<BYTE_WIDTH>::from(data)
 }
 
 impl<Ptr: Into<Decimal256>> FromIterator<Option<Ptr>> for Decimal256Array {
@@ -488,7 +471,7 @@ impl<Ptr: Into<Decimal256>> FromIterator<Option<Ptr>> for Decimal256Array {
             }
         });
 
-        build_decimal_array_from::<Decimal256Array, _>(null_buf, buffer.into())
+        build_decimal_array_from::<32>(null_buf, buffer.into())
     }
 }
 
@@ -513,96 +496,75 @@ impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for Decimal128Array {
             })
             .collect();
 
-        build_decimal_array_from::<Decimal128Array, _>(null_buf, buffer)
+        build_decimal_array_from::<16>(null_buf, buffer)
     }
 }
 
-macro_rules! def_decimal_array {
-    ($ty:ident, $array_name:expr, $decimal_ty:ident, $iter_ty:ident) => {
-        impl private_decimal::DecimalArrayPrivate for $ty {
-            fn raw_value_data_ptr(&self) -> *const u8 {
-                self.value_data.as_ptr()
-            }
-        }
+impl<const BYTE_WIDTH: usize> Array for BasicDecimalArray<BYTE_WIDTH> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
 
-        impl Array for $ty {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
+    fn data(&self) -> &ArrayData {
+        &self.data
+    }
 
-            fn data(&self) -> &ArrayData {
-                &self.data
-            }
-
-            fn into_data(self) -> ArrayData {
-                self.into()
-            }
-        }
-
-        impl From<$ty> for ArrayData {
-            fn from(array: $ty) -> Self {
-                array.data
-            }
-        }
-
-        impl fmt::Debug for $ty {
-            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-                write!(
-                    f,
-                    "{}<{}, {}>\n[\n",
-                    $array_name, self.precision, self.scale
-                )?;
-                print_long_array(self, f, |array, index, f| {
-                    let formatted_decimal = array.value_as_string(index);
-
-                    write!(f, "{}", formatted_decimal)
-                })?;
-                write!(f, "]")
-            }
-        }
-
-        impl<'a> ArrayAccessor for &'a $ty {
-            type Item = $decimal_ty;
-
-            fn value(&self, index: usize) -> Self::Item {
-                $ty::value(self, index)
-            }
-
-            unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-                $ty::value_unchecked(self, index)
-            }
-        }
-
-        impl<'a> IntoIterator for &'a $ty {
-            type Item = Option<$decimal_ty>;
-            type IntoIter = $iter_ty<'a>;
-
-            fn into_iter(self) -> Self::IntoIter {
-                $iter_ty::<'a>::new(self)
-            }
-        }
-
-        impl<'a> $ty {
-            /// constructs a new iterator
-            pub fn iter(&'a self) -> $iter_ty<'a> {
-                $iter_ty::<'a>::new(self)
-            }
-        }
-    };
+    fn into_data(self) -> ArrayData {
+        self.into()
+    }
 }
 
-def_decimal_array!(
-    Decimal128Array,
-    "Decimal128Array",
-    Decimal128,
-    Decimal128Iter
-);
-def_decimal_array!(
-    Decimal256Array,
-    "Decimal256Array",
-    Decimal256,
-    Decimal256Iter
-);
+impl<const BYTE_WIDTH: usize> From<BasicDecimalArray<BYTE_WIDTH>> for ArrayData {
+    fn from(array: BasicDecimalArray<BYTE_WIDTH>) -> Self {
+        array.data
+    }
+}
+
+impl<const BYTE_WIDTH: usize> fmt::Debug for BasicDecimalArray<BYTE_WIDTH> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Decimal{}Array<{}, {}>\n[\n",
+            BYTE_WIDTH * 8,
+            self.precision,
+            self.scale
+        )?;
+        print_long_array(self, f, |array, index, f| {
+            let formatted_decimal = array.value_as_string(index);
+
+            write!(f, "{}", formatted_decimal)
+        })?;
+        write!(f, "]")
+    }
+}
+
+impl<'a, const BYTE_WIDTH: usize> ArrayAccessor for &'a BasicDecimalArray<BYTE_WIDTH> {
+    type Item = BasicDecimal<BYTE_WIDTH>;
+
+    fn value(&self, index: usize) -> Self::Item {
+        BasicDecimalArray::<BYTE_WIDTH>::value(self, index)
+    }
+
+    unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
+        BasicDecimalArray::<BYTE_WIDTH>::value_unchecked(self, index)
+    }
+}
+
+impl<'a, const BYTE_WIDTH: usize> IntoIterator for &'a BasicDecimalArray<BYTE_WIDTH> {
+    type Item = Option<BasicDecimal<BYTE_WIDTH>>;
+    type IntoIter = BasicDecimalIter<'a, BYTE_WIDTH>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        BasicDecimalIter::<'a, BYTE_WIDTH>::new(self)
+    }
+}
+
+impl<'a, const BYTE_WIDTH: usize> BasicDecimalArray<BYTE_WIDTH> {
+    /// constructs a new iterator
+    pub fn iter(&'a self) -> BasicDecimalIter<'a, BYTE_WIDTH> {
+        BasicDecimalIter::<'a, BYTE_WIDTH>::new(self)
+    }
+}
 
 #[cfg(test)]
 mod tests {

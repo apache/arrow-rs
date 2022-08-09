@@ -2420,7 +2420,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::BasicDecimalArray;
     use crate::datatypes::TimeUnit;
     use crate::util::decimal::Decimal128;
     use crate::{buffer::Buffer, util::display::array_value_to_string};

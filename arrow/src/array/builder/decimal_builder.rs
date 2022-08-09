@@ -19,7 +19,7 @@ use num::BigInt;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::array::array_decimal::{BasicDecimalArray, Decimal256Array};
+use crate::array::array_decimal::Decimal256Array;
 use crate::array::ArrayRef;
 use crate::array::Decimal128Array;
 use crate::array::{ArrayBuilder, FixedSizeBinaryBuilder};
@@ -27,7 +27,7 @@ use crate::array::{ArrayBuilder, FixedSizeBinaryBuilder};
 use crate::error::{ArrowError, Result};
 
 use crate::datatypes::{validate_decimal256_precision, validate_decimal_precision};
-use crate::util::decimal::{BasicDecimal, Decimal256};
+use crate::util::decimal::Decimal256;
 
 /// Array Builder for [`Decimal128Array`]
 ///
@@ -258,7 +258,7 @@ mod tests {
     use super::*;
     use num::Num;
 
-    use crate::array::array_decimal::{BasicDecimalArray, Decimal128Array};
+    use crate::array::array_decimal::Decimal128Array;
     use crate::array::{array_decimal, Array};
     use crate::datatypes::DataType;
     use crate::util::decimal::{Decimal128, Decimal256};

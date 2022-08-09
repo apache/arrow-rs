@@ -34,7 +34,7 @@ use crate::datatypes::*;
 use crate::error::{ArrowError, Result};
 use crate::record_batch::{RecordBatch, RecordBatchReader};
 use crate::util::bit_util;
-use crate::util::decimal::{BasicDecimal, Decimal256};
+use crate::util::decimal::Decimal256;
 
 /// A struct that represents an Arrow file with a schema and record batches
 #[derive(Deserialize, Serialize, Debug)]
