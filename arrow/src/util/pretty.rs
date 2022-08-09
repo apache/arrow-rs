@@ -107,7 +107,7 @@ fn create_column(field: &str, columns: &[ArrayRef]) -> Result<Table> {
 mod tests {
     use crate::{
         array::{
-            self, new_null_array, Array, BasicDecimalArray, Date32Array, Date64Array,
+            self, new_null_array, Array, Date32Array, Date64Array,
             FixedSizeBinaryBuilder, Float16Array, Int32Array, PrimitiveBuilder,
             StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
             Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,

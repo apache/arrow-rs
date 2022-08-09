@@ -17,9 +17,9 @@
 
 use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
 use arrow::array::{
-    Array, ArrayRef, BasicDecimalArray, Decimal128Array, FixedSizeBinaryArray,
-    FixedSizeBinaryBuilder, IntervalDayTimeArray, IntervalDayTimeBuilder,
-    IntervalYearMonthArray, IntervalYearMonthBuilder, TimestampNanosecondArray,
+    Array, ArrayRef, Decimal128Array, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
+    IntervalDayTimeArray, IntervalDayTimeBuilder, IntervalYearMonthArray,
+    IntervalYearMonthBuilder, TimestampNanosecondArray,
 };
 use std::sync::Arc;
 
