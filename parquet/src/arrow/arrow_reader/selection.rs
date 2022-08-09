@@ -400,10 +400,8 @@ mod tests {
 
             let mut iter_b = b_bools.iter();
             for (idx, b) in a_bools.iter().enumerate() {
-                if *b {
-                    if *iter_b.next().unwrap() {
-                        expected_bools[idx] = true;
-                    }
+                if *b && *iter_b.next().unwrap() {
+                    expected_bools[idx] = true;
                 }
             }
 
