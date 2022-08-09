@@ -350,7 +350,7 @@ impl S3Client {
         Ok(())
     }
 
-    /// Make an S3 List request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>
+    /// Make an S3 List request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html>
     async fn list_request(
         &self,
         prefix: Option<&str>,
