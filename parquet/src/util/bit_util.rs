@@ -728,8 +728,7 @@ mod tests {
         let buffer = vec![10, 0, 0, 0, 20, 0, 30, 0, 0, 0, 40, 0];
         let mut bit_reader = BitReader::from(buffer);
         assert_eq!(bit_reader.get_value::<i64>(32), Some(10));
-        let skipped = bit_reader.skip(1, 16);
-        assert!(skipped);
+        assert_eq!(bit_reader.skip(1, 16), 1);
         assert_eq!(bit_reader.get_value::<i64>(32), Some(30));
         assert_eq!(bit_reader.get_value::<i64>(16), Some(40));
     }
