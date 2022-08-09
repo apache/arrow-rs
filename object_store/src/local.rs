@@ -1302,9 +1302,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn relative_root() {
+    async fn relative_paths() {
         LocalFileSystem::new_with_prefix(".").unwrap();
         LocalFileSystem::new_with_prefix("..").unwrap();
         LocalFileSystem::new_with_prefix("../..").unwrap();
+
+        let integration = LocalFileSystem::new();
+        let path = Path::from_filesystem_path(".").unwrap();
+        integration.list_with_delimiter(Some(&path)).await.unwrap();
     }
 }
