@@ -74,7 +74,7 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
     pub fn try_new_from_bytes(
         precision: usize,
         scale: usize,
-        bytes: &[u8],
+        bytes: &[u8; BYTE_WIDTH],
     ) -> Result<Self>
     where
         Self: Sized,
@@ -239,9 +239,9 @@ impl Decimal256 {
         scale: usize,
     ) -> Result<Decimal256> {
         let mut bytes = if num.is_negative() {
-            vec![255; 32]
+            [255_u8; 32]
         } else {
-            vec![0; 32]
+            [0; 32]
         };
         let num_bytes = &num.to_signed_bytes_le();
         bytes[0..num_bytes.len()].clone_from_slice(num_bytes);
@@ -345,9 +345,9 @@ mod tests {
 
     #[test]
     fn decimal_256_from_bytes() {
-        let mut bytes = vec![0; 32];
+        let mut bytes = [0_u8; 32];
         bytes[0..16].clone_from_slice(&100_i128.to_le_bytes());
-        let value = Decimal256::try_new_from_bytes(5, 2, bytes.as_slice()).unwrap();
+        let value = Decimal256::try_new_from_bytes(5, 2, &bytes).unwrap();
         assert_eq!(value.to_string(), "1.00");
 
         bytes[0..16].clone_from_slice(&i128::MAX.to_le_bytes());
@@ -367,7 +367,7 @@ mod tests {
         );
 
         // smaller than i128 minimum
-        bytes = vec![255; 32];
+        bytes = [255; 32];
         bytes[31] = 128;
         let value = Decimal256::try_new_from_bytes(76, 4, &bytes).unwrap();
         assert_eq!(
@@ -375,7 +375,7 @@ mod tests {
             "-574437317700748313234121683441537667865831564552201235664496608164256541.5731"
         );
 
-        bytes = vec![255; 32];
+        bytes = [255; 32];
         let value = Decimal256::try_new_from_bytes(5, 2, &bytes).unwrap();
         assert_eq!(value.to_string(), "-0.01");
     }
