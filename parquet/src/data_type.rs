@@ -565,7 +565,7 @@ impl AsBytes for str {
 
 pub(crate) mod private {
     use crate::encodings::decoding::PlainDecoderDetails;
-    use crate::util::bit_util::{BitReader, BitWriter};
+    use crate::util::bit_util::{read_num_bytes, BitReader, BitWriter};
     use crate::util::memory::ByteBufferPtr;
 
     use crate::basic::Type;
@@ -892,21 +892,6 @@ pub(crate) mod private {
         }
     }
 
-    // TODO - Why does macro importing fail?
-    /// Reads `$size` of bytes from `$src`, and reinterprets them as type `$ty`, in
-    /// little-endian order. `$ty` must implement the `Default` trait. Otherwise this won't
-    /// compile.
-    /// This is copied and modified from byteorder crate.
-    macro_rules! read_num_bytes {
-        ($ty:ty, $size:expr, $src:expr) => {{
-            assert!($size <= $src.len());
-            let mut buffer =
-                <$ty as $crate::util::bit_util::FromBytes>::Buffer::default();
-            buffer.as_mut()[..$size].copy_from_slice(&$src[..$size]);
-            <$ty>::from_ne_bytes(buffer)
-        }};
-    }
-
     impl ParquetValueType for super::ByteArray {
         const PHYSICAL_TYPE: Type = Type::BYTE_ARRAY;
 
@@ -946,9 +931,9 @@ pub(crate) mod private {
                 .as_mut()
                 .expect("set_data should have been called");
             let num_values = std::cmp::min(buffer.len(), decoder.num_values);
-            for i in 0..num_values {
+            for val_array in buffer.iter_mut().take(num_values) {
                 let len: usize =
-                    read_num_bytes!(u32, 4, data.start_from(decoder.start).as_ref())
+                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref())
                         as usize;
                 decoder.start += std::mem::size_of::<u32>();
 
@@ -956,7 +941,7 @@ pub(crate) mod private {
                     return Err(eof_err!("Not enough bytes to decode"));
                 }
 
-                let val: &mut Self = buffer[i].as_mut_any().downcast_mut().unwrap();
+                let val: &mut Self = val_array.as_mut_any().downcast_mut().unwrap();
 
                 val.set_data(data.range(decoder.start, len));
                 decoder.start += len;
@@ -975,7 +960,7 @@ pub(crate) mod private {
 
             for _ in 0..num_values {
                 let len: usize =
-                    read_num_bytes!(u32, 4, data.start_from(decoder.start).as_ref())
+                    read_num_bytes::<u32>(4, data.start_from(decoder.start).as_ref())
                         as usize;
                 decoder.start += std::mem::size_of::<u32>() + len;
             }
