@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::array::array_decimal::private_decimal::DecimalArrayPrivate;
 use crate::array::{ArrayAccessor, Decimal128Iter, Decimal256Iter};
 use num::BigInt;
 use std::borrow::Borrow;
 use std::convert::From;
 use std::fmt;
 use std::{any::Any, iter::FromIterator};
-use crate::array::array_decimal::private_decimal::DecimalArrayPrivate;
 
 use super::{
     array::print_long_array, raw_pointer::RawPtrBox, Array, ArrayData, FixedSizeListArray,
@@ -30,7 +30,11 @@ use super::{BooleanBufferBuilder, FixedSizeBinaryArray};
 #[allow(deprecated)]
 pub use crate::array::DecimalIter;
 use crate::buffer::{Buffer, MutableBuffer};
-use crate::datatypes::{validate_decimal256_precision, validate_decimal_precision, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE, validate_decimal_precision_with_bytes};
+use crate::datatypes::{
+    validate_decimal256_precision, validate_decimal256_precision_with_bytes,
+    validate_decimal_precision, validate_decimal_precision_with_bytes,
+    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+};
 use crate::datatypes::{DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE};
 use crate::error::{ArrowError, Result};
 use crate::util::decimal::{BasicDecimal, Decimal128, Decimal256};
@@ -302,18 +306,13 @@ pub trait BasicDecimalArray<T: BasicDecimal, U: From<ArrayData>>:
         Ok(self.data().clone().with_data_type(new_data_type).into())
     }
 
+    // TODO: remove this
     /// Validates decimal values in this array can be properly interpreted
     /// with the specified precision.
     fn validate_decimal_precision(&self, precision: usize) -> Result<()>;
 
     fn validate_decimal_with_bytes(&self, precision: usize) -> Result<()>;
 }
-
-
-impl  {
-
-}
-
 
 impl BasicDecimalArray<Decimal128, Decimal128Array> for Decimal128Array {
     const VALUE_LENGTH: i32 = 16;
@@ -351,7 +350,7 @@ impl BasicDecimalArray<Decimal128, Decimal128Array> for Decimal128Array {
         while current != current_end {
             if self.is_null(current) {
                 current += 1;
-                continue
+                continue;
             } else {
                 let offset = current + data.offset();
                 current += 1;
@@ -398,7 +397,28 @@ impl BasicDecimalArray<Decimal256, Decimal256Array> for Decimal256Array {
     }
 
     fn validate_decimal_with_bytes(&self, precision: usize) -> Result<()> {
-        todo!()
+        let current_end = self.data.len();
+        let mut current: usize = 0;
+        let data = &self.data;
+
+        while current != current_end {
+            if self.is_null(current) {
+                current += 1;
+                continue;
+            } else {
+                let offset = current + data.offset();
+                current += 1;
+                let raw_val = unsafe {
+                    let pos = self.value_offset_at(offset);
+                    std::slice::from_raw_parts(
+                        self.raw_value_data_ptr().offset(pos as isize),
+                        Self::VALUE_LENGTH as usize,
+                    )
+                };
+                validate_decimal256_precision_with_bytes(raw_val, precision)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -464,8 +484,6 @@ impl From<ArrayData> for Decimal256Array {
     }
 }
 
-
-
 impl<'a> Decimal128Array {
     /// Constructs a new iterator that iterates `Decimal128` values as i128 values.
     /// This is kept mostly for back-compatibility purpose.
@@ -474,11 +492,7 @@ impl<'a> Decimal128Array {
     pub fn i128_iter(&'a self) -> DecimalIter<'a> {
         DecimalIter::<'a>::new(self)
     }
-
-    pub fn bytes_iter(&'a self) ->
 }
-
-
 
 impl From<BigInt> for Decimal256 {
     fn from(bigint: BigInt) -> Self {

@@ -619,13 +619,6 @@ mod tests {
     use crate::array::*;
 
     #[test]
-    fn test_int32() {
-        let array = Int32Array::from(vec![1,2,3,4]);
-        let decimal = Decimal128Array::from_iter_values(vec![1,2,3,4]);
-        let result = decimal.iter();
-    }
-
-    #[test]
     fn test_buffer_builder_availability() {
         let _builder = Int8BufferBuilder::new(10);
         let _builder = Int16BufferBuilder::new(10);

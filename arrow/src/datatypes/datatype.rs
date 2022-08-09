@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::cmp::Ordering;
 use num::{BigInt, Num, ToPrimitive};
+use std::cmp::Ordering;
 use std::fmt;
 
 use serde_derive::{Deserialize, Serialize};
@@ -265,7 +265,7 @@ impl fmt::Display for DataType {
 }
 
 // Max value of little-endian format for each precision.
-pub(crate) const MAX_DECIMAL_BYTES_FOR_EACH_PRECISION : [[u8;16];38]  = [
+pub(crate) const MAX_DECIMAL_BYTES_FOR_EACH_PRECISION: [[u8; 16]; 38] = [
     9_i128.to_le_bytes(),
     99_i128.to_le_bytes(),
     999_i128.to_le_bytes(),
@@ -346,6 +346,13 @@ pub(crate) const MIN_DECIMAL_BYTES_FOR_EACH_PRECISION: [[u8; 16]; 38] = [
     (-9999999999999999999999999999999999999_i128).to_le_bytes(),
     (-99999999999999999999999999999999999999_i128).to_le_bytes(),
 ];
+
+// Max value of little-endian format for each precision.
+pub(crate) const MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [[u8; 16]; 1] =
+    [(-99999999999999999999999999999999999999_i128).to_le_bytes()];
+
+pub(crate) const MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [[u8; 16]; 1] =
+    [(-99999999999999999999999999999999999999_i128).to_le_bytes()];
 
 /// `MAX_DECIMAL_FOR_EACH_PRECISION[p]` holds the maximum `i128` value
 /// that can be stored in [DataType::Decimal128] value of precision `p`
@@ -604,7 +611,11 @@ fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
     Ordering::Equal
 }
 
-pub(crate) fn validate_decimal_precision_with_bytes(lt_value: &[u8], precision: usize) -> Result<i128> {
+#[inline]
+pub(crate) fn validate_decimal_precision_with_bytes(
+    lt_value: &[u8],
+    precision: usize,
+) -> Result<()> {
     if precision > DECIMAL128_MAX_PRECISION {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Max precision of a Decimal128 is {}, but got {}",
@@ -625,12 +636,36 @@ pub(crate) fn validate_decimal_precision_with_bytes(lt_value: &[u8], precision: 
             lt_value, precision, min
         )))
     } else {
-        Ok(1)
+        Ok(())
     }
 }
 
-pub(crate) fn validate_decimal256_precision_with_bytes(lt_value : &[u8], precision: usize) {
-
+#[inline]
+pub(crate) fn validate_decimal256_precision_with_bytes(
+    lt_value: &[u8],
+    precision: usize,
+) -> Result<()> {
+    if precision > DECIMAL256_MAX_PRECISION {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Max precision of a Decima256 is {}, but got {}",
+            DECIMAL256_MAX_PRECISION, precision,
+        )));
+    }
+    let max = MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision - 1];
+    let min = MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision - 1];
+    if singed_cmp_le_bytes(lt_value, &max) == Ordering::Greater {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{:?} is too large to store in a Decimal256 of precision {}. Max is {:?}",
+            lt_value, precision, max
+        )))
+    } else if singed_cmp_le_bytes(lt_value, &min) == Ordering::Less {
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{:?} is too small to store in a Decimal256 of precision {}. Min is {:?}",
+            lt_value, precision, min
+        )))
+    } else {
+        Ok(())
+    }
 }
 
 /// Validates that the specified string value can be properly
