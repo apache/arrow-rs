@@ -89,11 +89,11 @@ pub struct BasicDecimalArray<const BYTE_WIDTH: usize> {
 }
 
 impl<const BYTE_WIDTH: usize> BasicDecimalArray<BYTE_WIDTH> {
-    const VALUE_LENGTH: i32 = BYTE_WIDTH as i32;
-    const DEFAULT_TYPE: DataType = BasicDecimal::<BYTE_WIDTH>::DEFAULT_TYPE;
-    const MAX_PRECISION: usize = BasicDecimal::<BYTE_WIDTH>::MAX_PRECISION;
-    const MAX_SCALE: usize = BasicDecimal::<BYTE_WIDTH>::MAX_SCALE;
-    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType =
+    pub const VALUE_LENGTH: i32 = BYTE_WIDTH as i32;
+    pub const DEFAULT_TYPE: DataType = BasicDecimal::<BYTE_WIDTH>::DEFAULT_TYPE;
+    pub const MAX_PRECISION: usize = BasicDecimal::<BYTE_WIDTH>::MAX_PRECISION;
+    pub const MAX_SCALE: usize = BasicDecimal::<BYTE_WIDTH>::MAX_SCALE;
+    pub const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType =
         BasicDecimal::<BYTE_WIDTH>::TYPE_CONSTRUCTOR;
 
     pub fn data(&self) -> &ArrayData {

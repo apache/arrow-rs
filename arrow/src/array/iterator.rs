@@ -111,7 +111,7 @@ pub type BasicDecimalIter<'a, const BYTE_WIDTH: usize> =
 pub type Decimal128Iter<'a> = BasicDecimalIter<'a, 16>;
 
 /// an iterator that returns `Some(Decimal256)` or `None`, that can be used on a
-/// [`Decimal256Array`]
+/// [`super::Decimal256Array`]
 pub type Decimal256Iter<'a> = BasicDecimalIter<'a, 32>;
 /// an iterator that returns `Some(i128)` or `None`, that can be used on a
 /// [`Decimal128Array`]
