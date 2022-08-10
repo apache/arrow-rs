@@ -1301,11 +1301,10 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                         if v.is_none() {
                             Ok(None)
                         } else {
-                            v.and_then(|v| v.to_i128())
+                            v.as_ref().and_then(|v| v.to_i128())
                                 .ok_or_else(|| {
                                     ArrowError::InvalidArgumentError(
-                                    "Cannot be casted to 128-bit integer for Decimal128"
-                                        .to_string(),
+                                    format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
                                 )
                                 })
                                 .map(Some)
@@ -1357,11 +1356,10 @@ fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
                         if v.is_none() {
                             Ok(None)
                         } else {
-                            v.and_then(|v| v.to_i128())
+                            v.as_ref().and_then(|v| v.to_i128())
                                 .ok_or_else(|| {
                                     ArrowError::InvalidArgumentError(
-                                    "Cannot be casted to 128-bit integer for Decimal128"
-                                        .to_string(),
+                                    format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
                                 )
                                 })
                                 .map(Some)

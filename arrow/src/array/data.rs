@@ -396,25 +396,22 @@ impl ArrayData {
     /// panic's if the new DataType is not compatible with the
     /// existing type.
     ///
-    /// Note: currently only changing a [DataType::Decimal128]s precision
-    /// and scale are supported
+    /// Note: currently only changing a [DataType::Decimal128]s or
+    /// [DataType::Decimal256]s precision and scale are supported
     #[inline]
     pub(crate) fn with_data_type(mut self, new_data_type: DataType) -> Self {
-        assert!(
-            matches!(
-                self.data_type,
-                DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
-            ),
-            "only DecimalType is supported for existing type"
-        );
-        assert!(
-            matches!(
-                new_data_type,
-                DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
-            ),
-            "only DecimalType is supported for new datatype"
-        );
-        self.data_type = new_data_type;
+        if matches!(self.data_type, DataType::Decimal128(_, _))
+            && matches!(new_data_type, DataType::Decimal128(_, _))
+        {
+            self.data_type = new_data_type;
+        } else if matches!(self.data_type, DataType::Decimal256(_, _))
+            && matches!(new_data_type, DataType::Decimal256(_, _))
+        {
+            self.data_type = new_data_type;
+        } else {
+            panic!("only DecimalType with same byte width is supported for new datatype.")
+        }
+
         self
     }
 
