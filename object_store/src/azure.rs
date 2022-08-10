@@ -634,7 +634,7 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Set a client id used for client secret authorization 
+    /// Set a client id used for client secret authorization
     /// (required - one of access key, bearer token, or client credentials)
     pub fn with_client_id(mut self, client_id: impl Into<String>) -> Self {
         self.client_id = Some(client_id.into());
