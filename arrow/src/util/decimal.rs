@@ -246,6 +246,11 @@ impl Decimal256 {
         bytes[0..num_bytes.len()].clone_from_slice(num_bytes);
         Decimal256::try_new_from_bytes(precision, scale, &bytes)
     }
+
+    /// Constructs a `BigInt` from this `Decimal256` value.
+    pub(crate) fn to_big_int(&self) -> BigInt {
+        BigInt::from_signed_bytes_le(&self.value)
+    }
 }
 
 // compare two signed integer which are encoded with little endian.

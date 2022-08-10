@@ -483,9 +483,16 @@ pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Resul
 /// interpreted as a Decimal256 number with precision `precision`
 #[inline]
 pub(crate) fn validate_decimal256_precision(
-    value: &str,
+    value: &BigInt,
     precision: usize,
-) -> Result<BigInt> {
+) -> Result<&BigInt> {
+    if precision > DECIMAL256_MAX_PRECISION {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Max precision of a Decimal256 is {}, but got {}",
+            DECIMAL256_MAX_PRECISION, precision,
+        )));
+    }
+
     if precision > 38 {
         let max_str = MAX_DECIMAL_FOR_LARGER_PRECISION[precision - 38 - 1];
         let min_str = MIN_DECIMAL_FOR_LARGER_PRECISION[precision - 38 - 1];
@@ -493,13 +500,12 @@ pub(crate) fn validate_decimal256_precision(
         let max = BigInt::from_str_radix(max_str, 10).unwrap();
         let min = BigInt::from_str_radix(min_str, 10).unwrap();
 
-        let value = BigInt::from_str_radix(value, 10).unwrap();
-        if value > max {
+        if value > &max {
             Err(ArrowError::InvalidArgumentError(format!(
                 "{} is too large to store in a Decimal256 of precision {}. Max is {}",
                 value, precision, max
             )))
-        } else if value < min {
+        } else if value < &min {
             Err(ArrowError::InvalidArgumentError(format!(
                 "{} is too small to store in a Decimal256 of precision {}. Min is {}",
                 value, precision, min
@@ -510,7 +516,6 @@ pub(crate) fn validate_decimal256_precision(
     } else {
         let max = MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1];
         let min = MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1];
-        let value = BigInt::from_str_radix(value, 10).unwrap();
 
         if value.to_i128().unwrap() > max {
             Err(ArrowError::InvalidArgumentError(format!(
