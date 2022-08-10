@@ -128,10 +128,6 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
         &self.value
     }
 
-    pub fn raw_value_with_size(&self) -> &[u8; BYTE_WIDTH] {
-        &self.value
-    }
-
     /// Returns the precision of the decimal.
     pub fn precision(&self) -> usize {
         self.precision
