@@ -123,6 +123,6 @@ gpg --armor --output ${tarball}.asc --detach-sig ${tarball}
 (cd ${distdir} && shasum -a 512 ${tarname}) > ${tarball}.sha512
 
 echo "Uploading to apache dist/dev to ${url}"
-#svn co --depth=empty https://dist.apache.org/repos/dist/dev/arrow ${SOURCE_TOP_DIR}/dev/dist
-#svn add ${distdir}
-#svn ci -m "Apache Arrow Rust ${object_store_version=} ${rc}" ${distdir}
+svn co --depth=empty https://dist.apache.org/repos/dist/dev/arrow ${SOURCE_TOP_DIR}/dev/dist
+svn add ${distdir}
+svn ci -m "Apache Arrow Rust ${object_store_version=} ${rc}" ${distdir}
