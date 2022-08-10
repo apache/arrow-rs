@@ -33,21 +33,23 @@ use crate::{
     GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
 };
 use async_trait::async_trait;
-use azure_core::{auth::TokenCredential, prelude::*, HttpClient};
+use azure_core::{
+    error::{Error as AzureError, ErrorKind as AzureErrorKind},
+    prelude::*,
+    StatusCode,
+};
+use azure_identity::{
+    AutoRefreshingTokenCredential, ClientSecretCredential, TokenCredentialOptions,
+};
 use azure_storage::core::clients::StorageClient;
-use azure_storage::core::prelude::{AsStorageClient, StorageAccountClient};
-use azure_storage_blobs::blob::responses::ListBlobsResponse;
 use azure_storage_blobs::blob::Blob;
-use azure_storage_blobs::{
-    prelude::{AsBlobClient, AsContainerClient, ContainerClient},
-    DeleteSnapshotsMethod,
+use azure_storage_blobs::container::operations::ListBlobsResponse;
+use azure_storage_blobs::prelude::{
+    AsContainerClient, ContainerClient, DeleteSnapshotsMethod,
 };
 use bytes::Bytes;
-use futures::{
-    future::BoxFuture,
-    stream::{self, BoxStream},
-    StreamExt, TryStreamExt,
-};
+use chrono::{TimeZone, Utc};
+use futures::{future::BoxFuture, stream::BoxStream, StreamExt, TryStreamExt};
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::fmt::{Debug, Formatter};
@@ -68,7 +70,7 @@ enum Error {
         source,
     ))]
     UnableToDeleteData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         path: String,
     },
@@ -81,7 +83,7 @@ enum Error {
         source,
     ))]
     UnableToGetData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         path: String,
     },
@@ -94,7 +96,7 @@ enum Error {
         source,
     ))]
     UnableToHeadData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         path: String,
     },
@@ -107,7 +109,7 @@ enum Error {
         source,
     ))]
     UnableToGetPieceOfData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         path: String,
     },
@@ -120,7 +122,7 @@ enum Error {
         source,
     ))]
     UnableToPutData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         path: String,
     },
@@ -132,7 +134,7 @@ enum Error {
         source,
     ))]
     UnableToListData {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
     },
 
@@ -144,7 +146,7 @@ enum Error {
         source
     ))]
     UnableToCopyFile {
-        source: Box<dyn std::error::Error + Send + Sync>,
+        source: AzureError,
         container: String,
         from: String,
         to: String,
@@ -162,12 +164,12 @@ enum Error {
 
     NotFound {
         path: String,
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: AzureError,
     },
 
     AlreadyExists {
         path: String,
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: AzureError,
     },
 
     #[cfg(not(feature = "azure_test"))]
@@ -201,8 +203,14 @@ enum Error {
 impl From<Error> for super::Error {
     fn from(source: Error) -> Self {
         match source {
-            Error::NotFound { path, source } => Self::NotFound { path, source },
-            Error::AlreadyExists { path, source } => Self::AlreadyExists { path, source },
+            Error::NotFound { path, source } => Self::NotFound {
+                path,
+                source: Box::new(source),
+            },
+            Error::AlreadyExists { path, source } => Self::AlreadyExists {
+                path,
+                source: Box::new(source),
+            },
             _ => Self::Generic {
                 store: "Azure Blob Storage",
                 source: Box::new(source),
@@ -229,12 +237,11 @@ impl std::fmt::Display for MicrosoftAzure {
     }
 }
 
-#[allow(clippy::borrowed_box)]
-fn check_err_not_found(err: &Box<dyn std::error::Error + Send + Sync>) -> bool {
-    if let Some(azure_core::HttpError::StatusCode { status, .. }) =
-        err.downcast_ref::<azure_core::HttpError>()
-    {
-        return status.as_u16() == 404;
+fn check_err_not_found(err: &AzureError) -> bool {
+    if let Some(cast_err) = err.downcast_ref::<AzureError>() {
+        if let AzureErrorKind::HttpResponse { status, .. } = cast_err.kind() {
+            return *status == 404;
+        }
     };
     false
 }
@@ -245,9 +252,9 @@ impl ObjectStore for MicrosoftAzure {
         let bytes = bytes::BytesMut::from(&*bytes);
 
         self.container_client
-            .as_blob_client(location.as_ref())
+            .blob_client(location.as_ref())
             .put_block_blob(bytes)
-            .execute()
+            .into_future()
             .await
             .context(UnableToPutDataSnafu {
                 container: &self.container_name,
@@ -279,29 +286,29 @@ impl ObjectStore for MicrosoftAzure {
     }
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
-        let blob = self
+        let stream = self
             .container_client
-            .as_blob_client(location.as_ref())
+            .clone()
+            .blob_client(location.as_ref())
             .get()
-            .execute()
-            .await
-            .map_err(|err| {
-                if check_err_not_found(&err) {
-                    return Error::NotFound {
-                        source: err,
-                        path: location.to_string(),
-                    };
-                };
-                Error::UnableToGetData {
-                    source: err,
-                    container: self.container_name.clone(),
-                    path: location.to_string(),
-                }
-            })?;
+            .into_stream()
+            .and_then(|chunk| async { chunk.data.collect().await })
+            .map_err(move |err| match err.kind() {
+                AzureErrorKind::HttpResponse {
+                    status: StatusCode::NotFound,
+                    ..
+                } => crate::Error::NotFound {
+                    source: Box::new(err),
+                    path: "location".to_string(),
+                },
+                _ => crate::Error::Generic {
+                    source: Box::new(err),
+                    store: "container",
+                },
+            })
+            .boxed();
 
-        Ok(GetResult::Stream(
-            futures::stream::once(async move { Ok(blob.data) }).boxed(),
-        ))
+        Ok(GetResult::Stream(stream))
     }
 
     async fn get_range(
@@ -309,49 +316,62 @@ impl ObjectStore for MicrosoftAzure {
         location: &Path,
         range: std::ops::Range<usize>,
     ) -> Result<Bytes> {
-        let blob = self
+        let map_azure_err = |err: AzureError| match err.kind() {
+            AzureErrorKind::HttpResponse {
+                status: StatusCode::NotFound,
+                ..
+            } => Error::NotFound {
+                source: err,
+                path: location.to_string(),
+            },
+            _ => Error::UnableToGetPieceOfData {
+                source: err,
+                container: self.container_name.clone(),
+                path: location.to_string(),
+            },
+        };
+
+        let mut stream = self
             .container_client
-            .as_blob_client(location.as_ref())
+            .blob_client(location.as_ref())
             .get()
             .range(range)
-            .execute()
-            .await
-            .map_err(|err| {
-                if check_err_not_found(&err) {
-                    return Error::NotFound {
-                        source: err,
-                        path: location.to_string(),
-                    };
-                };
-                Error::UnableToGetPieceOfData {
-                    source: err,
-                    container: self.container_name.clone(),
-                    path: location.to_string(),
-                }
-            })?;
+            .into_stream();
 
-        Ok(blob.data)
+        let mut chunk: Vec<u8> = vec![];
+        while let Some(value) = stream.next().await {
+            let value = value
+                .map_err(map_azure_err)?
+                .data
+                .collect()
+                .await
+                .map_err(map_azure_err)?;
+            chunk.extend(&value);
+        }
+
+        Ok(chunk.into())
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let res = self
             .container_client
-            .as_blob_client(location.as_ref())
+            .blob_client(location.as_ref())
             .get_properties()
-            .execute()
+            .into_future()
             .await
-            .map_err(|err| {
-                if check_err_not_found(&err) {
-                    return Error::NotFound {
-                        source: err,
-                        path: location.to_string(),
-                    };
-                };
-                Error::UnableToHeadData {
+            .map_err(|err| match err.kind() {
+                AzureErrorKind::HttpResponse {
+                    status: StatusCode::NotFound,
+                    ..
+                } => Error::NotFound {
+                    source: err,
+                    path: location.to_string(),
+                },
+                _ => Error::UnableToHeadData {
                     source: err,
                     container: self.container_name.clone(),
                     path: location.to_string(),
-                }
+                },
             })?;
 
         convert_object_meta(res.blob)?.ok_or_else(|| super::Error::NotFound {
@@ -362,10 +382,10 @@ impl ObjectStore for MicrosoftAzure {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.container_client
-            .as_blob_client(location.as_ref())
+            .blob_client(location.as_ref())
             .delete()
             .delete_snapshots_method(DeleteSnapshotsMethod::Include)
-            .execute()
+            .into_future()
             .await
             .context(UnableToDeleteDataSnafu {
                 container: &self.container_name,
@@ -428,9 +448,9 @@ impl ObjectStore for MicrosoftAzure {
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
         let from_url = self.get_copy_from_url(from)?;
         self.container_client
-            .as_blob_client(to.as_ref())
-            .copy(&from_url)
-            .execute()
+            .blob_client(to.as_ref())
+            .copy(from_url)
+            .into_future()
             .await
             .context(UnableToCopyFileSnafu {
                 container: &self.container_name,
@@ -443,20 +463,20 @@ impl ObjectStore for MicrosoftAzure {
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         let from_url = self.get_copy_from_url(from)?;
         self.container_client
-            .as_blob_client(to.as_ref())
-            .copy(&from_url)
-            .if_match_condition(IfMatchCondition::NotMatch("*".to_string()))
-            .execute()
+            .blob_client(to.as_ref())
+            .copy(from_url)
+            .if_match(IfMatchCondition::NotMatch("*".to_string()))
+            .into_future()
             .await
             .map_err(|err| {
-                if let Some(azure_core::HttpError::StatusCode { status, .. }) =
-                    err.downcast_ref::<azure_core::HttpError>()
+                if let AzureErrorKind::HttpResponse {
+                    status: StatusCode::Conflict,
+                    ..
+                } = err.kind()
                 {
-                    if status.as_u16() == 409 {
-                        return Error::AlreadyExists {
-                            source: err,
-                            path: to.to_string(),
-                        };
+                    return Error::AlreadyExists {
+                        source: err,
+                        path: to.to_string(),
                     };
                 };
                 Error::UnableToCopyFile {
@@ -488,60 +508,33 @@ impl MicrosoftAzure {
         prefix: Option<&Path>,
         delimiter: bool,
     ) -> Result<BoxStream<'_, Result<ListBlobsResponse>>> {
-        enum ListState {
-            Start,
-            HasMore(String),
-            Done,
+        let mut stream = self.container_client.list_blobs();
+        if let Some(prefix_val) = format_prefix(prefix) {
+            stream = stream.prefix(prefix_val);
+        }
+        if delimiter {
+            stream = stream.delimiter(Delimiter::new(DELIMITER));
         }
 
-        let prefix_raw = format_prefix(prefix);
+        let stream = stream
+            .into_stream()
+            .map(|resp| match resp {
+                Ok(list_blobs) => Ok(list_blobs),
+                Err(err) => Err(crate::Error::from(Error::UnableToListData {
+                    source: err,
+                    container: self.container_name.clone(),
+                })),
+            })
+            .boxed();
 
-        Ok(stream::unfold(ListState::Start, move |state| {
-            let mut request = self.container_client.list_blobs();
-
-            if let Some(p) = prefix_raw.as_deref() {
-                request = request.prefix(p);
-            }
-
-            if delimiter {
-                request = request.delimiter(Delimiter::new(DELIMITER));
-            }
-
-            async move {
-                match state {
-                    ListState::HasMore(ref marker) => {
-                        request = request.next_marker(marker as &str);
-                    }
-                    ListState::Done => {
-                        return None;
-                    }
-                    ListState::Start => {}
-                }
-
-                let resp = match request.execute().await.context(UnableToListDataSnafu {
-                    container: &self.container_name,
-                }) {
-                    Ok(resp) => resp,
-                    Err(err) => return Some((Err(crate::Error::from(err)), state)),
-                };
-
-                let next_state = if let Some(marker) = &resp.next_marker {
-                    ListState::HasMore(marker.as_str().to_string())
-                } else {
-                    ListState::Done
-                };
-
-                Some((Ok(resp), next_state))
-            }
-        })
-        .boxed())
+        Ok(stream)
     }
 }
 
 /// Returns `None` if is a directory
 fn convert_object_meta(blob: Blob) -> Result<Option<ObjectMeta>> {
     let location = Path::parse(blob.name)?;
-    let last_modified = blob.properties.last_modified;
+    let last_modified = Utc.timestamp(blob.properties.last_modified.unix_timestamp(), 0);
     let size = blob
         .properties
         .content_length
@@ -582,7 +575,7 @@ fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
     Ok(url)
 }
 
-/// Configure a connection to Mirosoft Azure Blob Storage bucket using
+/// Configure a connection to Microsoft Azure Blob Storage container using
 /// the specified credentials.
 ///
 /// # Example
@@ -602,7 +595,10 @@ pub struct MicrosoftAzureBuilder {
     account: Option<String>,
     access_key: Option<String>,
     container_name: Option<String>,
-    token_credential: Option<Arc<dyn TokenCredential>>,
+    bearer_token: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    tenant_id: Option<String>,
     use_emulator: bool,
 }
 
@@ -634,18 +630,33 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Set a static bearer token to be used for authorizing requests
+    pub fn with_bearer_token(mut self, bearer_token: impl Into<String>) -> Self {
+        self.bearer_token = Some(bearer_token.into());
+        self
+    }
+
     /// Set the Azure Container Name (required)
     pub fn with_container_name(mut self, container_name: impl Into<String>) -> Self {
         self.container_name = Some(container_name.into());
         self
     }
 
-    /// Set a TokenCredential to be used for authentication (required - one of token_credential or access key)
-    pub fn with_token_credential(
-        mut self,
-        token_credential: Arc<dyn TokenCredential>,
-    ) -> Self {
-        self.token_credential = Some(token_credential);
+    /// Set a client id used for client secret authorization
+    pub fn with_client_id(mut self, client_id: impl Into<String>) -> Self {
+        self.client_id = Some(client_id.into());
+        self
+    }
+
+    /// Set a client secret used for client secret authorization
+    pub fn with_client_secret(mut self, client_secret: impl Into<String>) -> Self {
+        self.client_secret = Some(client_secret.into());
+        self
+    }
+
+    /// Set the tenant id of the Azure AD tenant
+    pub fn with_tenant_id(mut self, tenant_id: impl Into<String>) -> Self {
+        self.tenant_id = Some(tenant_id.into());
         self
     }
 
@@ -662,21 +673,19 @@ impl MicrosoftAzureBuilder {
             account,
             access_key,
             container_name,
-            token_credential,
+            bearer_token,
+            client_id,
+            client_secret,
+            tenant_id,
             use_emulator,
         } = self;
 
-        let account = account.ok_or(Error::MissingAccount {})?;
-        let access_key = access_key.ok_or(Error::MissingAccessKey {})?;
         let container_name = container_name.ok_or(Error::MissingContainerName {})?;
 
-        let http_client: Arc<dyn HttpClient> = Arc::new(reqwest::Client::new());
-
-        let (is_emulator, storage_account_client) = if use_emulator {
+        let (is_emulator, storage_client) = if use_emulator {
             check_if_emulator_works()?;
             // Allow overriding defaults. Values taken from
             // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
-            let http_client = azure_core::new_http_client();
             let blob_storage_url =
                 url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
             let queue_storage_url =
@@ -686,8 +695,7 @@ impl MicrosoftAzureBuilder {
             let filesystem_url =
                 url_from_env("AZURITE_TABLE_STORAGE_URL", "http://127.0.0.1:10004")?;
 
-            let storage_client = StorageAccountClient::new_emulator(
-                http_client,
+            let storage_client = StorageClient::new_emulator(
                 &blob_storage_url,
                 &table_storage_url,
                 &queue_storage_url,
@@ -696,27 +704,43 @@ impl MicrosoftAzureBuilder {
 
             (true, storage_client)
         } else {
-            let client = if let Some(credential) = self.token_credential {
-                StorageClient::new_bearer_token(http_client, account, bearer_token)
-            } else {
-                StorageClient::new_access_key(
-                    Arc::clone(&http_client),
+            let account = account.ok_or(Error::MissingAccount {})?;
+
+            let client = if bearer_token.is_some() {
+                Ok(StorageClient::new_bearer_token(
                     &account,
-                    &access_key,
-                )
-            };
+                    bearer_token.unwrap(),
+                ))
+            } else if access_key.is_some() {
+                Ok(StorageClient::new_access_key(&account, access_key.unwrap()))
+            } else if client_id.is_some()
+                && client_secret.is_some()
+                && tenant_id.is_some()
+            {
+                let credential = Arc::new(AutoRefreshingTokenCredential::new(
+                    ClientSecretCredential::new(
+                        tenant_id.unwrap(),
+                        client_id.unwrap(),
+                        client_secret.unwrap(),
+                        TokenCredentialOptions::default(),
+                    ),
+                ));
+                Ok(StorageClient::new_token_credential(&account, credential))
+            } else {
+                Err(Error::MissingContainerName {})
+            }?;
+
             (false, client)
         };
 
-        let storage_client = storage_account_client.as_storage_client();
-        let blob_base_url = storage_account_client
+        let blob_base_url = storage_client
             .blob_storage_url()
             .as_ref()
             // make url ending consistent between the emulator and remote storage account
             .trim_end_matches('/')
             .to_string();
 
-        let container_client = storage_client.as_container_client(&container_name);
+        let container_client = Arc::new(storage_client.container_client(&container_name));
 
         Ok(MicrosoftAzure {
             container_client,
@@ -760,9 +784,9 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
 
         Box::pin(async move {
             client
-                .as_blob_client(location.as_ref())
+                .blob_client(location.as_ref())
                 .put_block(block_id.clone(), buf)
-                .execute()
+                .into_future()
                 .await
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
@@ -786,7 +810,7 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
                 .map(|(part_number, maybe_part)| match maybe_part {
                     Some(part) => {
                         Ok(azure_storage_blobs::blob::BlobBlockType::Uncommitted(
-                            azure_storage_blobs::BlockId::new(part.content_id),
+                            azure_storage_blobs::prelude::BlockId::new(part.content_id),
                         ))
                     }
                     None => Err(io::Error::new(
@@ -804,9 +828,9 @@ impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
             };
 
             client
-                .as_blob_client(location.as_ref())
-                .put_block_list(&block_list)
-                .execute()
+                .blob_client(location.as_ref())
+                .put_block_list(block_list)
+                .into_future()
                 .await
                 .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
