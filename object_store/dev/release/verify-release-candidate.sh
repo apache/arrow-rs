@@ -102,11 +102,6 @@ test_source_distribution() {
   source $RUSTUP_HOME/env
 
   # build and test rust
-
-  # raises on any formatting errors
-  rustup component add rustfmt --toolchain stable
-  cargo fmt --all -- --check
-
   cargo build
   cargo test --all
 

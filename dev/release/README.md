@@ -22,10 +22,12 @@
 ## Overview
 
 This file documents the release process for:
+
 1. The "Rust Arrow Crates": `arrow`, `arrow-flight`, `parquet`, and `parquet-derive`.
 2. The `object_store` crate.
 
 ### The Rust Arrow Crates
+
 The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together. We try to release a new version of "Rust Arrow Crates" every two weeks. This cadence balances getting new features into the community without overwhelming downstream projects with too frequent changes or overly burdening maintainers.
 
 If any code has been merged to master that has a breaking API change, as defined in [Rust RFC 1105](https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md), the major version number incremented changed (e.g. `9.0.2` to `9.0.2`). Otherwise the new minor version incremented (e.g. `9.0.2` to `7.1.0`).
@@ -61,9 +63,9 @@ Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect th
 For the Rust Arrow crates, do this in the root of this repository. For
 `object_store` the same process is done in the `object_store`
 directory. Examples:
-* Rust Arrow Crates: [#2323](https://github.com/apache/arrow-rs/pull/2323)
-* `object_store`: TODO
 
+- Rust Arrow Crates: [#2323](https://github.com/apache/arrow-rs/pull/2323)
+- `object_store`: TODO
 
 ```bash
 git checkout master
