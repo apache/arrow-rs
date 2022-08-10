@@ -17,4 +17,4 @@
   under the License.
 -->
 
-See instructons in [`/dev/release/README.md`](../../../dev/release/README.md)
+See instructions in [`/dev/release/README.md`](../../../dev/release/README.md)
