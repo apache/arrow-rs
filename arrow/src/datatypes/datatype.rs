@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use num::BigInt;
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -1029,15 +1030,20 @@ pub(crate) fn validate_decimal256_precision_with_lt_bytes(
     }
     let max = MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision - 1];
     let min = MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[precision - 1];
+
     if singed_cmp_le_bytes(lt_value, &max) == Ordering::Greater {
         Err(ArrowError::InvalidArgumentError(format!(
             "{:?} is too large to store in a Decimal256 of precision {}. Max is {:?}",
-            lt_value, precision, max
+            BigInt::from_signed_bytes_le(lt_value),
+            precision,
+            BigInt::from_signed_bytes_le(&max)
         )))
     } else if singed_cmp_le_bytes(lt_value, &min) == Ordering::Less {
         Err(ArrowError::InvalidArgumentError(format!(
             "{:?} is too small to store in a Decimal256 of precision {}. Min is {:?}",
-            lt_value, precision, min
+            BigInt::from_signed_bytes_le(lt_value),
+            precision,
+            BigInt::from_signed_bytes_le(&min)
         )))
     } else {
         Ok(())

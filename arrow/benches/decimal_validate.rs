@@ -18,14 +18,12 @@
 #[macro_use]
 extern crate criterion;
 
-use arrow::array::{
-    Array, Decimal128Array, Decimal256Array, Decimal256Builder,
-};
+use arrow::array::{Array, Decimal128Array, Decimal256Array, Decimal256Builder};
 use criterion::Criterion;
 
 extern crate arrow;
 
-use arrow::util::decimal::{Decimal256};
+use arrow::util::decimal::Decimal256;
 
 fn validate_decimal128_array(array: Decimal128Array) {
     array.with_precision_and_scale(35, 0).unwrap();
