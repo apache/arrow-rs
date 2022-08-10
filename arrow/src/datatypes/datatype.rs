@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use num::{BigInt, Num, ToPrimitive};
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -265,91 +264,9 @@ impl fmt::Display for DataType {
     }
 }
 
-// Max decimal128 value of little-endian format for each precision.
-pub(crate) const MAX_DECIMAL_BYTES_FOR_EACH_PRECISION: [[u8; 16]; 38] = [
-    9_i128.to_le_bytes(),
-    99_i128.to_le_bytes(),
-    999_i128.to_le_bytes(),
-    9999_i128.to_le_bytes(),
-    99999_i128.to_le_bytes(),
-    999999_i128.to_le_bytes(),
-    9999999_i128.to_le_bytes(),
-    99999999_i128.to_le_bytes(),
-    999999999_i128.to_le_bytes(),
-    9999999999_i128.to_le_bytes(),
-    99999999999_i128.to_le_bytes(),
-    999999999999_i128.to_le_bytes(),
-    9999999999999_i128.to_le_bytes(),
-    99999999999999_i128.to_le_bytes(),
-    999999999999999_i128.to_le_bytes(),
-    9999999999999999_i128.to_le_bytes(),
-    99999999999999999_i128.to_le_bytes(),
-    999999999999999999_i128.to_le_bytes(),
-    9999999999999999999_i128.to_le_bytes(),
-    99999999999999999999_i128.to_le_bytes(),
-    999999999999999999999_i128.to_le_bytes(),
-    9999999999999999999999_i128.to_le_bytes(),
-    99999999999999999999999_i128.to_le_bytes(),
-    999999999999999999999999_i128.to_le_bytes(),
-    9999999999999999999999999_i128.to_le_bytes(),
-    99999999999999999999999999_i128.to_le_bytes(),
-    999999999999999999999999999_i128.to_le_bytes(),
-    9999999999999999999999999999_i128.to_le_bytes(),
-    99999999999999999999999999999_i128.to_le_bytes(),
-    999999999999999999999999999999_i128.to_le_bytes(),
-    9999999999999999999999999999999_i128.to_le_bytes(),
-    99999999999999999999999999999999_i128.to_le_bytes(),
-    999999999999999999999999999999999_i128.to_le_bytes(),
-    9999999999999999999999999999999999_i128.to_le_bytes(),
-    99999999999999999999999999999999999_i128.to_le_bytes(),
-    999999999999999999999999999999999999_i128.to_le_bytes(),
-    9999999999999999999999999999999999999_i128.to_le_bytes(),
-    99999999999999999999999999999999999999_i128.to_le_bytes(),
-];
-
-// Min decimal128 value of little-endian format for each precision.
-pub(crate) const MIN_DECIMAL_BYTES_FOR_EACH_PRECISION: [[u8; 16]; 38] = [
-    (-9_i128).to_le_bytes(),
-    (-99_i128).to_le_bytes(),
-    (-999_i128).to_le_bytes(),
-    (-9999_i128).to_le_bytes(),
-    (-99999_i128).to_le_bytes(),
-    (-999999_i128).to_le_bytes(),
-    (-9999999_i128).to_le_bytes(),
-    (-99999999_i128).to_le_bytes(),
-    (-999999999_i128).to_le_bytes(),
-    (-9999999999_i128).to_le_bytes(),
-    (-99999999999_i128).to_le_bytes(),
-    (-999999999999_i128).to_le_bytes(),
-    (-9999999999999_i128).to_le_bytes(),
-    (-99999999999999_i128).to_le_bytes(),
-    (-999999999999999_i128).to_le_bytes(),
-    (-9999999999999999_i128).to_le_bytes(),
-    (-99999999999999999_i128).to_le_bytes(),
-    (-999999999999999999_i128).to_le_bytes(),
-    (-9999999999999999999_i128).to_le_bytes(),
-    (-99999999999999999999_i128).to_le_bytes(),
-    (-999999999999999999999_i128).to_le_bytes(),
-    (-9999999999999999999999_i128).to_le_bytes(),
-    (-99999999999999999999999_i128).to_le_bytes(),
-    (-999999999999999999999999_i128).to_le_bytes(),
-    (-9999999999999999999999999_i128).to_le_bytes(),
-    (-99999999999999999999999999_i128).to_le_bytes(),
-    (-999999999999999999999999999_i128).to_le_bytes(),
-    (-9999999999999999999999999999_i128).to_le_bytes(),
-    (-99999999999999999999999999999_i128).to_le_bytes(),
-    (-999999999999999999999999999999_i128).to_le_bytes(),
-    (-9999999999999999999999999999999_i128).to_le_bytes(),
-    (-99999999999999999999999999999999_i128).to_le_bytes(),
-    (-999999999999999999999999999999999_i128).to_le_bytes(),
-    (-9999999999999999999999999999999999_i128).to_le_bytes(),
-    (-99999999999999999999999999999999999_i128).to_le_bytes(),
-    (-999999999999999999999999999999999999_i128).to_le_bytes(),
-    (-9999999999999999999999999999999999999_i128).to_le_bytes(),
-    (-99999999999999999999999999999999999999_i128).to_le_bytes(),
-];
-
 // MAX decimal256 value of little-endian format for each precision.
+// Each element is the max value of signed 256-bit integer for the specified precision which
+// is encoded to the 76-byte width format of little-endian.
 pub(crate) const MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [[u8; 32]; 76] = [
     [
         9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -658,6 +575,8 @@ pub(crate) const MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [[u8; 32]; 76] = [
 ];
 
 // MIN decimal256 value of little-endian format for each precision.
+// Each element is the min value of signed 256-bit integer for the specified precision which
+// is encoded to the 76-byte width format of little-endian.
 pub(crate) const MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [[u8; 32]; 76] = [
     [
         247, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -1008,49 +927,6 @@ pub const MAX_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     99999999999999999999999999999999999999,
 ];
 
-/// `MAX_DECIMAL_FOR_LARGER_PRECISION[p]` holds the maximum integer value
-/// that can be stored in [DataType::Decimal256] value of precision `p` > 38
-pub const MAX_DECIMAL_FOR_LARGER_PRECISION: [&str; 38] = [
-    "999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999999999999999999999999999999999",
-    "99999999999999999999999999999999999999999999999999999999999999999999999999",
-    "999999999999999999999999999999999999999999999999999999999999999999999999999",
-    "9999999999999999999999999999999999999999999999999999999999999999999999999999",
-];
-
 /// `MIN_DECIMAL_FOR_EACH_PRECISION[p]` holds the minimum `i128` value
 /// that can be stored in a [DataType::Decimal128] value of precision `p`
 pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
@@ -1092,49 +968,6 @@ pub const MIN_DECIMAL_FOR_EACH_PRECISION: [i128; 38] = [
     -999999999999999999999999999999999999,
     -9999999999999999999999999999999999999,
     -99999999999999999999999999999999999999,
-];
-
-/// `MIN_DECIMAL_FOR_LARGER_PRECISION[p]` holds the minimum integer value
-/// that can be stored in a [DataType::Decimal256] value of precision `p` > 38
-pub const MIN_DECIMAL_FOR_LARGER_PRECISION: [&str; 38] = [
-    "-999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999999999999999999999999999999999",
-    "-99999999999999999999999999999999999999999999999999999999999999999999999999",
-    "-999999999999999999999999999999999999999999999999999999999999999999999999999",
-    "-9999999999999999999999999999999999999999999999999999999999999999999999999999",
 ];
 
 /// The maximum precision for [DataType::Decimal128] values
@@ -1182,41 +1015,10 @@ pub fn validate_decimal_precision(value: i128, precision: usize) -> Result<i128>
 }
 
 /// Validates that the specified `byte_array` of little-endian format
-/// value can be properly interpreted as a Decimal number with precision `precision`
-#[inline]
-pub fn validate_decimal_precision_with_bytes(
-    lt_value: &[u8; 16],
-    precision: usize,
-) -> Result<()> {
-    if precision > DECIMAL128_MAX_PRECISION {
-        return Err(ArrowError::InvalidArgumentError(format!(
-            "Max precision of a Decimal128 is {}, but got {}",
-            DECIMAL128_MAX_PRECISION, precision,
-        )));
-    }
-
-    let max = MAX_DECIMAL_BYTES_FOR_EACH_PRECISION[precision - 1];
-    let min = MIN_DECIMAL_BYTES_FOR_EACH_PRECISION[precision - 1];
-    if singed_cmp_le_bytes(lt_value, &max) == Ordering::Greater {
-        Err(ArrowError::InvalidArgumentError(format!(
-            "{:?} is too large to store in a Decimal128 of precision {}. Max is {:?}",
-            lt_value, precision, max
-        )))
-    } else if singed_cmp_le_bytes(lt_value, &min) == Ordering::Less {
-        Err(ArrowError::InvalidArgumentError(format!(
-            "{:?} is too small to store in a Decimal128 of precision {}. Min is {:?}",
-            lt_value, precision, min
-        )))
-    } else {
-        Ok(())
-    }
-}
-
-/// Validates that the specified `byte_array` of little-endian format
 /// value can be properly interpreted as a Decimal256 number with precision `precision`
 #[inline]
-pub(crate) fn validate_decimal256_precision_with_bytes(
-    lt_value: &[u8; 32],
+pub(crate) fn validate_decimal256_precision_with_lt_bytes(
+    lt_value: &[u8],
     precision: usize,
 ) -> Result<()> {
     if precision > DECIMAL256_MAX_PRECISION {
@@ -1239,55 +1041,6 @@ pub(crate) fn validate_decimal256_precision_with_bytes(
         )))
     } else {
         Ok(())
-    }
-}
-
-/// Validates that the specified string value can be properly
-/// interpreted as a Decimal256 number with precision `precision`
-#[inline]
-pub(crate) fn validate_decimal256_precision(
-    value: &str,
-    precision: usize,
-) -> Result<BigInt> {
-    if precision > 38 {
-        let max_str = MAX_DECIMAL_FOR_LARGER_PRECISION[precision - 38 - 1];
-        let min_str = MIN_DECIMAL_FOR_LARGER_PRECISION[precision - 38 - 1];
-
-        let max = BigInt::from_str_radix(max_str, 10).unwrap();
-        let min = BigInt::from_str_radix(min_str, 10).unwrap();
-
-        let value = BigInt::from_str_radix(value, 10).unwrap();
-        if value > max {
-            Err(ArrowError::InvalidArgumentError(format!(
-                "{} is too large to store in a Decimal256 of precision {}. Max is {}",
-                value, precision, max
-            )))
-        } else if value < min {
-            Err(ArrowError::InvalidArgumentError(format!(
-                "{} is too small to store in a Decimal256 of precision {}. Min is {}",
-                value, precision, min
-            )))
-        } else {
-            Ok(value)
-        }
-    } else {
-        let max = MAX_DECIMAL_FOR_EACH_PRECISION[precision - 1];
-        let min = MIN_DECIMAL_FOR_EACH_PRECISION[precision - 1];
-        let value = BigInt::from_str_radix(value, 10).unwrap();
-
-        if value.to_i128().unwrap() > max {
-            Err(ArrowError::InvalidArgumentError(format!(
-                "{} is too large to store in a Decimal256 of precision {}. Max is {}",
-                value, precision, max
-            )))
-        } else if value.to_i128().unwrap() < min {
-            Err(ArrowError::InvalidArgumentError(format!(
-                "{} is too small to store in a Decimal256 of precision {}. Min is {}",
-                value, precision, min
-            )))
-        } else {
-            Ok(value)
-        }
     }
 }
 
@@ -1701,6 +1454,39 @@ impl DataType {
                 DataType::Map(b_field, b_is_sorted),
             ) => a_field == b_field && a_is_sorted == b_is_sorted,
             _ => self == other,
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::datatypes::{
+        MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION,
+        MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION,
+    };
+    use crate::util::decimal::Decimal256;
+    use num::{BigInt, Num};
+
+    #[test]
+    fn test_decimal256_min_max_for_precision() {
+        // The precision from 1 to 76
+        let mut max_value = "9".to_string();
+        let mut min_value = "-9".to_string();
+        for i in 1..77 {
+            let max_decimal_bytes =
+                Decimal256::from(BigInt::from_str_radix(max_value.as_str(), 10).unwrap())
+                    .raw_value_with_size()
+                    .clone();
+            let min_decimal_bytes =
+                Decimal256::from(BigInt::from_str_radix(min_value.as_str(), 10).unwrap())
+                    .raw_value_with_size()
+                    .clone();
+            let max_bytes = MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[i - 1];
+            let min_bytes = MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[i - 1];
+            max_value += "9";
+            min_value += "9";
+            assert_eq!(max_decimal_bytes, max_bytes);
+            assert_eq!(min_decimal_bytes, min_bytes);
         }
     }
 }

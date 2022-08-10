@@ -19,8 +19,8 @@
 //! common attributes and operations for Arrow array.
 
 use crate::datatypes::{
-    validate_decimal256_precision, validate_decimal_precision, DataType, IntervalUnit,
-    UnionMode,
+    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision, DataType,
+    IntervalUnit, UnionMode,
 };
 use crate::error::{ArrowError, Result};
 use crate::util::bit_iterator::BitSliceIterator;
@@ -30,7 +30,6 @@ use crate::{
     util::bit_util,
 };
 use half::f16;
-use num::BigInt;
 use std::convert::TryInto;
 use std::mem;
 use std::ops::Range;
@@ -1043,9 +1042,7 @@ impl ArrayData {
                 for pos in 0..self.len() {
                     let offset = pos * 32;
                     let raw_bytes = &values[offset..offset + 32];
-                    let integer = BigInt::from_signed_bytes_le(raw_bytes);
-                    let value_str = integer.to_string();
-                    validate_decimal256_precision(&value_str, *p)?;
+                    validate_decimal256_precision_with_lt_bytes(raw_bytes, *p)?;
                 }
                 Ok(())
             }

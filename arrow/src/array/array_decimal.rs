@@ -29,10 +29,9 @@ use super::{BasicDecimalIter, BooleanBufferBuilder, FixedSizeBinaryArray};
 #[allow(deprecated)]
 pub use crate::array::DecimalIter;
 use crate::buffer::{Buffer, MutableBuffer};
-use crate::datatypes::DataType;
+use crate::datatypes::{validate_decimal256_precision_with_lt_bytes, DataType};
 use crate::datatypes::{
-    validate_decimal256_precision, validate_decimal_precision, DECIMAL256_MAX_PRECISION,
-    DECIMAL_DEFAULT_SCALE,
+    validate_decimal_precision, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use crate::error::{ArrowError, Result};
 use crate::util::decimal::{BasicDecimal, Decimal256};
@@ -273,7 +272,7 @@ impl Decimal128Array {
 
     /// Validates decimal values in this array can be properly interpreted
     /// with the specified precision.
-    pub fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
+    fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
         if precision < self.precision {
             for v in self.iter().flatten() {
                 validate_decimal_precision(v.as_i128(), precision)?;
@@ -332,15 +331,30 @@ impl Decimal128Array {
 impl Decimal256Array {
     /// Validates decimal values in this array can be properly interpreted
     /// with the specified precision.
-    pub fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
-        if precision < self.precision {
-            for v in self.iter().flatten() {
-                validate_decimal256_precision(&v.to_string(), precision)?;
+    fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
+        let current_end = self.data.len();
+        let mut current: usize = 0;
+        let data = &self.data;
+
+        while current != current_end {
+            if self.is_null(current) {
+                current += 1;
+                continue;
+            } else {
+                let offset = current + data.offset();
+                current += 1;
+                let raw_val = unsafe {
+                    let pos = self.value_offset_at(offset);
+                    std::slice::from_raw_parts(
+                        self.raw_value_data_ptr().offset(pos as isize),
+                        Self::VALUE_LENGTH as usize,
+                    )
+                };
+                validate_decimal256_precision_with_lt_bytes(raw_val, precision)?;
             }
         }
         Ok(())
     }
-
     /// Returns a Decimal array with the same data as self, with the
     /// specified precision.
     ///
