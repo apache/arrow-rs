@@ -277,23 +277,24 @@ impl ObjectStore for MicrosoftAzure {
     }
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
+        let loc = location.clone();
         let stream = self
             .container_client
             .blob_client(location.as_ref())
             .get()
             .into_stream()
-            .and_then(|chunk| async { chunk.data.collect().await })
-            .map_err(|err| match err.kind() {
+            .and_then(|chunk| chunk.data.collect())
+            .map_err(move |err| match err.kind() {
                 AzureErrorKind::HttpResponse {
                     status: StatusCode::NotFound,
                     ..
                 } => crate::Error::NotFound {
                     source: Box::new(err),
-                    path: "location".to_string(),
+                    path: loc.to_string(),
                 },
                 _ => crate::Error::Generic {
                     source: Box::new(err),
-                    store: "container",
+                    store: "MicrosoftAzure",
                 },
             })
             .boxed();
@@ -707,14 +708,14 @@ impl MicrosoftAzureBuilder {
                 && client_secret.is_some()
                 && tenant_id.is_some()
             {
-                let credential = Arc::new(AutoRefreshingTokenCredential::new(
-                    Arc::new(ClientSecretCredential::new(
+                let credential = Arc::new(AutoRefreshingTokenCredential::new(Arc::new(
+                    ClientSecretCredential::new(
                         tenant_id.unwrap(),
                         client_id.unwrap(),
                         client_secret.unwrap(),
                         TokenCredentialOptions::default(),
-                    )),
-                ));
+                    ),
+                )));
                 Ok(StorageClient::new_token_credential(&account, credential))
             } else {
                 Err(Error::MissingContainerName {})
