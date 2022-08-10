@@ -112,7 +112,6 @@ git tag <version> apache/master
 git push apache <version>
 ```
 
-
 ### Pick an Release Candidate (RC) number
 
 Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
@@ -122,11 +121,13 @@ Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps.
 
 Rust Arrow Crates:
+
 ```shell
 ./dev/release/create-tarball.sh 4.1.0 2
 ```
 
 `object_store`:
+
 ```shell
 ./object_store/dev/release/create-tarball.sh 4.1.0 2
 ```
@@ -197,6 +198,7 @@ Rust Arrow Crates:
 ```
 
 `object_store`
+
 ```shell
 ./object_store/dev/release/release-tarball.sh 4.1.0 2
 ```
@@ -224,6 +226,7 @@ Verify that the Cargo.toml in the tarball contains the correct version
 following commands
 
 Rust Arrow Crates:
+
 ```shell
 (cd arrow && cargo publish)
 (cd arrow-flight && cargo publish)
@@ -232,6 +235,7 @@ Rust Arrow Crates:
 ```
 
 `object_store`
+
 ```shell
 cargo publish
 ```
