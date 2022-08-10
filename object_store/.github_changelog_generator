@@ -20,9 +20,8 @@
 
 # Add special sections for documentation, security and performance
 add-sections={"documentation":{"prefix":"**Documentation updates:**","labels":["documentation"]},"security":{"prefix":"**Security updates:**","labels":["security"]},"performance":{"prefix":"**Performance improvements:**","labels":["performance"]}}
-# uncomment to not show PRs. TBD if we shown them or not.
-#pull-requests=false
 # so that the component is shown associated with the issue
-issue-line-labels=arrow,parquet,arrow-flight
-exclude-labels=development-process,invalid,object-store
+issue-line-labels=object-store
+# skip non object_store issues
+exclude-labels=development-process,invalid,object-store,arrow,parquet,arrow-flight
 breaking_labels=api-change
