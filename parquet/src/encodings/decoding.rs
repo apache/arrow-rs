@@ -736,8 +736,44 @@ where
     }
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
-        let mut buffer = vec![T::T::default(); num_values];
-        self.get(&mut buffer)
+        let mut skip = 0;
+        let to_skip = num_values.min(self.values_left);
+
+        while skip != to_skip {
+            // try to consume first value in header.
+            if let Some(value) = self.first_value.take() {
+                self.last_value = value;
+                skip += 1;
+                self.values_left -= 1;
+            }
+
+            if self.mini_block_remaining == 0 {
+                self.next_mini_block()?;
+            }
+
+            let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
+            let batch_to_skip = self.mini_block_remaining.min(to_skip - skip);
+
+            for i in 0..batch_to_skip {
+                if let Some(v) = self.bit_reader.get_value::<T::T>(bit_width) {
+                    self.last_value = self
+                        .last_value
+                        .wrapping_add(&v)
+                        .wrapping_add(&self.min_delta)
+                } else {
+                    return Err(general_err!(
+                        "Expected to skip {} values from DeltaBitPack mini block but got {}",
+                        batch_to_skip,
+                        i + 1
+                    ));
+                }
+            }
+            skip += batch_to_skip;
+            self.mini_block_remaining -= batch_to_skip;
+            self.values_left -= batch_to_skip;
+        }
+
+        Ok(to_skip)
     }
 }
 
