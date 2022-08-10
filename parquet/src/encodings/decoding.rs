@@ -738,15 +738,18 @@ where
     fn skip(&mut self, num_values: usize) -> Result<usize> {
         let mut skip = 0;
         let to_skip = num_values.min(self.values_left);
+        if to_skip == 0 {
+            return Ok(0);
+        }
+
+        // try to consume first value in header.
+        if let Some(value) = self.first_value.take() {
+            self.last_value = value;
+            skip += 1;
+            self.values_left -= 1;
+        }
 
         while skip != to_skip {
-            // try to consume first value in header.
-            if let Some(value) = self.first_value.take() {
-                self.last_value = value;
-                skip += 1;
-                self.values_left -= 1;
-            }
-
             if self.mini_block_remaining == 0 {
                 self.next_mini_block()?;
             }
