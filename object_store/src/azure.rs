@@ -237,15 +237,6 @@ impl std::fmt::Display for MicrosoftAzure {
     }
 }
 
-fn check_err_not_found(err: &AzureError) -> bool {
-    if let Some(cast_err) = err.downcast_ref::<AzureError>() {
-        if let AzureErrorKind::HttpResponse { status, .. } = cast_err.kind() {
-            return *status == 404;
-        }
-    };
-    false
-}
-
 #[async_trait]
 impl ObjectStore for MicrosoftAzure {
     async fn put(&self, location: &Path, bytes: Bytes) -> Result<()> {
@@ -288,12 +279,11 @@ impl ObjectStore for MicrosoftAzure {
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let stream = self
             .container_client
-            .clone()
             .blob_client(location.as_ref())
             .get()
             .into_stream()
             .and_then(|chunk| async { chunk.data.collect().await })
-            .map_err(move |err| match err.kind() {
+            .map_err(|err| match err.kind() {
                 AzureErrorKind::HttpResponse {
                     status: StatusCode::NotFound,
                     ..
@@ -718,12 +708,12 @@ impl MicrosoftAzureBuilder {
                 && tenant_id.is_some()
             {
                 let credential = Arc::new(AutoRefreshingTokenCredential::new(
-                    ClientSecretCredential::new(
+                    Arc::new(ClientSecretCredential::new(
                         tenant_id.unwrap(),
                         client_id.unwrap(),
                         client_secret.unwrap(),
                         TokenCredentialOptions::default(),
-                    ),
+                    )),
                 ));
                 Ok(StorageClient::new_token_credential(&account, credential))
             } else {
