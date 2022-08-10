@@ -703,22 +703,18 @@ impl MicrosoftAzureBuilder {
 
             (true, storage_client)
         } else {
-            let client = if bearer_token.is_some() {
-                Ok(StorageClient::new_bearer_token(
-                    &account,
-                    bearer_token.unwrap(),
-                ))
-            } else if access_key.is_some() {
-                Ok(StorageClient::new_access_key(&account, access_key.unwrap()))
-            } else if client_id.is_some()
-                && client_secret.is_some()
-                && tenant_id.is_some()
+            let client = if let Some(bearer_token) = bearer_token {
+                Ok(StorageClient::new_bearer_token(&account, bearer_token))
+            } else if let Some(access_key) = access_key {
+                Ok(StorageClient::new_access_key(&account, access_key))
+            } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
+                (tenant_id, client_id, client_secret)
             {
                 let credential = Arc::new(AutoRefreshingTokenCredential::new(Arc::new(
                     ClientSecretCredential::new(
-                        tenant_id.unwrap(),
-                        client_id.unwrap(),
-                        client_secret.unwrap(),
+                        tenant_id,
+                        client_id,
+                        client_secret,
                         TokenCredentialOptions::default(),
                     ),
                 )));
