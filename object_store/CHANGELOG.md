@@ -30,15 +30,8 @@
 
 **Fixed bugs:**
 
-- `cargo docs` nightly fails. [\#2385](https://github.com/apache/arrow-rs/issues/2385)
-- AsyncFileReader No Longer Object-Safe [\#2372](https://github.com/apache/arrow-rs/issues/2372)
-- Azure/S3 Storage Fails to Copy Blob with URL-encoded Path [\#2353](https://github.com/apache/arrow-rs/issues/2353)
-- Accessing a file with a percent-encoded name on the filesystem with ObjectStore LocalFileSystem [\#2349](https://github.com/apache/arrow-rs/issues/2349)
-
-**Closed issues:**
-
-- Skip values assert row\_count fail [\#2316](https://github.com/apache/arrow-rs/issues/2316)
-- Release Arrow `20.0.0` \(next release after `19.0.0`\) [\#2172](https://github.com/apache/arrow-rs/issues/2172)
+- Azure/S3 Storage Fails to Copy Blob with URL-encoded Path [\#2353](https://github.com/apache/arrow-rs/issues/2353) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Accessing a file with a percent-encoded name on the filesystem with ObjectStore LocalFileSystem [\#2349](https://github.com/apache/arrow-rs/issues/2349) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 
 **Merged pull requests:**
 
