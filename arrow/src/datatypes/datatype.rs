@@ -1155,7 +1155,7 @@ pub const DECIMAL_DEFAULT_SCALE: usize = 10;
 /// Validates that the specified `i128` value can be properly
 /// interpreted as a Decimal number with precision `precision`
 #[inline]
-pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Result<i128> {
+pub fn validate_decimal_precision(value: i128, precision: usize) -> Result<i128> {
     if precision > DECIMAL128_MAX_PRECISION {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Max precision of a Decimal128 is {}, but got {}",
@@ -1184,8 +1184,8 @@ pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Resul
 /// Validates that the specified `byte_array` of little-endian format
 /// value can be properly interpreted as a Decimal number with precision `precision`
 #[inline]
-pub(crate) fn validate_decimal_precision_with_bytes(
-    lt_value: &[u8],
+pub fn validate_decimal_precision_with_bytes(
+    lt_value: &[u8; 16],
     precision: usize,
 ) -> Result<()> {
     if precision > DECIMAL128_MAX_PRECISION {
@@ -1216,7 +1216,7 @@ pub(crate) fn validate_decimal_precision_with_bytes(
 /// value can be properly interpreted as a Decimal256 number with precision `precision`
 #[inline]
 pub(crate) fn validate_decimal256_precision_with_bytes(
-    lt_value: &[u8],
+    lt_value: &[u8; 32],
     precision: usize,
 ) -> Result<()> {
     if precision > DECIMAL256_MAX_PRECISION {
