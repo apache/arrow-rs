@@ -30,18 +30,14 @@
 - object\_store: Create explicit test for symlinks [\#2206](https://github.com/apache/arrow-rs/issues/2206) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 - object\_store: Make builder style configuration for object stores [\#2203](https://github.com/apache/arrow-rs/issues/2203) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 - object\_store: Add example in the main documentation readme [\#2202](https://github.com/apache/arrow-rs/issues/2202) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Switch object\_store to log crate from tokio-tracing [\#2255](https://github.com/apache/arrow-rs/issues/2255) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 
 **Fixed bugs:**
 
 - Azure/S3 Storage Fails to Copy Blob with URL-encoded Path [\#2353](https://github.com/apache/arrow-rs/issues/2353) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 - Accessing a file with a percent-encoded name on the filesystem with ObjectStore LocalFileSystem [\#2349](https://github.com/apache/arrow-rs/issues/2349) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Test `local::tests::test_list_root` fails on main on macos [\#2174](https://github.com/apache/arrow-rs/issues/2174) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- object\_store unit test might be flaky [\#2141](https://github.com/apache/arrow-rs/issues/2141) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
 
 **Documentation updates:**
 
-- Update instructions on How to join the slack \#arrow-rust channel -- or maybe try to switch to discord?? [\#2192](https://github.com/apache/arrow-rs/issues/2192)
 - Improve `object_store crate` documentation [\#2260](https://github.com/apache/arrow-rs/pull/2260) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([alamb](https://github.com/alamb))
 
 **Merged pull requests:**
