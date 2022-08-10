@@ -19,7 +19,6 @@
 
 use std::cmp::Ordering;
 
-use crate::array::BasicDecimalArray;
 use crate::array::*;
 use crate::datatypes::TimeUnit;
 use crate::datatypes::*;

@@ -198,12 +198,6 @@ where
         self.num_records += buffered_records;
         self.num_values += buffered_values;
 
-        self.consume_def_levels();
-        self.consume_rep_levels();
-        self.consume_record_data();
-        self.consume_bitmap();
-        self.reset();
-
         let remaining = num_records - buffered_records;
 
         if remaining == 0 {
@@ -220,6 +214,7 @@ where
     }
 
     /// Returns number of records stored in buffer.
+    #[allow(unused)]
     pub fn num_records(&self) -> usize {
         self.num_records
     }
@@ -277,11 +272,6 @@ where
         self.def_levels
             .as_mut()
             .map(|levels| levels.split_bitmask(self.num_values))
-    }
-
-    /// Returns column reader.
-    pub(crate) fn column_reader(&self) -> Option<&ColumnReader<CV>> {
-        self.column_reader.as_ref()
     }
 
     /// Try to read one batch of data.

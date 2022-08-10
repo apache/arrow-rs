@@ -439,7 +439,7 @@ mod tests {
         // test default values
         assert_eq!(args.input_format, CsvDialect::Csv);
         assert_eq!(args.batch_size, 1000);
-        assert_eq!(args.has_header, false);
+        assert!(!args.has_header);
         assert_eq!(args.delimiter, None);
         assert_eq!(args.get_delimiter(), b',');
         assert_eq!(args.record_terminator, None);
@@ -553,7 +553,7 @@ mod tests {
             Field::new("field5", DataType::Utf8, false),
         ]));
 
-        let reader_builder = configure_reader_builder(&args, arrow_schema.clone());
+        let reader_builder = configure_reader_builder(&args, arrow_schema);
         let builder_debug = format!("{:?}", reader_builder);
         assert_debug_text(&builder_debug, "has_header", "false");
         assert_debug_text(&builder_debug, "delimiter", "Some(44)");
@@ -585,7 +585,7 @@ mod tests {
             Field::new("field4", DataType::Utf8, false),
             Field::new("field5", DataType::Utf8, false),
         ]));
-        let reader_builder = configure_reader_builder(&args, arrow_schema.clone());
+        let reader_builder = configure_reader_builder(&args, arrow_schema);
         let builder_debug = format!("{:?}", reader_builder);
         assert_debug_text(&builder_debug, "has_header", "true");
         assert_debug_text(&builder_debug, "delimiter", "Some(9)");

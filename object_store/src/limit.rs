@@ -110,6 +110,15 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.get_range(location, range).await
     }
 
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<usize>],
+    ) -> Result<Vec<Bytes>> {
+        let _permit = self.semaphore.acquire().await.unwrap();
+        self.inner.get_ranges(location, ranges).await
+    }
+
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.head(location).await
@@ -237,11 +246,11 @@ mod tests {
         let memory = InMemory::new();
         let integration = LimitStore::new(memory, max_requests);
 
-        put_get_delete_list(&integration).await.unwrap();
-        list_uses_directories_correctly(&integration).await.unwrap();
-        list_with_delimiter(&integration).await.unwrap();
-        rename_and_copy(&integration).await.unwrap();
-        stream_get(&integration).await.unwrap();
+        put_get_delete_list(&integration).await;
+        list_uses_directories_correctly(&integration).await;
+        list_with_delimiter(&integration).await;
+        rename_and_copy(&integration).await;
+        stream_get(&integration).await;
 
         let mut streams = Vec::with_capacity(max_requests);
         for _ in 0..max_requests {

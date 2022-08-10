@@ -39,7 +39,6 @@ where
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
     rep_levels_buffer: Option<Buffer>,
-    column_desc: ColumnDescPtr,
     record_reader: RecordReader<T>,
 }
 
@@ -50,14 +49,13 @@ where
 {
     /// Construct null array reader.
     pub fn new(pages: Box<dyn PageIterator>, column_desc: ColumnDescPtr) -> Result<Self> {
-        let record_reader = RecordReader::<T>::new(column_desc.clone());
+        let record_reader = RecordReader::<T>::new(column_desc);
 
         Ok(Self {
             data_type: ArrowType::Null,
             pages,
             def_levels_buffer: None,
             rep_levels_buffer: None,
-            column_desc,
             record_reader,
         })
     }

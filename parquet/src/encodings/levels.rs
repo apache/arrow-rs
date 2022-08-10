@@ -23,7 +23,7 @@ use crate::basic::Encoding;
 use crate::data_type::AsBytes;
 use crate::errors::Result;
 use crate::util::{
-    bit_util::{ceil, num_required_bits, BitReader, BitWriter},
+    bit_util::{ceil, num_required_bits, read_num_bytes, BitReader, BitWriter},
     memory::ByteBufferPtr,
 };
 
@@ -142,12 +142,14 @@ impl LevelEncoder {
 /// Decoder for definition/repetition levels.
 /// Currently only supports RLE and BIT_PACKED encoding for Data Page v1 and
 /// RLE for Data Page v2.
+#[allow(unused)]
 pub enum LevelDecoder {
     Rle(Option<usize>, RleDecoder),
     RleV2(Option<usize>, RleDecoder),
     BitPacked(Option<usize>, u8, BitReader),
 }
 
+#[allow(unused)]
 impl LevelDecoder {
     /// Creates new level decoder based on encoding and max definition/repetition level.
     /// This method only initializes level decoder, `set_data` method must be called
@@ -190,7 +192,7 @@ impl LevelDecoder {
             LevelDecoder::Rle(ref mut num_values, ref mut decoder) => {
                 *num_values = Some(num_buffered_values);
                 let i32_size = mem::size_of::<i32>();
-                let data_size = read_num_bytes!(i32, i32_size, data.as_ref()) as usize;
+                let data_size = read_num_bytes::<i32>(i32_size, data.as_ref()) as usize;
                 decoder.set_data(data.range(i32_size, data_size));
                 i32_size + data_size
             }
@@ -274,7 +276,7 @@ impl LevelDecoder {
 mod tests {
     use super::*;
 
-    use crate::util::test_common::random_numbers_range;
+    use crate::util::test_common::rand_gen::random_numbers_range;
 
     fn test_internal_roundtrip(enc: Encoding, levels: &[i16], max_level: i16, v2: bool) {
         let mut encoder = if v2 {

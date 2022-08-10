@@ -32,6 +32,7 @@ pub struct MapArrayReader {
     value_reader: Box<dyn ArrayReader>,
     data_type: ArrowType,
     map_def_level: i16,
+    #[allow(unused)]
     map_rep_level: i16,
 }
 
@@ -47,6 +48,7 @@ impl MapArrayReader {
             key_reader,
             value_reader,
             data_type,
+            // These are the wrong way round https://github.com/apache/arrow-rs/issues/1699
             map_def_level: rep_level,
             map_rep_level: def_level,
         }

@@ -25,7 +25,7 @@ use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::{
-    ArrayDataBuilder, ArrayRef, BasicDecimalArray, BooleanArray, BooleanBufferBuilder,
+    ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder,
     Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use arrow::buffer::Buffer;
@@ -44,7 +44,6 @@ where
     pages: Box<dyn PageIterator>,
     def_levels_buffer: Option<Buffer>,
     rep_levels_buffer: Option<Buffer>,
-    column_desc: ColumnDescPtr,
     record_reader: RecordReader<T>,
 }
 
@@ -67,14 +66,13 @@ where
                 .clone(),
         };
 
-        let record_reader = RecordReader::<T>::new(column_desc.clone());
+        let record_reader = RecordReader::<T>::new(column_desc);
 
         Ok(Self {
             data_type,
             pages,
             def_levels_buffer: None,
             rep_levels_buffer: None,
-            column_desc,
             record_reader,
         })
     }
@@ -245,7 +243,7 @@ mod tests {
     use crate::data_type::Int32Type;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
-    use crate::util::test_common::make_pages;
+    use crate::util::test_common::rand_gen::make_pages;
     use crate::util::InMemoryPageIterator;
     use arrow::array::PrimitiveArray;
     use arrow::datatypes::ArrowPrimitiveType;
@@ -253,6 +251,7 @@ mod tests {
     use rand::distributions::uniform::SampleUniform;
     use std::collections::VecDeque;
 
+    #[allow(clippy::too_many_arguments)]
     fn make_column_chunks<T: DataType>(
         column_desc: ColumnDescPtr,
         encoding: Encoding,

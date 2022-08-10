@@ -67,9 +67,9 @@ fn main() {
             println!("Metadata for file: {}", &filename);
             println!();
             if verbose {
-                print_parquet_metadata(&mut std::io::stdout(), &metadata);
+                print_parquet_metadata(&mut std::io::stdout(), metadata);
             } else {
-                print_file_metadata(&mut std::io::stdout(), &metadata.file_metadata());
+                print_file_metadata(&mut std::io::stdout(), metadata.file_metadata());
             }
         }
     }
