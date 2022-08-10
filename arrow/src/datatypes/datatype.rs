@@ -267,7 +267,7 @@ impl fmt::Display for DataType {
 // MAX decimal256 value of little-endian format for each precision.
 // Each element is the max value of signed 256-bit integer for the specified precision which
 // is encoded to the 76-byte width format of little-endian.
-const MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [[u8; 32]; 76] = [
+pub(crate) const MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [[u8; 32]; 76] = [
     [
         9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0,
@@ -577,7 +577,7 @@ const MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [[u8; 32]; 76] = [
 // MIN decimal256 value of little-endian format for each precision.
 // Each element is the min value of signed 256-bit integer for the specified precision which
 // is encoded to the 76-byte width format of little-endian.
-const MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [[u8; 32]; 76] = [
+pub(crate) const MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION: [[u8; 32]; 76] = [
     [
         247, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
         255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
@@ -1460,7 +1460,7 @@ impl DataType {
 
 #[cfg(test)]
 mod test {
-    use crate::datatypes::{
+    use crate::datatypes::datatype::{
         MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION,
         MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION,
     };
@@ -1473,20 +1473,16 @@ mod test {
         let mut max_value = "9".to_string();
         let mut min_value = "-9".to_string();
         for i in 1..77 {
-            let max_decimal_bytes =
-                Decimal256::from(BigInt::from_str_radix(max_value.as_str(), 10).unwrap())
-                    .raw_value_with_size()
-                    .clone();
-            let min_decimal_bytes =
-                Decimal256::from(BigInt::from_str_radix(min_value.as_str(), 10).unwrap())
-                    .raw_value_with_size()
-                    .clone();
+            let max_decimal =
+                Decimal256::from(BigInt::from_str_radix(max_value.as_str(), 10).unwrap());
+            let min_decimal =
+                Decimal256::from(BigInt::from_str_radix(min_value.as_str(), 10).unwrap());
             let max_bytes = MAX_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[i - 1];
             let min_bytes = MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[i - 1];
             max_value += "9";
             min_value += "9";
-            assert_eq!(max_decimal_bytes, max_bytes);
-            assert_eq!(min_decimal_bytes, min_bytes);
+            assert_eq!(max_decimal.raw_value(), max_bytes);
+            assert_eq!(min_decimal.raw_value(), min_bytes);
         }
     }
 }

@@ -21,7 +21,7 @@ extern crate criterion;
 use arrow::array::{
     Array, BasicDecimalArray, Decimal128Array, Decimal256Array, Decimal256Builder,
 };
-use arrow::datatypes::{validate_decimal_precision, DataType};
+use arrow::datatypes::DataType;
 use criterion::Criterion;
 
 extern crate arrow;
