@@ -867,11 +867,8 @@ mod test {
         let child_field1 = Field::new("child1", DataType::Float16, false);
         let child_field2 = Field::new("child2", DataType::Float16, false);
 
-        let field1 = Field::new(
-            "field1",
-            DataType::Struct(vec![child_field1.clone()]),
-            true,
-        );
+        let field1 =
+            Field::new("field1", DataType::Struct(vec![child_field1.clone()]), true);
         let field2 = Field::new(
             "field1",
             DataType::Struct(vec![child_field1, child_field2]),
