@@ -35,7 +35,7 @@ all-features = true
 [dependencies] # In alphabetical order
 async-trait = "0.1.53"
 # Microsoft Azure Blob storage integration
-azure_core = { version = "0.2", optional = true, default-features = false, features = ["enable_reqwest_rustls"] }
+azure_core = { version = "0.4", optional = true, default-features = false, features = ["enable_reqwest_rustls"] }
 azure_storage = { version = "0.2", optional = true, default-features = false, features = ["account"] }
 azure_storage_blobs = { version = "0.2", optional = true, default-features = false, features = ["enable_reqwest_rustls"] }
 bytes = "1.0"
