@@ -19,14 +19,13 @@
 extern crate criterion;
 
 use arrow::array::{
-    Array, BasicDecimalArray, Decimal128Array, Decimal256Array, Decimal256Builder,
+    Array, Decimal128Array, Decimal256Array, Decimal256Builder,
 };
-use arrow::datatypes::DataType;
 use criterion::Criterion;
 
 extern crate arrow;
 
-use arrow::util::decimal::{BasicDecimal, Decimal128, Decimal256};
+use arrow::util::decimal::{Decimal256};
 
 fn validate_decimal128_array(array: Decimal128Array) {
     array.with_precision_and_scale(35, 0).unwrap();
@@ -39,7 +38,7 @@ fn validate_decimal256_array(array: Decimal256Array) {
 fn validate_decimal128_benchmark(c: &mut Criterion) {
     let decimal_array = Decimal128Array::from_iter_values(vec![12324; 20000]);
     let data = decimal_array.into_data();
-    c.bench_function("validate_decimal128_array 2000", |b| {
+    c.bench_function("validate_decimal128_array 20000", |b| {
         b.iter(|| {
             let array = Decimal128Array::from(data.clone());
             validate_decimal128_array(array);
@@ -47,29 +46,28 @@ fn validate_decimal128_benchmark(c: &mut Criterion) {
     });
 }
 
-// fn validate_decimal256_benchmark(c: &mut Criterion) {
-//     let mut decimal_builder = Decimal256Builder::new(2000, 76, 0);
-//     let mut bytes = vec![0; 32];
-//     bytes[0..16].clone_from_slice(&12324_i128.to_le_bytes());
-//     for _ in 0..2000 {
-//         decimal_builder
-//             .append_value(&Decimal256::new(76, 0, &bytes))
-//             .unwrap();
-//     }
-//     let decimal_array256_data = decimal_builder.finish();
-//     let data = decimal_array256_data.into_data();
-//     // decimal array fast
-//     c.bench_function("validate_decimal256_array 2000", |b| {
-//         b.iter(|| {
-//             let array = Decimal256Array::from(data.clone());
-//             validate_decimal256_array(array);
-//         })
-//     });
-// }
+fn validate_decimal256_benchmark(c: &mut Criterion) {
+    let mut decimal_builder = Decimal256Builder::new(20000, 76, 0);
+    let mut bytes = vec![0; 32];
+    bytes[0..16].clone_from_slice(&12324_i128.to_le_bytes());
+    for _ in 0..20000 {
+        decimal_builder
+            .append_value(&Decimal256::new(76, 0, &bytes))
+            .unwrap();
+    }
+    let decimal_array256_data = decimal_builder.finish();
+    let data = decimal_array256_data.into_data();
+    c.bench_function("validate_decimal256_array 20000", |b| {
+        b.iter(|| {
+            let array = Decimal256Array::from(data.clone());
+            validate_decimal256_array(array);
+        })
+    });
+}
 
 criterion_group!(
     benches,
     validate_decimal128_benchmark,
-    // validate_decimal256_benchmark,
+    validate_decimal256_benchmark,
 );
 criterion_main!(benches);
