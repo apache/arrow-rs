@@ -193,11 +193,11 @@ enum Error {
     #[snafu(display("Account must be specified"))]
     MissingAccount {},
 
-    #[snafu(display("Access key must be specified"))]
-    MissingAccessKey {},
-
     #[snafu(display("Container name must be specified"))]
     MissingContainerName {},
+
+    #[snafu(display("At least one authorization option must be specified"))]
+    MissingCredentials {},
 }
 
 impl From<Error> for super::Error {
@@ -615,13 +615,14 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Set the Azure Access Key (required - one of token_credential or access key)
+    /// Set the Azure Access Key (required - one of access key, bearer token, or client credentials)
     pub fn with_access_key(mut self, access_key: impl Into<String>) -> Self {
         self.access_key = Some(access_key.into());
         self
     }
 
     /// Set a static bearer token to be used for authorizing requests
+    /// (required - one of access key, bearer token, or client credentials)
     pub fn with_bearer_token(mut self, bearer_token: impl Into<String>) -> Self {
         self.bearer_token = Some(bearer_token.into());
         self
@@ -633,19 +634,22 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Set a client id used for client secret authorization
+    /// Set a client id used for client secret authorization 
+    /// (required - one of access key, bearer token, or client credentials)
     pub fn with_client_id(mut self, client_id: impl Into<String>) -> Self {
         self.client_id = Some(client_id.into());
         self
     }
 
     /// Set a client secret used for client secret authorization
+    /// (required - one of access key, bearer token, or client credentials)
     pub fn with_client_secret(mut self, client_secret: impl Into<String>) -> Self {
         self.client_secret = Some(client_secret.into());
         self
     }
 
     /// Set the tenant id of the Azure AD tenant
+    /// (required - one of access key, bearer token, or client credentials)
     pub fn with_tenant_id(mut self, tenant_id: impl Into<String>) -> Self {
         self.tenant_id = Some(tenant_id.into());
         self
@@ -671,6 +675,7 @@ impl MicrosoftAzureBuilder {
             use_emulator,
         } = self;
 
+        let account = account.ok_or(Error::MissingAccount {})?;
         let container_name = container_name.ok_or(Error::MissingContainerName {})?;
 
         let (is_emulator, storage_client) = if use_emulator {
@@ -695,8 +700,6 @@ impl MicrosoftAzureBuilder {
 
             (true, storage_client)
         } else {
-            let account = account.ok_or(Error::MissingAccount {})?;
-
             let client = if bearer_token.is_some() {
                 Ok(StorageClient::new_bearer_token(
                     &account,
@@ -718,7 +721,7 @@ impl MicrosoftAzureBuilder {
                 )));
                 Ok(StorageClient::new_token_credential(&account, credential))
             } else {
-                Err(Error::MissingContainerName {})
+                Err(Error::MissingCredentials {})
             }?;
 
             (false, client)
