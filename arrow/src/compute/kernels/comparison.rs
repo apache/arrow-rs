@@ -987,18 +987,19 @@ pub fn gt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     compare_op_scalar(left, |a| a >= right)
 }
 
+// Avoids creating a closure for each combination of `$RIGHT` and `$TY`
+fn try_to_type_result<T>(value: Option<T>, right: &str, ty: &str) -> Result<T> {
+    value.ok_or_else(|| {
+        ArrowError::ComputeError(format!("Could not convert {} with {}", right, ty,))
+    })
+}
+
 /// Calls $RIGHT.$TY() (e.g. `right.to_i128()`) with a nice error message.
 /// Type of expression is `Result<.., ArrowError>`
 macro_rules! try_to_type {
-    ($RIGHT: expr, $TY: ident) => {{
-        $RIGHT.$TY().ok_or_else(|| {
-            ArrowError::ComputeError(format!(
-                "Could not convert {} with {}",
-                stringify!($RIGHT),
-                stringify!($TY)
-            ))
-        })
-    }};
+    ($RIGHT: expr, $TY: ident) => {
+        try_to_type_result($RIGHT.$TY(), stringify!($RIGHT), stringify!($TYPE))
+    };
 }
 
 macro_rules! dyn_compare_scalar {
