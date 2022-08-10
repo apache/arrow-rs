@@ -247,6 +247,7 @@ macro_rules! def_decimal {
 
 // compare two signed integer which are encoded with little endian.
 // left bytes and right bytes must have the same length.
+#[inline]
 pub(crate) fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
     assert_eq!(
         left.len(),

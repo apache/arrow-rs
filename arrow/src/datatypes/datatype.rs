@@ -1181,6 +1181,8 @@ pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Resul
     }
 }
 
+/// Validates that the specified `byte_array` of little-endian format
+/// value can be properly interpreted as a Decimal number with precision `precision`
 #[inline]
 pub(crate) fn validate_decimal_precision_with_bytes(
     lt_value: &[u8],
@@ -1210,6 +1212,8 @@ pub(crate) fn validate_decimal_precision_with_bytes(
     }
 }
 
+/// Validates that the specified `byte_array` of little-endian format
+/// value can be properly interpreted as a Decimal256 number with precision `precision`
 #[inline]
 pub(crate) fn validate_decimal256_precision_with_bytes(
     lt_value: &[u8],
