@@ -278,7 +278,7 @@ impl ObjectStore for MicrosoftAzure {
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
         let loc = location.clone();
-        let stream = self
+        let mut stream = self
             .container_client
             .blob_client(location.as_ref())
             .get()
@@ -299,7 +299,10 @@ impl ObjectStore for MicrosoftAzure {
             })
             .boxed();
 
-        Ok(GetResult::Stream(stream))
+        let first = stream.next().await.transpose()?.unwrap_or_default();
+        Ok(GetResult::Stream(Box::pin(
+            futures::stream::once(async { Ok(first) }).chain(stream),
+        )))
     }
 
     async fn get_range(

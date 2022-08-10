@@ -13,3 +13,4 @@ parquet/data.parquet
 .githubchangeloggenerator.cache.log
 justfile
 .prettierignore
+.env
