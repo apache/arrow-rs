@@ -136,6 +136,23 @@ pub trait AsyncFileReader: Send {
     fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>>;
 }
 
+impl AsyncFileReader for Box<dyn AsyncFileReader> {
+    fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
+        self.as_mut().get_bytes(range)
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<usize>>,
+    ) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+        self.as_mut().get_byte_ranges(ranges)
+    }
+
+    fn get_metadata(&mut self) -> BoxFuture<'_, Result<Arc<ParquetMetaData>>> {
+        self.as_mut().get_metadata()
+    }
+}
+
 impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     fn get_bytes(&mut self, range: Range<usize>) -> BoxFuture<'_, Result<Bytes>> {
         async move {
