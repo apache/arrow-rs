@@ -137,7 +137,7 @@ where
         for (idx, maybe_value) in dictionary_values.iter().enumerate() {
             match maybe_value {
                 Some(value) => {
-                    let hash = compute_hash(&state, value.as_bytes());
+                    let hash = state.hash_one(value.as_bytes());
 
                     let key = K::Native::from_usize(idx)
                         .ok_or(ArrowError::DictionaryKeyOverflowError)?;
@@ -149,7 +149,7 @@ where
 
                     if let RawEntryMut::Vacant(v) = entry {
                         v.insert_with_hasher(hash, key, (), |key| {
-                            compute_hash(&state, get_bytes(&values_builder, key))
+                            state.hash_one(get_bytes(&values_builder, key))
                         });
                     }
 
@@ -217,7 +217,7 @@ where
 
         let state = &self.state;
         let storage = &mut self.values_builder;
-        let hash = compute_hash(state, value.as_bytes());
+        let hash = state.hash_one(value.as_bytes());
 
         let entry = self
             .dedup
@@ -234,7 +234,7 @@ where
 
                 *entry
                     .insert_with_hasher(hash, key, (), |key| {
-                        compute_hash(state, get_bytes(storage, key))
+                        state.hash_one(get_bytes(storage, key))
                     })
                     .0
             }
@@ -266,13 +266,6 @@ where
 
         DictionaryArray::from(unsafe { builder.build_unchecked() })
     }
-}
-
-fn compute_hash(hasher: &ahash::RandomState, value: &[u8]) -> u64 {
-    use std::hash::{BuildHasher, Hash, Hasher};
-    let mut state = hasher.build_hasher();
-    value.hash(&mut state);
-    state.finish()
 }
 
 fn get_bytes<'a, K: ArrowNativeType>(values: &'a StringBuilder, key: &K) -> &'a [u8] {
