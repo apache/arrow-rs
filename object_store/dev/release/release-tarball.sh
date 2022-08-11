@@ -53,7 +53,7 @@ mkdir -p ${tmp_dir}
 echo "Clone dev dist repository"
 svn \
   co \
-  https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-obect-store-rs-${version}-rc${rc} \
+  https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-object-store-rs-${version}-rc${rc} \
   ${tmp_dir}/dev
 
 echo "Clone release dist repository"
