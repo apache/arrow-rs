@@ -749,31 +749,45 @@ where
             self.values_left -= 1;
         }
 
-        while skip != to_skip {
+        let mini_block_batch_size = match T::T::PHYSICAL_TYPE {
+            Type::INT32 => 32,
+            Type::INT64 => 64,
+            _ => unreachable!(),
+        };
+
+        let mut skip_buffer = vec![T::T::default(); mini_block_batch_size];
+        while skip < to_skip {
             if self.mini_block_remaining == 0 {
                 self.next_mini_block()?;
             }
 
             let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
-            let batch_to_skip = self.mini_block_remaining.min(to_skip - skip);
+            let mini_block_to_skip = self.mini_block_remaining.min(to_skip - skip);
+            let mini_block_should_skip = mini_block_to_skip;
 
-            for i in 0..batch_to_skip {
-                if let Some(v) = self.bit_reader.get_value::<T::T>(bit_width) {
-                    self.last_value = self
-                        .last_value
-                        .wrapping_add(&v)
-                        .wrapping_add(&self.min_delta)
-                } else {
-                    return Err(general_err!(
-                        "Expected to skip {} values from DeltaBitPack mini block but got {}",
-                        batch_to_skip,
-                        i + 1
-                    ));
-                }
+            let skip_count = self
+                .bit_reader
+                .get_batch(&mut skip_buffer[0..mini_block_to_skip], bit_width);
+
+            if skip_count != mini_block_to_skip {
+                return Err(general_err!(
+                    "Expected to skip {} values from mini block got {}.",
+                    mini_block_batch_size,
+                    skip_count
+                ));
             }
-            skip += batch_to_skip;
-            self.mini_block_remaining -= batch_to_skip;
-            self.values_left -= batch_to_skip;
+
+            for v in &mut skip_buffer[0..skip_count] {
+                *v = v
+                    .wrapping_add(&self.min_delta)
+                    .wrapping_add(&self.last_value);
+
+                self.last_value = *v;
+            }
+
+            skip += mini_block_should_skip;
+            self.mini_block_remaining -= mini_block_should_skip;
+            self.values_left -= mini_block_should_skip;
         }
 
         Ok(to_skip)
