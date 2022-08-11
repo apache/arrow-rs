@@ -47,7 +47,7 @@ jobs:
           path: rust
           fetch-depth: 0
       - name: Setup Python
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v4
         with:
           python-version: 3.8
       - name: Setup Archery
@@ -82,7 +82,7 @@ jobs:
           path: /home/runner/target
           # this key is not equal because maturin uses different compilation flags.
           key: ${{ runner.os }}-${{ matrix.arch }}-target-maturin-cache-${{ matrix.rust }}-
-      - uses: actions/setup-python@v3
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.7'
       - name: Upgrade pip and setuptools
