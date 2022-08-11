@@ -24,7 +24,7 @@ use arrow::record_batch::RecordBatch;
 pub trait ArrowPredicate: Send + 'static {
     /// Returns the [`ProjectionMask`] that describes the columns required
     /// to evaluate this predicate. All projected columns will be provided in the `batch`
-    /// passed to [`filter`](Self::filter)
+    /// passed to [`evaluate`](Self::evaluate)
     fn projection(&self) -> &ProjectionMask;
 
     /// Evaluate this predicate for the given [`RecordBatch`] containing the columns
