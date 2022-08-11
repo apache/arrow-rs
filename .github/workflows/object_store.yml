@@ -36,7 +36,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Setup Rust toolchain with clippy
         run: |
           rustup toolchain install stable
@@ -85,7 +85,7 @@ jobs:
         OBJECT_STORE_BUCKET: test-bucket
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Configure Fake GCS Server (GCP emulation)
         run: |
