@@ -37,12 +37,13 @@ name = "arrow"
 path = "src/lib.rs"
 bench = false
 
-[dependencies]
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ahash = { version = "0.8", default-features = false, features=["compile-time-rng"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ahash = { version = "0.8", default-features = false, features=["runtime-rng"] }
 
+[dependencies]
 serde = { version = "1.0", default-features = false }
 serde_derive = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
