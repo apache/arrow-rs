@@ -24,6 +24,7 @@ use crate::encodings::levels::LevelEncoder;
 use crate::errors::Result;
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 use crate::util::memory::ByteBufferPtr;
+use std::iter::Peekable;
 use std::mem;
 
 pub trait DataPageBuilder {
@@ -127,8 +128,8 @@ impl DataPageBuilder for DataPageBuilderImpl {
                 encoding: self.encoding.unwrap(),
                 num_nulls: 0, /* set to dummy value - don't need this when reading
                                * data page */
-                num_rows: self.num_values, /* also don't need this when reading
-                                            * data page */
+                num_rows: self.num_values, /* num_rows only needs in skip_records, now we not support skip REPEATED field,
+                                            * so we can assume num_values == num_rows */
                 def_levels_byte_len: self.def_levels_byte_len,
                 rep_levels_byte_len: self.rep_levels_byte_len,
                 is_compressed: false,
@@ -149,13 +150,13 @@ impl DataPageBuilder for DataPageBuilderImpl {
 
 /// A utility page reader which stores pages in memory.
 pub struct InMemoryPageReader<P: Iterator<Item = Page>> {
-    page_iter: P,
+    page_iter: Peekable<P>,
 }
 
 impl<P: Iterator<Item = Page>> InMemoryPageReader<P> {
     pub fn new(pages: impl IntoIterator<Item = Page, IntoIter = P>) -> Self {
         Self {
-            page_iter: pages.into_iter(),
+            page_iter: pages.into_iter().peekable(),
         }
     }
 }
@@ -166,11 +167,28 @@ impl<P: Iterator<Item = Page> + Send> PageReader for InMemoryPageReader<P> {
     }
 
     fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
-        unimplemented!()
+        if let Some(x) = self.page_iter.peek() {
+            match x {
+                Page::DataPage { .. } => {
+                    unreachable!()
+                }
+                Page::DataPageV2 { num_rows, .. } => Ok(Some(PageMetadata {
+                    num_rows: *num_rows as usize,
+                    is_dict: false,
+                })),
+                Page::DictionaryPage { .. } => Ok(Some(PageMetadata {
+                    num_rows: 0,
+                    is_dict: true,
+                })),
+            }
+        } else {
+            Ok(None)
+        }
     }
 
     fn skip_next_page(&mut self) -> Result<()> {
-        unimplemented!()
+        self.page_iter.next();
+        Ok(())
     }
 }
 
