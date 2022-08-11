@@ -62,7 +62,7 @@ impl<S: Storage> Interner<S> {
 
     /// Intern the value, returning the interned key, and if this was a new value
     pub fn intern(&mut self, value: &S::Value) -> S::Key {
-        let hash = self.state.hash_one(value);
+        let hash = self.state.hash_one(value.as_bytes());
 
         let entry = self
             .dedup
@@ -76,7 +76,7 @@ impl<S: Storage> Interner<S> {
 
                 *entry
                     .insert_with_hasher(hash, key, (), |key| {
-                        compute_hash(&self.state, self.storage.get(*key))
+                        self.state.hash_one(self.storage.get(*key).as_bytes())
                     })
                     .0
             }
