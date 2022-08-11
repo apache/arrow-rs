@@ -62,7 +62,7 @@ impl<S: Storage> Interner<S> {
 
     /// Intern the value, returning the interned key, and if this was a new value
     pub fn intern(&mut self, value: &S::Value) -> S::Key {
-        let hash = compute_hash(&self.state, value);
+        let hash = self.state.hash_one(value);
 
         let entry = self
             .dedup
@@ -92,11 +92,4 @@ impl<S: Storage> Interner<S> {
     pub fn into_inner(self) -> S {
         self.storage
     }
-}
-
-fn compute_hash<T: AsBytes + ?Sized>(state: &ahash::RandomState, value: &T) -> u64 {
-    use std::hash::{BuildHasher, Hasher};
-    let mut hasher = state.build_hasher();
-    value.as_bytes().hash(&mut hasher);
-    hasher.finish()
 }
