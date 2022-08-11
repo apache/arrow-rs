@@ -154,9 +154,18 @@ impl RowSelection {
         }
     }
 
-    /// Given a [`RowSelection`] computed under `self` returns the [`RowSelection`]
+    /// Given a [`RowSelection`] computed under `self`, returns the [`RowSelection`]
     /// representing their conjunction
-    pub fn and(&self, other: &Self) -> Self {
+    ///
+    /// For example:
+    ///
+    /// self:     NNNNNNNNNNNNYYYYYYYYYYYYYYYYYYYYYYNNNYYYYY
+    /// other:                YYYYYNNNNYYYYYYYYYYYYY   YYNNN
+    ///
+    /// returned: NNNNNNNNNNNNYYYYYNNNNYYYYYYYYYYYYYYNNYNNNN
+    ///
+    ///
+    pub fn and_then(&self, other: &Self) -> Self {
         let mut selectors = vec![];
         let mut first = self.selectors.iter().cloned().peekable();
         let mut second = other.selectors.iter().cloned().peekable();
@@ -358,11 +367,11 @@ mod tests {
             RowSelector::skip(4),
         ]);
 
-        assert_eq!(a.and(&b), expected);
+        assert_eq!(a.and_then(&b), expected);
 
         a.split_off(7);
         expected.split_off(7);
-        assert_eq!(a.and(&b), expected);
+        assert_eq!(a.and_then(&b), expected);
 
         let a = RowSelection::from(vec![RowSelector::select(5), RowSelector::skip(3)]);
 
@@ -374,7 +383,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            a.and(&b).selectors,
+            a.and_then(&b).selectors,
             vec![
                 RowSelector::select(2),
                 RowSelector::skip(1),
@@ -411,7 +420,7 @@ mod tests {
             let total_rows: usize = expected.selectors.iter().map(|s| s.row_count).sum();
             assert_eq!(a_len, total_rows);
 
-            assert_eq!(a.and(&b), expected);
+            assert_eq!(a.and_then(&b), expected);
         }
     }
 }

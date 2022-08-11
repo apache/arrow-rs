@@ -27,13 +27,12 @@ pub trait ArrowPredicate: Send + 'static {
     /// passed to [`filter`](Self::filter)
     fn projection(&self) -> &ProjectionMask;
 
-    /// Called with a [`RecordBatch`] containing the columns identified by [`Self::projection`],
-    /// with `true` values in the returned [`BooleanArray`] indicating rows
-    /// matching the predicate.
+    /// Evaluate this predicate for the given [`RecordBatch`] containing the columns
+    /// identified by [`Self::projection`]
     ///
-    /// All row that are `true` in returned [`BooleanArray`] will be returned to the reader.
-    /// Any rows that are `false` or `Null` will not be
-    fn filter(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray>;
+    /// Rows that are `true` in the returned [`BooleanArray`] will be returned by the
+    /// parquet reader, whereas rows that are `false` or `Null` will not be
+    fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray>;
 }
 
 /// An [`ArrowPredicate`] created from an [`FnMut`]
@@ -63,7 +62,7 @@ where
         &self.projection
     }
 
-    fn filter(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
+    fn evaluate(&mut self, batch: RecordBatch) -> ArrowResult<BooleanArray> {
         (self.f)(batch)
     }
 }

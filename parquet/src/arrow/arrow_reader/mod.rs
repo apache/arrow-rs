@@ -377,7 +377,7 @@ pub(crate) fn evaluate_predicate(
         ParquetRecordBatchReader::new(batch_size, array_reader, input_selection.clone());
     let mut filters = vec![];
     for maybe_batch in reader {
-        let filter = predicate.filter(maybe_batch?)?;
+        let filter = predicate.evaluate(maybe_batch?)?;
         match filter.null_count() {
             0 => filters.push(filter),
             _ => filters.push(prep_null_mask_filter(&filter)),
@@ -386,7 +386,7 @@ pub(crate) fn evaluate_predicate(
 
     let raw = RowSelection::from_filters(&filters);
     Ok(match input_selection {
-        Some(selection) => selection.and(&raw),
+        Some(selection) => selection.and_then(&raw),
         None => raw,
     })
 }
