@@ -64,8 +64,7 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
         Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.3;
 
     /// Tries to create a decimal value from precision, scale and bytes.
-    /// If the length of bytes isn't same as the bit width of this decimal,
-    /// returning an error. The bytes should be stored in little-endian order.
+    /// The bytes should be stored in little-endian order.
     ///
     /// Safety:
     /// This method doesn't validate if the decimal value represented by the bytes
