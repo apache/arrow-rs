@@ -27,10 +27,7 @@ use crate::errors::Result;
 use std::marker::PhantomData;
 
 #[cfg(test)]
-use arrow::array::{
-    BinaryArray, BinaryBuilder, LargeStringArray, LargeStringBuilder, StringArray,
-    StringBuilder,
-};
+use arrow::array::{StringArray, StringBuilder};
 
 /// A converter is used to consume record reader's content and convert it to arrow
 /// primitive array.
@@ -212,47 +209,6 @@ impl Converter<Vec<Option<ByteArray>>, StringArray> for Utf8ArrayConverter {
 }
 
 #[cfg(test)]
-pub struct LargeUtf8ArrayConverter {}
-
-#[cfg(test)]
-impl Converter<Vec<Option<ByteArray>>, LargeStringArray> for LargeUtf8ArrayConverter {
-    fn convert(&self, source: Vec<Option<ByteArray>>) -> Result<LargeStringArray> {
-        let data_size = source
-            .iter()
-            .map(|x| x.as_ref().map(|b| b.len()).unwrap_or(0))
-            .sum();
-
-        let mut builder = LargeStringBuilder::with_capacity(source.len(), data_size);
-        for v in source {
-            match v {
-                Some(array) => builder.append_value(array.as_utf8()?),
-                None => builder.append_null(),
-            }
-        }
-
-        Ok(builder.finish())
-    }
-}
-
-#[cfg(test)]
-pub struct BinaryArrayConverter {}
-
-#[cfg(test)]
-impl Converter<Vec<Option<ByteArray>>, BinaryArray> for BinaryArrayConverter {
-    fn convert(&self, source: Vec<Option<ByteArray>>) -> Result<BinaryArray> {
-        let mut builder = BinaryBuilder::new(source.len());
-        for v in source {
-            match v {
-                Some(array) => builder.append_value(array.data()),
-                None => builder.append_null(),
-            }
-        }
-
-        Ok(builder.finish())
-    }
-}
-
-#[cfg(test)]
 pub type Utf8Converter =
     ArrayRefConverter<Vec<Option<ByteArray>>, StringArray, Utf8ArrayConverter>;
 
@@ -283,35 +239,6 @@ pub type DecimalFixedLengthByteArrayConverter = ArrayRefConverter<
 
 pub type DecimalByteArrayConvert =
     ArrayRefConverter<Vec<Option<ByteArray>>, Decimal128Array, DecimalArrayConverter>;
-
-#[cfg(test)]
-pub struct FromConverter<S, T> {
-    _source: PhantomData<S>,
-    _dest: PhantomData<T>,
-}
-
-#[cfg(test)]
-impl<S, T> FromConverter<S, T>
-where
-    T: From<S>,
-{
-    pub fn new() -> Self {
-        Self {
-            _source: PhantomData,
-            _dest: PhantomData,
-        }
-    }
-}
-
-#[cfg(test)]
-impl<S, T> Converter<S, T> for FromConverter<S, T>
-where
-    T: From<S>,
-{
-    fn convert(&self, source: S) -> Result<T> {
-        Ok(T::from(source))
-    }
-}
 
 pub struct ArrayRefConverter<S, A, C> {
     _source: PhantomData<S>,

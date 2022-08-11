@@ -202,8 +202,7 @@ impl Decimal256Builder {
         let value = if self.value_validation {
             let raw_bytes = value.raw_value();
             let integer = BigInt::from_signed_bytes_le(raw_bytes);
-            let value_str = integer.to_string();
-            validate_decimal256_precision(&value_str, self.precision)?;
+            validate_decimal256_precision(&integer, self.precision)?;
             value
         } else {
             value

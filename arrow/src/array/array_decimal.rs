@@ -75,12 +75,6 @@ pub type Decimal128Array = BasicDecimalArray<16>;
 
 pub type Decimal256Array = BasicDecimalArray<32>;
 
-mod private_decimal {
-    pub trait DecimalArrayPrivate {
-        fn raw_value_data_ptr(&self) -> *const u8;
-    }
-}
-
 pub struct BasicDecimalArray<const BYTE_WIDTH: usize> {
     data: ArrayData,
     value_data: RawPtrBox<u8>,
@@ -90,10 +84,10 @@ pub struct BasicDecimalArray<const BYTE_WIDTH: usize> {
 
 impl<const BYTE_WIDTH: usize> BasicDecimalArray<BYTE_WIDTH> {
     pub const VALUE_LENGTH: i32 = BYTE_WIDTH as i32;
-    pub const DEFAULT_TYPE: DataType = BasicDecimal::<BYTE_WIDTH>::DEFAULT_TYPE;
+    const DEFAULT_TYPE: DataType = BasicDecimal::<BYTE_WIDTH>::DEFAULT_TYPE;
     pub const MAX_PRECISION: usize = BasicDecimal::<BYTE_WIDTH>::MAX_PRECISION;
     pub const MAX_SCALE: usize = BasicDecimal::<BYTE_WIDTH>::MAX_SCALE;
-    pub const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType =
+    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType =
         BasicDecimal::<BYTE_WIDTH>::TYPE_CONSTRUCTOR;
 
     pub fn data(&self) -> &ArrayData {
@@ -341,7 +335,7 @@ impl Decimal256Array {
     pub fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
         if precision < self.precision {
             for v in self.iter().flatten() {
-                validate_decimal256_precision(&v.to_string(), precision)?;
+                validate_decimal256_precision(&v.to_big_int(), precision)?;
             }
         }
         Ok(())

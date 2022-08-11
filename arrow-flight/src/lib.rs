@@ -28,6 +28,7 @@ use std::{
     ops::Deref,
 };
 
+#[allow(clippy::derive_partial_eq_without_eq)]
 mod gen {
     include!("arrow.flight.protocol.rs");
 }

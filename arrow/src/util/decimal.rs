@@ -35,7 +35,7 @@ pub struct BasicDecimal<const BYTE_WIDTH: usize> {
 
 impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
     #[allow(clippy::type_complexity)]
-    const _MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE: (
+    const MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE: (
         usize,
         usize,
         fn(usize, usize) -> DataType,
@@ -56,13 +56,12 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
         _ => panic!("invalid byte width"),
     };
 
-    pub const MAX_PRECISION: usize =
-        Self::_MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.0;
-    pub const MAX_SCALE: usize = Self::_MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.1;
+    pub const MAX_PRECISION: usize = Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.0;
+    pub const MAX_SCALE: usize = Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.1;
     pub const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType =
-        Self::_MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.2;
+        Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.2;
     pub const DEFAULT_TYPE: DataType =
-        Self::_MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.3;
+        Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.3;
 
     /// Tries to create a decimal value from precision, scale and bytes.
     /// If the length of bytes isn't same as the bit width of this decimal,
@@ -246,6 +245,11 @@ impl Decimal256 {
         let num_bytes = &num.to_signed_bytes_le();
         bytes[0..num_bytes.len()].clone_from_slice(num_bytes);
         Decimal256::try_new_from_bytes(precision, scale, &bytes)
+    }
+
+    /// Constructs a `BigInt` from this `Decimal256` value.
+    pub(crate) fn to_big_int(&self) -> BigInt {
+        BigInt::from_signed_bytes_le(&self.value)
     }
 }
 

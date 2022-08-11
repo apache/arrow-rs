@@ -44,7 +44,7 @@ pub fn zip(
     let falsy = falsy.data();
     let truthy = truthy.data();
 
-    let mut mutable = MutableArrayData::new(vec![&*truthy, &*falsy], false, truthy.len());
+    let mut mutable = MutableArrayData::new(vec![truthy, falsy], false, truthy.len());
 
     // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
     // fill with falsy values

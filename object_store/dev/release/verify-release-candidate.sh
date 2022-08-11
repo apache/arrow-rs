@@ -45,7 +45,7 @@ download_dist_file() {
 }
 
 download_rc_file() {
-  download_dist_file apache-arrow-rs-${VERSION}-rc${RC_NUMBER}/$1
+  download_dist_file apache-arrow-object-store-rs-${VERSION}-rc${RC_NUMBER}/$1
 }
 
 import_gpg_keys() {
@@ -102,36 +102,11 @@ test_source_distribution() {
   source $RUSTUP_HOME/env
 
   # build and test rust
-
-  # raises on any formatting errors
-  rustup component add rustfmt --toolchain stable
-  cargo fmt --all -- --check
-
-  # Clone testing repositories if not cloned already
-  git clone https://github.com/apache/arrow-testing.git arrow-testing-data
-  git clone https://github.com/apache/parquet-testing.git parquet-testing-data
-  export ARROW_TEST_DATA=$PWD/arrow-testing-data/data
-  export PARQUET_TEST_DATA=$PWD/parquet-testing-data/data
-
-  # use local modules because we don't publish modules to crates.io yet
-  sed \
-    -i.bak \
-    -E \
-    -e 's/^arrow = "([^"]*)"/arrow = { version = "\1", path = "..\/arrow" }/g' \
-    -e 's/^parquet = "([^"]*)"/parquet = { version = "\1", path = "..\/parquet" }/g' \
-    */Cargo.toml
-
   cargo build
   cargo test --all
 
-  # verify that the crates can be published to crates.io
-  pushd arrow
-    cargo publish --dry-run
-  popd
-
-  # Note can't verify parquet/arrow-flight/parquet-derive until arrow is actually published
-  # as they depend on arrow
-
+  # verify that the crate can be published to crates.io
+  cargo publish --dry-run
 }
 
 TEST_SUCCESS=no
@@ -140,7 +115,7 @@ setup_tempdir "arrow-${VERSION}"
 echo "Working in sandbox ${ARROW_TMPDIR}"
 cd ${ARROW_TMPDIR}
 
-dist_name="apache-arrow-rs-${VERSION}"
+dist_name="apache-arrow-object-store-rs-${VERSION}"
 import_gpg_keys
 fetch_archive ${dist_name}
 tar xf ${dist_name}.tar.gz

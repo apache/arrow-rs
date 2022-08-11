@@ -504,7 +504,7 @@ where
             let record_count = self.do_put_statement_update(token, request).await?;
             let result = DoPutUpdateResult { record_count };
             let output = futures::stream::iter(vec![Ok(super::super::gen::PutResult {
-                app_metadata: result.as_any().encode_to_vec(),
+                app_metadata: result.encode_to_vec(),
             })]);
             return Ok(Response::new(Box::pin(output)));
         }
@@ -525,7 +525,7 @@ where
                 .await?;
             let result = DoPutUpdateResult { record_count };
             let output = futures::stream::iter(vec![Ok(super::super::gen::PutResult {
-                app_metadata: result.as_any().encode_to_vec(),
+                app_metadata: result.encode_to_vec(),
             })]);
             return Ok(Response::new(Box::pin(output)));
         }
