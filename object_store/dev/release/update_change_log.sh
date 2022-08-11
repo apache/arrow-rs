@@ -40,6 +40,8 @@ OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
 # remove license header so github-changelog-generator has a clean base to append
 sed -i.bak '1,18d' "${OUTPUT_PATH}"
 
+# use exclude-tags-regex to filter out tags used for arrow
+# crates and only look at tags that begin with `object_store_`
 pushd "${SOURCE_TOP_DIR}"
 docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$CHANGELOG_GITHUB_TOKEN" -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user apache \
