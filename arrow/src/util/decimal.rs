@@ -114,17 +114,17 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
     /// Creates a decimal value from precision, scale, and bytes.
     ///
     /// Safety:
-    /// This method doesn't check if the length of bytes is compatible with this decimal.
+    /// This method doesn't check if the precision and scale are valid.
     /// Use `try_new_from_bytes` for safe constructor.
-    pub fn new(precision: usize, scale: usize, bytes: &[u8]) -> Self {
+    pub fn new(precision: usize, scale: usize, bytes: &[u8; BYTE_WIDTH]) -> Self {
         Self {
             precision,
             scale,
-            value: bytes.try_into().unwrap(),
+            value: *bytes,
         }
     }
     /// Returns the raw bytes of the integer representation of the decimal.
-    pub fn raw_value(&self) -> &[u8] {
+    pub fn raw_value(&self) -> &[u8; BYTE_WIDTH] {
         &self.value
     }
 
