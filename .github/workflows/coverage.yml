@@ -32,7 +32,7 @@ jobs:
     # otherwise we get this error:
     # Failed to run tests: ASLR disable failed: EPERM: Operation not permitted
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
       - name: Setup Rust toolchain

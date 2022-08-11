@@ -39,7 +39,7 @@ jobs:
       env:
         RUSTDOCFLAGS: "-Dwarnings"
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
       - name: Install python dev
