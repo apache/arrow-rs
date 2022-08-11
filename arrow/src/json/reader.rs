@@ -590,7 +590,7 @@ pub struct Decoder {
     options: DecoderOptions,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Options for JSON decoding
 pub struct DecoderOptions {
     /// Batch size (number of records to load each time), defaults to 1024 records
