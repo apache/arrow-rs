@@ -18,7 +18,6 @@
 use crate::data_type::AsBytes;
 use hashbrown::hash_map::RawEntryMut;
 use hashbrown::HashMap;
-use std::hash::Hash;
 
 const DEFAULT_DEDUP_CAPACITY: usize = 4096;
 
