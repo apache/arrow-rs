@@ -169,9 +169,10 @@ impl<P: Iterator<Item = Page> + Send> PageReader for InMemoryPageReader<P> {
     fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
         if let Some(x) = self.page_iter.peek() {
             match x {
-                Page::DataPage { .. } => {
-                    unreachable!()
-                }
+                Page::DataPage { num_values, .. } => Ok(Some(PageMetadata {
+                    num_rows: *num_values as usize,
+                    is_dict: false,
+                })),
                 Page::DataPageV2 { num_rows, .. } => Ok(Some(PageMetadata {
                     num_rows: *num_rows as usize,
                     is_dict: false,
