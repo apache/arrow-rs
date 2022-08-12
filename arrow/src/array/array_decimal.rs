@@ -270,13 +270,11 @@ impl Decimal128Array {
         Decimal128Array::from(data)
     }
 
-    /// Validates decimal values in this array can be properly interpreted
-    /// with the specified precision.
+    // Validates decimal values in this array can be properly interpreted
+    // with the specified precision.
     fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
-        if precision < self.precision {
-            for v in self.iter().flatten() {
-                validate_decimal_precision(v.as_i128(), precision)?;
-            }
+        for v in self.iter().flatten() {
+            validate_decimal_precision(v.as_i128(), precision)?;
         }
         Ok(())
     }
@@ -316,7 +314,9 @@ impl Decimal128Array {
         // Ensure that all values are within the requested
         // precision. For performance, only check if the precision is
         // decreased
-        self.validate_decimal_precision(precision)?;
+        if precision < self.precision {
+            self.validate_decimal_precision(precision)?;
+        }
 
         let data_type = Self::TYPE_CONSTRUCTOR(self.precision, self.scale);
         assert_eq!(self.data().data_type(), &data_type);
@@ -329,8 +329,8 @@ impl Decimal128Array {
 }
 
 impl Decimal256Array {
-    /// Validates decimal values in this array can be properly interpreted
-    /// with the specified precision.
+    // Validates decimal values in this array can be properly interpreted
+    // with the specified precision.
     fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
         let current_end = self.data.len();
         let mut current: usize = 0;
@@ -355,6 +355,7 @@ impl Decimal256Array {
         }
         Ok(())
     }
+
     /// Returns a Decimal array with the same data as self, with the
     /// specified precision.
     ///
@@ -390,7 +391,9 @@ impl Decimal256Array {
         // Ensure that all values are within the requested
         // precision. For performance, only check if the precision is
         // decreased
-        self.validate_decimal_precision(precision)?;
+        if precision < self.precision {
+            self.validate_decimal_precision(precision)?;
+        }
 
         let data_type = Self::TYPE_CONSTRUCTOR(self.precision, self.scale);
         assert_eq!(self.data().data_type(), &data_type);
