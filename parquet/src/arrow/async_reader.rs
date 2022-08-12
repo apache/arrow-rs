@@ -96,9 +96,9 @@ use arrow::record_batch::RecordBatch;
 
 use crate::arrow::array_reader::{build_array_reader, RowGroupCollection};
 use crate::arrow::arrow_reader::{
-    evaluate_predicate, ParquetRecordBatchReader, RowFilter, RowSelection,
+    evaluate_predicate, ArrowReaderBuilder, ParquetRecordBatchReader, RowFilter,
+    RowSelection,
 };
-use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::ProjectionMask;
 use crate::basic::Compression;
 use crate::column::page::{Page, PageIterator, PageMetadata, PageReader};
@@ -108,7 +108,7 @@ use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use crate::file::serialized_reader::{decode_page, read_page_header};
 use crate::file::FOOTER_SIZE;
-use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
+use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
 pub trait AsyncFileReader: Send {
@@ -194,112 +194,23 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     }
 }
 
+#[doc(hidden)]
+/// A newtype used within [`ReaderOptionsBuilder`] to distinguish sync readers from async
+pub struct AsyncReader<T>(T);
+
 /// A builder used to construct a [`ParquetRecordBatchStream`] for a parquet file
 ///
 /// In particular, this handles reading the parquet file metadata, allowing consumers
 /// to use this information to select what specific columns, row groups, etc...
 /// they wish to be read by the resulting stream
 ///
-pub struct ParquetRecordBatchStreamBuilder<T> {
-    input: T,
+pub type ParquetRecordBatchStreamBuilder<T> = ArrowReaderBuilder<AsyncReader<T>>;
 
-    metadata: Arc<ParquetMetaData>,
-
-    schema: SchemaRef,
-
-    batch_size: usize,
-
-    row_groups: Option<Vec<usize>>,
-
-    projection: ProjectionMask,
-
-    filter: Option<RowFilter>,
-
-    selection: Option<RowSelection>,
-}
-
-impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
+impl<T: AsyncFileReader + Send + 'static> ArrowReaderBuilder<AsyncReader<T>> {
     /// Create a new [`ParquetRecordBatchStreamBuilder`] with the provided parquet file
     pub async fn new(mut input: T) -> Result<Self> {
         let metadata = input.get_metadata().await?;
-
-        let schema = Arc::new(parquet_to_arrow_schema(
-            metadata.file_metadata().schema_descr(),
-            metadata.file_metadata().key_value_metadata(),
-        )?);
-
-        Ok(Self {
-            input,
-            metadata,
-            schema,
-            batch_size: 1024,
-            row_groups: None,
-            projection: ProjectionMask::all(),
-            filter: None,
-            selection: None,
-        })
-    }
-
-    /// Returns a reference to the [`ParquetMetaData`] for this parquet file
-    pub fn metadata(&self) -> &Arc<ParquetMetaData> {
-        &self.metadata
-    }
-
-    /// Returns the parquet [`SchemaDescriptor`] for this parquet file
-    pub fn parquet_schema(&self) -> &SchemaDescriptor {
-        self.metadata.file_metadata().schema_descr()
-    }
-
-    /// Returns the arrow [`SchemaRef`] for this parquet file
-    pub fn schema(&self) -> &SchemaRef {
-        &self.schema
-    }
-
-    /// Set the size of [`RecordBatch`] to produce
-    pub fn with_batch_size(self, batch_size: usize) -> Self {
-        Self { batch_size, ..self }
-    }
-
-    /// Only read data from the provided row group indexes
-    pub fn with_row_groups(self, row_groups: Vec<usize>) -> Self {
-        Self {
-            row_groups: Some(row_groups),
-            ..self
-        }
-    }
-
-    /// Only read data from the provided column indexes
-    pub fn with_projection(self, mask: ProjectionMask) -> Self {
-        Self {
-            projection: mask,
-            ..self
-        }
-    }
-
-    /// Provide a [`RowSelection] to filter out rows, and avoid fetching their
-    /// data into memory
-    ///
-    /// Row group filtering is applied prior to this, and rows from skipped
-    /// row groups should not be included in the [`RowSelection`]
-    ///
-    /// TODO: Make public once stable (#1792)
-    #[allow(unused)]
-    pub(crate) fn with_row_selection(self, selection: RowSelection) -> Self {
-        Self {
-            selection: Some(selection),
-            ..self
-        }
-    }
-
-    /// Provide a [`RowFilter`] to skip decoding rows
-    ///
-    /// TODO: Make public once stable (#1792)
-    #[allow(unused)]
-    pub(crate) fn with_row_filter(self, filter: RowFilter) -> Self {
-        Self {
-            filter: Some(filter),
-            ..self
-        }
+        Self::new_builder(AsyncReader(input), metadata, Default::default())
     }
 
     /// Build a new [`ParquetRecordBatchStream`]
@@ -321,7 +232,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         };
 
         let reader = ReaderFactory {
-            input: self.input,
+            input: self.input.0,
             filter: self.filter,
             metadata: self.metadata.clone(),
             schema: self.schema.clone(),
@@ -806,8 +717,8 @@ impl PageIterator for ColumnChunkIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::arrow_reader::ArrowPredicateFn;
-    use crate::arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader};
+    use crate::arrow::arrow_reader::{ArrowPredicateFn, ParquetRecordBatchReaderBuilder};
+    use crate::arrow::ArrowWriter;
     use crate::file::footer::parse_metadata;
     use arrow::array::{Array, ArrayRef, Int32Array, StringArray};
     use arrow::error::Result as ArrowResult;
@@ -837,7 +748,7 @@ mod tests {
         let path = format!("{}/alltypes_plain.parquet", testdata);
         let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let metadata = crate::file::footer::parse_metadata(&data).unwrap();
+        let metadata = parse_metadata(&data).unwrap();
         let metadata = Arc::new(metadata);
 
         assert_eq!(metadata.num_row_groups(), 1);
@@ -862,9 +773,11 @@ mod tests {
 
         let async_batches: Vec<_> = stream.try_collect().await.unwrap();
 
-        let mut sync_reader = ParquetFileArrowReader::try_new(data).unwrap();
-        let sync_batches = sync_reader
-            .get_record_reader_by_columns(mask, 1024)
+        let sync_batches = ParquetRecordBatchReaderBuilder::try_new(data)
+            .unwrap()
+            .with_projection(mask)
+            .with_batch_size(104)
+            .build()
             .unwrap()
             .collect::<ArrowResult<Vec<_>>>()
             .unwrap();
