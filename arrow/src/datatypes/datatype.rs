@@ -1024,7 +1024,7 @@ pub(crate) fn validate_decimal256_precision_with_lt_bytes(
 ) -> Result<()> {
     if precision > DECIMAL256_MAX_PRECISION {
         return Err(ArrowError::InvalidArgumentError(format!(
-            "Max precision of a Decima256 is {}, but got {}",
+            "Max precision of a Decimal256 is {}, but got {}",
             DECIMAL256_MAX_PRECISION, precision,
         )));
     }
