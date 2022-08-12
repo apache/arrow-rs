@@ -236,8 +236,6 @@ impl ArrowReaderOptions {
     /// Set this true to enable decoding of the [PageIndex] if present. This can be used
     /// to push down predicates to the parquet scan, potentially eliminating unnecessary IO
     ///
-    /// See [`RowFilter`] and [`RowSelection`] for more information
-    ///
     /// [PageIndex]: [https://github.com/apache/parquet-format/blob/master/PageIndex.md]
     pub fn with_page_index(self, page_index: bool) -> Self {
         Self { page_index, ..self }
