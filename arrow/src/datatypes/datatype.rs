@@ -1487,8 +1487,8 @@ mod test {
             let min_bytes = MIN_DECIMAL_BYTES_FOR_LARGER_EACH_PRECISION[i - 1];
             max_value += "9";
             min_value += "9";
-            assert_eq!(max_decimal.raw_value(), max_bytes);
-            assert_eq!(min_decimal.raw_value(), min_bytes);
+            assert_eq!(max_decimal.raw_value(), &max_bytes);
+            assert_eq!(min_decimal.raw_value(), &min_bytes);
         }
     }
 }
