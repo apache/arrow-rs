@@ -122,6 +122,8 @@ impl<const BYTE_WIDTH: usize> BasicDecimalArray<BYTE_WIDTH> {
                 self.raw_value_data_ptr().offset(pos as isize),
                 Self::VALUE_LENGTH as usize,
             )
+            .try_into()
+            .unwrap()
         };
         BasicDecimal::<BYTE_WIDTH>::new(self.precision(), self.scale(), raw_val)
     }
