@@ -29,10 +29,9 @@ use super::{BasicDecimalIter, BooleanBufferBuilder, FixedSizeBinaryArray};
 #[allow(deprecated)]
 pub use crate::array::DecimalIter;
 use crate::buffer::{Buffer, MutableBuffer};
-use crate::datatypes::DataType;
+use crate::datatypes::{validate_decimal256_precision_with_lt_bytes, DataType};
 use crate::datatypes::{
-    validate_decimal256_precision, validate_decimal_precision, DECIMAL256_MAX_PRECISION,
-    DECIMAL_DEFAULT_SCALE,
+    validate_decimal_precision, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
 };
 use crate::error::{ArrowError, Result};
 use crate::util::decimal::{BasicDecimal, Decimal256};
@@ -271,13 +270,11 @@ impl Decimal128Array {
         Decimal128Array::from(data)
     }
 
-    /// Validates decimal values in this array can be properly interpreted
-    /// with the specified precision.
-    pub fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
-        if precision < self.precision {
-            for v in self.iter().flatten() {
-                validate_decimal_precision(v.as_i128(), precision)?;
-            }
+    // Validates decimal values in this array can be properly interpreted
+    // with the specified precision.
+    fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
+        for v in self.iter().flatten() {
+            validate_decimal_precision(v.as_i128(), precision)?;
         }
         Ok(())
     }
@@ -317,7 +314,9 @@ impl Decimal128Array {
         // Ensure that all values are within the requested
         // precision. For performance, only check if the precision is
         // decreased
-        self.validate_decimal_precision(precision)?;
+        if precision < self.precision {
+            self.validate_decimal_precision(precision)?;
+        }
 
         let data_type = Self::TYPE_CONSTRUCTOR(self.precision, self.scale);
         assert_eq!(self.data().data_type(), &data_type);
@@ -330,15 +329,23 @@ impl Decimal128Array {
 }
 
 impl Decimal256Array {
-    /// Validates decimal values in this array can be properly interpreted
-    /// with the specified precision.
-    pub fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
-        if precision < self.precision {
-            for v in self.iter().flatten() {
-                validate_decimal256_precision(&v.to_big_int(), precision)?;
+    // Validates decimal values in this array can be properly interpreted
+    // with the specified precision.
+    fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
+        (0..self.len()).try_for_each(|idx| {
+            if self.is_valid(idx) {
+                let raw_val = unsafe {
+                    let pos = self.value_offset(idx);
+                    std::slice::from_raw_parts(
+                        self.raw_value_data_ptr().offset(pos as isize),
+                        Self::VALUE_LENGTH as usize,
+                    )
+                };
+                validate_decimal256_precision_with_lt_bytes(raw_val, precision)
+            } else {
+                Ok(())
             }
-        }
-        Ok(())
+        })
     }
 
     /// Returns a Decimal array with the same data as self, with the
@@ -376,7 +383,9 @@ impl Decimal256Array {
         // Ensure that all values are within the requested
         // precision. For performance, only check if the precision is
         // decreased
-        self.validate_decimal_precision(precision)?;
+        if precision < self.precision {
+            self.validate_decimal_precision(precision)?;
+        }
 
         let data_type = Self::TYPE_CONSTRUCTOR(self.precision, self.scale);
         assert_eq!(self.data().data_type(), &data_type);

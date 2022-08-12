@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use num::BigInt;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -26,7 +25,9 @@ use crate::array::{ArrayBuilder, FixedSizeBinaryBuilder};
 
 use crate::error::{ArrowError, Result};
 
-use crate::datatypes::{validate_decimal256_precision, validate_decimal_precision};
+use crate::datatypes::{
+    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision,
+};
 use crate::util::decimal::Decimal256;
 
 /// Array Builder for [`Decimal128Array`]
@@ -201,8 +202,7 @@ impl Decimal256Builder {
     pub fn append_value(&mut self, value: &Decimal256) -> Result<()> {
         let value = if self.value_validation {
             let raw_bytes = value.raw_value();
-            let integer = BigInt::from_signed_bytes_le(raw_bytes);
-            validate_decimal256_precision(&integer, self.precision)?;
+            validate_decimal256_precision_with_lt_bytes(raw_bytes, self.precision)?;
             value
         } else {
             value
@@ -255,7 +255,7 @@ impl Decimal256Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num::Num;
+    use num::{BigInt, Num};
 
     use crate::array::array_decimal::Decimal128Array;
     use crate::array::{array_decimal, Array};
