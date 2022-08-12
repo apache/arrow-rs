@@ -273,10 +273,14 @@ impl Decimal128Array {
     // Validates decimal values in this array can be properly interpreted
     // with the specified precision.
     fn validate_decimal_precision(&self, precision: usize) -> Result<()> {
-        for v in self.iter().flatten() {
-            validate_decimal_precision(v.as_i128(), precision)?;
-        }
-        Ok(())
+        (0..self.len()).try_for_each(|idx| {
+            if self.is_valid(idx) {
+                let decimal = unsafe { self.value_unchecked(idx) };
+                validate_decimal_precision(decimal.as_i128(), precision)
+            } else {
+                Ok(())
+            }
+        })
     }
 
     /// Returns a Decimal array with the same data as self, with the

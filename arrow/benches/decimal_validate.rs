@@ -18,8 +18,12 @@
 #[macro_use]
 extern crate criterion;
 
-use arrow::array::{Array, Decimal128Array, Decimal256Array, Decimal256Builder};
+use arrow::array::{
+    Array, Decimal128Array, Decimal128Builder, Decimal256Array, Decimal256Builder,
+};
 use criterion::Criterion;
+use num::BigInt;
+use rand::Rng;
 
 extern crate arrow;
 
@@ -34,7 +38,15 @@ fn validate_decimal256_array(array: Decimal256Array) {
 }
 
 fn validate_decimal128_benchmark(c: &mut Criterion) {
-    let decimal_array = Decimal128Array::from_iter_values(vec![12324; 20000]);
+    let mut rng = rand::thread_rng();
+    let size: i128 = 20000;
+    let mut decimal_builder = Decimal128Builder::new(size as usize, 38, 0);
+    for _ in 0..size {
+        decimal_builder
+            .append_value(rng.gen_range::<i128, _>(0..999999999999))
+            .unwrap();
+    }
+    let decimal_array = decimal_builder.finish();
     let data = decimal_array.into_data();
     c.bench_function("validate_decimal128_array 20000", |b| {
         b.iter(|| {
@@ -45,13 +57,13 @@ fn validate_decimal128_benchmark(c: &mut Criterion) {
 }
 
 fn validate_decimal256_benchmark(c: &mut Criterion) {
-    let mut decimal_builder = Decimal256Builder::new(20000, 76, 0);
-    let mut bytes = vec![0; 32];
-    bytes[0..16].clone_from_slice(&12324_i128.to_le_bytes());
-    for _ in 0..20000 {
-        decimal_builder
-            .append_value(&Decimal256::new(76, 0, &bytes))
-            .unwrap();
+    let mut rng = rand::thread_rng();
+    let size: i128 = 20000;
+    let mut decimal_builder = Decimal256Builder::new(size as usize, 76, 0);
+    for _ in 0..size {
+        let v = rng.gen_range::<i128, _>(0..999999999999999);
+        let decimal = Decimal256::from_big_int(&BigInt::from(v), 76, 0).unwrap();
+        decimal_builder.append_value(&decimal).unwrap();
     }
     let decimal_array256_data = decimal_builder.finish();
     let data = decimal_array256_data.into_data();

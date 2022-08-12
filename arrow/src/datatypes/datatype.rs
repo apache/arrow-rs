@@ -989,7 +989,7 @@ pub const DECIMAL_DEFAULT_SCALE: usize = 10;
 /// Validates that the specified `i128` value can be properly
 /// interpreted as a Decimal number with precision `precision`
 #[inline]
-pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Result<i128> {
+pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Result<()> {
     if precision > DECIMAL128_MAX_PRECISION {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Max precision of a Decimal128 is {}, but got {}",
@@ -1011,7 +1011,7 @@ pub(crate) fn validate_decimal_precision(value: i128, precision: usize) -> Resul
             value, precision, min
         )))
     } else {
-        Ok(value)
+        Ok(())
     }
 }
 
