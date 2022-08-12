@@ -616,7 +616,7 @@ mod tests {
         let file = get_test_file("parquet/generated_simple_numerics/blogs.parquet");
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let original_schema = Arc::clone(&builder.schema());
+        let original_schema = Arc::clone(builder.schema());
         let reader = builder.build().unwrap();
 
         // Verify that the schema was correctly parsed
@@ -628,7 +628,7 @@ mod tests {
         let file = get_test_file("parquet/generated_simple_numerics/blogs.parquet");
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-        let original_schema = Arc::clone(&builder.schema());
+        let original_schema = Arc::clone(builder.schema());
 
         let mask = ProjectionMask::leaves(builder.parquet_schema(), [2]);
         let reader = builder.with_projection(mask).build().unwrap();
