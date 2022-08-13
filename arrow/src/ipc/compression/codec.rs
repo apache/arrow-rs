@@ -23,7 +23,7 @@ use std::io::{Read, Write};
 const LENGTH_NO_COMPRESSED_DATA: i64 = -1;
 const LENGTH_OF_PREFIX_DATA: i64 = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Represents compressing a ipc stream using a particular compression algorithm
 pub enum CompressionCodec {
     Lz4Frame,
