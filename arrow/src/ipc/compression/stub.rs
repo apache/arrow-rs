@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Stubs that implement the same interface as ipc_compression
-//! but always error.
+//! Stubs that implement the same interface as the ipc_compression
+//! codec module, but always errors.
 
 use crate::buffer::Buffer;
 use crate::error::{ArrowError, Result};
