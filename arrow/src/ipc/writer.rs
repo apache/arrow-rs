@@ -368,9 +368,8 @@ impl IpcDataGenerator {
             c.finish()
         });
 
-        let compression_codec: Option<CompressionCodec> = batch_compression_type
-            .map(TryInto::try_into)
-            .transpose()?;
+        let compression_codec: Option<CompressionCodec> =
+            batch_compression_type.map(TryInto::try_into).transpose()?;
 
         for array in batch.columns() {
             let array_data = array.data();
