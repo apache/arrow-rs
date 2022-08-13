@@ -106,11 +106,11 @@ impl CompressionCodec {
             Buffer::from(data)
         } else {
             // decompress data using the codec
-            let mut _uncompressed_buffer =
+            let mut uncompressed_buffer =
                 Vec::with_capacity(decompressed_length as usize);
             let input_data = &input[(LENGTH_OF_PREFIX_DATA as usize)..];
-            self.decompress(input_data, &mut _uncompressed_buffer)?;
-            Buffer::from(_uncompressed_buffer)
+            self.decompress(input_data, &mut uncompressed_buffer)?;
+            Buffer::from(uncompressed_buffer)
         };
         Ok(buffer)
     }
