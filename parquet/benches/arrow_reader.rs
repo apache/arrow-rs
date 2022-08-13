@@ -43,6 +43,10 @@ fn build_test_schema() -> SchemaDescPtr {
             OPTIONAL BYTE_ARRAY optional_string_leaf (UTF8);
             REQUIRED INT64 mandatory_int64_leaf;
             OPTIONAL INT64 optional_int64_leaf;
+            REQUIRED INT32 mandatory_decimal1_leaf (DECIMAL(8,2));
+            OPTIONAL INT32 optional_decimal1_leaf (DECIMAL(8,2));
+            REQUIRED INT64 mandatory_decimal2_leaf (DECIMAL(16,2));
+            OPTIONAL INT64 optional_decimal2_leaf (DECIMAL(16,2));
         }
         ";
     parse_message_type(message_type)
@@ -66,6 +70,8 @@ fn build_encoded_primitive_page_iterator<T>(
     column_desc: ColumnDescPtr,
     null_density: f32,
     encoding: Encoding,
+    min: usize,
+    max: usize,
 ) -> impl PageIterator + Clone
 where
     T: parquet::data_type::DataType,
@@ -90,7 +96,7 @@ where
                 };
                 if def_level == max_def_level {
                     let value =
-                        FromPrimitive::from_usize(rng.gen_range(0..1000)).unwrap();
+                        FromPrimitive::from_usize(rng.gen_range(min..max)).unwrap();
                     values.push(value);
                 }
                 def_levels.push(def_level);
@@ -377,6 +383,8 @@ fn bench_primitive<T>(
     schema: &SchemaDescPtr,
     mandatory_column_desc: &ColumnDescPtr,
     optional_column_desc: &ColumnDescPtr,
+    min: usize,
+    max: usize,
 ) where
     T: parquet::data_type::DataType,
     T::T: SampleUniform + FromPrimitive + Copy,
@@ -389,6 +397,8 @@ fn bench_primitive<T>(
         mandatory_column_desc.clone(),
         0.0,
         Encoding::PLAIN,
+        min,
+        max,
     );
     group.bench_function("plain encoded, mandatory, no NULLs", |b| {
         b.iter(|| {
@@ -406,6 +416,8 @@ fn bench_primitive<T>(
         optional_column_desc.clone(),
         0.0,
         Encoding::PLAIN,
+        min,
+        max,
     );
     group.bench_function("plain encoded, optional, no NULLs", |b| {
         b.iter(|| {
@@ -422,6 +434,8 @@ fn bench_primitive<T>(
         optional_column_desc.clone(),
         0.5,
         Encoding::PLAIN,
+        min,
+        max,
     );
     group.bench_function("plain encoded, optional, half NULLs", |b| {
         b.iter(|| {
@@ -438,6 +452,8 @@ fn bench_primitive<T>(
         mandatory_column_desc.clone(),
         0.0,
         Encoding::DELTA_BINARY_PACKED,
+        min,
+        max,
     );
     group.bench_function("binary packed, mandatory, no NULLs", |b| {
         b.iter(|| {
@@ -455,6 +471,8 @@ fn bench_primitive<T>(
         optional_column_desc.clone(),
         0.0,
         Encoding::DELTA_BINARY_PACKED,
+        min,
+        max,
     );
     group.bench_function("binary packed, optional, no NULLs", |b| {
         b.iter(|| {
@@ -471,6 +489,8 @@ fn bench_primitive<T>(
         mandatory_column_desc.clone(),
         0.0,
         Encoding::DELTA_BINARY_PACKED,
+        min,
+        max,
     );
     group.bench_function("binary packed skip, mandatory, no NULLs", |b| {
         b.iter(|| {
@@ -488,6 +508,8 @@ fn bench_primitive<T>(
         optional_column_desc.clone(),
         0.0,
         Encoding::DELTA_BINARY_PACKED,
+        min,
+        max,
     );
     group.bench_function("binary packed skip, optional, no NULLs", |b| {
         b.iter(|| {
@@ -504,6 +526,8 @@ fn bench_primitive<T>(
         optional_column_desc.clone(),
         0.5,
         Encoding::DELTA_BINARY_PACKED,
+        min,
+        max,
     );
     group.bench_function("binary packed, optional, half NULLs", |b| {
         b.iter(|| {
@@ -561,6 +585,39 @@ fn bench_primitive<T>(
     });
 }
 
+fn decimal_benches(c: &mut Criterion) {
+    let schema = build_test_schema();
+    // parquet int32, logical type decimal(8,2)
+    let mandatory_decimal1_leaf_desc = schema.column(6);
+    let optional_decimal1_leaf_desc = schema.column(7);
+    let mut group = c.benchmark_group("arrow_array_reader/INT32/Decimal128Array");
+    bench_primitive::<Int32Type>(
+        &mut group,
+        &schema,
+        &mandatory_decimal1_leaf_desc,
+        &optional_decimal1_leaf_desc,
+        // precision is 8: the max is 99999999
+        9999000,
+        9999999,
+    );
+    group.finish();
+
+    // parquet int64, logical type decimal(16,2)
+    let mut group = c.benchmark_group("arrow_array_reader/INT64/Decimal128Array");
+    let mandatory_decimal2_leaf_desc = schema.column(8);
+    let optional_decimal2_leaf_desc = schema.column(9);
+    bench_primitive::<Int64Type>(
+        &mut group,
+        &schema,
+        &mandatory_decimal2_leaf_desc,
+        &optional_decimal2_leaf_desc,
+        // precision is 18: the max is 999999999999999999
+        999999999999000,
+        999999999999999,
+    );
+    group.finish();
+}
+
 fn add_benches(c: &mut Criterion) {
     let mut count: usize = 0;
 
@@ -580,6 +637,8 @@ fn add_benches(c: &mut Criterion) {
         &schema,
         &mandatory_int32_column_desc,
         &optional_int32_column_desc,
+        0,
+        1000,
     );
     group.finish();
 
@@ -592,6 +651,8 @@ fn add_benches(c: &mut Criterion) {
         &schema,
         &mandatory_int64_column_desc,
         &optional_int64_column_desc,
+        0,
+        1000,
     );
     group.finish();
 
@@ -743,5 +804,5 @@ fn add_benches(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, add_benches);
+criterion_group!(benches, add_benches, decimal_benches,);
 criterion_main!(benches);
