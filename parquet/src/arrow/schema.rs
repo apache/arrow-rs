@@ -1233,6 +1233,9 @@ mod tests {
             OPTIONAL INT64   ts_milli (TIMESTAMP_MILLIS);
             REQUIRED INT64   ts_micro (TIMESTAMP_MICROS);
             REQUIRED INT64   ts_nano (TIMESTAMP(NANOS,true));
+            REPEATED INT32   int_list;
+            REPEATED BINARY  byte_list;
+            REPEATED BINARY  string_list (UTF8);
         }
         ";
         let parquet_group_type = parse_message_type(message_type).unwrap();
@@ -1277,6 +1280,29 @@ mod tests {
             Field::new(
                 "ts_nano",
                 DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_string())),
+                false,
+            ),
+            Field::new(
+                "int_list",
+                DataType::List(Box::new(Field::new("int_list", DataType::Int32, false))),
+                false,
+            ),
+            Field::new(
+                "byte_list",
+                DataType::List(Box::new(Field::new(
+                    "byte_list",
+                    DataType::Binary,
+                    false,
+                ))),
+                false,
+            ),
+            Field::new(
+                "string_list",
+                DataType::List(Box::new(Field::new(
+                    "string_list",
+                    DataType::Utf8,
+                    false,
+                ))),
                 false,
             ),
         ];
