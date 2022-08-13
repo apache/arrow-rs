@@ -799,7 +799,7 @@ pub struct FileReader<R: Read + Seek> {
 
 impl<R: Read + Seek> fmt::Debug for FileReader<R> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::result::Result<(), fmt::Error> {
-        f.debug_struct("StreamReader<R>")
+        f.debug_struct("FileReader<R>")
             .field("reader", &"BufReader<..>")
             .field("schema", &self.schema)
             .field("blocks", &self.blocks)

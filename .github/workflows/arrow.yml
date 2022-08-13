@@ -51,7 +51,7 @@ jobs:
       - name: Test
         run: |
           cargo test -p arrow
-      - name: Test --features=force_validate,prettyprint,ffi
+      - name: Test --features=force_validate,prettyprint,ipc_compression,ffi
         run: |
           cargo test -p arrow --features=force_validate,prettyprint,ipc_compression,ffi
       - name: Run examples
