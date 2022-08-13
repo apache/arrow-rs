@@ -369,7 +369,7 @@ impl IpcDataGenerator {
         });
 
         let compression_codec: Option<CompressionCodec> = batch_compression_type
-            .map(|batch_compression_type| batch_compression_type.try_into())
+            .map(TryInto::try_into)
             .transpose()?;
 
         for array in batch.columns() {
@@ -1251,7 +1251,7 @@ fn write_buffer(
         ))
     })?;
 
-    // make new indx entry
+    // make new index entry
     buffers.push(ipc::Buffer::new(offset, len));
     // padding and make offset 8 bytes aligned
     let pad_len = pad_to_8(len as u32) as i64;

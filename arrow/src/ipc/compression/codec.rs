@@ -54,7 +54,7 @@ impl CompressionCodec {
     /// Writes this format to output:
     /// ```text
     /// [8 bytes]:         uncompressed length
-    /// [reminaing bytes]: compressed data stream
+    /// [remaining bytes]: compressed data stream
     /// ```
     pub(crate) fn compress_to_vec(
         &self,
@@ -64,7 +64,7 @@ impl CompressionCodec {
         let uncompressed_data_len = input.len();
         let original_output_len = output.len();
 
-        if uncompressed_data_len == 0 {
+        if input.is_empty() {
             // empty input, nothing to do
         } else {
             // write compressed data directly into the output buffer
@@ -90,7 +90,7 @@ impl CompressionCodec {
     /// The input should look like:
     /// ```text
     /// [8 bytes]:         uncompressed length
-    /// [reminaing bytes]: compressed data stream
+    /// [remaining bytes]: compressed data stream
     /// ```
     pub(crate) fn decompress_to_buffer(&self, input: &[u8]) -> Result<Buffer> {
         // read the first 8 bytes to determine if the data is
@@ -163,7 +163,7 @@ impl CompressionCodec {
 
 /// Get the uncompressed length
 /// Notes:
-///   -1: indicate that the data that follows is not compressed
+///   LENGTH_NO_COMPRESSED_DATA: indicate that the data that follows is not compressed
 ///    0: indicate that there is no data
 ///   positive number: indicate the uncompressed length for the following data
 #[inline]
