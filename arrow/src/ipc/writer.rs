@@ -592,13 +592,11 @@ impl<W: Write> FileWriter<W> {
     ) -> Result<Self> {
         let data_gen = IpcDataGenerator::default();
         let mut writer = BufWriter::new(writer);
-        // write magic to header
-        let mut header_size: usize = 0;
+        // write magic to header aligned on 8 byte boundary
+        let header_size = super::ARROW_MAGIC.len() + 2;
+        assert_eq!(header_size, 8);
         writer.write_all(&super::ARROW_MAGIC[..])?;
-        header_size += super::ARROW_MAGIC.len();
-        // create an 8-byte boundary after the header
         writer.write_all(&[0, 0])?;
-        header_size += 2;
         // write the schema, set the written bytes to the schema + header
         let encoded_message = data_gen.schema_to_bytes(schema, &write_options);
         let (meta, data) = write_message(&mut writer, encoded_message, &write_options)?;
