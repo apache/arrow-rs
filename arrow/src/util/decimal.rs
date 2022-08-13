@@ -18,30 +18,62 @@
 //! Decimal related utils
 
 use crate::datatypes::{
-    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE,
+    DataType, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION,
+    DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
 };
 use crate::error::{ArrowError, Result};
 use num::bigint::BigInt;
 use num::Signed;
 use std::cmp::{min, Ordering};
 
-pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
-    /// The bit-width of the internal representation.
-    const BIT_WIDTH: usize;
-    /// The maximum precision.
-    const MAX_PRECISION: usize;
-    /// The maximum scale.
-    const MAX_SCALE: usize;
+#[derive(Debug)]
+pub struct BasicDecimal<const BYTE_WIDTH: usize> {
+    precision: usize,
+    scale: usize,
+    value: [u8; BYTE_WIDTH],
+}
+
+impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
+    #[allow(clippy::type_complexity)]
+    const MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE: (
+        usize,
+        usize,
+        fn(usize, usize) -> DataType,
+        DataType,
+    ) = match BYTE_WIDTH {
+        16 => (
+            DECIMAL128_MAX_PRECISION,
+            DECIMAL128_MAX_SCALE,
+            DataType::Decimal128,
+            DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
+        ),
+        32 => (
+            DECIMAL256_MAX_PRECISION,
+            DECIMAL256_MAX_SCALE,
+            DataType::Decimal256,
+            DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
+        ),
+        _ => panic!("invalid byte width"),
+    };
+
+    pub const MAX_PRECISION: usize = Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.0;
+    pub const MAX_SCALE: usize = Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.1;
+    pub const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType =
+        Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.2;
+    pub const DEFAULT_TYPE: DataType =
+        Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.3;
 
     /// Tries to create a decimal value from precision, scale and bytes.
-    /// If the length of bytes isn't same as the bit width of this decimal,
-    /// returning an error. The bytes should be stored in little-endian order.
+    /// The bytes should be stored in little-endian order.
     ///
     /// Safety:
     /// This method doesn't validate if the decimal value represented by the bytes
     /// can be fitted into the specified precision.
-    fn try_new_from_bytes(precision: usize, scale: usize, bytes: &[u8]) -> Result<Self>
+    pub fn try_new_from_bytes(
+        precision: usize,
+        scale: usize,
+        bytes: &[u8; BYTE_WIDTH],
+    ) -> Result<Self>
     where
         Self: Sized,
     {
@@ -67,13 +99,13 @@ pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
             )));
         }
 
-        if bytes.len() == Self::BIT_WIDTH / 8 {
+        if bytes.len() == BYTE_WIDTH {
             Ok(Self::new(precision, scale, bytes))
         } else {
             Err(ArrowError::InvalidArgumentError(format!(
                 "Input to Decimal{} must be {} bytes",
-                Self::BIT_WIDTH,
-                Self::BIT_WIDTH / 8
+                BYTE_WIDTH * 8,
+                BYTE_WIDTH
             )))
         }
     }
@@ -81,23 +113,35 @@ pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
     /// Creates a decimal value from precision, scale, and bytes.
     ///
     /// Safety:
-    /// This method doesn't check if the length of bytes is compatible with this decimal.
+    /// This method doesn't check if the precision and scale are valid.
     /// Use `try_new_from_bytes` for safe constructor.
-    fn new(precision: usize, scale: usize, bytes: &[u8]) -> Self;
-
+    pub fn new(precision: usize, scale: usize, bytes: &[u8; BYTE_WIDTH]) -> Self {
+        Self {
+            precision,
+            scale,
+            value: *bytes,
+        }
+    }
     /// Returns the raw bytes of the integer representation of the decimal.
-    fn raw_value(&self) -> &[u8];
+    pub fn raw_value(&self) -> &[u8; BYTE_WIDTH] {
+        &self.value
+    }
 
     /// Returns the precision of the decimal.
-    fn precision(&self) -> usize;
+    pub fn precision(&self) -> usize {
+        self.precision
+    }
 
     /// Returns the scale of the decimal.
-    fn scale(&self) -> usize;
+    pub fn scale(&self) -> usize {
+        self.scale
+    }
 
     /// Returns the string representation of the decimal.
     /// If the string representation cannot be fitted with the precision of the decimal,
     /// the string will be truncated.
-    fn to_string(&self) -> String {
+    #[allow(clippy::inherent_to_string)]
+    pub fn to_string(&self) -> String {
         let raw_bytes = self.raw_value();
         let integer = BigInt::from_signed_bytes_le(raw_bytes);
         let value_str = integer.to_string();
@@ -119,15 +163,44 @@ pub trait BasicDecimal: PartialOrd + Ord + PartialEq + Eq {
     }
 }
 
+impl<const BYTE_WIDTH: usize> PartialOrd for BasicDecimal<BYTE_WIDTH> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        assert_eq!(
+            self.scale, other.scale,
+            "Cannot compare two Decimals with different scale: {}, {}",
+            self.scale, other.scale
+        );
+        Some(singed_cmp_le_bytes(&self.value, &other.value))
+    }
+}
+
+impl<const BYTE_WIDTH: usize> Ord for BasicDecimal<BYTE_WIDTH> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        assert_eq!(
+            self.scale, other.scale,
+            "Cannot compare two Decimals with different scale: {}, {}",
+            self.scale, other.scale
+        );
+        singed_cmp_le_bytes(&self.value, &other.value)
+    }
+}
+
+impl<const BYTE_WIDTH: usize> PartialEq<Self> for BasicDecimal<BYTE_WIDTH> {
+    fn eq(&self, other: &Self) -> bool {
+        assert_eq!(
+            self.scale, other.scale,
+            "Cannot compare two Decimals with different scale: {}, {}",
+            self.scale, other.scale
+        );
+        self.value.eq(&other.value)
+    }
+}
+
+impl<const BYTE_WIDTH: usize> Eq for BasicDecimal<BYTE_WIDTH> {}
+
 /// Represents a decimal value with precision and scale.
 /// The decimal value could represented by a signed 128-bit integer.
-#[derive(Debug)]
-pub struct Decimal128 {
-    #[allow(dead_code)]
-    precision: usize,
-    scale: usize,
-    value: [u8; 16],
-}
+pub type Decimal128 = BasicDecimal<16>;
 
 impl Decimal128 {
     /// Creates `Decimal128` from an `i128` value.
@@ -154,13 +227,7 @@ impl From<Decimal128> for i128 {
 
 /// Represents a decimal value with precision and scale.
 /// The decimal value could be represented by a signed 256-bit integer.
-#[derive(Debug)]
-pub struct Decimal256 {
-    #[allow(dead_code)]
-    precision: usize,
-    scale: usize,
-    value: [u8; 32],
-}
+pub type Decimal256 = BasicDecimal<32>;
 
 impl Decimal256 {
     /// Constructs a `Decimal256` value from a `BigInt`.
@@ -170,84 +237,25 @@ impl Decimal256 {
         scale: usize,
     ) -> Result<Decimal256> {
         let mut bytes = if num.is_negative() {
-            vec![255; 32]
+            [255_u8; 32]
         } else {
-            vec![0; 32]
+            [0; 32]
         };
         let num_bytes = &num.to_signed_bytes_le();
         bytes[0..num_bytes.len()].clone_from_slice(num_bytes);
         Decimal256::try_new_from_bytes(precision, scale, &bytes)
     }
-}
 
-macro_rules! def_decimal {
-    ($ty:ident, $bit:expr, $max_p:expr, $max_s:expr) => {
-        impl BasicDecimal for $ty {
-            const BIT_WIDTH: usize = $bit;
-            const MAX_PRECISION: usize = $max_p;
-            const MAX_SCALE: usize = $max_s;
-
-            fn new(precision: usize, scale: usize, bytes: &[u8]) -> Self {
-                $ty {
-                    precision,
-                    scale,
-                    value: bytes.try_into().unwrap(),
-                }
-            }
-
-            fn raw_value(&self) -> &[u8] {
-                &self.value
-            }
-
-            fn precision(&self) -> usize {
-                self.precision
-            }
-
-            fn scale(&self) -> usize {
-                self.scale
-            }
-        }
-
-        impl PartialOrd for $ty {
-            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-                assert_eq!(
-                    self.scale, other.scale,
-                    "Cannot compare two Decimals with different scale: {}, {}",
-                    self.scale, other.scale
-                );
-                Some(singed_cmp_le_bytes(&self.value, &other.value))
-            }
-        }
-
-        impl Ord for $ty {
-            fn cmp(&self, other: &Self) -> Ordering {
-                assert_eq!(
-                    self.scale, other.scale,
-                    "Cannot compare two Decimals with different scale: {}, {}",
-                    self.scale, other.scale
-                );
-                singed_cmp_le_bytes(&self.value, &other.value)
-            }
-        }
-
-        impl PartialEq<Self> for $ty {
-            fn eq(&self, other: &Self) -> bool {
-                assert_eq!(
-                    self.scale, other.scale,
-                    "Cannot compare two Decimals with different scale: {}, {}",
-                    self.scale, other.scale
-                );
-                self.value.eq(&other.value)
-            }
-        }
-
-        impl Eq for $ty {}
-    };
+    /// Constructs a `BigInt` from this `Decimal256` value.
+    pub(crate) fn to_big_int(&self) -> BigInt {
+        BigInt::from_signed_bytes_le(&self.value)
+    }
 }
 
 // compare two signed integer which are encoded with little endian.
 // left bytes and right bytes must have the same length.
-fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
+#[inline]
+pub(crate) fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
     assert_eq!(
         left.len(),
         right.len(),
@@ -286,24 +294,9 @@ fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
     Ordering::Equal
 }
 
-def_decimal!(
-    Decimal128,
-    128,
-    DECIMAL128_MAX_PRECISION,
-    DECIMAL128_MAX_SCALE
-);
-def_decimal!(
-    Decimal256,
-    256,
-    DECIMAL256_MAX_PRECISION,
-    DECIMAL256_MAX_SCALE
-);
-
 #[cfg(test)]
 mod tests {
-    use crate::util::decimal::{
-        singed_cmp_le_bytes, BasicDecimal, Decimal128, Decimal256,
-    };
+    use super::*;
     use num::{BigInt, Num};
     use rand::random;
 
@@ -356,9 +349,9 @@ mod tests {
 
     #[test]
     fn decimal_256_from_bytes() {
-        let mut bytes = vec![0; 32];
+        let mut bytes = [0_u8; 32];
         bytes[0..16].clone_from_slice(&100_i128.to_le_bytes());
-        let value = Decimal256::try_new_from_bytes(5, 2, bytes.as_slice()).unwrap();
+        let value = Decimal256::try_new_from_bytes(5, 2, &bytes).unwrap();
         assert_eq!(value.to_string(), "1.00");
 
         bytes[0..16].clone_from_slice(&i128::MAX.to_le_bytes());
@@ -378,7 +371,7 @@ mod tests {
         );
 
         // smaller than i128 minimum
-        bytes = vec![255; 32];
+        bytes = [255; 32];
         bytes[31] = 128;
         let value = Decimal256::try_new_from_bytes(76, 4, &bytes).unwrap();
         assert_eq!(
@@ -386,7 +379,7 @@ mod tests {
             "-574437317700748313234121683441537667865831564552201235664496608164256541.5731"
         );
 
-        bytes = vec![255; 32];
+        bytes = [255; 32];
         let value = Decimal256::try_new_from_bytes(5, 2, &bytes).unwrap();
         assert_eq!(value.to_string(), "-0.01");
     }

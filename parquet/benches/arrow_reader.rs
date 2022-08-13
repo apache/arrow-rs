@@ -300,6 +300,26 @@ fn bench_array_reader(mut array_reader: Box<dyn ArrayReader>) -> usize {
     total_count
 }
 
+fn bench_array_reader_skip(mut array_reader: Box<dyn ArrayReader>) -> usize {
+    // test procedure: read data in batches of 8192 until no more data
+    let mut total_count = 0;
+    let mut skip = false;
+    let mut array_len;
+    loop {
+        if skip {
+            array_len = array_reader.skip_records(BATCH_SIZE).unwrap();
+        } else {
+            let array = array_reader.next_batch(BATCH_SIZE);
+            array_len = array.unwrap().len();
+        }
+        total_count += array_len;
+        skip = !skip;
+        if array_len < BATCH_SIZE {
+            break;
+        }
+    }
+    total_count
+}
 fn create_primitive_array_reader(
     page_iterator: impl PageIterator + 'static,
     column_desc: ColumnDescPtr,
@@ -441,6 +461,39 @@ fn bench_primitive<T>(
             let array_reader =
                 create_primitive_array_reader(data.clone(), optional_column_desc.clone());
             count = bench_array_reader(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    // binary packed skip , no NULLs
+    let data = build_encoded_primitive_page_iterator::<T>(
+        schema.clone(),
+        mandatory_column_desc.clone(),
+        0.0,
+        Encoding::DELTA_BINARY_PACKED,
+    );
+    group.bench_function("binary packed skip, mandatory, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader = create_primitive_array_reader(
+                data.clone(),
+                mandatory_column_desc.clone(),
+            );
+            count = bench_array_reader_skip(array_reader);
+        });
+        assert_eq!(count, EXPECTED_VALUE_COUNT);
+    });
+
+    let data = build_encoded_primitive_page_iterator::<T>(
+        schema.clone(),
+        optional_column_desc.clone(),
+        0.0,
+        Encoding::DELTA_BINARY_PACKED,
+    );
+    group.bench_function("binary packed skip, optional, no NULLs", |b| {
+        b.iter(|| {
+            let array_reader =
+                create_primitive_array_reader(data.clone(), optional_column_desc.clone());
+            count = bench_array_reader_skip(array_reader);
         });
         assert_eq!(count, EXPECTED_VALUE_COUNT);
     });

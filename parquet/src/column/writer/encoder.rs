@@ -168,7 +168,6 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
 
         // Set either main encoder or fallback encoder.
         let encoder = get_encoder(
-            descr.clone(),
             props
                 .encoding(descr.path())
                 .unwrap_or_else(|| fallback_encoding(T::get_physical_type(), props)),

@@ -39,20 +39,18 @@ use crate::data_type::{
     Int64Type, Int96Type,
 };
 use crate::errors::Result;
-use crate::schema::types::{ColumnDescriptor, ColumnPath, SchemaDescPtr, Type};
+use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
 
 /// Create array reader from parquet schema, projection mask, and parquet file reader.
 pub fn build_array_reader(
-    parquet_schema: SchemaDescPtr,
     arrow_schema: SchemaRef,
     mask: ProjectionMask,
-    row_groups: Box<dyn RowGroupCollection>,
+    row_groups: &dyn RowGroupCollection,
 ) -> Result<Box<dyn ArrayReader>> {
-    let field =
-        convert_schema(parquet_schema.as_ref(), mask, Some(arrow_schema.as_ref()))?;
+    let field = convert_schema(&row_groups.schema(), mask, Some(arrow_schema.as_ref()))?;
 
     match &field {
-        Some(field) => build_reader(field, row_groups.as_ref()),
+        Some(field) => build_reader(field, row_groups),
         None => Ok(make_empty_array_reader(row_groups.num_rows())),
     }
 }
@@ -104,13 +102,11 @@ fn build_list_reader(
 
     let data_type = field.arrow_type.clone();
     let item_reader = build_reader(&children[0], row_groups)?;
-    let item_type = item_reader.get_data_type().clone();
 
     match is_large {
         false => Ok(Box::new(ListArrayReader::<i32>::new(
             item_reader,
             data_type,
-            item_type,
             field.def_level,
             field.rep_level,
             field.nullable,
@@ -118,7 +114,6 @@ fn build_list_reader(
         true => Ok(Box::new(ListArrayReader::<i64>::new(
             item_reader,
             data_type,
-            item_type,
             field.def_level,
             field.rep_level,
             field.nullable,
@@ -318,7 +313,7 @@ mod tests {
     use super::*;
     use crate::arrow::parquet_to_arrow_schema;
     use crate::file::reader::{FileReader, SerializedFileReader};
-    use crate::util::test_common::get_test_file;
+    use crate::util::test_common::file_util::get_test_file;
     use arrow::datatypes::Field;
     use std::sync::Arc;
 
@@ -336,13 +331,8 @@ mod tests {
         )
         .unwrap();
 
-        let array_reader = build_array_reader(
-            file_reader.metadata().file_metadata().schema_descr_ptr(),
-            Arc::new(arrow_schema),
-            mask,
-            Box::new(file_reader),
-        )
-        .unwrap();
+        let array_reader =
+            build_array_reader(Arc::new(arrow_schema), mask, &file_reader).unwrap();
 
         // Create arrow types
         let arrow_type = DataType::Struct(vec![Field::new(

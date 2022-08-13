@@ -73,7 +73,7 @@ pub fn parquet_to_arrow_schema_by_columns(
     // Add the Arrow metadata to the Parquet metadata skipping keys that collide
     if let Some(arrow_schema) = &maybe_schema {
         arrow_schema.metadata().iter().for_each(|(k, v)| {
-            metadata.entry(k.clone()).or_insert(v.clone());
+            metadata.entry(k.clone()).or_insert_with(|| v.clone());
         });
     }
 
@@ -100,7 +100,7 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
                 Ok(message) => message
                     .header_as_schema()
                     .map(arrow::ipc::convert::fb_to_schema)
-                    .ok_or(arrow_err!("the message is not Arrow Schema")),
+                    .ok_or_else(|| arrow_err!("the message is not Arrow Schema")),
                 Err(err) => {
                     // The flatbuffers implementation returns an error on verification error.
                     Err(arrow_err!(
