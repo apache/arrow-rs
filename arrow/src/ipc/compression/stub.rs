@@ -22,14 +22,14 @@ use crate::buffer::Buffer;
 use crate::error::{ArrowError, Result};
 use crate::ipc::CompressionType;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionCodec {}
 
 impl TryFrom<CompressionCodec> for CompressionType {
     type Error = ArrowError;
     fn try_from(codec: CompressionCodec) -> Result<Self> {
-        return Err(ArrowError::InvalidArgumentError(
-            format!("codec type {:?} not supported because arrow was not compiled with the ipc_compression feature", codec)));
+        Err(ArrowError::InvalidArgumentError(
+            format!("codec type {:?} not supported because arrow was not compiled with the ipc_compression feature", codec)))
     }
 }
 
