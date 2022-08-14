@@ -26,6 +26,8 @@ use num::bigint::BigInt;
 use num::Signed;
 use std::cmp::{min, Ordering};
 
+/// Indicate which [`BasicDecimal`]s are valid.
+/// Currently we only support [`Decimal128`] and [`Decimal256`].
 pub trait ValidDecimal {
     const MAX_PRECISION: usize;
     const MAX_SCALE: usize;
