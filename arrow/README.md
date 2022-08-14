@@ -42,7 +42,8 @@ However, for historical reasons, this crate uses versions with major numbers gre
 The `arrow` crate provides the following features which may be enabled in your `Cargo.toml`:
 
 - `csv` (default) - support for reading and writing Arrow arrays to/from csv files
-- `ipc` (default) - support for the [arrow-flight](https://crates.io/crates/arrow-flight) IPC and wire format
+- `ipc` (default) - support for reading [Arrow IPC Format](https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc), also used as the wire protocol in [arrow-flight](https://crates.io/crates/arrow-flight)
+- `ipc_compression`  - Enables reading and writing compressed IPC streams (also enables `ipc`)
 - `prettyprint` - support for formatting record batches as textual columns
 - `js` - support for building arrow for WebAssembly / JavaScript
 - `simd` - (_Requires Nightly Rust_) Use alternate hand optimized

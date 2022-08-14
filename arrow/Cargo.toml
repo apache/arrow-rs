@@ -56,6 +56,7 @@ csv_crate = { version = "1.1", default-features = false, optional = true, packag
 regex = { version = "1.5.6", default-features = false, features = ["std", "unicode"] }
 regex-syntax = { version = "0.6.27", default-features = false, features = ["unicode"] }
 lazy_static = { version = "1.4", default-features = false }
+lz4 = { version = "1.23", default-features = false, optional = true }
 packed_simd = { version = "0.3", default-features = false, optional = true, package = "packed_simd_2" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = { version = "0.6", default-features = false, optional = true }
@@ -66,9 +67,11 @@ pyo3 = { version = "0.16", default-features = false, optional = true }
 lexical-core = { version = "^0.8", default-features = false, features = ["write-integers", "write-floats", "parse-integers", "parse-floats"] }
 multiversion = { version = "0.6.1", default-features = false }
 bitflags = { version = "1.2.1", default-features = false }
+zstd = { version = "0.11.1", default-features = false, optional = true }
 
 [features]
 default = ["csv", "ipc"]
+ipc_compression = ["ipc", "zstd", "lz4"]
 csv = ["csv_crate"]
 ipc = ["flatbuffers"]
 simd = ["packed_simd"]

@@ -15,28 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// TODO: (vcq): Protobuf codegen is not generating Debug impls.
-#![allow(missing_debug_implementations)]
+#[cfg(feature = "ipc_compression")]
+mod codec;
+#[cfg(feature = "ipc_compression")]
+pub(crate) use codec::CompressionCodec;
 
-pub mod convert;
-pub mod reader;
-pub mod writer;
-
-mod compression;
-
-#[allow(clippy::redundant_closure)]
-#[allow(clippy::needless_lifetimes)]
-#[allow(clippy::extra_unused_lifetimes)]
-#[allow(clippy::redundant_static_lifetimes)]
-#[allow(clippy::redundant_field_names)]
-#[allow(non_camel_case_types)]
-pub mod gen;
-
-pub use self::gen::File::*;
-pub use self::gen::Message::*;
-pub use self::gen::Schema::*;
-pub use self::gen::SparseTensor::*;
-pub use self::gen::Tensor::*;
-
-const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
-const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
+#[cfg(not(feature = "ipc_compression"))]
+mod stub;
+#[cfg(not(feature = "ipc_compression"))]
+pub(crate) use stub::CompressionCodec;
