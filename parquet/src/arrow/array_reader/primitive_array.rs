@@ -25,8 +25,8 @@ use crate::data_type::DataType;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow::array::{
-    ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder,
-    Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array,
+    ArrayDataBuilder, ArrayRef, BooleanArray, BooleanBufferBuilder, Decimal128Array,
+    Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use arrow::buffer::Buffer;
 use arrow::datatypes::DataType as ArrowType;
@@ -36,9 +36,9 @@ use std::sync::Arc;
 /// Primitive array readers are leaves of array reader tree. They accept page iterator
 /// and read them into primitive arrays.
 pub struct PrimitiveArrayReader<T>
-    where
-        T: DataType,
-        T::T: ScalarValue,
+where
+    T: DataType,
+    T::T: ScalarValue,
 {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
@@ -48,9 +48,9 @@ pub struct PrimitiveArrayReader<T>
 }
 
 impl<T> PrimitiveArrayReader<T>
-    where
-        T: DataType,
-        T::T: ScalarValue,
+where
+    T: DataType,
+    T::T: ScalarValue,
 {
     /// Construct primitive array reader.
     pub fn new(
@@ -80,9 +80,9 @@ impl<T> PrimitiveArrayReader<T>
 
 /// Implementation of primitive array reader.
 impl<T> ArrayReader for PrimitiveArrayReader<T>
-    where
-        T: DataType,
-        T::T: ScalarValue,
+where
+    T: DataType,
+    T::T: ScalarValue,
 {
     fn as_any(&self) -> &dyn Any {
         self
@@ -189,7 +189,7 @@ impl<T> ArrayReader for PrimitiveArrayReader<T>
                         .downcast_ref::<Int32Array>()
                         .unwrap()
                         .iter()
-                        .map(|v| v.map(|v| v.into()))
+                        .map(|v| v.map(|v| v as i128))
                         .collect::<Decimal128Array>(),
 
                     ArrowType::Int64 => array
@@ -197,7 +197,7 @@ impl<T> ArrayReader for PrimitiveArrayReader<T>
                         .downcast_ref::<Int64Array>()
                         .unwrap()
                         .iter()
-                        .map(|v| v.map(|v| v.into()))
+                        .map(|v| v.map(|v| v as i128))
                         .collect::<Decimal128Array>(),
                     _ => {
                         return Err(arrow_err!(
@@ -206,7 +206,7 @@ impl<T> ArrayReader for PrimitiveArrayReader<T>
                         ));
                     }
                 }
-                    .with_precision_and_scale(p, s)?;
+                .with_precision_and_scale(p, s)?;
 
                 Arc::new(array) as ArrayRef
             }
@@ -245,11 +245,11 @@ mod tests {
     use crate::util::test_common::rand_gen::make_pages;
     use crate::util::InMemoryPageIterator;
     use arrow::array::{Array, PrimitiveArray};
-    use arrow::datatypes::{ArrowPrimitiveType};
+    use arrow::datatypes::ArrowPrimitiveType;
 
+    use arrow::datatypes::DataType::Decimal128;
     use rand::distributions::uniform::SampleUniform;
     use std::collections::VecDeque;
-    use arrow::datatypes::DataType::Decimal128;
 
     #[allow(clippy::too_many_arguments)]
     fn make_column_chunks<T: DataType>(
@@ -315,7 +315,7 @@ mod tests {
             column_desc,
             None,
         )
-            .unwrap();
+        .unwrap();
 
         // expect no values to be read
         let array = array_reader.next_batch(50).unwrap();
@@ -362,7 +362,7 @@ mod tests {
                 column_desc,
                 None,
             )
-                .unwrap();
+            .unwrap();
 
             // Read first 50 values, which are all from the first column chunk
             let array = array_reader.next_batch(50).unwrap();
@@ -562,7 +562,7 @@ mod tests {
                 column_desc,
                 None,
             )
-                .unwrap();
+            .unwrap();
 
             let mut accu_len: usize = 0;
 
@@ -604,7 +604,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_primitive_array_reader_decimal_types() {
         // parquet `INT32` to decimal
@@ -643,18 +642,30 @@ mod tests {
                 column_desc,
                 None,
             )
-                .unwrap();
+            .unwrap();
 
             // read data from the reader
             // the data type is decimal(8,2)
             let array = array_reader.next_batch(50).unwrap();
             assert_eq!(array.data_type(), &Decimal128(8, 2));
             let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            let data_decimal_array = data[0..50].iter().copied().map(|v| Some(v as i128)).collect::<Decimal128Array>().with_precision_and_scale(8, 2).unwrap();
+            let data_decimal_array = data[0..50]
+                .iter()
+                .copied()
+                .map(|v| Some(v as i128))
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(8, 2)
+                .unwrap();
             assert_eq!(array, &data_decimal_array);
 
             // not equal with different data type(precision and scale)
-            let data_decimal_array = data[0..50].iter().copied().map(|v| Some(v as i128)).collect::<Decimal128Array>().with_precision_and_scale(9, 0).unwrap();
+            let data_decimal_array = data[0..50]
+                .iter()
+                .copied()
+                .map(|v| Some(v as i128))
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(9, 0)
+                .unwrap();
             assert_ne!(array, &data_decimal_array)
         }
 
@@ -694,18 +705,30 @@ mod tests {
                 column_desc,
                 None,
             )
-                .unwrap();
+            .unwrap();
 
             // read data from the reader
             // the data type is decimal(18,4)
             let array = array_reader.next_batch(50).unwrap();
             assert_eq!(array.data_type(), &Decimal128(18, 4));
             let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-            let data_decimal_array = data[0..50].iter().copied().map(|v| Some(v as i128)).collect::<Decimal128Array>().with_precision_and_scale(18, 4).unwrap();
+            let data_decimal_array = data[0..50]
+                .iter()
+                .copied()
+                .map(|v| Some(v as i128))
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(18, 4)
+                .unwrap();
             assert_eq!(array, &data_decimal_array);
 
             // not equal with different data type(precision and scale)
-            let data_decimal_array = data[0..50].iter().copied().map(|v| Some(v as i128)).collect::<Decimal128Array>().with_precision_and_scale(34, 0).unwrap();
+            let data_decimal_array = data[0..50]
+                .iter()
+                .copied()
+                .map(|v| Some(v as i128))
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(34, 0)
+                .unwrap();
             assert_ne!(array, &data_decimal_array)
         }
     }
