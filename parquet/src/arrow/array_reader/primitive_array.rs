@@ -176,6 +176,7 @@ where
         // are datatypes which we must convert explicitly.
         // These are:
         // - date64: we should cast int32 to date32, then date32 to date64.
+        // - decimal: cast in32 to decimal, int64 to decimal
         let array = match target_type {
             ArrowType::Date64 => {
                 // this is cheap as it internally reinterprets the data

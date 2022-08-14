@@ -64,8 +64,7 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
         Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.3;
 
     /// Tries to create a decimal value from precision, scale and bytes.
-    /// If the length of bytes isn't same as the bit width of this decimal,
-    /// returning an error. The bytes should be stored in little-endian order.
+    /// The bytes should be stored in little-endian order.
     ///
     /// Safety:
     /// This method doesn't validate if the decimal value represented by the bytes
@@ -114,17 +113,17 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
     /// Creates a decimal value from precision, scale, and bytes.
     ///
     /// Safety:
-    /// This method doesn't check if the length of bytes is compatible with this decimal.
+    /// This method doesn't check if the precision and scale are valid.
     /// Use `try_new_from_bytes` for safe constructor.
-    pub fn new(precision: usize, scale: usize, bytes: &[u8]) -> Self {
+    pub fn new(precision: usize, scale: usize, bytes: &[u8; BYTE_WIDTH]) -> Self {
         Self {
             precision,
             scale,
-            value: bytes.try_into().unwrap(),
+            value: *bytes,
         }
     }
     /// Returns the raw bytes of the integer representation of the decimal.
-    pub fn raw_value(&self) -> &[u8] {
+    pub fn raw_value(&self) -> &[u8; BYTE_WIDTH] {
         &self.value
     }
 
@@ -255,7 +254,8 @@ impl Decimal256 {
 
 // compare two signed integer which are encoded with little endian.
 // left bytes and right bytes must have the same length.
-fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
+#[inline]
+pub(crate) fn singed_cmp_le_bytes(left: &[u8], right: &[u8]) -> Ordering {
     assert_eq!(
         left.len(),
         right.len(),

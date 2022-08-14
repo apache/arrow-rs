@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use num::BigInt;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -26,7 +25,9 @@ use crate::array::{ArrayBuilder, FixedSizeBinaryBuilder};
 
 use crate::error::{ArrowError, Result};
 
-use crate::datatypes::{validate_decimal256_precision, validate_decimal_precision};
+use crate::datatypes::{
+    validate_decimal256_precision_with_lt_bytes, validate_decimal_precision,
+};
 use crate::util::decimal::Decimal256;
 
 /// Array Builder for [`Decimal128Array`]
@@ -84,31 +85,12 @@ impl Decimal128Builder {
     /// Appends a decimal value into the builder.
     #[inline]
     pub fn append_value(&mut self, value: impl Into<i128>) -> Result<()> {
-        let value = if self.value_validation {
-            validate_decimal_precision(value.into(), self.precision)?
-        } else {
-            value.into()
-        };
-
-        let value_as_bytes =
-            Self::from_i128_to_fixed_size_bytes(value, Self::BYTE_LENGTH as usize)?;
-        if Self::BYTE_LENGTH != value_as_bytes.len() as i32 {
-            return Err(ArrowError::InvalidArgumentError(
-                "Byte slice does not have the same length as Decimal128Builder value lengths".to_string()
-            ));
+        let value = value.into();
+        if self.value_validation {
+            validate_decimal_precision(value, self.precision)?
         }
+        let value_as_bytes: [u8; 16] = value.to_le_bytes();
         self.builder.append_value(value_as_bytes.as_slice())
-    }
-
-    pub(crate) fn from_i128_to_fixed_size_bytes(v: i128, size: usize) -> Result<Vec<u8>> {
-        if size > 16 {
-            return Err(ArrowError::InvalidArgumentError(
-                "Decimal128Builder only supports values up to 16 bytes.".to_string(),
-            ));
-        }
-        let res = v.to_le_bytes();
-        let start_byte = 16 - size;
-        Ok(res[start_byte..16].to_vec())
     }
 
     /// Append a null value to the array.
@@ -201,8 +183,7 @@ impl Decimal256Builder {
     pub fn append_value(&mut self, value: &Decimal256) -> Result<()> {
         let value = if self.value_validation {
             let raw_bytes = value.raw_value();
-            let integer = BigInt::from_signed_bytes_le(raw_bytes);
-            validate_decimal256_precision(&integer, self.precision)?;
+            validate_decimal256_precision_with_lt_bytes(raw_bytes, self.precision)?;
             value
         } else {
             value
@@ -255,7 +236,7 @@ impl Decimal256Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num::Num;
+    use num::{BigInt, Num};
 
     use crate::array::array_decimal::Decimal128Array;
     use crate::array::{array_decimal, Array};

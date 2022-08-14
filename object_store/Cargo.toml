@@ -22,11 +22,7 @@ edition = "2021"
 license = "MIT/Apache-2.0"
 readme = "README.md"
 description = "A generic object store interface for uniformly interacting with AWS S3, Google Cloud Storage, Azure Blob Storage and local files."
-keywords = [
-    "object",
-    "storage",
-    "cloud",
-]
+keywords = ["object", "storage", "cloud"]
 repository = "https://github.com/apache/arrow-rs"
 
 [package.metadata.docs.rs]
@@ -35,9 +31,10 @@ all-features = true
 [dependencies] # In alphabetical order
 async-trait = "0.1.53"
 # Microsoft Azure Blob storage integration
-azure_core = { version = "0.2", optional = true, default-features = false, features = ["enable_reqwest_rustls"] }
-azure_storage = { version = "0.2", optional = true, default-features = false, features = ["account"] }
-azure_storage_blobs = { version = "0.2", optional = true, default-features = false, features = ["enable_reqwest_rustls"] }
+azure_core = { version = "0.4", optional = true, default-features = false, features = ["enable_reqwest_rustls"] }
+azure_identity = { version = "0.5", optional = true, default-features = false, features = ["enable_reqwest_rustls"]}
+azure_storage = { version = "0.5", optional = true, default-features = false, features = ["enable_reqwest_rustls"]}
+azure_storage_blobs = { version = "0.5", optional = true, default-features = false, features = ["enable_reqwest_rustls"] }
 bytes = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Google Cloud Storage integration
@@ -70,7 +67,7 @@ url = "2.2"
 walkdir = "2"
 
 [features]
-azure = ["azure_core", "azure_storage_blobs", "azure_storage", "reqwest"]
+azure = ["azure_core", "azure_storage_blobs", "azure_storage", "reqwest", "azure_identity"]
 azure_test = ["azure", "azure_core/azurite_workaround", "azure_storage/azurite_workaround", "azure_storage_blobs/azurite_workaround"]
 gcp = ["serde", "serde_json", "quick-xml", "reqwest", "reqwest/json", "reqwest/stream", "chrono/serde", "rustls-pemfile", "base64", "rand", "ring"]
 aws = ["rusoto_core", "rusoto_credential", "rusoto_s3", "rusoto_sts", "hyper", "hyper-rustls"]
