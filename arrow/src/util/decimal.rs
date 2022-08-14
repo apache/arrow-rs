@@ -252,6 +252,13 @@ impl Decimal256 {
     }
 }
 
+impl From<BigInt> for Decimal256 {
+    fn from(bigint: BigInt) -> Self {
+        Decimal256::from_big_int(&bigint, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE)
+            .unwrap()
+    }
+}
+
 // compare two signed integer which are encoded with little endian.
 // left bytes and right bytes must have the same length.
 #[inline]
