@@ -46,9 +46,9 @@ use crate::util::decimal::{BasicDecimal, Decimal256};
 ///
 ///    // Create a DecimalArray with the default precision and scale
 ///    let decimal_array: Decimal128Array = vec![
-///       Some(8_887_000_000),
+///       Some(8_887_000_000_i128),
 ///       None,
-///       Some(-8_887_000_000),
+///       Some(-8_887_000_000_i128),
 ///     ]
 ///     .into_iter().collect();
 ///
