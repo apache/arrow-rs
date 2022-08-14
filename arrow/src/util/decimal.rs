@@ -26,6 +26,29 @@ use num::bigint::BigInt;
 use num::Signed;
 use std::cmp::{min, Ordering};
 
+pub trait ValidDecimal {
+    const MAX_PRECISION: usize;
+    const MAX_SCALE: usize;
+    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType;
+    const DEFAULT_TYPE: DataType;
+}
+
+impl ValidDecimal for Decimal128 {
+    const MAX_PRECISION: usize = DECIMAL128_MAX_PRECISION;
+    const MAX_SCALE: usize = DECIMAL128_MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType = DataType::Decimal128;
+    const DEFAULT_TYPE: DataType =
+        DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+}
+
+impl ValidDecimal for Decimal256 {
+    const MAX_PRECISION: usize = DECIMAL256_MAX_PRECISION;
+    const MAX_SCALE: usize = DECIMAL256_MAX_SCALE;
+    const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType = DataType::Decimal256;
+    const DEFAULT_TYPE: DataType =
+        DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
+}
+
 #[derive(Debug)]
 pub struct BasicDecimal<const BYTE_WIDTH: usize> {
     precision: usize,
@@ -33,36 +56,10 @@ pub struct BasicDecimal<const BYTE_WIDTH: usize> {
     value: [u8; BYTE_WIDTH],
 }
 
-impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
-    #[allow(clippy::type_complexity)]
-    const MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE: (
-        usize,
-        usize,
-        fn(usize, usize) -> DataType,
-        DataType,
-    ) = match BYTE_WIDTH {
-        16 => (
-            DECIMAL128_MAX_PRECISION,
-            DECIMAL128_MAX_SCALE,
-            DataType::Decimal128,
-            DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
-        ),
-        32 => (
-            DECIMAL256_MAX_PRECISION,
-            DECIMAL256_MAX_SCALE,
-            DataType::Decimal256,
-            DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE),
-        ),
-        _ => panic!("invalid byte width"),
-    };
-
-    pub const MAX_PRECISION: usize = Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.0;
-    pub const MAX_SCALE: usize = Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.1;
-    pub const TYPE_CONSTRUCTOR: fn(usize, usize) -> DataType =
-        Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.2;
-    pub const DEFAULT_TYPE: DataType =
-        Self::MAX_PRECISION_SCALE_CONSTRUCTOR_DEFAULT_TYPE.3;
-
+impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH>
+where
+    Self: ValidDecimal,
+{
     /// Tries to create a decimal value from precision, scale and bytes.
     /// The bytes should be stored in little-endian order.
     ///
@@ -78,35 +75,24 @@ impl<const BYTE_WIDTH: usize> BasicDecimal<BYTE_WIDTH> {
         Self: Sized,
     {
         if precision > Self::MAX_PRECISION {
-            return Err(ArrowError::InvalidArgumentError(format!(
+            Err(ArrowError::InvalidArgumentError(format!(
                 "precision {} is greater than max {}",
                 precision,
                 Self::MAX_PRECISION
-            )));
-        }
-        if scale > Self::MAX_SCALE {
-            return Err(ArrowError::InvalidArgumentError(format!(
+            )))
+        } else if scale > Self::MAX_SCALE {
+            Err(ArrowError::InvalidArgumentError(format!(
                 "scale {} is greater than max {}",
                 scale,
                 Self::MAX_SCALE
-            )));
-        }
-
-        if precision < scale {
-            return Err(ArrowError::InvalidArgumentError(format!(
+            )))
+        } else if precision < scale {
+            Err(ArrowError::InvalidArgumentError(format!(
                 "Precision {} is less than scale {}",
                 precision, scale
-            )));
-        }
-
-        if bytes.len() == BYTE_WIDTH {
-            Ok(Self::new(precision, scale, bytes))
-        } else {
-            Err(ArrowError::InvalidArgumentError(format!(
-                "Input to Decimal{} must be {} bytes",
-                BYTE_WIDTH * 8,
-                BYTE_WIDTH
             )))
+        } else {
+            Ok(Self::new(precision, scale, bytes))
         }
     }
 
