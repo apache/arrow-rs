@@ -125,11 +125,15 @@ impl RowGroupCollection for Arc<dyn FileReader> {
 }
 
 pub(crate) struct FileReaderRowGroupCollection {
+    /// The underling file reader
     reader: Arc<dyn FileReader>,
+    /// Optional list of row group indices to scan
     row_groups: Option<Vec<usize>>,
 }
 
 impl FileReaderRowGroupCollection {
+    /// Creates a new [`RowGroupCollection`] from a `FileReader` and an optional
+    /// list of row group indexes to scan
     pub fn new(reader: Arc<dyn FileReader>, row_groups: Option<Vec<usize>>) -> Self {
         Self { reader, row_groups }
     }

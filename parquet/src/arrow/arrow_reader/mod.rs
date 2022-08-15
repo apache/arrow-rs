@@ -119,7 +119,7 @@ impl<T> ArrowReaderBuilder<T> {
         &self.schema
     }
 
-    /// Set the size of [`RecordBatch`] to produce
+    /// Set the size of [`RecordBatch`] to produce. Defaults to 1024
     pub fn with_batch_size(self, batch_size: usize) -> Self {
         Self { batch_size, ..self }
     }
@@ -156,6 +156,8 @@ impl<T> ArrowReaderBuilder<T> {
     }
 
     /// Provide a [`RowFilter`] to skip decoding rows
+    ///
+    /// Row filters are applied after row group selection and row selection
     ///
     /// TODO: Make public once stable (#1792)
     #[allow(unused)]
