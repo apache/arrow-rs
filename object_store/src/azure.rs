@@ -49,7 +49,7 @@ use azure_storage_blobs::prelude::{
 };
 use bytes::Bytes;
 use chrono::{TimeZone, Utc};
-use futures::{future::BoxFuture, stream::BoxStream, StreamExt, TryStreamExt};
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeSet;
 use std::fmt::{Debug, Formatter};
@@ -765,70 +765,47 @@ impl AzureMultiPartUpload {
     }
 }
 
+#[async_trait]
 impl CloudMultiPartUploadImpl for AzureMultiPartUpload {
-    fn put_multipart_part(
+    async fn put_multipart_part(
         &self,
         buf: Vec<u8>,
         part_idx: usize,
-    ) -> BoxFuture<'static, Result<(usize, UploadPart), io::Error>> {
-        let client = Arc::clone(&self.container_client);
-        let location = self.location.clone();
+    ) -> Result<UploadPart, io::Error> {
         let block_id = self.get_block_id(part_idx);
 
-        Box::pin(async move {
-            client
-                .blob_client(location.as_ref())
-                .put_block(block_id.clone(), buf)
-                .into_future()
-                .await
-                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        self.container_client
+            .blob_client(self.location.as_ref())
+            .put_block(block_id.clone(), buf)
+            .into_future()
+            .await
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
-            Ok((
-                part_idx,
-                UploadPart {
-                    content_id: block_id,
-                },
-            ))
+        Ok(UploadPart {
+            content_id: block_id,
         })
     }
 
-    fn complete(
-        &self,
-        completed_parts: Vec<Option<UploadPart>>,
-    ) -> BoxFuture<'static, Result<(), io::Error>> {
-        let parts =
-            completed_parts
-                .into_iter()
-                .enumerate()
-                .map(|(part_number, maybe_part)| match maybe_part {
-                    Some(part) => {
-                        Ok(azure_storage_blobs::blob::BlobBlockType::Uncommitted(
-                            azure_storage_blobs::prelude::BlockId::new(part.content_id),
-                        ))
-                    }
-                    None => Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Missing information for upload part {:?}", part_number),
-                    )),
-                });
+    async fn complete(&self, completed_parts: Vec<UploadPart>) -> Result<(), io::Error> {
+        let blocks = completed_parts
+            .into_iter()
+            .map(|part| {
+                azure_storage_blobs::blob::BlobBlockType::Uncommitted(
+                    azure_storage_blobs::prelude::BlockId::new(part.content_id),
+                )
+            })
+            .collect();
 
-        let client = Arc::clone(&self.container_client);
-        let location = self.location.clone();
+        let block_list = azure_storage_blobs::blob::BlockList { blocks };
 
-        Box::pin(async move {
-            let block_list = azure_storage_blobs::blob::BlockList {
-                blocks: parts.collect::<Result<_, io::Error>>()?,
-            };
+        self.container_client
+            .blob_client(self.location.as_ref())
+            .put_block_list(block_list)
+            .into_future()
+            .await
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
 
-            client
-                .blob_client(location.as_ref())
-                .put_block_list(block_list)
-                .into_future()
-                .await
-                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
-
-            Ok(())
-        })
+        Ok(())
     }
 }
 
