@@ -606,6 +606,9 @@ mod tests {
     use std::fs::File;
     use std::sync::Arc;
 
+    use crate::arrow::arrow_reader::{
+        ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder,
+    };
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Field, Schema, UInt32Type, UInt8Type};
     use arrow::error::Result as ArrowResult;
@@ -613,7 +616,6 @@ mod tests {
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
 
-    use crate::arrow::{ArrowReader, ParquetFileArrowReader};
     use crate::basic::Encoding;
     use crate::file::metadata::ParquetMetaData;
     use crate::file::properties::WriterVersion;
@@ -667,8 +669,8 @@ mod tests {
         }
 
         let cursor = Bytes::from(buffer);
-        let mut arrow_reader = ParquetFileArrowReader::try_new(cursor).unwrap();
-        let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
+        let mut record_batch_reader =
+            ParquetRecordBatchReader::try_new(cursor, 1024).unwrap();
 
         let actual_batch = record_batch_reader
             .next()
@@ -1116,9 +1118,8 @@ mod tests {
         writer.write(expected_batch).unwrap();
         writer.close().unwrap();
 
-        let mut arrow_reader =
-            ParquetFileArrowReader::try_new(file.try_clone().unwrap()).unwrap();
-        let mut record_batch_reader = arrow_reader.get_record_reader(1024).unwrap();
+        let mut record_batch_reader =
+            ParquetRecordBatchReader::try_new(file.try_clone().unwrap(), 1024).unwrap();
 
         let actual_batch = record_batch_reader
             .next()
@@ -1889,11 +1890,12 @@ mod tests {
 
         writer.close().unwrap();
 
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        assert_eq!(&row_group_sizes(arrow_reader.metadata()), &[200, 200, 50]);
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert_eq!(&row_group_sizes(builder.metadata()), &[200, 200, 50]);
 
-        let batches = arrow_reader
-            .get_record_reader(100)
+        let batches = builder
+            .with_batch_size(100)
+            .build()
             .unwrap()
             .collect::<ArrowResult<Vec<_>>>()
             .unwrap();
@@ -2034,11 +2036,12 @@ mod tests {
         // Should have written entire first batch and first row of second to the first row group
         // leaving a single row in the second row group
 
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        assert_eq!(&row_group_sizes(arrow_reader.metadata()), &[6, 1]);
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        assert_eq!(&row_group_sizes(builder.metadata()), &[6, 1]);
 
-        let batches = arrow_reader
-            .get_record_reader(2)
+        let batches = builder
+            .with_batch_size(2)
+            .build()
             .unwrap()
             .collect::<ArrowResult<Vec<_>>>()
             .unwrap();

@@ -488,7 +488,7 @@ mod tests {
 
     use crate::file::metadata::KeyValue;
     use crate::{
-        arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader},
+        arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
         schema::{parser::parse_message_type, types::SchemaDescriptor},
     };
 
@@ -1688,14 +1688,9 @@ mod tests {
         writer.close()?;
 
         // read file back
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        let read_schema = arrow_reader.get_schema()?;
-        assert_eq!(schema, read_schema);
-
-        // read all fields by columns
-        let partial_read_schema =
-            arrow_reader.get_schema_by_columns(ProjectionMask::all())?;
-        assert_eq!(schema, partial_read_schema);
+        let arrow_reader = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let read_schema = arrow_reader.schema();
+        assert_eq!(&schema, read_schema.as_ref());
 
         Ok(())
     }
@@ -1757,15 +1752,9 @@ mod tests {
         writer.close()?;
 
         // read file back
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        let read_schema = arrow_reader.get_schema()?;
-        assert_eq!(schema, read_schema);
-
-        // read all fields by columns
-        let partial_read_schema =
-            arrow_reader.get_schema_by_columns(ProjectionMask::all())?;
-        assert_eq!(schema, partial_read_schema);
-
+        let arrow_reader = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let read_schema = arrow_reader.schema();
+        assert_eq!(&schema, read_schema.as_ref());
         Ok(())
     }
 }

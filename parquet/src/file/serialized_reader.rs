@@ -135,7 +135,7 @@ impl IntoIterator for SerializedFileReader<File> {
 /// A serialized implementation for Parquet [`FileReader`].
 pub struct SerializedFileReader<R: ChunkReader> {
     chunk_reader: Arc<R>,
-    metadata: ParquetMetaData,
+    metadata: Arc<ParquetMetaData>,
 }
 
 /// A predicate for filtering row groups, invoked with the metadata and index
@@ -208,7 +208,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
         let metadata = footer::parse_metadata(&chunk_reader)?;
         Ok(Self {
             chunk_reader: Arc::new(chunk_reader),
-            metadata,
+            metadata: Arc::new(metadata),
         })
     }
 
@@ -248,22 +248,26 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
 
             Ok(Self {
                 chunk_reader: Arc::new(chunk_reader),
-                metadata: ParquetMetaData::new_with_page_index(
+                metadata: Arc::new(ParquetMetaData::new_with_page_index(
                     metadata.file_metadata().clone(),
                     filtered_row_groups,
                     Some(columns_indexes),
                     Some(offset_indexes),
-                ),
+                )),
             })
         } else {
             Ok(Self {
                 chunk_reader: Arc::new(chunk_reader),
-                metadata: ParquetMetaData::new(
+                metadata: Arc::new(ParquetMetaData::new(
                     metadata.file_metadata().clone(),
                     filtered_row_groups,
-                ),
+                )),
             })
         }
+    }
+
+    pub(crate) fn metadata_ref(&self) -> &Arc<ParquetMetaData> {
+        &self.metadata
     }
 }
 
