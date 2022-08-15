@@ -18,7 +18,7 @@
 //! An object store implementation for a local filesystem
 use crate::{
     maybe_spawn_blocking,
-    path::{filesystem_path_to_url, Path},
+    path::{absolute_path_to_url, Path},
     GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, Result,
 };
 use async_trait::async_trait;
@@ -129,6 +129,12 @@ pub(crate) enum Error {
         path: String,
         source: io::Error,
     },
+
+    #[snafu(display("Unable to canonicalize filesystem root: {}", path.display()))]
+    UnableToCanonicalize {
+        path: PathBuf,
+        source: io::Error,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -214,17 +220,24 @@ impl LocalFileSystem {
     }
 
     /// Create new filesystem storage with `prefix` applied to all paths
+    ///
+    /// Returns an error if the path does not exist
+    ///
     pub fn new_with_prefix(prefix: impl AsRef<std::path::Path>) -> Result<Self> {
+        let path = std::fs::canonicalize(&prefix).context(UnableToCanonicalizeSnafu {
+            path: prefix.as_ref(),
+        })?;
+
         Ok(Self {
             config: Arc::new(Config {
-                root: filesystem_path_to_url(prefix)?,
+                root: absolute_path_to_url(path)?,
             }),
         })
     }
 }
 
 impl Config {
-    /// Return filesystem path of the given location
+    /// Return an absolute filesystem path of the given location
     fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
         let mut url = self.root.clone();
         url.path_segments_mut()
@@ -238,8 +251,9 @@ impl Config {
             .map_err(|_| Error::InvalidUrl { url }.into())
     }
 
+    /// Resolves the provided absolute filesystem path to a [`Path`] prefix
     fn filesystem_to_path(&self, location: &std::path::Path) -> Result<Path> {
-        Ok(Path::from_filesystem_path_with_base(
+        Ok(Path::from_absolute_path_with_base(
             location,
             Some(&self.root),
         )?)
@@ -1285,5 +1299,16 @@ mod tests {
         let res = integration.list_with_delimiter(None).await.unwrap();
         assert_eq!(res.objects.len(), 1);
         assert_eq!(res.objects[0].location.as_ref(), filename);
+    }
+
+    #[tokio::test]
+    async fn relative_paths() {
+        LocalFileSystem::new_with_prefix(".").unwrap();
+        LocalFileSystem::new_with_prefix("..").unwrap();
+        LocalFileSystem::new_with_prefix("../..").unwrap();
+
+        let integration = LocalFileSystem::new();
+        let path = Path::from_filesystem_path(".").unwrap();
+        integration.list_with_delimiter(Some(&path)).await.unwrap();
     }
 }

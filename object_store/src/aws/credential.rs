@@ -267,9 +267,9 @@ pub enum CredentialProvider {
 impl CredentialProvider {
     pub async fn get_credential(&self) -> Result<Arc<AwsCredential>> {
         match self {
-            CredentialProvider::Static(s) => Ok(Arc::clone(&s.credential)),
-            CredentialProvider::Instance(c) => c.get_credential().await,
-            CredentialProvider::WebIdentity(c) => c.get_credential().await,
+            Self::Static(s) => Ok(Arc::clone(&s.credential)),
+            Self::Instance(c) => c.get_credential().await,
+            Self::WebIdentity(c) => c.get_credential().await,
         }
     }
 }
@@ -553,7 +553,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_instance_metadata() {
-        if !env::var("TEST_INTEGRATION").is_ok() {
+        if env::var("TEST_INTEGRATION").is_err() {
             eprintln!("skipping AWS integration test");
         }
 

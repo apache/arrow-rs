@@ -18,7 +18,7 @@
 //! Contains Rust mappings for Thrift definition.
 //! Refer to `parquet.thrift` file to see raw definitions.
 
-use std::{convert, fmt, result, str};
+use std::{fmt, result, str};
 
 use parquet_format as parquet;
 
@@ -42,6 +42,7 @@ pub use parquet_format::{
 /// For example INT16 is not included as a type since a good encoding of INT32
 /// would handle this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(non_camel_case_types)]
 pub enum Type {
     BOOLEAN,
     INT32,
@@ -62,7 +63,8 @@ pub enum Type {
 ///
 /// This struct was renamed from `LogicalType` in version 4.0.0.
 /// If targeting Parquet format 2.4.0 or above, please use [LogicalType] instead.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum ConvertedType {
     NONE,
     /// A BYTE_ARRAY actually contains UTF8 encoded chars.
@@ -163,7 +165,7 @@ pub enum ConvertedType {
 /// This is an *entirely new* struct as of version
 /// 4.0.0. The struct previously named `LogicalType` was renamed to
 /// [`ConvertedType`]. Please see the README.md for more details.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogicalType {
     String,
     Map,
@@ -196,7 +198,8 @@ pub enum LogicalType {
 // Mirrors `parquet::FieldRepetitionType`
 
 /// Representation of field types in schema.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum Repetition {
     /// Field is required (can not be null) and each record has exactly 1 value.
     REQUIRED,
@@ -213,6 +216,7 @@ pub enum Repetition {
 /// Not all encodings are valid for all types. These enums are also used to specify the
 /// encoding of definition and repetition levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[allow(non_camel_case_types)]
 pub enum Encoding {
     /// Default byte encoding.
     /// - BOOLEAN - 1 bit per value, 0 is false; 1 is true.
@@ -277,7 +281,7 @@ pub enum Encoding {
 // Mirrors `parquet::CompressionCodec`
 
 /// Supported compression algorithms.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compression {
     UNCOMPRESSED,
     SNAPPY,
@@ -293,7 +297,8 @@ pub enum Compression {
 
 /// Available data pages for Parquet file format.
 /// Note that some of the page types may not be supported.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum PageType {
     DATA_PAGE,
     INDEX_PAGE,
@@ -312,7 +317,8 @@ pub enum PageType {
 ///
 /// See reference in
 /// <https://github.com/apache/parquet-cpp/blob/master/src/parquet/types.h>
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum SortOrder {
     /// Signed (either value or legacy byte-wise) comparison.
     SIGNED,
@@ -327,7 +333,8 @@ pub enum SortOrder {
 ///
 /// If column order is undefined, then it is the legacy behaviour and all values should
 /// be compared as signed values/bytes.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum ColumnOrder {
     /// Column uses the order defined by its logical or physical type
     /// (if there is no logical type), parquet-format 2.4.0+.
@@ -489,7 +496,7 @@ impl fmt::Display for ColumnOrder {
 // ----------------------------------------------------------------------
 // parquet::Type <=> Type conversion
 
-impl convert::From<parquet::Type> for Type {
+impl From<parquet::Type> for Type {
     fn from(value: parquet::Type) -> Self {
         match value {
             parquet::Type::Boolean => Type::BOOLEAN,
@@ -504,7 +511,7 @@ impl convert::From<parquet::Type> for Type {
     }
 }
 
-impl convert::From<Type> for parquet::Type {
+impl From<Type> for parquet::Type {
     fn from(value: Type) -> Self {
         match value {
             Type::BOOLEAN => parquet::Type::Boolean,
@@ -522,7 +529,7 @@ impl convert::From<Type> for parquet::Type {
 // ----------------------------------------------------------------------
 // parquet::ConvertedType <=> ConvertedType conversion
 
-impl convert::From<Option<parquet::ConvertedType>> for ConvertedType {
+impl From<Option<parquet::ConvertedType>> for ConvertedType {
     fn from(option: Option<parquet::ConvertedType>) -> Self {
         match option {
             None => ConvertedType::NONE,
@@ -558,7 +565,7 @@ impl convert::From<Option<parquet::ConvertedType>> for ConvertedType {
     }
 }
 
-impl convert::From<ConvertedType> for Option<parquet::ConvertedType> {
+impl From<ConvertedType> for Option<parquet::ConvertedType> {
     fn from(value: ConvertedType) -> Self {
         match value {
             ConvertedType::NONE => None,
@@ -595,7 +602,7 @@ impl convert::From<ConvertedType> for Option<parquet::ConvertedType> {
 // ----------------------------------------------------------------------
 // parquet::LogicalType <=> LogicalType conversion
 
-impl convert::From<parquet::LogicalType> for LogicalType {
+impl From<parquet::LogicalType> for LogicalType {
     fn from(value: parquet::LogicalType) -> Self {
         match value {
             parquet::LogicalType::STRING(_) => LogicalType::String,
@@ -627,7 +634,7 @@ impl convert::From<parquet::LogicalType> for LogicalType {
     }
 }
 
-impl convert::From<LogicalType> for parquet::LogicalType {
+impl From<LogicalType> for parquet::LogicalType {
     fn from(value: LogicalType) -> Self {
         match value {
             LogicalType::String => parquet::LogicalType::STRING(Default::default()),
@@ -723,7 +730,7 @@ impl From<Option<LogicalType>> for ConvertedType {
 // ----------------------------------------------------------------------
 // parquet::FieldRepetitionType <=> Repetition conversion
 
-impl convert::From<parquet::FieldRepetitionType> for Repetition {
+impl From<parquet::FieldRepetitionType> for Repetition {
     fn from(value: parquet::FieldRepetitionType) -> Self {
         match value {
             parquet::FieldRepetitionType::Required => Repetition::REQUIRED,
@@ -733,7 +740,7 @@ impl convert::From<parquet::FieldRepetitionType> for Repetition {
     }
 }
 
-impl convert::From<Repetition> for parquet::FieldRepetitionType {
+impl From<Repetition> for parquet::FieldRepetitionType {
     fn from(value: Repetition) -> Self {
         match value {
             Repetition::REQUIRED => parquet::FieldRepetitionType::Required,
@@ -746,7 +753,7 @@ impl convert::From<Repetition> for parquet::FieldRepetitionType {
 // ----------------------------------------------------------------------
 // parquet::Encoding <=> Encoding conversion
 
-impl convert::From<parquet::Encoding> for Encoding {
+impl From<parquet::Encoding> for Encoding {
     fn from(value: parquet::Encoding) -> Self {
         match value {
             parquet::Encoding::Plain => Encoding::PLAIN,
@@ -762,7 +769,7 @@ impl convert::From<parquet::Encoding> for Encoding {
     }
 }
 
-impl convert::From<Encoding> for parquet::Encoding {
+impl From<Encoding> for parquet::Encoding {
     fn from(value: Encoding) -> Self {
         match value {
             Encoding::PLAIN => parquet::Encoding::Plain,
@@ -781,7 +788,7 @@ impl convert::From<Encoding> for parquet::Encoding {
 // ----------------------------------------------------------------------
 // parquet::CompressionCodec <=> Compression conversion
 
-impl convert::From<parquet::CompressionCodec> for Compression {
+impl From<parquet::CompressionCodec> for Compression {
     fn from(value: parquet::CompressionCodec) -> Self {
         match value {
             parquet::CompressionCodec::Uncompressed => Compression::UNCOMPRESSED,
@@ -795,7 +802,7 @@ impl convert::From<parquet::CompressionCodec> for Compression {
     }
 }
 
-impl convert::From<Compression> for parquet::CompressionCodec {
+impl From<Compression> for parquet::CompressionCodec {
     fn from(value: Compression) -> Self {
         match value {
             Compression::UNCOMPRESSED => parquet::CompressionCodec::Uncompressed,
@@ -812,7 +819,7 @@ impl convert::From<Compression> for parquet::CompressionCodec {
 // ----------------------------------------------------------------------
 // parquet::PageType <=> PageType conversion
 
-impl convert::From<parquet::PageType> for PageType {
+impl From<parquet::PageType> for PageType {
     fn from(value: parquet::PageType) -> Self {
         match value {
             parquet::PageType::DataPage => PageType::DATA_PAGE,
@@ -823,7 +830,7 @@ impl convert::From<parquet::PageType> for PageType {
     }
 }
 
-impl convert::From<PageType> for parquet::PageType {
+impl From<PageType> for parquet::PageType {
     fn from(value: PageType) -> Self {
         match value {
             PageType::DATA_PAGE => parquet::PageType::DataPage,

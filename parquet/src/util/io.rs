@@ -18,8 +18,6 @@
 use std::{cell::RefCell, cmp, fmt, io::*};
 
 use crate::file::reader::Length;
-#[allow(deprecated)]
-use crate::file::writer::ParquetWriter;
 
 const DEFAULT_BUF_SIZE: usize = 8 * 1024;
 
@@ -156,51 +154,6 @@ impl<R: ParquetReader> Length for FileSource<R> {
     }
 }
 
-/// Struct that represents `File` output stream with position tracking.
-/// Used as a sink in file writer.
-#[deprecated = "use TrackedWrite instead"]
-#[allow(deprecated)]
-pub struct FileSink<W: ParquetWriter> {
-    buf: BufWriter<W>,
-    // This is not necessarily position in the underlying file,
-    // but rather current position in the sink.
-    pos: u64,
-}
-
-#[allow(deprecated)]
-impl<W: ParquetWriter> FileSink<W> {
-    /// Creates new file sink.
-    /// Position is set to whatever position file has.
-    pub fn new(buf: &W) -> Self {
-        let mut owned_buf = buf.try_clone().unwrap();
-        let pos = owned_buf.seek(SeekFrom::Current(0)).unwrap();
-        Self {
-            buf: BufWriter::new(owned_buf),
-            pos,
-        }
-    }
-}
-
-#[allow(deprecated)]
-impl<W: ParquetWriter> Write for FileSink<W> {
-    fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        let num_bytes = self.buf.write(buf)?;
-        self.pos += num_bytes as u64;
-        Ok(num_bytes)
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        self.buf.flush()
-    }
-}
-
-#[allow(deprecated)]
-impl<W: ParquetWriter> Position for FileSink<W> {
-    fn pos(&self) -> u64 {
-        self.pos
-    }
-}
-
 // Position implementation for Cursor to use in various tests.
 impl<'a> Position for Cursor<&'a mut Vec<u8>> {
     fn pos(&self) -> u64 {
@@ -214,7 +167,7 @@ mod tests {
 
     use std::iter;
 
-    use crate::util::test_common::get_test_file;
+    use crate::util::test_common::file_util::get_test_file;
 
     #[test]
     fn test_io_read_fully() {
@@ -275,30 +228,6 @@ mod tests {
         let bytes_read = src.read(&mut buf[..]).unwrap();
         assert_eq!(bytes_read, 4);
         assert_eq!(buf, vec![b'P', b'A', b'R', b'1']);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_io_write_with_pos() {
-        let mut file = tempfile::tempfile().unwrap();
-        file.write_all(&[b'a', b'b', b'c']).unwrap();
-
-        // Write into sink
-        let mut sink = FileSink::new(&file);
-        assert_eq!(sink.pos(), 3);
-
-        sink.write_all(&[b'd', b'e', b'f', b'g']).unwrap();
-        assert_eq!(sink.pos(), 7);
-
-        sink.flush().unwrap();
-        assert_eq!(sink.pos(), file.seek(SeekFrom::Current(0)).unwrap());
-
-        // Read data using file chunk
-        let mut res = vec![0u8; 7];
-        let mut chunk =
-            FileSource::new(&file, 0, file.metadata().unwrap().len() as usize);
-        chunk.read_exact(&mut res[..]).unwrap();
-        assert_eq!(res, vec![b'a', b'b', b'c', b'd', b'e', b'f', b'g']);
     }
 
     #[test]

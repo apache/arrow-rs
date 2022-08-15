@@ -987,18 +987,19 @@ pub fn gt_eq_utf8_scalar<OffsetSize: OffsetSizeTrait>(
     compare_op_scalar(left, |a| a >= right)
 }
 
+// Avoids creating a closure for each combination of `$RIGHT` and `$TY`
+fn try_to_type_result<T>(value: Option<T>, right: &str, ty: &str) -> Result<T> {
+    value.ok_or_else(|| {
+        ArrowError::ComputeError(format!("Could not convert {} with {}", right, ty,))
+    })
+}
+
 /// Calls $RIGHT.$TY() (e.g. `right.to_i128()`) with a nice error message.
 /// Type of expression is `Result<.., ArrowError>`
 macro_rules! try_to_type {
-    ($RIGHT: expr, $TY: ident) => {{
-        $RIGHT.$TY().ok_or_else(|| {
-            ArrowError::ComputeError(format!(
-                "Could not convert {} with {}",
-                stringify!($RIGHT),
-                stringify!($TY)
-            ))
-        })
-    }};
+    ($RIGHT: expr, $TY: ident) => {
+        try_to_type_result($RIGHT.$TY(), stringify!($RIGHT), stringify!($TYPE))
+    };
 }
 
 macro_rules! dyn_compare_scalar {
@@ -1068,59 +1069,35 @@ macro_rules! dyn_compare_scalar {
         match $KT.as_ref() {
             DataType::UInt8 => {
                 let left = as_dictionary_array::<UInt8Type>($LEFT);
-                unpack_dict_comparison(
-                    left,
-                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
-                )
+                unpack_dict_comparison(left, $OP(left.values(), $RIGHT)?)
             }
             DataType::UInt16 => {
                 let left = as_dictionary_array::<UInt16Type>($LEFT);
-                unpack_dict_comparison(
-                    left,
-                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
-                )
+                unpack_dict_comparison(left, $OP(left.values(), $RIGHT)?)
             }
             DataType::UInt32 => {
                 let left = as_dictionary_array::<UInt32Type>($LEFT);
-                unpack_dict_comparison(
-                    left,
-                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
-                )
+                unpack_dict_comparison(left, $OP(left.values(), $RIGHT)?)
             }
             DataType::UInt64 => {
                 let left = as_dictionary_array::<UInt64Type>($LEFT);
-                unpack_dict_comparison(
-                    left,
-                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
-                )
+                unpack_dict_comparison(left, $OP(left.values(), $RIGHT)?)
             }
             DataType::Int8 => {
                 let left = as_dictionary_array::<Int8Type>($LEFT);
-                unpack_dict_comparison(
-                    left,
-                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
-                )
+                unpack_dict_comparison(left, $OP(left.values(), $RIGHT)?)
             }
             DataType::Int16 => {
                 let left = as_dictionary_array::<Int16Type>($LEFT);
-                unpack_dict_comparison(
-                    left,
-                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
-                )
+                unpack_dict_comparison(left, $OP(left.values(), $RIGHT)?)
             }
             DataType::Int32 => {
                 let left = as_dictionary_array::<Int32Type>($LEFT);
-                unpack_dict_comparison(
-                    left,
-                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
-                )
+                unpack_dict_comparison(left, $OP(left.values(), $RIGHT)?)
             }
             DataType::Int64 => {
                 let left = as_dictionary_array::<Int64Type>($LEFT);
-                unpack_dict_comparison(
-                    left,
-                    dyn_compare_scalar!(left.values(), $RIGHT, $OP)?,
-                )
+                unpack_dict_comparison(left, $OP(left.values(), $RIGHT)?)
             }
             _ => Err(ArrowError::ComputeError(format!(
                 "Unsupported dictionary key type {:?}",
@@ -1186,7 +1163,7 @@ where
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
-            dyn_compare_scalar!(left, right, key_type, eq_scalar)
+            dyn_compare_scalar!(left, right, key_type, eq_dyn_scalar)
         }
         _ => dyn_compare_scalar!(left, right, eq_scalar),
     }
@@ -1200,7 +1177,7 @@ where
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
-            dyn_compare_scalar!(left, right, key_type, lt_scalar)
+            dyn_compare_scalar!(left, right, key_type, lt_dyn_scalar)
         }
         _ => dyn_compare_scalar!(left, right, lt_scalar),
     }
@@ -1214,7 +1191,7 @@ where
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
-            dyn_compare_scalar!(left, right, key_type, lt_eq_scalar)
+            dyn_compare_scalar!(left, right, key_type, lt_eq_dyn_scalar)
         }
         _ => dyn_compare_scalar!(left, right, lt_eq_scalar),
     }
@@ -1228,7 +1205,7 @@ where
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
-            dyn_compare_scalar!(left, right, key_type, gt_scalar)
+            dyn_compare_scalar!(left, right, key_type, gt_dyn_scalar)
         }
         _ => dyn_compare_scalar!(left, right, gt_scalar),
     }
@@ -1242,7 +1219,7 @@ where
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
-            dyn_compare_scalar!(left, right, key_type, gt_eq_scalar)
+            dyn_compare_scalar!(left, right, key_type, gt_eq_dyn_scalar)
         }
         _ => dyn_compare_scalar!(left, right, gt_eq_scalar),
     }
@@ -1256,7 +1233,7 @@ where
 {
     match left.data_type() {
         DataType::Dictionary(key_type, _value_type) => {
-            dyn_compare_scalar!(left, right, key_type, neq_scalar)
+            dyn_compare_scalar!(left, right, key_type, neq_dyn_scalar)
         }
         _ => dyn_compare_scalar!(left, right, neq_scalar),
     }

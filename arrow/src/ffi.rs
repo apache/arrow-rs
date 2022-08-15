@@ -911,7 +911,6 @@ impl<'a> ArrowArrayChild<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::BasicDecimalArray;
     use crate::array::{
         export_array_into_raw, make_array, Array, ArrayData, BooleanArray,
         Decimal128Array, DictionaryArray, DurationSecondArray, FixedSizeBinaryArray,

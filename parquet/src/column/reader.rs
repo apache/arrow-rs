@@ -28,7 +28,7 @@ use crate::column::reader::decoder::{
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{ceil, num_required_bits};
+use crate::util::bit_util::{ceil, num_required_bits, read_num_bytes};
 use crate::util::memory::ByteBufferPtr;
 
 pub(crate) mod decoder;
@@ -520,7 +520,7 @@ fn parse_v1_level(
     match encoding {
         Encoding::RLE => {
             let i32_size = std::mem::size_of::<i32>();
-            let data_size = read_num_bytes!(i32, i32_size, buf.as_ref()) as usize;
+            let data_size = read_num_bytes::<i32>(i32_size, buf.as_ref()) as usize;
             Ok((i32_size + data_size, buf.range(i32_size, data_size)))
         }
         Encoding::BIT_PACKED => {
@@ -544,8 +544,8 @@ mod tests {
 
     use crate::basic::Type as PhysicalType;
     use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
-    use crate::util::test_common::make_pages;
     use crate::util::test_common::page_util::InMemoryPageReader;
+    use crate::util::test_common::rand_gen::make_pages;
 
     const NUM_LEVELS: usize = 128;
     const NUM_PAGES: usize = 2;
@@ -1231,6 +1231,7 @@ mod tests {
 
         // Helper function for the general case of `read_batch()` where `values`,
         // `def_levels` and `rep_levels` are always provided with enough space.
+        #[allow(clippy::too_many_arguments)]
         fn test_read_batch_general(
             &mut self,
             desc: ColumnDescPtr,
@@ -1262,6 +1263,7 @@ mod tests {
 
         // Helper function to test `read_batch()` method with custom buffers for values,
         // definition and repetition levels.
+        #[allow(clippy::too_many_arguments)]
         fn test_read_batch(
             &mut self,
             desc: ColumnDescPtr,

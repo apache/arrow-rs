@@ -43,7 +43,7 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -69,7 +69,7 @@ jobs:
         # "1" means line tables only, which is useful for panic tracebacks.
         RUSTFLAGS: "-C debuginfo=1"
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -118,7 +118,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -128,8 +128,4 @@ jobs:
           rustup component add clippy
       - name: Run clippy
         run: |
-          # Only run clippy for the library at this time,
-          # as there are clippy errors for other targets
-          cargo clippy -p parquet --all-features --lib -- -D warnings
-          # https://github.com/apache/arrow-rs/issues/1254
-          #cargo clippy -p parquet --all-targets --all-features -- -D warnings
+          cargo clippy -p parquet --all-targets --all-features -- -D warnings

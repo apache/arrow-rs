@@ -329,7 +329,7 @@ pub use zstd_codec::*;
 mod tests {
     use super::*;
 
-    use crate::util::test_common::*;
+    use crate::util::test_common::rand_gen::random_bytes;
 
     fn test_roundtrip(c: CodecType, data: &[u8]) {
         let mut c1 = create_codec(c).unwrap().unwrap();

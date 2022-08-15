@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::array::ArrayAccessor;
-use crate::array::{BasicDecimalArray, Decimal256Array};
+use crate::array::BasicDecimalArray;
 
 use super::{
     Array, BooleanArray, Decimal128Array, GenericBinaryArray, GenericListArray,
@@ -104,14 +104,15 @@ pub type GenericStringIter<'a, T> = ArrayIter<&'a GenericStringArray<T>>;
 pub type GenericBinaryIter<'a, T> = ArrayIter<&'a GenericBinaryArray<T>>;
 pub type GenericListArrayIter<'a, O> = ArrayIter<&'a GenericListArray<O>>;
 
+pub type BasicDecimalIter<'a, const BYTE_WIDTH: usize> =
+    ArrayIter<&'a BasicDecimalArray<BYTE_WIDTH>>;
 /// an iterator that returns `Some(Decimal128)` or `None`, that can be used on a
 /// [`Decimal128Array`]
-pub type Decimal128Iter<'a> = ArrayIter<&'a Decimal128Array>;
+pub type Decimal128Iter<'a> = BasicDecimalIter<'a, 16>;
 
 /// an iterator that returns `Some(Decimal256)` or `None`, that can be used on a
-/// [`Decimal256Array`]
-pub type Decimal256Iter<'a> = ArrayIter<&'a Decimal256Array>;
-
+/// [`super::Decimal256Array`]
+pub type Decimal256Iter<'a> = BasicDecimalIter<'a, 32>;
 /// an iterator that returns `Some(i128)` or `None`, that can be used on a
 /// [`Decimal128Array`]
 #[derive(Debug)]

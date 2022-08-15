@@ -17,17 +17,17 @@
 
 use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
 use arrow::array::{
-    Array, ArrayRef, BasicDecimalArray, BinaryArray, BinaryBuilder, Decimal128Array,
-    FixedSizeBinaryArray, FixedSizeBinaryBuilder, IntervalDayTimeArray,
-    IntervalDayTimeBuilder, IntervalYearMonthArray, IntervalYearMonthBuilder,
-    LargeBinaryArray, LargeBinaryBuilder, LargeStringArray, LargeStringBuilder,
-    StringArray, StringBuilder, TimestampNanosecondArray,
+    Array, ArrayRef, Decimal128Array, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
+    IntervalDayTimeArray, IntervalDayTimeBuilder, IntervalYearMonthArray,
+    IntervalYearMonthBuilder, TimestampNanosecondArray,
 };
-use std::convert::{From, TryInto};
 use std::sync::Arc;
 
 use crate::errors::Result;
 use std::marker::PhantomData;
+
+#[cfg(test)]
+use arrow::array::{StringArray, StringBuilder};
 
 /// A converter is used to consume record reader's content and convert it to arrow
 /// primitive array.
@@ -185,8 +185,10 @@ impl Converter<Vec<Option<Int96>>, TimestampNanosecondArray> for Int96ArrayConve
     }
 }
 
+#[cfg(test)]
 pub struct Utf8ArrayConverter {}
 
+#[cfg(test)]
 impl Converter<Vec<Option<ByteArray>>, StringArray> for Utf8ArrayConverter {
     fn convert(&self, source: Vec<Option<ByteArray>>) -> Result<StringArray> {
         let data_size = source
@@ -206,70 +208,9 @@ impl Converter<Vec<Option<ByteArray>>, StringArray> for Utf8ArrayConverter {
     }
 }
 
-pub struct LargeUtf8ArrayConverter {}
-
-impl Converter<Vec<Option<ByteArray>>, LargeStringArray> for LargeUtf8ArrayConverter {
-    fn convert(&self, source: Vec<Option<ByteArray>>) -> Result<LargeStringArray> {
-        let data_size = source
-            .iter()
-            .map(|x| x.as_ref().map(|b| b.len()).unwrap_or(0))
-            .sum();
-
-        let mut builder = LargeStringBuilder::with_capacity(source.len(), data_size);
-        for v in source {
-            match v {
-                Some(array) => builder.append_value(array.as_utf8()?),
-                None => builder.append_null(),
-            }
-        }
-
-        Ok(builder.finish())
-    }
-}
-
-pub struct BinaryArrayConverter {}
-
-impl Converter<Vec<Option<ByteArray>>, BinaryArray> for BinaryArrayConverter {
-    fn convert(&self, source: Vec<Option<ByteArray>>) -> Result<BinaryArray> {
-        let mut builder = BinaryBuilder::new(source.len());
-        for v in source {
-            match v {
-                Some(array) => builder.append_value(array.data()),
-                None => builder.append_null(),
-            }
-        }
-
-        Ok(builder.finish())
-    }
-}
-
-pub struct LargeBinaryArrayConverter {}
-
-impl Converter<Vec<Option<ByteArray>>, LargeBinaryArray> for LargeBinaryArrayConverter {
-    fn convert(&self, source: Vec<Option<ByteArray>>) -> Result<LargeBinaryArray> {
-        let mut builder = LargeBinaryBuilder::new(source.len());
-        for v in source {
-            match v {
-                Some(array) => builder.append_value(array.data()),
-                None => builder.append_null(),
-            }
-        }
-
-        Ok(builder.finish())
-    }
-}
-
+#[cfg(test)]
 pub type Utf8Converter =
     ArrayRefConverter<Vec<Option<ByteArray>>, StringArray, Utf8ArrayConverter>;
-pub type LargeUtf8Converter =
-    ArrayRefConverter<Vec<Option<ByteArray>>, LargeStringArray, LargeUtf8ArrayConverter>;
-pub type BinaryConverter =
-    ArrayRefConverter<Vec<Option<ByteArray>>, BinaryArray, BinaryArrayConverter>;
-pub type LargeBinaryConverter = ArrayRefConverter<
-    Vec<Option<ByteArray>>,
-    LargeBinaryArray,
-    LargeBinaryArrayConverter,
->;
 
 pub type Int96Converter =
     ArrayRefConverter<Vec<Option<Int96>>, TimestampNanosecondArray, Int96ArrayConverter>;
@@ -298,32 +239,6 @@ pub type DecimalFixedLengthByteArrayConverter = ArrayRefConverter<
 
 pub type DecimalByteArrayConvert =
     ArrayRefConverter<Vec<Option<ByteArray>>, Decimal128Array, DecimalArrayConverter>;
-
-pub struct FromConverter<S, T> {
-    _source: PhantomData<S>,
-    _dest: PhantomData<T>,
-}
-
-impl<S, T> FromConverter<S, T>
-where
-    T: From<S>,
-{
-    pub fn new() -> Self {
-        Self {
-            _source: PhantomData,
-            _dest: PhantomData,
-        }
-    }
-}
-
-impl<S, T> Converter<S, T> for FromConverter<S, T>
-where
-    T: From<S>,
-{
-    fn convert(&self, source: S) -> Result<T> {
-        Ok(T::from(source))
-    }
-}
 
 pub struct ArrayRefConverter<S, A, C> {
     _source: PhantomData<S>,
