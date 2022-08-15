@@ -81,9 +81,8 @@ jobs:
         run: conda run --no-capture-output ci/scripts/go_build.sh $PWD
       - name: Build Java
         run: conda run --no-capture-output ci/scripts/java_build.sh $PWD /build
-      # Temporarily disable JS https://issues.apache.org/jira/browse/ARROW-17410
-      # - name: Build JS
-      #   run: conda run --no-capture-output ci/scripts/js_build.sh $PWD /build
+      - name: Build JS
+        run: conda run --no-capture-output ci/scripts/js_build.sh $PWD /build
       - name: Install archery
         run: conda run --no-capture-output pip install -e dev/archery
       - name: Run integration tests
@@ -93,7 +92,7 @@ jobs:
             --with-cpp=1 \
             --with-csharp=1 \
             --with-java=1 \
-            --with-js=0 \
+            --with-js=1 \
             --with-go=1 \
             --with-rust=1 \
             --gold-dirs=testing/data/arrow-ipc-stream/integration/0.14.1 \
