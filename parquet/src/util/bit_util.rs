@@ -312,23 +312,25 @@ impl BitWriter {
 pub const MAX_VLQ_BYTE_LEN: usize = 10;
 
 pub struct BitReader {
-    // The byte buffer to read from, passed in by client
+    /// The byte buffer to read from, passed in by client
     buffer: ByteBufferPtr,
 
-    // Bytes are memcpy'd from `buffer` and values are read from this variable.
-    // This is faster than reading values byte by byte directly from `buffer`
+    /// Bytes are memcpy'd from `buffer` and values are read from this variable.
+    /// This is faster than reading values byte by byte directly from `buffer`
+    ///
+    /// This is only populated when `self.bit_offset != 0`
     buffered_values: u64,
 
-    //
-    // End                                         Start
-    // |............|B|B|B|B|B|B|B|B|..............|
-    //                   ^          ^
-    //                 bit_offset   byte_offset
-    //
-    // Current byte offset in `buffer`
+    ///
+    /// End                                         Start
+    /// |............|B|B|B|B|B|B|B|B|..............|
+    ///                   ^          ^
+    ///                 bit_offset   byte_offset
+    ///
+    /// Current byte offset in `buffer`
     byte_offset: usize,
 
-    // Current bit offset in `buffered_values`
+    /// Current bit offset in `buffered_values`
     bit_offset: usize,
 }
 
@@ -368,9 +370,10 @@ impl BitReader {
             return None;
         }
 
-        // Only need to populate buffer if byte aligned
+        // If buffer is not byte aligned, `self.buffered_values` will
+        // have already been populated
         if self.bit_offset == 0 {
-            self.load_buffer()
+            self.load_buffered_values()
         }
 
         let mut v = trailing_bits(self.buffered_values, self.bit_offset + num_bits)
@@ -381,8 +384,10 @@ impl BitReader {
             self.byte_offset += 8;
             self.bit_offset -= 64;
 
+            // If the new bit_offset is not 0, we need to read the next 64-bit chunk
+            // to buffered_values and update `v`
             if self.bit_offset != 0 {
-                self.load_buffer();
+                self.load_buffered_values();
 
                 v |= trailing_bits(self.buffered_values, self.bit_offset)
                     .wrapping_shl((num_bits - self.bit_offset) as u32);
@@ -546,7 +551,7 @@ impl BitReader {
         self.bit_offset = end_bit_offset % 8;
 
         if self.bit_offset != 0 {
-            self.load_buffer()
+            self.load_buffered_values()
         }
 
         values_to_read
@@ -632,9 +637,12 @@ impl BitReader {
         })
     }
 
-    /// Populates `self.buffered_values`
+    /// Loads up to the the next 8 bytes from `self.buffer` at `self.byte_offset`
+    /// into `self.buffered_values`.
+    ///
+    /// Reads fewer than 8 bytes if there are fewer than 8 bytes left
     #[inline]
-    fn load_buffer(&mut self) {
+    fn load_buffered_values(&mut self) {
         let bytes_to_read = cmp::min(self.buffer.len() - self.byte_offset, 8);
         self.buffered_values =
             read_num_bytes!(u64, bytes_to_read, self.buffer.data()[self.byte_offset..]);
