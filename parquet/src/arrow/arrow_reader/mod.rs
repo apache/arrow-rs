@@ -402,7 +402,7 @@ impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
 
     /// Build a [`ParquetRecordBatchReader`]
     ///
-    /// Note: this will eagerly evaluate any [`RowFilter`] before returning
+    /// Note: this will eagerly evaluate any `RowFilter` before returning
     pub fn build(self) -> Result<ParquetRecordBatchReader> {
         let reader =
             FileReaderRowGroupCollection::new(Arc::new(self.input.0), self.row_groups);
