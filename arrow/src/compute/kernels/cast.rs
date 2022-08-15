@@ -1263,14 +1263,17 @@ fn cast_string_to_binary<OffsetSize>(array: &ArrayRef) -> Result<ArrayRef>
 where
     OffsetSize: OffsetSizeTrait,
 {
-    let array = array.as_any().downcast_ref::<GenericStringArray<OffsetSize>>().unwrap();
+    let array = array
+        .as_any()
+        .downcast_ref::<GenericStringArray<OffsetSize>>()
+        .unwrap();
 
-    Ok(Arc::new(array.iter().map(|x| {
-        match x {
-            Some(data) => Some(data.as_bytes()),
-            None => None
-        }
-    }).collect::<GenericBinaryArray<OffsetSize>>()))
+    Ok(Arc::new(
+        array
+            .iter()
+            .map(|x| x.map(|data| data.as_bytes()))
+            .collect::<GenericBinaryArray<OffsetSize>>(),
+    ))
 }
 
 /// Get the time unit as a multiple of a second
@@ -3509,7 +3512,10 @@ mod tests {
         assert!(down_cast.is_null(2));
 
         array_ref = cast(&a2, &DataType::LargeBinary).unwrap();
-        let down_cast = array_ref.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+        let down_cast = array_ref
+            .as_any()
+            .downcast_ref::<LargeBinaryArray>()
+            .unwrap();
         assert_eq!(bytes_1, down_cast.value(0));
         assert_eq!(bytes_2, down_cast.value(1));
         assert!(down_cast.is_null(2));
@@ -4098,12 +4104,8 @@ mod tests {
 
     #[test]
     fn test_cast_from_uint32() {
-        let u32_values: Vec<u32> = vec![
-            0,
-            u8::MAX as u32,
-            u16::MAX as u32,
-            u32::MAX as u32,
-        ];
+        let u32_values: Vec<u32> =
+            vec![0, u8::MAX as u32, u16::MAX as u32, u32::MAX as u32];
         let u32_array: ArrayRef = Arc::new(UInt32Array::from(u32_values));
 
         let f64_expected = vec!["0.0", "255.0", "65535.0", "4294967295.0"];
@@ -4551,13 +4553,8 @@ mod tests {
 
     #[test]
     fn test_cast_from_int16() {
-        let i16_values: Vec<i16> = vec![
-            i16::MIN,
-            i8::MIN as i16,
-            0,
-            i8::MAX as i16,
-            i16::MAX,
-        ];
+        let i16_values: Vec<i16> =
+            vec![i16::MIN, i8::MIN as i16, 0, i8::MAX as i16, i16::MAX];
         let i16_array: ArrayRef = Arc::new(Int16Array::from(i16_values));
 
         let f64_expected = vec!["-32768.0", "-128.0", "0.0", "127.0", "32767.0"];
