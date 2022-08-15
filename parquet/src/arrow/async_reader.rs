@@ -96,8 +96,8 @@ use arrow::record_batch::RecordBatch;
 
 use crate::arrow::array_reader::{build_array_reader, RowGroupCollection};
 use crate::arrow::arrow_reader::{
-    evaluate_predicate, ArrowReaderBuilder, ParquetRecordBatchReader, RowFilter,
-    RowSelection,
+    evaluate_predicate, selects_any, ArrowReaderBuilder, ParquetRecordBatchReader,
+    RowFilter, RowSelection,
 };
 use crate::arrow::ProjectionMask;
 use crate::basic::Compression;
@@ -283,9 +283,6 @@ where
         batch_size: usize,
     ) -> ReadResult<T> {
         // TODO: calling build_array multiple times is wasteful
-        let selects_any = |selection: Option<&RowSelection>| {
-            selection.map(|x| x.selects_any()).unwrap_or(true)
-        };
 
         let meta = self.metadata.row_group(row_group_idx);
         let mut row_group = InMemoryRowGroup {
