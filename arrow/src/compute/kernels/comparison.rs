@@ -29,7 +29,8 @@ use crate::compute::util::combine_option_bitmap;
 use crate::datatypes::{
     ArrowNativeType, ArrowNumericType, DataType, Date32Type, Date64Type, Float32Type,
     Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
-    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, TimeUnit,
+    IntervalMonthDayNanoType, IntervalUnit, IntervalYearMonthType, Time32MillisecondType,
+    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimeUnit,
     TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
     TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
@@ -1915,6 +1916,21 @@ macro_rules! typed_compares {
             (DataType::Date64, DataType::Date64) => {
                 cmp_primitive_array::<Date64Type, _>($LEFT, $RIGHT, $OP)
             }
+            (DataType::Time32(TimeUnit::Second), DataType::Time32(TimeUnit::Second)) => {
+                cmp_primitive_array::<Time32SecondType, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Time32(TimeUnit::Millisecond),
+                DataType::Time32(TimeUnit::Millisecond),
+            ) => cmp_primitive_array::<Time32MillisecondType, _>($LEFT, $RIGHT, $OP),
+            (
+                DataType::Time64(TimeUnit::Microsecond),
+                DataType::Time64(TimeUnit::Microsecond),
+            ) => cmp_primitive_array::<Time64MicrosecondType, _>($LEFT, $RIGHT, $OP),
+            (
+                DataType::Time64(TimeUnit::Nanosecond),
+                DataType::Time64(TimeUnit::Nanosecond),
+            ) => cmp_primitive_array::<Time64NanosecondType, _>($LEFT, $RIGHT, $OP),
             (
                 DataType::Interval(IntervalUnit::YearMonth),
                 DataType::Interval(IntervalUnit::YearMonth),
@@ -2017,6 +2033,30 @@ macro_rules! typed_dict_cmp {
             }
             (DataType::Date64, DataType::Date64) => {
                 cmp_dict::<$KT, Date64Type, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Time32(TimeUnit::Second),
+                DataType::Time32(TimeUnit::Second),
+            ) => {
+                cmp_dict::<$KT, Time32SecondType, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Time32(TimeUnit::Millisecond),
+                DataType::Time32(TimeUnit::Millisecond),
+            ) => {
+                cmp_dict::<$KT, Time32MillisecondType, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Time64(TimeUnit::Microsecond),
+                DataType::Time64(TimeUnit::Microsecond),
+            ) => {
+                cmp_dict::<$KT, Time64MicrosecondType, _>($LEFT, $RIGHT, $OP)
+            }
+            (
+                DataType::Time64(TimeUnit::Nanosecond),
+                DataType::Time64(TimeUnit::Nanosecond),
+            ) => {
+                cmp_dict::<$KT, Time64NanosecondType, _>($LEFT, $RIGHT, $OP)
             }
             (
                 DataType::Interval(IntervalUnit::YearMonth),
@@ -2734,6 +2774,42 @@ mod tests {
             eq,
             eq_dyn,
             TimestampSecondArray,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![false, false, true, false, false, false, false, true, false, false]
+        );
+
+        cmp_vec!(
+            eq,
+            eq_dyn,
+            Time32SecondArray,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![false, false, true, false, false, false, false, true, false, false]
+        );
+
+        cmp_vec!(
+            eq,
+            eq_dyn,
+            Time32MillisecondArray,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![false, false, true, false, false, false, false, true, false, false]
+        );
+
+        cmp_vec!(
+            eq,
+            eq_dyn,
+            Time64MicrosecondArray,
+            vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
+            vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
+            vec![false, false, true, false, false, false, false, true, false, false]
+        );
+
+        cmp_vec!(
+            eq,
+            eq_dyn,
+            Time64NanosecondArray,
             vec![8, 8, 8, 8, 8, 8, 8, 8, 8, 8],
             vec![6, 7, 8, 9, 10, 6, 7, 8, 9, 10],
             vec![false, false, true, false, false, false, false, true, false, false]
