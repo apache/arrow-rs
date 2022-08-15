@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::aws::credential::{AwsCredential, CredentialExt, CredentialProvider};
-use crate::client::pagination::paginated;
+use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::multipart::UploadPart;
 use crate::path::DELIMITER;
@@ -27,7 +27,7 @@ use crate::{
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use percent_encoding::{utf8_percent_encode, AsciiSet, PercentEncode, NON_ALPHANUMERIC};
-use reqwest::{Client, Method, Response, StatusCode};
+use reqwest::{Client as ReqwestClient, Method, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
 use std::ops::Range;
@@ -211,7 +211,7 @@ impl S3Config {
 #[derive(Debug)]
 pub(crate) struct S3Client {
     config: S3Config,
-    client: Client,
+    client: ReqwestClient,
 }
 
 impl S3Client {
@@ -256,7 +256,7 @@ impl S3Client {
         }
 
         let response = builder
-            .sign(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
             .send_retry(&self.config.retry_config)
             .await
             .context(GetRequestSnafu {
@@ -287,7 +287,7 @@ impl S3Client {
 
         let response = builder
             .query(query)
-            .sign(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
             .send_retry(&self.config.retry_config)
             .await
             .context(PutRequestSnafu {
@@ -313,7 +313,7 @@ impl S3Client {
         self.client
             .request(Method::DELETE, url)
             .query(query)
-            .sign(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
             .send_retry(&self.config.retry_config)
             .await
             .context(DeleteRequestSnafu {
@@ -336,7 +336,7 @@ impl S3Client {
         self.client
             .request(Method::PUT, url)
             .header("x-amz-copy-source", source)
-            .sign(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
             .send_retry(&self.config.retry_config)
             .await
             .context(CopyRequestSnafu {
@@ -381,7 +381,7 @@ impl S3Client {
             .client
             .request(Method::GET, &url)
             .query(&query)
-            .sign(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
             .send_retry(&self.config.retry_config)
             .await
             .context(ListRequestSnafu)?
@@ -405,7 +405,7 @@ impl S3Client {
         delimiter: bool,
     ) -> BoxStream<'_, Result<ListResult>> {
         let prefix = format_prefix(prefix);
-        paginated(prefix, move |prefix, token| async move {
+        stream_paginated(prefix, move |prefix, token| async move {
             let (r, next_token) = self
                 .list_request(prefix.as_deref(), delimiter, token.as_deref())
                 .await?;
@@ -426,7 +426,7 @@ impl S3Client {
         let response = self
             .client
             .request(Method::POST, url)
-            .sign(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
             .send_retry(&self.config.retry_config)
             .await
             .context(CreateMultipartRequestSnafu)?
@@ -467,7 +467,7 @@ impl S3Client {
             .request(Method::POST, url)
             .query(&[("uploadId", upload_id)])
             .body(body)
-            .sign(credential.as_ref(), &self.config.region, "s3")
+            .with_aws_sigv4(credential.as_ref(), &self.config.region, "s3")
             .send_retry(&self.config.retry_config)
             .await
             .context(CompleteMultipartRequestSnafu)?

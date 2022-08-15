@@ -145,12 +145,22 @@ impl<'a> RequestSigner<'a> {
 }
 
 pub trait CredentialExt {
-    fn sign(self, credential: &AwsCredential, region: &str, service: &str) -> Self;
+    /// Sign a request <https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html>
+    fn with_aws_sigv4(
+        self,
+        credential: &AwsCredential,
+        region: &str,
+        service: &str,
+    ) -> Self;
 }
 
 impl CredentialExt for RequestBuilder {
-    /// Sign a request <https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html>
-    fn sign(mut self, credential: &AwsCredential, region: &str, service: &str) -> Self {
+    fn with_aws_sigv4(
+        mut self,
+        credential: &AwsCredential,
+        region: &str,
+        service: &str,
+    ) -> Self {
         // Hack around lack of access to underlying request
         // https://github.com/seanmonstar/reqwest/issues/1212
         let mut request = self
@@ -202,7 +212,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 /// Canonicalizes headers into the AWS Canonical Form.
 ///
-/// <http://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html>
+/// <https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html>
 fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
     let mut headers = BTreeMap::<&str, Vec<&str>>::new();
     let mut value_count = 0;

@@ -45,7 +45,7 @@ use reqwest::{header, Client, Method, Response, StatusCode};
 use snafu::{ResultExt, Snafu};
 use tokio::io::AsyncWrite;
 
-use crate::client::pagination::paginated;
+use crate::client::pagination::stream_paginated;
 use crate::client::retry::RetryExt;
 use crate::{
     client::{oauth::OAuthProvider, token::TokenCache},
@@ -478,7 +478,7 @@ impl GoogleCloudStorageClient {
         delimiter: bool,
     ) -> BoxStream<'_, Result<ListResponse>> {
         let prefix = format_prefix(prefix);
-        paginated(prefix, move |prefix, token| async move {
+        stream_paginated(prefix, move |prefix, token| async move {
             let mut r = self
                 .list_request(prefix.as_deref(), delimiter, token.as_deref())
                 .await?;
