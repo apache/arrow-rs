@@ -424,7 +424,7 @@ impl<T: DataType> Decoder<T> for RleValueDecoder<T> {
 
         // We still need to remove prefix of i32 from the stream.
         const I32_SIZE: usize = mem::size_of::<i32>();
-        let data_size = read_num_bytes!(i32, I32_SIZE, data.as_ref()) as usize;
+        let data_size = bit_util::read_num_bytes::<i32>(I32_SIZE, data.as_ref()) as usize;
         self.decoder = RleDecoder::new(1);
         self.decoder.set_data(data.range(I32_SIZE, data_size));
         self.values_left = num_values;
@@ -736,8 +736,61 @@ where
     }
 
     fn skip(&mut self, num_values: usize) -> Result<usize> {
-        let mut buffer = vec![T::T::default(); num_values];
-        self.get(&mut buffer)
+        let mut skip = 0;
+        let to_skip = num_values.min(self.values_left);
+        if to_skip == 0 {
+            return Ok(0);
+        }
+
+        // try to consume first value in header.
+        if let Some(value) = self.first_value.take() {
+            self.last_value = value;
+            skip += 1;
+            self.values_left -= 1;
+        }
+
+        let mini_block_batch_size = match T::T::PHYSICAL_TYPE {
+            Type::INT32 => 32,
+            Type::INT64 => 64,
+            _ => unreachable!(),
+        };
+
+        let mut skip_buffer = vec![T::T::default(); mini_block_batch_size];
+        while skip < to_skip {
+            if self.mini_block_remaining == 0 {
+                self.next_mini_block()?;
+            }
+
+            let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
+            let mini_block_to_skip = self.mini_block_remaining.min(to_skip - skip);
+            let mini_block_should_skip = mini_block_to_skip;
+
+            let skip_count = self
+                .bit_reader
+                .get_batch(&mut skip_buffer[0..mini_block_to_skip], bit_width);
+
+            if skip_count != mini_block_to_skip {
+                return Err(general_err!(
+                    "Expected to skip {} values from mini block got {}.",
+                    mini_block_batch_size,
+                    skip_count
+                ));
+            }
+
+            for v in &mut skip_buffer[0..skip_count] {
+                *v = v
+                    .wrapping_add(&self.min_delta)
+                    .wrapping_add(&self.last_value);
+
+                self.last_value = *v;
+            }
+
+            skip += mini_block_should_skip;
+            self.mini_block_remaining -= mini_block_should_skip;
+            self.values_left -= mini_block_should_skip;
+        }
+
+        Ok(to_skip)
     }
 }
 

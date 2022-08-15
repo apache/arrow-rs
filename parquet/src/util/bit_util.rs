@@ -88,17 +88,17 @@ impl FromBytes for bool {
 
 from_le_bytes! { u8, u16, u32, u64, i8, i16, i32, i64, f32, f64 }
 
-/// Reads `$size` of bytes from `$src`, and reinterprets them as type `$ty`, in
-/// little-endian order. `$ty` must implement the `Default` trait. Otherwise this won't
-/// compile.
+/// Reads `size` of bytes from `src`, and reinterprets them as type `ty`, in
+/// little-endian order.
 /// This is copied and modified from byteorder crate.
-macro_rules! read_num_bytes {
-    ($ty:ty, $size:expr, $src:expr) => {{
-        assert!($size <= $src.len());
-        let mut buffer = <$ty as $crate::util::bit_util::FromBytes>::Buffer::default();
-        buffer.as_mut()[..$size].copy_from_slice(&$src[..$size]);
-        <$ty>::from_ne_bytes(buffer)
-    }};
+pub(crate) fn read_num_bytes<T>(size: usize, src: &[u8]) -> T
+where
+    T: FromBytes,
+{
+    assert!(size <= src.len());
+    let mut buffer = <T as FromBytes>::Buffer::default();
+    buffer.as_mut()[..size].copy_from_slice(&src[..size]);
+    <T>::from_ne_bytes(buffer)
 }
 
 /// Returns the ceil of value/divisor.
@@ -592,7 +592,7 @@ impl BitReader {
         }
 
         // Advance byte_offset to next unread byte and read num_bytes
-        let v = read_num_bytes!(T, num_bytes, self.buffer.data()[self.byte_offset..]);
+        let v = read_num_bytes::<T>(num_bytes, &self.buffer.data()[self.byte_offset..]);
         self.byte_offset += num_bytes;
 
         Some(v)
@@ -645,7 +645,7 @@ impl BitReader {
     fn load_buffered_values(&mut self) {
         let bytes_to_read = cmp::min(self.buffer.len() - self.byte_offset, 8);
         self.buffered_values =
-            read_num_bytes!(u64, bytes_to_read, self.buffer.data()[self.byte_offset..]);
+            read_num_bytes::<u64>(bytes_to_read, &self.buffer.data()[self.byte_offset..]);
     }
 }
 

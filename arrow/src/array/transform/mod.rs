@@ -670,8 +670,6 @@ mod tests {
     use std::{convert::TryFrom, sync::Arc};
 
     use super::*;
-
-    use crate::array::BasicDecimalArray;
     use crate::array::Decimal128Array;
     use crate::{
         array::{

@@ -11,3 +11,6 @@ parquet/data.parquet
 # release notes cache
 .githubchangeloggenerator.cache
 .githubchangeloggenerator.cache.log
+justfile
+.prettierignore
+.env

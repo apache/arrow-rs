@@ -68,7 +68,7 @@ const DEFAULT_CREATED_BY: &str = env!("PARQUET_CREATED_BY");
 /// Parquet writer version.
 ///
 /// Basic constant, which is not part of the Thrift definition.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum WriterVersion {
     PARQUET_1_0,

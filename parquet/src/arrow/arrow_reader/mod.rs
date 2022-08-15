@@ -21,6 +21,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use arrow::array::Array;
+use arrow::compute::prep_null_mask_filter;
 use arrow::datatypes::{DataType as ArrowType, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
@@ -35,6 +36,17 @@ use crate::file::metadata::{KeyValue, ParquetMetaData};
 use crate::file::reader::{ChunkReader, FileReader, SerializedFileReader};
 use crate::file::serialized_reader::ReadOptionsBuilder;
 use crate::schema::types::SchemaDescriptor;
+
+#[allow(unused)]
+mod filter;
+#[allow(unused)]
+mod selection;
+
+// TODO: Make these public once stable (#1792)
+#[allow(unused_imports)]
+pub(crate) use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+#[allow(unused_imports)]
+pub(crate) use selection::{RowSelection, RowSelector};
 
 /// Arrow reader api.
 /// With this api, user can get arrow schema from parquet file, and read parquet data
@@ -72,41 +84,10 @@ pub trait ArrowReader {
     ) -> Result<Self::RecordReader>;
 }
 
-/// [`RowSelection`] allows selecting or skipping a provided number of rows
-/// when scanning the parquet file
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RowSelection {
-    /// The number of rows
-    pub row_count: usize,
-
-    /// If true, skip `row_count` rows
-    pub skip: bool,
-}
-
-impl RowSelection {
-    /// Select `row_count` rows
-    #[allow(unused)]
-    pub fn select(row_count: usize) -> Self {
-        Self {
-            row_count,
-            skip: false,
-        }
-    }
-
-    /// Skip `row_count` rows
-    #[allow(unused)]
-    pub fn skip(row_count: usize) -> Self {
-        Self {
-            row_count,
-            skip: true,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ArrowReaderOptions {
     skip_arrow_metadata: bool,
-    selection: Option<Vec<RowSelection>>,
+    selection: Option<RowSelection>,
 }
 
 impl ArrowReaderOptions {
@@ -130,12 +111,9 @@ impl ArrowReaderOptions {
 
     /// Scan rows from the parquet file according to the provided `selection`
     ///
-    /// TODO: Make public once row selection fully implemented (#1792)
+    /// TODO: Revisit this API, as [`Self`] is provided before the file metadata is available
     #[allow(unused)]
-    pub(crate) fn with_row_selection(
-        self,
-        selection: impl Into<Vec<RowSelection>>,
-    ) -> Self {
+    pub(crate) fn with_row_selection(self, selection: impl Into<RowSelection>) -> Self {
         Self {
             selection: Some(selection.into()),
             ..self
@@ -143,6 +121,9 @@ impl ArrowReaderOptions {
     }
 }
 
+/// An `ArrowReader` that can be used to synchronously read parquet data as [`RecordBatch`]
+///
+/// See [`crate::arrow::async_reader`] for an asynchronous interface
 pub struct ParquetFileArrowReader {
     file_reader: Arc<dyn FileReader>,
 
@@ -178,21 +159,13 @@ impl ArrowReader for ParquetFileArrowReader {
         mask: ProjectionMask,
         batch_size: usize,
     ) -> Result<ParquetRecordBatchReader> {
-        let array_reader = build_array_reader(
-            self.file_reader
-                .metadata()
-                .file_metadata()
-                .schema_descr_ptr(),
-            Arc::new(self.get_schema()?),
-            mask,
-            Box::new(self.file_reader.clone()),
-        )?;
+        let array_reader =
+            build_array_reader(Arc::new(self.get_schema()?), mask, &self.file_reader)?;
 
-        let selection = self.options.selection.clone().map(Into::into);
         Ok(ParquetRecordBatchReader::new(
             batch_size,
             array_reader,
-            selection,
+            self.options.selection.clone(),
         ))
     }
 }
@@ -279,11 +252,13 @@ impl ParquetFileArrowReader {
     }
 }
 
+/// An `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`]
+/// read from a parquet data source
 pub struct ParquetRecordBatchReader {
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
-    selection: Option<VecDeque<RowSelection>>,
+    selection: Option<VecDeque<RowSelector>>,
 }
 
 impl Iterator for ParquetRecordBatchReader {
@@ -319,7 +294,7 @@ impl Iterator for ParquetRecordBatchReader {
                         Some(remaining) if remaining != 0 => {
                             // if page row count less than batch_size we must set batch size to page row count.
                             // add check avoid dead loop
-                            selection.push_front(RowSelection::select(remaining));
+                            selection.push_front(RowSelector::select(remaining));
                             need_read
                         }
                         _ => front.row_count,
@@ -364,22 +339,13 @@ impl RecordBatchReader for ParquetRecordBatchReader {
 }
 
 impl ParquetRecordBatchReader {
-    pub fn try_new(
-        batch_size: usize,
-        array_reader: Box<dyn ArrayReader>,
-    ) -> Result<Self> {
-        Ok(Self::new(batch_size, array_reader, None))
-    }
-
     /// Create a new [`ParquetRecordBatchReader`] that will read at most `batch_size` rows at
     /// a time from [`ArrayReader`] based on the configured `selection`. If `selection` is `None`
     /// all rows will be returned
-    ///
-    /// TODO: Make public once row selection fully implemented (#1792)
     pub(crate) fn new(
         batch_size: usize,
         array_reader: Box<dyn ArrayReader>,
-        selection: Option<VecDeque<RowSelection>>,
+        selection: Option<RowSelection>,
     ) -> Self {
         let schema = match array_reader.get_data_type() {
             ArrowType::Struct(ref fields) => Schema::new(fields.clone()),
@@ -390,9 +356,39 @@ impl ParquetRecordBatchReader {
             batch_size,
             array_reader,
             schema: Arc::new(schema),
-            selection,
+            selection: selection.map(Into::into),
         }
     }
+}
+
+/// Evaluates an [`ArrowPredicate`] returning the [`RowSelection`]
+///
+/// If this [`ParquetRecordBatchReader`] has a [`RowSelection`], the
+/// returned [`RowSelection`] will be the conjunction of this and
+/// the rows selected by `predicate`
+#[allow(unused)]
+pub(crate) fn evaluate_predicate(
+    batch_size: usize,
+    array_reader: Box<dyn ArrayReader>,
+    input_selection: Option<RowSelection>,
+    predicate: &mut dyn ArrowPredicate,
+) -> Result<RowSelection> {
+    let reader =
+        ParquetRecordBatchReader::new(batch_size, array_reader, input_selection.clone());
+    let mut filters = vec![];
+    for maybe_batch in reader {
+        let filter = predicate.evaluate(maybe_batch?)?;
+        match filter.null_count() {
+            0 => filters.push(filter),
+            _ => filters.push(prep_null_mask_filter(&filter)),
+        };
+    }
+
+    let raw = RowSelection::from_filters(&filters);
+    Ok(match input_selection {
+        Some(selection) => selection.and_then(&raw),
+        None => raw,
+    })
 }
 
 #[cfg(test)]
@@ -417,11 +413,10 @@ mod tests {
 
     use crate::arrow::arrow_reader::{
         ArrowReader, ArrowReaderOptions, ParquetFileArrowReader,
-        ParquetRecordBatchReader, RowSelection,
+        ParquetRecordBatchReader, RowSelection, RowSelector,
     };
     use crate::arrow::buffer::converter::{
-        BinaryArrayConverter, Converter, FixedSizeArrayConverter, FromConverter,
-        IntervalDayTimeArrayConverter, LargeUtf8ArrayConverter, Utf8ArrayConverter,
+        Converter, FixedSizeArrayConverter, IntervalDayTimeArrayConverter,
     };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
@@ -517,29 +512,29 @@ mod tests {
 
     #[test]
     fn test_primitive_single_column_reader_test() {
-        run_single_column_reader_tests::<BoolType, BooleanArray, _, BoolType>(
+        run_single_column_reader_tests::<BoolType, _, BoolType>(
             2,
             ConvertedType::NONE,
             None,
-            &FromConverter::new(),
+            |vals| Arc::new(BooleanArray::from_iter(vals.iter().cloned())),
             &[Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY],
         );
-        run_single_column_reader_tests::<Int32Type, Int32Array, _, Int32Type>(
+        run_single_column_reader_tests::<Int32Type, _, Int32Type>(
             2,
             ConvertedType::NONE,
             None,
-            &FromConverter::new(),
+            |vals| Arc::new(Int32Array::from_iter(vals.iter().cloned())),
             &[
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
                 Encoding::DELTA_BINARY_PACKED,
             ],
         );
-        run_single_column_reader_tests::<Int64Type, Int64Array, _, Int64Type>(
+        run_single_column_reader_tests::<Int64Type, _, Int64Type>(
             2,
             ConvertedType::NONE,
             None,
-            &FromConverter::new(),
+            |vals| Arc::new(Int64Array::from_iter(vals.iter().cloned())),
             &[
                 Encoding::PLAIN,
                 Encoding::RLE_DICTIONARY,
@@ -561,16 +556,11 @@ mod tests {
     #[test]
     fn test_fixed_length_binary_column_reader() {
         let converter = FixedSizeArrayConverter::new(20);
-        run_single_column_reader_tests::<
-            FixedLenByteArrayType,
-            FixedSizeBinaryArray,
-            FixedSizeArrayConverter,
-            RandFixedLenGen,
-        >(
+        run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             20,
             ConvertedType::NONE,
             None,
-            &converter,
+            |vals| Arc::new(converter.convert(vals.to_vec()).unwrap()),
             &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
         );
     }
@@ -578,16 +568,11 @@ mod tests {
     #[test]
     fn test_interval_day_time_column_reader() {
         let converter = IntervalDayTimeArrayConverter {};
-        run_single_column_reader_tests::<
-            FixedLenByteArrayType,
-            IntervalDayTimeArray,
-            IntervalDayTimeArrayConverter,
-            RandFixedLenGen,
-        >(
+        run_single_column_reader_tests::<FixedLenByteArrayType, _, RandFixedLenGen>(
             12,
             ConvertedType::INTERVAL,
             None,
-            &converter,
+            |vals| Arc::new(converter.convert(vals.to_vec()).unwrap()),
             &[Encoding::PLAIN, Encoding::RLE_DICTIONARY],
         );
     }
@@ -602,6 +587,12 @@ mod tests {
 
     #[test]
     fn test_utf8_single_column_reader_test() {
+        fn string_converter<O: OffsetSizeTrait>(vals: &[Option<ByteArray>]) -> ArrayRef {
+            Arc::new(GenericStringArray::<O>::from_iter(vals.iter().map(|x| {
+                x.as_ref().map(|b| std::str::from_utf8(b.data()).unwrap())
+            })))
+        }
+
         let encodings = &[
             Encoding::PLAIN,
             Encoding::RLE_DICTIONARY,
@@ -609,46 +600,39 @@ mod tests {
             Encoding::DELTA_BYTE_ARRAY,
         ];
 
-        let converter = BinaryArrayConverter {};
-        run_single_column_reader_tests::<
-            ByteArrayType,
-            BinaryArray,
-            BinaryArrayConverter,
-            RandUtf8Gen,
-        >(2, ConvertedType::NONE, None, &converter, encodings);
-
-        let utf8_converter = Utf8ArrayConverter {};
-        run_single_column_reader_tests::<
-            ByteArrayType,
-            StringArray,
-            Utf8ArrayConverter,
-            RandUtf8Gen,
-        >(2, ConvertedType::UTF8, None, &utf8_converter, encodings);
-
-        run_single_column_reader_tests::<
-            ByteArrayType,
-            StringArray,
-            Utf8ArrayConverter,
-            RandUtf8Gen,
-        >(
+        run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
             2,
-            ConvertedType::UTF8,
-            Some(ArrowDataType::Utf8),
-            &utf8_converter,
+            ConvertedType::NONE,
+            None,
+            |vals| {
+                Arc::new(BinaryArray::from_iter(
+                    vals.iter().map(|x| x.as_ref().map(|x| x.data())),
+                ))
+            },
             encodings,
         );
 
-        let large_utf8_converter = LargeUtf8ArrayConverter {};
-        run_single_column_reader_tests::<
-            ByteArrayType,
-            LargeStringArray,
-            LargeUtf8ArrayConverter,
-            RandUtf8Gen,
-        >(
+        run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
+            2,
+            ConvertedType::UTF8,
+            None,
+            string_converter::<i32>,
+            encodings,
+        );
+
+        run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
+            2,
+            ConvertedType::UTF8,
+            Some(ArrowDataType::Utf8),
+            string_converter::<i32>,
+            encodings,
+        );
+
+        run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
             2,
             ConvertedType::UTF8,
             Some(ArrowDataType::LargeUtf8),
-            &large_utf8_converter,
+            string_converter::<i64>,
             encodings,
         );
 
@@ -658,21 +642,21 @@ mod tests {
                 let mut opts = TestOptions::new(2, 20, 15).with_null_percent(50);
                 opts.encoding = *encoding;
 
+                let data_type = ArrowDataType::Dictionary(
+                    Box::new(key.clone()),
+                    Box::new(ArrowDataType::Utf8),
+                );
+
                 // Cannot run full test suite as keys overflow, run small test instead
-                single_column_reader_test::<
-                    ByteArrayType,
-                    StringArray,
-                    Utf8ArrayConverter,
-                    RandUtf8Gen,
-                >(
+                single_column_reader_test::<ByteArrayType, _, RandUtf8Gen>(
                     opts,
                     2,
                     ConvertedType::UTF8,
-                    Some(ArrowDataType::Dictionary(
-                        Box::new(key.clone()),
-                        Box::new(ArrowDataType::Utf8),
-                    )),
-                    &utf8_converter,
+                    Some(data_type.clone()),
+                    move |vals| {
+                        let vals = string_converter::<i32>(vals);
+                        arrow::compute::cast(&vals, &data_type).unwrap()
+                    },
                 );
             }
         }
@@ -687,37 +671,37 @@ mod tests {
         ];
 
         for key in &key_types {
-            run_single_column_reader_tests::<
-                ByteArrayType,
-                StringArray,
-                Utf8ArrayConverter,
-                RandUtf8Gen,
-            >(
+            let data_type = ArrowDataType::Dictionary(
+                Box::new(key.clone()),
+                Box::new(ArrowDataType::Utf8),
+            );
+
+            run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
                 2,
                 ConvertedType::UTF8,
-                Some(ArrowDataType::Dictionary(
-                    Box::new(key.clone()),
-                    Box::new(ArrowDataType::Utf8),
-                )),
-                &utf8_converter,
+                Some(data_type.clone()),
+                move |vals| {
+                    let vals = string_converter::<i32>(vals);
+                    arrow::compute::cast(&vals, &data_type).unwrap()
+                },
                 encodings,
             );
 
             // https://github.com/apache/arrow-rs/issues/1179
-            // run_single_column_reader_tests::<
-            //     ByteArrayType,
-            //     LargeStringArray,
-            //     LargeUtf8ArrayConverter,
-            //     RandUtf8Gen,
-            // >(
+            // let data_type = ArrowDataType::Dictionary(
+            //     Box::new(key.clone()),
+            //     Box::new(ArrowDataType::LargeUtf8),
+            // );
+            //
+            // run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
             //     2,
             //     ConvertedType::UTF8,
-            //     Some(ArrowDataType::Dictionary(
-            //         Box::new(key.clone()),
-            //         Box::new(ArrowDataType::LargeUtf8),
-            //     )),
-            //     &large_utf8_converter,
-            //     encodings
+            //     Some(data_type.clone()),
+            //     move |vals| {
+            //         let vals = string_converter::<i64>(vals);
+            //         arrow::compute::cast(&vals, &data_type).unwrap()
+            //     },
+            //     encodings,
             // );
         }
     }
@@ -905,7 +889,7 @@ mod tests {
         /// Encoding
         encoding: Encoding,
         //row selections and total selected row count
-        row_selections: Option<(Vec<RowSelection>, usize)>,
+        row_selections: Option<(RowSelection, usize)>,
     }
 
     impl Default for TestOptions {
@@ -1004,17 +988,16 @@ mod tests {
     ///
     /// `rand_max` represents the maximum size of value to pass to to
     /// value generator
-    fn run_single_column_reader_tests<T, A, C, G>(
+    fn run_single_column_reader_tests<T, F, G>(
         rand_max: i32,
         converted_type: ConvertedType,
         arrow_type: Option<ArrowDataType>,
-        converter: &C,
+        converter: F,
         encodings: &[Encoding],
     ) where
         T: DataType,
         G: RandGen<T>,
-        A: Array + 'static,
-        C: Converter<Vec<Option<T::T>>, A> + 'static,
+        F: Fn(&[Option<T::T>]) -> ArrayRef,
     {
         let mut all_options = vec![
             // choose record_batch_batch (15) so batches cross row
@@ -1090,12 +1073,12 @@ mod tests {
                         ..opts.clone()
                     };
 
-                    single_column_reader_test::<T, A, C, G>(
+                    single_column_reader_test::<T, _, G>(
                         opts,
                         rand_max,
                         converted_type,
                         arrow_type.clone(),
-                        converter,
+                        &converter,
                     )
                 }
             }
@@ -1105,17 +1088,16 @@ mod tests {
     /// Create a parquet file and then read it using
     /// `ParquetFileArrowReader` using the parameters described in
     /// `opts`.
-    fn single_column_reader_test<T, A, C, G>(
+    fn single_column_reader_test<T, F, G>(
         opts: TestOptions,
         rand_max: i32,
         converted_type: ConvertedType,
         arrow_type: Option<ArrowDataType>,
-        converter: &C,
+        converter: F,
     ) where
         T: DataType,
         G: RandGen<T>,
-        A: Array + 'static,
-        C: Converter<Vec<Option<T::T>>, A> + 'static,
+        F: Fn(&[Option<T::T>]) -> ArrayRef,
     {
         // Print out options to facilitate debugging failures on CI
         println!(
@@ -1175,9 +1157,7 @@ mod tests {
                 .unwrap(),
         );
 
-        let arrow_field = arrow_type
-            .clone()
-            .map(|t| arrow::datatypes::Field::new("leaf", t, false));
+        let arrow_field = arrow_type.map(|t| Field::new("leaf", t, false));
 
         let mut file = tempfile::tempfile().unwrap();
 
@@ -1203,6 +1183,7 @@ mod tests {
             let mut without_skip_data = gen_expected_data::<T>(&def_levels, &values);
 
             let mut skip_data: Vec<Option<T::T>> = vec![];
+            let selections: VecDeque<RowSelector> = selections.into();
             for select in selections {
                 if select.skip {
                     without_skip_data.drain(0..select.row_count);
@@ -1231,19 +1212,9 @@ mod tests {
                 let batch = maybe_batch.unwrap().unwrap();
                 assert_eq!(end - total_read, batch.num_rows());
 
-                let mut data = vec![];
-                data.extend_from_slice(&expected_data[total_read..end]);
+                let a = converter(&expected_data[total_read..end]);
+                let b = Arc::clone(batch.column(0));
 
-                let a = converter.convert(data).unwrap();
-                let mut b = Arc::clone(batch.column(0));
-
-                if let Some(arrow_type) = arrow_type.as_ref() {
-                    assert_eq!(b.data_type(), arrow_type);
-                    if let ArrowDataType::Dictionary(_, v) = arrow_type {
-                        assert_eq!(a.data_type(), v.as_ref());
-                        b = arrow::compute::cast(&b, v.as_ref()).unwrap()
-                    }
-                }
                 assert_eq!(a.data_type(), b.data_type());
                 assert_eq!(a.data(), b.data(), "{:#?} vs {:#?}", a.data(), b.data());
 
@@ -1282,12 +1253,12 @@ mod tests {
         def_levels: Option<&Vec<Vec<i16>>>,
         file: File,
         schema: TypePtr,
-        field: Option<arrow::datatypes::Field>,
+        field: Option<Field>,
         opts: &TestOptions,
     ) -> Result<parquet_format::FileMetaData> {
         let mut writer_props = opts.writer_props();
         if let Some(field) = field {
-            let arrow_schema = arrow::datatypes::Schema::new(vec![field]);
+            let arrow_schema = Schema::new(vec![field]);
             add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut writer_props);
         }
 
@@ -1789,12 +1760,12 @@ mod tests {
     /// a `batch_size` and `selection`
     fn get_expected_batches(
         column: &RecordBatch,
-        selection: &[RowSelection],
+        selection: &RowSelection,
         batch_size: usize,
     ) -> Vec<RecordBatch> {
         let mut expected_batches = vec![];
 
-        let mut selection: VecDeque<_> = selection.iter().cloned().collect();
+        let mut selection: VecDeque<_> = selection.clone().into();
         let mut row_offset = 0;
         let mut last_start = None;
         while row_offset < column.num_rows() && !selection.is_empty() {
@@ -1846,7 +1817,7 @@ mod tests {
         step_len: usize,
         total_len: usize,
         skip_first: bool,
-    ) -> (Vec<RowSelection>, usize) {
+    ) -> (RowSelection, usize) {
         let mut remaining = total_len;
         let mut skip = skip_first;
         let mut vec = vec![];
@@ -1857,7 +1828,7 @@ mod tests {
             } else {
                 remaining
             };
-            vec.push(RowSelection {
+            vec.push(RowSelector {
                 row_count: step,
                 skip,
             });
@@ -1867,7 +1838,7 @@ mod tests {
             }
             skip = !skip;
         }
-        (vec, selected_count)
+        (vec.into(), selected_count)
     }
 
     #[test]
@@ -1916,7 +1887,7 @@ mod tests {
         fn create_skip_reader(
             test_file: &File,
             batch_size: usize,
-            selections: Vec<RowSelection>,
+            selections: RowSelection,
         ) -> ParquetRecordBatchReader {
             let arrow_reader_options =
                 ArrowReaderOptions::new().with_row_selection(selections);

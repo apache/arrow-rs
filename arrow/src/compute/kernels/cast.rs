@@ -36,6 +36,7 @@
 //! ```
 
 use chrono::Timelike;
+use std::ops::{Div, Mul};
 use std::str;
 use std::sync::Arc;
 
@@ -53,7 +54,7 @@ use crate::temporal_conversions::{
 use crate::{array::*, compute::take};
 use crate::{buffer::Buffer, util::serialization::lexical_to_string};
 use num::cast::AsPrimitive;
-use num::{NumCast, ToPrimitive};
+use num::{BigInt, NumCast, ToPrimitive};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug)]
@@ -78,6 +79,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // TODO UTF8/unsigned numeric to decimal
         // cast one decimal type to another decimal type
         (Decimal128(_, _), Decimal128(_, _)) => true,
+        (Decimal256(_, _), Decimal256(_, _)) => true,
+        (Decimal128(_, _), Decimal256(_, _)) => true,
+        (Decimal256(_, _), Decimal128(_, _)) => true,
         // signed numeric to decimal
         (Null | Int8 | Int16 | Int32 | Int64 | Float32 | Float64, Decimal128(_, _)) |
         // decimal to signed numeric
@@ -432,7 +436,16 @@ pub fn cast_with_options(
     }
     match (from_type, to_type) {
         (Decimal128(_, s1), Decimal128(p2, s2)) => {
-            cast_decimal_to_decimal(array, s1, p2, s2)
+            cast_decimal_to_decimal::<16, 16>(array, s1, p2, s2)
+        }
+        (Decimal256(_, s1), Decimal256(p2, s2)) => {
+            cast_decimal_to_decimal::<32, 32>(array, s1, p2, s2)
+        }
+        (Decimal128(_, s1), Decimal256(p2, s2)) => {
+            cast_decimal_to_decimal::<16, 32>(array, s1, p2, s2)
+        }
+        (Decimal256(_, s1), Decimal128(p2, s2)) => {
+            cast_decimal_to_decimal::<32, 16>(array, s1, p2, s2)
         }
         (Decimal128(_, scale), _) => {
             // cast decimal to other type
@@ -1252,34 +1265,123 @@ const fn time_unit_multiple(unit: &TimeUnit) -> i64 {
 }
 
 /// Cast one type of decimal array to another type of decimal array
-fn cast_decimal_to_decimal(
+fn cast_decimal_to_decimal<const BYTE_WIDTH1: usize, const BYTE_WIDTH2: usize>(
     array: &ArrayRef,
     input_scale: &usize,
     output_precision: &usize,
     output_scale: &usize,
 ) -> Result<ArrayRef> {
-    let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
-
-    let output_array = if input_scale > output_scale {
+    if input_scale > output_scale {
         // For example, input_scale is 4 and output_scale is 3;
         // Original value is 11234_i128, and will be cast to 1123_i128.
         let div = 10_i128.pow((input_scale - output_scale) as u32);
-        array
-            .iter()
-            .map(|v| v.map(|v| v.as_i128() / div))
-            .collect::<Decimal128Array>()
+        if BYTE_WIDTH1 == 16 {
+            let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let iter = array.iter().map(|v| v.map(|v| v.as_i128() / div));
+            if BYTE_WIDTH2 == 16 {
+                let output_array = iter
+                    .collect::<Decimal128Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            } else {
+                let output_array = iter
+                    .map(|v| v.map(BigInt::from))
+                    .collect::<Decimal256Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            }
+        } else {
+            let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
+            let iter = array.iter().map(|v| v.map(|v| v.to_big_int().div(div)));
+            if BYTE_WIDTH2 == 16 {
+                let values = iter
+                    .map(|v| {
+                        if v.is_none() {
+                            Ok(None)
+                        } else {
+                            v.as_ref().and_then(|v| v.to_i128())
+                                .ok_or_else(|| {
+                                    ArrowError::InvalidArgumentError(
+                                    format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
+                                )
+                                })
+                                .map(Some)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let output_array = values
+                    .into_iter()
+                    .collect::<Decimal128Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            } else {
+                let output_array = iter
+                    .collect::<Decimal256Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            }
+        }
     } else {
         // For example, input_scale is 3 and output_scale is 4;
         // Original value is 1123_i128, and will be cast to 11230_i128.
         let mul = 10_i128.pow((output_scale - input_scale) as u32);
-        array
-            .iter()
-            .map(|v| v.map(|v| v.as_i128() * mul))
-            .collect::<Decimal128Array>()
-    }
-    .with_precision_and_scale(*output_precision, *output_scale)?;
+        if BYTE_WIDTH1 == 16 {
+            let array = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let iter = array.iter().map(|v| v.map(|v| v.as_i128() * mul));
+            if BYTE_WIDTH2 == 16 {
+                let output_array = iter
+                    .collect::<Decimal128Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
 
-    Ok(Arc::new(output_array))
+                Ok(Arc::new(output_array))
+            } else {
+                let output_array = iter
+                    .map(|v| v.map(BigInt::from))
+                    .collect::<Decimal256Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            }
+        } else {
+            let array = array.as_any().downcast_ref::<Decimal256Array>().unwrap();
+            let iter = array.iter().map(|v| v.map(|v| v.to_big_int().mul(mul)));
+            if BYTE_WIDTH2 == 16 {
+                let values = iter
+                    .map(|v| {
+                        if v.is_none() {
+                            Ok(None)
+                        } else {
+                            v.as_ref().and_then(|v| v.to_i128())
+                                .ok_or_else(|| {
+                                    ArrowError::InvalidArgumentError(
+                                    format!("{:?} cannot be casted to 128-bit integer for Decimal128", v),
+                                )
+                                })
+                                .map(Some)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                let output_array = values
+                    .into_iter()
+                    .collect::<Decimal128Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            } else {
+                let output_array = iter
+                    .collect::<Decimal256Array>()
+                    .with_precision_and_scale(*output_precision, *output_scale)?;
+
+                Ok(Arc::new(output_array))
+            }
+        }
+    }
 }
 
 /// Cast an array by changing its array_data type to the desired type
@@ -2420,9 +2522,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::array::BasicDecimalArray;
     use crate::datatypes::TimeUnit;
-    use crate::util::decimal::Decimal128;
+    use crate::util::decimal::{Decimal128, Decimal256};
     use crate::{buffer::Buffer, util::display::array_value_to_string};
 
     macro_rules! generate_cast_test_case {
@@ -2461,8 +2562,19 @@ mod tests {
             .with_precision_and_scale(precision, scale)
     }
 
+    fn create_decimal256_array(
+        array: Vec<Option<BigInt>>,
+        precision: usize,
+        scale: usize,
+    ) -> Result<Decimal256Array> {
+        array
+            .into_iter()
+            .collect::<Decimal256Array>()
+            .with_precision_and_scale(precision, scale)
+    }
+
     #[test]
-    fn test_cast_decimal_to_decimal() {
+    fn test_cast_decimal128_to_decimal128() {
         let input_type = DataType::Decimal128(20, 3);
         let output_type = DataType::Decimal128(20, 4);
         assert!(can_cast_types(&input_type, &output_type));
@@ -2488,6 +2600,97 @@ mod tests {
         assert!(result.is_err());
         assert_eq!("Invalid argument error: 12345600 is too large to store in a Decimal128 of precision 2. Max is 99",
                    result.unwrap_err().to_string());
+    }
+
+    #[test]
+    fn test_cast_decimal128_to_decimal256() {
+        let input_type = DataType::Decimal128(20, 3);
+        let output_type = DataType::Decimal256(20, 4);
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![Some(1123456), Some(2123456), Some(3123456), None];
+        let input_decimal_array = create_decimal_array(&array, 20, 3).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal256Array,
+            &output_type,
+            vec![
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(11234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(21234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(31234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cast_decimal256_to_decimal128() {
+        let input_type = DataType::Decimal256(20, 3);
+        let output_type = DataType::Decimal128(20, 4);
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![
+            Some(BigInt::from(1123456)),
+            Some(BigInt::from(2123456)),
+            Some(BigInt::from(3123456)),
+            None,
+        ];
+        let input_decimal_array = create_decimal256_array(array, 20, 3).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal128Array,
+            &output_type,
+            vec![
+                Some(Decimal128::new_from_i128(20, 4, 11234560_i128)),
+                Some(Decimal128::new_from_i128(20, 4, 21234560_i128)),
+                Some(Decimal128::new_from_i128(20, 4, 31234560_i128)),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn test_cast_decimal256_to_decimal256() {
+        let input_type = DataType::Decimal256(20, 3);
+        let output_type = DataType::Decimal256(20, 4);
+        assert!(can_cast_types(&input_type, &output_type));
+        let array = vec![
+            Some(BigInt::from(1123456)),
+            Some(BigInt::from(2123456)),
+            Some(BigInt::from(3123456)),
+            None,
+        ];
+        let input_decimal_array = create_decimal256_array(array, 20, 3).unwrap();
+        let array = Arc::new(input_decimal_array) as ArrayRef;
+        generate_cast_test_case!(
+            &array,
+            Decimal256Array,
+            &output_type,
+            vec![
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(11234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(21234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                Some(
+                    Decimal256::from_big_int(&BigInt::from(31234560_i128), 20, 4)
+                        .unwrap()
+                ),
+                None
+            ]
+        );
     }
 
     #[test]

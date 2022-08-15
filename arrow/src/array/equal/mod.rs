@@ -262,7 +262,6 @@ mod tests {
     use std::convert::TryFrom;
     use std::sync::Arc;
 
-    use crate::array::BasicDecimalArray;
     use crate::array::{
         array::Array, ArrayData, ArrayDataBuilder, ArrayRef, BooleanArray,
         FixedSizeBinaryBuilder, FixedSizeListBuilder, GenericBinaryArray, Int32Builder,

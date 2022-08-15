@@ -21,7 +21,7 @@ use parquet_format::{
 };
 
 /// PageEncodingStats for a column chunk and data page.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageEncodingStats {
     /// the page type (data/dic/...)
     pub page_type: PageType,
