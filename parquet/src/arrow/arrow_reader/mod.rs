@@ -1082,6 +1082,7 @@ mod tests {
         row_filter: Option<Vec<bool>>,
     }
 
+    /// Manually implement this to avoid printing entire contents of row_selections and row_filter
     impl std::fmt::Debug for TestOptions {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("TestOptions")
