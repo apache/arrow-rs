@@ -36,7 +36,7 @@ use crate::util::{
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
-#[derive(Clone, Debug, PartialOrd, Default, PartialEq)]
+#[derive(Clone, Debug, PartialOrd, Default, PartialEq, Eq)]
 pub struct Int96 {
     value: [u32; 3],
 }
