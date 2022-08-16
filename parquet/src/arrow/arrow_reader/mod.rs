@@ -27,7 +27,9 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::{RecordBatch, RecordBatchReader};
 use arrow::{array::StructArray, error::ArrowError};
 
-use crate::arrow::array_reader::{build_array_reader, ArrayReader};
+use crate::arrow::array_reader::{
+    build_array_reader, ArrayReader, FileReaderRowGroupCollection,
+};
 use crate::arrow::schema::parquet_to_arrow_schema;
 use crate::arrow::schema::parquet_to_arrow_schema_by_columns;
 use crate::arrow::ProjectionMask;
@@ -48,9 +50,129 @@ pub(crate) use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 #[allow(unused_imports)]
 pub(crate) use selection::{RowSelection, RowSelector};
 
+/// A generic builder for constructing sync or async arrow parquet readers. This is not intended
+/// to be used directly, instead you should use the specialization for the type of reader
+/// you wish to use
+///
+/// * For a synchronous API - [`ParquetRecordBatchReaderBuilder`]
+/// * For an asynchronous API - [`ParquetRecordBatchStreamBuilder`]
+///
+/// [`ParquetRecordBatchStreamBuilder`]: [crate::arrow::async_reader::ParquetRecordBatchStreamBuilder]
+pub struct ArrowReaderBuilder<T> {
+    pub(crate) input: T,
+
+    pub(crate) metadata: Arc<ParquetMetaData>,
+
+    pub(crate) schema: SchemaRef,
+
+    pub(crate) batch_size: usize,
+
+    pub(crate) row_groups: Option<Vec<usize>>,
+
+    pub(crate) projection: ProjectionMask,
+
+    pub(crate) filter: Option<RowFilter>,
+
+    pub(crate) selection: Option<RowSelection>,
+}
+
+impl<T> ArrowReaderBuilder<T> {
+    pub(crate) fn new_builder(
+        input: T,
+        metadata: Arc<ParquetMetaData>,
+        options: ArrowReaderOptions,
+    ) -> Result<Self> {
+        let kv_metadata = match options.skip_arrow_metadata {
+            true => None,
+            false => metadata.file_metadata().key_value_metadata(),
+        };
+
+        let schema = Arc::new(parquet_to_arrow_schema(
+            metadata.file_metadata().schema_descr(),
+            kv_metadata,
+        )?);
+
+        Ok(Self {
+            input,
+            metadata,
+            schema,
+            batch_size: 1024,
+            row_groups: None,
+            projection: ProjectionMask::all(),
+            filter: None,
+            selection: None,
+        })
+    }
+
+    /// Returns a reference to the [`ParquetMetaData`] for this parquet file
+    pub fn metadata(&self) -> &Arc<ParquetMetaData> {
+        &self.metadata
+    }
+
+    /// Returns the parquet [`SchemaDescriptor`] for this parquet file
+    pub fn parquet_schema(&self) -> &SchemaDescriptor {
+        self.metadata.file_metadata().schema_descr()
+    }
+
+    /// Returns the arrow [`SchemaRef`] for this parquet file
+    pub fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    /// Set the size of [`RecordBatch`] to produce. Defaults to 1024
+    pub fn with_batch_size(self, batch_size: usize) -> Self {
+        Self { batch_size, ..self }
+    }
+
+    /// Only read data from the provided row group indexes
+    pub fn with_row_groups(self, row_groups: Vec<usize>) -> Self {
+        Self {
+            row_groups: Some(row_groups),
+            ..self
+        }
+    }
+
+    /// Only read data from the provided column indexes
+    pub fn with_projection(self, mask: ProjectionMask) -> Self {
+        Self {
+            projection: mask,
+            ..self
+        }
+    }
+
+    /// Provide a [`RowSelection] to filter out rows, and avoid fetching their
+    /// data into memory
+    ///
+    /// Row group filtering is applied prior to this, and rows from skipped
+    /// row groups should not be included in the [`RowSelection`]
+    ///
+    /// TODO: Make public once stable (#1792)
+    #[allow(unused)]
+    pub(crate) fn with_row_selection(self, selection: RowSelection) -> Self {
+        Self {
+            selection: Some(selection),
+            ..self
+        }
+    }
+
+    /// Provide a [`RowFilter`] to skip decoding rows
+    ///
+    /// Row filters are applied after row group selection and row selection
+    ///
+    /// TODO: Make public once stable (#1792)
+    #[allow(unused)]
+    pub(crate) fn with_row_filter(self, filter: RowFilter) -> Self {
+        Self {
+            filter: Some(filter),
+            ..self
+        }
+    }
+}
+
 /// Arrow reader api.
 /// With this api, user can get arrow schema from parquet file, and read parquet data
 /// into arrow arrays.
+#[deprecated(note = "Use ParquetRecordBatchReaderBuilder instead")]
 pub trait ArrowReader {
     type RecordReader: RecordBatchReader;
 
@@ -84,10 +206,14 @@ pub trait ArrowReader {
     ) -> Result<Self::RecordReader>;
 }
 
+/// Options that control how metadata is read for a parquet file
+///
+/// See [`ArrowReaderBuilder`] for how to configure how the column data
+/// is then read from the file, including projection and filter pushdown
 #[derive(Debug, Clone, Default)]
 pub struct ArrowReaderOptions {
     skip_arrow_metadata: bool,
-    selection: Option<RowSelection>,
+    page_index: bool,
 }
 
 impl ArrowReaderOptions {
@@ -109,27 +235,27 @@ impl ArrowReaderOptions {
         }
     }
 
-    /// Scan rows from the parquet file according to the provided `selection`
+    /// Set this true to enable decoding of the [PageIndex] if present. This can be used
+    /// to push down predicates to the parquet scan, potentially eliminating unnecessary IO
     ///
-    /// TODO: Revisit this API, as [`Self`] is provided before the file metadata is available
-    #[allow(unused)]
-    pub(crate) fn with_row_selection(self, selection: impl Into<RowSelection>) -> Self {
-        Self {
-            selection: Some(selection.into()),
-            ..self
-        }
+    /// [PageIndex]: [https://github.com/apache/parquet-format/blob/master/PageIndex.md]
+    pub fn with_page_index(self, page_index: bool) -> Self {
+        Self { page_index, ..self }
     }
 }
 
 /// An `ArrowReader` that can be used to synchronously read parquet data as [`RecordBatch`]
 ///
 /// See [`crate::arrow::async_reader`] for an asynchronous interface
+#[deprecated(note = "Use ParquetRecordBatchReaderBuilder instead")]
 pub struct ParquetFileArrowReader {
     file_reader: Arc<dyn FileReader>,
 
+    #[allow(deprecated)]
     options: ArrowReaderOptions,
 }
 
+#[allow(deprecated)]
 impl ArrowReader for ParquetFileArrowReader {
     type RecordReader = ParquetRecordBatchReader;
 
@@ -165,11 +291,12 @@ impl ArrowReader for ParquetFileArrowReader {
         Ok(ParquetRecordBatchReader::new(
             batch_size,
             array_reader,
-            self.options.selection.clone(),
+            None,
         ))
     }
 }
 
+#[allow(deprecated)]
 impl ParquetFileArrowReader {
     /// Create a new [`ParquetFileArrowReader`] with the provided [`ChunkReader`]
     ///
@@ -194,15 +321,7 @@ impl ParquetFileArrowReader {
         chunk_reader: R,
         options: ArrowReaderOptions,
     ) -> Result<Self> {
-        let file_reader = if options.selection.is_some() {
-            let options = ReadOptionsBuilder::new().with_page_index().build();
-            Arc::new(SerializedFileReader::new_with_options(
-                chunk_reader,
-                options,
-            )?)
-        } else {
-            Arc::new(SerializedFileReader::new(chunk_reader)?)
-        };
+        let file_reader = Arc::new(SerializedFileReader::new(chunk_reader)?);
         Ok(Self::new_with_options(file_reader, options))
     }
 
@@ -249,6 +368,79 @@ impl ParquetFileArrowReader {
             .metadata()
             .file_metadata()
             .key_value_metadata()
+    }
+}
+
+#[doc(hidden)]
+/// A newtype used within [`ReaderOptionsBuilder`] to distinguish sync readers from async
+pub struct SyncReader<T: ChunkReader>(SerializedFileReader<T>);
+
+/// A synchronous builder used to construct [`ParquetRecordBatchReader`] for a file
+///
+/// For an async API see [`crate::arrow::async_reader::ParquetRecordBatchStreamBuilder`]
+pub type ParquetRecordBatchReaderBuilder<T> = ArrowReaderBuilder<SyncReader<T>>;
+
+impl<T: ChunkReader + 'static> ArrowReaderBuilder<SyncReader<T>> {
+    /// Create a new [`ParquetRecordBatchReaderBuilder`]
+    pub fn try_new(reader: T) -> Result<Self> {
+        Self::try_new_with_options(reader, Default::default())
+    }
+
+    /// Create a new [`ParquetRecordBatchReaderBuilder`] with [`ArrowReaderOptions`]
+    pub fn try_new_with_options(reader: T, options: ArrowReaderOptions) -> Result<Self> {
+        let reader = match options.page_index {
+            true => {
+                let read_options = ReadOptionsBuilder::new().with_page_index().build();
+                SerializedFileReader::new_with_options(reader, read_options)?
+            }
+            false => SerializedFileReader::new(reader)?,
+        };
+
+        let metadata = Arc::clone(reader.metadata_ref());
+        Self::new_builder(SyncReader(reader), metadata, options)
+    }
+
+    /// Build a [`ParquetRecordBatchReader`]
+    ///
+    /// Note: this will eagerly evaluate any `RowFilter` before returning
+    pub fn build(self) -> Result<ParquetRecordBatchReader> {
+        let reader =
+            FileReaderRowGroupCollection::new(Arc::new(self.input.0), self.row_groups);
+
+        let mut filter = self.filter;
+        let mut selection = self.selection;
+
+        if let Some(filter) = filter.as_mut() {
+            for predicate in filter.predicates.iter_mut() {
+                if !selects_any(selection.as_ref()) {
+                    break;
+                }
+
+                let projection = predicate.projection().clone();
+                let array_reader =
+                    build_array_reader(Arc::clone(&self.schema), projection, &reader)?;
+
+                selection = Some(evaluate_predicate(
+                    self.batch_size,
+                    array_reader,
+                    selection,
+                    predicate.as_mut(),
+                )?);
+            }
+        }
+
+        let array_reader = build_array_reader(self.schema, self.projection, &reader)?;
+
+        // If selection is empty, truncate
+        if !selects_any(selection.as_ref()) {
+            selection = Some(RowSelection::from(vec![]));
+        }
+
+        Ok(ParquetRecordBatchReader::new(
+            self.batch_size,
+            array_reader,
+            selection,
+        ))
     }
 }
 
@@ -339,6 +531,18 @@ impl RecordBatchReader for ParquetRecordBatchReader {
 }
 
 impl ParquetRecordBatchReader {
+    /// Create a new [`ParquetRecordBatchReader`] from the provided chunk reader
+    ///
+    /// See [`ParquetRecordBatchReaderBuilder`] for more options
+    pub fn try_new<T: ChunkReader + 'static>(
+        reader: T,
+        batch_size: usize,
+    ) -> Result<Self> {
+        ParquetRecordBatchReaderBuilder::try_new(reader)?
+            .with_batch_size(batch_size)
+            .build()
+    }
+
     /// Create a new [`ParquetRecordBatchReader`] that will read at most `batch_size` rows at
     /// a time from [`ArrayReader`] based on the configured `selection`. If `selection` is `None`
     /// all rows will be returned
@@ -361,12 +565,16 @@ impl ParquetRecordBatchReader {
     }
 }
 
+/// Returns `true` if `selection` is `None` or selects some rows
+pub(crate) fn selects_any(selection: Option<&RowSelection>) -> bool {
+    selection.map(|x| x.selects_any()).unwrap_or(true)
+}
+
 /// Evaluates an [`ArrowPredicate`] returning the [`RowSelection`]
 ///
 /// If this [`ParquetRecordBatchReader`] has a [`RowSelection`], the
 /// returned [`RowSelection`] will be the conjunction of this and
 /// the rows selected by `predicate`
-#[allow(unused)]
 pub(crate) fn evaluate_predicate(
     batch_size: usize,
     array_reader: Box<dyn ArrayReader>,
@@ -396,7 +604,7 @@ mod tests {
     use bytes::Bytes;
     use std::cmp::min;
     use std::collections::VecDeque;
-    use std::convert::TryFrom;
+    use std::fmt::Formatter;
     use std::fs::File;
     use std::io::Seek;
     use std::path::PathBuf;
@@ -412,8 +620,8 @@ mod tests {
     use arrow::record_batch::{RecordBatch, RecordBatchReader};
 
     use crate::arrow::arrow_reader::{
-        ArrowReader, ArrowReaderOptions, ParquetFileArrowReader,
-        ParquetRecordBatchReader, RowSelection, RowSelector,
+        ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReader,
+        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
     use crate::arrow::buffer::converter::{
         Converter, FixedSizeArrayConverter, IntervalDayTimeArrayConverter,
@@ -427,7 +635,6 @@ mod tests {
     };
     use crate::errors::Result;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
-    use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
@@ -435,38 +642,29 @@ mod tests {
 
     #[test]
     fn test_arrow_reader_all_columns() {
-        let parquet_file_reader =
-            get_test_reader("parquet/generated_simple_numerics/blogs.parquet");
+        let file = get_test_file("parquet/generated_simple_numerics/blogs.parquet");
 
-        let mut arrow_reader = ParquetFileArrowReader::new(parquet_file_reader);
-
-        let record_batch_reader = arrow_reader
-            .get_record_reader(60)
-            .expect("Failed to read into array!");
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let original_schema = Arc::clone(builder.schema());
+        let reader = builder.build().unwrap();
 
         // Verify that the schema was correctly parsed
-        let original_schema = arrow_reader.get_schema().unwrap().fields().clone();
-        assert_eq!(original_schema, *record_batch_reader.schema().fields());
+        assert_eq!(original_schema.fields(), reader.schema().fields());
     }
 
     #[test]
     fn test_arrow_reader_single_column() {
-        let parquet_file_reader =
-            get_test_reader("parquet/generated_simple_numerics/blogs.parquet");
+        let file = get_test_file("parquet/generated_simple_numerics/blogs.parquet");
 
-        let file_metadata = parquet_file_reader.metadata().file_metadata();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let original_schema = Arc::clone(builder.schema());
 
-        let mask = ProjectionMask::leaves(file_metadata.schema_descr(), [2]);
-        let mut arrow_reader = ParquetFileArrowReader::new(parquet_file_reader);
-
-        let record_batch_reader = arrow_reader
-            .get_record_reader_by_columns(mask, 60)
-            .expect("Failed to read into array!");
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), [2]);
+        let reader = builder.with_projection(mask).build().unwrap();
 
         // Verify that the schema was correctly parsed
-        let original_schema = arrow_reader.get_schema().unwrap().fields().clone();
-        assert_eq!(1, record_batch_reader.schema().fields().len());
-        assert_eq!(original_schema[1], record_batch_reader.schema().fields()[0]);
+        assert_eq!(1, reader.schema().fields().len());
+        assert_eq!(original_schema.fields()[1], reader.schema().fields()[0]);
     }
 
     #[test]
@@ -493,9 +691,7 @@ mod tests {
 
         file.rewind().unwrap();
 
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        let record_reader = arrow_reader.get_record_reader(2).unwrap();
-
+        let record_reader = ParquetRecordBatchReader::try_new(file, 2).unwrap();
         let batches = record_reader.collect::<ArrowResult<Vec<_>>>().unwrap();
 
         assert_eq!(batches.len(), 4);
@@ -733,9 +929,7 @@ mod tests {
         writer.write(&written).unwrap();
         writer.close().unwrap();
 
-        let read = ParquetFileArrowReader::try_new(Bytes::from(buffer))
-            .unwrap()
-            .get_record_reader(3)
+        let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
             .unwrap()
             .collect::<ArrowResult<Vec<_>>>()
             .unwrap();
@@ -771,9 +965,7 @@ mod tests {
         writer.write(&written).unwrap();
         writer.close().unwrap();
 
-        let read = ParquetFileArrowReader::try_new(Bytes::from(buffer))
-            .unwrap()
-            .get_record_reader(3)
+        let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
             .unwrap()
             .collect::<ArrowResult<Vec<_>>>()
             .unwrap();
@@ -813,9 +1005,7 @@ mod tests {
         writer.write(&written).unwrap();
         writer.close().unwrap();
 
-        let read = ParquetFileArrowReader::try_new(Bytes::from(buffer))
-            .unwrap()
-            .get_record_reader(3)
+        let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
             .unwrap()
             .collect::<ArrowResult<Vec<_>>>()
             .unwrap();
@@ -838,9 +1028,7 @@ mod tests {
         for (prefix, target_precision) in file_variants {
             let path = format!("{}/{}_decimal.parquet", testdata, prefix);
             let file = File::open(&path).unwrap();
-            let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-
-            let mut record_reader = arrow_reader.get_record_reader(32).unwrap();
+            let mut record_reader = ParquetRecordBatchReader::try_new(file, 32).unwrap();
 
             let batch = record_reader.next().unwrap().unwrap();
             assert_eq!(batch.num_rows(), 24);
@@ -862,7 +1050,7 @@ mod tests {
     }
 
     /// Parameters for single_column_reader_test
-    #[derive(Debug, Clone)]
+    #[derive(Clone)]
     struct TestOptions {
         /// Number of row group to write to parquet (row group size =
         /// num_row_groups / num_rows)
@@ -888,8 +1076,30 @@ mod tests {
         enabled_statistics: EnabledStatistics,
         /// Encoding
         encoding: Encoding,
-        //row selections and total selected row count
+        /// row selections and total selected row count
         row_selections: Option<(RowSelection, usize)>,
+        /// row filter
+        row_filter: Option<Vec<bool>>,
+    }
+
+    /// Manually implement this to avoid printing entire contents of row_selections and row_filter
+    impl std::fmt::Debug for TestOptions {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("TestOptions")
+                .field("num_row_groups", &self.num_row_groups)
+                .field("num_rows", &self.num_rows)
+                .field("record_batch_size", &self.record_batch_size)
+                .field("null_percent", &self.null_percent)
+                .field("write_batch_size", &self.write_batch_size)
+                .field("max_data_page_size", &self.max_data_page_size)
+                .field("max_dict_page_size", &self.max_dict_page_size)
+                .field("writer_version", &self.writer_version)
+                .field("enabled_statistics", &self.enabled_statistics)
+                .field("encoding", &self.encoding)
+                .field("row_selections", &self.row_selections.is_some())
+                .field("row_filter", &self.row_filter.is_some())
+                .finish()
+        }
     }
 
     impl Default for TestOptions {
@@ -906,6 +1116,7 @@ mod tests {
                 enabled_statistics: EnabledStatistics::Page,
                 encoding: Encoding::PLAIN,
                 row_selections: None,
+                row_filter: None,
             }
         }
     }
@@ -949,6 +1160,8 @@ mod tests {
         }
 
         fn with_row_selections(self) -> Self {
+            assert!(self.row_filter.is_none(), "Must set row selection first");
+
             let mut rng = thread_rng();
             let step = rng.gen_range(self.record_batch_size..self.num_rows);
             let row_selections = create_test_selection(
@@ -958,6 +1171,19 @@ mod tests {
             );
             Self {
                 row_selections: Some(row_selections),
+                ..self
+            }
+        }
+
+        fn with_row_filter(self) -> Self {
+            let row_count = match &self.row_selections {
+                Some((_, count)) => *count,
+                None => self.num_row_groups * self.num_rows,
+            };
+
+            let mut rng = thread_rng();
+            Self {
+                row_filter: Some((0..row_count).map(|_| rng.gen_bool(0.9)).collect()),
                 ..self
             }
         }
@@ -999,7 +1225,7 @@ mod tests {
         G: RandGen<T>,
         F: Fn(&[Option<T::T>]) -> ArrayRef,
     {
-        let mut all_options = vec![
+        let all_options = vec![
             // choose record_batch_batch (15) so batches cross row
             // group boundaries (50 rows in 2 row groups) cases.
             TestOptions::new(2, 100, 15),
@@ -1028,9 +1254,8 @@ mod tests {
             TestOptions::new(2, 256, 91)
                 .with_null_percent(25)
                 .with_enabled_statistics(EnabledStatistics::None),
-        ];
+            // Test skip
 
-        let skip_options = vec![
             // choose record_batch_batch (15) so batches cross row
             // group boundaries (50 rows in 2 row groups) cases.
             TestOptions::new(2, 100, 15).with_row_selections(),
@@ -1059,9 +1284,24 @@ mod tests {
             TestOptions::new(2, 256, 93)
                 .with_null_percent(25)
                 .with_row_selections(),
-        ];
+            // Test filter
 
-        all_options.extend(skip_options);
+            // Test with row filter
+            TestOptions::new(4, 100, 25).with_row_filter(),
+            // Test with row selection and row filter
+            TestOptions::new(4, 100, 25)
+                .with_row_selections()
+                .with_row_filter(),
+            // Test with nulls and row filter
+            TestOptions::new(2, 256, 93)
+                .with_null_percent(25)
+                .with_row_filter(),
+            // Test with nulls and row filter
+            TestOptions::new(2, 256, 93)
+                .with_null_percent(25)
+                .with_row_selections()
+                .with_row_filter(),
+        ];
 
         all_options.into_iter().for_each(|opts| {
             for writer_version in [WriterVersion::PARQUET_1_0, WriterVersion::PARQUET_2_0]
@@ -1173,35 +1413,72 @@ mod tests {
 
         file.rewind().unwrap();
 
-        let mut arrow_reader;
-        let expected_data: Vec<Option<T::T>>;
-        if let Some((selections, row_count)) = opts.row_selections.clone() {
-            let options =
-                ArrowReaderOptions::new().with_row_selection(selections.clone());
-            arrow_reader =
-                ParquetFileArrowReader::try_new_with_options(file, options).unwrap();
-            let mut without_skip_data = gen_expected_data::<T>(&def_levels, &values);
+        // TODO: Should be able to always enable page index (#2434)
+        let options = ArrowReaderOptions::new()
+            .with_page_index(opts.enabled_statistics == EnabledStatistics::Page);
 
-            let mut skip_data: Vec<Option<T::T>> = vec![];
-            let selections: VecDeque<RowSelector> = selections.into();
-            for select in selections {
-                if select.skip {
-                    without_skip_data.drain(0..select.row_count);
-                } else {
-                    skip_data.extend(without_skip_data.drain(0..select.row_count));
+        let mut builder =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+
+        let expected_data = match opts.row_selections {
+            Some((selections, row_count)) => {
+                let mut without_skip_data = gen_expected_data::<T>(&def_levels, &values);
+
+                let mut skip_data: Vec<Option<T::T>> = vec![];
+                let dequeue: VecDeque<RowSelector> = selections.clone().into();
+                for select in dequeue {
+                    if select.skip {
+                        without_skip_data.drain(0..select.row_count);
+                    } else {
+                        skip_data.extend(without_skip_data.drain(0..select.row_count));
+                    }
                 }
-            }
-            expected_data = skip_data;
-            assert_eq!(expected_data.len(), row_count);
-        } else {
-            arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-            //get flatten table data
-            expected_data = gen_expected_data::<T>(&def_levels, &values);
-            assert_eq!(expected_data.len(), opts.num_rows * opts.num_row_groups);
-        }
+                builder = builder.with_row_selection(selections);
 
-        let mut record_reader = arrow_reader
-            .get_record_reader(opts.record_batch_size)
+                assert_eq!(skip_data.len(), row_count);
+                skip_data
+            }
+            None => {
+                //get flatten table data
+                let expected_data = gen_expected_data::<T>(&def_levels, &values);
+                assert_eq!(expected_data.len(), opts.num_rows * opts.num_row_groups);
+                expected_data
+            }
+        };
+
+        let expected_data = match opts.row_filter {
+            Some(filter) => {
+                let expected_data = expected_data
+                    .into_iter()
+                    .zip(filter.iter())
+                    .filter_map(|(d, f)| f.then(|| d))
+                    .collect();
+
+                let mut filter_offset = 0;
+                let filter = RowFilter::new(vec![Box::new(ArrowPredicateFn::new(
+                    ProjectionMask::all(),
+                    move |b| {
+                        let array = BooleanArray::from_iter(
+                            filter
+                                .iter()
+                                .skip(filter_offset)
+                                .take(b.num_rows())
+                                .map(|x| Some(*x)),
+                        );
+                        filter_offset += b.num_rows();
+                        Ok(array)
+                    },
+                ))]);
+
+                builder = builder.with_row_filter(filter);
+                expected_data
+            }
+            None => expected_data,
+        };
+
+        let mut record_reader = builder
+            .with_batch_size(opts.record_batch_size)
+            .build()
             .unwrap();
 
         let mut total_read = 0;
@@ -1284,15 +1561,6 @@ mod tests {
         writer.close()
     }
 
-    fn get_test_reader(file_name: &str) -> Arc<SerializedFileReader<File>> {
-        let file = get_test_file(file_name);
-
-        let reader =
-            SerializedFileReader::new(file).expect("Failed to create serialized reader");
-
-        Arc::new(reader)
-    }
-
     fn get_test_file(file_name: &str) -> File {
         let mut path = PathBuf::new();
         path.push(arrow::util::test_util::arrow_test_data());
@@ -1309,20 +1577,21 @@ mod tests {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/nested_structs.rust.parquet", testdata);
         let file = File::open(&path).unwrap();
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        let record_batch_reader = arrow_reader
-            .get_record_reader(60)
-            .expect("Failed to read into array!");
+        let record_batch_reader = ParquetRecordBatchReader::try_new(file, 60).unwrap();
 
         for batch in record_batch_reader {
             batch.unwrap();
         }
 
-        let mask = ProjectionMask::leaves(arrow_reader.parquet_schema(), [3, 8, 10]);
-        let projected_reader = arrow_reader
-            .get_record_reader_by_columns(mask.clone(), 60)
+        let file = File::open(&path).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), [3, 8, 10]);
+        let projected_reader = builder
+            .with_projection(mask)
+            .with_batch_size(60)
+            .build()
             .unwrap();
-        let projected_schema = arrow_reader.get_schema_by_columns(mask).unwrap();
 
         let expected_schema = Schema::new(vec![
             Field::new(
@@ -1345,12 +1614,11 @@ mod tests {
         ]);
 
         // Tests for #1652 and #1654
-        assert_eq!(projected_reader.schema().as_ref(), &projected_schema);
-        assert_eq!(expected_schema, projected_schema);
+        assert_eq!(&expected_schema, projected_reader.schema().as_ref());
 
         for batch in projected_reader {
             let batch = batch.unwrap();
-            assert_eq!(batch.schema().as_ref(), &projected_schema);
+            assert_eq!(batch.schema().as_ref(), &expected_schema);
         }
     }
 
@@ -1359,10 +1627,7 @@ mod tests {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/nested_maps.snappy.parquet", testdata);
         let file = File::open(&path).unwrap();
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        let record_batch_reader = arrow_reader
-            .get_record_reader(60)
-            .expect("Failed to read into array!");
+        let record_batch_reader = ParquetRecordBatchReader::try_new(file, 60).unwrap();
 
         for batch in record_batch_reader {
             batch.unwrap();
@@ -1406,10 +1671,10 @@ mod tests {
             writer.close().unwrap();
         }
 
-        let mut reader = ParquetFileArrowReader::try_new(file).unwrap();
-        let mask = ProjectionMask::leaves(reader.parquet_schema(), [0]);
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), [0]);
 
-        let reader = reader.get_record_reader_by_columns(mask, 1024).unwrap();
+        let reader = builder.with_projection(mask).build().unwrap();
 
         let expected_schema = Schema::new(vec![Field::new(
             "group",
@@ -1443,10 +1708,8 @@ mod tests {
         ];
 
         let file = Bytes::from(data);
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        let mut record_batch_reader = arrow_reader
-            .get_record_reader_by_columns(ProjectionMask::all(), 10)
-            .unwrap();
+        let mut record_batch_reader =
+            ParquetRecordBatchReader::try_new(file, 10).unwrap();
 
         let error = record_batch_reader.next().unwrap().unwrap_err();
 
@@ -1519,9 +1782,7 @@ mod tests {
 
         file.rewind().unwrap();
 
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-
-        let record_reader = arrow_reader.get_record_reader(3).unwrap();
+        let record_reader = ParquetRecordBatchReader::try_new(file, 3).unwrap();
 
         let batches = record_reader
             .collect::<ArrowResult<Vec<RecordBatch>>>()
@@ -1558,10 +1819,8 @@ mod tests {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/null_list.parquet", testdata);
         let file = File::open(&path).unwrap();
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        let mut record_batch_reader = arrow_reader
-            .get_record_reader(60)
-            .expect("Failed to read into array!");
+        let mut record_batch_reader =
+            ParquetRecordBatchReader::try_new(file, 60).unwrap();
 
         let batch = record_batch_reader.next().unwrap().unwrap();
         assert_eq!(batch.num_rows(), 1);
@@ -1584,8 +1843,7 @@ mod tests {
     fn test_null_schema_inference() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{}/null_list.parquet", testdata);
-        let reader =
-            Arc::new(SerializedFileReader::try_from(File::open(&path).unwrap()).unwrap());
+        let file = File::open(&path).unwrap();
 
         let arrow_field = Field::new(
             "emptylist",
@@ -1593,9 +1851,10 @@ mod tests {
             true,
         );
 
-        let options = ArrowReaderOptions::default().with_skip_arrow_metadata(true);
-        let mut arrow_reader = ParquetFileArrowReader::new_with_options(reader, options);
-        let schema = arrow_reader.get_schema().unwrap();
+        let options = ArrowReaderOptions::new().with_skip_arrow_metadata(true);
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let schema = builder.schema();
         assert_eq!(schema.fields().len(), 1);
         assert_eq!(schema.field(0), &arrow_field);
     }
@@ -1637,40 +1896,38 @@ mod tests {
             file
         };
 
-        let v1_reader = Arc::new(
-            SerializedFileReader::new(file(WriterVersion::PARQUET_1_0)).unwrap(),
-        );
-        let v2_reader = Arc::new(
-            SerializedFileReader::new(file(WriterVersion::PARQUET_2_0)).unwrap(),
-        );
+        let skip_options = ArrowReaderOptions::new().with_skip_arrow_metadata(true);
 
-        let mut arrow_reader = ParquetFileArrowReader::new(v1_reader.clone());
-        assert_eq!(
-            &arrow_reader.get_schema().unwrap(),
-            schema_with_metadata.as_ref()
-        );
+        let v1_reader = file(WriterVersion::PARQUET_1_0);
+        let v2_reader = file(WriterVersion::PARQUET_2_0);
 
-        let options = ArrowReaderOptions::new().with_skip_arrow_metadata(true);
-        let mut arrow_reader =
-            ParquetFileArrowReader::new_with_options(v1_reader, options);
-        assert_eq!(
-            &arrow_reader.get_schema().unwrap(),
-            schema_without_metadata.as_ref()
-        );
+        let arrow_reader =
+            ParquetRecordBatchReader::try_new(v1_reader.try_clone().unwrap(), 1024)
+                .unwrap();
+        assert_eq!(arrow_reader.schema(), schema_with_metadata);
 
-        let mut arrow_reader = ParquetFileArrowReader::new(v2_reader.clone());
-        assert_eq!(
-            &arrow_reader.get_schema().unwrap(),
-            schema_with_metadata.as_ref()
-        );
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            v1_reader,
+            skip_options.clone(),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        assert_eq!(reader.schema(), schema_without_metadata);
 
-        let options = ArrowReaderOptions::new().with_skip_arrow_metadata(true);
-        let mut arrow_reader =
-            ParquetFileArrowReader::new_with_options(v2_reader, options);
-        assert_eq!(
-            &arrow_reader.get_schema().unwrap(),
-            schema_without_metadata.as_ref()
-        );
+        let arrow_reader =
+            ParquetRecordBatchReader::try_new(v2_reader.try_clone().unwrap(), 1024)
+                .unwrap();
+        assert_eq!(arrow_reader.schema(), schema_with_metadata);
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            v2_reader,
+            skip_options,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        assert_eq!(reader.schema(), schema_without_metadata);
     }
 
     #[test]
@@ -1679,13 +1936,16 @@ mod tests {
         let path = format!("{}/alltypes_plain.parquet", testdata);
         let file = File::open(&path).unwrap();
 
-        let mut arrow_reader = ParquetFileArrowReader::try_new(file).unwrap();
-        let file_metadata = arrow_reader.metadata().file_metadata();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
+        let file_metadata = builder.metadata().file_metadata();
         let expected_rows = file_metadata.num_rows() as usize;
-        let schema = file_metadata.schema_descr_ptr();
 
-        let mask = ProjectionMask::leaves(&schema, []);
-        let batch_reader = arrow_reader.get_record_reader_by_columns(mask, 2).unwrap();
+        let mask = ProjectionMask::leaves(builder.parquet_schema(), []);
+        let batch_reader = builder
+            .with_projection(mask)
+            .with_batch_size(2)
+            .build()
+            .unwrap();
 
         let mut total_rows = 0;
         for maybe_batch in batch_reader {
@@ -1731,8 +1991,8 @@ mod tests {
         }
         writer.close().unwrap();
 
-        let mut file_reader = ParquetFileArrowReader::try_new(Bytes::from(buf)).unwrap();
-        let mut record_reader = file_reader.get_record_reader(batch_size).unwrap();
+        let mut record_reader =
+            ParquetRecordBatchReader::try_new(Bytes::from(buf), batch_size).unwrap();
         assert_eq!(
             batch_size,
             record_reader.next().unwrap().unwrap().num_rows()
@@ -1847,9 +2107,8 @@ mod tests {
         let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
         let test_file = File::open(&path).unwrap();
 
-        let mut serial_arrow_reader =
-            ParquetFileArrowReader::try_new(File::open(path).unwrap()).unwrap();
-        let mut serial_reader = serial_arrow_reader.get_record_reader(7300).unwrap();
+        let mut serial_reader =
+            ParquetRecordBatchReader::try_new(File::open(path).unwrap(), 7300).unwrap();
         let data = serial_reader.next().unwrap().unwrap();
 
         let do_test = |batch_size: usize, selection_len: usize| {
@@ -1889,15 +2148,14 @@ mod tests {
             batch_size: usize,
             selections: RowSelection,
         ) -> ParquetRecordBatchReader {
-            let arrow_reader_options =
-                ArrowReaderOptions::new().with_row_selection(selections);
-
-            let mut skip_arrow_reader = ParquetFileArrowReader::try_new_with_options(
-                test_file.try_clone().unwrap(),
-                arrow_reader_options,
-            )
-            .unwrap();
-            skip_arrow_reader.get_record_reader(batch_size).unwrap()
+            let options = ArrowReaderOptions::new().with_page_index(true);
+            let file = test_file.try_clone().unwrap();
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+                .unwrap()
+                .with_batch_size(batch_size)
+                .with_row_selection(selections)
+                .build()
+                .unwrap()
         }
     }
 }
