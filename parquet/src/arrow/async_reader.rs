@@ -78,7 +78,7 @@
 use std::collections::VecDeque;
 use std::fmt::Formatter;
 
-use std::io::{Cursor, Read, SeekFrom};
+use std::io::SeekFrom;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -88,7 +88,7 @@ use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
 use futures::ready;
 use futures::stream::Stream;
-use parquet_format::{PageHeader, PageLocation, PageType};
+
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use arrow::datatypes::SchemaRef;
@@ -100,14 +100,16 @@ use crate::arrow::arrow_reader::{
     RowFilter, RowSelection,
 };
 use crate::arrow::ProjectionMask;
-use crate::basic::Compression;
-use crate::column::page::{Page, PageIterator, PageMetadata, PageReader};
-use crate::compression::{create_codec, Codec};
+
+use crate::column::page::{PageIterator, PageReader};
+
 use crate::errors::{ParquetError, Result};
 use crate::file::footer::{decode_footer, decode_metadata};
 use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
-use crate::file::serialized_reader::{decode_page, read_page_header};
+use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
+
 use crate::file::FOOTER_SIZE;
+
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr};
 
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
@@ -286,7 +288,8 @@ where
 
         let meta = self.metadata.row_group(row_group_idx);
         let mut row_group = InMemoryRowGroup {
-            schema: meta.schema_descr_ptr(),
+            metadata: meta.clone(),
+            // schema: meta.schema_descr_ptr(),
             row_count: meta.num_rows() as usize,
             column_chunks: vec![None; meta.columns().len()],
         };
@@ -299,12 +302,7 @@ where
 
                 let predicate_projection = predicate.projection().clone();
                 row_group
-                    .fetch(
-                        &mut self.input,
-                        meta,
-                        &predicate_projection,
-                        selection.as_ref(),
-                    )
+                    .fetch(&mut self.input, &predicate_projection, selection.as_ref())
                     .await?;
 
                 let array_reader = build_array_reader(
@@ -327,7 +325,7 @@ where
         }
 
         row_group
-            .fetch(&mut self.input, meta, &projection, selection.as_ref())
+            .fetch(&mut self.input, &projection, selection.as_ref())
             .await?;
 
         let reader = ParquetRecordBatchReader::new(
@@ -472,8 +470,8 @@ where
 
 /// An in-memory collection of column chunks
 struct InMemoryRowGroup {
-    schema: SchemaDescPtr,
-    column_chunks: Vec<Option<InMemoryColumnChunk>>,
+    metadata: RowGroupMetaData,
+    column_chunks: Vec<Option<ColumnChunkData>>,
     row_count: usize,
 }
 
@@ -482,62 +480,49 @@ impl InMemoryRowGroup {
     async fn fetch<T: AsyncFileReader + Send>(
         &mut self,
         input: &mut T,
-        metadata: &RowGroupMetaData,
         projection: &ProjectionMask,
         selection: Option<&RowSelection>,
     ) -> Result<()> {
         if let Some((selection, page_locations)) =
-            selection.zip(metadata.page_offset_index().as_ref())
+            selection.zip(self.metadata.page_offset_index().as_ref())
         {
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
             // `RowSelection`
-            let mut fetch_ranges = vec![];
-            let mut page_count = vec![];
+            let mut offsets: Vec<Vec<usize>> = vec![];
 
-            let page_masks: Vec<Vec<bool>> = self
+            let fetch_ranges = self
                 .column_chunks
                 .iter()
                 .enumerate()
                 .into_iter()
                 .filter_map(|(idx, chunk)| {
                     (chunk.is_none() && projection.leaf_included(idx)).then(|| {
-                        let (mask, ranges) = selection.page_mask(&page_locations[idx]);
-                        page_count.push(ranges.len());
-                        fetch_ranges.extend(ranges);
-                        mask
+                        let (_mask, ranges) = selection.page_mask(&page_locations[idx]);
+                        offsets.push(ranges.iter().map(|range| range.start).collect());
+                        ranges
                     })
                 })
+                .flatten()
                 .collect();
 
             let mut chunk_data = input.get_byte_ranges(fetch_ranges).await?.into_iter();
-            let mut page_count = page_count.into_iter();
-            let mut page_masks = page_masks.into_iter();
+            let mut offsets = offsets.into_iter();
 
             for (idx, chunk) in self.column_chunks.iter_mut().enumerate() {
                 if chunk.is_some() || !projection.leaf_included(idx) {
                     continue;
                 }
 
-                let column = metadata.column(idx);
-
-                if let Some(mask) = page_masks.next() {
-                    let page_count = page_count.next().unwrap();
-
-                    let mut data = Vec::with_capacity(page_count);
-                    for _ in 0..page_count {
-                        data.push(chunk_data.next().unwrap());
+                if let Some(page_offsets) = offsets.next() {
+                    let mut chunks = Vec::with_capacity(page_offsets.len());
+                    for _ in 0..page_offsets.len() {
+                        chunks.push(chunk_data.next().unwrap());
                     }
 
-                    *chunk = Some(InMemoryColumnChunk {
-                        num_values: column.num_values(),
-                        compression: column.compression(),
-                        physical_type: column.column_type(),
-                        data: ColumnChunkData::Sparse {
-                            data,
-                            index: page_locations[idx].clone(),
-                            mask,
-                        },
-                    });
+                    *chunk = Some(ColumnChunkData::Sparse {
+                        length: self.metadata.column(idx).byte_range().1 as usize,
+                        data: page_offsets.into_iter().zip(chunks.into_iter()).collect(),
+                    })
                 }
             }
         } else {
@@ -548,7 +533,7 @@ impl InMemoryRowGroup {
                 .into_iter()
                 .filter_map(|(idx, chunk)| {
                     (chunk.is_none() && projection.leaf_included(idx)).then(|| {
-                        let column = metadata.column(idx);
+                        let column = self.metadata.column(idx);
                         let (start, length) = column.byte_range();
                         start as usize..(start + length) as usize
                     })
@@ -562,14 +547,10 @@ impl InMemoryRowGroup {
                     continue;
                 }
 
-                let column = metadata.column(idx);
-
                 if let Some(data) = chunk_data.next() {
-                    *chunk = Some(InMemoryColumnChunk {
-                        num_values: column.num_values(),
-                        compression: column.compression(),
-                        physical_type: column.column_type(),
-                        data: ColumnChunkData::Dense(data),
+                    *chunk = Some(ColumnChunkData::Dense {
+                        offset: self.metadata.column(idx).byte_range().0 as usize,
+                        data,
                     });
                 }
             }
@@ -581,7 +562,7 @@ impl InMemoryRowGroup {
 
 impl RowGroupCollection for InMemoryRowGroup {
     fn schema(&self) -> SchemaDescPtr {
-        self.schema.clone()
+        self.metadata.schema_descr_ptr()
     }
 
     fn num_rows(&self) -> usize {
@@ -589,319 +570,80 @@ impl RowGroupCollection for InMemoryRowGroup {
     }
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
-        let page_reader = self.column_chunks[i].as_ref().unwrap().pages();
+        match &self.column_chunks[i] {
+            None => Err(ParquetError::General(format!(
+                "Invalid column index {}, column was not fetched",
+                i
+            ))),
+            Some(data) => {
+                let page_locations = self
+                    .metadata
+                    .page_offset_index()
+                    .as_ref()
+                    .map(|index| index[i].clone());
+                let page_reader: Box<dyn PageReader> =
+                    Box::new(SerializedPageReader::new(
+                        Arc::new(data.clone()),
+                        self.metadata.column(i),
+                        self.row_count,
+                        page_locations,
+                    )?);
 
-        Ok(Box::new(ColumnChunkIterator {
-            schema: self.schema.clone(),
-            column_schema: self.schema.columns()[i].clone(),
-            reader: Some(page_reader),
-        }))
+                Ok(Box::new(ColumnChunkIterator {
+                    schema: self.metadata.schema_descr_ptr(),
+                    column_schema: self.metadata.schema_descr_ptr().columns()[i].clone(),
+                    reader: Some(Ok(page_reader)),
+                }))
+            }
+        }
     }
 }
 
+/// An in-memory column chunk
 #[derive(Clone)]
 enum ColumnChunkData {
     /// Column chunk data representing only a subset of data pages
     Sparse {
-        data: Vec<Bytes>,
-        index: Vec<PageLocation>,
-        mask: Vec<bool>,
+        /// Length of the full column chunk
+        length: usize,
+        data: Vec<(usize, Bytes)>,
     },
     /// Full column chunk
-    Dense(Bytes),
+    Dense { offset: usize, data: Bytes },
 }
 
-/// Data for a single column chunk
-#[derive(Clone)]
-struct InMemoryColumnChunk {
-    num_values: i64,
-    compression: Compression,
-    physical_type: crate::basic::Type,
-    data: ColumnChunkData,
+impl Length for ColumnChunkData {
+    fn len(&self) -> u64 {
+        match &self {
+            ColumnChunkData::Sparse { length, .. } => *length as u64,
+            ColumnChunkData::Dense { data, .. } => data.len() as u64,
+        }
+    }
 }
 
-impl InMemoryColumnChunk {
-    fn pages(&self) -> Result<Box<dyn PageReader>> {
-        match &self.data {
-            ColumnChunkData::Dense(bytes) => {
-                let page_reader = DenseColumnChunkReader::new(
-                    bytes.clone(),
-                    self.compression,
-                    self.num_values,
-                    self.physical_type,
-                )?;
-                Ok(Box::new(page_reader))
+impl ChunkReader for ColumnChunkData {
+    type T = bytes::buf::Reader<Bytes>;
+
+    fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
+        match &self {
+            ColumnChunkData::Sparse { data, .. } => data
+                .iter()
+                .find(|(offset, bytes)| {
+                    *offset <= start as usize && (start as usize - *offset) < bytes.len()
+                })
+                .map(|(_, bytes)| bytes.slice(0..length).reader())
+                .ok_or_else(|| {
+                    ParquetError::General(format!(
+                        "Invalid offset in sparse column chunk data: {}",
+                        start
+                    ))
+                }),
+            ColumnChunkData::Dense { offset, data } => {
+                let start = start as usize - *offset;
+                let end = start + length;
+                Ok(data.slice(start..end).reader())
             }
-            ColumnChunkData::Sparse { data, index, mask } => {
-                let page_reader = SparseColumnChunkReader::new(
-                    data.clone(),
-                    index.clone(),
-                    mask.clone(),
-                    self.compression,
-                    self.num_values,
-                    self.physical_type,
-                )?;
-                Ok(Box::new(page_reader))
-            }
         }
-    }
-}
-
-// A serialized implementation for Parquet [`PageReader`].
-struct DenseColumnChunkReader {
-    chunk: Bytes,
-    decompressor: Option<Box<dyn Codec>>,
-    num_values: i64,
-    physical_type: crate::basic::Type,
-    offset: usize,
-    seen_num_values: i64,
-    // If the next page header has already been "peeked", we will cache it here
-    next_page_header: Option<PageHeader>,
-}
-
-impl DenseColumnChunkReader {
-    /// Creates a new serialized page reader from file source.
-    fn new(
-        chunk: Bytes,
-        compression: Compression,
-        num_values: i64,
-        physical_type: crate::basic::Type,
-    ) -> Result<Self> {
-        let decompressor = create_codec(compression)?;
-        let result = Self {
-            chunk,
-            decompressor,
-            num_values,
-            physical_type,
-            offset: 0,
-            seen_num_values: 0,
-            next_page_header: None,
-        };
-        Ok(result)
-    }
-}
-
-impl Iterator for DenseColumnChunkReader {
-    type Item = Result<Page>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.get_next_page().transpose()
-    }
-}
-
-impl PageReader for DenseColumnChunkReader {
-    fn get_next_page(&mut self) -> Result<Option<Page>> {
-        while self.seen_num_values < self.num_values {
-            let mut cursor = Cursor::new(&self.chunk.as_ref()[self.offset..]);
-            let page_header = if let Some(page_header) = self.next_page_header.take() {
-                // The next page header has already been peeked, so use the cached value
-                page_header
-            } else {
-                let page_header = read_page_header(&mut cursor)?;
-                self.offset += cursor.position() as usize;
-                page_header
-            };
-
-            let compressed_size = page_header.compressed_page_size as usize;
-
-            let start_offset = self.offset;
-            let end_offset = self.offset + compressed_size;
-            self.offset = end_offset;
-
-            let buffer = self.chunk.slice(start_offset..end_offset);
-
-            let result = match page_header.type_ {
-                PageType::DataPage | PageType::DataPageV2 => {
-                    let decoded = decode_page(
-                        page_header,
-                        buffer.into(),
-                        self.physical_type,
-                        self.decompressor.as_mut(),
-                    )?;
-                    self.seen_num_values += decoded.num_values() as i64;
-                    decoded
-                }
-                PageType::DictionaryPage => decode_page(
-                    page_header,
-                    buffer.into(),
-                    self.physical_type,
-                    self.decompressor.as_mut(),
-                )?,
-                _ => {
-                    // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-                    continue;
-                }
-            };
-
-            return Ok(Some(result));
-        }
-
-        // We are at the end of this column chunk and no more page left. Return None.
-        Ok(None)
-    }
-
-    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
-        while self.seen_num_values < self.num_values {
-            return if let Some(buffered_header) = self.next_page_header.as_ref() {
-                if let Ok(page_metadata) = buffered_header.try_into() {
-                    Ok(Some(page_metadata))
-                } else {
-                    // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-                    self.next_page_header = None;
-                    continue;
-                }
-            } else {
-                let mut cursor = Cursor::new(&self.chunk.as_ref()[self.offset..]);
-                let page_header = read_page_header(&mut cursor)?;
-                self.offset += cursor.position() as usize;
-
-                let page_metadata = if let Ok(page_metadata) = (&page_header).try_into() {
-                    Ok(Some(page_metadata))
-                } else {
-                    // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-                    continue;
-                };
-
-                self.next_page_header = Some(page_header);
-                page_metadata
-            };
-        }
-
-        Ok(None)
-    }
-
-    fn skip_next_page(&mut self) -> Result<()> {
-        if let Some(buffered_header) = self.next_page_header.take() {
-            // The next page header has already been peeked, so just advance the offset
-            self.offset += buffered_header.compressed_page_size as usize;
-        } else {
-            let mut cursor = Cursor::new(&self.chunk.as_ref()[self.offset..]);
-            let page_header = read_page_header(&mut cursor)?;
-            self.offset += cursor.position() as usize;
-            self.offset += page_header.compressed_page_size as usize;
-        }
-
-        Ok(())
-    }
-}
-
-struct SparseColumnChunkReader {
-    data: Vec<Bytes>,
-    index: Vec<PageLocation>,
-    mask: Vec<bool>,
-    decompressor: Option<Box<dyn Codec>>,
-    num_values: i64,
-    physical_type: crate::basic::Type,
-    offset: usize,
-    seen_num_pages: usize,
-}
-
-impl SparseColumnChunkReader {
-    fn new(
-        data: Vec<Bytes>,
-        index: Vec<PageLocation>,
-        mask: Vec<bool>,
-        compression: Compression,
-        num_values: i64,
-        physical_type: crate::basic::Type,
-    ) -> Result<Self> {
-        let decompressor = create_codec(compression)?;
-        let result = Self {
-            data,
-            index,
-            mask,
-            decompressor,
-            num_values,
-            physical_type,
-            offset: 0,
-            seen_num_pages: 0,
-        };
-        Ok(result)
-    }
-}
-
-impl Iterator for SparseColumnChunkReader {
-    type Item = Result<Page>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.get_next_page().transpose()
-    }
-}
-
-impl PageReader for SparseColumnChunkReader {
-    fn get_next_page(&mut self) -> Result<Option<Page>> {
-        if self.offset == self.index.len() - 1 {
-            return Ok(None);
-        }
-
-        if self.mask[self.offset] {
-            let data = &self.data[self.seen_num_pages + 1];
-            let mut cursor = Cursor::new(data);
-
-            let page_header = read_page_header(&mut cursor)?;
-            self.offset += 1;
-
-            let compressed_size = page_header.compressed_page_size as usize;
-
-            let start_offset = cursor.position() as usize;
-            let end_offset = start_offset + compressed_size;
-
-            let buffer = cursor.into_inner().slice(start_offset..end_offset);
-
-            let result = match page_header.type_ {
-                PageType::DataPage | PageType::DataPageV2 => {
-                    let decoded = decode_page(
-                        page_header,
-                        buffer.into(),
-                        self.physical_type,
-                        self.decompressor.as_mut(),
-                    )?;
-                    decoded
-                }
-                _ => {
-                    return Err(ParquetError::ArrowError(format!(
-                        "Error reading next page, page at index {} not a data page",
-                        self.offset
-                    )))
-                }
-            };
-
-            self.offset += 1;
-            self.seen_num_pages += 1;
-
-            Ok(Some(result))
-        } else {
-            Err(ParquetError::ArrowError(format!(
-                "Error reading next page, page at index {} not fetched",
-                self.offset
-            )))
-        }
-    }
-
-    fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
-        if self.offset < self.index.len() - 2 {
-            Ok(Some(PageMetadata {
-                num_rows: self.index[self.offset + 1].first_row_index as usize
-                    - self.index[self.offset].first_row_index as usize,
-                is_dict: false,
-            }))
-        } else if self.offset == self.index.len() - 1 {
-            Ok(Some(PageMetadata {
-                num_rows: self.num_values as usize
-                    - self.index[self.offset].first_row_index as usize,
-                is_dict: false,
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn skip_next_page(&mut self) -> Result<()> {
-        if self.mask[self.offset] {
-            self.seen_num_pages += 1;
-        }
-        self.offset += 1;
-        Ok(())
     }
 }
 
@@ -933,11 +675,15 @@ impl PageIterator for ColumnChunkIterator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::arrow_reader::{ArrowPredicateFn, ParquetRecordBatchReaderBuilder};
-    use crate::arrow::ArrowWriter;
+    use crate::arrow::arrow_reader::{
+        ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowSelector,
+    };
+    use crate::arrow::{parquet_to_arrow_schema, ArrowWriter};
     use crate::file::footer::parse_metadata;
+    use crate::file::page_index::index_reader;
     use arrow::array::{Array, ArrayRef, Int32Array, StringArray};
     use arrow::error::Result as ArrowResult;
+
     use futures::TryStreamExt;
     use std::sync::Mutex;
 
@@ -1014,105 +760,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_in_memory_column_chunk_reader() {
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_plain.parquet", testdata);
-        let data = Bytes::from(std::fs::read(path).unwrap());
-
-        let metadata = crate::file::footer::parse_metadata(&data).unwrap();
-
-        let column_metadata = metadata.row_group(0).column(0);
-
-        let (start, length) = column_metadata.byte_range();
-
-        let column_data = data.slice(start as usize..(start + length) as usize);
-
-        let mut reader = DenseColumnChunkReader::new(
-            column_data,
-            column_metadata.compression(),
-            column_metadata.num_values(),
-            column_metadata.column_type(),
-        )
-        .expect("building reader");
-
-        let first_page = reader
-            .peek_next_page()
-            .expect("peeking first page")
-            .expect("first page is empty");
-
-        assert!(first_page.is_dict);
-        assert_eq!(first_page.num_rows, 0);
-
-        let first_page = reader
-            .get_next_page()
-            .expect("getting first page")
-            .expect("first page is empty");
-
-        assert_eq!(
-            first_page.page_type(),
-            crate::basic::PageType::DICTIONARY_PAGE
-        );
-        assert_eq!(first_page.num_values(), 8);
-
-        let second_page = reader
-            .peek_next_page()
-            .expect("peeking second page")
-            .expect("second page is empty");
-
-        assert!(!second_page.is_dict);
-        assert_eq!(second_page.num_rows, 8);
-
-        let second_page = reader
-            .get_next_page()
-            .expect("getting second page")
-            .expect("second page is empty");
-
-        assert_eq!(second_page.page_type(), crate::basic::PageType::DATA_PAGE);
-        assert_eq!(second_page.num_values(), 8);
-
-        let third_page = reader.peek_next_page().expect("getting third page");
-
-        assert!(third_page.is_none());
-
-        let third_page = reader.get_next_page().expect("getting third page");
-
-        assert!(third_page.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_in_memory_column_chunk_reader_skip_page() {
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{}/alltypes_plain.parquet", testdata);
-        let data = Bytes::from(std::fs::read(path).unwrap());
-
-        let metadata = crate::file::footer::parse_metadata(&data).unwrap();
-
-        let column_metadata = metadata.row_group(0).column(0);
-
-        let (start, length) = column_metadata.byte_range();
-
-        let column_data = data.slice(start as usize..(start + length) as usize);
-
-        let mut reader = DenseColumnChunkReader::new(
-            column_data,
-            column_metadata.compression(),
-            column_metadata.num_values(),
-            column_metadata.column_type(),
-        )
-        .expect("building reader");
-
-        reader.skip_next_page().expect("skipping first page");
-
-        let second_page = reader
-            .get_next_page()
-            .expect("getting second page")
-            .expect("second page is empty");
-
-        assert_eq!(second_page.page_type(), crate::basic::PageType::DATA_PAGE);
-        assert_eq!(second_page.num_values(), 8);
-    }
-
-    #[tokio::test]
     async fn test_row_filter() {
         let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
         let b = StringArray::from_iter_values(["1", "2", "3", "4", "5", "6"]);
@@ -1182,75 +829,85 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_row_filter_prune_io() {
-        let a = StringArray::from_iter_values(["a", "b", "b", "b", "c", "c"]);
-        let b = StringArray::from_iter_values(["1", "2", "3", "4", "5", "6"]);
-        let c = Int32Array::from_iter(0..6);
-        let data = RecordBatch::try_from_iter([
-            ("a", Arc::new(a) as ArrayRef),
-            ("b", Arc::new(b) as ArrayRef),
-            ("c", Arc::new(c) as ArrayRef),
-        ])
-            .unwrap();
+    async fn test_in_memory_row_group_sparse() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/alltypes_tiny_pages.parquet", testdata);
+        let data = Bytes::from(std::fs::read(path).unwrap());
 
-        let mut buf = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new(&mut buf, data.schema(), None).unwrap();
-        writer.write(&data).unwrap();
-        writer.close().unwrap();
+        let metadata = parse_metadata(&data).unwrap();
 
-        let data: Bytes = buf.into();
+        let offset_index =
+            index_reader::read_pages_locations(&data, metadata.row_group(0).columns())
+                .expect("reading offset index");
 
+        let mut row_group_meta = metadata.row_group(0).clone();
+        row_group_meta.set_page_offset(offset_index.clone());
+        let metadata =
+            ParquetMetaData::new(metadata.file_metadata().clone(), vec![row_group_meta]);
 
+        let metadata = Arc::new(metadata);
 
-        let mut metadata = parse_metadata(&data).unwrap();
+        let num_rows = metadata.row_group(0).num_rows();
 
-        let parquet_schema = metadata.file_metadata().schema_descr_ptr();
+        assert_eq!(metadata.num_row_groups(), 1);
 
-        let test = TestReader {
-            data,
-            metadata: Arc::new(metadata),
+        let async_reader = TestReader {
+            data: data.clone(),
+            metadata: metadata.clone(),
             requests: Default::default(),
         };
-        let requests = test.requests.clone();
 
-        let a_filter = ArrowPredicateFn::new(
-            ProjectionMask::leaves(&parquet_schema, vec![0]),
-            |batch| arrow::compute::eq_dyn_utf8_scalar(batch.column(0), "b"),
+        let requests = async_reader.requests.clone();
+        let schema = Arc::new(
+            parquet_to_arrow_schema(metadata.file_metadata().schema_descr(), None)
+                .expect("building arrow schema"),
         );
 
-        let b_filter = ArrowPredicateFn::new(
-            ProjectionMask::leaves(&parquet_schema, vec![1]),
-            |batch| arrow::compute::eq_dyn_utf8_scalar(batch.column(0), "4"),
-        );
+        let _schema_desc = metadata.file_metadata().schema_descr();
 
-        let filter = RowFilter::new(vec![Box::new(a_filter), Box::new(b_filter)]);
+        let projection =
+            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), vec![0]);
 
-        let mask = ProjectionMask::leaves(&parquet_schema, vec![0, 2]);
-        let stream = ParquetRecordBatchStreamBuilder::new(test)
+        let reader_factory = ReaderFactory {
+            metadata,
+            schema,
+            input: async_reader,
+            filter: None,
+        };
+
+        let mut skip = true;
+        let mut pages = offset_index[0].iter().peekable();
+
+        // Setup `RowSelection` so that we can skip every other page
+        let mut selectors = vec![];
+        let mut expected_page_requests: Vec<Range<usize>> = vec![];
+        while let Some(page) = pages.next() {
+            let num_rows = if let Some(next_page) = pages.peek() {
+                next_page.first_row_index - page.first_row_index
+            } else {
+                num_rows - page.first_row_index
+            };
+
+            if skip {
+                selectors.push(RowSelector::skip(num_rows as usize));
+            } else {
+                selectors.push(RowSelector::select(num_rows as usize));
+                let start = page.offset as usize;
+                let end = start + page.compressed_page_size as usize;
+                expected_page_requests.push(start..end);
+            }
+            skip = !skip;
+        }
+
+        let selection = RowSelection::from(selectors);
+
+        let (_factory, _reader) = reader_factory
+            .read_row_group(0, Some(selection), projection, 48)
             .await
-            .unwrap()
-            .with_projection(mask.clone())
-            .with_batch_size(1024)
-            .with_row_filter(filter)
-            .build()
-            .unwrap();
+            .expect("reading row group");
 
-        let batches: Vec<_> = stream.try_collect().await.unwrap();
-        assert_eq!(batches.len(), 1);
+        let requests = requests.lock().unwrap();
 
-        let batch = &batches[0];
-        assert_eq!(batch.num_rows(), 1);
-        assert_eq!(batch.num_columns(), 2);
-
-        let col = batch.column(0);
-        let val = col.as_any().downcast_ref::<StringArray>().unwrap().value(0);
-        assert_eq!(val, "b");
-
-        let col = batch.column(1);
-        let val = col.as_any().downcast_ref::<Int32Array>().unwrap().value(0);
-        assert_eq!(val, 3);
-
-        // Should only have made 3 requests
-        assert_eq!(requests.lock().unwrap().len(), 3);
+        assert_eq!(&requests[..], &expected_page_requests)
     }
 }

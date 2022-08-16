@@ -118,54 +118,6 @@ impl RowSelection {
         Self { selectors }
     }
 
-    /// Given an offset index, return the ranges for data pages selected by `self`
-    pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<usize>> {
-        let mut ranges = vec![];
-        let mut row_offset = 0;
-
-        let mut pages = page_locations.iter().peekable();
-        let mut selectors = self.selectors.iter().cloned();
-        let mut current_selector = selectors.next();
-        let mut current_page = pages.next();
-
-        let mut current_page_included = false;
-
-        while let Some((selector, page)) = current_selector.as_mut().zip(current_page) {
-            if !selector.skip && !current_page_included {
-                let start = page.offset as usize;
-                let end = start + page.compressed_page_size as usize;
-                ranges.push(start..end);
-                current_page_included = true;
-            }
-
-            if let Some(next_page) = pages.peek() {
-                if row_offset + selector.row_count > next_page.first_row_index as usize {
-                    let remaining_in_page =
-                        next_page.first_row_index as usize - row_offset;
-                    selector.row_count -= remaining_in_page;
-                    row_offset += remaining_in_page;
-                    current_page_included = false;
-                    current_page = pages.next();
-
-                    continue;
-                } else {
-                    if row_offset + selector.row_count
-                        == next_page.first_row_index as usize
-                    {
-                        current_page_included = false;
-                        current_page = pages.next();
-                    }
-                    row_offset += selector.row_count;
-                    current_selector = selectors.next();
-                }
-            } else {
-                break;
-            }
-        }
-
-        ranges
-    }
-
     /// Given an offset index, return a mask indicating which pages are selected along with their locations by `self`
     pub fn page_mask(
         &self,
@@ -185,13 +137,11 @@ impl RowSelection {
         while let Some((selector, (mut page_idx, page))) =
             current_selector.as_mut().zip(current_page)
         {
-            if !selector.skip && !current_page_included {
-                if !mask[page_idx] {
-                    mask[page_idx] = true;
-                    let start = page.offset as usize;
-                    let end = start + page.compressed_page_size as usize;
-                    ranges.push(start..end);
-                }
+            if !selector.skip && !current_page_included && !mask[page_idx] {
+                mask[page_idx] = true;
+                let start = page.offset as usize;
+                let end = start + page.compressed_page_size as usize;
+                ranges.push(start..end);
             }
 
             if let Some((_, next_page)) = pages.peek() {
@@ -530,63 +480,6 @@ mod tests {
 
             assert_eq!(a.and_then(&b), expected);
         }
-    }
-
-    #[test]
-    fn test_scan_ranges() {
-        let selection = RowSelection::from(vec![
-            RowSelector::skip(10),
-            RowSelector::select(3),
-            RowSelector::skip(3),
-            RowSelector::select(4),
-            RowSelector::skip(5),
-            RowSelector::select(5),
-            RowSelector::skip(12),
-            RowSelector::select(12),
-            RowSelector::skip(12),
-        ]);
-
-        let index = vec![
-            PageLocation {
-                offset: 0,
-                compressed_page_size: 10,
-                first_row_index: 0,
-            },
-            PageLocation {
-                offset: 10,
-                compressed_page_size: 10,
-                first_row_index: 10,
-            },
-            PageLocation {
-                offset: 20,
-                compressed_page_size: 10,
-                first_row_index: 20,
-            },
-            PageLocation {
-                offset: 30,
-                compressed_page_size: 10,
-                first_row_index: 30,
-            },
-            PageLocation {
-                offset: 40,
-                compressed_page_size: 10,
-                first_row_index: 40,
-            },
-            PageLocation {
-                offset: 50,
-                compressed_page_size: 10,
-                first_row_index: 50,
-            },
-            PageLocation {
-                offset: 60,
-                compressed_page_size: 10,
-                first_row_index: 60,
-            },
-        ];
-
-        let ranges = selection.scan_ranges(&index);
-
-        assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60]);
     }
 
     #[test]
