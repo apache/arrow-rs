@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::array::ArrayAccessor;
-use num::BigInt;
 use std::convert::From;
 use std::fmt;
 use std::{any::Any, iter::FromIterator};
@@ -28,10 +27,8 @@ use super::{BasicDecimalIter, BooleanBufferBuilder, FixedSizeBinaryArray};
 #[allow(deprecated)]
 pub use crate::array::DecimalIter;
 use crate::buffer::{Buffer, MutableBuffer};
+use crate::datatypes::validate_decimal_precision;
 use crate::datatypes::{validate_decimal256_precision_with_lt_bytes, DataType};
-use crate::datatypes::{
-    validate_decimal_precision, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE,
-};
 use crate::error::{ArrowError, Result};
 use crate::util::decimal::{BasicDecimal, Decimal256};
 
@@ -434,13 +431,6 @@ impl<'a> Decimal128Array {
     }
 }
 
-impl From<BigInt> for Decimal256 {
-    fn from(bigint: BigInt) -> Self {
-        Decimal256::from_big_int(&bigint, DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE)
-            .unwrap()
-    }
-}
-
 fn build_decimal_array_from<const BYTE_WIDTH: usize>(
     null_buf: BooleanBufferBuilder,
     buffer: Buffer,
@@ -577,6 +567,7 @@ impl<'a, const BYTE_WIDTH: usize> BasicDecimalArray<BYTE_WIDTH> {
 #[cfg(test)]
 mod tests {
     use crate::array::Decimal256Builder;
+    use crate::datatypes::{DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
     use crate::util::decimal::Decimal128;
     use crate::{array::Decimal128Builder, datatypes::Field};
     use num::{BigInt, Num};

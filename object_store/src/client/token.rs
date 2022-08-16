@@ -30,9 +30,17 @@ pub struct TemporaryToken<T> {
 
 /// Provides [`TokenCache::get_or_insert_with`] which can be used to cache a
 /// [`TemporaryToken`] based on its expiry
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TokenCache<T> {
     cache: Mutex<Option<TemporaryToken<T>>>,
+}
+
+impl<T> Default for TokenCache<T> {
+    fn default() -> Self {
+        Self {
+            cache: Default::default(),
+        }
+    }
 }
 
 impl<T: Clone + Send> TokenCache<T> {
