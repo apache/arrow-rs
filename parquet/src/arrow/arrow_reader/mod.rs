@@ -39,16 +39,11 @@ use crate::file::reader::{ChunkReader, FileReader, SerializedFileReader};
 use crate::file::serialized_reader::ReadOptionsBuilder;
 use crate::schema::types::SchemaDescriptor;
 
-#[allow(unused)]
 mod filter;
-#[allow(unused)]
 mod selection;
 
-// TODO: Make these public once stable (#1792)
-#[allow(unused_imports)]
-pub(crate) use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-#[allow(unused_imports)]
-pub(crate) use selection::{RowSelection, RowSelector};
+pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
+pub use selection::{RowSelection, RowSelector};
 
 /// A generic builder for constructing sync or async arrow parquet readers. This is not intended
 /// to be used directly, instead you should use the specialization for the type of reader
@@ -141,14 +136,16 @@ impl<T> ArrowReaderBuilder<T> {
     }
 
     /// Provide a [`RowSelection] to filter out rows, and avoid fetching their
-    /// data into memory
+    /// data into memory.
     ///
-    /// Row group filtering is applied prior to this, and rows from skipped
+    /// Row group filtering is applied prior to this, and therefore rows from skipped
     /// row groups should not be included in the [`RowSelection`]
     ///
-    /// TODO: Make public once stable (#1792)
-    #[allow(unused)]
-    pub(crate) fn with_row_selection(self, selection: RowSelection) -> Self {
+    /// An example use case of this would be applying a selection determined by
+    /// evaluating predicates against the [`Index`]
+    ///
+    /// [`Index`]: [parquet::file::page_index::index::Index]
+    pub fn with_row_selection(self, selection: RowSelection) -> Self {
         Self {
             selection: Some(selection),
             ..self
@@ -158,10 +155,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// Provide a [`RowFilter`] to skip decoding rows
     ///
     /// Row filters are applied after row group selection and row selection
-    ///
-    /// TODO: Make public once stable (#1792)
-    #[allow(unused)]
-    pub(crate) fn with_row_filter(self, filter: RowFilter) -> Self {
+    pub fn with_row_filter(self, filter: RowFilter) -> Self {
         Self {
             filter: Some(filter),
             ..self
