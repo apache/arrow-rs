@@ -45,7 +45,7 @@ pub trait Length {
 /// For an object store reader, each read can be mapped to a range request.
 pub trait ChunkReader: Length + Send + Sync {
     type T: Read + Send;
-    /// get a serialy readeable slice of the current reader
+    /// Get a serially readable slice of the current reader
     /// This should fail if the slice exceeds the current bounds
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T>;
 }

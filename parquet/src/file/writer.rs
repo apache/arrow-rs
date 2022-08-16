@@ -663,7 +663,7 @@ mod tests {
     use super::*;
 
     use bytes::Bytes;
-    use std::{fs::File, io::Cursor};
+    use std::fs::File;
 
     use crate::basic::{Compression, Encoding, LogicalType, Repetition, Type};
     use crate::column::page::PageReader;
@@ -675,6 +675,7 @@ mod tests {
         statistics::{from_thrift, to_thrift, Statistics},
     };
     use crate::record::RowAccessor;
+    use crate::schema::types::{ColumnDescriptor, ColumnPath};
     use crate::util::memory::ByteBufferPtr;
 
     #[test]
@@ -1062,11 +1063,25 @@ mod tests {
             page_writer.close().unwrap();
         }
         {
+            let reader = bytes::Bytes::from(buffer);
+
+            let t = types::Type::primitive_type_builder("t", physical_type)
+                .build()
+                .unwrap();
+
+            let desc = ColumnDescriptor::new(Arc::new(t), 0, 0, ColumnPath::new(vec![]));
+            let meta = ColumnChunkMetaData::builder(Arc::new(desc))
+                .set_compression(codec)
+                .set_total_compressed_size(reader.len() as i64)
+                .set_num_values(total_num_values)
+                .build()
+                .unwrap();
+
             let mut page_reader = SerializedPageReader::new(
-                Cursor::new(&buffer),
-                total_num_values,
-                codec,
-                physical_type,
+                Arc::new(reader),
+                &meta,
+                total_num_values as usize,
+                None,
             )
             .unwrap();
 
