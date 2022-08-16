@@ -18,6 +18,48 @@
 use super::{Buffer, MutableBuffer};
 use crate::util::bit_util::ceil;
 
+/// Apply a bitwise operation `op` to three inputs and return the result as a Buffer.
+/// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn bitwise_ternary_op_helper<F>(
+    first: &Buffer,
+    first_offset_in_bits: usize,
+    second: &Buffer,
+    second_offset_in_bits: usize,
+    third: &Buffer,
+    third_offset_in_bits: usize,
+    len_in_bits: usize,
+    op: F,
+) -> Buffer
+where
+    F: Fn(u64, u64, u64) -> u64,
+{
+    let first_chunks = first.bit_chunks(first_offset_in_bits, len_in_bits);
+    let second_chunks = second.bit_chunks(second_offset_in_bits, len_in_bits);
+    let third_chunks = third.bit_chunks(third_offset_in_bits, len_in_bits);
+
+    let chunks = first_chunks
+        .iter()
+        .zip(second_chunks.iter())
+        .zip(third_chunks.iter())
+        .map(|((first, second), third)| op(first, second, third));
+    // Soundness: `BitChunks` is a `BitChunks` iterator which
+    // correctly reports its upper bound
+    let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+
+    let remainder_bytes = ceil(first_chunks.remainder_len(), 8);
+    let rem = op(
+        first_chunks.remainder_bits(),
+        second_chunks.remainder_bits(),
+        third_chunks.remainder_bits(),
+    );
+    // we are counting its starting from the least significant bit, to to_le_bytes should be correct
+    let rem = &rem.to_le_bytes()[0..remainder_bytes];
+    buffer.extend_from_slice(rem);
+
+    buffer.into()
+}
+
 /// Apply a bitwise operation `op` to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
 pub fn bitwise_bin_op_helper<F>(
