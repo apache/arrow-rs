@@ -1259,21 +1259,37 @@ pub fn cast_with_options(
 }
 
 /// Cast to string array to binary array
-fn cast_string_to_binary(array: &ArrayRef) -> Result<ArrayRef>
-{
+fn cast_string_to_binary(array: &ArrayRef) -> Result<ArrayRef> {
     let from_type = array.data_type();
     match *from_type {
         DataType::Utf8 => {
-            let data = unsafe {array.data().clone().into_builder().data_type(DataType::Binary).build_unchecked()};
+            let data = unsafe {
+                array
+                    .data()
+                    .clone()
+                    .into_builder()
+                    .data_type(DataType::Binary)
+                    .build_unchecked()
+            };
 
-            Ok(Arc::new(BinaryArray::from(data)) as  ArrayRef)
+            Ok(Arc::new(BinaryArray::from(data)) as ArrayRef)
         }
         DataType::LargeUtf8 => {
-            let data = unsafe {array.data().clone().into_builder().data_type(DataType::LargeBinary).build_unchecked()};
+            let data = unsafe {
+                array
+                    .data()
+                    .clone()
+                    .into_builder()
+                    .data_type(DataType::LargeBinary)
+                    .build_unchecked()
+            };
 
-            Ok(Arc::new(LargeBinaryArray::from(data)) as  ArrayRef)
+            Ok(Arc::new(LargeBinaryArray::from(data)) as ArrayRef)
         }
-        _ => Err(ArrowError::InvalidArgumentError(format!("{:?} cannot be converted to binary array", from_type))),
+        _ => Err(ArrowError::InvalidArgumentError(format!(
+            "{:?} cannot be converted to binary array",
+            from_type
+        ))),
     }
 }
 
