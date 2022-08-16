@@ -1391,7 +1391,7 @@ impl DataType {
         }
     }
 
-    /// Returns true if this type is numeric: (UInt*, Unit*, or Float*).
+    /// Returns true if this type is numeric: (UInt*, Int*, or Float*).
     pub fn is_numeric(t: &DataType) -> bool {
         use DataType::*;
         matches!(
