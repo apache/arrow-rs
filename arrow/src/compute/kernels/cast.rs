@@ -695,7 +695,7 @@ pub fn cast_with_options(
             Float64 => cast_string_to_numeric::<Float64Type, i32>(array, cast_options),
             Date32 => cast_string_to_date32::<i32>(&**array, cast_options),
             Date64 => cast_string_to_date64::<i32>(&**array, cast_options),
-            Binary => cast_string_to_binary::<i32>(array),
+            Binary => cast_string_to_binary(array),
             Time32(TimeUnit::Second) => {
                 cast_string_to_time32second::<i32>(&**array, cast_options)
             }
@@ -842,7 +842,7 @@ pub fn cast_with_options(
             Float64 => cast_string_to_numeric::<Float64Type, i64>(array, cast_options),
             Date32 => cast_string_to_date32::<i64>(&**array, cast_options),
             Date64 => cast_string_to_date64::<i64>(&**array, cast_options),
-            LargeBinary => cast_string_to_binary::<i64>(array),
+            LargeBinary => cast_string_to_binary(array),
             Time32(TimeUnit::Second) => {
                 cast_string_to_time32second::<i64>(&**array, cast_options)
             }
@@ -1259,21 +1259,22 @@ pub fn cast_with_options(
 }
 
 /// Cast to string array to binary array
-fn cast_string_to_binary<OffsetSize>(array: &ArrayRef) -> Result<ArrayRef>
-where
-    OffsetSize: OffsetSizeTrait,
+fn cast_string_to_binary(array: &ArrayRef) -> Result<ArrayRef>
 {
-    let array = array
-        .as_any()
-        .downcast_ref::<GenericStringArray<OffsetSize>>()
-        .unwrap();
+    let from_type = array.data_type();
+    match *from_type {
+        DataType::Utf8 => {
+            let data = unsafe {array.data().clone().into_builder().data_type(DataType::Binary).build_unchecked()};
 
-    Ok(Arc::new(
-        array
-            .iter()
-            .map(|x| x.map(|data| data.as_bytes()))
-            .collect::<GenericBinaryArray<OffsetSize>>(),
-    ))
+            Ok(Arc::new(BinaryArray::from(data)) as  ArrayRef)
+        }
+        DataType::LargeUtf8 => {
+            let data = unsafe {array.data().clone().into_builder().data_type(DataType::LargeBinary).build_unchecked()};
+
+            Ok(Arc::new(LargeBinaryArray::from(data)) as  ArrayRef)
+        }
+        _ => Err(ArrowError::InvalidArgumentError(format!("{:?} cannot be converted to binary array", from_type))),
+    }
 }
 
 /// Get the time unit as a multiple of a second
