@@ -843,7 +843,7 @@ mod tests {
         run_test::<Int96Type>(
             -1,
             &[Int96::from(vec![1, 2, 3]), Int96::from(vec![2, 3, 4])],
-            32,
+            24,
         );
         run_test::<ByteArrayType>(
             -1,

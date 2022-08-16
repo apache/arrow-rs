@@ -36,29 +36,27 @@ use crate::util::{
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
-#[derive(Clone, Debug, PartialOrd, Default)]
+#[derive(Clone, Debug, PartialOrd, Default, PartialEq)]
 pub struct Int96 {
-    value: Option<[u32; 3]>,
+    value: [u32; 3],
 }
 
 impl Int96 {
     /// Creates new INT96 type struct with no data set.
     pub fn new() -> Self {
-        Self { value: None }
+        Self { value: [0; 3] }
     }
 
     /// Returns underlying data as slice of [`u32`].
     #[inline]
     pub fn data(&self) -> &[u32] {
-        self.value
-            .as_ref()
-            .expect("set_data should have been called")
+        &self.value
     }
 
     /// Sets data for this INT96 type.
     #[inline]
     pub fn set_data(&mut self, elem0: u32, elem1: u32, elem2: u32) {
-        self.value = Some([elem0, elem1, elem2]);
+        self.value = [elem0, elem1, elem2];
     }
 
     /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
@@ -72,16 +70,6 @@ impl Int96 {
         let seconds = (day - JULIAN_DAY_OF_EPOCH) * SECONDS_PER_DAY;
 
         seconds * MILLIS_PER_SECOND + nanoseconds / 1_000_000
-    }
-}
-
-impl PartialEq for Int96 {
-    fn eq(&self, other: &Int96) -> bool {
-        match (&self.value, &other.value) {
-            (Some(v1), Some(v2)) => v1 == v2,
-            (None, None) => true,
-            _ => false,
-        }
     }
 }
 
