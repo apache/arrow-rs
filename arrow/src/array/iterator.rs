@@ -107,7 +107,7 @@ pub type GenericListArrayIter<'a, O> = ArrayIter<&'a GenericListArray<O>>;
 
 pub type DecimalIter<'a, T> = ArrayIter<&'a DecimalArray<T>>;
 /// an iterator that returns `Some(Decimal128)` or `None`, that can be used on a
-/// [`Decimal128Array`]
+/// [`super::Decimal128Array`]
 pub type Decimal128Iter<'a> = DecimalIter<'a, Decimal128Type>;
 
 /// an iterator that returns `Some(Decimal256)` or `None`, that can be used on a
