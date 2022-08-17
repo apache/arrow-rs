@@ -62,19 +62,8 @@ pub fn parse_metadata<R: ChunkReader>(chunk_reader: &R) -> Result<ParquetMetaDat
         ));
     }
 
-    let mut metadata = Vec::with_capacity(metadata_len);
-
-    let read = chunk_reader
-        .get_read(file_size - footer_metadata_len as u64, metadata_len)?
-        .read_to_end(&mut metadata)?;
-
-    if read != metadata_len {
-        return Err(eof_err!(
-            "Expected to read {} bytes of metadata, got {}",
-            metadata_len,
-            read
-        ));
-    }
+    let metadata =
+        chunk_reader.get_bytes(file_size - footer_metadata_len as u64, metadata_len)?;
 
     decode_metadata(&metadata)
 }

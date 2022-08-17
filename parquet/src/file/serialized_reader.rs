@@ -79,8 +79,12 @@ impl ChunkReader for Bytes {
     type T = bytes::buf::Reader<Bytes>;
 
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
+        Ok(self.get_bytes(start, length)?.reader())
+    }
+
+    fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
         let start = start as usize;
-        Ok(self.slice(start..start + length).reader())
+        Ok(self.slice(start..start + length))
     }
 }
 
@@ -623,26 +627,13 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     let page_len = front.compressed_page_size as usize;
 
-                    // TODO: Add ChunkReader get_bytes to potentially avoid copy
-                    let mut buffer = Vec::with_capacity(page_len);
-                    let read = self
-                        .reader
-                        .get_read(front.offset as u64, page_len)?
-                        .read_to_end(&mut buffer)?;
+                    let buffer = self.reader.get_bytes(front.offset as u64, page_len)?;
 
-                    if read != page_len {
-                        return Err(eof_err!(
-                            "Expected to read {} bytes of page, read only {}",
-                            page_len,
-                            read
-                        ));
-                    }
-
-                    let mut cursor = Cursor::new(buffer);
+                    let mut cursor = Cursor::new(buffer.as_ref());
                     let header = read_page_header(&mut cursor)?;
                     let offset = cursor.position();
 
-                    let bytes = Bytes::from(cursor.into_inner()).slice(offset as usize..);
+                    let bytes = buffer.slice(offset as usize..);
                     decode_page(
                         header,
                         bytes.into(),
