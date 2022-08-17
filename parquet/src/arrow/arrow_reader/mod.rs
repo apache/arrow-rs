@@ -135,7 +135,7 @@ impl<T> ArrowReaderBuilder<T> {
         }
     }
 
-    /// Provide a [`RowSelection] to filter out rows, and avoid fetching their
+    /// Provide a [`RowSelection`] to filter out rows, and avoid fetching their
     /// data into memory.
     ///
     /// Row group filtering is applied prior to this, and therefore rows from skipped
