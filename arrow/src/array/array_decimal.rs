@@ -16,8 +16,6 @@
 // under the License.
 
 use crate::array::ArrayAccessor;
-
-use std::borrow::Borrow;
 use std::convert::From;
 use std::fmt;
 use std::{any::Any, iter::FromIterator};
@@ -45,9 +43,9 @@ use crate::util::decimal::{BasicDecimal, Decimal256};
 ///
 ///    // Create a DecimalArray with the default precision and scale
 ///    let decimal_array: Decimal128Array = vec![
-///       Some(8_887_000_000),
+///       Some(8_887_000_000_i128),
 ///       None,
-///       Some(-8_887_000_000),
+///       Some(-8_887_000_000_i128),
 ///     ]
 ///     .into_iter().collect();
 ///
@@ -452,8 +450,8 @@ impl<Ptr: Into<Decimal256>> FromIterator<Option<Ptr>> for Decimal256Array {
     }
 }
 
-impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for Decimal128Array {
-    fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
+impl<Ptr: Into<i128>> FromIterator<Option<Ptr>> for Decimal128Array {
+    fn from_iter<I: IntoIterator<Item = Option<Ptr>>>(iter: I) -> Self {
         let iter = iter.into_iter();
         let (lower, upper) = iter.size_hint();
         let size_hint = upper.unwrap_or(lower);
@@ -462,9 +460,9 @@ impl<Ptr: Borrow<Option<i128>>> FromIterator<Ptr> for Decimal128Array {
 
         let buffer: Buffer = iter
             .map(|item| {
-                if let Some(a) = item.borrow() {
+                if let Some(a) = item {
                     null_buf.append(true);
-                    *a
+                    a.into()
                 } else {
                     null_buf.append(false);
                     // arbitrary value for NULL
@@ -547,6 +545,7 @@ impl<'a, const BYTE_WIDTH: usize> BasicDecimalArray<BYTE_WIDTH> {
 mod tests {
     use crate::array::Decimal256Builder;
     use crate::datatypes::{DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE};
+    use crate::util::decimal::Decimal128;
     use crate::{array::Decimal128Builder, datatypes::Field};
     use num::{BigInt, Num};
 
@@ -749,8 +748,8 @@ mod tests {
 
     #[test]
     fn test_decimal_array_fmt_debug() {
-        let arr = [Some(8887000000), Some(-8887000000), None]
-            .iter()
+        let arr = [Some(8887000000_i128), Some(-8887000000_i128), None]
+            .into_iter()
             .collect::<Decimal128Array>()
             .with_precision_and_scale(23, 6)
             .unwrap();
@@ -935,6 +934,24 @@ mod tests {
             .unwrap(),
             array.value(2)
         );
+        assert!(!array.is_null(2));
+    }
+
+    #[test]
+    fn test_from_iter_decimal128array() {
+        let array: Decimal128Array = vec![
+            Some(Decimal128::new_from_i128(38, 10, -100)),
+            None,
+            Some(Decimal128::new_from_i128(38, 10, 101)),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::Decimal128(38, 10));
+        assert_eq!(-100_i128, array.value(0).into());
+        assert!(!array.is_null(0));
+        assert!(array.is_null(1));
+        assert_eq!(101_i128, array.value(2).into());
         assert!(!array.is_null(2));
     }
 }
