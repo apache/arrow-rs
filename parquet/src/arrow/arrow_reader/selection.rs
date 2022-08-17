@@ -451,11 +451,11 @@ mod tests {
         let mut rand = thread_rng();
         for _ in 0..100 {
             let a_len = rand.gen_range(10..100);
-            let a_bools: Vec<_> = (0..a_len).map(|x| rand.gen_bool(0.2)).collect();
+            let a_bools: Vec<_> = (0..a_len).map(|_| rand.gen_bool(0.2)).collect();
             let a = RowSelection::from_filters(&[BooleanArray::from(a_bools.clone())]);
 
             let b_len: usize = a_bools.iter().map(|x| *x as usize).sum();
-            let b_bools: Vec<_> = (0..b_len).map(|x| rand.gen_bool(0.8)).collect();
+            let b_bools: Vec<_> = (0..b_len).map(|_| rand.gen_bool(0.8)).collect();
             let b = RowSelection::from_filters(&[BooleanArray::from(b_bools.clone())]);
 
             let mut expected_bools = vec![false; a_len];
