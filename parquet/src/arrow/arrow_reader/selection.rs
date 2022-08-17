@@ -126,16 +126,14 @@ impl RowSelection {
         let mut ranges = vec![];
         let mut row_offset = 0;
 
-        let mut pages = page_locations.iter().enumerate().peekable();
+        let mut pages = page_locations.iter().peekable();
         let mut selectors = self.selectors.iter().cloned();
         let mut current_selector = selectors.next();
         let mut current_page = pages.next();
 
         let mut current_page_included = false;
 
-        while let Some((selector, (mut page_idx, page))) =
-            current_selector.as_mut().zip(current_page)
-        {
+        while let Some((selector, page)) = current_selector.as_mut().zip(current_page) {
             if !(selector.skip || current_page_included) {
                 let start = page.offset as usize;
                 let end = start + page.compressed_page_size as usize;
@@ -143,7 +141,7 @@ impl RowSelection {
                 current_page_included = true;
             }
 
-            if let Some((_, next_page)) = pages.peek() {
+            if let Some(next_page) = pages.peek() {
                 if row_offset + selector.row_count > next_page.first_row_index as usize {
                     let remaining_in_page =
                         next_page.first_row_index as usize - row_offset;
