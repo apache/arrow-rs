@@ -23,8 +23,6 @@ use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::str::from_utf8;
 
-use byteorder::{BigEndian, ByteOrder};
-
 use crate::basic::Type;
 use crate::column::reader::{ColumnReader, ColumnReaderImpl};
 use crate::column::writer::{ColumnWriter, ColumnWriterImpl};
@@ -349,8 +347,7 @@ pub enum Decimal {
 impl Decimal {
     /// Creates new decimal value from `i32`.
     pub fn from_i32(value: i32, precision: i32, scale: i32) -> Self {
-        let mut bytes = [0; 4];
-        BigEndian::write_i32(&mut bytes, value);
+        let bytes = value.to_be_bytes();
         Decimal::Int32 {
             value: bytes,
             precision,
@@ -360,8 +357,7 @@ impl Decimal {
 
     /// Creates new decimal value from `i64`.
     pub fn from_i64(value: i64, precision: i32, scale: i32) -> Self {
-        let mut bytes = [0; 8];
-        BigEndian::write_i64(&mut bytes, value);
+        let bytes = value.to_be_bytes();
         Decimal::Int64 {
             value: bytes,
             precision,
@@ -569,7 +565,6 @@ pub(crate) mod private {
     use crate::util::memory::ByteBufferPtr;
 
     use crate::basic::Type;
-    use byteorder::ByteOrder;
     use std::convert::TryInto;
 
     use super::{ParquetError, Result, SliceAsBytes};
@@ -851,9 +846,11 @@ pub(crate) mod private {
 
             let mut pos = 0; // position in byte array
             for item in buffer.iter_mut().take(num_values) {
-                let elem0 = byteorder::LittleEndian::read_u32(&bytes[pos..pos + 4]);
-                let elem1 = byteorder::LittleEndian::read_u32(&bytes[pos + 4..pos + 8]);
-                let elem2 = byteorder::LittleEndian::read_u32(&bytes[pos + 8..pos + 12]);
+                let elem0 = u32::from_le_bytes(bytes[pos..pos + 4].try_into().unwrap());
+                let elem1 =
+                    u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap());
+                let elem2 =
+                    u32::from_le_bytes(bytes[pos + 8..pos + 12].try_into().unwrap());
 
                 item.set_data(elem0, elem1, elem2);
                 pos += 12;
