@@ -22,7 +22,7 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
 
-/// [`RowSelection`] is a collection of [`RowSelect`] used to skip rows when
+/// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when
 /// scanning a parquet file
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct RowSelector {
