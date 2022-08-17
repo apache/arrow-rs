@@ -64,6 +64,11 @@ pub fn read_pages_locations<R: ChunkReader>(
 ) -> Result<Vec<Vec<PageLocation>>, ParquetError> {
     let (offset, total_length) = get_location_offset_and_total_length(chunks)?;
 
+    // If there is no OffsetIndex, return an empty vector
+    if total_length == 0 {
+        return Ok(vec![]);
+    }
+
     //read all need data into buffer
     let mut reader = reader.get_read(offset, total_length)?;
     let mut data = vec![0; total_length];
@@ -161,4 +166,28 @@ fn deserialize_column_index(
     };
 
     Ok(index)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::file::footer::parse_metadata;
+    use crate::file::page_index::index_reader::read_pages_locations;
+    use bytes::Bytes;
+
+    #[test]
+    fn read_page_locations_no_index_in_file() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{}/alltypes_plain.parquet", testdata);
+        let data = Bytes::from(std::fs::read(path).unwrap());
+
+        let metadata = parse_metadata(&data).expect("parsing metadata");
+
+        let columns = metadata.row_group(0).columns();
+
+        let locations = read_pages_locations(&data, columns).expect("reading locations");
+
+        // If a parquet file does not have an OffsetIndex, read_page_locations should just return
+        // an empty vec and not an error
+        assert!(locations.is_empty());
+    }
 }

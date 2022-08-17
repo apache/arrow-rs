@@ -484,6 +484,7 @@ pub(crate) fn decode_page(
     Ok(result)
 }
 
+#[allow(clippy::large_enum_variant)]
 enum SerializedPageReaderState {
     Values {
         /// The current byte offset in the reader
