@@ -65,7 +65,7 @@ pub fn read_pages_locations<R: ChunkReader>(
     let (offset, total_length) = get_location_offset_and_total_length(chunks)?;
 
     //read all need data into buffer
-    let mut reader = reader.get_read(offset, reader.len() as usize)?;
+    let mut reader = reader.get_read(offset, total_length)?;
     let mut data = vec![0; total_length];
     reader.read_exact(&mut data)?;
 
