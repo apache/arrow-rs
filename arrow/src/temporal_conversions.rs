@@ -138,22 +138,9 @@ pub fn timestamp_ns_to_datetime(v: i64) -> NaiveDateTime {
     )
 }
 
-///
 #[inline]
 pub(crate) fn split_second(v: i64, base: i64) -> (i64, u32) {
-    if v < 0 {
-        let v = -v;
-        let mut seconds = v / base;
-        let mut part = v % base;
-
-        if part > 0 {
-            seconds += 1;
-            part = base - part;
-        }
-        (-seconds, part as u32)
-    } else {
-        (v / base, (v % base) as u32)
-    }
+    (v.div_euclid(base), v.rem_euclid(base) as u32)
 }
 
 /// converts a `i64` representing a `duration(s)` to [`Duration`]
