@@ -36,7 +36,7 @@ use crate::util::{
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
-#[derive(Clone, Debug, PartialOrd, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialOrd, Default, PartialEq, Eq)]
 pub struct Int96 {
     value: [u32; 3],
 }
@@ -61,15 +61,29 @@ impl Int96 {
 
     /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
     pub fn to_i64(&self) -> i64 {
+        let (seconds, nanoseconds) = self.to_seconds_and_nanos();
+        seconds * 1_000 + nanoseconds / 1_000_000
+    }
+
+    /// Converts this INT96 into an i64 representing the number of NANOSECONDS since EPOCH
+    ///
+    /// Will wrap around on overflow
+    pub fn to_nanos(&self) -> i64 {
+        let (seconds, nanoseconds) = self.to_seconds_and_nanos();
+        seconds
+            .wrapping_mul(1_000_000_000)
+            .wrapping_add(nanoseconds)
+    }
+
+    /// Converts this INT96 to a number of seconds and nanoseconds since EPOCH
+    pub fn to_seconds_and_nanos(&self) -> (i64, i64) {
         const JULIAN_DAY_OF_EPOCH: i64 = 2_440_588;
         const SECONDS_PER_DAY: i64 = 86_400;
-        const MILLIS_PER_SECOND: i64 = 1_000;
 
         let day = self.data()[2] as i64;
         let nanoseconds = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
         let seconds = (day - JULIAN_DAY_OF_EPOCH) * SECONDS_PER_DAY;
-
-        seconds * MILLIS_PER_SECOND + nanoseconds / 1_000_000
+        (seconds, nanoseconds)
     }
 }
 

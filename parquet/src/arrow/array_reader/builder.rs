@@ -27,9 +27,9 @@ use crate::arrow::array_reader::{
 };
 use crate::arrow::buffer::converter::{
     DecimalArrayConverter, DecimalByteArrayConvert, DecimalFixedLengthByteArrayConverter,
-    FixedLenBinaryConverter, FixedSizeArrayConverter, Int96ArrayConverter,
-    Int96Converter, IntervalDayTimeArrayConverter, IntervalDayTimeConverter,
-    IntervalYearMonthArrayConverter, IntervalYearMonthConverter,
+    FixedLenBinaryConverter, FixedSizeArrayConverter, IntervalDayTimeArrayConverter,
+    IntervalDayTimeConverter, IntervalYearMonthArrayConverter,
+    IntervalYearMonthConverter,
 };
 use crate::arrow::schema::{convert_schema, ParquetField, ParquetFieldType};
 use crate::arrow::ProjectionMask;
@@ -182,26 +182,11 @@ fn build_primitive_reader(
             column_desc,
             arrow_type,
         )?)),
-        PhysicalType::INT96 => {
-            // get the optional timezone information from arrow type
-            let timezone = arrow_type.as_ref().and_then(|data_type| {
-                if let DataType::Timestamp(_, tz) = data_type {
-                    tz.clone()
-                } else {
-                    None
-                }
-            });
-            let converter = Int96Converter::new(Int96ArrayConverter { timezone });
-            Ok(Box::new(ComplexObjectArrayReader::<
-                Int96Type,
-                Int96Converter,
-            >::new(
-                page_iterator,
-                column_desc,
-                converter,
-                arrow_type,
-            )?))
-        }
+        PhysicalType::INT96 => Ok(Box::new(PrimitiveArrayReader::<Int96Type>::new(
+            page_iterator,
+            column_desc,
+            arrow_type,
+        )?)),
         PhysicalType::FLOAT => Ok(Box::new(PrimitiveArrayReader::<FloatType>::new(
             page_iterator,
             column_desc,

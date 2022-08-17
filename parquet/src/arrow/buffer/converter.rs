@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
+use crate::data_type::{ByteArray, FixedLenByteArray};
 use arrow::array::{
     Array, ArrayRef, Decimal128Array, FixedSizeBinaryArray, FixedSizeBinaryBuilder,
     IntervalDayTimeArray, IntervalDayTimeBuilder, IntervalYearMonthArray,
-    IntervalYearMonthBuilder, TimestampNanosecondArray,
+    IntervalYearMonthBuilder,
 };
 use std::sync::Arc;
 
@@ -169,22 +169,6 @@ impl Converter<Vec<Option<FixedLenByteArray>>, IntervalDayTimeArray>
     }
 }
 
-pub struct Int96ArrayConverter {
-    pub timezone: Option<String>,
-}
-
-impl Converter<Vec<Option<Int96>>, TimestampNanosecondArray> for Int96ArrayConverter {
-    fn convert(&self, source: Vec<Option<Int96>>) -> Result<TimestampNanosecondArray> {
-        Ok(TimestampNanosecondArray::from_opt_vec(
-            source
-                .into_iter()
-                .map(|int96| int96.map(|val| val.to_i64() * 1_000_000))
-                .collect(),
-            self.timezone.clone(),
-        ))
-    }
-}
-
 #[cfg(test)]
 pub struct Utf8ArrayConverter {}
 
@@ -211,9 +195,6 @@ impl Converter<Vec<Option<ByteArray>>, StringArray> for Utf8ArrayConverter {
 #[cfg(test)]
 pub type Utf8Converter =
     ArrayRefConverter<Vec<Option<ByteArray>>, StringArray, Utf8ArrayConverter>;
-
-pub type Int96Converter =
-    ArrayRefConverter<Vec<Option<Int96>>, TimestampNanosecondArray, Int96ArrayConverter>;
 
 pub type FixedLenBinaryConverter = ArrayRefConverter<
     Vec<Option<FixedLenByteArray>>,
