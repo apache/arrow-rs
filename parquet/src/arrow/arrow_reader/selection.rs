@@ -118,12 +118,11 @@ impl RowSelection {
         Self { selectors }
     }
 
-    /// Given an offset index, return a mask indicating which pages are selected along with their locations by `self`
-    pub fn page_mask(
+    /// Given an offset index, return the offset ranges for all data pages selected by `self`
+    pub(crate) fn scan_ranges(
         &self,
         page_locations: &[PageLocation],
-    ) -> (Vec<bool>, Vec<Range<usize>>) {
-        let mut mask = vec![false; page_locations.len()];
+    ) -> Vec<Range<usize>> {
         let mut ranges = vec![];
         let mut row_offset = 0;
 
@@ -137,11 +136,11 @@ impl RowSelection {
         while let Some((selector, (mut page_idx, page))) =
             current_selector.as_mut().zip(current_page)
         {
-            if !selector.skip && !current_page_included && !mask[page_idx] {
-                mask[page_idx] = true;
+            if !(selector.skip || current_page_included) {
                 let start = page.offset as usize;
                 let end = start + page.compressed_page_size as usize;
                 ranges.push(start..end);
+                current_page_included = true;
             }
 
             if let Some((_, next_page)) = pages.peek() {
@@ -151,6 +150,7 @@ impl RowSelection {
                     selector.row_count -= remaining_in_page;
                     row_offset += remaining_in_page;
                     current_page = pages.next();
+                    current_page_included = false;
 
                     continue;
                 } else {
@@ -158,6 +158,7 @@ impl RowSelection {
                         == next_page.first_row_index as usize
                     {
                         current_page = pages.next();
+                        current_page_included = false;
                     }
                     row_offset += selector.row_count;
                     current_selector = selectors.next();
@@ -167,11 +168,7 @@ impl RowSelection {
             }
         }
 
-        (mask, ranges)
-    }
-
-    pub fn selectors(&self) -> &[RowSelector] {
-        &self.selectors
+        ranges
     }
 
     /// Splits off the first `row_count` from this [`RowSelection`]
@@ -483,19 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn test_page_mask() {
-        let selection = RowSelection::from(vec![
-            RowSelector::skip(10),
-            RowSelector::select(3),
-            RowSelector::skip(3),
-            RowSelector::select(4),
-            RowSelector::skip(5),
-            RowSelector::select(5),
-            RowSelector::skip(12),
-            RowSelector::select(12),
-            RowSelector::skip(12),
-        ]);
-
+    fn test_scan_ranges() {
         let index = vec![
             PageLocation {
                 offset: 0,
@@ -534,9 +519,51 @@ mod tests {
             },
         ];
 
-        let (mask, ranges) = selection.page_mask(&index);
+        let selection = RowSelection::from(vec![
+            // Skip first page
+            RowSelector::skip(10),
+            // Multiple selects in same page
+            RowSelector::select(3),
+            RowSelector::skip(3),
+            RowSelector::select(4),
+            // Select to page boundary
+            RowSelector::skip(5),
+            RowSelector::select(5),
+            // Skip full page past page boundary
+            RowSelector::skip(12),
+            // Select across page boundaries
+            RowSelector::select(12),
+            // Skip final page
+            RowSelector::skip(12),
+        ]);
 
-        assert_eq!(mask, vec![false, true, true, false, true, true, false]);
+        let ranges = selection.scan_ranges(&index);
+
+        // assert_eq!(mask, vec![false, true, true, false, true, true, false]);
         assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60]);
+
+        let selection = RowSelection::from(vec![
+            // Skip first page
+            RowSelector::skip(10),
+            // Multiple selects in same page
+            RowSelector::select(3),
+            RowSelector::skip(3),
+            RowSelector::select(4),
+            // Select to page boundary
+            RowSelector::skip(5),
+            RowSelector::select(5),
+            // Skip full page past page boundary
+            RowSelector::skip(12),
+            // Select across page boundaries
+            RowSelector::select(12),
+            RowSelector::skip(1),
+            // Select across page boundaries including final page
+            RowSelector::select(8),
+        ]);
+
+        let ranges = selection.scan_ranges(&index);
+
+        // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
+        assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60, 60..70]);
     }
 }

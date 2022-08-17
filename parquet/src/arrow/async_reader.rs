@@ -488,7 +488,7 @@ impl InMemoryRowGroup {
         {
             // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
             // `RowSelection`
-            let mut offsets: Vec<Vec<usize>> = vec![];
+            let mut page_start_offsets: Vec<Vec<usize>> = vec![];
 
             let fetch_ranges = self
                 .column_chunks
@@ -497,8 +497,9 @@ impl InMemoryRowGroup {
                 .into_iter()
                 .filter_map(|(idx, chunk)| {
                     (chunk.is_none() && projection.leaf_included(idx)).then(|| {
-                        let (_mask, ranges) = selection.page_mask(&page_locations[idx]);
-                        offsets.push(ranges.iter().map(|range| range.start).collect());
+                        let ranges = selection.scan_ranges(&page_locations[idx]);
+                        page_start_offsets
+                            .push(ranges.iter().map(|range| range.start).collect());
                         ranges
                     })
                 })
@@ -506,22 +507,22 @@ impl InMemoryRowGroup {
                 .collect();
 
             let mut chunk_data = input.get_byte_ranges(fetch_ranges).await?.into_iter();
-            let mut offsets = offsets.into_iter();
+            let mut page_start_offsets = page_start_offsets.into_iter();
 
             for (idx, chunk) in self.column_chunks.iter_mut().enumerate() {
                 if chunk.is_some() || !projection.leaf_included(idx) {
                     continue;
                 }
 
-                if let Some(page_offsets) = offsets.next() {
-                    let mut chunks = Vec::with_capacity(page_offsets.len());
-                    for _ in 0..page_offsets.len() {
+                if let Some(offsets) = page_start_offsets.next() {
+                    let mut chunks = Vec::with_capacity(offsets.len());
+                    for _ in 0..offsets.len() {
                         chunks.push(chunk_data.next().unwrap());
                     }
 
                     *chunk = Some(ColumnChunkData::Sparse {
                         length: self.metadata.column(idx).byte_range().1 as usize,
-                        data: page_offsets.into_iter().zip(chunks.into_iter()).collect(),
+                        data: offsets.into_iter().zip(chunks.into_iter()).collect(),
                     })
                 }
             }
@@ -606,9 +607,11 @@ enum ColumnChunkData {
     Sparse {
         /// Length of the full column chunk
         length: usize,
+        /// Set of data pages included in this sparse chunk. Each element is a tuple
+        /// of (page offset, page data)
         data: Vec<(usize, Bytes)>,
     },
-    /// Full column chunk
+    /// Full column chunk and its offset
     Dense { offset: usize, data: Bytes },
 }
 
@@ -627,12 +630,9 @@ impl ChunkReader for ColumnChunkData {
     fn get_read(&self, start: u64, length: usize) -> Result<Self::T> {
         match &self {
             ColumnChunkData::Sparse { data, .. } => data
-                .iter()
-                .find(|(offset, bytes)| {
-                    *offset <= start as usize && (start as usize - *offset) < bytes.len()
-                })
-                .map(|(_, bytes)| bytes.slice(0..length).reader())
-                .ok_or_else(|| {
+                .binary_search_by_key(&start, |(offset, _)| *offset as u64)
+                .map(|idx| data[idx].1.slice(0..length).reader())
+                .map_err(|_| {
                     ParquetError::General(format!(
                         "Invalid offset in sparse column chunk data: {}",
                         start
