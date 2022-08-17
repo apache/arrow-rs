@@ -288,7 +288,7 @@ where
 
         let meta = self.metadata.row_group(row_group_idx);
         let mut row_group = InMemoryRowGroup {
-            metadata: meta.clone(),
+            metadata: meta,
             // schema: meta.schema_descr_ptr(),
             row_count: meta.num_rows() as usize,
             column_chunks: vec![None; meta.columns().len()],
@@ -469,13 +469,13 @@ where
 }
 
 /// An in-memory collection of column chunks
-struct InMemoryRowGroup {
-    metadata: RowGroupMetaData,
-    column_chunks: Vec<Option<ColumnChunkData>>,
+struct InMemoryRowGroup<'a> {
+    metadata: &'a RowGroupMetaData,
+    column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     row_count: usize,
 }
 
-impl InMemoryRowGroup {
+impl<'a> InMemoryRowGroup<'a> {
     /// Fetches the necessary column data into memory
     async fn fetch<T: AsyncFileReader + Send>(
         &mut self,
@@ -520,10 +520,10 @@ impl InMemoryRowGroup {
                         chunks.push(chunk_data.next().unwrap());
                     }
 
-                    *chunk = Some(ColumnChunkData::Sparse {
+                    *chunk = Some(Arc::new(ColumnChunkData::Sparse {
                         length: self.metadata.column(idx).byte_range().1 as usize,
                         data: offsets.into_iter().zip(chunks.into_iter()).collect(),
-                    })
+                    }))
                 }
             }
         } else {
@@ -549,10 +549,10 @@ impl InMemoryRowGroup {
                 }
 
                 if let Some(data) = chunk_data.next() {
-                    *chunk = Some(ColumnChunkData::Dense {
+                    *chunk = Some(Arc::new(ColumnChunkData::Dense {
                         offset: self.metadata.column(idx).byte_range().0 as usize,
                         data,
-                    });
+                    }));
                 }
             }
         }
@@ -561,7 +561,7 @@ impl InMemoryRowGroup {
     }
 }
 
-impl RowGroupCollection for InMemoryRowGroup {
+impl<'a> RowGroupCollection for InMemoryRowGroup<'a> {
     fn schema(&self) -> SchemaDescPtr {
         self.metadata.schema_descr_ptr()
     }
@@ -584,7 +584,7 @@ impl RowGroupCollection for InMemoryRowGroup {
                     .map(|index| index[i].clone());
                 let page_reader: Box<dyn PageReader> =
                     Box::new(SerializedPageReader::new(
-                        Arc::new(data.clone()),
+                        data.clone(),
                         self.metadata.column(i),
                         self.row_count,
                         page_locations,
