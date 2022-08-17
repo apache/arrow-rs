@@ -34,12 +34,14 @@ use array::DictionaryArray;
 
 use crate::error::{ArrowError, Result};
 
+const NULL: &str = "NULL";
+
 macro_rules! make_string {
     ($array_type:ty, $column: ident, $row: ident) => {{
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
         let s = if array.is_null($row) {
-            "".to_string()
+            NULL.to_string()
         } else {
             array.value($row).to_string()
         };
@@ -56,7 +58,7 @@ macro_rules! make_string_interval_year_month {
             .unwrap();
 
         let s = if array.is_null($row) {
-            "NULL".to_string()
+            NULL.to_string()
         } else {
             let interval = array.value($row) as f64;
             let years = (interval / 12_f64).floor();
@@ -80,7 +82,7 @@ macro_rules! make_string_interval_day_time {
             .unwrap();
 
         let s = if array.is_null($row) {
-            "NULL".to_string()
+            NULL.to_string()
         } else {
             let value: u64 = array.value($row) as u64;
 
@@ -116,7 +118,7 @@ macro_rules! make_string_interval_month_day_nano {
             .unwrap();
 
         let s = if array.is_null($row) {
-            "NULL".to_string()
+            NULL.to_string()
         } else {
             let value: u128 = array.value($row) as u128;
 
@@ -152,7 +154,7 @@ macro_rules! make_string_date {
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
         let s = if array.is_null($row) {
-            "".to_string()
+            NULL.to_string()
         } else {
             array
                 .value_as_date($row)
@@ -169,7 +171,7 @@ macro_rules! make_string_time {
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
         let s = if array.is_null($row) {
-            "".to_string()
+            NULL.to_string()
         } else {
             array
                 .value_as_time($row)
@@ -186,7 +188,7 @@ macro_rules! make_string_datetime {
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
         let s = if array.is_null($row) {
-            "".to_string()
+            NULL.to_string()
         } else {
             array
                 .value_as_datetime($row)
@@ -204,7 +206,7 @@ macro_rules! make_string_hex {
         let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
 
         let s = if array.is_null($row) {
-            "".to_string()
+            NULL.to_string()
         } else {
             let mut tmp = "".to_string();
 
@@ -273,7 +275,7 @@ fn append_struct_field_string(
     target.push_str("\": ");
 
     if field_col.is_null(row) {
-        target.push_str("null");
+        target.push_str(NULL);
     } else {
         match field_col.data_type() {
             DataType::Utf8 | DataType::LargeUtf8 => {
@@ -296,7 +298,7 @@ fn append_struct_field_string(
 /// suitable for converting large arrays or record batches.
 pub fn array_value_to_string(column: &array::ArrayRef, row: usize) -> Result<String> {
     if column.is_null(row) {
-        return Ok("".to_string());
+        return Ok(NULL.to_string());
     }
     match column.data_type() {
         DataType::Utf8 => make_string!(array::StringArray, column, row),
@@ -452,7 +454,7 @@ fn dict_array_value_to_string<K: ArrowPrimitiveType>(
     let keys_array = dict_array.keys();
 
     if keys_array.is_null(row) {
-        return Ok(String::from(""));
+        return Ok(String::from(NULL));
     }
 
     let dict_index = keys_array.value(row).to_usize().ok_or_else(|| {
